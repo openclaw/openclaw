@@ -23,6 +23,7 @@ import {
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { withPluginRetentionOwner } from "../../plugins/plugin-retention-diagnostics.js";
 import {
   runOutsidePluginRuntimeGenerationScope,
   withPluginRuntimeGenerationScope,
@@ -37,17 +38,14 @@ import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveModelFallbackAvailability,
-} from "../agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import { createAssistantErrorTranscript } from "../assistant-error-transcript.js";
 import {
   runBestEffortCallback,
   serializeAgentEventCallback,
 } from "../embedded-agent-subscribe.callback.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
+import { resolveModelFallbackAvailability } from "../model-selection-config.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
@@ -69,7 +67,7 @@ import { withRequiredSessionPlacement } from "../session-placement-admission.js"
 import { resolveSessionPlacementTurnSettlementAssertion } from "../session-placement-forced-terminal-settlement.js";
 import { captureSessionSuspension, type SessionSuspensionParams } from "../session-suspension.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { redactRunIdentifier } from "../workspace-run.js";
+import { redactRunIdentifier, resolveRunBootstrapWorkspaceDir } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import { buildCompletedAgentUsageMeta, mergeCompletedAgentUsage } from "./completed-usage.js";
 import { resolveGlobalLane } from "./lanes.js";
@@ -94,6 +92,7 @@ import {
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
 import {
+  resolveEmbeddedRuntimePluginPreparation,
   resolveEmbeddedRuntimePluginSelections,
   resolveInitialEmbeddedRunModel,
 } from "./run/runtime-resolution.js";
@@ -117,23 +116,32 @@ export function runEmbeddedAgent(
     (internalParamsInput.preparedModelRuntimeMode === "isolated-read-only"
       ? undefined
       : getPreparedModelRuntimePluginGeneration());
-  return withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-    const prepared = await prepareEmbeddedRunSession({
-      ...internalParamsInput,
-      config,
-      lifecycleGeneration,
-      ...(pluginGeneration ? { pluginGeneration } : {}),
-    });
-    return await withRequiredSessionPlacement(
-      prepared.runSessionTarget,
-      {
-        config: prepared.params.config,
-        assertCurrent: prepared.params.preparedRunAdmission?.assertSourceCurrent,
-        signal: prepared.params.abortSignal,
-      },
-      () => runEmbeddedAgentForSession(prepared),
-    );
-  });
+  // Capture host-selected facts before session preparation can retain a generation.
+  return withPluginRetentionOwner(
+    {
+      agentId: internalParamsInput.agentId,
+      sessionKey: internalParamsInput.sessionKey,
+      runId: internalParamsInput.runId,
+    },
+    () =>
+      withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+        const prepared = await prepareEmbeddedRunSession({
+          ...internalParamsInput,
+          config,
+          lifecycleGeneration,
+          ...(pluginGeneration ? { pluginGeneration } : {}),
+        });
+        return await withRequiredSessionPlacement(
+          prepared.runSessionTarget,
+          {
+            config: prepared.params.config,
+            assertCurrent: prepared.params.preparedRunAdmission?.assertSourceCurrent,
+            signal: prepared.params.abortSignal,
+          },
+          () => runEmbeddedAgentForSession(prepared),
+        );
+      }),
+  );
 }
 
 async function runEmbeddedAgentForSession(
@@ -304,9 +312,7 @@ async function runEmbeddedAgentForSession(
           workspaceDir: runtimeWorkspaceResolution.workspaceDir,
           preserveWorkspaceDirOnRefresh: !runtimeWorkspaceResolution.isCanonicalWorkspace,
           ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-          ...(params.preparedModelRuntimeMode === "isolated-read-only"
-            ? { loadRuntimePlugins: true }
-            : {}),
+          ...resolveEmbeddedRuntimePluginPreparation(params),
           runtimePluginSelections,
         };
         startupStages.mark("harness-selection");
@@ -339,6 +345,7 @@ async function runEmbeddedAgentForSession(
             ...(!isolatedReadOnly
               ? {
                   retainIdleRunOwner,
+                  ...(refreshed ? { waitForReplacementPublication: true } : {}),
                   ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
                 }
               : {}),
@@ -482,10 +489,7 @@ async function runEmbeddedAgentForSession(
                 runId: params.runId,
                 trigger: params.trigger,
                 event: { cleanedBody: params.prompt },
-                context: {
-                  ...hookCtx,
-                  heartbeatEventQueueSessionKey: params.heartbeatEventQueueSessionKey,
-                },
+                context: hookCtx,
                 onDispatch: () =>
                   notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
                 onDeclined: () =>
@@ -557,7 +561,7 @@ async function runEmbeddedAgentForSession(
                 agentDir,
                 workspaceResolution,
                 workspaceDir: resolvedWorkspace,
-                bootstrapWorkspaceDir: canonicalWorkspace,
+                bootstrapWorkspaceDir: resolveRunBootstrapWorkspaceDir(params, canonicalWorkspace),
                 isCanonicalWorkspace,
                 globalLane,
                 hookRunner,
@@ -577,10 +581,12 @@ async function runEmbeddedAgentForSession(
               });
             };
             const runWithPreparedRuntime = () =>
-              withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
-                context = AsyncLocalStorage.snapshot();
-                return runPrepared();
-              });
+              preparedModelRuntimeLease.run(() =>
+                withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
+                  context = AsyncLocalStorage.snapshot();
+                  return runPrepared();
+                }),
+              );
             return params.pluginGeneration
               ? await withPreparedModelRuntimePluginGenerationScope(
                   preparedModelRuntimeLease.pluginGeneration,
@@ -676,6 +682,9 @@ async function runEmbeddedAgentForSession(
             }
             // A refresh must join the old generation's tracked cleanup before reacquisition.
             await generationCleanup;
+            // The logical turn's engine came from the old generation; release it so a reload
+            // can drain it. The next attempt's begin rebinds it from the published generation.
+            await continuation.contextEngineLogicalTurnLease?.handOver();
             // The old attempt has persisted results and released its tools. Reuse admission,
             // but acquire fresh plugin owners before continuing the same task from its transcript.
             params = continuation;

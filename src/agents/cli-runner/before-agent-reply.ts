@@ -35,17 +35,11 @@ export async function runCliBeforeAgentReply(
             ...buildAgentHookContextCronFields(params),
             agentId: params.agentId,
             sessionKey: params.sessionKey,
-            heartbeatEventQueueSessionKey: params.heartbeatEventQueueSessionKey,
             sessionId: params.sessionId,
             workspaceDir: params.workspaceDir,
             trigger: params.trigger,
             ...buildAgentHookContextChannelFields(params),
-            ...buildAgentHookContextIdentityFields({
-              trigger: params.trigger,
-              senderId: params.senderId,
-              chatId: params.chatId,
-              channelContext: params.channelContext,
-            }),
+            ...buildAgentHookContextIdentityFields(params),
           },
           onDispatch: () =>
             params.onExecutionPhase?.({

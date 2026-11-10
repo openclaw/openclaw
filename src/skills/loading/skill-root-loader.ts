@@ -10,7 +10,6 @@ import {
   type LoadedLocalSkill,
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
-import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { createSkillEntry } from "./skill-entry-metadata.js";
 import { compactSkillPath } from "./skill-paths.js";
 import {
@@ -19,7 +18,6 @@ import {
   discoverSkillCandidates,
   resolveSkillDiscoveryLimits,
   type CandidateSkillDir,
-  type ResolvedSkillDiscoveryLimits,
 } from "./skill-root-discovery.js";
 import { resolveSkillTelemetrySourceValue } from "./source.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths } from "./symlink-targets.js";
@@ -199,38 +197,6 @@ export function loadSkillRootRecords(params: {
   return loadedSkills;
 }
 
-function loadGeneratedPluginSkillRecords(params: {
-  pluginSkillsDir: string;
-  pluginSkillRoots: readonly PluginSkillRoot[];
-  source: string;
-  limits: ResolvedSkillDiscoveryLimits;
-}): LoadedSkillRecord[] {
-  const candidates = discoverPluginSkills(params);
-  const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
-  const loadedSkills: LoadedSkillRecord[] = [];
-  for (const candidate of candidates) {
-    const record = loadContainedSkillRecord({
-      skillDir: candidate.skillDir,
-      rootRealPath: candidate.skillDirRealPath,
-      source: params.source,
-      maxBytes: params.limits.maxSkillFileBytes,
-      rejectHardlinks: candidate.rejectHardlinks,
-    });
-    if (record) {
-      record.skill.discoveryRoot = { path: path.resolve(params.pluginSkillsDir), worktree: false };
-      loadedSkills.push({
-        ...record,
-        syncSourceDir: candidate.skillDirRealPath,
-        syncDirName: path.basename(record.skill.baseDir),
-      });
-    }
-    if (loadedSkills.length >= maxSkillsLoadedPerSource) {
-      break;
-    }
-  }
-  return loadedSkills;
-}
-
 /** Scan selected roots on their owning host, retaining native precedence and file rules. */
 export function loadWorkspaceSkillSourceEntries(
   plan: WorkspaceSkillSourcePlan,
@@ -257,9 +223,35 @@ export function loadWorkspaceSkillSourceEntries(
       source: "openclaw-extra",
       limits: resolveSkillDiscoveryLimits(config),
     };
-    for (const record of readSourceEntries(batch, ["generated", input], () =>
-      loadGeneratedPluginSkillRecords(input).map(createSkillEntry),
-    )) {
+    for (const record of readSourceEntries(batch, ["generated", input], () => {
+      const candidates = discoverPluginSkills(input);
+      const maxSkillsLoadedPerSource = Math.max(0, input.limits.maxSkillsLoadedPerSource);
+      const loadedSkills: LoadedSkillRecord[] = [];
+      for (const candidate of candidates) {
+        const loadedRecord = loadContainedSkillRecord({
+          skillDir: candidate.skillDir,
+          rootRealPath: candidate.skillDirRealPath,
+          source: input.source,
+          maxBytes: input.limits.maxSkillFileBytes,
+          rejectHardlinks: candidate.rejectHardlinks,
+        });
+        if (loadedRecord) {
+          loadedRecord.skill.discoveryRoot = {
+            path: path.resolve(input.pluginSkillsDir),
+            worktree: false,
+          };
+          loadedSkills.push({
+            ...loadedRecord,
+            syncSourceDir: candidate.skillDirRealPath,
+            syncDirName: path.basename(loadedRecord.skill.baseDir),
+          });
+        }
+        if (loadedSkills.length >= maxSkillsLoadedPerSource) {
+          break;
+        }
+      }
+      return loadedSkills.map(createSkillEntry);
+    })) {
       extra.push({
         ...record,
         sourceOrder:

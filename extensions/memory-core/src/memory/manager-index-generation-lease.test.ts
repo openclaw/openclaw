@@ -1,20 +1,55 @@
-// Memory Core tests published-index read and publication ordering.
 import { describe, expect, it, vi } from "vitest";
 import {
   acquireMemoryIndexReadGeneration,
   withMemoryIndexGeneration,
 } from "./manager-index-generation-lease.js";
 
-async function withReadGeneration<T>(key: string, run: () => Promise<T>): Promise<T> {
-  const release = await acquireMemoryIndexReadGeneration(key);
-  try {
-    return await run();
-  } finally {
-    await release();
-  }
-}
-
 describe("memory index generation lease", () => {
+  it("holds successor publication behind a predecessor module's admitted reader", async () => {
+    const key = "/memory-test/module-overlap.sqlite";
+    const release = await acquireMemoryIndexReadGeneration(key);
+    vi.resetModules();
+    const successor = await import("./manager-index-generation-lease.js");
+    expect(successor.withMemoryIndexGeneration).not.toBe(withMemoryIndexGeneration);
+    const publish = vi.fn(async () => {});
+    const pending = successor.withMemoryIndexGeneration(key, "write", publish);
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(publish).not.toHaveBeenCalled();
+    } finally {
+      await release();
+      await pending;
+    }
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
+  it("shares reindex exclusion across overlapping module generations", async () => {
+    const predecessor = await import("./manager-reindex-lock.js");
+    const lock = await predecessor.waitForMemoryReindexLock("/memory-test/module-reindex.sqlite");
+    vi.resetModules();
+    const successor = await import("./manager-reindex-lock.js");
+    expect(successor.waitForMemoryReindexLock).not.toBe(predecessor.waitForMemoryReindexLock);
+    const entered = vi.fn();
+    const pending = successor
+      .waitForMemoryReindexLock("/memory-test/module-reindex.sqlite", {
+        waitForActive: true,
+      })
+      .then((next) => {
+        entered();
+        return next;
+      });
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(entered).not.toHaveBeenCalled();
+    } finally {
+      await lock.release();
+      await (await pending).release();
+    }
+    expect(entered).toHaveBeenCalledOnce();
+  });
+
   it("rejects a native signal that was aborted before admission", async () => {
     const controller = new AbortController();
     const reason = new Error("cancel before admission");
@@ -79,70 +114,31 @@ describe("memory index generation lease", () => {
     expect(published).toHaveBeenCalledOnce();
   });
 
-  it("admits another reader into the active generation when no writer is queued", async () => {
-    let releaseFirstReader = () => {};
-    const firstReaderGate = new Promise<void>((resolve) => {
-      releaseFirstReader = resolve;
-    });
+  it.each([false, true])("admits a second reader with queued publication=%s", async (queued) => {
     const events: string[] = [];
-    const generationPath = "/memory-test/shared-reader-generation.sqlite";
-    const firstReader = withReadGeneration(generationPath, async () => {
-      events.push("first-reader");
-      await firstReaderGate;
-    });
-    await vi.waitFor(() => expect(events).toContain("first-reader"));
-    const nextReader = withReadGeneration(generationPath, async () => {
+    const generationPath = `/memory-test/second-reader-${queued}.sqlite`;
+    const releaseFirstReader = await acquireMemoryIndexReadGeneration(generationPath);
+    events.push("first-reader");
+    const publish = queued
+      ? withMemoryIndexGeneration(generationPath, "write", async () => {
+          events.push("publish");
+        })
+      : Promise.resolve();
+    const nextReader = acquireMemoryIndexReadGeneration(generationPath).then(async (release) => {
       events.push("next-reader");
+      await release();
     });
-    await nextReader;
-    expect(events).toEqual(["first-reader", "next-reader"]);
-    releaseFirstReader();
-    await firstReader;
-  });
-
-  it("lets readers continue while publication waits for the active generation", async () => {
-    let releaseFirstReader = () => {};
-    const firstReaderGate = new Promise<void>((resolve) => {
-      releaseFirstReader = resolve;
-    });
-    const events: string[] = [];
-    const generationPath = "/memory-test/reader-before-publish.sqlite";
-    const firstReader = withReadGeneration(generationPath, async () => {
-      events.push("first-reader-start");
-      await firstReaderGate;
-      events.push("first-reader-end");
-    });
-    await vi.waitFor(() => expect(events).toContain("first-reader-start"));
-    const publish = withMemoryIndexGeneration(generationPath, "write", async () => {
-      events.push("publish");
-    });
-    await Promise.resolve();
-    expect(events).not.toContain("publish");
-    releaseFirstReader();
-    await Promise.all([firstReader, publish]);
-    expect(events).toEqual(["first-reader-start", "first-reader-end", "publish"]);
-  });
-
-  it("does not admit a new generation reader ahead of queued publication", async () => {
-    let releaseFirstReader = () => {};
-    const firstReaderGate = new Promise<void>((resolve) => {
-      releaseFirstReader = resolve;
-    });
-    const events: string[] = [];
-    const generationPath = "/memory-test/publish-before-reader.sqlite";
-    const firstReader = withReadGeneration(generationPath, async () => {
-      events.push("first-reader");
-      await firstReaderGate;
-    });
-    await vi.waitFor(() => expect(events).toContain("first-reader"));
-    const publish = withMemoryIndexGeneration(generationPath, "write", async () => {
-      events.push("publish");
-    });
-    const nextReader = withReadGeneration(generationPath, async () => {
-      events.push("next-reader");
-    });
-    releaseFirstReader();
-    await Promise.all([firstReader, publish, nextReader]);
-    expect(events).toEqual(["first-reader", "publish", "next-reader"]);
+    if (queued) {
+      await Promise.resolve();
+      expect(events).toEqual(["first-reader"]);
+      await releaseFirstReader();
+    }
+    await Promise.all([publish, nextReader]);
+    expect(events).toEqual(
+      queued ? ["first-reader", "publish", "next-reader"] : ["first-reader", "next-reader"],
+    );
+    if (!queued) {
+      await releaseFirstReader();
+    }
   });
 });

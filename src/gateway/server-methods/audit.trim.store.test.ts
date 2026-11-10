@@ -43,17 +43,15 @@ describe("audit methods against a real audit store", () => {
     "inspects retained execution identity without host SQLite (writable actor: %s)",
     async (warmActor) => {
       const database = createDatabaseOptions();
-      expect(
-        prepareExecutionIdentityContextAtAdmission(
-          {
-            runId: "inspection-run",
-            agentId: "main",
-            ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-            runtime: { kind: "embedded" },
-          },
-          { ...database, contextId: "inspection-context", executionId: "inspection-execution" },
-        ),
-      ).toBeDefined();
+      prepareExecutionIdentityContextAtAdmission(
+        {
+          runId: "inspection-run",
+          agentId: "main",
+          ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
+          runtime: { kind: "embedded" },
+        },
+        { ...database, contextId: "inspection-context", executionId: "inspection-execution" },
+      );
       await closeOpenClawStateDatabaseAsync();
       if (warmActor) {
         await listAuditEvents({ database, limit: 1 });
@@ -93,7 +91,6 @@ describe("audit methods against a real audit store", () => {
     async (method) => {
       const database = createDatabaseOptions();
       const input = {
-        sourceId: "audit-trim-run-source",
         occurredAt: Date.now(),
         kind: "agent_run" as const,
         actorType: "agent" as const,
@@ -102,19 +99,22 @@ describe("audit methods against a real audit store", () => {
         sessionKey: "agent:main:main",
         runId: "run-trim-1",
       };
-      recordAuditEventInDatabase(
-        { ...input, sourceSequence: 1, action: "agent.run.started", status: "started" },
-        { ...database, database: openOpenClawStateDatabase(database) },
-      );
-      const finished = recordAuditEventInDatabase(
-        {
-          ...input,
-          sourceId: "audit-trim-finished",
-          sourceSequence: 2,
-          action: "agent.run.finished",
-          status: "succeeded",
-        },
-        { ...database, database: openOpenClawStateDatabase(database) },
+      const store = { ...database, database: openOpenClawStateDatabase(database) };
+      const [, finished] = (
+        [
+          { action: "agent.run.started", status: "started" },
+          { action: "agent.run.finished", status: "succeeded" },
+        ] as const
+      ).map((phase, index) =>
+        recordAuditEventInDatabase(
+          {
+            ...input,
+            sourceId: `audit-trim-${index}`,
+            sourceSequence: index + 1,
+            ...phase,
+          },
+          store,
+        ),
       );
 
       // Negative control: untrimmed filter values miss the planted row at the store.

@@ -6,6 +6,7 @@ import {
   collectNestedErrorCandidates,
   extractErrorCodeOrErrno,
 } from "@openclaw/normalization-core/error-coercion";
+import { requireExactTestResults } from "./lib/ios-test-results.mjs";
 
 export const IOS_RELEASE_TESTS = [
   "OpenClawUITests/OpenClawSnapshotUITests/testLiveGatewayPairChatAndRelaunch",
@@ -15,7 +16,7 @@ export const MODEL_REF = "openai/ios-e2e";
 const IOS_RELEASE_CHAT_FAILURE =
   /IOS_RELEASE_CHAT_FAILURE (first|second|relaunch) (submission|reply) draft=(true|false) keyboard=(true|false) reply=(true|false) writing=(true|false) jump=(true|false) foreground=(true|false) input=(true|false) transcript=(true|false) send=(true|false)/u;
 export const IOS_RELEASE_TEST_FAILURE_LOCATION =
-  /(?:^|\/)OpenClawSnapshotUITests\.swift:([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu;
+  /(?:^|\/)(OpenClawSnapshotUITests(?:\+(?:Chat|Helpers))?\.swift):([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu;
 const SAMPLE_INTERVAL_MS = 1_000;
 const MAX_SAMPLE_GAP_MS = 3_000;
 export type Mode = "stock" | "compare";
@@ -37,6 +38,7 @@ export type Operation =
   | "simulator-create"
   | "simulator-boot"
   | "simulator-ready"
+  | "simulator-headroom"
   | "simulator-slim"
   | "simulator-delete"
   | "fixture-server"
@@ -118,11 +120,11 @@ export class OperationError extends Error {
         }
       }
       // Keep failure locations actionable without exporting assertion text, paths, or credentials.
-      const lines = [...output.matchAll(IOS_RELEASE_TEST_FAILURE_LOCATION)].map(
-        (match) => match[1],
+      const locations = [...output.matchAll(IOS_RELEASE_TEST_FAILURE_LOCATION)].map(
+        (match) => `${match[1]}:${match[2]}`,
       );
       this.diagnostic.context.push(
-        ...[...new Set(lines)].slice(0, 8).map((line) => `xctest-line:${line}`),
+        ...[...new Set(locations)].slice(0, 8).map((location) => `xctest-location:${location}`),
       );
     }
   }
@@ -161,70 +163,6 @@ function object(value: unknown): JsonObject {
     throw new Error("invalid-json-object");
   }
   return value as JsonObject;
-}
-
-// XCTest identifies class/test(); the UI bundle ancestry supplies the target.
-export function requireExactTestResult(value: unknown, expected: TestIdentity): void {
-  const cases: { node: JsonObject; bundle?: string }[] = [];
-  const visit = (entry: unknown, bundle?: string) => {
-    const node = object(entry);
-    const owner =
-      node.nodeType === "UI test bundle"
-        ? typeof node.name === "string"
-          ? node.name
-          : undefined
-        : node.nodeType === "Unit test bundle"
-          ? undefined
-          : bundle;
-    if (node.nodeType === "Test Case") {
-      cases.push({ node, bundle: owner });
-    }
-    if (node.children !== undefined) {
-      if (!Array.isArray(node.children)) {
-        throw new Error("invalid-test-children");
-      }
-      node.children.forEach((child) => visit(child, owner));
-    }
-  };
-  const roots = object(value).testNodes;
-  if (!Array.isArray(roots)) {
-    throw new Error("missing-test-nodes");
-  }
-  roots.forEach((node) => visit(node));
-  if (cases.some(({ node }) => node.result === "Skipped")) {
-    throw new Error("test-skipped");
-  }
-  const [testCase] = cases;
-  if (
-    cases.length !== 1 ||
-    !testCase ||
-    testCase.bundle !== expected.split("/")[0] ||
-    testCase.node.nodeIdentifier !== `${expected.split("/").slice(1).join("/")}()` ||
-    testCase.node.result !== "Passed"
-  ) {
-    throw new Error("test-identity-or-result");
-  }
-  let repetitions = 0;
-  let runs = 0;
-  const checkRuns = (entry: unknown) => {
-    const node = object(entry);
-    if (node.nodeType === "Repetition") {
-      repetitions++;
-    }
-    if (node.nodeType === "Test Case Run") {
-      runs++;
-    }
-    if (node.result !== undefined && node.result !== "Passed") {
-      throw new Error("failed-test-child");
-    }
-    if (Array.isArray(node.children)) {
-      node.children.forEach(checkRuns);
-    }
-  };
-  checkRuns(testCase.node);
-  if (repetitions > 1 || runs > 1) {
-    throw new Error("repeated-test");
-  }
 }
 
 export type Measurement = { processes: number; bytes: number; cpu: number };
@@ -396,7 +334,7 @@ export async function runTrials(mode: Mode, deps: TrialDependencies) {
         const caseStarted = deps.now();
         try {
           deps.signal.throwIfAborted();
-          requireExactTestResult(await resources.test(test), test);
+          requireExactTestResults(await resources.test(test), [test]);
           testResult.status = "passed";
         } finally {
           testResult.ms = deps.now() - caseStarted;

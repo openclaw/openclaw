@@ -1,9 +1,12 @@
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { readHostFreeMemoryBytes } from "../../infra/host-memory.js";
 import type {
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
 } from "../../plugins/cli-backend.types.js";
+import { CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE } from "../failover/error.js";
 import { runCliCleanup } from "./cleanup.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError } from "./exit-error.js";
@@ -11,6 +14,9 @@ import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const MAX_LIVE_SESSIONS = 16;
+// A warm session measured ~490 MiB RSS: Claude Code (~200 MiB Linux, ~260 MiB macOS)
+// plus its supervisor helpers, more while it works. Keep room for about two.
+const MIN_FREE_MEMORY_BYTES = 1024 ** 3;
 
 type CliLiveSessionOwner = {
   backendId: string;
@@ -156,6 +162,20 @@ function retainCleanup(context: PreparedCliRunContext, record: CliLiveSessionRec
   };
 }
 
+function createCapacityError(context: PreparedCliRunContext, message: string, code?: string) {
+  return createCliFailoverError(
+    message,
+    "rate_limit",
+    {
+      provider: context.params.provider,
+      model: context.modelId,
+      sessionId: context.params.sessionId,
+      lane: context.params.lane,
+    },
+    code ? { code } : undefined,
+  );
+}
+
 function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {
   if (liveSessions.size < MAX_LIVE_SESSIONS) {
     return;
@@ -166,12 +186,41 @@ function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {
       return;
     }
   }
-  throw createCliFailoverError("Too many CLI live sessions are active.", "rate_limit", {
-    provider: context.params.provider,
-    model: context.modelId,
-    sessionId: context.params.sessionId,
-    lane: context.params.lane,
-  });
+  throw createCapacityError(context, "Too many CLI live sessions are active.");
+}
+
+/**
+ * Before a turn may start a new warm process, retire least recently used idle
+ * processes while host memory is low. Busy processes stay; the turn fails over.
+ */
+export async function ensureCliLiveSessionMemory(
+  context: PreparedCliRunContext,
+  signal: AbortSignal,
+): Promise<void> {
+  if (liveSessions.has(buildCliLiveSessionKey(context))) {
+    // Reuse or same-owner replacement adds no process.
+    return;
+  }
+  // One pass in least recently used order; each close waits for that process to exit.
+  for (const record of Array.from(liveSessions.values())) {
+    if (!record.handle.isIdle()) {
+      continue;
+    }
+    if (readHostFreeMemoryBytes() >= MIN_FREE_MEMORY_BYTES) {
+      return;
+    }
+    cliBackendLog.warn(
+      `cli live session memory pressure: closing idle session activeSessions=${liveSessions.size}`,
+    );
+    await racePromiseWithAbortSignal(closeRecord(record, "idle"), signal);
+  }
+  if (readHostFreeMemoryBytes() < MIN_FREE_MEMORY_BYTES) {
+    throw createCapacityError(
+      context,
+      "Host memory is too low for another CLI live session.",
+      CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE,
+    );
+  }
 }
 
 /** Returns whether this prepared local plugin transport may retain its execution process. */
@@ -281,6 +330,11 @@ export function createCliLiveSessionCapability(params: {
       promptToolNamesHash: context.promptToolNamesHash,
       mcpResumeHash: context.preparedBackend.mcpResumeHash ?? context.preparedBackend.mcpConfigHash,
       credentialFingerprint: context.preparedBackend.secretInput?.fingerprint,
+      // A warm child keeps the login it started with. Reuse it only while the native owner
+      // this run was prepared under is the one it was started under.
+      nativeLoginOwnerHash: context.cliHistoryWriter?.bindsNativeLogin
+        ? sha256Hex(context.cliHistoryWriter.authFingerprint)
+        : undefined,
       skillsFingerprint,
       env: Object.keys(params.env)
         .toSorted()
@@ -401,6 +455,9 @@ export function createCliLiveSessionCapability(params: {
         params.beginCapture(record.capture.key);
       }
       retainCleanup(params.context, record);
+      // Map order is least recently used first for idle eviction.
+      liveSessions.delete(ownerKey);
+      liveSessions.set(ownerKey, record);
     },
     remove: (handle) => {
       const record = liveSessions.get(ownerKey);

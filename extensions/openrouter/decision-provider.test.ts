@@ -11,10 +11,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   }),
 }));
 
+const predicateQuestion = { type: "boolean", instructions: "Is this urgent?" } as const;
 const batch: DecisionBatchV2 = {
   state: { type: "json", value: { ticket: "Synthetic ticket" } },
   questions: {
-    q: { type: "boolean", instructions: "Is this urgent?" },
+    q: predicateQuestion,
     c: { type: "choice", instructions: "Which team?", criteria: { a: null, b: "Billing" } },
     s: { type: "score", instructions: "How urgent?", criteria: ["Low", "High"] },
   },
@@ -52,7 +53,7 @@ function context(config: Config = {}): DecisionProviderContextV2 {
     config,
     auth: { apiKey: "synthetic-prepared-token", mode: "api-key", profileId: "openrouter:fixture" },
     signal: new AbortController().signal,
-    deadlineMonotonicMs: performance.now() + 5000,
+    deadlineMonotonicMs: Number.POSITIVE_INFINITY,
     isAdmissible: () => true,
   };
 }
@@ -85,6 +86,63 @@ async function unavailable(reason: string, ctx = context(), input = batch) {
 function guarded(response: Response) {
   return { response, finalUrl: `${baseUrl}/systemone`, release };
 }
+it.each(["parallel/decisions-fast", "parallel/decisions-fast:free"])(
+  "evaluates %s as typed web-grounded decisions, preserving sources and refusals",
+  async (modelId) => {
+    const annotations = [
+      { type: "url_citation", url_citation: { url: "https://example.com", title: "Evidence" } },
+    ];
+    respond({
+      ...wire(),
+      model: modelId,
+      provider: "Parallel",
+      annotations,
+      answers: {
+        q: wire().answers.q,
+        c: { type: "refusal" },
+        s: { type: "score", score: 0.7, probabilities: { "0": 0.3, "1": 0.7 } },
+      },
+    });
+    const ctx = context();
+    ctx.model.id = modelId;
+    ctx.model.inference!.decision!.confidence = "provider-specific";
+    expect(await provider.evaluate(batch, ctx)).toMatchObject({
+      status: "ok",
+      result: {
+        model: modelId,
+        answers: {
+          q: { type: "boolean", probabilityTrue: 0.37 },
+          c: { type: "error", code: "provider-error", providerCode: "refusal" },
+        },
+        metadata: { provider: "Parallel", annotations },
+      },
+    });
+    expect(sentRequest().url).toBe(`${baseUrl}/systemone`);
+    expect(readRequestBody()).toEqual({
+      model: modelId,
+      state: { ticket: "Synthetic ticket" },
+      questions: {
+        q: { ...batch.questions.q, type: "noul" },
+        c: batch.questions.c,
+        s: batch.questions.s,
+      },
+    });
+  },
+);
+it("rejects unsupported Parallel input before transport", async () => {
+  const ctx = context();
+  ctx.model.id = "parallel/decisions-fast";
+  for (const input of [
+    { ...batch, state: { type: "image" as const, dataUri: "data:image/png;base64,aA==" } },
+    {
+      ...batch,
+      questions: Object.fromEntries(Array.from({ length: 101 }, (_, i) => [i, predicateQuestion])),
+    },
+  ]) {
+    await unavailable("unsupported-input", ctx, input);
+  }
+  expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+});
 function respond(value: unknown, status = 200) {
   vi.mocked(fetchWithSsrFGuard).mockResolvedValue(guarded(Response.json(value, { status })));
 }
@@ -295,9 +353,7 @@ it("rejects unsupported native inputs, parameters and absent credentials before 
   await unavailable("unsupported-input", ctx);
   await unavailable("credentials-unavailable", { ...context(), auth: { mode: "api-key" } });
   const configured = context();
-  configured.config.agents = {
-    defaults: { models: modelParams({ max_tokens: 100 }) },
-  };
+  configured.config.agents = { defaults: { models: modelParams({ max_tokens: 100 }) } };
   await unavailable("unsupported-input", configured);
   expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
 });
@@ -336,6 +392,7 @@ it.each([undefined, "allow"] as const)(
 );
 
 it.each([
+  { annotations: [{ type: "url_citation", url_citation: { url: 7 } }] },
   { answers: {} },
   { answers: { ...wire().answers, c: { ...wire().answers.c, probabilities: { a: 0, b: 0 } } } },
   {

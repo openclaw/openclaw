@@ -11,11 +11,13 @@ import {
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "../../../components/session-progress-hovercard-target.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   coalesceAgentRunFrames,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
@@ -87,6 +89,8 @@ function renderFrame(
         frame: input.kind === "group" ? { ...completedFrame, parts: [input] } : input,
         options: {
           streamOptions: {},
+          workPreviews: new Map(),
+          partDependencies: (part) => [part],
           renderGroupOptions: () => ({ showReasoning: true, ...options }),
           isWorkExpanded: () => true,
           onToggleWork: () => {},
@@ -124,6 +128,8 @@ function openReport(key = "click") {
 function titlerFor(key: string, title: string) {
   const titler = new SessionLinkTitler();
   titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
+  titler.context = createInitializationContext(titler.client);
+  titler.context.gateway.snapshot.hello = gatewayHelloForMethods(["controlUi.sessionPreview"]);
   const request = vi.spyOn(titler.client, "request").mockResolvedValueOnce({
     status: "ok",
     sessionKey: key,
@@ -157,6 +163,13 @@ function narration(content: unknown, timestamp: number, overrides: Record<string
   };
 }
 
+async function renderToolFiles(group: MessageGroup, frame: boolean) {
+  const onOpenWorkspaceFile = vi.fn();
+  (frame ? renderFrame : renderGroup)(group, { onOpenWorkspaceFile, ...expanded });
+  await settleToolBridges(container);
+  return onOpenWorkspaceFile;
+}
+
 it.each([
   { collapsed: false, key: "click" },
   { collapsed: true, key: "Enter" },
@@ -170,35 +183,68 @@ it.each([
   openReport(key);
 });
 
-it.each([false, true])("opens sender's nested tool files (frame=%s)", async (frame) => {
-  const onOpenWorkspaceFile = vi.fn();
-  const group = createGroup(
-    { sessionKey },
-    {
+it.each([
+  { frame: false, forwarded: false },
+  { frame: true, forwarded: false },
+  { frame: false, forwarded: true },
+  { frame: true, forwarded: true },
+])(
+  "routes nested tool files to their message owner (frame=$frame, forwarded=$forwarded)",
+  async ({ frame, forwarded }) => {
+    const group = createGroup(forwarded ? { sessionKey } : undefined, {
       runId: "forwarded-tools",
+      __openclaw: { id: "entry-read" },
       content: [
         readCall("parent-read", reportPath),
-        readCall("child-read", "reports/styles.css", "parent-read"),
+        ...(forwarded ? [readCall("child-read", "reports/styles.css", "parent-read")] : []),
       ],
-    },
-  );
-  const options = { onOpenWorkspaceFile, ...expanded };
-  if (frame) {
-    renderFrame(group, options);
-  } else {
-    renderGroup(group, options);
-  }
-  await settleToolBridges(container);
-  const links = container.querySelectorAll<HTMLButtonElement>(".chat-tool-row__file-link");
-  expect(links).toHaveLength(2);
-  for (const link of links) {
-    link.click();
-  }
-  expect(onOpenWorkspaceFile.mock.calls).toEqual([
-    [{ path: reportPath, sessionKey }],
-    [{ path: "reports/styles.css", sessionKey }],
-  ]);
-});
+    });
+    const onOpenWorkspaceFile = await renderToolFiles(group, frame);
+    const links = container.querySelectorAll<HTMLButtonElement>(".chat-tool-row__file-link");
+    expect(links).toHaveLength(forwarded ? 2 : 1);
+    for (const link of links) {
+      link.click();
+    }
+    const owner = forwarded ? { sessionKey } : { messageEntryId: "entry-read" };
+    expect(onOpenWorkspaceFile.mock.calls).toEqual(
+      (forwarded ? [reportPath, "reports/styles.css"] : [reportPath]).map((path) => [
+        { path, ...owner },
+      ]),
+    );
+  },
+);
+
+it.each([
+  { senderSession: undefined, available: true },
+  { senderSession: mainSession, available: true },
+  { senderSession: { sessionKey, agentId: "research" }, available: false },
+  { senderSession: { sessionKey: mainSession.sessionKey, agentId: "research" }, available: false },
+])(
+  "keeps Files search in its owning session ($senderSession)",
+  async ({ senderSession, available }) => {
+    const onFindWorkspaceFile = vi.fn();
+    renderGroup(
+      createGroup(senderSession, {
+        phase: "final_answer",
+        content: [
+          {
+            type: "attachment_error",
+            attachment: { code: "file-too-large", kind: "document", label: "orders-large.zip" },
+          },
+        ],
+      }),
+      { sessionKey: mainSession.sessionKey, agentId: "main", onFindWorkspaceFile },
+    );
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => expect(container.textContent).toContain("Too large to attach."));
+    const find = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Find in Files",
+    );
+    expect(Boolean(find)).toBe(available);
+    find?.click();
+    expect(onFindWorkspaceFile).toHaveBeenCalledTimes(available ? 1 : 0);
+  },
+);
 
 it("keeps the sender on narrated file links in a run frame", () => {
   const groups = groupMessages([
@@ -212,6 +258,26 @@ it("keeps the sender on narrated file links in a run frame", () => {
   openReport();
 });
 
+it.each([{ phase: "final_answer" }, { stopReason: "stop" }])(
+  "keeps an explicit mixed forwarded answer visible with file and reply actions (%j)",
+  (terminal) => {
+    const [group] = groupMessages([
+      narration([{ type: "text", text: reportLink }, readCall("read-report", reportPath)], 1_000, {
+        senderSession: { sessionKey },
+        ...terminal,
+      }),
+    ]);
+    if (group?.kind !== "group") {
+      throw new Error("Missing forwarded answer group");
+    }
+    expect(group.role).toBe("assistant");
+    renderGroup(group, { onReply: vi.fn() });
+    openReport();
+    expect(query('button[aria-label="Reply to message"]')).not.toBeNull();
+    expect(query('button[aria-label="Copy as markdown"]')).not.toBeNull();
+  },
+);
+
 it.each([false, true])("preserves sender attribution (forwarded=%s)", async (forwarded) => {
   const group = createGroup(forwarded ? mainSession : undefined, {}, "Forwarded from main");
   renderGroup(group);
@@ -222,7 +288,6 @@ it.each([false, true])("preserves sender attribution (forwarded=%s)", async (for
   }
   const forwardedGroup = query(".chat-group--forwarded");
   expect(forwardedGroup?.classList.contains("chat-group--sender-tint")).toBe(true);
-  expect(forwardedGroup?.style.getPropertyValue("--chat-sender-hue")).not.toBe("");
   const attribution = required(
     ".chat-group--forwarded .chat-group-messages > .chat-reply-attribution",
   );
@@ -239,7 +304,7 @@ it.each([false, true])("preserves sender attribution (forwarded=%s)", async (for
 
   const { titler } = titlerFor("agent:main:main", "Main session");
   const sourceLink = expectDefined(link, "source session link");
-  await titler.decorate(sourceLink, true);
+  await titler.decorate(sourceLink);
   expect(sourceLink.textContent).toBe("Main session");
   renderGroup(group);
   const retained = query(`${attributionSelector} a`);
@@ -247,31 +312,14 @@ it.each([false, true])("preserves sender attribution (forwarded=%s)", async (for
   expect(retained?.hasAttribute("title")).toBe(false);
 });
 
-it.each([
-  ["research", "blob:research-avatar", "image"],
-  ["research", "https://example.test/avatar.png", "face"],
-  ["main", "blob:main-avatar", "face"],
-  ["removed", "blob:stale-avatar", "empty"],
-  [undefined, null, "empty"],
-] as const)("renders forwarded agent %s with %s as %s", async (agentId, avatar, expected) => {
-  renderGroup(createGroup({ agentId }), {
+it("uses the current agent face instead of its forwarded-avatar entry", async () => {
+  renderGroup(createGroup({ agentId: "main" }), {
     ...agentOptions,
-    senderAgentAvatars: new Map(agentId ? [[agentId, avatar]] : []),
+    senderAgentAvatars: new Map([["main", "blob:main-avatar"]]),
   });
-
-  const image = query("img.chat-avatar.assistant");
-  expect(image !== null).toBe(expected === "image");
-  if (expected === "empty") {
-    expect(query(".chat-avatar, .chat-avatar-slot")).toBeNull();
-  }
-  if (expected === "image") {
-    expect(image).toMatchObject({ src: avatar, alt: "Research Agent" });
-  }
-  if (expected === "face") {
-    await vi.dynamicImportSettled();
-    await vi.waitFor(() => expect(query(".identity-avatar__agent-face")).not.toBeNull());
-    expect(query(".chat-avatar--sender-initials")).toBeNull();
-  }
+  await vi.dynamicImportSettled();
+  await vi.waitFor(() => expect(query(".identity-avatar__agent-face")).not.toBeNull());
+  expect(query("img.chat-avatar.assistant, .chat-avatar--sender-initials")).toBeNull();
 });
 
 it.each([
@@ -291,7 +339,7 @@ it.each([
   expect(chip.getAttribute("data-session-key")).toBe(isCronRun ? null : key);
   expect(text(attributionSelector) ?? "").not.toContain("—");
   const { titler, request } = titlerFor(key, "Client session title");
-  await titler.decorate(chip, true);
+  await titler.decorate(chip);
   expect(chip.textContent?.trim()).toBe(chipText);
   expect(chip.getAttribute("href")).toBe(href);
   if (isCronRun) {

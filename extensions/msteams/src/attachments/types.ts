@@ -25,7 +25,6 @@ export type MSTeamsHtmlAttachmentSummary = {
   dataImages: number;
   cidImages: number;
   srcHosts: string[];
-  attachmentTags: number;
   attachmentIds: string[];
 };
 

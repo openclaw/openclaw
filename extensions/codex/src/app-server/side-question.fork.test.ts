@@ -7,8 +7,12 @@ import {
   createMockPluginRegistry,
   useProviderToolSchemaRuntimeForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   recordCodexThreadForkSettings,
   recordCodexTurnForkSettings,
@@ -35,8 +39,10 @@ const {
 } = await import("./side-question.test-support.js");
 
 beforeAll(async () => {
+  setRuntimeConfigSnapshot({});
   await captureRuntimeConfigAsyncReader()();
 });
+afterAll(() => clearRuntimeConfigSnapshot());
 
 useProviderToolSchemaRuntimeForTest(["openai", "codex", "lmstudio"]);
 
@@ -102,6 +108,8 @@ describe("runCodexAppServerSideQuestion cache-parity fork", () => {
         ...parentPolicy,
         modelProvider: "openai",
         permissions: "parent-permissions",
+        // A cold resume can change this without rewriting the rollout's creation base.
+        baseInstructions: "Effective parent base after a cold resume.",
         developerInstructions: "Exact parent generic policy and workspace instructions.",
         config: {
           web_search: webSearch,

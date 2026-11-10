@@ -131,8 +131,6 @@ function resolveAuthDecisionLogCoalescing(
   const suppressedDuplicateCount = recentAgeMs < staleWindowMs ? recent?.suppressed : undefined;
   if (recentAgeMs >= staleWindowMs) {
     authDecisionLogCoalesceEntries.delete(key);
-  }
-  if (!authDecisionLogCoalesceEntries.has(key)) {
     for (const [entryKey, entry] of authDecisionLogCoalesceEntries) {
       if (entry.lastLoggedAt < now - staleWindowMs) {
         authDecisionLogCoalesceEntries.delete(entryKey);
@@ -293,7 +291,9 @@ export type ModelFallbackChainStopReason =
   | "agent_run_restart_abort"
   | "agent_run_superseded_abort"
   | "session_placement_settlement_closed"
-  | "terminal_abort_wrapper";
+  | "terminal_abort_wrapper"
+  | "local_runtime_coordination"
+  | "transcript_not_continuable";
 
 /** Record a local or terminal stop separately from provider-failure decisions. */
 export function logModelFallbackChainStopped(params: {

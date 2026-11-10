@@ -6,7 +6,9 @@ import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
+  readSqliteWriterAppVersion,
 } from "../infra/sqlite-user-version.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -38,6 +40,7 @@ export function assertSupportedAgentSchemaVersion(
       pathname,
       userVersion,
       OPENCLAW_AGENT_SCHEMA_VERSION,
+      readSqliteWriterAppVersion(db),
     );
   }
   return userVersion;
@@ -79,8 +82,9 @@ export function assertCanonicalAgentPersistenceVersion(
     throw new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, userVersion);
   }
   if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION && !isNewUnownedDatabase) {
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${pathname} uses schema version ${userVersion}; stop active agents and run openclaw doctor --fix to migrate session identities before using it.`,
+    throw new StartupMaintenanceRequiredError(
+      "state-migrations",
+      `OpenClaw agent database ${pathname} uses schema version ${userVersion}; stop active agents and run openclaw doctor --fix to upgrade it to schema version ${OPENCLAW_AGENT_SCHEMA_VERSION} before using it.`,
     );
   }
 }

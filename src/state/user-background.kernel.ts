@@ -64,7 +64,6 @@ export function readUserBackgroundCommand(
     if (command.type === "userBackground.snapshot") {
       return {
         type: command.type,
-        profileId: owner,
         result: owner ? readSnapshot(db, owner) : { status: "no_durable_identity" },
       };
     }

@@ -302,13 +302,13 @@ export function createMemoryWikiCompiledCacheStore(
     overflowPolicy: "evict-oldest",
   });
   return {
-    async read(this: void, config: ResolvedMemoryWikiConfig) {
+    async read(this: void, config: ResolvedMemoryWikiConfig, reload = false) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const activeVault = resolveActiveVault(config);
       if (!activeVault?.compiledCachePublicationId) {
         return null;
       }
-      if (activeVault.snapshot) {
+      if (activeVault.snapshot && !reload) {
         return activeVault.snapshot;
       }
       const key = publicationKey(ownerId, activeVault.compiledCachePublicationId);
@@ -471,8 +471,27 @@ export async function writeMemoryWikiCompiledCache(
   parentPublicationId: string | null,
   commitPublication: () => Promise<void>,
   loadDurableIdentity: () => Promise<DurableVaultIdentity>,
+  options?: { reuseUnchanged: boolean; signal?: AbortSignal },
 ): Promise<void> {
   const store = requireConfiguredStore();
+  const predecessor = resolveActiveVault(config);
+  if (
+    options?.reuseUnchanged &&
+    parentPublicationId &&
+    predecessor?.compiledCachePublicationId === parentPublicationId
+  ) {
+    // Explicit compilation validates persisted bytes, even with a warm snapshot.
+    // The compiler holds the vault mutation lock throughout this decision.
+    const persisted = await store.read(config, true);
+    options.signal?.throwIfAborted();
+    if (resolveActiveVault(config) !== predecessor) {
+      throw new Error("Memory Wiki cache owner retired before publication.");
+    }
+    if (JSON.stringify(persisted) === JSON.stringify(snapshot)) {
+      dashboardStates.delete(dashboardStateKey(config));
+      return;
+    }
+  }
   const { activeVault, serializedSnapshot } = await store.write(config, snapshot, publicationId);
   if (resolveActiveVault(config) !== activeVault) {
     await store.deletePublication(config, publicationId);

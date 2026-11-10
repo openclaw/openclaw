@@ -38,9 +38,8 @@ export function inspectNostrIngressEvent(event: unknown): { eventId: string; lan
 export async function migrateNostrLegacyRecentEventIds(params: {
   queue: ChannelIngressQueue<NostrIngressPayload>;
   eventIds: readonly string[];
-  migratedAt?: number;
 }): Promise<void> {
-  const migratedAt = params.migratedAt ?? Date.now();
+  const migratedAt = Date.now();
   for (const eventId of new Set(params.eventIds)) {
     if (!eventId.trim()) {
       continue;

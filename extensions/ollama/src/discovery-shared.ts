@@ -82,46 +82,6 @@ export function resolveOllamaRuntimeBaseUrl(params: {
   return params.discoveredBaseUrl;
 }
 
-function resolveOllamaDiscoveryAuth(params: {
-  env: NodeJS.ProcessEnv;
-  baseUrl?: string;
-  explicitApiKey?: ModelProviderConfig["apiKey"];
-  resolvedAuth: ReturnType<OllamaDiscoveryContext["resolveProviderApiKey"]>;
-}): { apiKey?: ModelProviderConfig["apiKey"]; discoveryApiKey?: string } | null {
-  const envValue = normalizeOptionalString(params.env.OLLAMA_API_KEY);
-  const resolvedApiKey = normalizeOptionalString(params.resolvedAuth.apiKey);
-  const resolvedDiscoveryApiKey = normalizeOptionalString(params.resolvedAuth.discoveryApiKey);
-  const explicitRef = coerceSecretRef(params.explicitApiKey);
-  const explicitApiKey = explicitRef
-    ? resolvedDiscoveryApiKey
-    : readOllamaStringValue(params.explicitApiKey);
-  // Only discoveryApiKey proves a SecretRef resolved. Keep its reference in
-  // config, even when the credential bytes happen to equal a local marker.
-  if (explicitRef && !explicitApiKey) {
-    return null;
-  }
-  if (explicitApiKey && (explicitRef || !isOllamaApiKeyMarker(explicitApiKey))) {
-    return { apiKey: explicitRef ?? explicitApiKey, discoveryApiKey: explicitApiKey };
-  }
-  if (!isLocalOllamaBaseUrl(params.baseUrl)) {
-    if (resolvedDiscoveryApiKey) {
-      return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey };
-    }
-    if (resolvedApiKey && !isOllamaApiKeyMarker(resolvedApiKey)) {
-      return { apiKey: resolvedApiKey, discoveryApiKey: resolvedApiKey };
-    }
-    return envValue && envValue !== OLLAMA_DEFAULT_API_KEY
-      ? { apiKey: "OLLAMA_API_KEY", discoveryApiKey: envValue }
-      : {};
-  }
-  if (resolvedApiKey && resolvedApiKey !== envValue && !isOllamaApiKeyMarker(resolvedApiKey)) {
-    return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey ?? resolvedApiKey };
-  }
-  // Ambient cloud credentials must not reach local servers; synthetic local
-  // auth belongs only in config, never in HTTP discovery headers.
-  return { apiKey: OLLAMA_DEFAULT_API_KEY };
-}
-
 const LOCAL_OLLAMA_HOSTNAMES = new Set([
   "localhost",
   "0.0.0.0",
@@ -273,12 +233,46 @@ export async function resolveOllamaDiscoveryResult(params: {
   const resolvedOllamaAuth = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID);
   const ollamaKey = resolvedOllamaAuth.apiKey;
   const hasOllamaDiscoveryOptIn = typeof ollamaKey === "string" && ollamaKey.trim().length > 0;
-  const auth = resolveOllamaDiscoveryAuth({
-    env: params.ctx.env,
-    baseUrl: configuredBaseUrl,
-    explicitApiKey: explicit?.apiKey,
-    resolvedAuth: resolvedOllamaAuth,
-  });
+  const env = params.ctx.env;
+  const configuredApiKey = explicit?.apiKey;
+  const resolveOllamaDiscoveryAuth = (): {
+    apiKey?: ModelProviderConfig["apiKey"];
+    discoveryApiKey?: string;
+  } | null => {
+    const envValue = normalizeOptionalString(env.OLLAMA_API_KEY);
+    const resolvedApiKey = normalizeOptionalString(resolvedOllamaAuth.apiKey);
+    const resolvedDiscoveryApiKey = normalizeOptionalString(resolvedOllamaAuth.discoveryApiKey);
+    const explicitRef = coerceSecretRef(configuredApiKey);
+    const explicitApiKey = explicitRef
+      ? resolvedDiscoveryApiKey
+      : readOllamaStringValue(configuredApiKey);
+    // Only discoveryApiKey proves a SecretRef resolved. Keep its reference in
+    // config, even when the credential bytes happen to equal a local marker.
+    if (explicitRef && !explicitApiKey) {
+      return null;
+    }
+    if (explicitApiKey && (explicitRef || !isOllamaApiKeyMarker(explicitApiKey))) {
+      return { apiKey: explicitRef ?? explicitApiKey, discoveryApiKey: explicitApiKey };
+    }
+    if (!isLocalOllamaBaseUrl(configuredBaseUrl)) {
+      if (resolvedDiscoveryApiKey) {
+        return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey };
+      }
+      if (resolvedApiKey && !isOllamaApiKeyMarker(resolvedApiKey)) {
+        return { apiKey: resolvedApiKey, discoveryApiKey: resolvedApiKey };
+      }
+      return envValue && envValue !== OLLAMA_DEFAULT_API_KEY
+        ? { apiKey: "OLLAMA_API_KEY", discoveryApiKey: envValue }
+        : {};
+    }
+    if (resolvedApiKey && resolvedApiKey !== envValue && !isOllamaApiKeyMarker(resolvedApiKey)) {
+      return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey ?? resolvedApiKey };
+    }
+    // Ambient cloud credentials must not reach local servers; synthetic local
+    // auth belongs only in config, never in HTTP discovery headers.
+    return { apiKey: OLLAMA_DEFAULT_API_KEY };
+  };
+  const auth = resolveOllamaDiscoveryAuth();
   if (!auth) {
     return null;
   }

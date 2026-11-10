@@ -113,7 +113,8 @@ export function currentReefDeliveries(
         matchesReefPeerIdentity(getTrust(peer), parsed.data.recipient)
         ? [{ peer, id, delivery: parsed.data }]
         : [];
-    });
+    })
+    .toSorted((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
 }
 
 export function matchesReefDeliveryBinding(

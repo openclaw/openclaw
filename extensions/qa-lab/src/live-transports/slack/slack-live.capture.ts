@@ -221,11 +221,9 @@ async function collectSlackQaMessageWrites(params: {
 export async function readSlackQaMessageWrites(params: {
   afterRequestEventId: number;
   sessionId: string;
-  settleTimeoutMs?: number;
   store: AsyncDebugProxyCaptureReader;
 }): Promise<SlackObservedMessage[]> {
-  const timeoutMs = params.settleTimeoutMs ?? SLACK_QA_CAPTURE_SETTLE_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + SLACK_QA_CAPTURE_SETTLE_TIMEOUT_MS;
   while (true) {
     const result = await collectSlackQaMessageWrites({
       afterRequestEventId: params.afterRequestEventId,

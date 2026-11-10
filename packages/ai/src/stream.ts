@@ -32,12 +32,10 @@ function retainUnscopedStreamLifetime(
     releaseLifetime = resolve;
   });
   void runWithHost(() => lifetime);
-  let released = false;
   let resultSettled = false;
   let bufferSettled = false;
   const releaseIfSettled = () => {
-    if (!released && resultSettled && bufferSettled) {
-      released = true;
+    if (resultSettled && bufferSettled) {
       releaseLifetime();
     }
   };

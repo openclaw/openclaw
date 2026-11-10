@@ -10,10 +10,11 @@ import {
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
+import { packToArchive } from "../../plugins/test-helpers/archive-fixtures.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import * as shared from "./shared.js";
 import * as execution from "./update-command-execution.js";
-import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
+import { installFreshUpdateFixture, writeFreshJson } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
 import * as runtimePlan from "./update-command-runtime-preflight.js";
@@ -44,19 +45,17 @@ it.each([false, true])(
     fs.writeFileSync(path.join(fixture.root, relativeFile), marker, { mode: 0o600 });
     const candidate = path.join(base, "package");
     await writePackageRoot(candidate, "2026.9.4");
-    fs.writeFileSync(
-      path.join(candidate, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "2026.9.4",
-        type: "module",
-        openclaw: { schemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 } },
-      }),
-    );
+    writeFreshJson(path.join(candidate, "package.json"), {
+      name: "openclaw",
+      version: "2026.9.4",
+      type: "module",
+      openclaw: { schemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 } },
+    });
     await writePackageDistInventory(candidate);
-    const artifact = path.join(base, "candidate.tgz");
-    execFileSync("tar", ["-czf", artifact, "-C", base, "package"], {
-      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    const artifact = await packToArchive({
+      pkgDir: candidate,
+      outDir: base,
+      outName: "candidate.tgz",
     });
     vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
     vi.mocked(updateGlobal.resolveGlobalInstallTarget).mockResolvedValue(target);
@@ -86,6 +85,7 @@ it.each([false, true])(
       const result = await params.stagedPackage.run({
         root: fixture.root,
         installKind: "package",
+        installTarget: target,
         tag: artifact,
         timeoutMs: 30_000,
         startedAt: params.startedAt,

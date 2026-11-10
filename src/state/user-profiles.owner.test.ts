@@ -1,10 +1,8 @@
-import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
   observeSqliteReadSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -26,23 +24,23 @@ import {
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
 } from "./user-profiles.js";
+import { useUserStateFixture } from "./user-state.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  });
-});
-
-function stateOptions() {
-  return { path: join(tempDirs.make("openclaw-user-profiles-owner-"), "openclaw.sqlite") };
-}
+const stateOptions = useUserStateFixture("openclaw-user-profiles-owner-");
 
 function fixture() {
   const options = stateOptions();
   const owner = ensureGatewayOwnerProfile("Local Owner", options);
   const db = openOpenClawStateDatabase(options).db;
-  return { options, owner, db };
+  const reject = (
+    operation: () => unknown,
+    code: "merge" | "role" | "repair-required" = "merge",
+  ) => {
+    const before = profileState(options);
+    expect(operation).toThrow(expect.objectContaining({ name: "UserProfileOwnerError", code }));
+    expect(profileState(options)).toEqual(before);
+  };
+  return { options, owner, db, reject };
 }
 
 function ownerReference(kind: "merged owner" | "tombstone", state: ReturnType<typeof fixture>) {
@@ -56,16 +54,6 @@ function ownerReference(kind: "merged owner" | "tombstone", state: ReturnType<ty
     )
     .run("retired-owner-alias", state.owner.id);
   return "retired-owner-alias";
-}
-
-function expectUnchanged(
-  operation: () => unknown,
-  options: ReturnType<typeof fixture>["options"],
-  code: "merge" | "role" | "repair-required",
-) {
-  const before = profileState(options);
-  expect(operation).toThrow(expect.objectContaining({ name: "UserProfileOwnerError", code }));
-  expect(profileState(options)).toEqual(before);
 }
 
 describe("gateway owner profiles", () => {
@@ -94,41 +82,34 @@ describe("gateway owner profiles", () => {
     }
   });
 
-  it.each(["merged owner", "tombstone"] as const)("rejects linking to the %s", (kind) => {
+  it.each([
+    ["merged owner", "merge"],
+    ["tombstone", "merge"],
+    ["merged owner", "role"],
+    ["tombstone", "role"],
+  ] as const)("rejects %s %s mutations", (kind, code) => {
     const state = fixture();
     const target = ownerReference(kind, state);
-    expectUnchanged(
-      () => linkEmail("person@example.test", target, state.options),
-      state.options,
-      "merge",
+    state.reject(
+      () =>
+        code === "merge"
+          ? linkEmail("person@example.test", target, state.options)
+          : setUserProfileRole(target, "guest", state.options),
+      code,
     );
   });
 
   it("rejects moving an owner's email to a person", () => {
-    const { options, owner, db } = fixture();
+    const { options, owner, db, reject } = fixture();
     const person = ensureProfileForEmail("person@example.test", options);
     db.prepare(
       "INSERT INTO user_profile_emails (email, profile_id, created_at) VALUES (?, ?, 1)",
     ).run("old-owner@example.test", owner.id);
-    expectUnchanged(
-      () => linkEmail("old-owner@example.test", person.id, options),
-      options,
-      "merge",
-    );
-  });
-
-  it.each(["merged owner", "tombstone"] as const)("rejects assigning a role to the %s", (kind) => {
-    const state = fixture();
-    const target = ownerReference(kind, state);
-    expectUnchanged(
-      () => setUserProfileRole(target, "guest", state.options),
-      state.options,
-      "role",
-    );
+    reject(() => linkEmail("old-owner@example.test", person.id, options));
   });
 
   it("rejects verified GitHub sign-in through an old merged-owner email", () => {
-    const { options, owner, db } = fixture();
+    const { options, owner, db, reject } = fixture();
     const identity = { accountId: 10, login: "person" };
     syncGitHubIdentity(
       { identity, authenticationAlias: { kind: "github-login", login: "person" } },
@@ -138,51 +119,39 @@ describe("gateway owner profiles", () => {
       "INSERT INTO user_profile_emails (email, profile_id, created_at) VALUES (?, ?, 1)",
     ).run("old-owner@example.test", owner.id);
     mergeOwnerIntoPerson(owner.id, options);
-    expectUnchanged(
-      () =>
-        syncGitHubIdentity(
-          {
-            identity,
-            authenticationAlias: { kind: "email", email: "old-owner@example.test" },
-          },
-          options,
-        ),
-      options,
-      "merge",
+    reject(() =>
+      syncGitHubIdentity(
+        { identity, authenticationAlias: { kind: "email", email: "old-owner@example.test" } },
+        options,
+      ),
     );
-    expectUnchanged(
-      () =>
-        ensureProfileForEmail("old-owner@example.test", {
-          ...options,
-          expectedGitHubAccountId: identity.accountId,
-        }),
-      options,
-      "merge",
+    reject(() =>
+      ensureProfileForEmail("old-owner@example.test", {
+        ...options,
+        expectedGitHubAccountId: identity.accountId,
+      }),
     );
   });
 
   it("rejects personal sign-in through an old merged-owner GitHub identity", () => {
-    const { options, owner, db } = fixture();
+    const { options, owner, db, reject } = fixture();
     db.prepare(
       "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES ('github', '10', ?, 'person', 1)",
     ).run(owner.id);
     mergeOwnerIntoPerson(owner.id, options);
-    expectUnchanged(
-      () =>
-        syncGitHubIdentity(
-          {
-            identity: { accountId: 10, login: "person" },
-            authenticationAlias: { kind: "email", email: "person@example.test" },
-          },
-          options,
-        ),
-      options,
-      "merge",
+    reject(() =>
+      syncGitHubIdentity(
+        {
+          identity: { accountId: 10, login: "person" },
+          authenticationAlias: { kind: "email", email: "person@example.test" },
+        },
+        options,
+      ),
     );
   });
 
   it.each(["owner", "identity", "misdirected"])("requires Doctor for a damaged %s", (kind) => {
-    const { options, owner, db } = fixture();
+    const { options, owner, db, reject } = fixture();
     if (kind === "owner") {
       mergeOwnerIntoPerson(owner.id, options);
     } else {
@@ -194,11 +163,7 @@ describe("gateway owner profiles", () => {
         "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local'",
       ).run(legacy.id);
     }
-    expectUnchanged(
-      () => ensureGatewayOwnerProfile("Host Renamed", options),
-      options,
-      "repair-required",
-    );
+    reject(() => ensureGatewayOwnerProfile("Host Renamed", options), "repair-required");
     expect(() => ensureGatewayOwnerProfile("Host Renamed", options)).toThrow(
       "openclaw doctor --fix",
     );

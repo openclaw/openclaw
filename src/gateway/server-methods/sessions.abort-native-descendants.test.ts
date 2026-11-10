@@ -25,11 +25,14 @@ import {
   setRpcSourceIdentityForTest,
 } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
+import * as sessionUtils from "../session-utils.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
-import { createActiveRun } from "./chat.abort.test-helpers.js";
+import { handleChatAbortRequest } from "./chat-abort-handler.js";
+import { createActiveRun, invokeChatAbortHandler } from "./chat.abort.test-helpers.js";
 import {
   abortContext,
   expectAbortFailure,
+  expectCancelledSession,
   revocableAuthority,
   seedYieldedSession,
   stopSession,
@@ -69,6 +72,137 @@ async function seedYieldedParent() {
   await seedYieldedSession(fixture.stateDir, sessionKey, sessionId, runId, lifecycleRevision);
   expect(loadSessionEntry(target)?.status).toBeUndefined();
 }
+
+function parentRun(route: string, overrides: Parameters<typeof createActiveRun>[1] = {}) {
+  const parent = createActiveRun(sessionKey, {
+    runId,
+    sessionId,
+    agentId: "main",
+    queued: route.startsWith("reserved"),
+    ...overrides,
+  });
+  if (!route.startsWith("reserved")) {
+    rpcSourceTesting.set(runId, parent);
+  }
+  return parent;
+}
+
+function chatAbort(
+  context: ReturnType<typeof abortContext>,
+  overrides: Partial<
+    Omit<Parameters<typeof invokeChatAbortHandler>[0], "handler" | "context">
+  > = {},
+) {
+  return invokeChatAbortHandler({
+    handler: handleChatAbortRequest,
+    context,
+    request: { sessionKey, runId },
+    client: { connect: { scopes: ["operator.admin"] } },
+    ...overrides,
+  });
+}
+
+it.each([
+  "reserved chat",
+  "indexed chat",
+  "indexed sessions",
+  "reserved cross-session chat",
+  "hidden cross-session chat",
+] as const)("exact %s Stop retains the native requester's physical lifecycle", async (route) => {
+  await seedYieldedParent();
+  const crossSession = route.includes("cross-session");
+  const requestedKey = crossSession ? "agent:main:other-conversation" : sessionKey;
+  if (crossSession) {
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: requestedKey,
+      defaultSessionId: "other-physical-session",
+      lifecycleRevision: "other-lifecycle",
+    });
+  }
+  const context = abortContext();
+  const parent = parentRun(route, {
+    controlUiVisible: route.startsWith("hidden") ? false : undefined,
+  });
+  const cancel = vi.fn(async () => ({ killed: 1, cancelledRequesters: [requester] }));
+  installHarness(async (params, run) => {
+    expect(params).toMatchObject(requester);
+    return run(cancel);
+  });
+  const respond = vi.fn<RespondFn>();
+  const client = { connect: { scopes: ["operator.admin"] } };
+  if (route === "indexed sessions") {
+    await stopSession(sessionKey, respond, context, { runId }, client);
+  } else {
+    await chatAbort(context, { request: { sessionKey: requestedKey, runId }, respond, client });
+  }
+  expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
+  expect(parent.input.abortSignal.aborted).toBe(true);
+  expect(cancel).toHaveBeenCalledOnce();
+});
+
+it.each(["reserved", "indexed"] as const)(
+  "exact %s Stop rejects foreign and revoked requesters before native cancellation",
+  async (route) => {
+    await seedYieldedParent();
+    const context = abortContext();
+    const parent = parentRun(route, { owner: { connId: "owner" } });
+    const client = { connId: "owner", connect: { scopes: ["operator.write"] }, invalidated: false };
+    const cancel = vi.fn(async () => ({ killed: 1, cancelledRequesters: [requester] }));
+    const prepare = vi.fn();
+    installHarness(async (_params, run) => {
+      prepare();
+      client.invalidated = true;
+      return run(cancel);
+    });
+    const foreignResponse = await chatAbort(context, {
+      client: { connId: "foreign", connect: { scopes: ["operator.write"] } },
+    });
+    expectAbortFailure(foreignResponse, "unauthorized", "INVALID_REQUEST");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(parent.input.abortSignal.aborted).toBe(false);
+    await expect(chatAbort(context, { client })).rejects.toThrow(
+      "Gateway requester authority changed",
+    );
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    // Reserved sources stop before native preparation; accepted parent effects remain.
+    expect(parent.input.abortSignal.aborted).toBe(route === "reserved");
+  },
+);
+
+it.each(["reserved", "indexed"] as const)(
+  "exact %s Stop rejects a retargeted source during lifecycle preparation",
+  async (route) => {
+    await seedYieldedParent();
+    const context = abortContext();
+    const parent = parentRun(route, { controlUiVisible: false });
+    const cancel = vi.fn(async () => ({ killed: 1, cancelledRequesters: [requester] }));
+    installHarness((_params, run) => run(cancel));
+    const read = sessionUtils.loadGatewaySessionEntryReadOnlyInWorker;
+    const reader = vi
+      .spyOn(sessionUtils, "loadGatewaySessionEntryReadOnlyInWorker")
+      .mockImplementation(async (params) => {
+        const result = await read(params);
+        if (params.key === sessionKey) {
+          setRpcSourceIdentityForTest(parent, { sessionId: "retargeted-session" });
+        }
+        return result;
+      });
+    try {
+      await expect(
+        chatAbort(context, {
+          request: { sessionKey: "agent:main:other-conversation", runId },
+        }),
+      ).rejects.toThrow("Run changed before cancellation; retry Stop.");
+      expect(parent.input.abortSignal.aborted).toBe(false);
+      expect(cancel).not.toHaveBeenCalled();
+    } finally {
+      reader.mockRestore();
+    }
+  },
+);
 
 it.each([
   "cancelled",
@@ -144,12 +278,7 @@ it.each([
       const failures = ["failed settlement", "partial settlement"];
       expect(respond.mock.calls[0]?.[0]).toBe(!failures.includes(race));
       if (race === "cancelled" || race === "partial settlement" || race === "retired owner") {
-        expect(loadSessionEntry(target)).toMatchObject({
-          sessionId,
-          lastRunId: runId,
-          status: "killed",
-          abortedLastRun: true,
-        });
+        expectCancelledSession(loadSessionEntry(target), runId, { sessionId });
         expect(loadSessionEntry(target)?.lifecycleRunId).toBeUndefined();
       } else {
         expect(loadSessionEntry(target)).toEqual(expected);
@@ -171,8 +300,7 @@ it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
       lifecycleRevision,
     });
     const context = abortContext();
-    const parent = createActiveRun(sessionKey, { runId, sessionId, agentId: "main" });
-    rpcSourceTesting.set(runId, parent);
+    const parent = parentRun("indexed");
     let successor: ReturnType<typeof createActiveRun> | undefined;
     const entered = createDeferred();
     const resume = createDeferred();
@@ -235,39 +363,52 @@ it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
   },
 );
 
-it("stops a captured old embedded run when native preparation rejects after row replacement", async () => {
-  await seedYieldedParent();
-  const original = expectDefined(loadSessionEntry(target), "original requester");
-  const abort = vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
-  const handle = createEmbeddedRunHandle({ runId, abort });
-  setActiveEmbeddedRun(sessionId, handle, sessionKey);
-  await replaceSessionEntry(target, {
-    ...original,
-    sessionId: "replacement-session",
-    lifecycleRevision: "replacement-revision",
-    lifecycleRunId: "replacement-run",
-  });
-  const replacement = loadSessionEntry(target);
-  const prepare = vi.fn(async (params: Parameters<DescendantCancellation>[0]) => {
-    expect(params).toMatchObject({ sessionId, requesterTurnRunId: runId });
-    expect(params.lifecycleRevision).toBeUndefined();
-    throw new Error("Original native generation is unavailable");
-  });
-  installHarness(prepare);
-  const respond = vi.fn<RespondFn>();
-  try {
-    await stopSession(sessionKey, respond, abortContext(), { runId });
-    expect(prepare).toHaveBeenCalledOnce();
-    expect(abort).toHaveBeenCalledOnce();
-    expectAbortFailure(
-      respond,
-      expect.stringContaining("Original native generation is unavailable"),
-    );
-    expect(loadSessionEntry(target)).toEqual(replacement);
-  } finally {
-    clearActiveEmbeddedRun(sessionId, handle);
-  }
-});
+it.each(["embedded", "reserved", "indexed"] as const)(
+  "stops a captured old %s run when native preparation rejects after row replacement",
+  async (route) => {
+    await seedYieldedParent();
+    const original = expectDefined(loadSessionEntry(target), "original requester");
+    const abort = vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
+    const handle = createEmbeddedRunHandle({ runId, abort });
+    const context = abortContext();
+    const parent = route === "embedded" ? undefined : parentRun(route);
+    if (route === "embedded") {
+      setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    }
+    await replaceSessionEntry(target, {
+      ...original,
+      sessionId: "replacement-session",
+      lifecycleRevision: "replacement-revision",
+      lifecycleRunId: "replacement-run",
+    });
+    const replacement = loadSessionEntry(target);
+    const prepare = vi.fn(async (params: Parameters<DescendantCancellation>[0]) => {
+      expect(params).toMatchObject({ sessionId, requesterTurnRunId: runId });
+      expect(params.lifecycleRevision).toBeUndefined();
+      throw new Error("Original native generation is unavailable");
+    });
+    installHarness(prepare);
+    const respond = vi.fn<RespondFn>();
+    try {
+      if (route === "embedded") {
+        await stopSession(sessionKey, respond, context, { runId });
+      } else {
+        await chatAbort(context, { respond });
+      }
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(
+        route === "embedded" ? abort.mock.calls.length === 1 : parent?.input.abortSignal.aborted,
+      ).toBe(true);
+      expectAbortFailure(
+        respond,
+        expect.stringContaining("Original native generation is unavailable"),
+      );
+      expect(loadSessionEntry(target)).toEqual(replacement);
+    } finally {
+      clearActiveEmbeddedRun(sessionId, handle);
+    }
+  },
+);
 
 it.each(["declined", "revoked", "prepared"] as const)(
   "preserves the parent fence with %s native preparation",

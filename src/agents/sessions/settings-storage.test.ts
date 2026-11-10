@@ -25,26 +25,23 @@ afterEach(async () => {
 });
 
 it.each([
-  { input: "{", error: SyntaxError },
-  { input: "null", error: TypeError },
-  { input: "42", error: TypeError },
-  { input: "true", error: TypeError },
-  { input: '"invalid"', error: TypeError },
-])("isolates invalid settings $input to the affected file", ({ input, error }) => {
+  { input: "{" },
+  { input: "null" },
+  { input: "42" },
+  { input: "true" },
+  { input: '"invalid"' },
+])("isolates invalid settings $input to the affected file", ({ input }) => {
   const { root, settingsPath } = settingsFixture("invalid", input);
   const projectPath = join(root, ".openclaw", "settings.json");
   mkdirSync(join(root, ".openclaw"));
   fs.writeFileSync(projectPath, '{"defaultThinkingLevel":"high"}');
-  expect(readSettingsScope(settingsPath)).toEqual({ settings: {}, loadError: expect.any(error) });
-  expect(readSettingsScope(projectPath)).toEqual({
-    settings: { defaultThinkingLevel: "high" },
-    loadError: null,
-  });
+  expect(readSettingsScope(settingsPath)).toEqual({});
+  expect(readSettingsScope(projectPath)).toEqual({ defaultThinkingLevel: "high" });
   expect(fs.readFileSync(settingsPath, "utf8")).toBe(input);
 });
 
 it.each(["EISDIR", "ENOTDIR"])(
-  "preserves a file %s error without losing the other scope",
+  "isolates a file %s error without losing the other scope",
   (code) => {
     const { root, agentDir, settingsPath } = settingsFixture("read-error");
     if (code === "EISDIR") {
@@ -55,14 +52,8 @@ it.each(["EISDIR", "ENOTDIR"])(
     const projectPath = join(root, ".openclaw", "settings.json");
     mkdirSync(join(root, ".openclaw"));
     fs.writeFileSync(projectPath, '{"defaultThinkingLevel":"high"}');
-    expect(readSettingsScope(settingsPath)).toEqual({
-      settings: {},
-      loadError: expect.objectContaining({ code }),
-    });
-    expect(readSettingsScope(projectPath)).toEqual({
-      settings: { defaultThinkingLevel: "high" },
-      loadError: null,
-    });
+    expect(readSettingsScope(settingsPath)).toEqual({});
+    expect(readSettingsScope(projectPath)).toEqual({ defaultThinkingLevel: "high" });
   },
 );
 
@@ -72,11 +63,8 @@ it("loads absent settings without creating or syncing writer sidecars", () => {
   mkdirSync(join(root, ".openclaw"));
   const fsync = vi.spyOn(fs, "fsyncSync");
   syncBuiltinESMExports();
-  expect(readSettingsScope(settingsPath)).toEqual({ settings: {}, loadError: null });
-  expect(readSettingsScope(join(root, ".openclaw", "settings.json"))).toEqual({
-    settings: {},
-    loadError: null,
-  });
+  expect(readSettingsScope(settingsPath)).toEqual({});
+  expect(readSettingsScope(join(root, ".openclaw", "settings.json"))).toEqual({});
   expect(fsync).not.toHaveBeenCalled();
   expect(fs.readdirSync(agentDir)).toEqual([]);
   expect(fs.readdirSync(join(root, ".openclaw"))).toEqual([]);

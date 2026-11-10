@@ -16,31 +16,17 @@ import {
   PREPARED_THINKING_POLICY,
   type ThinkingCatalogPolicyCarrier,
 } from "../plugins/provider-thinking-catalog.js";
+import { mergeConfiguredThinkingLevelMap } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-
-type ModelCatalogRouteMatcher = (
-  entry: ModelCatalogEntry,
-  route: ProviderModelRouteCandidate,
-) => boolean;
-
-type ModelCatalogLogicalIdentity = { id: string; key: string };
-
-/** Provider-owned catalog equivalence and exact physical-route matching. */
-export type ModelCatalogRoutePolicy = {
-  resolveIdentity(
-    entry: Pick<ModelCatalogEntry, "provider" | "id">,
-  ): ModelCatalogLogicalIdentity | null;
-  matchesRoute: ModelCatalogRouteMatcher;
-};
+import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 
 export type ModelCatalogRouteProjection =
   | { kind: "unmanaged" }
-  | { kind: "unresolved"; policy: ModelCatalogRoutePolicy }
+  | { kind: "unresolved" }
   | {
       kind: "selected";
       route: ProviderModelRouteCandidate;
-      policy: ModelCatalogRoutePolicy;
     };
 
 type ModelCatalogLogicalOverrides = Partial<
@@ -59,7 +45,6 @@ type ModelCatalogLogicalOverrides = Partial<
 /** Prepares configured-row indexes for one stable catalog config and policy projection. */
 export function createConfiguredModelCatalogOverridesResolver(params: {
   cfg: OpenClawConfig;
-  policy?: ModelCatalogRoutePolicy;
 }): (
   entry: Pick<ModelCatalogEntry, "provider" | "id">,
 ) => ModelCatalogLogicalOverrides | undefined {
@@ -79,7 +64,7 @@ export function createConfiguredModelCatalogOverridesResolver(params: {
       }
       const surface = resolveProviderModelPolicySurface(provider);
       const normalizeConfiguredModelId = (modelId: string) =>
-        params.policy?.resolveIdentity({ provider: providerId, id: modelId })?.id ??
+        openAIModelCatalogRoutePolicy.resolveIdentity({ provider: providerId, id: modelId })?.id ??
         resolveProviderModelCatalogId({ provider, modelId, surface }) ??
         modelId.trim();
       const resolveModel = createConfiguredProviderModelResolver(
@@ -119,6 +104,8 @@ function logicalIdentity(
     name: name ?? id,
     provider: entry.provider,
     ...(entry.alias ? { alias: entry.alias } : {}),
+    // Family names the model's developer, so it survives a route projection with the identity.
+    ...(lifecycleEntry.family ? { family: lifecycleEntry.family } : {}),
     ...(lifecycleEntry.providerOrder !== undefined
       ? { providerOrder: lifecycleEntry.providerOrder }
       : {}),
@@ -133,7 +120,11 @@ function applyLogicalOverrides(
   entry: ModelCatalogEntry,
   overrides: ModelCatalogLogicalOverrides | undefined,
 ): ModelCatalogEntry {
-  return overrides ? { ...entry, ...overrides } : entry;
+  if (!overrides) {
+    return entry;
+  }
+  const thinkingLevelMap = mergeConfiguredThinkingLevelMap(entry, overrides);
+  return { ...entry, ...overrides, ...(thinkingLevelMap ? { thinkingLevelMap } : {}) };
 }
 
 /**
@@ -163,7 +154,7 @@ export function projectModelCatalogEntryForRoute(params: {
   }
 
   const id =
-    params.projection.policy.resolveIdentity(params.entry)?.id ??
+    openAIModelCatalogRoutePolicy.resolveIdentity(params.entry)?.id ??
     splitTrailingAuthProfile(params.entry.id).model;
   if (params.projection.kind === "unresolved") {
     const entry = applyLogicalOverrides(
@@ -173,7 +164,8 @@ export function projectModelCatalogEntryForRoute(params: {
     return { entry, runtimeEntry: entry };
   }
 
-  const { policy, route } = params.projection;
+  const { route } = params.projection;
+  const policy = openAIModelCatalogRoutePolicy;
   const identity = policy.resolveIdentity(params.entry);
   const donor: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier) | undefined =
     (identity

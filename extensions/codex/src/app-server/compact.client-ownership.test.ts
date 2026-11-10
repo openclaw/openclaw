@@ -13,7 +13,10 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerClient } from "./client.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
-import { compactCodexSessionWithTestHost as maybeCompactCodexAppServerSession } from "./compact.test-support.js";
+import {
+  compactCodexSessionWithTestHost as maybeCompactCodexAppServerSession,
+  compactionItemEvent,
+} from "./compact.test-support.js";
 import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import {
   registerCodexTestSessionIdentity,
@@ -109,15 +112,8 @@ function sendCompactionCompleted(
     method: "turn/started",
     params: { threadId, turn: { ...turn, status: "inProgress" } },
   });
-  for (const method of ["item/started", "item/completed"]) {
-    send({
-      method,
-      params: {
-        threadId,
-        turnId,
-        item: { id: "compacted", type: "contextCompaction" },
-      },
-    });
+  for (const method of ["item/started", "item/completed"] as const) {
+    send(compactionItemEvent(method, turnId, "compacted", threadId));
   }
   send({ method: "turn/completed", params: { threadId, turn } });
 }
@@ -316,6 +312,8 @@ it.each([
     const ownerClaimed = subscription === "claimed";
     const ownerWrites = subscription === "untracked" ? [0, 0] : [0, 0, 0];
     let ownerExited = false;
+    let retirementReleased = false;
+    const retiredOwnerRead = createDeferred<void>();
     const resumes: number[] = [];
     const compactStarted = createDeferred<{
       id: number;
@@ -329,8 +327,17 @@ it.each([
         if (request.method === "thread/read") {
           send({
             id: request.id,
-            result: { thread: { ...result.thread, status: { type: "notLoaded" } } },
+            result: {
+              thread: {
+                ...result.thread,
+                // A live writer cannot also report that its thread has unloaded.
+                status: { type: index === 0 && !ownerExited ? "idle" : "notLoaded" },
+              },
+            },
           });
+          if (index === 0 && retirementReleased) {
+            retiredOwnerRead.resolve();
+          }
           return;
         }
         if (request.method === "thread/resume" || request.method === "thread/start") {
@@ -441,6 +448,7 @@ it.each([
           const release = lease.release;
           vi.spyOn(lease, "release").mockImplementation((wait) => {
             const exit = release(wait);
+            retirementReleased = true;
             released.resolve();
             return exit;
           });
@@ -471,6 +479,9 @@ it.each([
         expect(acquired).toBe(lateRelease === "during-resume");
         if (lateRelease === "during-resume") {
           await released.promise;
+          if (!ownerClaimed) {
+            await retiredOwnerRead.promise;
+          }
           await setImmediate();
           if (ownerClaimed) {
             expect(

@@ -26,6 +26,7 @@ import type {
   NormalizedConfigIoDeps,
   ParseConfigJson5Result,
 } from "./io.read.types.js";
+import { normalizeLegacyWorkboardDatabaseConfig } from "./legacy-workboard-database.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
 import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
@@ -119,7 +120,6 @@ export function normalizeConfigIoDeps(overrides: ConfigIoDeps = {}): NormalizedC
   const env = overrides.env ?? process.env;
   return {
     fs: overrides.fs ?? fs,
-    json5: overrides.json5 ?? JSON5,
     env,
     lowerPrecedenceEnv: overrides.lowerPrecedenceEnv ?? {},
     homedir: overrides.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
@@ -135,12 +135,9 @@ export function normalizeConfigIoDeps(overrides: ConfigIoDeps = {}): NormalizedC
   };
 }
 
-export function parseConfigJson5(
-  raw: string,
-  json5: { parse: (value: string) => unknown } = JSON5,
-): ParseConfigJson5Result {
+export function parseConfigJson5(raw: string): ParseConfigJson5Result {
   try {
-    return { ok: true, parsed: parseJsonWithJson5Fallback(raw, json5) };
+    return { ok: true, parsed: parseJsonWithJson5Fallback(raw, JSON5) };
   } catch (err) {
     return { ok: false, error: String(err) };
   }
@@ -261,7 +258,7 @@ export function resolveConfigIncludesForRead(
           throw error;
         }
       },
-      parseJson: (raw) => deps.json5.parse(raw),
+      parseJson: (raw) => JSON5.parse(raw),
     },
     { allowedRoots },
   );
@@ -291,7 +288,7 @@ export function resolveConfigForRead(
     onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
   });
   return {
-    resolvedConfigRaw,
+    resolvedConfigRaw: normalizeLegacyWorkboardDatabaseConfig(resolvedConfigRaw, env),
     envSnapshotForRestore: cloneEnvWithPlatformSemantics(env),
     envWarnings,
     resolutionFacts: createConfigResolutionFacts(

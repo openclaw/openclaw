@@ -1,15 +1,38 @@
-import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  buildManifestModelProviderConfig,
+  readManifestProviderDefaultModelRef,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createProviderConnectionPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
-import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildCohereCatalogModels, COHERE_BASE_URL, isModernCohereModelId } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+const COHERE_MANIFEST_CATALOG = manifest.modelCatalog.providers.cohere;
+
+const COHERE_BASE_URL = COHERE_MANIFEST_CATALOG.baseUrl;
+const COHERE_COMMAND_A_PLUS_MODEL_ID = "command-a-plus-05-2026";
+const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
+const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
+
+const COHERE_MODERN_MODEL_IDS = new Set([
+  COHERE_COMMAND_A_PLUS_MODEL_ID,
+  COHERE_COMMAND_A_REASONING_MODEL_ID,
+  // Modern sweeps require agent tool use; Vision explicitly does not support tools.
+  COHERE_NORTH_MINI_CODE_MODEL_ID,
+]);
+
+function buildCohereCatalogModels(): ModelDefinitionConfig[] {
+  return buildManifestModelProviderConfig({
+    providerId: "cohere",
+    catalog: COHERE_MANIFEST_CATALOG,
+  }).models;
+}
 
 const COHERE_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "cohere")!;
 const { applyConfig } = createProviderConnectionPresetAppliers<[]>({
@@ -23,20 +46,7 @@ const { applyConfig } = createProviderConnectionPresetAppliers<[]>({
   }),
 });
 
-function wrapCohereProviderStream(ctx: ProviderWrapStreamFnContext) {
-  return createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload }) => {
-    // Cohere's Compatibility API uses developer, not system, for instructions.
-    if (Array.isArray(payload.messages)) {
-      payload.messages = payload.messages.map((message) => {
-        const record = asOptionalObjectRecord(message);
-        return record?.role === "system" ? { ...record, role: "developer" } : message;
-      });
-    }
-
-    // Cohere lets tool-capable models choose a tool when tool_choice is omitted.
-    delete payload.tool_choice;
-  });
-}
+const cohereStreamHooks = buildProviderStreamFamilyHooks("cohere-compatibility");
 
 export default defineSingleProviderPluginEntry({
   id: "cohere",
@@ -69,8 +79,8 @@ export default defineSingleProviderPluginEntry({
         },
       },
     },
-    wrapStreamFn: wrapCohereProviderStream,
-    wrapSimpleCompletionStreamFn: wrapCohereProviderStream,
-    isModernModelRef: ({ modelId }) => isModernCohereModelId(modelId),
+    wrapStreamFn: cohereStreamHooks.wrapStreamFn,
+    wrapSimpleCompletionStreamFn: cohereStreamHooks.wrapStreamFn,
+    isModernModelRef: ({ modelId }) => COHERE_MODERN_MODEL_IDS.has(modelId.trim().toLowerCase()),
   },
 });

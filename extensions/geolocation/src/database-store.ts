@@ -33,7 +33,6 @@ export type GeolocationDatabase = {
 type StoreDeps = {
   stateDir: string;
   settings: GeolocationSettings;
-  now: () => Date;
   fetchImpl: typeof fetch;
   logger?: { info: (msg: string) => void; warn: (msg: string) => void };
 };
@@ -55,7 +54,7 @@ async function readFileAge(file: string, now: Date): Promise<number | undefined>
 }
 
 async function downloadDatabase(deps: StoreDeps, target: string): Promise<DatabaseReader> {
-  const urls = expandDatabaseUrls(deps.settings.databaseUrl, deps.now());
+  const urls = expandDatabaseUrls(deps.settings.databaseUrl, new Date());
   const failures: string[] = [];
   for (const url of urls) {
     try {
@@ -127,8 +126,8 @@ export function createGeolocationDatabaseStore(deps: StoreDeps) {
   };
 
   const openFromDisk = async (): Promise<GeolocationDatabase> => {
-    const refreshDue = deps.now().getTime() > refreshAfter;
-    const age = await readFileAge(target, deps.now());
+    const refreshDue = Date.now() > refreshAfter;
+    const age = await readFileAge(target, new Date());
     let downloaded: DatabaseReader | undefined;
     if (age === undefined) {
       downloaded = await downloadDatabase(deps, target);
@@ -150,7 +149,7 @@ export function createGeolocationDatabaseStore(deps: StoreDeps) {
     opened = reader;
     // Idle eviction must neither retry a failed refresh early nor extend its backoff.
     if (refreshDue) {
-      refreshAfter = deps.now().getTime() + deps.settings.refreshMs;
+      refreshAfter = Date.now() + deps.settings.refreshMs;
     }
     clearTimeout(idleTimer);
     // A failed publication leaves memory as the only usable copy. Otherwise the
@@ -162,7 +161,7 @@ export function createGeolocationDatabaseStore(deps: StoreDeps) {
   return {
     async load(): Promise<GeolocationDatabase> {
       const current = opened;
-      if (current && deps.now().getTime() <= refreshAfter) {
+      if (current && Date.now() <= refreshAfter) {
         idleTimer?.refresh();
         return { lookup: (ip: string) => current.get(ip) };
       }

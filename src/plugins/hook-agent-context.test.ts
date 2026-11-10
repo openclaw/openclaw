@@ -2,8 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { registerCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import {
-  buildAgentHookContextCronFields,
   buildAgentHookContextChannelFields,
+  buildAgentHookContextCronFields,
   buildAgentHookContextIdentityFields,
 } from "./hook-agent-context.js";
 

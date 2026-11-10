@@ -54,7 +54,7 @@ struct ChatMarkdownRenderer: View {
 
     struct InlineMathTypography: Equatable {
         static let body = Self(size: OpenClawChatTypography.bodySize, relativeTo: .body)
-        static let callout = Self(size: 16, relativeTo: .callout)
+        static let callout = Self(size: OpenClawChatTypography.scaled(16), relativeTo: .callout)
 
         let size: CGFloat
         let relativeTo: Font.TextStyle
@@ -144,7 +144,7 @@ struct ChatMarkdownRenderer: View {
         case let .math(math):
             ChatMathBlockView(block: math, textColor: self.textColor)
         case let .table(table):
-            ChatMarkdownTableView(table: table)
+            self.tableView(table)
         case let .list(list):
             self.listView(list)
         case let .disclosure(disclosure):
@@ -158,6 +158,10 @@ struct ChatMarkdownRenderer: View {
             Divider()
                 .accessibilityHidden(true)
         }
+    }
+
+    func tableView(_ table: ChatMarkdownTable) -> ChatMarkdownTableView {
+        ChatMarkdownTableView(table: table, typography: self.typography)
     }
 
     func listView(_ list: ChatMarkdownList) -> ChatMarkdownListView {

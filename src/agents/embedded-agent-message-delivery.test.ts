@@ -9,6 +9,20 @@ import {
 
 describe("projectEmbeddedMessageDeliveryFact", () => {
   it.each([
+    ["nonarray", "thread", undefined],
+    ["mixed", ["thread", 1], undefined],
+    ["sparse", Object.assign([], { length: 1 }), undefined],
+    ["raw strings", ["", " thread ", "thread", "thread"], ["", " thread ", "thread", "thread"]],
+  ])("validates the complete delivery thread list: %s", (_label, createdThreadIds, expected) => {
+    const fact = readEmbeddedMessageDeliveryFact({
+      status: "settled",
+      partialDelivery: false,
+      createdThreadIds,
+    });
+    expect(fact?.createdThreadIds).toEqual(expected);
+  });
+
+  it.each([
     [{ dryRun: true, sentBeforeError: true }, "dryRun", false],
     [{ sentBeforeError: true, messageId: "suppressed" }, "settled", true],
     [{ messageId: "suppressed", error: "no delivery" }, "suppressed", false],

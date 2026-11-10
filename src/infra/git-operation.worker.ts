@@ -27,14 +27,21 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
                 ({ executeWorkspaceInventoryComputation }) =>
                   executeWorkspaceInventoryComputation(command),
               );
+            case "workspace.manifest.local":
             case "workspace.manifest.capture":
+            case "workspace.manifest.base-refresh":
+            case "workspace.manifest.equal":
             case "workspace.manifest.snapshot":
+            case "workspace.manifest.document":
+            case "workspace.manifest.template":
+            case "workspace.manifest.reference":
             case "workspace.manifest.parse":
+            case "workspace.manifest.paths":
             case "workspace.manifest.serialize":
             case "workspace.manifest.overlay":
             case "workspace.manifest.pair":
             case "workspace.manifest.staged":
-            case "workspace.manifest.entries":
+            case "workspace.manifest.result":
             case "workspace.manifest.file":
             case "workspace.manifest.nodes":
             case "workspace.reconcile.preflight":
@@ -44,6 +51,8 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
               );
             case "workspace.manifest.stage-input":
             case "workspace.manifest.tree-input":
+            case "workspace.reconcile.patch":
+            case "workspace.reconcile.diff":
             case "workspace.manifest.remote-capture":
               // Streamed fs-safe creation owns native descriptors until cleanup settles.
               return control.runNativeSection(async () => {
@@ -89,8 +98,8 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
               );
             case "repository.branches":
               return import("../agents/worktrees/branches.runtime.js").then(
-                ({ readRepositoryBranches }) =>
-                  readRepositoryBranches(command.input.repoRoot, command.input),
+                ({ readRepositoryBranchSnapshot }) =>
+                  readRepositoryBranchSnapshot(command.input.repoRoot, command.input),
               );
             case "checkout.revision":
               return import("../gateway/control-ui-session-prs-git.runtime.js").then(
@@ -126,12 +135,24 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
       return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason };
     } catch (error) {
       return { ok: false, error: serializeGitWorkerFailure(error) };
+    } finally {
+      // V8 retains the last successful regex input, including task-owned checkout paths.
+      /(?:)/.test("");
     }
   },
   {
-    transferList: (reply) =>
-      reply.ok && reply.value instanceof Uint8Array && reply.value.buffer instanceof ArrayBuffer
-        ? [reply.value.buffer]
-        : [],
+    transferList: (reply) => {
+      if (!reply.ok) {
+        return [];
+      }
+      const value = reply.value;
+      if (value instanceof Uint8Array && value.buffer instanceof ArrayBuffer) {
+        return [value.buffer];
+      }
+      if (value && typeof value === "object" && "patch" in value) {
+        return [value.patch.buffer, value.basePack.buffer];
+      }
+      return [];
+    },
   },
 );

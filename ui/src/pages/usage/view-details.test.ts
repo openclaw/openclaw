@@ -2,13 +2,14 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageTimePoint } from "../../../../src/shared/session-usage-timeseries-types.js";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { SessionLogEntry, UsageProps, UsageSessionEntry } from "./types.ts";
 import { SessionDetailPanel } from "./view-details.tsx";
+import { text, texts } from "./view-render.test-support.ts";
 import { createUsageProps } from "./view.test-support.ts";
 
 afterEach(() => {
@@ -62,16 +63,6 @@ function toolUsage(read = 4, exec = 3) {
   };
 }
 
-function text(root: ParentNode | null | undefined, selector: string) {
-  return root?.querySelector(selector)?.textContent;
-}
-
-function texts(root: ParentNode, selector: string, normalize = false) {
-  return [...root.querySelectorAll(selector)].map((item) =>
-    normalize ? item.textContent?.replaceAll(/\s+/g, " ").trim() : item.textContent,
-  );
-}
-
 function expectText(root: ParentNode, selector: string, ...parts: string[]) {
   for (const part of parts) {
     expect(text(root, selector)).toContain(part);
@@ -92,7 +83,7 @@ function log(timestamp: number, role: SessionLogEntry["role"], content: string):
 function toolRows(root: ParentNode) {
   return [...root.querySelectorAll(".usage-list-item")].map((item) => [
     item.firstElementChild?.textContent,
-    text(item, ".usage-list-value > span"),
+    text(item, ".usage-list-value"),
   ]);
 }
 
@@ -169,7 +160,7 @@ function mount(
           sessionLogs: errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
           sessionLogsStatus: status(errors.sessionLogs, errors.sessionLogsHasLoaded),
           logFilters: errors.logFilters ?? defaults.detail.logFilters,
-          context: { weight: errors.contextWeight, loading: false, status: status() },
+          context: { weight: errors.contextWeight, read: null, status: status() },
         },
         callbacks: {
           ...defaults.callbacks.details,
@@ -193,6 +184,28 @@ function mount(
   flush();
   return container;
 }
+
+it.each([
+  { label: "total-only reports", input: 0, output: 0 },
+  { label: "partially categorized reports", input: 30, output: 40 },
+])("preserves reported token totals when selecting $label", ({ input, output }) => {
+  const container = mount(
+    [1000, 2000, 3000].map((timestamp) =>
+      point({ timestamp, totalTokens: 150, input, output, cacheRead: 0, cacheWrite: 0 }),
+    ),
+    { breakdownMode: "by-type" },
+  );
+  expect(text(container, ".timeseries-summary")).toContain("450");
+  container
+    .querySelector<HTMLElement>(".chart-handle-left")!
+    .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  flush();
+  expect(text(container, ".session-detail-stats")).toContain("300 tokens");
+  expect(text(container, ".timeseries-summary")).toContain("300");
+  expect(text(container, ".timeseries-breakdown .cost-breakdown-total")).toContain(
+    input === 0 ? "0" : "140",
+  );
+});
 
 it.each([
   { key: "ArrowLeft", start: null, end: null, expected: [1000, 3000] },
@@ -371,8 +384,10 @@ it("aggregates selected tokens while counting actual loaded message roles", () =
     { value: "—", meta: "— tool results" },
     { value: "1s" },
   ]);
-  const breakdown = texts(container, ".timeseries-breakdown .legend-item", true);
-  expect(breakdown).toEqual(["Output 20", "Input 10", "Cache Write 5", "Cache Read 12"]);
+  const breakdown = texts(container, ".timeseries-breakdown .legend-item").map((value) =>
+    value?.replaceAll(/\s+/g, " "),
+  );
+  expect(breakdown).toEqual(["Output 20", "Input 10", "Cache write 5", "Cache read 12"]);
   expect(text(container, ".timeseries-breakdown .cost-breakdown-total")).toContain("47");
 
   const full = mount(points, data);
@@ -412,16 +427,16 @@ it("keeps interval message and tool counts unavailable for initial failure", () 
   ]);
 });
 
-it("keeps stale loaded counts independent of conversation search and role filters", () => {
+it.each(["tool", "user"] as const)("keeps stale counts independent of %s and search", (role) => {
   const start = Date.parse("2026-08-20T12:00:00Z");
   const container = mount([point({ timestamp: start }), point({ timestamp: start + 1000 })], {
     start,
     end: start + 1000,
-    sessionLogsData: [log(start, "user", "Question"), log(start + 1000, "assistant", "Answer")],
+    sessionLogsData: [log(start, "user", "A\u0308"), log(start + 1000, "assistant", "Answer")],
     sessionLogsHasLoaded: true,
     sessionLogs: "refresh failed",
     stale: true,
-    logFilters: { roles: ["tool"], tools: [], hasTools: false, query: "not present" },
+    logFilters: { roles: [role], tools: [], hasTools: false, query: "ä" },
   });
   expect(summary(container)).toMatchObject([
     { value: "2", meta: "1 user · 1 assistant Loaded conversation · selected interval" },
@@ -429,8 +444,8 @@ it("keeps stale loaded counts independent of conversation search and role filter
     {},
     {},
   ]);
-  expect(container.querySelectorAll(".session-log-entry")).toHaveLength(0);
-  expect(text(container, ".usage-detail-error--conversation")).toContain("Showing stale data");
+  expect(container.querySelectorAll(".session-log-entry")).toHaveLength(role === "user" ? 1 : 0);
+  expect(text(container, ".usage-detail-error--conversation")).toContain("Showing last known data");
 });
 
 it("counts repeated assistant calls without counting toolResult results in the selected range", () => {
@@ -487,8 +502,8 @@ it("renders detail request failure messages without retry buttons", () => {
   });
 
   for (const [kind, message] of [
-    ["timeline", "Could not load usage over time: timeline unavailable"],
-    ["conversation", "Could not load conversation: logs unavailable"],
+    ["timeline", "Couldn’t load usage over time. Try again. timeline unavailable"],
+    ["conversation", "Couldn’t load conversation. Try again. logs unavailable"],
   ]) {
     const error = container.querySelector(`.usage-detail-error--${kind}`);
     expect(error?.textContent).toContain(message);
@@ -500,17 +515,28 @@ it("keeps loaded details visible and marks them stale after refresh failures", a
   const restoreI18n = captureI18nStateForTesting();
   const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
   try {
+    await i18n.setLocale("en");
+    const container = mount([point({ timestamp: 1000 }), point({ timestamp: 2000 })], {
+      timeSeries: "timeline unavailable",
+      sessionLogs: "logs unavailable",
+      sessionLogsData: [
+        log(timestamp, "user", "retained message"),
+        log(Number.NaN, "assistant", "undated message"),
+      ],
+      stale: true,
+    });
     for (const locale of ["en", "fr", "en"] as const) {
       await i18n.setLocale(locale);
-      const container = mount([point({ timestamp: 1000 }), point({ timestamp: 2000 })], {
-        timeSeries: "timeline unavailable",
-        sessionLogs: "logs unavailable",
-        sessionLogsData: [
-          log(timestamp, "user", "retained message"),
-          log(Number.NaN, "assistant", "undated message"),
-        ],
-        stale: true,
+      flush();
+      const chartTimestamp = new Date(1000).toLocaleString(locale, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
       });
+      expect(container.querySelector(".ts-bar")?.getAttribute("aria-label")).toBe(
+        `${chartTimestamp} · 100 ${t("usage.metrics.tokens").toLowerCase()}`,
+      );
 
       expect(container.querySelectorAll(".usage-detail-error--timeline strong")).toHaveLength(1);
       expect(container.querySelectorAll(".usage-detail-error--conversation strong")).toHaveLength(
@@ -520,7 +546,7 @@ it("keeps loaded details visible and marks them stale after refresh failures", a
       expect(container.textContent).toContain("retained message");
       expect(container.textContent).toContain("undated message");
       expect(container.textContent).toContain(
-        locale === "en" ? "Showing stale data" : t("common.staleData"),
+        locale === "en" ? "Showing last known data" : t("common.staleData"),
       );
       const timestamps = [...container.querySelectorAll(".session-log-meta > span:nth-child(2)")];
       expect(timestamps.map((element) => element.textContent)).toEqual([
@@ -553,10 +579,10 @@ it("counts embedded context once with an unverified native file", () => {
     injectedWorkspaceFiles: [contextFile("known.md", 200), contextFile("AGENTS.md", 900, true)],
   };
   const container = mount([], { contextWeight });
-
-  expect(container.querySelector(".context-total")?.textContent).toContain("325");
-  const legend = texts(container, ".context-legend .legend-item", true);
-  expect(legend).toEqual(["Sys ~125", "Skills ~50", "Tools ~100", "Files ~50"]);
+  expect(text(container, ".context-total")).toContain("325");
+  expect(
+    texts(container, ".context-legend .legend-item").map((value) => value?.replaceAll(/\s+/g, " ")),
+  ).toEqual(["Sys ~125", "Skills ~50", "Tools ~100", "Files ~50"]);
   const fileRows = container.querySelectorAll(
     ".context-breakdown-card:last-child .context-breakdown-item",
   );

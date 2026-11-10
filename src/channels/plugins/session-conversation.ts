@@ -225,9 +225,8 @@ export function resolveSessionConversationRef(
 
 export function resolveSessionThreadInfo(
   sessionKey: string | undefined | null,
-  opts: SessionConversationResolutionOptions = {},
 ): ParsedThreadSessionSuffix {
-  const resolved = resolveSessionConversationRef(sessionKey, opts);
+  const resolved = resolveSessionConversationRef(sessionKey);
   if (!resolved) {
     return parseThreadSessionSuffix(sessionKey);
   }

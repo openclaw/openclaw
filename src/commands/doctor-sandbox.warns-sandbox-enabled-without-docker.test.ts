@@ -2,11 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { DEFAULT_SANDBOX_IMAGE } from "../agents/sandbox/constants.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { withMockedPlatform as onPlatform } from "../test-utils/vitest-spies.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const runExec = vi.fn();
 const runCommandWithTimeout = vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>();
@@ -22,22 +23,6 @@ vi.mock("../flows/bundled-health-checks.js", () => ({ resolveCodexHealthApi }));
 // mock-isolation: Sandbox probes must not launch commands on the test host.
 vi.mock("../process/exec.js", () => ({ runExec, runCommandWithTimeout }));
 
-vi.mock("../agents/sandbox/constants.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/sandbox/constants.js")>(
-    "../agents/sandbox/constants.js",
-  )),
-  DEFAULT_SANDBOX_BROWSER_IMAGE: "browser-image",
-  DEFAULT_SANDBOX_COMMON_IMAGE: "common-image",
-  DEFAULT_SANDBOX_IMAGE: "default-image",
-}));
-
-vi.mock("../agents/sandbox/config.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/sandbox/config.js")>(
-    "../agents/sandbox/config.js",
-  )),
-  resolveSandboxScope: vi.fn(() => "shared"),
-}));
-
 // mock-isolation: Synthetic engine descriptors keep probes independent of installed containers.
 vi.mock("../agents/sandbox/docker.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
@@ -48,6 +33,9 @@ vi.mock("../agents/sandbox/docker.js", () => ({
 // mock-isolation: Capture Doctor notices without writing to the real terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
+// mock-isolation: Image health fixtures exclude agent-directory registration and filesystem observers.
+vi.mock("../agents/agent-scope-config.js", () => ({ listAgentEntriesWithSource: () => [] }));
+
 const { maybeRepairSandboxImages, noteCodexBwrapNamespaceWarnings } =
   await import("./doctor-sandbox.js");
 
@@ -56,17 +44,11 @@ describe("sandbox health", () => {
 
   const mockPrompter: DoctorPrompter = {
     confirmRuntimeRepair: vi.fn().mockResolvedValue(false),
-    repairMode: {
-      shouldRepair: false,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    } satisfies DoctorRepairMode,
   } as unknown as DoctorPrompter;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(mockPrompter.confirmRuntimeRepair).mockResolvedValue(false);
     runExec.mockResolvedValue({ stdout: "", stderr: "" });
     validateSandboxContainerEngineTarget.mockResolvedValue(undefined);
     resolveCodexHealthApi.mockReturnValue({
@@ -84,15 +66,14 @@ describe("sandbox health", () => {
       agents: { defaults: { sandbox: { mode, ...(network ? { docker: { network } } : {}) } } },
     };
   }
-
-  async function onPlatform(platform: NodeJS.Platform, run: () => Promise<void>) {
-    const spy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-    try {
-      await run();
-    } finally {
-      spy.mockRestore();
-    }
-  }
+  const probeOnLinux = (cfg = createSandboxConfig("all")) =>
+    onPlatform("linux", () => noteCodexBwrapNamespaceWarnings(cfg));
+  const expectNoCodexProbe = () => {
+    expect(resolveCodexHealthApi).not.toHaveBeenCalled();
+    expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+  };
+  const expectNote = (message: string) =>
+    expect(note).toHaveBeenCalledWith(expect.stringContaining(message), "Sandbox");
 
   it.each(["non-main", "off"] as const)(
     "reports unavailable Docker with sandbox mode %s",
@@ -102,18 +83,8 @@ describe("sandbox health", () => {
       if (mode === "off") {
         expect(note).not.toHaveBeenCalled();
       } else {
-        expect(note.mock.calls[0]!).toEqual([
-          [
-            'Sandbox mode is enabled (mode: "non-main") but Docker is not available.',
-            "Docker is required for sandbox mode to function.",
-            "Isolated sessions (automations, sub-agents) will fail without Docker.",
-            "",
-            "Options:",
-            "- Install Docker and restart the gateway",
-            "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
-          ].join("\n"),
-          "Sandbox",
-        ]);
+        expectNote('mode: "non-main") but Docker is not available');
+        expectNote("openclaw config set agents.defaults.sandbox.mode off");
       }
     },
   );
@@ -141,12 +112,32 @@ describe("sandbox health", () => {
     await onPlatform("linux", async () => {
       await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
     });
-    expect(runExec).toHaveBeenCalledWith("docker", ["image", "inspect", "default-image"], {
+    expect(runExec).toHaveBeenCalledWith("docker", ["image", "inspect", DEFAULT_SANDBOX_IMAGE], {
       timeoutMs: 5_000,
     });
     expect(runExec.mock.calls.some(([command]) => command === "unshare")).toBe(false);
-    expect(resolveCodexHealthApi).not.toHaveBeenCalled();
-    expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+    expectNoCodexProbe();
+  });
+
+  it("returns a nonblocking update warning when only the previous default image exists", async () => {
+    runExec.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === "image" && args[2] !== "openclaw-sandbox:bookworm-slim") {
+        throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const warnings = await maybeRepairSandboxImages(
+      createSandboxConfig("non-main"),
+      mockRuntime,
+      mockPrompter,
+    );
+    expect(warnings).toEqual([
+      expect.stringContaining(`Sandbox base image missing: ${DEFAULT_SANDBOX_IMAGE}`),
+    ]);
+    expect(warnings?.[0]).toContain("openclaw doctor --fix");
+    expect(warnings?.[0]).toContain("Sandboxed turns will fail");
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(mockRuntime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -166,8 +157,7 @@ describe("sandbox health", () => {
     }
     await onPlatform(platform, () => noteCodexBwrapNamespaceWarnings(cfg));
     expect(runExec.mock.calls.some(([command]) => command === "unshare")).toBe(false);
-    expect(resolveCodexHealthApi).not.toHaveBeenCalled();
-    expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+    expectNoCodexProbe();
     expect(note).not.toHaveBeenCalled();
   });
 
@@ -177,10 +167,7 @@ describe("sandbox health", () => {
     ["Codex", "user", "bwrap: setting up uid map: Permission denied"],
   ] as const)("reports %s %s namespace failures", async (stage, kind, denial) => {
     if (stage === "unshare") {
-      runExec.mockImplementation(async (command: string, args: string[]) => {
-        if (command === "docker" && args[0] === "version") {
-          return { stdout: "24.0.0", stderr: "" };
-        }
+      runExec.mockImplementation(async (command: string) => {
         if (command === "unshare") {
           throw Object.assign(new Error("unshare failed"), { stderr: denial });
         }
@@ -193,100 +180,67 @@ describe("sandbox health", () => {
         denial,
       });
     }
-    const cfg = createSandboxConfig("all");
-    cfg.plugins = { entries: { codex: { enabled: true } } };
-    const options = { env: { PATH: "/service/bin" }, cwd: "/service/workspace" };
-    await onPlatform("linux", () => noteCodexBwrapNamespaceWarnings(cfg, options));
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(`Codex bwrap ${kind} namespace check failed`),
-      "Sandbox",
-    );
+    await probeOnLinux();
+    expectNote(`Codex bwrap ${kind} namespace check failed`);
     if (stage === "unshare") {
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining("kernel.apparmor_restrict_unprivileged_userns=0"),
-        "Sandbox",
-      );
+      expectNote("kernel.apparmor_restrict_unprivileged_userns=0");
       expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
     } else {
-      const message = note.mock.calls[0]![0];
-      expect(message).toContain(`Codex bwrap ${kind} namespace check failed`);
-      expect(message).toContain(`Check result: ${denial}`);
-      expect(message).toContain(`Check command: ${codexSandboxCommand}`);
-      expect(resolveCodexHealthApi).toHaveBeenCalledExactlyOnceWith({ cfg, ...options });
-      expect(probeCodexWorkspaceWriteSandbox).toHaveBeenCalledExactlyOnceWith({
-        cfg,
-        env: options.env,
-      });
+      expectNote(`Check result: ${denial}`);
+      expectNote(`Check command: ${codexSandboxCommand}`);
     }
   });
 
-  it.each(["inconclusive", "unavailable", "older"] as const)(
-    "reports %s probes as unverified without diagnosing namespace policy",
-    async (scenario) => {
-      const reason = {
-        inconclusive: "Codex sandbox probe timed out.",
-        unavailable: "The selected Codex health API could not be loaded.",
-        older: "The selected Codex plugin does not provide a workspace-write sandbox check.",
-      }[scenario];
-      if (scenario === "unavailable") {
-        resolveCodexHealthApi.mockReturnValue({
-          status: "unavailable",
-          reason,
-          reportAvailability: true,
-        });
-      } else if (scenario === "older") {
-        resolveCodexHealthApi.mockReturnValue({ status: "available", api: {} });
-      }
+  it.each([
+    ["inconclusive", "Codex sandbox probe timed out."],
+    ["unavailable", "The selected Codex health API could not be loaded."],
+    ["older", "The selected Codex plugin does not provide a workspace-write sandbox check."],
+    ["not-configured", undefined],
+    ["ok", undefined],
+    ["skipped", undefined],
+    ["egress-enabled", undefined],
+  ] as const)("reports a %s Codex probe", async (scenario, reason) => {
+    if (scenario === "unavailable") {
+      resolveCodexHealthApi.mockReturnValue({ status: scenario, reason, reportAvailability: true });
+    } else if (scenario === "older") {
+      resolveCodexHealthApi.mockReturnValue({ status: "available", api: {} });
+    } else if (scenario === "not-configured") {
+      resolveCodexHealthApi.mockReturnValue({ status: scenario });
+    } else if (scenario === "inconclusive" || scenario === "skipped") {
       probeCodexWorkspaceWriteSandbox.mockResolvedValue({
-        status: "inconclusive",
+        status: scenario,
         command: codexSandboxCommand,
-        reason,
+        reason: reason ?? "A remote Codex transport is configured.",
       });
-      await onPlatform("linux", () => noteCodexBwrapNamespaceWarnings(createSandboxConfig("all")));
-      const message = note.mock.calls[0]![0];
-      expect(message).toContain("Doctor could not verify the Codex bwrap network sandbox.");
-      expect(message).toContain(`Check result: ${reason}`);
-      expect(message).not.toContain("namespace check failed");
-      expect(message).not.toContain("AppArmor");
-      if (scenario === "inconclusive") {
-        expect(message).toContain(`Check command: ${codexSandboxCommand}`);
-      } else {
-        expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it.each(["not-configured", "ok", "skipped", "egress-enabled"] as const)(
-    "does not emit a network note for a %s Codex sandbox probe",
-    async (status) => {
-      if (status === "not-configured") {
-        resolveCodexHealthApi.mockReturnValue({ status });
-      } else if (status === "skipped") {
-        probeCodexWorkspaceWriteSandbox.mockResolvedValue({
-          status,
-          reason: "A remote Codex transport is configured.",
-        });
-      }
-      await onPlatform("linux", () =>
-        noteCodexBwrapNamespaceWarnings(
-          status === "egress-enabled"
-            ? createSandboxConfig("all", "bridge")
-            : createSandboxConfig("all"),
-        ),
-      );
+    }
+    await probeOnLinux(
+      createSandboxConfig("all", scenario === "egress-enabled" ? "bridge" : undefined),
+    );
+    if (!reason) {
       expect(note).not.toHaveBeenCalled();
-      if (status === "not-configured" || status === "egress-enabled") {
+      if (scenario === "not-configured" || scenario === "egress-enabled") {
         expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
       }
-      if (status === "egress-enabled") {
+      if (scenario === "egress-enabled") {
         expect(resolveCodexHealthApi).not.toHaveBeenCalled();
       }
-    },
-  );
+      return;
+    }
+    const message = note.mock.calls[0]![0];
+    expect(message).toContain("Doctor could not verify the Codex bwrap network sandbox.");
+    expect(message).toContain(`Check result: ${reason}`);
+    expect(message).not.toContain("namespace check failed");
+    expect(message).not.toContain("AppArmor");
+    if (scenario === "inconclusive") {
+      expect(message).toContain(`Check command: ${codexSandboxCommand}`);
+    } else {
+      expect(probeCodexWorkspaceWriteSandbox).not.toHaveBeenCalled();
+    }
+  });
 
   describe("sandbox setup script execution", () => {
     const dirs = useAutoCleanupTempDirTracker(afterEach);
-    const scriptRel = path.join("scripts", "sandbox-setup.sh");
+    const scriptRel = path.join("scripts", "sandbox-image-build.sh");
 
     beforeEach(() => {
       runExec.mockImplementation(async (command: string, args: string[]) => {
@@ -298,87 +252,73 @@ describe("sandbox health", () => {
         }
         throw new Error(`Unexpected sandbox probe: ${command} ${args.join(" ")}`);
       });
-      runCommandWithTimeout.mockResolvedValue({
-        stdout: "",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
+      runCommandWithTimeout.mockResolvedValue(createCommandResult());
       vi.mocked(mockPrompter.confirmRuntimeRepair).mockResolvedValue(true);
     });
 
-    afterEach(() => {
-      runExec.mockReset();
-      runCommandWithTimeout.mockReset();
-      vi.mocked(mockPrompter.confirmRuntimeRepair).mockReset().mockResolvedValue(false);
+    function mkPackage(script = false): string {
+      const root = fs.realpathSync(dirs.make("ocsbx-"));
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+      if (script) {
+        fs.mkdirSync(path.join(root, "scripts"));
+        fs.writeFileSync(path.join(root, scriptRel), "#!/bin/sh\n");
+      }
+      return root;
+    }
+
+    it.each(["missing", "source", "installed"])("locates setup scripts (%s)", async (location) => {
+      let argv1: string, cwd: string, expectedRoot: string | null;
+      if (location === "installed") {
+        expectedRoot = mkPackage(true);
+        argv1 = path.join(expectedRoot, "openclaw.mjs");
+        cwd = dirs.make("ocsbx-cwd-");
+      } else if (location === "source") {
+        argv1 = path.join(mkPackage(), "openclaw.mjs");
+        cwd = expectedRoot = mkPackage(true);
+      } else {
+        // Keep an enclosing checkout above TMPDIR outside package discovery.
+        cwd = path.join(fs.realpathSync(dirs.make("ocsbx-none-")), "node_modules", ".bin");
+        fs.mkdirSync(cwd, { recursive: true });
+        argv1 = path.join(cwd, "openclaw");
+        expectedRoot = null;
+      }
+      fs.writeFileSync(argv1, "");
+      const originalArgv = process.argv;
+      const argv = [...originalArgv];
+      argv[1] = argv1;
+      const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      let warnings: string[];
+      try {
+        process.argv = argv;
+        warnings = await maybeRepairSandboxImages(
+          createSandboxConfig("all"),
+          mockRuntime,
+          mockPrompter,
+        );
+      } finally {
+        process.argv = originalArgv;
+        cwdSpy.mockRestore();
+      }
+      if (expectedRoot === null) {
+        expect(warnings).toHaveLength(1);
+        expect(runCommandWithTimeout).not.toHaveBeenCalled();
+        expect(note).toHaveBeenCalledWith(
+          "Unable to locate scripts/sandbox-image-build.sh. Run it from the repo root.",
+          "Sandbox",
+        );
+        expect(mockRuntime.log).not.toHaveBeenCalled();
+      } else {
+        expect(warnings).toEqual([]);
+        expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
+          ["bash", path.join(expectedRoot, scriptRel)],
+          { timeoutMs: 20 * 60 * 1000, cwd: expectedRoot },
+        );
+        expect(vi.mocked(mockRuntime.log).mock.calls).toEqual([
+          ["Running scripts/sandbox-image-build.sh..."],
+          ["Completed scripts/sandbox-image-build.sh."],
+        ]);
+      }
+      expect(mockRuntime.error).not.toHaveBeenCalled();
     });
-
-    function mkTmp(prefix: string): string {
-      return fs.realpathSync(dirs.make(prefix));
-    }
-
-    function mkRepo(prefix: string): string {
-      const repo = mkTmp(prefix);
-      fs.mkdirSync(path.join(repo, "scripts"), { recursive: true });
-      fs.writeFileSync(path.join(repo, scriptRel), "#!/bin/sh\n");
-      fs.writeFileSync(path.join(repo, "package.json"), JSON.stringify({ name: "openclaw" }));
-      return repo;
-    }
-
-    it.each([false, true])(
-      "locates setup scripts (installed package=%s)",
-      async (installedPackage) => {
-        let argv1: string, cwd: string, expectedRoot: string | null;
-        if (installedPackage) {
-          const installed = mkTmp("ocsbx-installed-");
-          fs.writeFileSync(
-            path.join(installed, "package.json"),
-            JSON.stringify({ name: "openclaw" }),
-          );
-          argv1 = path.join(installed, "openclaw.mjs");
-          fs.writeFileSync(argv1, "");
-          cwd = expectedRoot = mkRepo("ocsbx-source-");
-          expect(resolveOpenClawPackageRootSync({ argv1, cwd })).toBe(installed);
-        } else {
-          // Keep an enclosing checkout above TMPDIR outside package discovery.
-          cwd = path.join(mkTmp("ocsbx-none-"), "node_modules", ".bin");
-          fs.mkdirSync(cwd, { recursive: true });
-          argv1 = path.join(cwd, "openclaw");
-          fs.writeFileSync(argv1, "");
-          expectedRoot = null;
-        }
-        const originalArgv = process.argv;
-        const argv = [...originalArgv];
-        argv[1] = argv1;
-        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
-        try {
-          process.argv = argv;
-          await maybeRepairSandboxImages(createSandboxConfig("all"), mockRuntime, mockPrompter);
-        } finally {
-          process.argv = originalArgv;
-          cwdSpy.mockRestore();
-        }
-        if (expectedRoot === null) {
-          expect(runCommandWithTimeout).not.toHaveBeenCalled();
-          expect(note).toHaveBeenCalledWith(
-            "Unable to locate scripts/sandbox-setup.sh. Run it from the repo root.",
-            "Sandbox",
-          );
-          expect(mockRuntime.log).not.toHaveBeenCalled();
-        } else {
-          expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
-            ["bash", path.join(expectedRoot, scriptRel)],
-            { timeoutMs: 20 * 60 * 1000, cwd: expectedRoot },
-          );
-          expect(vi.mocked(mockRuntime.log).mock.calls).toEqual([
-            ["Running scripts/sandbox-setup.sh..."],
-            ["Completed scripts/sandbox-setup.sh."],
-          ]);
-        }
-        expect(mockRuntime.error).not.toHaveBeenCalled();
-      },
-    );
   });
 });

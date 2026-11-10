@@ -6,6 +6,7 @@ import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import type { DeferredHookWake } from "../cron/wake-contract.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { closeHttpServers } from "../infra/http-server-lifecycle.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
@@ -103,9 +104,11 @@ export async function createGatewayHttpTransport(params: {
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
   getPluginRouteRegistry?: () => PluginRegistry;
+  isRequestRuntimeReady?: () => boolean;
   isStartupPluginRuntimeReady?: () => boolean;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   httpRequestLifetime?: GatewayHttpRequestLifetime;
+  deferHookWake?: DeferredHookWake;
   deps: CliDeps;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
@@ -171,6 +174,8 @@ export async function createGatewayHttpTransport(params: {
         createGatewayHookDispatcher({
           deps: params.deps,
           logHooks: params.logHooks,
+          deferHookWake: params.deferHookWake,
+          resolvePluginRegistry: resolvePluginRouteRegistry,
           ...(params.getGatewayRequestContext
             ? { resolveGatewayContext: params.getGatewayRequestContext }
             : {}),
@@ -366,6 +371,7 @@ export async function createGatewayHttpTransport(params: {
       getRuntimeConfig: loadRuntimeConfig,
       getGatewayRequestContext: params.getGatewayRequestContext,
       waitForRequestRuntime: params.waitForRequestRuntime,
+      isRequestRuntimeReady: params.isRequestRuntimeReady,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
       httpRequestLifetime: params.httpRequestLifetime,
       isTerminalEnabled: params.isTerminalEnabled,
@@ -433,7 +439,7 @@ export async function createGatewayHttpTransport(params: {
       getRuntimeConfig: loadRuntimeConfig,
       handleRequest: getGatewayHttpRequestHandler(httpServer),
       handleUpgrade: controlUiUpgradeHandler,
-      handleSandboxRequest: createSandboxHostHttpRequestHandler(resolvePluginRouteRegistry),
+      handleSandboxRequest: createSandboxHostHttpRequestHandler({ clients: params.clients }),
       signal: requestLifetime
         ? AbortSignal.any([gatewayLifetime, requestLifetime])
         : gatewayLifetime,
@@ -460,7 +466,7 @@ export async function createGatewayHttpTransport(params: {
       const sandboxServers = bindHosts.map(() =>
         createSandboxHostHttpServer(
           params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
-          resolvePluginRouteRegistry,
+          { clients: params.clients },
         ),
       );
       // Register before binding so normal runtime cleanup closes a partially

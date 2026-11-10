@@ -5,6 +5,7 @@ import panelStyles from "../../styles/panel-loading-skeleton.css?inline";
 export type PanelLoadingSkeletonVariant =
   | "board"
   | "browser"
+  | "browser-viewport"
   | "chat"
   | "desktop"
   | "discussion"
@@ -92,6 +93,8 @@ export function PanelLoadingSkeleton(props: {
             <div class="skeleton viewport" />
           </>
         );
+      case "browser-viewport":
+        return <div class="skeleton viewport" />;
       case "chat":
         return (
           <div class="conversation">
@@ -179,7 +182,7 @@ export function PanelLoadingSkeleton(props: {
       overlay={props.overlay ? "" : undefined}
     >
       <style>{panelStyles}</style>
-      {content()}
+      <div class="panel-loading-content">{content()}</div>
     </openclaw-panel-loading-skeleton>
   );
 }

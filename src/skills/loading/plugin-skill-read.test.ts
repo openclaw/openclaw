@@ -69,13 +69,7 @@ async function fixture(rootPath = "skills/guide") {
     version: {
       version: "1.0.0",
       pluginManifestSummary: {
-        bundledSkills: [
-          {
-            name: "operator-guide",
-            rootPath,
-            skillMdPath: `${rootPath}/SKILL.md`,
-          },
-        ],
+        bundledSkills: [{ name: "operator-guide", rootPath, skillMdPath: `${rootPath}/SKILL.md` }],
       },
       files: [...source].map(([p, b]) => ({
         path: `${rootPath}/${p}`,
@@ -272,9 +266,9 @@ describe("complete plugin skill bundles", () => {
     "leaves selected content unavailable after %s failure",
     async (failure) => {
       const { catalog, source, calls } = await fixture();
-      let time = Date.now();
+      let time = performance.now();
       if (failure === "deadline") {
-        vi.spyOn(Date, "now").mockImplementation(() => time);
+        vi.spyOn(performance, "now").mockImplementation(() => time);
       }
       const result = await catalog(({ version }) => {
         if (failure === "integrity") {

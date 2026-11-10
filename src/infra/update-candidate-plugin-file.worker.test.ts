@@ -13,10 +13,8 @@ import type {
   UpdateCandidatePluginHashReply,
   UpdateCandidatePluginHashRequest,
 } from "./update-candidate-plugin-hash.js";
-import {
-  copyUpdateCandidatePluginTrees,
-  prepareUpdateCandidatePluginTrees,
-} from "./update-candidate-plugin-tree.js";
+import { pluginTreeLayout } from "./update-candidate-plugin-scheduling.test-support.js";
+import { copyUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 
 vi.mock("node:os", async (importOriginal) => ({
@@ -34,25 +32,15 @@ afterEach(() => {
 });
 
 async function fixture(count = 1) {
-  const base = await fs.realpath(directories.make("update-file-workers-"));
-  const source = path.join(base, "source");
+  const layout = await pluginTreeLayout(directories.make("update-file-workers-"), "owner/snapshot");
+  const { base, source, targetStateDir: privateRoot, destination, candidateRoot } = layout;
   const owner = path.join(base, "owner");
-  const privateRoot = path.join(owner, "snapshot");
-  const destination = path.join(privateRoot, "plugin");
-  const candidateRoot = path.join(base, "candidate");
-  await fs.mkdir(source);
-  await fs.mkdir(candidateRoot);
   await fs.mkdir(destination, { recursive: true });
   for (let index = 0; index < count; index += 1) {
     await fs.writeFile(path.join(source, `${index}.txt`), `plugin payload ${index}`);
   }
   await fs.chmod(path.join(source, "0.txt"), 0o444);
-  const plan = await prepareUpdateCandidatePluginTrees({
-    roots: new Map([[source, destination]]),
-    project: (file) => path.join(destination, path.relative(source, file)),
-    targetStateDir: privateRoot,
-    candidateRoot,
-  });
+  const plan = await layout.prepare();
   const entry = plan.entries.find((item) => item.kind === "file");
   if (entry?.kind !== "file") {
     throw new Error("Missing fixture file");

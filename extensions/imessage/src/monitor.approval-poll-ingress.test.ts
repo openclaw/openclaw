@@ -1,32 +1,28 @@
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-// Imessage tests cover approval poll durable-ingress ownership.
-import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { waitForTransportReady as WaitForReady } from "openclaw/plugin-sdk/transport-ready-runtime";
+import { beforeEach, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { createIMessageRpcClient } from "./client.js";
-import { monitorIMessageProvider } from "./monitor.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
+import type { IMessagePayload } from "./monitor/types.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
-const waitForTransportReadyMock = vi.hoisted(() =>
-  vi.fn<typeof waitForTransportReady>(async () => {}),
-);
-const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
+const waitUntilReady = vi.hoisted(() => vi.fn<typeof WaitForReady>(async () => {}));
+const createClient = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
 const maybeResolveIMessageApprovalPollVoteMock = vi.hoisted(() => vi.fn());
 const runChannelInboundEventMock = vi.hoisted(() =>
   vi.fn(async () => ({ admission: { kind: "handled", reason: "test" }, dispatched: false })),
 );
-const ingressLifecycleMocks = vi.hoisted(() => ({
-  onAdopted: vi.fn(async () => {}),
-  onDeferred: vi.fn(),
-  onAdoptionFinalizing: vi.fn(),
-  onAbandoned: vi.fn(async () => {}),
-}));
 const ingressHarness = vi.hoisted(() => ({
   done: Promise.resolve(),
   resolveDone: () => {},
+  results: [] as unknown[],
 }));
+type Dispatch = (...args: [unknown, unknown, number, object]) => Promise<unknown>;
 
+// mock-isolation: Readiness is fixture-controlled; no installed Messages transport is probed.
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
-  waitForTransportReady: waitForTransportReadyMock,
+  waitForTransportReady: waitUntilReady,
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
@@ -57,36 +53,20 @@ vi.mock("./approval-reactions.js", async (importOriginal) => ({
   handleIMessageApprovalReaction: vi.fn(async () => ({ handled: false, stopPolling: false })),
 }));
 
-vi.mock("./client.js", () => ({
-  createIMessageRpcClient: createIMessageRpcClientMock,
-}));
+// mock-isolation: The monitor connects only to the fixture RPC client, never the user's Messages store.
+vi.mock("./client.js", () => ({ createIMessageRpcClient: createClient }));
 
 vi.mock("./monitor/abort-handler.js", () => ({
   attachIMessageMonitorAbortHandler: vi.fn(() => () => {}),
 }));
 
+// mock-isolation: This fixture owns ingress claims and records priority dispatch without a live queue.
 vi.mock("./monitor/ingress.js", () => ({
   createIMessageDurableIngress: vi.fn(
-    (opts: {
-      dispatchPriority?: (
-        message: unknown,
-        lifecycle: unknown,
-        receivedAt: number,
-        provenance: object,
-      ) => Promise<unknown>;
-      dispatch: (
-        message: unknown,
-        lifecycle: unknown,
-        receivedAt: number,
-        provenance: object,
-      ) => Promise<unknown>;
-    }) => ({
+    (opts: { dispatchPriority?: Dispatch; dispatch: Dispatch }) => ({
       receive: async (raw: { message: unknown }) => {
         try {
-          const lifecycle = {
-            abortSignal: new AbortController().signal,
-            ...ingressLifecycleMocks,
-          };
+          const lifecycle = { abortSignal: new AbortController().signal };
           const priorityResult = await opts.dispatchPriority?.(
             raw.message,
             lifecycle,
@@ -95,11 +75,9 @@ vi.mock("./monitor/ingress.js", () => ({
           );
           const result =
             priorityResult ?? (await opts.dispatch(raw.message, lifecycle, Date.now(), {}));
-          if ((result as { kind?: string } | undefined)?.kind === "completed") {
-            await ingressLifecycleMocks.onAdopted();
-          }
+          ingressHarness.results.push(result);
         } catch (error) {
-          await ingressLifecycleMocks.onAbandoned();
+          ingressHarness.results.push(error);
           throw error;
         } finally {
           ingressHarness.resolveDone();
@@ -111,152 +89,86 @@ vi.mock("./monitor/ingress.js", () => ({
   ),
 }));
 
-function createRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-  };
-}
-
-describe("iMessage approval poll durable ingress", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
-    waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
-    createIMessageRpcClientMock.mockReset();
-    maybeResolveIMessageApprovalPollVoteMock.mockReset();
-    runChannelInboundEventMock.mockClear();
-    for (const mock of Object.values(ingressLifecycleMocks)) {
-      mock.mockClear();
-    }
-    ingressHarness.done = new Promise<void>((resolve) => {
-      ingressHarness.resolveDone = () => resolve();
-    });
-  });
-
-  function arrangeNotification(createdAt = new Date().toISOString()) {
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      onNotification = params?.onNotification;
-      return {
-        request: vi.fn(async () => ({ subscription: 1 })),
-        waitForClose: vi.fn(async () => {
-          onNotification?.({
-            method: "message",
-            params: {
-              message: {
-                id: 42,
-                guid: "approval-poll-vote-guid",
-                chat_id: 7,
-                chat_guid: "iMessage;-;redacted-peer",
-                chat_identifier: "redacted-peer",
-                sender: "redacted-peer",
-                is_from_me: false,
-                is_group: false,
-                created_at: createdAt,
-                poll: {
-                  kind: "vote",
-                  original_guid: "approval-poll-guid",
-                  vote: { option_id: "approve-once" },
-                },
-              },
-            },
-          });
-          await ingressHarness.done;
-        }),
-        stop: vi.fn(async () => {}),
-      } as never;
-    });
-  }
-
-  function arrangeApprovalCommandNotification() {
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      onNotification = params?.onNotification;
-      return {
-        request: vi.fn(async () => ({ subscription: 1 })),
-        waitForClose: vi.fn(async () => {
-          onNotification?.({
-            method: "message",
-            params: {
-              message: {
-                id: 43,
-                guid: "approval-command-guid",
-                chat_id: 7,
-                chat_guid: "iMessage;-;redacted-peer",
-                chat_identifier: "redacted-peer",
-                sender: "redacted-peer",
-                destination_caller_id: "redacted-agent",
-                is_from_me: false,
-                is_group: false,
-                created_at: new Date().toISOString(),
-                text: "/approve reject exec-1",
-              },
-            },
-          });
-          await ingressHarness.done;
-        }),
-        stop: vi.fn(async () => {}),
-      } as never;
-    });
-  }
-
-  it("completes a handled approval vote instead of abandoning it for replay", async () => {
-    arrangeNotification();
-    maybeResolveIMessageApprovalPollVoteMock.mockResolvedValue(true);
-
-    await monitorIMessageProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      config: { channels: { imessage: {} } } as never,
-      runtime: createRuntime() as never,
-    });
-
-    expect(ingressLifecycleMocks.onAdopted).toHaveBeenCalledTimes(1);
-    expect(ingressLifecycleMocks.onAbandoned).not.toHaveBeenCalled();
-  });
-
-  it("abandons a claim when approval vote resolution fails transiently", async () => {
-    arrangeNotification();
-    maybeResolveIMessageApprovalPollVoteMock.mockRejectedValue(new Error("gateway unavailable"));
-    const runtime = createRuntime();
-
-    await monitorIMessageProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      config: { channels: { imessage: {} } } as never,
-      runtime: runtime as never,
-    });
-
-    expect(ingressLifecycleMocks.onAdopted).not.toHaveBeenCalled();
-    expect(ingressLifecycleMocks.onAbandoned).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("gateway unavailable"));
-  });
-
-  it("applies the live age fence before resolving an approval vote", async () => {
-    arrangeNotification(new Date(Date.now() - 60 * 60 * 1_000).toISOString());
-    maybeResolveIMessageApprovalPollVoteMock.mockResolvedValue(true);
-
-    await monitorIMessageProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      config: { channels: { imessage: {} } } as never,
-      runtime: createRuntime() as never,
-    });
-
-    expect(maybeResolveIMessageApprovalPollVoteMock).not.toHaveBeenCalled();
-    expect(ingressLifecycleMocks.onAdopted).toHaveBeenCalledTimes(1);
-  });
-
-  it("routes a valid approval command ahead of the conversation debounce lane", async () => {
-    arrangeApprovalCommandNotification();
-
-    await monitorIMessageProvider({
-      scheduler: createTestPluginServiceScheduler(),
-      config: {
-        channels: { imessage: { dmPolicy: "open", allowFrom: ["*"] } },
-      } as never,
-      runtime: createRuntime() as never,
-    });
-
-    expect(runChannelInboundEventMock).toHaveBeenCalledTimes(1);
-    expect(ingressLifecycleMocks.onAdopted).toHaveBeenCalledTimes(1);
-    expect(ingressLifecycleMocks.onAbandoned).not.toHaveBeenCalled();
+beforeEach(() => {
+  installIMessageStateRuntimeForTest();
+  waitUntilReady.mockReset().mockResolvedValue(undefined);
+  createClient.mockReset();
+  maybeResolveIMessageApprovalPollVoteMock.mockReset();
+  runChannelInboundEventMock.mockClear();
+  ingressHarness.results = [];
+  ingressHarness.done = new Promise<void>((resolve) => {
+    ingressHarness.resolveDone = () => resolve();
   });
 });
+
+function arrangeNotification(overrides: Partial<IMessagePayload> = {}) {
+  createClient.mockImplementation(async (params) => {
+    return {
+      request: vi.fn(async () => ({ subscription: 1 })),
+      waitForClose: vi.fn(async () => {
+        params?.onNotification?.({
+          method: "message",
+          params: {
+            message: {
+              id: 42,
+              guid: "approval-poll-vote-guid",
+              chat_id: 7,
+              chat_guid: "iMessage;-;redacted-peer",
+              chat_identifier: "redacted-peer",
+              sender: "redacted-peer",
+              is_from_me: false,
+              is_group: false,
+              created_at: new Date().toISOString(),
+              poll: {
+                kind: "vote",
+                original_guid: "approval-poll-guid",
+                vote: { option_id: "approve-once" },
+              },
+              ...overrides,
+            },
+          },
+        });
+        await ingressHarness.done;
+      }),
+      stop: vi.fn(async () => {}),
+    } as never;
+  });
+}
+
+it.each(["vote", "transient failure", "stale vote", "command"])(
+  "settles approval ingress: %s",
+  async (kind) => {
+    const failed = kind === "transient failure";
+    const command = kind === "command";
+    arrangeNotification(
+      command
+        ? {
+            destination_caller_id: "redacted-agent",
+            poll: undefined,
+            text: "/approve reject exec-1",
+          }
+        : kind === "stale vote"
+          ? { created_at: new Date(Date.now() - 60 * 60 * 1_000).toISOString() }
+          : {},
+    );
+    if (failed) {
+      maybeResolveIMessageApprovalPollVoteMock.mockRejectedValue(new Error("gateway unavailable"));
+    } else {
+      maybeResolveIMessageApprovalPollVoteMock.mockResolvedValue(!command);
+    }
+    const runtime = createRuntimeSpies();
+    await monitorIMessageProvider({
+      scheduler: createTestPluginServiceScheduler(),
+      runtime,
+      config: { channels: { imessage: command ? { dmPolicy: "open", allowFrom: ["*"] } : {} } },
+    });
+    expect(ingressHarness.results).toEqual([failed ? expect.any(Error) : { kind: "completed" }]);
+    if (failed) {
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("gateway unavailable"));
+    } else if (command) {
+      expect(runChannelInboundEventMock).toHaveBeenCalledOnce();
+    } else if (kind === "stale vote") {
+      expect(maybeResolveIMessageApprovalPollVoteMock).not.toHaveBeenCalled();
+    }
+  },
+);

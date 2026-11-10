@@ -355,7 +355,7 @@ Main already has size-derived inspection budgets. In
 is `300 seconds + ceil(40 × family bytes / 32 MiB) seconds`: four copy/comparison
 passes with tenfold slow-hardware headroom. `update-candidate-state.sizes.ts`
 includes SQLite sidecars; aggregate inspection sums serial families.
-`update-finalization-budget.ts` combines state, step, observed startup, and plugin
+`update-finalization-budget.ts` combines state, step, and plugin
 work. Defaults of 20-minute runner, 30-minute step, and 45-minute automatic step
 in `update-run-timeouts.ts` are distinct from the private 2,400-second deadline.
 

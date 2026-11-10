@@ -1,81 +1,68 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { afterEach, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../runtime-api.js";
+import { createAccount, createRuntimeEnv } from "./inbound-media.test-fixtures.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createFileSharedActivityBody } from "./monitor.test-fixtures.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
-import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
+import type { CoreConfig } from "./types.js";
 import type { NextcloudTalkIngressPayload } from "./webhook-spool-state.js";
-import {
-  createNextcloudTalkWebhookSpool,
-  type NextcloudTalkIngressLifecycle,
-} from "./webhook-spool.js";
+import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
 vi.mock("./room-info.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./room-info.js")>()),
   resolveNextcloudTalkRoomKind: vi.fn(async () => "group"),
 }));
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
-describe("file-share caption mention admission", () => {
-  it.each([
-    { caption: "{mention-user1} inspect {file}", mentioned: true },
-    { caption: "@bert inspect {file}", mentioned: true },
-    { caption: "inspect {file}", mentioned: false },
-    { caption: "{file}", mentioned: false },
-  ])(
-    "gates durable caption $caption without treating file metadata as mentions",
-    async ({ caption, mentioned }) => {
-      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nextcloud-mentions-"));
+it.each([
+  { caption: "{mention-user1} inspect {file}", mentioned: true },
+  { caption: "@bert inspect {file}", mentioned: true },
+  { caption: "inspect {file}", mentioned: false },
+  { caption: "{file}", mentioned: false },
+])(
+  "gates durable caption $caption without treating file metadata as mentions",
+  ({ caption, mentioned }) =>
+    withTempDir("nextcloud-mentions-", async (directory) => {
       const core = createPluginRuntimeMock();
       core.channel.mentions.buildMentionRegexes = buildMentionRegexes;
       core.channel.mentions.matchesMentionPatterns = matchesMentionPatterns;
       setNextcloudTalkRuntime(core as unknown as PluginRuntime);
-      const account: ResolvedNextcloudTalkAccount = {
-        accountId: "default",
-        enabled: true,
+      const account = createAccount({
         baseUrl: "https://nextcloud.example",
         secret: "fixture",
-        secretSource: "config",
         config: {
           groupPolicy: "open",
           mediaAllowFrom: [],
           rooms: { "redacted-room-token": { requireMention: true } },
         },
-      };
+      });
       const config = {
         messages: { groupChat: { mentionPatterns: ["@bert\\b"] } },
         channels: { "nextcloud-talk": account.config },
       } as CoreConfig;
-      const runtime = { log: vi.fn(), error: vi.fn() } as unknown as RuntimeEnv;
+      const runtime = createRuntimeEnv();
       const queue = createChannelIngressQueueForTests<NextcloudTalkIngressPayload>({
         channelId: "nextcloud-talk",
         accountId: "default",
         stateDir: directory,
       });
-      const deliver = vi.fn(
-        async (message: NextcloudTalkInboundMessage, lifecycle: NextcloudTalkIngressLifecycle) => {
-          await handleNextcloudTalkInbound({
+      const deliver = vi.fn<Parameters<typeof createNextcloudTalkWebhookSpool>[0]["deliver"]>(
+        (message, lifecycle) =>
+          handleNextcloudTalkInbound({
             message,
             account,
             config,
             runtime,
             turnAdoptionLifecycle: lifecycle,
-          });
-        },
+          }),
       );
       const spool = createNextcloudTalkWebhookSpool({
         accountId: "default",
@@ -101,16 +88,13 @@ describe("file-share caption mention admission", () => {
         expect(core.channel.inbound.dispatch).toHaveBeenCalledTimes(mentioned ? 1 : 0);
         expect(core.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
         if (mentioned) {
-          expect(
-            vi.mocked(core.channel.inbound.buildContext).mock.calls[0]?.[0].access?.mentions
-              ?.wasMentioned,
-          ).toBe(true);
+          expect(vi.mocked(core.channel.inbound.buildContext).mock.calls[0]?.[0]).toMatchObject({
+            access: { mentions: { wasMentioned: true } },
+          });
         }
       } finally {
         await spool.stop();
         closeOpenClawStateDatabaseForTest();
-        await fs.rm(directory, { recursive: true, force: true });
       }
-    },
-  );
-});
+    }),
+);

@@ -31,3 +31,21 @@ it("bounds cyclic, deep, and broad retained structures", () => {
   }
   expect(estimateRetainedDataSize([deep]).truncated).toBe(true);
 });
+
+it("bounds native collections and counts shared values without calling custom iterators", () => {
+  const shared = { payload: "synthetic row payload" };
+  const map = new Map<unknown, unknown>([["row", shared]]);
+  const set = new Set([shared]);
+  Object.defineProperty(map, Symbol.iterator, {
+    value: () => {
+      throw new Error("iterator ran");
+    },
+  });
+  const measured = estimateRetainedDataSize([map, set]);
+  expect(measured.truncated).toBe(false);
+  expect(measured.objects).toBe(3);
+  expect(measured.stringBytes).toBe(2 * ("row".length + "payload".length + shared.payload.length));
+  expect(
+    estimateRetainedDataSize([new Set(Array.from({ length: 100_001 }, (_, i) => i))]).truncated,
+  ).toBe(true);
+});

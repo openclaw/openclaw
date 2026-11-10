@@ -1,3 +1,4 @@
+import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 /** Execution and result contracts for isolated cron agent runs. */
@@ -59,6 +60,7 @@ export type CronRunnerStartedInfo = {
 /** Completed prompt result recorded by the outer execution owner. */
 export type CronCompletedPromptRun = {
   runResult: EmbeddedAgentRunResult;
+  currentContextSnapshot?: CompactionAccountingFact["currentContextSnapshot"];
   fallbackProvider: string;
   fallbackModel: string;
   runStartedAt: number;

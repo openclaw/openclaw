@@ -11,6 +11,7 @@ import {
   configuredPricingCases,
   staleCost,
 } from "./model.configured-pricing.test-support.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./model.fixture.test-support.js";
 import { expectResolvedForwardCompatFallbackResult } from "./model.forward-compat.test-support.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
@@ -31,7 +32,10 @@ vi.mock("../auth-profiles.js", () => ({
   resolveAuthProfileOrder: () => [],
 }));
 
+// mock-isolation: Resolution tests supply their own rows; bundled vendor rows must not leak in.
 vi.mock("./model.static-catalog.js", () => ({
+  createBundledStaticCatalogModelResolver: () => () => undefined,
+  listBundledVendorCatalogRows: () => [],
   resolveBundledProviderStaticCatalogModel: () => undefined,
   resolveBundledStaticCatalogModel: () => undefined,
   resolveManifestModelCatalogProviderAliasMetadata: ({
@@ -108,25 +112,18 @@ vi.mock("../prepared-model-runtime.js", async () => {
       Object.assign(modelRegistry, { fork: () => modelRegistry });
     }
     return {
-      catalogOwner: undefined,
-      agentDir: input.agentDir,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      activeProjectKeys: [],
-      allowGatewaySubagentBinding: false,
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
-      metadataSnapshot: createPluginMetadataSnapshot({
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: input.agentDir,
         config,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        createStores: () => ({ authStorage, modelRegistry }),
+        metadataSnapshot: createPluginMetadataSnapshot({
+          config,
+          manifestRegistry: { plugins: [], diagnostics: [] },
+          ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        }),
       }),
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels: [],
-      findConfiguredRuntimeModel: () => undefined,
+      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
       inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
-      createStores: () => ({ authStorage, modelRegistry }),
     } satisfies PreparedModelRuntimeSnapshot;
   };
   return {

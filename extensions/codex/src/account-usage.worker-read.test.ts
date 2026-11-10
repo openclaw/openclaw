@@ -36,10 +36,13 @@ it.each([false, true])(
         },
         "fixture",
       );
+      const revocation: {
+        store: Awaited<ReturnType<typeof updateAuthProfileStoreWithLock>>;
+      } = { store: null };
       vi.mocked(readCodexAppServerUsage).mockImplementation(async (options) => {
         options.assertCurrent?.();
         if (revoke) {
-          const updated = await updateAuthProfileStoreWithLock({
+          revocation.store = await updateAuthProfileStoreWithLock({
             agentDir,
             saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
             updater(store) {
@@ -47,17 +50,9 @@ it.each([false, true])(
               return true;
             },
           });
-          expect(updated?.profiles[profileId]).toBeUndefined();
-          expect(updated).not.toBeNull();
         }
-        return {
-          rateLimits: {
-            rateLimits: {
-              limitId: "codex",
-              primary: { usedPercent: 42, windowDurationMins: 300 },
-            },
-          },
-        };
+        const primary = { usedPercent: 42, windowDurationMins: 300 };
+        return { rateLimits: { rateLimits: { limitId: "codex", primary } } };
       });
       const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
       const params = { agentId: "fixture", profileId };
@@ -72,6 +67,10 @@ it.each([false, true])(
           context: { getRuntimeConfig: () => config } as GatewayRequestHandlerOptions["context"],
           hasCurrentClientAuthority: () => true,
         });
+        if (revoke) {
+          expect(revocation.store?.profiles[profileId]).toBeUndefined();
+          expect(revocation.store).not.toBeNull();
+        }
         expect(respond).toHaveBeenCalledExactlyOnceWith(
           !revoke,
           revoke

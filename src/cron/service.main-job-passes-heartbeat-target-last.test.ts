@@ -10,10 +10,10 @@ import {
 } from "./service.test-harness.js";
 import { onTimer } from "./service/timer.test-support.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-main-heartbeat-target" });
+const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-main-session-delivery" });
 
-describe("cron main job passes heartbeat target=last", () => {
-  it("preserves the last target for immediate wakes", async () => {
+describe("cron main job session delivery", () => {
+  it("dispatches main-session events through the session controller", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.now();
     const clock = createGatewaySchedulerClock(now);
@@ -34,13 +34,11 @@ describe("cron main job passes heartbeat target=last", () => {
         },
       ],
     });
-    const { cron, state, finished, requestHeartbeatAndWait } =
-      createStartedCronServiceWithFinishedBarrier({
-        scheduler: createTestGatewayScheduler(clock.clock),
-        storePath,
-        logger,
-        requestHeartbeatAndWait: async () => ({ status: "ran", durationMs: 50 }),
-      });
+    const { cron, state, finished, runSessionEvent } = createStartedCronServiceWithFinishedBarrier({
+      scheduler: createTestGatewayScheduler(clock.clock),
+      storePath,
+      logger,
+    });
     const terminal = finished.waitForOk("main-delivery");
     try {
       await cron.start();
@@ -51,17 +49,12 @@ describe("cron main job passes heartbeat target=last", () => {
         await onTimer(state);
       }
       await terminal;
-      expect(requestHeartbeatAndWait).toHaveBeenCalledExactlyOnceWith(
+      expect(runSessionEvent).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          source: "cron",
-          intent: "immediate",
-          reason: "cron:main-delivery",
-          agentId: "main",
-          heartbeat: { target: "last" },
+          job: expect.objectContaining({ id: "main-delivery", sessionTarget: "main" }),
+          text: "Check in",
         }),
-        expect.any(Object),
       );
-      expect(requestHeartbeatAndWait.mock.calls[0]?.[0].sessionKey).toBeUndefined();
     } finally {
       cron.stop();
     }

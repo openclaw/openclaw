@@ -3,8 +3,9 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 export const EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE =
@@ -17,10 +18,18 @@ type ExecutionOwnerLifecycleDatabase = Pick<
 >;
 
 /** Only an enabled binding write allocates this existing optional table. */
-export const ensureExecutionOwnerLifecycleBindingSchema = createSqliteSchemaEnsurer(
+const ensureNativeExecutionOwnerLifecycleBindingSchema = createSqliteSchemaEnsurer(
   () => getOpenClawStateFeatureSchemaSql(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE),
   { tables: [EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE] },
 );
+
+export function ensureExecutionOwnerLifecycleBindingSchema(db: EngineConnection): void {
+  if (isPostgresSqlConnection(db)) {
+    ensureStatePostgresFragment(db, EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE);
+  } else {
+    ensureNativeExecutionOwnerLifecycleBindingSchema(db);
+  }
+}
 
 /** The first admitted execution owns this diagnostic link for the receipt's lifetime. */
 export function bindExecutionOwnerLifecycleMetadata(params: {

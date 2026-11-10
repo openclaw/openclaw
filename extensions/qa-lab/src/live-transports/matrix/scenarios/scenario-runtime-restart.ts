@@ -24,9 +24,6 @@ import {
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
 export async function runHomeserverRestartResumeScenario(context: MatrixQaScenarioContext) {
-  if (!context.interruptTransport) {
-    throw new Error("Matrix homeserver restart scenario requires a transport interruption hook");
-  }
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_HOMESERVER_ROOM_KEY);
   await context.interruptTransport();
   const resumed = await runAssertedDriverTopLevelScenario({
@@ -46,11 +43,6 @@ export async function runHomeserverRestartResumeScenario(context: MatrixQaScenar
 }
 
 export async function runInitialCatchupThenIncrementalScenario(context: MatrixQaScenarioContext) {
-  if (!context.restartGatewayWithQueuedMessage) {
-    throw new Error(
-      "Matrix initial catchup scenario requires a queued-message gateway restart callback",
-    );
-  }
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_RESTART_ROOM_KEY);
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const catchupToken = buildMatrixQaToken("MATRIX_QA_CATCHUP");
@@ -100,11 +92,6 @@ export async function runInitialCatchupThenIncrementalScenario(context: MatrixQa
 }
 
 export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenarioContext) {
-  if (!context.restartGatewayAfterStateMutation) {
-    throw new Error(
-      "Matrix stale sync replay dedupe scenario requires a persisted-state restart callback",
-    );
-  }
   if (!context.gatewayStateDir) {
     throw new Error("Matrix stale sync replay dedupe scenario requires a gateway state directory");
   }

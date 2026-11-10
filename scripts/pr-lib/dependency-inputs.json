@@ -1,0 +1,63 @@
+{
+  "files": [
+    "node-version.mjs",
+    "runtime-process-scripts.generated.mjs",
+    "runtime-process-bootstrap.generated.mjs",
+    "scripts/preinstall-package-manager-warning.mjs",
+    "scripts/postinstall-bundled-plugins.mjs",
+    "scripts/prepare-git-hooks.mjs",
+    "scripts/lib/package-lifecycle-marker.mjs",
+    "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/windows-cmd-helpers.mjs",
+    "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+    "scripts/lib/fs-safe-npm-cli-protocol.mjs",
+    "scripts/generate-kysely-types.mts",
+    "scripts/lib/direct-run.mjs",
+    "package.json",
+    "pnpm-workspace.yaml",
+    "tsconfig.json",
+    "packages/gateway-protocol/package.json",
+    "packages/normalization-core/package.json",
+    "scripts/native-protocol-inputs.json",
+    "scripts/prepare-native-protocol.mjs",
+    "src/infra/directory-walk.ts",
+    "packages/gateway-protocol/scripts/native-codegen.ts",
+    "scripts/protocol-gen-swift.ts",
+    "scripts/protocol-gen-kotlin.ts",
+    "scripts/runtime-postbuild-shared.mjs",
+    "scripts/lib/protocol-codegen-schema.ts",
+    "scripts/lib/protocol-codegen-names.mts",
+    "scripts/lib/record-shared.mjs",
+    "scripts/check-protocol-event-coverage.mts",
+    "src/gateway/session-method-policy.ts",
+    "src/gateway/operator-scopes.ts",
+    "src/shared/gateway-method-policy.ts",
+    "src/gateway/events.ts",
+    "scripts/check-install-dependency-ownership.mjs",
+    "config/tsconfig/oxlint.source.json",
+    "packages/tsconfig.json",
+    "packages/normalization-core/tsconfig.json",
+    "scripts/tsconfig.json",
+    "src/tsconfig.json",
+    "src/gateway/tsconfig.json",
+    "src/state/openclaw-state-schema.sql",
+    "src/state/openclaw-agent-schema.sql"
+  ],
+  "directories": [
+    "packages/gateway-protocol/src",
+    "packages/normalization-core/src",
+    "src/gateway/methods"
+  ],
+  "presence": [
+    ".git",
+    "src",
+    "extensions",
+    "git-hooks"
+  ],
+  "auditSha256": "e2b8b0481ce9f18ecece5a24465cf16022954555718e9552b8c7caa0af8478b0",
+  "runtime": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "modules": "147"
+  }
+}

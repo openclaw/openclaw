@@ -10,7 +10,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import YAML from "yaml";
-import { extractWikiLinks } from "./markdown-links.js";
+import { FRONTMATTER_PATTERN, renderWikiFrontmatter } from "./frontmatter-source.js";
+import { extractWikiLinks, maskMarkdownCode } from "./markdown-links.js";
 import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
 
 export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
@@ -25,7 +26,6 @@ export type ParsedWikiMarkdown = {
   body: string;
 };
 
-export type WikiClaimEvidence = NonNullable<ReturnType<typeof normalizeWikiClaimEvidence>>;
 export type WikiClaim = ReturnType<typeof normalizeWikiClaims>[number];
 type WikiPersonCard = ReturnType<typeof normalizeWikiPersonCard>;
 export type WikiRelationship = ReturnType<typeof normalizeWikiRelationships>[number];
@@ -77,7 +77,6 @@ type WikiPageSummaryScanResult =
   | { status: "invalid-frontmatter"; error: WikiPageFrontmatterError }
   | { status: "ignored" };
 
-const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const MAX_WIKI_SEGMENT_BYTES = 240;
 const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
 const FS_SAFE_PINNED_WRITE_TEMP_SUFFIX = ".00000000-0000-4000-8000-000000000000.fallback.tmp";
@@ -87,8 +86,8 @@ const MAX_WIKI_SAFE_WRITE_FILENAME_COMPONENT_BYTES =
   Buffer.byteLength(".");
 const WIKI_SEGMENT_HASH_BYTES = 12;
 const WIKI_RESERVED_PAGE_STEMS = new Set(["index"]);
-const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
-const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
+export const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
+export const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 
 function capWikiValueWithHash(raw: string, maxBytes: number, fallback: string): string {
   if (Buffer.byteLength(raw) <= maxBytes) {
@@ -105,7 +104,6 @@ function capWikiValueWithHash(raw: string, maxBytes: number, fallback: string): 
 export function slugifyWikiSegment(raw: string): string {
   const slug = normalizeLowercaseStringOrEmpty(raw)
     .replace(/[^\p{L}\p{N}\p{M}]+/gu, "-")
-    .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
   if (!slug) {
     return "page";
@@ -153,14 +151,25 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
 export function renderWikiMarkdown(params: {
   frontmatter: Record<string, unknown>;
   body: string;
+  /** Current page text; ordinary mappings preserve untouched source, other graphs render values. */
+  original?: string;
 }): string {
-  const frontmatter = YAML.stringify(params.frontmatter).trimEnd();
+  const frontmatter = renderWikiFrontmatter(params.frontmatter, params.original);
   return `---\n${frontmatter}\n---\n\n${params.body.trimStart()}`;
 }
 
 function extractTitleFromMarkdown(body: string): string | undefined {
-  const match = body.match(/^#\s+(.+?)\s*$/m);
-  return normalizeOptionalString(match?.[1]);
+  // Masking keeps offsets: "# comment" lines in code cannot match, and the title is
+  // read from the unmasked line so inline code in a real heading survives.
+  for (const heading of maskMarkdownCode(body).matchAll(/^#[ \t].*$/gm)) {
+    const title = normalizeOptionalString(
+      body.slice(heading.index + 1, heading.index + heading[0].length),
+    );
+    if (title) {
+      return title;
+    }
+  }
+  return undefined;
 }
 
 function normalizeOptionalStringFields<K extends string>(
@@ -314,13 +323,24 @@ function afterSourceContentFence(page: string): number {
   return fenceLineStart + fence.length + close.index + close[0].length;
 }
 
-function findNotesHumanBlock(page: string): { start: number; end: number } | null {
-  const searchFrom = afterSourceContentFence(page);
-  const start = page.indexOf(HUMAN_START_MARKER, searchFrom);
-  const endMarker = page.lastIndexOf(HUMAN_END_MARKER);
-  if (start === -1 && endMarker < searchFrom) {
+function findNotesHumanBlock(
+  page: string,
+  producerMarkdown = false,
+): { start: number; end: number } | null {
+  const bodyOffset = producerMarkdown
+    ? (page.match(FRONTMATTER_PATTERN)?.[0].length ?? 0)
+    : afterSourceContentFence(page);
+  // Code examples belong to the transcript/producer, never to the local Notes slot.
+  const searchable = maskMarkdownCode(page.slice(bodyOffset), true);
+  const start = searchable.indexOf(HUMAN_START_MARKER);
+  const endMarker = searchable.lastIndexOf(HUMAN_END_MARKER);
+  if (start === -1 && endMarker < 0) {
+    // Raw producer documents can have their own unmarked Notes heading.
+    if (producerMarkdown) {
+      return null;
+    }
     const notesSection = /(?:^|\r?\n)## Notes[\t ]*(?:\r?\n|$)([\s\S]*)/u.exec(
-      page.slice(searchFrom),
+      page.slice(bodyOffset),
     );
     if (!notesSection?.[1]?.trim()) {
       return null;
@@ -332,11 +352,14 @@ function findNotesHumanBlock(page: string): { start: number; end: number } | nul
       `Memory Wiki human Notes are missing ${missingMarker}; restore the missing marker before updating or removing this page`,
     );
   }
-  return { start, end: endMarker + HUMAN_END_MARKER.length };
+  return { start: bodyOffset + start, end: bodyOffset + endMarker + HUMAN_END_MARKER.length };
 }
 
-export function extractHumanNotesBlock(page: string): string | null {
-  const block = findNotesHumanBlock(page);
+export function extractHumanNotesBlock(
+  page: string,
+  options?: { producerMarkdown?: boolean },
+): string | null {
+  const block = findNotesHumanBlock(page, options?.producerMarkdown);
   if (!block) {
     return null;
   }
@@ -347,9 +370,13 @@ export function extractHumanNotesBlock(page: string): string | null {
   return notes.trim() ? page.slice(block.start, block.end) : null;
 }
 
-export function preserveHumanNotesBlock(rendered: string, existing: string): string {
-  const existingBlock = findNotesHumanBlock(existing);
-  const renderedBlock = findNotesHumanBlock(rendered);
+export function preserveHumanNotesBlock(
+  rendered: string,
+  existing: string,
+  options?: { producerMarkdown?: boolean },
+): string {
+  const existingBlock = findNotesHumanBlock(existing, options?.producerMarkdown);
+  const renderedBlock = findNotesHumanBlock(rendered, options?.producerMarkdown);
   if (!existingBlock || !renderedBlock) {
     return rendered;
   }
@@ -430,14 +457,19 @@ export function formatWikiLink(params: {
   sourceRelativeTo?: string;
   title: string;
 }): string {
-  const withoutExtension = params.relativePath.replace(/\.md$/i, "");
   if (params.renderMode === "obsidian") {
-    return `[[${withoutExtension}|${params.title}]]`;
+    return `[[${params.relativePath.replace(/\.md$/i, "")}|${params.title}]]`;
   }
   const linkTarget = params.sourceRelativeTo
     ? path.posix.relative(path.posix.dirname(params.sourceRelativeTo), params.relativePath)
     : params.relativePath;
-  return `[${params.title}](${linkTarget})`;
+  // Angle brackets keep spaces and parentheses inside the link destination.
+  const destination = /[\s()<>]/.test(linkTarget)
+    ? `<${linkTarget.replace(/[<>]/g, "\\$&")}>`
+    : linkTarget;
+  // Titles are metadata: Markdown, entities, and HTML must not change their displayed text.
+  const label = params.title.replace(/[\\[\]`*_~<&]/g, "\\$&");
+  return `[${label}](${destination})`;
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {

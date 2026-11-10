@@ -9,6 +9,8 @@ import {
 import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
 import { SUB_CLI_COMMAND_METADATA } from "./program/subcli-command-metadata.js";
 
+export { rewriteUpdateFlagArgv } from "../infra/cli-root-options.js";
+
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const ROOT_VERSION_ALIAS_FLAGS = new Set(["-v"]);
 const VERSION_FLAGS = new Set(["-V", "--version", ...ROOT_VERSION_ALIAS_FLAGS]);
@@ -164,10 +166,8 @@ export function isSimpleCommandHelpInvocation(
   return commandSeen && helpSeen;
 }
 
-type HelpNormalizationPositional = { value: string; index: number };
-
 function scanHelpNormalizationArgv(argv: string[]) {
-  const positionals: HelpNormalizationPositional[] = [];
+  const positionals: { value: string; index: number }[] = [];
   const rootOptions: string[] = [];
   let helpFlagIndex: number | null = null;
   let literal = false;
@@ -198,35 +198,6 @@ function scanHelpNormalizationArgv(argv: string[]) {
   }
 
   return { ok: true as const, positionals, rootOptions, helpFlagIndex };
-}
-
-export function rewriteUpdateFlagArgv(argv: string[]): string[] {
-  // Preserve the old root --update spelling by rewriting before Commander registration.
-  // Only rewrite --update while scanning the root-option prefix; once a command
-  // or `--` appears, later --update tokens belong to that command's arguments.
-  const updateIndex = argv.indexOf("--update");
-  if (updateIndex === -1) {
-    return argv;
-  }
-
-  for (let i = 2; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      return argv;
-    }
-    if (i === updateIndex) {
-      return argv.toSpliced(updateIndex, 1, "update");
-    }
-    const consumed = consumeRootOptionToken(argv, i);
-    if (consumed > 0) {
-      i += consumed - 1;
-      continue;
-    }
-    if (!arg.startsWith("-")) {
-      return argv;
-    }
-  }
-  return argv;
 }
 
 export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
@@ -290,21 +261,6 @@ export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
   const targetPath = positionals.slice(1).map((positional) => positional.value);
   return [runtimePath, entryPath, ...rootOptions, ...targetPath, "--help"];
 }
-
-type NormalizeRootNoColorArgvOptions = {
-  shouldPreserveNoColor?: (params: {
-    remainingArgs: readonly string[];
-    noColorIndex: number;
-  }) => boolean;
-};
-
-type NormalizeRootLogLevelArgvOptions = {
-  shouldPreserveLogLevel?: (params: {
-    remainingArgs: readonly string[];
-    logLevelIndex: number;
-    consumed: number;
-  }) => boolean;
-};
 
 function isPossibleCommandOptionValue(
   remainingArgs: readonly string[],
@@ -395,7 +351,12 @@ function normalizeRootOptionArgv(
 
 export function normalizeRootNoColorArgv(
   argv: string[],
-  options: NormalizeRootNoColorArgvOptions = {},
+  options: {
+    shouldPreserveNoColor?: (params: {
+      remainingArgs: readonly string[];
+      noColorIndex: number;
+    }) => boolean;
+  } = {},
 ): string[] {
   return normalizeRootOptionArgv(
     argv,
@@ -407,7 +368,13 @@ export function normalizeRootNoColorArgv(
 
 export function normalizeRootLogLevelArgv(
   argv: string[],
-  options: NormalizeRootLogLevelArgvOptions = {},
+  options: {
+    shouldPreserveLogLevel?: (params: {
+      remainingArgs: readonly string[];
+      logLevelIndex: number;
+      consumed: number;
+    }) => boolean;
+  } = {},
 ): string[] {
   return normalizeRootOptionArgv(
     argv,

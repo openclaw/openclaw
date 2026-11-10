@@ -12,6 +12,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const intervalMs = 15_000;
+const processSampleIntervalMs = 60_000;
 const maxOutputBytes = 4 * 1024 * 1024;
 const qualificationPhases = [
   "source-head",
@@ -27,6 +28,7 @@ const qualificationPhases = [
   "simulator-create",
   "simulator-boot",
   "simulator-ready",
+  "simulator-headroom",
   "simulator-slim",
   "simulator-delete",
   "fixture-server",
@@ -55,16 +57,16 @@ const phases = new Set([
   ...["iphone", "ipad", "watch", "all"].flatMap((device) =>
     [
       "build",
+      "host-idle",
+      "simulator-idle",
+      "headroom",
       "create",
       "boot",
       "shutdown",
       "delete",
       "status-bar",
       "watch-capture",
-      "capture-01-control-connected",
-      "capture-02-chat-connected",
-      "capture-03-agent-connected",
-      "capture-04-settings-connected",
+      "capture",
     ].map((operation) => `screenshot-${device}-${operation}`),
   ),
 ]);
@@ -78,6 +80,8 @@ const roles = new Set([
   "git",
   "xcodebuild",
   "XCBBuildService",
+  "SWBBuildService",
+  "DTServiceHub",
   "swift-frontend",
   "swift-driver",
   "swift",
@@ -106,6 +110,72 @@ const roles = new Set([
   "mds",
   "mds_stores",
   "mdworker_shared",
+  "CoreSpotlightService",
+  "spotlightknowledged",
+  "spotlightknowledged.updater",
+  "searchd",
+  "photoanalysisd",
+  "mediaanalysisd",
+  "assetsd",
+  "mobileassetd",
+  "UserEventAgent",
+  "configd_sim",
+  "ids_simd",
+  "cfprefsd",
+  "containermanagerd",
+  "containermanagerd_system",
+  "installd",
+  "installcoordinationd",
+  "lsd",
+  "notifyd",
+  "trustd",
+  "securityd",
+  "modelcatalogd",
+  "modelmanagerd",
+  "mlhostd",
+  "mlruntimed",
+  "intelligenceplatformd",
+  "intelligencecontextd",
+  "intelligenceflowd",
+  "intelligencetasksd",
+  "generativeexperiencesd",
+  "knowledgeconstructiond",
+  "assistantd",
+  "triald",
+  "axassetsd",
+  "managedassetsd",
+  "AssetCacheLocatorService",
+  "fileindexerd",
+  "biomed",
+  "biomesyncd",
+  "chronod",
+  "liveactivitiesd",
+  "systemsoundserver-simd",
+  "_iokitsimd",
+  "iokitsimd",
+  "xpcproxy_sim",
+  "launchd_sim_trampoline",
+  "tccd",
+  "diagnosticd",
+  "diagnosticextensionsd",
+  "ScreenTimeAgent",
+  "UsageTrackingAgent",
+  "familycircled",
+  "ReportCrash",
+  "osanalyticshelper",
+  "PerfPowerServices",
+  "PerfPowerServicesExtended",
+  "symptomsd",
+  "logd_helper",
+  "logd_reporter",
+  "MTLCompilerService",
+  "com.apple.WebKit.GPU",
+  "com.apple.WebKit.Networking",
+  "com.apple.WebKit.WebContent",
+  "dasd",
+  "nsurlsessiond",
+  "sharingd",
+  "swcd",
   "testmanagerd",
   "xctest",
   "OpenClaw",
@@ -138,31 +208,95 @@ function delta(current, previous) {
 }
 
 function processRows(output, previous, elapsedMs) {
-  return output.split("\n").flatMap((line) => {
-    const match = /^\s*(\d+)\s+(\d+)\s+([\d:.-]+)\s+(\d+)\s+([A-Za-z+<>=-]+)\s+(.+)$/u.exec(line);
+  const rows = output.split("\n").flatMap((line) => {
+    const match =
+      /^\s*(\d+)\s+(\d+)\s+([\d:.-]+)\s+(\d+)\s+([A-Za-z+<>=-]+)\s+(\d+(?:\.\d+)?)\s+(.+)$/u.exec(
+        line,
+      );
     if (!match) {
       return [];
     }
-    const [, pid, ppid, time, rss, state, command] = match;
+    const [, pid, ppid, time, rss, state, recent, command] = match;
     const [day, clock] = time.includes("-") ? time.split("-") : ["0", time];
     const cpuMs =
       (Number(day) * 86_400 + clock.split(":").reduce((s, n) => s * 60 + Number(n), 0)) * 1_000;
     const cpuDeltaMs = delta(cpuMs, previous.get(Number(pid)));
-    const basename = path.basename(command.trim());
+    const executable = command.trim();
+    const basename = path.basename(executable);
+    const origin =
+      (executable.startsWith("/Library/Developer/CoreSimulator/") ||
+        executable.startsWith(
+          "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-",
+        ) ||
+        executable.startsWith(
+          "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.watchOS.SimulatorRuntime-",
+        )) &&
+      executable.includes("/Contents/Resources/RuntimeRoot/")
+        ? "simulator-runtime"
+        : /^\/Applications\/Xcode(?:_[^/]+)?\.app\//u.test(executable)
+          ? "xcode"
+          : /^\/(?:System\/Library|usr\/(?:bin|sbin|libexec)|bin|sbin)\//u.test(executable)
+            ? "host-system"
+            : "other";
+    // Only installed Apple runtime system paths may contribute an otherwise unknown name.
+    // Device data, apps, and container paths retain the fixed-role privacy boundary.
+    const runtimeSystemPath =
+      /^(?:\/Library\/Developer\/CoreSimulator\/Volumes\/[^/]+|\/private\/var\/run\/com\.apple\.security\.cryptexd\/mnt\/com\.apple\.(?:iPhoneOS|watchOS)\.SimulatorRuntime-[^/]+)\/Library\/Developer\/CoreSimulator\/Profiles\/Runtimes\/[^/]+\.simruntime\/Contents\/Resources\/RuntimeRoot\/(?:System\/Library|usr\/(?:bin|sbin|libexec))\//u.test(
+        executable,
+      ) && path.posix.normalize(executable) === executable;
+    const publicRuntimeName =
+      runtimeSystemPath && /^[A-Za-z][A-Za-z0-9_.+-]{0,95}$/u.test(basename);
     return [
       {
         pid: Number(pid),
         parentPid: Number(ppid),
-        role: roles.has(basename) ? basename : "other",
+        role: roles.has(basename) || publicRuntimeName ? basename : "other",
+        origin,
+        parentRole: "other",
         state,
         rssBytes: Number(rss) * 1024,
         cpuMs,
         cpuDeltaMs,
+        cpuRecentPercent: Number(recent),
         cpuPercent:
           cpuDeltaMs === null ? null : Math.round((cpuDeltaMs / elapsedMs) * 10_000) / 100,
       },
     ];
   });
+  const byPid = new Map(rows.map((row) => [row.pid, row]));
+  for (const row of rows) {
+    row.parentRole = byPid.get(row.parentPid)?.role ?? "other";
+  }
+  return rows;
+}
+
+function processSummary(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = `${row.origin}:${row.role}`;
+    const group = groups.get(key) ?? {
+      origin: row.origin,
+      role: row.role,
+      count: 0,
+      cpuObservedCount: 0,
+      cpuDeltaMs: 0,
+      cpuRecentPercent: 0,
+    };
+    group.count += 1;
+    group.cpuRecentPercent += row.cpuRecentPercent;
+    if (row.cpuDeltaMs !== null) {
+      group.cpuObservedCount += 1;
+      group.cpuDeltaMs += row.cpuDeltaMs;
+    }
+    groups.set(key, group);
+  }
+  return {
+    count: rows.length,
+    runnableCount: rows.filter((row) => row.state.startsWith("R")).length,
+    uninterruptibleCount: rows.filter((row) => row.state.startsWith("U")).length,
+    // All observed rows contribute, including those outside the top-process display.
+    groups: [...groups.values()].toSorted((a, b) => b.cpuRecentPercent - a.cpuRecentPercent),
+  };
 }
 
 function memory(output) {
@@ -228,7 +362,8 @@ function startTimeline(output) {
     unavailableProbes = 0,
     outputLimitReached = false;
   let probeStatus = {};
-  let timer, pending;
+  let timer;
+  const pending = new Map();
   const started = performance.now();
   const cpuStart = process.cpuUsage();
   let previousCpu = cpuTimes(),
@@ -237,6 +372,7 @@ function startTimeline(output) {
     previousDisks = new Map();
   let previousAt = started;
   let previousProcessAt = started;
+  let nextProcessAt = started;
   const phase = () => {
     try {
       const value = readFileSync(phaseFile, "utf8").trim();
@@ -276,37 +412,59 @@ function startTimeline(output) {
         resolve("");
         return;
       }
+      const name = path.basename(command);
+      if (pending.has(name)) {
+        probeStatus[name] = { wallMs: 0, outcome: "pending-after-timeout" };
+        resolve("");
+        return;
+      }
       const at = performance.now();
+      let settled = false;
+      const observation = { child: undefined, deadline: undefined };
+      const finish = (outcome, stdout = "") => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(observation.deadline);
+        const wallMs = performance.now() - at;
+        commandWallMs += wallMs;
+        probeStatus[name] = { wallMs: Math.round(wallMs), outcome };
+        if (outcome !== "ok") {
+          unavailableProbes += 1;
+        }
+        resolve(outcome === "ok" ? stdout : "");
+      };
+      pending.set(name, observation);
       // Only observation subprocesses are deprioritized; the wrapped workload is unchanged.
-      pending = execFile(
+      observation.child = execFile(
         "/usr/bin/nice",
         ["-n", "10", command, ...args],
         {
-          timeout: 2_000,
           killSignal: "SIGKILL",
           maxBuffer: 256 * 1024,
           env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LC_ALL: "C" },
         },
         (error, stdout) => {
-          pending = undefined;
-          const wallMs = performance.now() - at;
-          commandWallMs += wallMs;
-          probeStatus[path.basename(command)] = {
-            wallMs: Math.round(wallMs),
-            outcome: !error
+          pending.delete(name);
+          finish(
+            !error
               ? "ok"
               : error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
                 ? "output-limit"
                 : error.killed
                   ? "timeout"
                   : "unavailable",
-          };
-          if (error) {
-            unavailableProbes += 1;
-          }
-          resolve(error ? "" : stdout);
+            stdout,
+          );
         },
       );
+      observation.deadline = setTimeout(() => {
+        // Child output closure can stall after SIGKILL. Stop waiting without
+        // starting another copy of this probe until its callback releases it.
+        finish("timeout");
+        observation.child.kill("SIGKILL");
+      }, 2_000);
     });
   async function sample() {
     const at = performance.now();
@@ -316,10 +474,23 @@ function startTimeline(output) {
     const vm = memory(await probe("/usr/bin/vm_stat"));
     const pressure = await probe("/usr/sbin/sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]);
     const diskRows = disks(await probe("/usr/sbin/iostat", ["-Id"]));
-    const processOutput = await probe("/bin/ps", ["-axo", "pid=,ppid=,time=,rss=,state=,comm="]);
-    // Earlier probes can stall independently of the interval between process CPU observations.
-    const processAt = performance.now();
-    const rows = processRows(processOutput, previousProcesses, processAt - previousProcessAt);
+    let rows = [];
+    let processIntervalMs = null;
+    if (performance.now() < nextProcessAt) {
+      probeStatus.ps = { wallMs: 0, outcome: "not-due" };
+    } else {
+      const processOutput = await probe("/bin/ps", [
+        "-axo",
+        "pid=,ppid=,time=,rss=,state=,%cpu=,comm=",
+      ]);
+      // Intentional skips retain the CPU baseline; earlier probes may delay the next observation.
+      const processAt = performance.now();
+      processIntervalMs = previousProcesses.size ? Math.round(processAt - previousProcessAt) : null;
+      rows = processRows(processOutput, previousProcesses, processAt - previousProcessAt);
+      previousProcessAt = processAt;
+      previousProcesses = new Map(rows.map((row) => [row.pid, row.cpuMs]));
+      nextProcessAt = processAt + processSampleIntervalMs;
+    }
     if (!active) {
       return;
     }
@@ -328,7 +499,8 @@ function startTimeline(output) {
       Object.keys(cpu).map((key) => [key, delta(cpu[key], previousCpu[key])]),
     );
     const total = Object.values(cpuDeltas).reduce((sum, n) => sum + n, 0);
-    const topCpu = rows.toSorted((a, b) => (b.cpuDeltaMs ?? 0) - (a.cpuDeltaMs ?? 0)).slice(0, 6);
+    // Native decaying CPU averages also rank new processes and fresh post-timeout baselines.
+    const topCpu = rows.toSorted((a, b) => b.cpuRecentPercent - a.cpuRecentPercent).slice(0, 6);
     const topMemory = rows.toSorted((a, b) => b.rssBytes - a.rssBytes).slice(0, 6);
     const selected = [...new Map([...topCpu, ...topMemory].map((row) => [row.pid, row])).values()];
     samples += 1;
@@ -340,6 +512,7 @@ function startTimeline(output) {
       phase: phase(),
       intervalMs: samples === 1 ? null : Math.round(at - previousAt),
       sampleWallMs: Math.round(performance.now() - at),
+      processIntervalMs,
       probes: probeStatus,
       host: {
         cpuPercent:
@@ -374,14 +547,13 @@ function startTimeline(output) {
         })),
       },
       processes: selected,
+      processSummary: probeStatus.ps?.outcome === "ok" ? processSummary(rows) : null,
       collector: overhead(),
     });
     previousAt = at;
-    previousProcessAt = processAt;
     previousCpu = cpu;
     previousMemory = vm;
     previousDisks = new Map(diskRows.map((disk) => [disk.device, disk]));
-    previousProcesses = new Map(rows.map((row) => [row.pid, row.cpuMs]));
     // Delayed collection skips missed slots; there is never a catch-up queue.
     if (active) {
       timer = setTimeout(collect, intervalMs);
@@ -397,6 +569,7 @@ function startTimeline(output) {
     type: "start",
     at: new Date().toISOString(),
     intervalMs,
+    processSampleIntervalMs,
     maxOutputBytes,
     cpuCount: os.availableParallelism(),
     totalMemoryBytes: os.totalmem(),
@@ -411,7 +584,10 @@ function startTimeline(output) {
     stop(code, signal) {
       active = false;
       clearTimeout(timer);
-      pending?.kill("SIGKILL");
+      for (const observation of pending.values()) {
+        clearTimeout(observation.deadline);
+        observation.child.kill("SIGKILL");
+      }
       // Do not await native probes at workload completion, even if the host is overloaded.
       emit({
         type: "end",

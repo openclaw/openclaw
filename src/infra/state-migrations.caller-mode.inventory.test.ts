@@ -4,10 +4,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
-import {
-  listPluginDoctorStateMigrationEntries,
-  resolveLivePluginDoctorStateMigrationInventory,
-} from "../plugins/doctor-contract-registry.js";
+import { prepareLivePluginDoctorStateMigrationInventory } from "../plugins/doctor-contract-preparation.js";
+import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store.js";
@@ -24,7 +22,6 @@ import {
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { runPostSessionPluginDoctorStateRepairs } from "./state-migrations.plugin-doctor.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
 const tempDirs = createTrackedTempDirs();
 const sessionAction = { id: "session-action", phase: "after-session-repair", doctorOnly: true };
@@ -89,8 +86,8 @@ function repairResult(requiredPluginIds: string[], changes: string[] = []) {
   return { changes, completedPluginIds: undefined, requiredPluginIds, warnings: [] };
 }
 
-function discoverActions(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
-  return resolveLivePluginDoctorStateMigrationInventory({ config, env }).descriptors.map(
+async function discoverActions(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  return (await prepareLivePluginDoctorStateMigrationInventory({ config, env })).descriptors.map(
     ({ pluginId, id }) => ({ pluginId, id }),
   );
 }
@@ -111,7 +108,6 @@ function repair(
 afterEach(async () => {
   vi.unstubAllEnvs();
   clearPluginDoctorContractRegistryCache();
-  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
@@ -156,7 +152,7 @@ it("repairs a planned bundled owner omitted by a partial index after acquiring f
     return withPluginMetadataSnapshotScope(
       snapshot,
       async () => {
-        const actions = discoverActions(config, env);
+        const actions = await discoverActions(config, env);
         expect(actions).toEqual([
           { pluginId: "kept-owner", id: "session-action" },
           { pluginId: "omitted-owner", id: "session-action" },
@@ -202,12 +198,12 @@ it("keeps supported discovery and execution order stable when a configured alias
     },
   };
   const env = makeEnv(root);
-  const frozenActions = discoverActions(aliasConfig, env);
+  const frozenActions = await discoverActions(aliasConfig, env);
   expect(frozenActions).toEqual([
     { pluginId: "acpx", id: "acpx-session-action" },
     { pluginId: "codex", id: "codex-session-action" },
   ]);
-  expect(discoverActions(baseConfig, env)).toEqual(frozenActions);
+  expect(await discoverActions(baseConfig, env)).toEqual(frozenActions);
   await expect(repair(baseConfig, env, frozenActions.toReversed())).resolves.toEqual({
     ...repairResult(["acpx", "codex"]),
     warnings: [expect.stringContaining("immutable action order")],

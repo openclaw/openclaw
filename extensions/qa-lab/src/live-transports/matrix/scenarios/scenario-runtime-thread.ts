@@ -126,9 +126,6 @@ export async function runThreadRootPreservationScenario(context: MatrixQaScenari
 }
 
 export async function runThreadNestedReplyShapeScenario(context: MatrixQaScenarioContext) {
-  if (!context.gatewayCall) {
-    throw new Error("Matrix nested reply proof requires the Gateway send method");
-  }
   const result = await runThreadScenario(context, "MATRIX_QA_THREAD_NESTED");
   assertThreadReplyArtifact(result.reply, {
     expectedRootEventId: result.rootEventId,

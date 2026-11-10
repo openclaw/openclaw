@@ -1,6 +1,9 @@
 import { createMemo, For } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS } from "../../../src/gateway/control-ui-contract.js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import {
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
+} from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
@@ -8,10 +11,7 @@ import {
   createGatewayHarness as createPullRequestGateway,
   createHello,
 } from "../lib/session-pull-requests.test-support.ts";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  sessionPullRequestsForGateway,
-} from "../lib/session-pull-requests.ts";
+import { sessionPullRequestsForGateway } from "../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createTestSessionCapability } from "../lib/sessions/session-capability.test-support.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -105,12 +105,12 @@ if (!customElements.get(LIFECYCLE_HOST_TAG)) {
 
 function mountLifecycleHost(
   gateway: ApplicationGateway,
-  readRows: IndicatorOptions["getRows"],
-  getSessions: IndicatorOptions["getSessions"] = () => undefined,
+  rows: readonly SidebarRecentSession[] | IndicatorOptions["getRows"],
+  sessions?: SessionCapability,
 ): LifecycleTestHost {
   const host = new LifecycleTestHost();
-  host.setInputs({ gateway, getSessions });
-  host.readRows = readRows;
+  host.setInputs({ gateway, getSessions: () => sessions });
+  host.readRows = typeof rows === "function" ? rows : () => rows;
   document.body.append(host);
   return host;
 }
@@ -139,7 +139,7 @@ function createGatewayHarness(scopes = ["operator.read"]) {
 
 function mountRow(row = sessionRow("agent:main:demo", "wt-demo"), scopes?: string[]) {
   const harness = createGatewayHarness(scopes);
-  return { harness, row, host: mountLifecycleHost(harness.gateway, () => [row]) };
+  return { harness, row, host: mountLifecycleHost(harness.gateway, [row]) };
 }
 
 function expectSubscription(
@@ -154,24 +154,67 @@ function expectSubscription(
   );
 }
 
+function summary(
+  host: LifecycleTestHost,
+  row: SidebarRecentSession,
+  initial?: SidebarRecentSession["pullRequest"],
+) {
+  return host.indicators.summary(row.key, row.worktreeId ?? "", initial);
+}
+
+function setScopes(host: LifecycleTestHost, scopes: string[]) {
+  host.gateway.snapshot.hello = {
+    ...host.gateway.snapshot.hello!,
+    auth: { role: "operator", scopes },
+  };
+  host.setInputs({ gateway: host.gateway });
+  return host.updateComplete;
+}
+
 afterEach(() => {
   document.querySelectorAll(LIFECYCLE_HOST_TAG).forEach((host) => host.remove());
   vi.useRealTimers();
 });
 
-it("does not subscribe to PR status for session-only sidebar viewers", async () => {
+it("keeps session-only viewers passive and shows only their own conversation's confirmed badge", async () => {
   vi.useFakeTimers();
+  const other = sessionRow("agent:main:other", "wt-other", {
+    pullRequest: { numbers: [9], state: "open" },
+  });
   const { harness, row, host } = mountRow(undefined, [
     "operator.sessions.read",
     "operator.sessions.write",
   ]);
-  await host.updateComplete;
+  host.readRows = () => [row, other];
+  await settle(host);
   await vi.advanceTimersByTimeAsync(60_000);
   expect(harness.request).not.toHaveBeenCalled();
-  expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
+  expect(summary(host, row)).toBeUndefined();
   const initial = { numbers: [42], state: "open" as const };
   expect(host.indicators.summary(row.key, "", initial)).toEqual(initial);
-  expect(host.indicators.summary(row.key, row.worktreeId ?? "", initial)).toBeUndefined();
+  expect(summary(host, row, initial)).toBeUndefined();
+
+  const store = sessionPullRequestsForGateway(harness.gateway);
+  const conversation = {};
+  store.watch(conversation, [row.key], { foreground: true });
+  onTestFinished(() => store.unwatch(conversation));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(harness.request).toHaveBeenLastCalledWith(
+    SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+    { sessionKeys: [row.key] },
+    { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+  );
+  harness.publish(row.key, { pullRequests: [{ number: 7, state: "open" }] });
+  await host.updateComplete;
+  expect(summary(host, row)).toEqual({ numbers: [7], state: "open" });
+  expect(host.indicators.count(row.key)).toBe(1);
+  // Another checkout row keeps its catalog summary hidden: no own read confirmed it.
+  expect(summary(host, other, other.pullRequest)).toBeUndefined();
+
+  harness.publish(row.key, { status: "unavailable", discardPrevious: true });
+  await host.updateComplete;
+  expect(summary(host, row)).toBeUndefined();
+  expect(host.indicators.count(row.key)).toBe(0);
 });
 it("keeps empty rows idle across sidebar updates", async () => {
   vi.useFakeTimers();
@@ -189,47 +232,51 @@ it("keeps empty rows idle across sidebar updates", async () => {
   expect(harness.request).not.toHaveBeenCalled();
 });
 
-it.each(["merged"] as const)(
-  "observes visible rows and keeps the pushed %s summary through backoff",
-  async (state) => {
-    vi.useFakeTimers();
-    const { harness, row, host } = mountRow();
-    await settle(host);
-    expectSubscription(harness, [row.key]);
+it("observes visible rows and keeps the pushed merged summary through backoff", async () => {
+  vi.useFakeTimers();
+  const { harness, row, host } = mountRow();
+  await settle(host);
+  expectSubscription(harness, [row.key]);
+  const store = sessionPullRequestsForGateway(harness.gateway);
+  const activeOwner = {};
+  store.watch(activeOwner, [row.key], { foreground: true });
+  onTestFinished(() => store.unwatch(activeOwner));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(harness.request).toHaveBeenLastCalledWith(
+    SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+    { sessionKeys: [row.key] },
+    { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+  );
 
-    harness.publish(row.key, {
-      pullRequests: [
-        { number: 2, state },
-        {
-          number: 1,
-          url: "https://example.test/pr/1",
-          state,
-        },
-      ],
-      rateLimited: true,
-      status: "rate-limited",
-    });
-    await host.updateComplete;
-    expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toEqual({
-      numbers: [1, 2],
-      state,
-    });
+  const state = "merged";
+  const expected = { numbers: [1, 2], state };
+  harness.publish(row.key, {
+    pullRequests: [
+      { number: 2, state },
+      { number: 1, url: "https://example.test/pr/1", state },
+    ],
+    rateLimited: true,
+    status: "rate-limited",
+  });
+  await host.updateComplete;
+  expect(summary(host, row)).toEqual(expected);
 
-    harness.publish(row.key, { rateLimited: true, status: "rate-limited" });
-    await host.updateComplete;
-    expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toEqual({
-      numbers: [1, 2],
-      state,
-    });
+  harness.publish(row.key, { rateLimited: true, status: "rate-limited" });
+  await host.updateComplete;
+  expect(summary(host, row)).toEqual(expected);
 
-    harness.publish(row.key);
-    await host.updateComplete;
-    expect(
-      host.indicators.summary(row.key, row.worktreeId ?? "", { numbers: [99], state }),
-    ).toBeUndefined();
-    host.remove();
-  },
-);
+  harness.publish(row.key, { status: "unavailable", discardPrevious: true });
+  await host.updateComplete;
+  expect(store.get(row.key)?.pullRequests).toEqual([]);
+  expect(host.textContent).toBe("");
+  expect(host.indicators.count(row.key)).toBe(0);
+  expect(summary(host, row, { numbers: [99], state })).toBeUndefined();
+
+  harness.publish(row.key);
+  await host.updateComplete;
+  expect(summary(host, row, { numbers: [99], state })).toBeUndefined();
+  host.remove();
+});
 
 it("counts cold task receipts without a worktree or an invented state", async () => {
   vi.useFakeTimers();
@@ -280,25 +327,16 @@ it("clears alias indicators when the selected agent changes", async () => {
   const { harness, row, host } = mountRow(sessionRow("global", "wt-global"));
   await settle(host);
   harness.publish("agent:main:global", {
-    pullRequests: [
-      {
-        number: 1,
-        url: "https://example.test/pr/1",
-        state: "open",
-      },
-    ],
+    pullRequests: [{ number: 1, url: "https://example.test/pr/1", state: "open" }],
   });
   await host.updateComplete;
-  expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toEqual({
-    numbers: [1],
-    state: "open",
-  });
+  expect(summary(host, row)).toEqual({ numbers: [1], state: "open" });
 
   host.setInputs({ selectedAgentId: "work" });
   await settle(host);
 
   await host.updateComplete;
-  expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
+  expect(summary(host, row)).toBeUndefined();
 });
 
 it("clears a structural session's indicator while replacement data is pending", async () => {
@@ -307,28 +345,20 @@ it("clears a structural session's indicator while replacement data is pending", 
   const row = sessionRow("agent:main:demo", "wt-demo");
   const epoch = {};
   const setPullRequestSummary = vi.fn();
-  const host = mountLifecycleHost(
-    harness.gateway,
-    () => [row],
-    () =>
-      ({
-        subscribe: () => () => {},
-        capturePullRequestEpoch: vi.fn(() => epoch),
-        setPullRequestSummary,
-      }) as unknown as SessionCapability,
-  );
+  const host = mountLifecycleHost(harness.gateway, [row], {
+    subscribe: () => () => {},
+    capturePullRequestEpoch: vi.fn(() => epoch),
+    setPullRequestSummary,
+  } as unknown as SessionCapability);
   await settle(host);
   harness.publish(row.key, { pullRequests: [{ number: 1, state: "open" }] });
   await host.updateComplete;
-  expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toEqual({
-    numbers: [1],
-    state: "open",
-  });
+  expect(summary(host, row)).toEqual({ numbers: [1], state: "open" });
 
   harness.emit({ sessionKey: row.key, agentId: "main", reason: "rewind" }, "sessions.changed");
 
   await host.updateComplete;
-  expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
+  expect(summary(host, row)).toBeUndefined();
   expect(setPullRequestSummary).toHaveBeenCalledExactlyOnceWith(row.key, undefined, epoch);
 });
 
@@ -338,11 +368,7 @@ it.each(["agent", "client", "permissions", "sessions"] as const)(
     const harness = createGatewayHarness();
     const sessions = createTestSessionCapability(harness.gateway);
     const row = sessionRow("global", "wt-global");
-    const host = mountLifecycleHost(
-      harness.gateway,
-      () => [row],
-      () => sessions,
-    );
+    const host = mountLifecycleHost(harness.gateway, [row], sessions);
     await host.updateComplete;
     harness.publish("agent:main:global", { pullRequests: [{ number: 7, state: "open" }] });
     await host.updateComplete;
@@ -391,38 +417,25 @@ it("hides the row's saved PR summary after a same-client read-scope revocation",
   const row = sessionRow("agent:main:demo", "wt-demo", {
     pullRequest: { numbers: [42], state: "open" },
   });
-  const { harness, host } = mountRow(row);
+  const { host } = mountRow(row);
   await host.updateComplete;
   expect(host.textContent).toContain("42");
 
-  const snapshot = harness.gateway.snapshot;
-  snapshot.hello = {
-    ...snapshot.hello!,
-    auth: { role: "operator", scopes: ["operator.sessions.read", "operator.sessions.write"] },
-  };
-  host.setInputs({ gateway: harness.gateway });
-  await host.updateComplete;
+  await setScopes(host, ["operator.sessions.read", "operator.sessions.write"]);
   expect(host.textContent).not.toContain("42");
   expect(host.indicators.summary(row.key, row.worktreeId!, row.pullRequest)).toBeUndefined();
 
-  snapshot.hello = {
-    ...snapshot.hello,
-    auth: { role: "operator", scopes: ["operator.read"] },
-  };
-  host.setInputs({ gateway: harness.gateway });
-  await host.updateComplete;
+  await setScopes(host, ["operator.read"]);
   expect(host.textContent).toContain("42");
 });
 
 it("retains sidebar snapshots while only the viewed checkout drives subscriptions", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const harness = createGatewayHarness();
-  const rows = Array.from({ length: 40 }, (_, index) => ({
-    key: `agent:main:demo-${index}`,
-    isChild: false,
-    worktreeId: `wt-demo-${index}`,
-  })) as SidebarRecentSession[];
-  const host = mountLifecycleHost(harness.gateway, () => rows);
+  const rows = Array.from({ length: 40 }, (_, index) =>
+    sessionRow(`agent:main:demo-${index}`, `wt-demo-${index}`),
+  );
+  const host = mountLifecycleHost(harness.gateway, rows);
 
   await settle(host);
 
@@ -467,7 +480,7 @@ it("clears a rendered fallback after the visible snapshot leaves the bounded wat
   const host = mountLifecycleHost(
     harness.gateway,
     () => [sessionRow(key, "wt-demo", { pullRequest: sessions.pullRequestSummary(key) })],
-    () => sessions,
+    sessions,
   );
   host.setInputs({ rowsSource: sessions });
   await settle(host);
@@ -507,21 +520,19 @@ it("keeps sidebar watches passive across disconnect and reconnect", async () => 
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const { harness, row, host } = mountRow();
   await settle(host);
-  expect(harness.request.mock.lastCall?.[1]).toEqual(
-    host.isConnected ? { sessionKeys: [], passiveSessionKeys: [row.key] } : { sessionKeys: [] },
-  );
+  const expectWatch = () =>
+    expect(harness.request.mock.lastCall?.[1]).toEqual(
+      host.isConnected ? { sessionKeys: [], passiveSessionKeys: [row.key] } : { sessionKeys: [] },
+    );
+  expectWatch();
 
   host.remove();
   await settle(host);
 
-  expect(harness.request.mock.lastCall?.[1]).toEqual(
-    host.isConnected ? { sessionKeys: [], passiveSessionKeys: [row.key] } : { sessionKeys: [] },
-  );
+  expectWatch();
 
   document.body.append(host);
   await settle(host);
 
-  expect(harness.request.mock.lastCall?.[1]).toEqual(
-    host.isConnected ? { sessionKeys: [], passiveSessionKeys: [row.key] } : { sessionKeys: [] },
-  );
+  expectWatch();
 });

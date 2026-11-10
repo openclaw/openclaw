@@ -31,19 +31,25 @@ import type { PaneOutboxRecovery } from "../chat-outbox-recovery.tsx";
 import type { ChatPaneModelControl } from "../chat-pane-model-control.tsx";
 import type { ChatRealtimeView } from "../chat-realtime.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
+import type { ChatSessionStateSnapshot } from "../chat-session-state-snapshot.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { FallbackStatus } from "../tool-stream-contract.ts";
-import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
+import type { CompactionStatus, FallbackStatus } from "../tool-stream-contract.ts";
+import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import type { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
-import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
-import type { ChatComposerCapabilityMenuProps } from "./chat-composer-plus-menu.types.ts";
-import type { SkillMenu } from "./chat-composer-skill-menu.tsx";
-import type { SlashMenu } from "./chat-composer-slash-menu.tsx";
+import type { ComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
+import type {
+  HumanMentionAccess,
+  HumanMentionDirectory,
+  HumanMentionMenu,
+} from "./chat-composer-mention-menu-state.ts";
+import type { ChatComposerCapabilityMenuSource } from "./chat-composer-plus-menu.types.ts";
+import type { SkillMenu } from "./chat-composer-skill-menu-state.ts";
+import type { SlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
+import type { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 
 type ChatQueuedEditProps = {
   editingId: string | null;
@@ -54,6 +60,19 @@ type ChatQueuedEditProps = {
   onEditChange?: (text: string, mentions?: readonly HumanMention[]) => void;
   onEditSubmit?: () => void;
   onCancel: () => void;
+};
+
+/** Destinations and owner facts not already carried by ChatProps. */
+type ChatMobileActivities = {
+  onOpenSubagents?: NonNullable<ChatActivityPillsProps["subagents"]>["onOpen"];
+  goal?: Pick<NonNullable<ChatActivityPillsProps["goal"]>, "executionConfirmed" | "onOpen">;
+  onOpenProgress?: NonNullable<ChatActivityPillsProps["progress"]>["onOpen"];
+  onOpenPullRequest?: NonNullable<ChatActivityPillsProps["pullRequests"]>["onOpen"];
+  /** Eligibility is decided by the publication owner, including retained outcomes. */
+  publication?: {
+    eligible: boolean;
+    onOpen: NonNullable<ChatActivityPillsProps["publication"]>["onOpen"];
+  };
 };
 
 export type ChatComposerDisabledBanner = {
@@ -67,9 +86,14 @@ export type ChatComposerDisabledBanner = {
   busy?: boolean;
   busyLabel?: string;
   disabledReason?: string;
+  /** Cached presentation retains its appearance until live mutation authority arrives. */
+  actionPending?: boolean;
+  /** Existing pane run action, relocated into the desktop subagent notice. */
+  stop?: { onAbort: () => void };
 } & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
-export type ChatSessionProgressProps = {
+export type ChatSessionProgressProps = import("../chat-spawned-subagent.ts").SubagentRoster & {
+  connected?: boolean;
   sessionKey: string;
   currentAgentId: string;
   progressCard?: ProgressCard | null;
@@ -85,10 +109,25 @@ export type ChatSessionProgressProps = {
   messages: unknown[];
 };
 
+type ReplyAuthorProps = Parameters<typeof createReplyPreviewResolver>[1];
+
 export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
   getTranscriptElement?: () => HTMLElement | null;
+  getScrollToLatestElement?: () => HTMLButtonElement | null;
   onComposerShellRef?: (element: HTMLElement) => void | (() => void);
+  onComposerFloatRef?: (element: HTMLElement) => void | (() => void);
+  onActivityPillsLayout?: ChatActivityPillsProps["onLayout"];
+  /** Native merged chrome, supplied by the pane owner; never inferred from pane width. */
+  mobileComposer?: boolean;
+  /** Observed keyboard visibility from the shell viewport owner, when available. */
+  mobileKeyboardVisible?: boolean;
+  /** Presentation fact only. The host owns dock suspension and viewport recovery. */
+  onComposerEditingChange?: (editing: boolean) => void;
+  mobileActivities?: ChatMobileActivities;
+  /** Prepared by ChatComposerView from native facts and real destinations. */
+  mobileActivityPills?: ChatActivityPillsProps;
+  mobileApprovalContent?: JSX.Element;
   /** Provisional/deleted previews must not mount session-scoped extension controllers. */
   sessionAdmitted?: boolean;
   connected: boolean;
@@ -100,6 +139,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   submitPending?: boolean;
   disabledReason: string | null;
   disabledReasonTone?: "info" | "danger";
+  /** Optional route that resolves the disabled reason, shown beside it. */
+  disabledReasonAction?: { label: string; href: string; onNavigate: () => void };
   disabledReasonBusy?: boolean;
   disabledBanner?: ChatComposerDisabledBanner;
   runError?: ChatRunError | null;
@@ -113,9 +154,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   readingHistory?: boolean;
   onProgressManipulate?: () => void;
   runId?: string | null;
-  /** The pane scopes Gateway questions to this conversation's agent and session. */
+  /** The pane scopes Gateway questions to this conversation and its direct child sessions. */
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
-  asyncQuestions?: AsyncQuestionPresentation;
+  /** Asking child session display names, keyed by question id. */
+  gatewayQuestionSources?: ReadonlyMap<string, string>;
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
@@ -128,22 +170,44 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   mentions?: readonly HumanMention[];
   getMentions?: () => readonly HumanMention[];
   mentionDirectory?: HumanMentionDirectory;
+  /** Register the mounted native composer operation; return its parent-owned release. */
+  registerHumanMentionAccess?: (access: HumanMentionAccess) => () => void;
   mentionsUnsupported?: boolean;
   modelCatalog: readonly ModelCatalogEntry[];
   modelSwitching: boolean;
   sessions: SessionsListResult | null;
   /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
   selectedSession?: GatewaySessionRow;
+  /** Owners pass the same Incognito decision as the header; the edge turns dashed. */
+  incognito?: boolean;
+  contextUsage?: ChatSessionStateSnapshot["contextUsage"];
   toolOverrides?: SessionToolOverrides;
-  capabilityMenu?: ChatComposerCapabilityMenuProps;
+  capabilityMenu?: ChatComposerCapabilityMenuSource;
   providerUsage?: ProviderUsageDisplayProps;
+  contextGateway?: ApplicationGateway;
+  onOpenContext?: () => void;
+  /** Present only when this viewer may compact the session; the context popover offers it. */
+  onCompact?: () => void | Promise<unknown>;
+  compactionStatus?: CompactionStatus | null;
+  runActive?: boolean;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
   pendingAttachmentReads?: number;
+  attachmentReadRevision?: number;
   getPendingAttachmentReads?: () => number;
   replyTarget?: ChatReplyTarget | null;
+  /** Thread facts that name a reply target's author, as its transcript line does. */
+  userId?: ReplyAuthorProps["userId"];
+  userName?: ReplyAuthorProps["userName"];
+  assistantAvatar?: ReplyAuthorProps["assistantAvatar"];
+  assistantAvatarUrl?: ReplyAuthorProps["assistantAvatarUrl"];
+  assistantAvatarSource?: ReplyAuthorProps["assistantAvatarSource"];
+  senderAgentAvatars?: ReplyAuthorProps["senderAgentAvatars"];
+  mediaReadAllowed?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
+  chatMessageMaxWidth?: string | null;
+  onComposerWidthChange?: (value: string | undefined) => void;
   composerHoldToRecord?: boolean;
   realtimeTalkInputDeviceId?: string;
   onComposerHoldToRecordChange?: (enabled: boolean) => void;
@@ -181,10 +245,15 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
+  /** Stop parked the queue; automatic sends wait for Resume. */
+  queuePaused?: boolean;
+  onQueueResume?: () => void;
+  onQueueClear?: () => void;
   displayQueue?: ChatQueueDisplayItem[];
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
   goalRecovery?: ChatGoalRecovery;
+  goalResumeBusy?: boolean;
   onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
   onGoalSubmit?: (draft: ChatGoalDraft, submissionAction?: Event) => Promise<boolean>;
   goalDraftMode?: ChatGoalDraftMode | null;
@@ -216,16 +285,14 @@ export type ChatComposerState = {
   presentation: {
     dictationError: string | null;
     goalExpandedId: string | null;
-    activeQuestionKey: string | null;
-    gatewayQuestionIds: Set<string>;
-    asyncQuestionIds: Set<string>;
-    questionCollapsed: boolean;
+    queuedSubmit: string | null;
   };
   updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
   questionTakeoverActive: boolean;
   restoreComposerFocus: boolean;
   composerInput: HTMLElement | null;
   composerTextarea: HTMLTextAreaElement | null;
+  composerContext: HTMLElement | null;
   microphonePicker: ComposerMicrophoneOwner | null;
   // Stable refs keep layout observers attached across frame updates.
   composerInputRef: ((element?: Element) => void) | null;

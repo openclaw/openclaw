@@ -13,7 +13,6 @@ type PrivateMessageToolFinalContext = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   sendPolicyDenied: boolean;
   successfulSourceReplyDelivery: boolean;
-  isHeartbeat: boolean;
   isRoomEvent: boolean;
   terminalReply?: AgentRunTerminalReplySnapshot;
 };
@@ -25,7 +24,6 @@ export function isStrandedPrivateMessageToolFinal(params: PrivateMessageToolFina
     params.terminalReply &&
     params.terminalReply.disposition !== "silent" &&
     params.sourceReplyDeliveryMode === "message_tool_only" &&
-    !params.isHeartbeat &&
     !params.isRoomEvent &&
     !params.sendPolicyDenied &&
     !params.successfulSourceReplyDelivery,

@@ -8,15 +8,24 @@ import {
   normalizeUiAppearancePreference,
   UI_APPEARANCE_PREFERENCE_KEYS,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+} from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
+import {
+  normalizePersonalSessionGroups,
+  type PersonalSessionGroup,
+} from "../lib/sessions/personal-groups.ts";
 import {
   normalizeAccentColor,
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
   type ChatSendShortcut,
+  type UiPreferences,
   type UiSettings,
 } from "./settings-contract.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
@@ -27,7 +36,8 @@ export function isAppearancePref(key: string): key is keyof typeof UI_APPEARANCE
 }
 
 export const UI_NAVIGATION_PREFERENCE_KEYS = {
-  sidebarEntries: "ui.railShortcuts",
+  sidebarEntries: UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+  personalSessionGroups: UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
 } as const;
 
 export function isNavigationPref(key: string): key is keyof typeof UI_NAVIGATION_PREFERENCE_KEYS {
@@ -41,9 +51,9 @@ export function isProfilePref(key: string): boolean {
 type SyncedPrefSpec<T> = {
   configSync?: boolean;
   extract: (value: unknown) => T | undefined;
-  local: (settings: UiSettings) => T | undefined;
+  local: (settings: UiPreferences) => T | undefined;
   write?: (value: T | undefined) => Partial<UiSettings>;
-  canApply?: (value: T, settings: UiSettings) => boolean;
+  canApply?: (value: T, settings: UiPreferences) => boolean;
 };
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
@@ -111,6 +121,12 @@ export const SYNCED_PREFS = {
   }),
   // Unset uses the server-configured queue mode; clearing sends an explicit null removal.
   chatFollowUpMode: optionalPrefSpec("chatFollowUpMode", normalizeChatFollowUpModeOverride),
+  personalSessionGroups: prefSpec<PersonalSessionGroup[]>({
+    configSync: false,
+    extract: normalizePersonalSessionGroups,
+    local: (settings) => settings.personalSessionGroups ?? [],
+    write: (value) => ({ personalSessionGroups: value ?? [] }),
+  }),
   sidebarEntries: prefSpec<string[]>({
     configSync: false,
     extract: (value) => normalizeSidebarEntries(value) ?? undefined,
@@ -158,7 +174,10 @@ export const SYNCED_PREF_KEYS = Object.keys(SYNCED_PREFS) as SyncedPrefKey[];
 
 export function prefValuesEqual(left: unknown, right: unknown): boolean {
   if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((value, index) => value === right[index]);
+    return (
+      left.length === right.length &&
+      left.every((value, index) => prefValuesEqual(value, right[index]))
+    );
   }
   const leftRecord = asRecord(left);
   const rightRecord = asRecord(right);

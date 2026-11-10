@@ -4,7 +4,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { JsonObject } from "./protocol.js";
+import type { JsonObject, JsonValue } from "./protocol.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -87,29 +87,27 @@ it("rejects a private-looking user profile that escapes through a symlink", asyn
   await rejectsIsolation("external user or project config layer");
 });
 
-it.each([
-  [[], "could not verify its private Codex home"],
-  [[layer({ type: "legacyManagedConfigTomlFromFile" })], "unsupported config layer"],
-] as const)("rejects unverified layers %j", async (layers, reason) => {
-  state.config.layers = [...layers];
-  state.inventory.data = [inventoryEntry(state.workspace.cwd)];
+it.each<[string, JsonValue, string]>([
+  ["layers", [], "could not verify its private Codex home"],
+  ["layers", [layer({ type: "legacyManagedConfigTomlFromFile" })], "unsupported config layer"],
+  ...["packagedDefaults", "sessionFlags"].map((type): [string, JsonValue, string] => [
+    "layers",
+    [layer({ type }, { hooks: { SessionStart: [{ hooks: [{ command: "unexpected" }] }] } })],
+    "unmanaged hook declarations",
+  ]),
+  ...Array.of<JsonObject>(
+    { features: { hooks: true, plugins: true }, project_root_markers: [] },
+    { features: { hooks: true, plugins: false }, project_root_markers: [".git"] },
+    { features: { plugins: false }, project_root_markers: [] },
+  ).map((config): [string, JsonValue, string] => [
+    "config",
+    config,
+    "isolated hook discovery settings",
+  ]),
+  ["config", discoveryConfig(false), "cannot disable hooks without a managed requirement"],
+])("rejects unsafe %s: %j", async (key, value, reason) => {
+  state.config[key] = value;
   await rejectsIsolation(reason);
-});
-
-it.each(["packagedDefaults", "sessionFlags"])("rejects %s unmanaged hooks", async (type) => {
-  state.config.layers = [
-    layer({ type }, { hooks: { SessionStart: [{ hooks: [{ command: "unexpected" }] }] } }),
-  ];
-  await rejectsIsolation("unmanaged hook declarations");
-});
-
-it.each<JsonObject>([
-  { features: { hooks: true, plugins: true }, project_root_markers: [] },
-  { features: { hooks: true, plugins: false }, project_root_markers: [".git"] },
-  { features: { plugins: false }, project_root_markers: [] },
-])("rejects settings that cannot prove hook inventory isolation", async (config) => {
-  state.config.config = config;
-  await rejectsIsolation("isolated hook discovery settings");
 });
 
 it("accepts an explicit managed hooks disable without relying on an empty inventory", async () => {
@@ -120,11 +118,6 @@ it("accepts an explicit managed hooks disable without relying on an empty invent
     "config/read",
     "configRequirements/read",
   ]);
-});
-
-it("rejects disabled hooks without a managed disable requirement", async () => {
-  state.config.config = discoveryConfig(false);
-  await rejectsIsolation("cannot disable hooks without a managed requirement");
 });
 
 it.each<JsonObject>([

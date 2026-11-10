@@ -2,7 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import {
   getRpcSourceIdentity,
   getRpcSourceStartedAt,
-  isRpcSourceActive,
+  resolveRpcSourceSessionProgressState,
   listRpcSourceEntries,
   type RpcSourceRef,
 } from "../sessions/session-controller.rpc-sources.js";
@@ -44,7 +44,7 @@ export function resolveInFlightRunSnapshot(
   for (const [runId, entry] of listRpcSourceEntries()) {
     if (
       !matchesScope(entry) ||
-      !isRpcSourceActive(entry) ||
+      !resolveRpcSourceSessionProgressState(entry) ||
       entry.adapter.controlUiVisible === false ||
       entry.input.abortSignal.aborted ||
       entry.adapter.kind === "agent" ||
@@ -66,7 +66,7 @@ export function resolveInFlightRunSnapshot(
   if (best === undefined) {
     return undefined;
   }
-  // Adopt an active run before its first text so clients can reconcile its reply.
+  // Accepted preparation must replay before execution starts or any text arrives.
   return projectInFlightRunSnapshot({
     chatRunState: params.chatRunState,
     runId: best.runId,

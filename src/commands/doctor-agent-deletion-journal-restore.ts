@@ -6,7 +6,8 @@ import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/target
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { resolveAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
 import {
@@ -29,27 +30,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { backupDoctorSqliteDatabases } from "./doctor-migration-backup.js";
 
-// Integrity-verified published artifacts, including all three published channels.
-const AFFECTED_AGENT_SCHEMAS = new Map<string, number>([
-  ...[
-    "2026.9.7",
-    "2026.9.8",
-    "2026.9.9",
-    "2026.9.33",
-    "2026.10.1-beta.1",
-    "2026.10.1-beta.2",
-    "2026.10.1",
-    "2026.10.2",
-    "2026.10.3",
-    "2026.10.4",
-  ].map((version) => [version, 24] as const),
-  ...["2026.10.5-beta.1", "2026.10.5-beta.2", "2026.10.5-beta.3", "2026.10.5-beta.4"].map(
-    (version) => [version, 25] as const,
-  ),
-  ["2026.10.10-beta.1", 27],
-]);
-
-function readAffectedProducer(database: DatabaseSync, agentId: string) {
+function readVerifiedOwner(database: DatabaseSync, agentId: string) {
   const row = executeSqliteQueryTakeFirstSync(
     database,
     getNodeSqliteKysely<Pick<DB, "schema_meta">>(database)
@@ -64,26 +45,18 @@ function readAffectedProducer(database: DatabaseSync, agentId: string) {
   ) {
     return undefined;
   }
-  // System stores have no legitimate deletion history. Ordinary agents need
-  // the affected producer's unchanged birth stamp to restore lost deletion intent.
-  return isReservedSystemAgentId(agentId) ||
-    (row.app_version !== null &&
-      AFFECTED_AGENT_SCHEMAS.get(row.app_version) === row.schema_version &&
-      row.created_at > 0 &&
-      row.created_at === row.updated_at)
-    ? row
-    : undefined;
+  return row;
 }
 
-function inspectProducer(pathname: string, agentId: string) {
-  const snapshot = prepareSqliteReadOnlyLocationSync(pathname);
-  let producer: ReturnType<typeof readAffectedProducer>;
+async function inspectOwner(pathname: string, agentId: string) {
+  const snapshot = await prepareSqliteReadOnlyLocation(pathname, { preserveSourceArtifacts: true });
+  let producer: ReturnType<typeof readVerifiedOwner>;
   let cleanedUp: boolean;
   try {
     using database = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
-    producer = readAffectedProducer(database, agentId);
+    producer = readVerifiedOwner(database, agentId);
   } finally {
-    cleanedUp = snapshot.cleanup();
+    cleanedUp = await snapshot.cleanupAsync();
   }
   if (!cleanedUp) {
     throw new Error(`Could not release agent recovery inspection snapshot: ${snapshot.location}`);
@@ -91,7 +64,7 @@ function inspectProducer(pathname: string, agentId: string) {
   return producer;
 }
 
-/** Reconcile invalid system holds and the published native-first missing-journal cohort. */
+/** Restore configured, verified stores after journal loss; quarantine still needs explicit consent. */
 export async function restoreDoctorMissingJournalStores(params: {
   env: NodeJS.ProcessEnv;
   held: readonly HeldAgentDatabase[];
@@ -136,7 +109,12 @@ export async function restoreDoctorMissingJournalStores(params: {
           allowNativeRead: true,
         }) === true;
   };
-  const eligible = params.held.flatMap((target) => {
+  const signal = resolveSqliteInspectionSignal();
+  const eligible: Array<
+    HeldAgentDatabase & { producer: NonNullable<ReturnType<typeof readVerifiedOwner>> }
+  > = [];
+  for (const target of params.held) {
+    signal?.throwIfAborted();
     const owned = isReservedSystemAgentId(target.agentId)
       ? samePath(
           target.path,
@@ -147,18 +125,20 @@ export async function restoreDoctorMissingJournalStores(params: {
           (entry) => entry.agentId === target.agentId && samePath(entry.path, target.path),
         );
     if (!owned || !matchesReceipt(target)) {
-      return [];
+      continue;
     }
     try {
-      const producer = inspectProducer(target.path, target.agentId);
-      return producer ? [{ ...target, producer }] : [];
+      const producer = await inspectOwner(target.path, target.agentId);
+      if (producer) {
+        eligible.push({ ...target, producer });
+      }
     } catch (error) {
+      signal?.throwIfAborted();
       warnings.push(
-        `Agent ${target.agentId} remains held; could not verify its original producer: ${formatErrorMessage(error)}`,
+        `Agent ${target.agentId} remains held; could not verify its database ownership: ${formatErrorMessage(error)}`,
       );
-      return [];
     }
-  });
+  }
   if (eligible.length === 0) {
     return { changes, warnings, restored };
   }
@@ -175,8 +155,8 @@ export async function restoreDoctorMissingJournalStores(params: {
     }
   };
   assertCurrent();
-  // Ordinary agents require the published missing-journal cohort; reserved agents
-  // cannot be deleted. Both repairs preserve a verified rollback group first.
+  // Configured ownership and missing-table provenance permit restoration, even after
+  // an upgrade changed the producer stamp. Preserve a verified rollback group first.
   const backups = await backupDoctorSqliteDatabases({
     env: params.env,
     pendingDatabasePaths: eligible.map((target) => target.path),
@@ -211,11 +191,11 @@ export async function restoreDoctorMissingJournalStores(params: {
           !eligible.some(
             (target) =>
               target.agentId === owner?.agent_id &&
-              isDeepStrictEqual(readAffectedProducer(database, target.agentId), target.producer),
+              isDeepStrictEqual(readVerifiedOwner(database, target.agentId), target.producer),
           )
         ) {
           throw new Error(
-            "Recovery backup does not preserve the affected agent producer metadata.",
+            "Recovery backup does not preserve the verified agent ownership metadata.",
           );
         }
       },
@@ -239,7 +219,7 @@ export async function restoreDoctorMissingJournalStores(params: {
     assertCurrent();
     if (isReservedSystemAgentId(agentId)) {
       for (const target of targets) {
-        if (!isDeepStrictEqual(inspectProducer(target.path, agentId), target.producer)) {
+        if (!isDeepStrictEqual(await inspectOwner(target.path, agentId), target.producer)) {
           throw new Error(`System agent ${agentId} ownership changed before recovery.`);
         }
       }
@@ -282,7 +262,7 @@ export async function restoreDoctorMissingJournalStores(params: {
       remaining.delete(target);
       restored.push(target);
       warnings.push(
-        `Warning: Automatically restored agent ${agentId} database ${target.path}${isReservedSystemAgentId(agentId) ? " after verifying reserved system-agent ownership" : ` created by affected OpenClaw ${target.producer.app_version}`}. Verified backup: ${backupPaths.find((entry) => samePath(entry.sourcePath, target.path))!.path}; shared state and reconstruction records: ${sharedBackup.path}.`,
+        `Warning: Automatically restored agent ${agentId} database ${target.path}${isReservedSystemAgentId(agentId) ? " after verifying reserved system-agent ownership" : " after verifying configured ownership and missing deletion history"}. Verified backup: ${backupPaths.find((entry) => samePath(entry.sourcePath, target.path))!.path}; shared state and reconstruction records: ${sharedBackup.path}.`,
       );
     }
   }

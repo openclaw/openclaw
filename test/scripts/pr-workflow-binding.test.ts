@@ -1,10 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { constants as fsConstants, cpSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const templates = useAutoCleanupTempDirTracker(afterAll);
+const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+let seed: { root: string; source: string } | undefined;
 const ref = "refs/openclaw/pr-workflow-bindings/123";
 const inline = readFileSync("scripts/pr", "utf8")
   .split("<<'EOF_WRAPPER_GIT'\n")[1]
@@ -19,6 +22,8 @@ function fixture() {
     PATH: process.env.PATH,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
+    // Automatic maintenance must not race copying the completed seed.
+    GIT_CONFIG_PARAMETERS: "'maintenance.auto=false' 'gc.auto=0'",
     GIT_AUTHOR_NAME: "Workflow Fixture",
     GIT_AUTHOR_EMAIL: "fixture@example.invalid",
     GIT_COMMITTER_NAME: "Workflow Fixture",
@@ -29,15 +34,24 @@ function fixture() {
     expect(result.status, result.stderr).toBe(0);
     return result.stdout.trim();
   };
-  git(["init", "-q", "-b", "main"]);
-  git(["config", "commit.gpgsign", "false"]);
-  git(["config", "core.hooksPath", "/dev/null"]);
-  git(["remote", "add", "origin", "https://github.com/fixture/repo.git"]);
-  writeFileSync(join(root, "workflow.txt"), "first\n");
-  git(["add", "."]);
-  git(["commit", "-qm", "fixture workflow"]);
-  const source = git(["rev-parse", "HEAD"]);
-  git(["update-ref", "refs/remotes/origin/main", source]);
+  let source: string;
+  if (seed) {
+    cpSync(seed.root, root, copyOptions);
+    source = seed.source;
+  } else {
+    git(["init", "-q", "-b", "main"]);
+    git(["config", "commit.gpgsign", "false"]);
+    git(["config", "core.hooksPath", "/dev/null"]);
+    git(["remote", "add", "origin", "https://github.com/fixture/repo.git"]);
+    git(["commit", "--allow-empty", "-qm", "fixture workflow"]);
+    source = git(["rev-parse", "HEAD"]);
+    git(["update-ref", "refs/remotes/origin/main", source]);
+
+    const templateRoot = realpathSync(templates.make("pr-workflow-binding-template-"));
+    // Capture before any binding writes; every copy owns its mutable Git files.
+    cpSync(root, templateRoot, copyOptions);
+    seed = { root: templateRoot, source };
+  }
   const record = {
     version: 1,
     repository: "https://github.com/fixture/repo.git",
@@ -70,51 +84,83 @@ function fixture() {
 }
 
 describe.skipIf(process.platform === "win32")("native workflow binding storage", () => {
-  it.each([
-    {
-      remote: "writer@example.invalid:Org/repo.git",
-      changed: "other@example.invalid:Org/repo.git",
-      identity: '["scp","writer","example.invalid","Org/repo.git"]',
-    },
-    {
-      remote: "example.invalid:Org/repo.git",
-      changed: "other.invalid:Org/repo.git",
-      identity: '["scp","","example.invalid","Org/repo.git"]',
-    },
-    {
-      remote: "example.invalid:Org/repo.git",
-      changed: "example.invalid:org/repo.git",
-      identity: '["scp","","example.invalid","Org/repo.git"]',
-    },
-    {
-      remote: "example.invalid:Org/repo.git",
-      changed: "example.invalid:/Org/repo.git",
-      identity: '["scp","","example.invalid","Org/repo.git"]',
-    },
-    {
-      remote: "ssh://writer@example.invalid:2222/Org/repo.git",
-      changed: "ssh://writer@example.invalid:2223/Org/repo.git",
-      identity: "ssh://writer@example.invalid:2222/Org/repo.git",
-    },
-    {
-      remote: "https://example.invalid:8443/Org/repo.git",
-      changed: "https://example.invalid:8444/Org/repo.git",
-      identity: "https://example.invalid:8443/Org/repo.git",
-    },
-  ])(
-    "binds $remote without accepting a different endpoint $changed",
-    ({ remote, changed, identity }) => {
+  it.each(["valid", "review", "tree", "snapshot", "predecessor", "parent order"])(
+    "validates successor history including its %s continuation",
+    (fault) => {
       const f = fixture();
-      f.git(["remote", "set-url", "origin", remote]);
-      const admitted = f.run("workflow-admit", f.source, "");
-      expect(admitted.status, admitted.stderr).toBe(0);
-      expect(f.run("workflow-read").stdout).toBe(`${admitted.stdout}\t${f.source}\n`);
-      f.git(["remote", "set-url", "origin", changed]);
-      expect(f.run("workflow-read").status).toBe(1);
-      expect(f.git(["rev-parse", ref])).toBe(admitted.stdout);
-      expect(JSON.parse(f.git(["show", `${ref}:binding.json`])).repository).toBe(identity);
+      const previous = f.write(f.record);
+      const source = f.git(
+        ["commit-tree", `${f.source}^{tree}`, "-p", f.source],
+        "next workflow\n",
+      );
+      f.git(["update-ref", "refs/remotes/origin/main", source]);
+      const review = f.git(["hash-object", "-w", "--stdin"], "review bytes\n");
+      const snapshot = f.git(
+        ["hash-object", "-w", "--stdin"],
+        `.local/correction-review.json ${review}`,
+      );
+      const record = {
+        ...f.record,
+        version: 2,
+        source,
+        predecessor: previous,
+        continuation: {
+          head: f.source,
+          hostedHead: f.source,
+          tree: f.git(["rev-parse", `${f.source}^{tree}`]),
+          review,
+          snapshot,
+        },
+      };
+      if (fault === "review") {
+        record.continuation.review = source;
+      }
+      if (fault === "tree") {
+        record.continuation.tree = source;
+      }
+      if (fault === "snapshot") {
+        record.continuation.snapshot = review;
+      }
+      if (fault === "predecessor") {
+        record.predecessor = source;
+      }
+      const parents = [previous, source, f.source];
+      if (fault === "parent order") {
+        parents.reverse();
+      }
+      const next = f.write(record, parents, `100644 blob ${snapshot}\treview-snapshot\n`);
+      const result = f.run("workflow-read");
+      expect(result.status, result.stderr).toBe(fault === "valid" ? 0 : 1);
+      if (fault === "valid") {
+        expect(result.stdout).toBe(`${next}\t${source}\n`);
+        expect(f.run("workflow-history", previous, f.source).stdout).toBe(f.source);
+        expect(f.run("workflow-history", next, source).stdout).toBe(source);
+        expect(f.run("workflow-history", next, f.source).status).toBe(1);
+      }
+      expect(f.git(["rev-parse", ref])).toBe(next);
     },
   );
+
+  it.each([
+    ["writer@example.invalid:Org/repo.git", "other@example.invalid:Org/repo.git"],
+    ["example.invalid:Org/repo.git", "other.invalid:Org/repo.git"],
+    ["example.invalid:Org/repo.git", "example.invalid:org/repo.git"],
+    ["example.invalid:Org/repo.git", "example.invalid:/Org/repo.git"],
+    [
+      "ssh://writer@example.invalid:2222/Org/repo.git",
+      "ssh://writer@example.invalid:2223/Org/repo.git",
+    ],
+    ["https://example.invalid:8443/Org/repo.git", "https://example.invalid:8444/Org/repo.git"],
+  ])("binds %s without accepting a different endpoint %s", (remote, changed) => {
+    const f = fixture();
+    f.git(["remote", "set-url", "origin", remote]);
+    const admitted = f.run("workflow-admit", f.source, "");
+    expect(admitted.status, admitted.stderr).toBe(0);
+    expect(f.run("workflow-read").stdout).toBe(`${admitted.stdout}\t${f.source}\n`);
+    f.git(["remote", "set-url", "origin", changed]);
+    expect(f.run("workflow-read").status).toBe(1);
+    expect(f.git(["rev-parse", ref])).toBe(admitted.stdout);
+  });
 
   it("resolves a bare relative local origin without treating it as a URL", () => {
     const f = fixture();
@@ -122,19 +168,6 @@ describe.skipIf(process.platform === "win32")("native workflow binding storage",
     const admitted = f.run("workflow-admit", f.source, "");
     expect(admitted.status, admitted.stderr).toBe(0);
     expect(JSON.parse(f.git(["show", `${ref}:binding.json`])).repository).toBe(f.root);
-  });
-
-  it("retains the selected source across main advancement and exact admission reuse", () => {
-    const f = fixture();
-    const admitted = f.run("workflow-admit", f.source, "");
-    expect(admitted.status, admitted.stderr).toBe(0);
-    const binding = admitted.stdout;
-    writeFileSync(join(f.root, "workflow.txt"), "second\n");
-    f.git(["commit", "-qam", "advance workflow"]);
-    f.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    expect(f.run("workflow-read").stdout).toBe(`${binding}\t${f.source}\n`);
-    expect(f.run("workflow-admit", f.source, binding).stdout).toBe(binding);
-    expect(f.git(["rev-parse", `${binding}^`])).toBe(f.source);
   });
 
   it("refuses a competing initial admission and preserves the winner during stale retirement", () => {
@@ -177,6 +210,7 @@ describe.skipIf(process.platform === "win32")("native workflow binding storage",
     "symbolic ref",
     "dangling symbolic ref",
     "blob ref",
+    "source commit",
     "oversized",
   ])("rejects a %s binding before selecting code", (fault) => {
     const f = fixture();
@@ -198,6 +232,16 @@ describe.skipIf(process.platform === "win32")("native workflow binding storage",
       expect(f.git(["symbolic-ref", ref])).toBe("refs/openclaw/missing-binding");
     } else if (fault === "blob ref") {
       f.git(["update-ref", ref, f.git(["hash-object", "-w", "--stdin"], "not a commit")]);
+    } else if (fault === "source commit") {
+      f.git(["update-ref", ref, f.source]);
+      for (const result of [
+        f.run("workflow-read"),
+        f.run("workflow-history", f.source, f.source),
+      ]) {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Invalid workflow binding tree");
+      }
+      expect(f.git(["rev-parse", ref])).toBe(f.source);
     } else {
       f.write({ ...f.record, extra: "x".repeat(4096) });
     }

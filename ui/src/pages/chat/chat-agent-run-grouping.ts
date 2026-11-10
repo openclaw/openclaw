@@ -1,19 +1,12 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
 import {
   assistantMessageCanOwnTurnActions,
   assistantMessageIsInterrupted,
+  groupEndsRunInFailure,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
-import {
-  groupEndsRunInFailure,
-  joinActivityRuns,
-  type ActivityRunRenderItem,
-  type CompletedTurnRenderItem,
-  type StreamRunRenderItem,
-  type WorkGroupRenderItem,
-} from "./chat-thread-grouping.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   chatItemStartsDisplayTurn,
@@ -21,6 +14,13 @@ import {
   hasForwardedSource,
   assistantGroupIsIndependentBoundary,
 } from "./chat-turn-boundary.ts";
+import {
+  joinActivityRuns,
+  type ActivityRunRenderItem,
+  type CompletedTurnRenderItem,
+  type StreamRunRenderItem,
+  type WorkGroupRenderItem,
+} from "./chat-turn-presentation.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -39,12 +39,24 @@ export type AgentRunFrameRenderItem = {
     | { kind: "interrupted" }
     | { kind: "failed" };
   parts: AgentRunFramePart[];
+  /** Completed runs share one identity/footer across independently virtualized rows. */
+  fragment?: {
+    source: AgentRunFrameRenderItem;
+    first: boolean;
+    last: boolean;
+    firstAssistant: MessageGroup | undefined;
+    representative: MessageGroup | undefined;
+    firstBubbleKey: string | null;
+    work: WorkGroupRenderItem | undefined;
+  };
+  /** This run's groups held by an earlier rollup that no visible reply owns. */
+  detachedGroups?: MessageGroup[];
 };
 
 type AgentRunFrameInput = CompletedTurnRenderItem | ActivityRunRenderItem;
 
 export function chatItemGroups(
-  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup,
+  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup | ChatItem,
 ): MessageGroup[] {
   if (item.kind === "agent-run-frame") {
     return item.parts.flatMap(chatItemGroups);
@@ -63,8 +75,9 @@ function itemRunId(item: AgentRunFramePart): string | undefined {
     if (item.replyRunId) {
       return item.replyRunId;
     }
-    // Matching execution IDs cannot erase a forwarded presentation boundary.
-    if (item.groups.some(hasForwardedSource)) {
+    // Matching execution IDs cannot erase a forwarded presentation boundary
+    // or frame a rollup that no visible reply owns.
+    if (item.ownerless || item.groups.some(hasForwardedSource)) {
       return undefined;
     }
   }
@@ -173,6 +186,7 @@ export function coalesceAgentRunFrames(
   let segmentId: string | undefined;
   let runId: string | undefined;
   let parts: AgentRunFramePart[] = [];
+  let detached: MessageGroup[] = [];
   // A run that resumes a handoff continues the open frame: one answer, one
   // footer. The frame keeps the identity it opened with, so resuming reuses its
   // row; `resuming` lets exactly the next run in.
@@ -235,6 +249,7 @@ export function coalesceAgentRunFrames(
         )
       : semanticKey;
     emittedFrameKeys.add(semanticKey);
+    const detachedGroups = detached.filter((group) => group.runId === runId);
     result.push({
       kind: "agent-run-frame",
       key,
@@ -248,6 +263,7 @@ export function coalesceAgentRunFrames(
             ? { kind: "interrupted" }
             : { kind: "completed", actionOwner },
       parts,
+      ...(detachedGroups.length > 0 ? { detachedGroups } : {}),
     });
     parts = [];
     runId = undefined;
@@ -274,6 +290,7 @@ export function coalesceAgentRunFrames(
     const boundaryGroup = chatItemGroups(item)[0];
     if (boundaryGroup && chatItemStartsDisplayTurn(boundaryGroup)) {
       flush();
+      detached = [];
       presentationBoundaryKey = boundaryGroup.key;
       segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
@@ -291,9 +308,15 @@ export function coalesceAgentRunFrames(
     }
     const candidateBoundaryId = item.kind === "stream-run" ? item.boundaryId : undefined;
     const candidateRunId = itemRunId(item);
-    if (resuming && !candidateRunId && item.kind === "stream-run" && !candidateBoundaryId) {
-      // The resumed run can be working before the pane learns its run id. Its
-      // status belongs here already, so the block does not split and rejoin.
+    if (
+      resuming &&
+      !candidateRunId &&
+      ((item.kind === "stream-run" && !candidateBoundaryId) ||
+        (item.kind === "group" && item.role === "assistant"))
+    ) {
+      // The resumed run can be working before the pane learns its run id, and a
+      // handoff reports its result without one. Both belong to the open answer,
+      // so the block does not split into separate turns.
       addPart(item);
       continue;
     }
@@ -314,6 +337,9 @@ export function coalesceAgentRunFrames(
     if (!candidateRunId) {
       flush();
       result.push(item);
+      if (item.kind === "work-group" && item.ownerless) {
+        detached.push(...item.groups);
+      }
       if (item.kind === "activity-run") {
         // A mixed-run log owns no frame, but does not end its surrounding turn.
         // Retain the latest projected boundary for subsequent replies and status.

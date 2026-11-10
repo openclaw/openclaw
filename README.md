@@ -12,10 +12,10 @@
   <a href="https://www.npmjs.com/package/openclaw"><img src="https://img.shields.io/npm/v/openclaw?style=flat-square&label=npm" alt="npm version"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/node/v/openclaw?style=flat-square" alt="Node.js version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License: MIT"></a>
-  <a href="https://discord.gg/clawd"><img src="https://img.shields.io/discord/1456350064065904867?label=discord&logo=discord&logoColor=white&color=5865F2&style=flat-square" alt="Discord"></a>
+  <a href="https://openclaw.ai/discord?from=github-openclaw-readme-badge"><img src="https://img.shields.io/discord/1456350064065904867?label=discord&logo=discord&logoColor=white&color=5865F2&style=flat-square" alt="Discord"></a>
 </p>
 
-OpenClaw is an open-source AI assistant that runs on your own computer and meets you in the channels you already use: Discord, iMessage, Slack, Teams, Telegram, WhatsApp, and 20+ more, plus native apps for macOS, iOS, Android, Windows, and Linux. One Gateway runs it as a personal assistant on a laptop or as a shared [team deployment](https://docs.openclaw.ai/start/teams); configuration is the only difference.
+OpenClaw is an open-source AI assistant that runs on your own computer and meets you in the channels you already use: Discord, iMessage, Slack, Teams, Telegram, WhatsApp, and 20+ more, plus native apps for macOS, iOS, Android, Windows, and Linux. One Gateway runs it as a personal claw on a laptop or as a shared [multiplayer claw](https://docs.openclaw.ai/start/multiplayer); configuration is the only difference.
 
 **Yours, with no catch.** State, memory, and credentials live on your hardware. Models and agent harnesses (Claude, Codex, local models) are plugins you can swap without changing anything else. Your prompts go to the model provider and chat platforms you configure, plus any diagnostics export you enable yourself; by default OpenClaw itself phones home for nothing but a daily version check, anonymous feature statistics are opt-in, and `update.checkOnStart: false` disables both ([what OpenClaw sends](https://docs.openclaw.ai/gateway/telemetry)). OpenClaw is stewarded by the [OpenClaw Foundation](https://openclaw.org), an independent 501(c)(3), and has no paid tier, hosted service, or token. The architecture case — trusted gateway, untrusted execution, policy enforced by code — is in [Why OpenClaw](https://docs.openclaw.ai/start/why-openclaw).
 
@@ -35,7 +35,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 iwr -useb https://openclaw.ai/install.ps1 | iex
 ```
 
-Already manage Node.js? Install the published package instead (Node 24.16+ or 26.1+; Node 26 recommended):
+Already manage Node.js? Install the published package instead (Node 24.16.0+ on 24.x or 26.1.0+; 24.22.1+/26.12.1+ strongly recommended for security):
 
 ```bash
 npm install -g openclaw@latest --allow-scripts=openclaw
@@ -113,7 +113,7 @@ OpenClaw is developed in the open by the [OpenClaw Foundation](https://openclaw.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for maintainers and contribution guidelines; AI-assisted PRs are welcome.
 
-Use the [issue chooser](https://github.com/openclaw/openclaw/issues/new/choose) for bugs and feature requests, ask setup questions in [Discord](https://discord.gg/clawd), and report vulnerabilities through [SECURITY.md](SECURITY.md). New capabilities usually belong in plugins built on the [plugin SDK](https://docs.openclaw.ai/plugins/building-plugins) and shared through [ClawHub](https://clawhub.ai).
+Use the [issue chooser](https://github.com/openclaw/openclaw/issues/new/choose) for bugs and feature requests, get official OpenClaw support at [community.openclaw.ai](https://community.openclaw.ai/), and report vulnerabilities through [SECURITY.md](SECURITY.md). New capabilities usually belong in plugins built on the [plugin SDK](https://docs.openclaw.ai/plugins/building-plugins) and shared through [ClawHub](https://clawhub.ai).
 
 OpenClaw was built for **Molty**, a space lobster AI assistant, by Peter Steinberger and the community. Explore the [project lore](https://docs.openclaw.ai/start/lore), [soul.md](https://soul.md), [Peter's site](https://steipete.me), [Star History](https://www.star-history.com/#openclaw/openclaw&type=date&legend=top-left), and [@openclaw](https://x.com/openclaw).
 

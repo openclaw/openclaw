@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import {
   createProviderBrowserAuthSession,
   handleProviderOAuthCallback,
   PROVIDER_OAUTH_CALLBACK_PATH,
+  resolveBrowserAuthOrigin,
 } from "../provider-browser-auth.js";
 import { createRequest, createResponse } from "../server-http.test-harness.js";
-import type { GatewayWsBrowserOrigin } from "../server/ws-types.js";
 import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.js";
 
 let clearOrigin: () => void;
@@ -27,6 +33,7 @@ afterEach(() => {
   closeSession?.();
   clearOrigin();
   resetGatewayWorkAdmission();
+  clearRuntimeConfigSnapshot();
 });
 
 const authorization = {
@@ -42,57 +49,23 @@ function createSession(params: Parameters<typeof createProviderBrowserAuthSessio
   return session;
 }
 
-async function startLogin(timeoutMs = 60_000, browserOrigin?: GatewayWsBrowserOrigin) {
+async function startLogin(timeoutMs = 60_000) {
   const opened = createDeferredCore<string>();
   const session = createSession({
-    browserOrigin,
     openUrl: async (url) => opened.resolve(url),
   });
-  expect(session.available).toBe(true);
   const result = session.authorize({ ...authorization, timeoutMs });
   return { session, result, opened: await opened.promise };
 }
 
 function callback(query: string, method = "GET") {
   const response = createResponse();
-  expect(
-    handleProviderOAuthCallback(
-      createRequest({ path: `${PROVIDER_OAUTH_CALLBACK_PATH}?${query}`, method }),
-      response.res,
-    ),
-  ).toBe(true);
+  handleProviderOAuthCallback(
+    createRequest({ path: `${PROVIDER_OAUTH_CALLBACK_PATH}?${query}`, method }),
+    response.res,
+  );
   return response;
 }
-
-it.each([
-  "https://gateway.example",
-  "https://work.example:8447",
-  "http://localhost:18789",
-  "http://127.0.0.1:18789",
-  "http://[::1]:18789",
-])("receives one bound callback for %s", async (origin) => {
-  if (origin === "https://work.example:8447") {
-    clearOrigin();
-  }
-  const login = await startLogin(60_000, {
-    origin,
-    requestHost: new URL(origin).host,
-    isLocalClient: origin.startsWith("http:"),
-  });
-  const url = new URL(login.opened);
-  expect(new URL(url.searchParams.get("callback_url")!).origin).toBe(origin);
-  const response = callback("state=login-state&code=secret-code");
-  expect(response.res.statusCode).toBe(200);
-  expect(response.getBody()).toContain("Sign-in response received");
-  expect(response.getBody()).not.toMatch(/secret-code|login-state/);
-  expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
-  expect(response.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
-  await expect(login.result).resolves.toEqual({ code: "secret-code", state: "login-state" });
-  expect(callback("state=login-state&code=secret-code").res.statusCode).toBe(410);
-  const retained = login.session.authorize;
-  login.session.close();
-  await expect(retained(authorization)).rejects.toThrow("closed");
-});
 
 it("does not consume a pending login for malformed or unrelated responses", async () => {
   const login = await startLogin();
@@ -102,12 +75,32 @@ it("does not consume a pending login for malformed or unrelated responses", asyn
     "state=login-state&state=other&code=wrong",
     "state=login-state&code=one&code=two",
     "state=login-state&code=one&error=denied",
+    "state=login-state&code=one&iss=https%3A%2F%2Fprovider.example&iss=https%3A%2F%2Fother.example",
   ]) {
     expect(callback(query).res.statusCode).toBeGreaterThanOrEqual(400);
   }
   expect(callback("state=login-state&code=valid", "POST").res.statusCode).toBe(400);
-  expect(callback("state=login-state&code=valid").res.statusCode).toBe(200);
+  const response = callback("state=login-state&code=valid");
+  expect(response.res.statusCode).toBe(200);
+  expect(response.getBody()).not.toMatch(/valid|login-state/);
+  expect(response.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
   await expect(login.result).resolves.toEqual({ code: "valid", state: "login-state" });
+  const retained = login.session.authorize;
+  login.session.close();
+  await expect(retained(authorization)).rejects.toThrow("closed");
+});
+
+it("preserves the exact issuer from an accepted browser callback", async () => {
+  const login = await startLogin();
+  const response = callback(
+    "state=login-state&code=valid&iss=https%3A%2F%2Fprovider.example%2Ftenant%2F",
+  );
+  expect(response.res.statusCode).toBe(200);
+  await expect(login.result).resolves.toEqual({
+    code: "valid",
+    state: "login-state",
+    iss: "https://provider.example/tenant/",
+  });
 });
 
 it("settles a provider denial without exposing provider-controlled text", async () => {
@@ -139,22 +132,149 @@ it.each(["restart", "origin", "timer", "deadline"])("rejects %s callbacks", asyn
   await rejected;
 });
 
-it.each<GatewayWsBrowserOrigin | undefined>([
-  undefined,
-  { origin: "http://localhost:3000", requestHost: "localhost:18789", isLocalClient: true },
-  { origin: "http://localhost:18789", requestHost: "localhost:18789", isLocalClient: false },
-  { origin: "https://other.example", requestHost: "gateway.example", isLocalClient: false },
-  { origin: "https://work.example:8447", requestHost: "work.example:8448", isLocalClient: false },
-  { origin: "https://work.example/path", requestHost: "work.example", isLocalClient: false },
-  { origin: "http://192.168.1.2:18789", requestHost: "192.168.1.2:18789", isLocalClient: true },
-  { origin: "file://localhost", requestHost: "localhost", isLocalClient: true },
-])("rejects an unserved or unattested browser return ($origin)", async (browserOrigin) => {
-  if (!browserOrigin) {
+it.each<[string | undefined, string, boolean, boolean]>([
+  ["https://gateway.example", "gateway.example", false, true],
+  ["https://work.example:8447", "work.example:8447", false, true],
+  ["http://localhost:18789", "localhost:18789", true, true],
+  ["http://127.0.0.1:18789", "127.0.0.1:18789", true, true],
+  ["http://[::1]:18789", "[::1]:18789", true, true],
+  [undefined, "", false, false],
+  ["http://localhost:3000", "localhost:18789", true, false],
+  ["http://localhost:18789", "localhost:18789", false, false],
+  ["https://other.example", "gateway.example", false, false],
+  ["https://work.example:8447", "work.example:8448", false, false],
+  ["https://work.example/path", "work.example", false, false],
+  ["http://192.168.1.2:18789", "192.168.1.2:18789", true, false],
+  ["file://localhost", "localhost", true, false],
+])("checks served browser origin %s", async (origin, requestHost, isLocalClient, allowed) => {
+  if (origin !== "https://gateway.example") {
     clearOrigin();
   }
+  const browserOrigin = origin ? { origin, requestHost, isLocalClient } : undefined;
+  expect(resolveBrowserAuthOrigin(browserOrigin)?.origin).toBe(allowed ? origin : undefined);
   const openUrl = vi.fn();
   const session = createSession({ browserOrigin, openUrl });
-  expect(session.available).toBe(false);
-  await expect(session.authorize(authorization)).rejects.toThrow("secure Gateway address");
-  expect(openUrl).not.toHaveBeenCalled();
+  if (!allowed) {
+    await expect(session.authorize(authorization)).rejects.toThrow("secure Gateway address");
+    expect(openUrl).not.toHaveBeenCalled();
+  }
 });
+
+it("requires the initiating browser cookie without consuming another browser's callback", async () => {
+  const opened = createDeferredCore<string>();
+  const session = createSession({
+    openUrl: async (url) => opened.resolve(url),
+    browserBinding: { cookieName: "link-browser", cookieValue: "random-browser-proof" },
+  });
+  const result = session.authorize(authorization);
+  await opened.promise;
+  for (const cookie of [
+    undefined,
+    "link-browser=wrong",
+    "link-browser=random-browser-proof; link-browser=wrong",
+  ]) {
+    const response = createResponse();
+    handleProviderOAuthCallback(
+      createRequest({
+        path: PROVIDER_OAUTH_CALLBACK_PATH + "?state=login-state&code=valid",
+        method: "GET",
+        headers: cookie ? { cookie } : {},
+      }),
+      response.res,
+    );
+    expect(response.res.statusCode).toBe(403);
+  }
+  const response = createResponse();
+  handleProviderOAuthCallback(
+    createRequest({
+      path: PROVIDER_OAUTH_CALLBACK_PATH + "?state=login-state&code=valid",
+      method: "GET",
+      headers: { cookie: "link-browser=random-browser-proof" },
+    }),
+    response.res,
+  );
+  expect(response.res.statusCode).toBe(200);
+  await expect(result).resolves.toMatchObject({ code: "valid" });
+  expect(callback("state=login-state&code=valid").res.statusCode).toBe(410);
+});
+
+const proxyOrigin = "https://control.example.com";
+const proxyBrowser = { origin: proxyOrigin, requestHost: "gateway.internal:18789" };
+const proxyConfig: OpenClawConfig = {
+  gateway: {
+    publicOrigin: proxyOrigin,
+    trustedProxies: ["127.0.0.1"],
+    auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-forwarded-user" } },
+  },
+};
+const proxyPrincipal = {
+  role: "operator",
+  authMethod: "trusted-proxy" as const,
+  verifiedIdentity: "operator@example.com",
+  browserOrigin: proxyBrowser,
+};
+
+it.each([
+  [proxyOrigin, undefined],
+  [proxyOrigin + ":443", undefined],
+  [proxyOrigin + "/", undefined],
+  [proxyOrigin, "publicOrigin"],
+  [proxyOrigin, "proxy-policy"],
+] as const)(
+  "binds a trusted-proxy callback to current public-origin authority (%s, %s)",
+  async (publicOrigin, change) => {
+    const config = { gateway: { ...proxyConfig.gateway, publicOrigin } };
+    setRuntimeConfigSnapshot(config);
+    const opened = createDeferredCore<string>();
+    const session = createSession({
+      browserOrigin: proxyBrowser,
+      authPolicy: captureGatewayAuthPolicy(config, proxyPrincipal),
+      openUrl: async (url) => opened.resolve(url),
+    });
+    expect(session.available).toBe(true);
+    const result = session.authorize(authorization);
+    const url = new URL(await opened.promise);
+    expect(url.searchParams.get("callback_url")).toBe(
+      proxyOrigin + PROVIDER_OAUTH_CALLBACK_PATH + "?state=login-state",
+    );
+    if (change) {
+      setRuntimeConfigSnapshot({
+        gateway: {
+          ...proxyConfig.gateway,
+          ...(change === "publicOrigin"
+            ? { publicOrigin: "https://replacement.example" }
+            : { trustedProxies: [] }),
+          controlUi: { allowedOrigins: [proxyOrigin] },
+        },
+      });
+      const rejected = expect(result).rejects.toThrow("expired");
+      expect(callback("state=login-state&code=stale").res.statusCode).toBe(410);
+      await rejected;
+    } else {
+      expect(callback("state=login-state&code=valid").res.statusCode).toBe(200);
+      await expect(result).resolves.toEqual({ code: "valid", state: "login-state" });
+    }
+  },
+);
+
+it.each([
+  [undefined, proxyOrigin],
+  ["token", proxyOrigin],
+  ["trusted-proxy", "https://different.example"],
+] as const)(
+  "requires trusted-proxy authentication and the exact public origin (%s, %s)",
+  (authMethod, publicOrigin) => {
+    const config = {
+      gateway: {
+        ...proxyConfig.gateway,
+        publicOrigin,
+        controlUi: { allowedOrigins: [proxyOrigin] },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    const authPolicy = authMethod
+      ? captureGatewayAuthPolicy(config, { ...proxyPrincipal, authMethod })
+      : undefined;
+    expect(resolveBrowserAuthOrigin(proxyBrowser, { authPolicy })).toBeUndefined();
+  },
+);

@@ -126,30 +126,20 @@ beforeEach(() => {
 
 describe("OpenAI browser Talk catalog defaults", () => {
   it.each([
-    {
-      label: "unpinned browser",
-      model: undefined,
-      camera: false,
-      expected: "gpt-live-1",
-    },
-    { label: "explicit GA", model: "gpt-realtime-2.1", camera: true, expected: "gpt-realtime-2.1" },
-    {
-      label: "configured GA through a provider alias",
-      model: "gpt-realtime-2.1",
-      providerId: " OPENAI-VOICE ",
-      camera: true,
-      expected: "gpt-realtime-2.1",
-    },
-    {
-      label: "audio-only browser",
-      model: undefined,
-      camera: false,
-      expected: "gpt-live-1",
-      audioOnly: true,
-    },
-  ])(
-    "preserves $label from discovery through session creation",
-    async ({ model, providerId, camera, expected, audioOnly }) => {
+    ["unpinned browser", undefined, undefined, false, "gpt-live-1", false],
+    ["explicit GA", "gpt-realtime-2.1", undefined, true, "gpt-realtime-2.1", false],
+    [
+      "configured GA through a provider alias",
+      "gpt-realtime-2.1",
+      " OPENAI-VOICE ",
+      true,
+      "gpt-realtime-2.1",
+      false,
+    ],
+    ["audio-only browser", undefined, undefined, false, "gpt-live-1", true],
+  ] as const)(
+    "preserves %s from discovery through session creation",
+    async (_label, model, providerId, camera, expected, audioOnly) => {
       await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
         const cfg: OpenClawConfig = {
           agents: {

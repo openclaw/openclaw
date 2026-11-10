@@ -69,7 +69,7 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
   if (kind === "on-exit") {
     const command = readNonBlankString(schedule.command);
     return command
-      ? { kind: "on-exit", command, cwd: normalizeOptionalString(schedule.cwd) }
+      ? { kind: "on-exit", command, cwd: readNonBlankString(schedule.cwd) }
       : undefined;
   }
   if (kind === "stream") {
@@ -85,7 +85,7 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
     return {
       kind: "stream",
       command: [...command],
-      cwd: normalizeOptionalString(schedule.cwd),
+      cwd: readNonBlankString(schedule.cwd),
       mode: mode === "line" || mode === "match" ? mode : undefined,
       match: typeof schedule.match === "string" ? schedule.match : undefined,
       batchMs: readScheduleInteger(schedule, "batchMs"),

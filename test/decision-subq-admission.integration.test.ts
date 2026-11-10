@@ -8,26 +8,17 @@ import { parseDecisionEvaluateInput } from "../src/agents/tools/decision-tool-co
 import { createDecisionTool } from "../src/agents/tools/decision-tool.js";
 import { withGatewayToolCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { resolveConfigWidePluginManifestRegistry } from "../src/config/io.plugin-metadata.js";
-import {
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshot,
-} from "../src/config/runtime-snapshot.js";
+import { getRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import {
-  evaluateDecisionInRegistry,
-  inspectDecisionProviders,
-  prepareDecisionProviderReload,
-} from "../src/decisions/runtime.js";
+import { prepareDecisionProviderReload } from "../src/decisions/provider-reload.js";
+import { validateDecisionResultV2 } from "../src/decisions/result-validation.js";
+import { evaluateDecisionInRegistry } from "../src/decisions/runtime.js";
 import type { DecisionBatch } from "../src/decisions/types.js";
-import { validateDecisionResultV2 } from "../src/decisions/validation-v2.js";
 import { fetchWithRuntimeDispatcher } from "../src/infra/net/runtime-fetch.js";
 import { createHttp1Agent } from "../src/infra/net/undici-runtime.js";
 import { runPluginRegisterSyncInRegistry } from "../src/plugins/loader-module-runtime.js";
 import { createPluginRecord } from "../src/plugins/loader-records.js";
-import { resetPluginLoaderTestStateForTest } from "../src/plugins/loader.test-fixtures.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
-import { clearPluginMetadataLifecycleCaches } from "../src/plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshot } from "../src/plugins/plugin-metadata-snapshot.js";
 import { createRuntimeTestRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { createPluginRuntime } from "../src/plugins/runtime/index.js";
@@ -38,7 +29,9 @@ import {
   prepareSecretsRuntimeSnapshot,
 } from "../src/secrets/runtime.js";
 import {
+  admissionPlugin,
   createAdmissionBarrier,
+  resetAdmissionState,
   withAdmissionFixture,
   type AdmissionFixture,
 } from "./decision-admission.test-support.js";
@@ -117,13 +110,7 @@ async function runScenario(
   let dispatcher: ReturnType<typeof createHttp1Agent> | undefined;
   let barrier: ReturnType<typeof createAdmissionBarrier> | undefined;
   try {
-    const metadata = resolvePluginMetadataSnapshot({
-      config: cfg,
-      env: process.env,
-      workspaceDir: state.workspaceDir,
-    });
-    const manifest = metadata.byPluginId.get("subq");
-    assert(manifest);
+    const { metadata, manifest, record } = admissionPlugin("subq", cfg, state.workspaceDir);
     const prepareSnapshot = (env: NodeJS.ProcessEnv) =>
       prepareSecretsRuntimeSnapshot({
         config: cfg,
@@ -140,11 +127,7 @@ async function runScenario(
     const runtimeConfig = getRuntimeConfigSnapshot();
     assert(runtimeConfig);
     builder = createRuntimeTestRegistry(createPluginRuntime());
-    provider = createPluginRecord({
-      ...manifest,
-      enabled: true,
-      configSchema: Boolean(manifest.configSchema),
-    });
+    provider = record;
     const providerApi = builder.createApi(provider, { config: cfg });
     runPluginRegisterSyncInRegistry(subq.register, providerApi, builder.registry, provider.id);
     consumer = createPluginRecord({
@@ -178,7 +161,9 @@ async function runScenario(
     );
     expect(manifest.rootDir).toBe(fileURLToPath(new URL("../extensions/subq", import.meta.url)));
     expect(provider.source).toBe(manifest.source);
-    expect(inspectDecisionProviders(cfg, builder.registry)).toContainEqual(
+    expect(
+      builder.registry.decisionProviders.map((entry) => entry.host.inspect(cfg)),
+    ).toContainEqual(
       expect.objectContaining({ providerId: "subq", callable: true, credentialReady: true }),
     );
     const authority = createAdmittedRunOperatorAuthority({
@@ -298,7 +283,7 @@ async function runScenario(
         });
       }
     }
-    expect(inspectDecisionProviders(cfg, builder.registry)[0]).toMatchObject({
+    expect(builder.registry.decisionProviders[0]!.host.inspect(cfg)).toMatchObject({
       callable: change !== "secret-removed",
       credentialReady: change !== "secret-removed",
       activeRequests: 0,
@@ -318,8 +303,6 @@ async function runScenario(
     }
     await dispatcher?.close();
     clearSecretsRuntimeSnapshot();
-    clearPluginMetadataLifecycleCaches();
-    resetPluginLoaderTestStateForTest();
-    clearRuntimeConfigSnapshot();
+    await resetAdmissionState();
   }
 }

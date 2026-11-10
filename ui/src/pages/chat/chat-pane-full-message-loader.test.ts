@@ -1,11 +1,11 @@
-/* @vitest-environment jsdom */
-
 import { describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
-import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 
 const messageRequest = { sessionKey: "agent:main:example", messageId: "answer" };
 const result = { ok: true, message: { role: "assistant", content: "The full answer" } };
@@ -24,23 +24,18 @@ function fixture(request = vi.fn().mockResolvedValue(result)) {
     sessionId: state.currentSessionId,
     lifecycleRevision: "revision-1",
   };
-  state.sessionsResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [session],
-  };
+  state.sessionsResult = sessionListResult(1, [session]);
   context.gateway.snapshot.selfUser = { id: "alice", name: "Alice" };
   const load = () => createSidebarFullMessageLoader(state, context.gateway)!;
-  return { pane, state, context, session, load, request };
+  const expectRead = (input: typeof messageRequest & { sessionId?: string }) =>
+    expect(request).toHaveBeenLastCalledWith("chat.message.get", { ...input, maxChars: 500_000 });
+  return { pane, state, context, session, load, request, expectRead };
 }
 
 describe("explicit full-message reads", () => {
   it.each(["sharing or config", "role", "scopes"] as const)(
     "rechecks full-message reads after current %s authority changes without rerendering",
     async (change) => {
-      const full = result;
       const { pane, state, context, request: read } = fixture();
       context.gateway.snapshot.hello = gatewayHelloForMethods(
         ["chat.message.get"],
@@ -48,11 +43,10 @@ describe("explicit full-message reads", () => {
       );
       pane.render();
       const load = pane.chatProps!.loadFullAssistantMessage!;
-      const request = messageRequest;
-      expect(await load(request)).toEqual(full);
+      expect(await load(messageRequest)).toEqual(result);
       state.connectionEpoch += 1;
       context.gateway.snapshot.hello.auth!.scopes!.reverse();
-      expect(await load(request)).toEqual(full);
+      expect(await load(messageRequest)).toEqual(result);
       expect(read).toHaveBeenCalledTimes(1);
 
       if (change === "sharing or config") {
@@ -64,7 +58,7 @@ describe("explicit full-message reads", () => {
       }
       const denied = { ok: false, unavailableReason: "not_found" };
       read.mockResolvedValue(denied);
-      expect(await load(request)).toEqual(denied);
+      expect(await load(messageRequest)).toEqual(denied);
       expect(read).toHaveBeenCalledTimes(2);
     },
   );
@@ -86,41 +80,28 @@ describe("explicit full-message reads", () => {
   );
 
   it("retrieves retained references from the displayed physical session after the live session advances", async () => {
-    const { state, session, load, request } = fixture();
+    const { state, session, load, request, expectRead } = fixture();
     await load()(messageRequest);
     session.sessionId = "successor-session";
     await load()(messageRequest);
-    expect(request).toHaveBeenLastCalledWith("chat.message.get", {
-      ...messageRequest,
-      sessionId: "physical-session",
-      maxChars: 500_000,
-    });
+    expectRead({ ...messageRequest, sessionId: "physical-session" });
 
     for (const input of [
       { ...messageRequest, sessionKey: "agent:main:other" },
       { ...messageRequest, messageId: "pending:input-1" },
     ]) {
       await load()(input);
-      expect(request).toHaveBeenLastCalledWith("chat.message.get", {
-        ...input,
-        maxChars: 500_000,
-      });
+      expectRead(input);
     }
 
     state.currentSessionId = session.sessionId;
     await load()(messageRequest);
-    expect(request).toHaveBeenLastCalledWith("chat.message.get", {
-      ...messageRequest,
-      maxChars: 500_000,
-    });
+    expectRead(messageRequest);
     const explicitSource = { ...messageRequest, sessionId: "physical-session" };
     const reads = request.mock.calls.length;
     await load()(explicitSource);
     expect(request).toHaveBeenCalledTimes(reads + 1);
-    expect(request).toHaveBeenLastCalledWith("chat.message.get", {
-      ...explicitSource,
-      maxChars: 500_000,
-    });
+    expectRead(explicitSource);
   });
 
   it("does not borrow the selected global agent for a request that omitted its agent", async () => {

@@ -1,20 +1,24 @@
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { beforeEach, expect, it, vi } from "vitest";
-import { buildOpenAIProvider } from "./openai-provider.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import discoveryProvider from "./provider-discovery.js";
 import { resolveModelRoutes } from "./provider-policy-api.js";
 
 type CatalogOptions = { apiKey?: string; baseUrl?: string; profileId?: string };
 async function runCatalog(response: Response | undefined, options: CatalogOptions = {}) {
   const { apiKey = "sk-openai", baseUrl, profileId } = options;
-  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.startsWith("https://chatgpt.com/backend-api/codex/models?")) {
+      return Response.json({ models: [] });
+    }
     if (!response) {
       throw new Error("unexpected OpenAI live discovery request");
     }
     return response;
   });
   try {
-    const result = await buildOpenAIProvider().catalog?.run({
+    const result = await discoveryProvider.catalog?.run({
       resolveProviderAuth: () => ({ mode: "api_key", apiKey, profileId, source: "profile" }),
       resolveProviderApiKey: () => ({ apiKey }),
       config: baseUrl
@@ -38,14 +42,26 @@ async function runCatalog(response: Response | undefined, options: CatalogOption
 }
 
 beforeEach(clearLiveCatalogCacheForTests);
+afterEach(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth");
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
+});
 const modelRows = (ids: string[]) => ids.map((id) => ({ id, object: "model" }));
 
-it("shows every listed chat model that runs on Responses with conservative metadata", async () => {
-  const admittedIds = ["gpt-5.3-codex", "gpt-5.5-2026-04-23", "gpt-6.2"];
+it("lists configured API-key models without loading profile auth runtimes", async () => {
+  // mock-isolation: Prepared credentials must not load either broad auth owner.
+  vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
+    throw new Error("Configured API-key catalogs must not load broad auth helpers");
+  });
+  // mock-isolation: Prepared credentials must not initialize profile auth runtimes.
+  vi.doMock("openclaw/plugin-sdk/provider-auth-runtime", () => {
+    throw new Error("Configured API-key catalogs must not load profile auth runtime");
+  });
+  const admittedIds = ["gpt-5.3-codex", "gpt-5.5-2026-04-23", "gpt-5.6-cyber", "gpt-6.2"];
   // Include pre-GPT-5, non-chat, subscription-only and experimental model families.
   const unadmittedIds = (
     "gpt-4-0613 gpt-4.1-mini o3 ft:gpt-4.1-mini:acme::abc123 gpt-5.3-codex-spark " +
-    "gpt-5.6-cyber gpt-7-alpha kepler-alpha " +
+    "gpt-unknown-cyber-fixture gpt-7-alpha kepler-alpha " +
     "gpt-5.5-codex-1p-exp-p-0618-b2fcc1-ev3-text-1-treatment " +
     "gpt5-5-1p-exp-p-0628-2069ab-ev3-text-1-treatment " +
     "gpt-4o-mini-search-preview gpt-5-search-api gpt-live-1 gpt-4o-transcribe-diarize " +
@@ -87,9 +103,12 @@ it.each([
   ["an unauthorized key", 401, "sk-openai", "auth-rejected"],
   ["a forbidden key", 403, "sk-openai", "auth-rejected"],
   ["a temporary failure", 503, "sk-openai", "unavailable"],
+  ["a transport failure", undefined, "sk-openai", "unavailable"],
 ] as const)("scopes the selected profile for %s", async (_label, httpStatus, apiKey, status) => {
   const { provider, outcomes, requests } = await runCatalog(
-    Response.json({ data: modelRows(["text-embedding-3-small"]) }, { status: httpStatus }),
+    httpStatus === undefined
+      ? undefined
+      : Response.json({ data: modelRows(["text-embedding-3-small"]) }, { status: httpStatus }),
     { apiKey, profileId: "openai:api-key" },
   );
   expect(provider.models.map((model) => model.id)).toEqual(
@@ -108,7 +127,7 @@ it.each([
   if (apiKey === "secretref-managed") {
     expect(requests).toEqual([]);
   } else {
-    expect(requests).toHaveLength(1);
+    expect(requests).toHaveLength(status === "ready" ? 2 : 1);
     expect(requests[0]?.[0]).toBe("https://api.openai.com/v1/models");
     expect(new Headers(requests[0]?.[1]?.headers).get("Authorization")).toBe(`Bearer ${apiKey}`);
   }

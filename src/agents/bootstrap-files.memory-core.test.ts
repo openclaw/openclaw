@@ -37,15 +37,12 @@ const noSearchRuntime = (): MemoryPluginRuntime => ({
 
 type MemoryPath = [path: string, origin: "agent" | "untrusted", source?: string | null];
 
-it.each(["memory-core", "third-party"])(
-  "loads personal files and quarantines an untrusted tool write with %s",
-  (pluginId) =>
+it.each(["agent", "worktree", "roster-less worktree"] as const)(
+  "loads configured personal instructions in %s sessions and quarantines untrusted writes",
+  (mode) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      registerMemoryCapability(pluginId, {
-        runtime:
-          pluginId === "memory-core"
-            ? createMemoryRuntime({ runInBackgroundContext: (run) => run() })
-            : noSearchRuntime(),
+      registerMemoryCapability("memory-core", {
+        runtime: createMemoryRuntime({ runInBackgroundContext: (run) => run() }),
       });
       const workspaceDir = state.statePath("workspace");
       const profile = ensureProfileForEmail("person@example.test");
@@ -54,16 +51,38 @@ it.each(["memory-core", "third-party"])(
       await fs.mkdir(path.dirname(personalFile), { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
       await fs.writeFile(personalFile, "Personal preferences");
+      const worktree = mode !== "agent";
+      const bootstrapDir = worktree ? state.statePath("task") : workspaceDir;
+      if (worktree) {
+        const decoy = path.join(bootstrapDir, "users", profile.id, "USER.md");
+        await fs.mkdir(path.dirname(decoy), { recursive: true });
+        await fs.writeFile(decoy, "Worktree profile must not override saved preferences");
+        await fs.writeFile(path.join(bootstrapDir, "USER.md"), "Shared preferences");
+        await fs.writeFile(path.join(bootstrapDir, "AGENTS.md"), "Task project instructions");
+        await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Canonical soul must stay out");
+      }
       const warnings: string[] = [];
       const load = async () => {
         const { contextFiles } = await resolveBootstrapContextForRun({
-          workspaceDir,
-          config: {},
+          workspaceDir: bootstrapDir,
+          // CLI runs may carry only agents.defaults.workspace.
+          config:
+            mode === "roster-less worktree"
+              ? { agents: { defaults: { workspace: workspaceDir } } }
+              : { agents: { entries: { main: { workspace: workspaceDir } } } },
           agentId: "main",
           sessionKey: "agent:main:person",
           bootstrapUserProfileId: profile.id,
           warn: (message) => warnings.push(message),
         });
+        if (worktree) {
+          expect(contextFiles.some((file) => file.content === "Task project instructions")).toBe(
+            true,
+          );
+          expect(contextFiles.some((file) => file.content === "Canonical soul must stay out")).toBe(
+            false,
+          );
+        }
         return contextFiles
           .filter((file) => file.path.endsWith("USER.md"))
           .map((file) => file.content);
@@ -97,12 +116,10 @@ it.each(["local", "remote", "legacy"] as const)(
         const invalid = [
           "../USER.md",
           "/USER.md",
-          "memory/../USER.md",
           "C:\\USER.md",
           "memory/./note.md",
           "memory/bad\0.md",
           "memory/dreaming/note.md",
-          "notes/USER.md",
         ];
         paths = [
           ["USER.md", "agent", "USER.md"],

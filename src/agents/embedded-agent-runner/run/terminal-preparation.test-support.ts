@@ -1,10 +1,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
-import {
-  buildEmbeddedRunnerAssistant,
-  makeEmbeddedRunnerAttempt,
-} from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createUsageAccumulator, type mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
@@ -26,15 +23,11 @@ export type TerminalStatsInput = {
   attempts?: NonNullable<Parameters<typeof mergeUsageIntoAccumulator>[1]>[];
 };
 const finalSignature = JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" });
-export function assistantMessage(
-  stopReason: AssistantMessage["stopReason"] = "stop",
-): AssistantMessage {
-  return buildEmbeddedRunnerAssistant({
+export function assistantMessage(stopReason: AssistantMessage["stopReason"] = "stop") {
+  return makeAgentAssistantMessage({
     api: "responses",
     model: "gpt-5.4",
-    usage: createZeroUsageFixture(),
     content: [{ type: "text", text: "provider error details", textSignature: finalSignature }],
-    timestamp: 0,
     stopReason,
     ...(stopReason === "error" ? { errorMessage: "provider failed" } : {}),
   });
@@ -61,11 +54,10 @@ type PreparationOverrides = Partial<Omit<PreparationInput, "attempt" | "runParam
   runParams?: Partial<PreparationInput["runParams"]>;
   admittedRunContext?: PreparationInput["runParams"]["admittedRunContext"];
   sourceReplyDeliveryMode?: "message_tool_only";
-  heartbeat?: { continuesConversation: boolean };
 };
 
-function preparationInput(input: PreparationOverrides): PreparationInput {
-  const { admittedRunContext, sourceReplyDeliveryMode, heartbeat, runParams, ...overrides } = input;
+export function createTerminalPreparationInput(input: PreparationOverrides): PreparationInput {
+  const { admittedRunContext, sourceReplyDeliveryMode, runParams, ...overrides } = input;
   return {
     runParams: {
       admittedRunContext: admittedRunContext ?? createTestAdmittedRunContext("run-focused"),
@@ -73,8 +65,7 @@ function preparationInput(input: PreparationOverrides): PreparationInput {
       runId: "run-focused",
       workspaceDir: "/tmp/openclaw-test",
       prompt: "hi",
-      trigger: heartbeat ? "heartbeat" : "user",
-      ...(heartbeat?.continuesConversation ? { continuesConversation: true } : {}),
+      trigger: "user",
       timeoutMs: 60_000,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       ...runParams,
@@ -98,5 +89,5 @@ function preparationInput(input: PreparationOverrides): PreparationInput {
 
 export async function prepareAttempt(input: PreparationOverrides) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
-  return prepareEmbeddedRunTerminal(preparationInput(input));
+  return prepareEmbeddedRunTerminal(createTerminalPreparationInput(input));
 }

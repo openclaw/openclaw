@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, expect, it, vi } from "vitest";
+import { zstdDecompressSync } from "node:zlib";
+import { afterAll, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -34,12 +35,13 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-archive-byte-lim
 async function* buffers(...parts: string[]) {
   yield* parts.map((part) => Buffer.from(part));
 }
-
-let tempDir: string;
-
-beforeEach(() => {
-  tempDir = sessionDirs.make();
-});
+async function records(source: AsyncIterable<Uint8Array>, limit?: number) {
+  const collected: string[] = [];
+  for await (const record of readTranscriptArchiveRecords(source, limit)) {
+    collected.push(record);
+  }
+  return collected;
+}
 
 it.each([
   "aggregate blobs",
@@ -48,6 +50,7 @@ it.each([
   "valid identity",
   "valid compressed",
 ] as const)("enforces archive page byte limits for %s", async (kind) => {
+  const tempDir = sessionDirs.make();
   const env = { OPENCLAW_STATE_DIR: tempDir };
   const databasePath = path.join(tempDir, "bounded.sqlite");
   const options = { agentId: "main", env, path: databasePath };
@@ -123,64 +126,111 @@ it.each([
 });
 
 it("bounds each framed record before reading more input and excludes its final newline", async () => {
-  async function* chunks() {
-    yield* buffers('{"x":', '"xx"}');
-    throw new Error("Read beyond the record capacity");
+  for (const parts of [
+    ['{"x":', '"xx"}'],
+    ['{"x":"', "xxxx"],
+  ]) {
+    async function* chunks() {
+      yield* buffers(...parts);
+      throw new Error("Read beyond the record capacity");
+    }
+    await expect(readTranscriptArchiveRecords(chunks(), 8).next()).rejects.toThrow(
+      "record exceeds the task-history read capacity",
+    );
   }
-  await expect(readTranscriptArchiveRecords(chunks(), 8).next()).rejects.toThrow(
-    "record exceeds the task-history read capacity",
-  );
-  const records = [];
-  for await (const record of readTranscriptArchiveRecords(buffers('{\n"x":0', "}\n{}"), 8)) {
-    records.push(record.toString("utf8"));
-  }
-  expect(records).toEqual(['{\n"x":0}', "{}"]);
+  await expect(records(buffers('{\n"x":0', "}\n{}"), 8)).resolves.toEqual(['{\n"x":0}', "{}"]);
   await expect(readTranscriptArchiveRecords(buffers('{"x":"xx"}')).next()).resolves.toMatchObject({
-    value: Buffer.from('{"x":"xx"}'),
+    value: '{"x":"xx"}',
     done: false,
   });
 });
 
-it("aborts encoded output at the cap and removes staging files", async () => {
-  const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  const sessionId = "archive-output-overflow";
-  const sessionKey = "agent:main:archive-output-overflow";
-  await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
-  await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
-    {
-      type: "session",
-      id: sessionId,
-      content: randomBytes(4096).toString("base64"),
-    },
-  ]);
-
-  const target = resolveSqliteTargetFromSessionStorePath(storePath);
-  if (!target.path) {
-    throw new Error("expected SQLite target path");
+it("decodes complete records without copying their bytes or retaining mutable input", async () => {
+  const text = JSON.stringify({ value: "Archive 🦞" });
+  const input = Buffer.from(`padding${text}\n${text}`);
+  const source = new Uint8Array(input.buffer, input.byteOffset + 7, input.byteLength - 7);
+  const concat = vi.spyOn(Buffer, "concat");
+  try {
+    async function* chunks() {
+      yield source;
+    }
+    const result = await records(chunks());
+    expect(concat).not.toHaveBeenCalled();
+    source.fill(0);
+    expect(result).toEqual([text, text]);
+  } finally {
+    concat.mockRestore();
   }
-  const database = openOpenClawAgentDatabase({
-    agentId: target.agentId ?? "main",
-    path: target.path,
-  });
-  const plan = planSessionStateDeleteIfUnreferenced({
-    archiveDirectory: path.dirname(storePath),
-    database,
-    referencedSessionIds: new Set(),
-    sessionId,
-  });
-  if (!plan) {
-    throw new Error("expected archive plan");
-  }
-  closeOpenClawAgentDatabasesForTest();
-  const { materializeTranscriptArchiveInWorker } =
-    await import("./session-accessor.sqlite-archive.worker.js");
-
-  await expect(materializeTranscriptArchiveInWorker(plan)).rejects.toThrow(
-    "Archive exceeds 1024 bytes during encoding",
-  );
-  expect(
-    fs
-      .readdirSync(path.dirname(storePath))
-      .filter((entry) => entry.includes(".stage") || entry.includes("jsonl-stage")),
-  ).toEqual([]);
 });
+
+it("frames quoted controls and invalid raw newlines across chunk boundaries", async () => {
+  const quoted = JSON.stringify({ value: 'braces {} [], slash \\, quote ", unicode 🦞' });
+  const input = Buffer.from(`${quoted}\n{"x":"raw\nnewline"}\n{}\n`);
+  for (const size of [1, 17, input.byteLength]) {
+    async function* chunks() {
+      for (let offset = 0; offset < input.byteLength; offset += size) {
+        yield input.subarray(offset, offset + size);
+      }
+    }
+    await expect(records(chunks())).resolves.toEqual([quoted, '{"x":"raw', 'newline"}', "{}"]);
+  }
+});
+
+it.each([false, true])(
+  "materializes without flushing disposable stages (overflow=%s)",
+  async (overflow) => {
+    const tempDir = sessionDirs.make();
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const sessionId = "archive-output-overflow";
+    const sessionKey = "agent:main:archive-output-overflow";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    const events = [
+      {
+        type: "session",
+        id: sessionId,
+        content: overflow ? randomBytes(4096).toString("base64") : "Archive 🦞\n",
+      },
+    ];
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
+
+    const target = resolveSqliteTargetFromSessionStorePath(storePath);
+    if (!target.path) {
+      throw new Error("expected SQLite target path");
+    }
+    const database = openOpenClawAgentDatabase({
+      agentId: target.agentId ?? "main",
+      path: target.path,
+    });
+    const plan = planSessionStateDeleteIfUnreferenced({
+      archiveDirectory: path.dirname(storePath),
+      database,
+      referencedSessionIds: new Set(),
+      sessionId,
+    });
+    if (!plan) {
+      throw new Error("expected archive plan");
+    }
+    closeOpenClawAgentDatabasesForTest();
+    const { materializeTranscriptArchiveInWorker } =
+      await import("./session-accessor.sqlite-archive.worker.js");
+
+    using sync = vi.spyOn(fs, "fsyncSync");
+    if (overflow) {
+      await expect(materializeTranscriptArchiveInWorker(plan)).rejects.toThrow(
+        "Archive exceeds 1024 bytes during encoding",
+      );
+    } else {
+      const { archive } = await materializeTranscriptArchiveInWorker(plan);
+      expect(archive?.encoding).toBe("zstd");
+      expect(zstdDecompressSync(Buffer.from(archive!.bytes)).toString("utf8")).toBe(
+        `${JSON.stringify(events[0])}\n`,
+      );
+    }
+    expect(sync).not.toHaveBeenCalled();
+    expect(
+      fs
+        .readdirSync(path.dirname(storePath))
+        .filter((entry) => entry.includes(".stage") || entry.includes("jsonl-stage")),
+    ).toEqual([]);
+  },
+);

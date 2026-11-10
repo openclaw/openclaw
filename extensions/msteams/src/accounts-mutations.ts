@@ -5,24 +5,6 @@ import { hasConfiguredMSTeamsCredentials } from "./token-config.js";
 
 type MSTeamsSetupAccountConfig = NonNullable<MSTeamsConfig["accounts"]>[string];
 
-function splitRootIdentity(msteams: MSTeamsConfig): {
-  root: MSTeamsConfig;
-  defaultAccount: MSTeamsSetupAccountConfig;
-} {
-  const { appId, appPassword, ...root } = msteams;
-  return {
-    root,
-    defaultAccount: {
-      ...(msteams.enabled === false &&
-      (appId !== undefined || appPassword !== undefined || hasConfiguredMSTeamsCredentials(msteams))
-        ? { enabled: false }
-        : {}),
-      ...(appId !== undefined ? { appId } : {}),
-      ...(appPassword !== undefined ? { appPassword } : {}),
-    },
-  };
-}
-
 export function patchMSTeamsAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -50,7 +32,15 @@ export function patchMSTeamsAccountConfig(params: {
     };
   }
 
-  const { root: baseMsteams, defaultAccount } = splitRootIdentity(msteams);
+  const { appId, appPassword, ...baseMsteams } = msteams;
+  const defaultAccount: MSTeamsSetupAccountConfig = {
+    ...(msteams.enabled === false &&
+    (appId !== undefined || appPassword !== undefined || hasConfiguredMSTeamsCredentials(msteams))
+      ? { enabled: false }
+      : {}),
+    ...(appId !== undefined ? { appId } : {}),
+    ...(appPassword !== undefined ? { appPassword } : {}),
+  };
   // Opening the channel gate must not re-enable accounts the old gate kept disabled.
   const baseAccounts =
     ensureEnabled && msteams.enabled === false

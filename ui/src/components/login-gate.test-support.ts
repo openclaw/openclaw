@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import "./login-gate.ts";
+import "./login-gate-solid.tsx";
 
 type LoginGateElement = HTMLElement & {
   props: Record<string, unknown>;
@@ -24,6 +24,7 @@ export async function mountFailure(lastError: string, lastErrorCode: string | nu
     showGatewaySecret: false,
     onGatewayUrlChange: vi.fn(),
     onSecretChange: vi.fn(),
+    onBrowserPaired: vi.fn(),
     onToggleGatewaySecret: vi.fn(),
     onConnect: vi.fn(),
   };

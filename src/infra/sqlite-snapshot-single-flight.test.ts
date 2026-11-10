@@ -19,13 +19,7 @@ function createSnapshot(
   return { location, cleanup, cleanupAsync };
 }
 
-function completed<T>(value: T) {
-  const retained = createRetainedOperation<T>(() => {});
-  retained.resolve(value);
-  return retained.operation;
-}
-
-it("does not replay a synchronously refused producer even if a second attempt could succeed", () => {
+it("does not replay a synchronously refused producer", () => {
   const failure = new Error("snapshot producer admission refused");
   let attempts = 0;
   const pending = startSingleFlightSqliteSnapshot(
@@ -33,16 +27,7 @@ it("does not replay a synchronously refused producer even if a second attempt co
     "retained-test",
     () => {
       attempts++;
-      if (attempts === 1) {
-        throw failure;
-      }
-      return {
-        ...completed<PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation>({
-          ...createSnapshot("untracked-second-snapshot.sqlite"),
-          startCleanup: () => completed(true),
-        }),
-        startClose: () => completed(undefined),
-      };
+      throw failure;
     },
   );
   pending.service();
@@ -134,12 +119,11 @@ it.each(["all", 0, 1] as const)(
   },
 );
 
-it("joins orphan cleanup before the tracked producer settles", async () => {
+it("joins orphan cleanup before cancellation settles", async () => {
   const admitted = createDeferred();
   const produced = createDeferred();
   const cleanupStarted = createDeferred();
   const cleanupFinished = createDeferred();
-  const tracked: Promise<unknown>[] = [];
   const controller = new AbortController();
   const pending = prepareSingleFlightSqliteSnapshot(
     "orphan-drain.sqlite",
@@ -158,14 +142,12 @@ it("joins orphan cleanup before the tracked producer settles", async () => {
       );
     },
     controller.signal,
-    { trackProducer: (producer) => tracked.push(producer) },
   );
   await admitted.promise;
   controller.abort(new Error("caller cancelled"));
-  await expect(pending).rejects.toThrow("caller cancelled");
-  expect(tracked).toHaveLength(1);
+  const rejected = expect(pending).rejects.toThrow("caller cancelled");
   let settled = false;
-  void tracked[0]?.then(() => {
+  void pending.catch(() => {
     settled = true;
   });
   await Promise.resolve();
@@ -176,7 +158,7 @@ it("joins orphan cleanup before the tracked producer settles", async () => {
   await Promise.resolve();
   const settledBeforeCleanup = settled;
   cleanupFinished.resolve();
-  await expect(tracked[0]).resolves.toMatchObject({ location: "orphan-snapshot.sqlite" });
+  await rejected;
   expect(settledBeforeCleanup).toBe(false);
 });
 

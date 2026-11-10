@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { CreateResponseBodySchema } from "./open-responses.schema.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
-import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
+import { createAssistantOutputItem } from "./openresponses-shape.js";
 
 describe("OpenResponses aggregate behavior", () => {
   it.each([
@@ -12,13 +12,14 @@ describe("OpenResponses aggregate behavior", () => {
       phase: "commentary",
       status: "completed",
     }),
-    createFunctionCallOutputItem({
+    {
+      type: "function_call",
       id: "fc_1",
-      callId: "call_1",
+      call_id: "call_1",
       name: "lookup",
       arguments: "{}",
       status: "completed",
-    }),
+    },
   ])("accepts supported output metadata on replay: $type", (item) => {
     const body = { model: "openclaw", input: [item] };
     expect(CreateResponseBodySchema.safeParse(body).success).toBe(true);

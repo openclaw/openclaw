@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { promisify } from "node:util";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -14,10 +15,12 @@ import {
   type WorkerConnectParams,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
+import { withEnv } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createWorkerConnection } from "../worker/worker-connection.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
 import { createGatewayHttpServer } from "./server-http.js";
@@ -164,14 +167,17 @@ class PublicWorkerHarness {
     maxPayload: 64 * 1024,
     perMessageDeflate: false,
   });
-  readonly preauthBudget = createPreauthConnectionBudget(8);
+  readonly preauthBudget = withEnv(
+    { OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "8" },
+    createPreauthConnectionBudget,
+  );
   readonly publicRateLimiter: ReturnType<typeof createGatewayAuthRateLimiter>;
   readonly handlePluginUpgrade = vi.fn(async () => false);
   readonly httpServer: ReturnType<typeof createGatewayHttpServer>;
   readonly admitWorker: ReturnType<typeof vi.fn<WorkerConnectionService["admitWorker"]>>;
   port = 0;
 
-  constructor(options: { rateLimitMaxAttempts?: number } = {}) {
+  constructor(options: { rateLimitMaxAttempts?: number; tunnel?: boolean } = {}) {
     const nowMs = Date.now();
     const environment = {
       environmentId: "worker-public",
@@ -230,6 +236,15 @@ class PublicWorkerHarness {
       handleHooksRequest: async () => false,
       resolvedAuth: RESOLVED_AUTH,
     });
+    if (options.tunnel) {
+      this.httpServer.prependListener("upgrade", (req) => {
+        markGatewayIngressTransport(req, {
+          kind: "openclaw-id-tunnel",
+          peerKey: `iroh:${"a3".repeat(32)}`,
+          clientIp: "fd69:726f:6800::3",
+        });
+      });
+    }
   }
 
   async start(): Promise<void> {
@@ -277,13 +292,9 @@ class PublicWorkerHarness {
     this.connectionWork.beginClose();
     await this.connectionWork.drain();
     this.publicRateLimiter.dispose();
-    await new Promise<void>((resolve) => {
-      this.wss.close(() => resolve());
-    });
+    await promisify(this.wss.close.bind(this.wss))();
     if (this.httpServer.listening) {
-      await new Promise<void>((resolve, reject) => {
-        this.httpServer.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(this.httpServer.close.bind(this.httpServer))();
     }
   }
 }
@@ -307,8 +318,8 @@ async function withHarness(
   });
 }
 
-it("admits the production worker client on the reserved public path without a gateway challenge", () =>
-  withHarness({}, async (harness) => {
+it.each([false, true])("admits the production worker on its own credential (tunnel=%s)", (tunnel) =>
+  withHarness({ tunnel }, async (harness) => {
     const client = createWorkerConnection({
       endpoint: { kind: "websocket", url: harness.url() },
       connectParams: workerConnect(harness.credential),
@@ -327,7 +338,8 @@ it("admits the production worker client on the reserved public path without a ga
     } finally {
       await client.stop();
     }
-  }));
+  }),
+);
 
 it("rejects an admitted worker before hello when the receiver payload limit is unusable", () =>
   withHarness({}, async (harness) => {

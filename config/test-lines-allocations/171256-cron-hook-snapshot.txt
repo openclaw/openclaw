@@ -1,0 +1,4 @@
+# PR #171256: preserve active cron revision projection, actual hook-context builder
+# coverage, and the isolated Gateway persisted-edit regression from the prior head.
+# Exact net test growth against main; shared scalar unchanged.
+410

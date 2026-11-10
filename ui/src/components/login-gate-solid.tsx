@@ -1,16 +1,30 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import "../styles/connection-surfaces.css";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  For,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { ThemeBranding, ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import { hasEmbedderTransport, isRemoteControlUiIngress } from "../app/remote-ingress.ts";
 import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts";
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import "../lib/toast-host.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
+import "../lib/toast-host.tsx";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
+import { clearCompositionEnd, isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
@@ -22,12 +36,36 @@ import {
   type LoginFailureStep,
   resolveLoginFailureFeedback,
 } from "./login-gate-feedback.ts";
+import { ReportIssueLink } from "./report-issue-link.tsx";
 import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
+import { LazyViewError } from "./solid/lazy-view-error.tsx";
 import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerLoginEnglish);
+
+const LoginGateBrowserPairCard = lazy(() => import("./login-gate-browser-pair.tsx"), {
+  export: "LoginGateBrowserPairCard",
+});
+
+/**
+ * Whether the selected Gateway is the one serving this page's pairing route. Pairing
+ * posts to the page's origin and base path while the token is used on the selected URL,
+ * so another scheme (its default port differs too) or mount path is another Gateway.
+ */
+export function canPairBrowserWithGateway(gatewayUrl: string, basePath: string): boolean {
+  if (isRemoteControlUiIngress() || hasEmbedderTransport()) {
+    return false;
+  }
+  const parsed = URL.parse(gatewayUrl);
+  const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return (
+    parsed?.protocol === socketProtocol &&
+    parsed.host === window.location.host &&
+    normalizeBasePath(parsed.pathname) === normalizeBasePath(basePath)
+  );
+}
 
 export type LoginGateProps = LoginFailureFeedbackParams & {
   mascot?: ThemeMascot;
@@ -38,6 +76,8 @@ export type LoginGateProps = LoginFailureFeedbackParams & {
   showGatewaySecret: boolean;
   onGatewayUrlChange: (value: string) => void;
   onSecretChange: (value: string) => void;
+  /** Connect to the issuing Gateway with the device token pairing stored for it. */
+  onBrowserPaired: (gatewayUrl: string) => void;
   onToggleGatewaySecret: () => void;
   onConnect: () => void;
   onOpenGatewaySettings?: () => void;
@@ -45,8 +85,11 @@ export type LoginGateProps = LoginFailureFeedbackParams & {
 
 type BridgeProps = { props?: LoginGateProps };
 export type LoginGateElement = SolidBridgeElement<BridgeProps>;
-type RefreshState = "idle" | "pending" | "failed";
-type ViewProps = { model: LoginGateProps; cancelRefresh: () => void };
+type ViewProps = {
+  model: LoginGateProps;
+  cancelRefresh: () => void;
+  openPairCard: () => void;
+};
 const STATUS_ICONS: Record<LoginFailureFeedback["tone"], IconName> = {
   pending: "shieldEllipsis",
   warn: "clock",
@@ -107,6 +150,7 @@ function FailureFooter(props: { feedback: LoginFailureFeedback }) {
     <footer class="login-gate__foot">
       <details class="login-gate__failure-detail">
         <summary>{t("login.failure.rawError")}</summary>
+        <For each={props.feedback.details ?? []}>{(detail) => <p>{detail}</p>}</For>
         <div class="login-gate__failure-raw mono">{props.feedback.rawError}</div>
       </details>
       <a
@@ -117,6 +161,7 @@ function FailureFooter(props: { feedback: LoginFailureFeedback }) {
       >
         {t("common.learnMore")}
       </a>
+      <ReportIssueLink />
     </footer>
   );
 }
@@ -132,6 +177,9 @@ function LoginForm(
     props.model.onConnect();
   };
   const submitOnEnter = (event: KeyboardEvent) => {
+    if (isComposingKeyboardEvent(event)) {
+      return;
+    }
     if (event.key === "Enter") {
       connect();
     }
@@ -154,6 +202,9 @@ function LoginForm(
             props.cancelRefresh();
             props.model.onGatewayUrlChange(event.currentTarget.value);
           }}
+          onCompositionEnd={recordCompositionEnd}
+          onKeyUp={clearCompositionEnd}
+          onBlur={clearCompositionEnd}
           onKeyDown={submitOnEnter}
           placeholder="wss://gateway.example:443"
         />
@@ -174,6 +225,9 @@ function LoginForm(
               props.cancelRefresh();
               props.model.onSecretChange(event.currentTarget.value);
             }}
+            onCompositionEnd={recordCompositionEnd}
+            onKeyUp={clearCompositionEnd}
+            onBlur={clearCompositionEnd}
             onKeyDown={submitOnEnter}
             placeholder={t("login.secretPlaceholder")}
           />
@@ -208,6 +262,21 @@ function LoginForm(
   );
 }
 
+/** Card 1 offers pairing as a second way in without crowding the sign-in form. */
+function BrowserPairSlot(props: ViewProps) {
+  return (
+    <Show when={canPairBrowserWithGateway(props.model.gatewayUrl, props.model.resourceBasePath)}>
+      <button
+        type="button"
+        class="btn btn--ghost login-gate__browser-pair-start"
+        onClick={() => props.openPairCard()}
+      >
+        {t("login.browserPair.open")} <Icon name="chevronRight" />
+      </button>
+    </Show>
+  );
+}
+
 function ConnectionSummary(props: { model: LoginGateProps }) {
   const credential = () =>
     t(props.model.secret.trim() ? "login.connection.secretEntered" : "login.connection.noSecret");
@@ -228,7 +297,8 @@ function ConnectionSummary(props: { model: LoginGateProps }) {
 function StatusBody(
   props: ViewProps & {
     feedback: LoginFailureFeedback;
-    refreshState: RefreshState;
+    refreshing: boolean;
+    readRefreshOutcome: () => null | undefined;
     onRefresh: () => void;
     now: number;
   },
@@ -283,18 +353,18 @@ function StatusBody(
       )}
       <div class="login-gate__actions">
         <Show when={props.feedback.refreshAction}>
-          {(action) => (
+          {(refreshAction) => (
             <button
               type="button"
               class="btn primary login-gate__failure-refresh"
-              disabled={props.refreshState === "pending"}
-              onClick={props.onRefresh}
+              disabled={props.refreshing}
+              onClick={() => props.onRefresh()}
             >
-              {props.refreshState === "pending"
-                ? t("common.refreshing")
-                : props.refreshState === "failed"
-                  ? t("common.retry")
-                  : action().label}
+              <Show when={!props.refreshing} fallback={t("common.refreshing")}>
+                <Errored fallback={t("common.retry")}>
+                  {props.readRefreshOutcome() ?? refreshAction().label}
+                </Errored>
+              </Show>
             </button>
           )}
         </Show>
@@ -308,6 +378,7 @@ function StatusBody(
           {connectLabel()}
         </button>
       </div>
+      <BrowserPairSlot {...props} />
       <details class="login-gate__connection">
         <ConnectionSummary model={props.model} />
         <LoginForm {...props} withSubmit={false} />
@@ -335,6 +406,7 @@ function FormBody(props: ViewProps & { feedback: LoginFailureFeedback | null }) 
         </p>
       </div>
       <LoginForm {...props} withSubmit />
+      <BrowserPairSlot {...props} />
       {props.feedback ? (
         <>
           <Steps feedback={props.feedback} />
@@ -369,54 +441,59 @@ function FormBody(props: ViewProps & { feedback: LoginFailureFeedback | null }) 
   );
 }
 
-function LoginGateContent(
-  props: {
-    model: LoginGateProps;
-  },
-  host: LoginGateElement,
-): SolidJSX.Element {
+function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): SolidJSX.Element {
   host.style.display = "contents";
   const refreshIdentity = createMemo(
     () =>
       [
-        props.model.lastError,
-        props.model.lastErrorCode,
-        props.model.lastErrorAuthReason,
-        props.model.gatewayUrl,
-        props.model.resourceBasePath,
-        props.model.secret,
-        props.model.connected,
-        Boolean(props.model.reconnectPending),
+        model().lastError,
+        model().lastErrorCode,
+        model().lastErrorAuthReason,
+        model().gatewayUrl,
+        model().resourceBasePath,
+        model().secret,
+        model().connected,
+        Boolean(model().reconnectPending),
       ] as const,
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
   // A committed identity change retires feedback; unrelated renders preserve a pending attempt.
-  const [refreshState, setRefreshState] = createSignal<RefreshState>((): RefreshState => {
+  const [refreshCompletion, setRefreshCompletion] = createSignal<
+    { result: Promise<void> } | undefined
+  >(() => {
     refreshIdentity();
-    return "idle";
+    return undefined;
   });
+  const refreshOutcome = createMemo(() => refreshCompletion()?.result.then(() => null), {
+    loadingValue: undefined,
+  });
+  const [refreshing, setRefreshing] = createOptimistic(false);
+  const [pairCardOpen, setPairCardOpen] = createSignal(false);
   const [now, setNow] = createSignal(Date.now());
   useVisiblePoll(1_000, () => setNow(Date.now()), {
     enabled: () =>
-      Boolean(props.model.reconnectPending) &&
-      props.model.lastErrorCode === "GATEWAY_BUSY" &&
-      (props.model.reconnectAt ?? 0) > now(),
+      Boolean(model().reconnectPending) &&
+      model().lastErrorCode === "GATEWAY_BUSY" &&
+      (model().reconnectAt ?? 0) > now(),
     immediate: true,
   });
   type RefreshAttempt = {
     props: LoginGateProps;
-    identity: ReturnType<typeof refreshIdentity>;
+    retired: ReturnType<typeof Promise.withResolvers<void>>;
   };
   let refreshAttempt: RefreshAttempt | undefined;
-  const cancelRefresh = () => {
+  const retireRefresh = () => {
+    refreshAttempt?.retired.resolve();
     refreshAttempt = undefined;
-    setRefreshState("idle");
+  };
+  const cancelRefresh = () => {
+    retireRefresh();
+    setRefreshCompletion(undefined);
   };
   const ownsRefresh = (attempt: RefreshAttempt) => {
     const current = host.props;
     return (
       refreshAttempt === attempt &&
-      refreshIdentity() === attempt.identity &&
       host.isConnected &&
       current !== undefined &&
       !current.connected &&
@@ -433,12 +510,46 @@ function LoginGateContent(
       ).every((key) => current[key] === attempt.props[key])
     );
   };
-  const feedback = createMemo(() => resolveLoginFailureFeedback(props.model));
-  onCleanup(cancelRefresh);
-  onCleanup(listen(host, "login-gate-disconnect", cancelRefresh));
+  const feedback = createMemo(() => resolveLoginFailureFeedback(model()));
+  onSettled(() => {
+    const stopDisconnect = listen(host, "login-gate-disconnect", cancelRefresh);
+    const stopChange = listen(host, "login-gate-props-change", () => {
+      // Release the action before Solid commits the replacement connection props.
+      if (refreshAttempt && !ownsRefresh(refreshAttempt)) {
+        retireRefresh();
+      }
+    });
+    return () => {
+      retireRefresh();
+      stopDisconnect();
+      stopChange();
+    };
+  });
+  const presentRefresh = action(function* (
+    attempt: RefreshAttempt,
+    pending: Promise<boolean>,
+  ): Generator<Promise<boolean | void>, void, boolean | void> {
+    try {
+      if (ownsRefresh(attempt)) {
+        setRefreshing(true);
+      }
+      const reloaded = yield Promise.race([pending, attempt.retired.promise]);
+      if (ownsRefresh(attempt) && !reloaded) {
+        throw new Error("Control UI refresh did not reload the document");
+      }
+    } catch (error) {
+      if (ownsRefresh(attempt)) {
+        throw error;
+      }
+    } finally {
+      if (refreshAttempt === attempt) {
+        retireRefresh();
+      }
+    }
+  });
   const refreshPage = async () => {
     if (refreshAttempt && !ownsRefresh(refreshAttempt)) {
-      refreshAttempt = undefined;
+      retireRefresh();
     }
     const current = host.props;
     if (
@@ -452,33 +563,22 @@ function LoginGateContent(
     ) {
       return;
     }
-    const attempt = { props: current, identity: refreshIdentity() };
+    const attempt = {
+      props: current,
+      retired: Promise.withResolvers<void>(),
+    };
     refreshAttempt = attempt;
-    setRefreshState("pending");
-    try {
-      const reloaded = await retryStaleChunkReloadWhenReachable({
-        canReload: () => ownsRefresh(attempt),
-      });
-      if (ownsRefresh(attempt) && !reloaded) {
-        setRefreshState("failed");
-      }
-    } catch {
-      if (ownsRefresh(attempt)) {
-        setRefreshState("failed");
-      }
-    } finally {
-      if (refreshAttempt === attempt) {
-        if (!ownsRefresh(attempt)) {
-          cancelRefresh();
-        } else {
-          refreshAttempt = undefined;
-        }
-      }
-    }
+    const pending = retryStaleChunkReloadWhenReachable({
+      canReload: () => ownsRefresh(attempt),
+    });
+    const completion = presentRefresh(attempt, pending);
+    setRefreshCompletion({ result: completion });
+    // Retired views still consume their admitted operation's rejection.
+    await completion.catch(() => undefined);
   };
-  const branding = () => props.model.branding ?? currentThemeBranding();
+  const branding = () => model().branding ?? currentThemeBranding();
   const brandIcon = () =>
-    props.model.branding?.brandIcon ?? (props.model.mascot === "none" ? "mark" : "claw");
+    model().branding?.brandIcon ?? (model().mascot === "none" ? "mark" : "claw");
   return (
     <div
       class="login-gate"
@@ -496,7 +596,7 @@ function LoginGateContent(
               class="login-gate__logo"
               src={controlUiPublicAssetPath(
                 "favicon.svg",
-                normalizeBasePath(props.model.resourceBasePath),
+                normalizeBasePath(model().resourceBasePath),
               )}
               alt=""
             />
@@ -512,28 +612,67 @@ function LoginGateContent(
           <span class="login-gate__brand-name">{branding().brandName}</span>
         </header>
         <Show
-          when={feedback()?.placement === "status" ? feedback() : null}
+          when={
+            pairCardOpen() &&
+            canPairBrowserWithGateway(model().gatewayUrl, model().resourceBasePath)
+          }
           fallback={
-            <FormBody model={props.model} feedback={feedback()} cancelRefresh={cancelRefresh} />
+            <Show
+              when={feedback()?.placement === "status" ? feedback() : null}
+              fallback={
+                <FormBody
+                  model={model()}
+                  feedback={feedback()}
+                  cancelRefresh={cancelRefresh}
+                  openPairCard={() => setPairCardOpen(true)}
+                />
+              }
+            >
+              {(value) => (
+                <StatusBody
+                  model={model()}
+                  feedback={value()}
+                  cancelRefresh={cancelRefresh}
+                  openPairCard={() => setPairCardOpen(true)}
+                  refreshing={refreshing()}
+                  readRefreshOutcome={refreshOutcome}
+                  onRefresh={() => void refreshPage()}
+                  now={now()}
+                />
+              )}
+            </Show>
           }
         >
-          {(value) => (
-            <StatusBody
-              model={props.model}
-              feedback={value()}
-              cancelRefresh={cancelRefresh}
-              refreshState={refreshState()}
-              onRefresh={() => void refreshPage()}
-              now={now()}
-            />
-          )}
+          <Errored
+            fallback={(error, reset) => (
+              <LazyViewError
+                error={error()}
+                onRetry={() => reset()}
+                onClose={() => setPairCardOpen(false)}
+              />
+            )}
+          >
+            <Loading>
+              <LoginGateBrowserPairCard
+                host={host}
+                basePath={normalizeBasePath(model().resourceBasePath)}
+                gatewayUrl={model().gatewayUrl}
+                onPaired={(gatewayUrl) => {
+                  // Connection progress and errors belong to the sign-in card.
+                  setPairCardOpen(false);
+                  model().onBrowserPaired(gatewayUrl);
+                }}
+                onBack={() => setPairCardOpen(false)}
+              />
+            </Loading>
+          </Errored>
         </Show>
-        {props.model.onOpenGatewaySettings && (
+        {model().onOpenGatewaySettings && (
           <footer class="login-gate__recovery">
             <button
               type="button"
               class="btn btn--ghost"
-              onClick={() => props.model.onOpenGatewaySettings?.()}
+              onClick={() => model().onOpenGatewaySettings?.()}
             >
               {t("login.gatewaySettings")}
             </button>
@@ -546,23 +685,11 @@ function LoginGateContent(
 
 export const LoginGate = defineSolidBridge<BridgeProps>(
   "openclaw-login-gate",
-  (props, host) => (
-    <Show when={props.props}>
-      {(model) =>
-        LoginGateContent(
-          {
-            get model() {
-              return model();
-            },
-          },
-          host,
-        )
-      }
-    </Show>
-  ),
+  (props, host) => <Show when={props.props}>{(model) => LoginGateContent(model, host)}</Show>,
   {
     properties: { props: { default: undefined, attribute: false } },
     disconnected: (host) => host.dispatchEvent(new Event("login-gate-disconnect")),
+    propertyChanged: (host) => host.dispatchEvent(new Event("login-gate-props-change")),
   },
 );
 

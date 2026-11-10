@@ -1,6 +1,10 @@
 import type { BetaContextManagementConfig } from "@anthropic-ai/sdk/resources/beta/messages/messages.js";
 import type { TextBlockParam } from "@anthropic-ai/sdk/resources/messages.js";
-import { supportsClaudeServerCompaction, type Model } from "@openclaw/llm-core";
+import {
+  supportsClaudeServerCompaction,
+  type Model,
+  type PreparedSystemPrompt,
+} from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
@@ -20,6 +24,8 @@ import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundary,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  splitSystemPromptRelocatableBoundary,
   stripSystemPromptCacheBoundary,
   stripSystemPromptRelocatableBoundary,
 } from "../utils/system-prompt-cache-boundary.js";
@@ -205,18 +211,51 @@ export function resolveAnthropicCacheOptions(
   };
 }
 
+// Session revisions own these projections; the four cache policies cannot evict each other.
+const normalizedSystemBlocks = new WeakMap<PreparedSystemPrompt, Map<string, TextBlockParam[]>>();
+
+// Dynamic system text that precedes the Runtime facts. Sessions of one agent usually send it
+// byte-identical, but only a session's opening request can spare a checkpoint for it.
+const sessionSharedSystemBlocks = new WeakSet<object>();
+
 export function buildAnthropicSystemBlocks(
   systemPrompt: string | undefined,
   isOAuthToken: boolean,
   cacheControl: AnthropicEphemeralCacheControl | undefined,
   claudeCodeVersion = ANTHROPIC_CLAUDE_CODE_VERSION,
+  preparedSystemPrompt?: PreparedSystemPrompt,
 ): TextBlockParam[] | undefined {
-  const blocks: TextBlockParam[] = systemPrompt
-    ? [{ type: "text", text: sanitizeSurrogates(systemPrompt) }]
-    : [];
-  normalizeAnthropicSystemBlocks(blocks, cacheControl);
-  if (systemPrompt && blocks.length === 0) {
-    blocks.push({ type: "text", text: "" });
+  const revision = preparedSystemPrompt?.text === systemPrompt ? preparedSystemPrompt : undefined;
+  const policy = cacheControl ? (cacheControl.ttl ?? "default") : "none";
+  let variants = revision && normalizedSystemBlocks.get(revision);
+  let blocks = variants?.get(policy);
+  if (!blocks) {
+    blocks = systemPrompt ? [{ type: "text", text: sanitizeSurrogates(systemPrompt) }] : [];
+    normalizeAnthropicSystemBlocks(
+      blocks,
+      revision && cacheControl ? { ...cacheControl } : cacheControl,
+    );
+    if (systemPrompt && blocks.length === 0) {
+      blocks.push({ type: "text", text: "" });
+    }
+    if (revision) {
+      variants ??= new Map();
+      variants.set(policy, blocks);
+      normalizedSystemBlocks.set(revision, variants);
+    }
+  }
+  if (revision) {
+    // Payload hooks and OAuth identity blocks remain request-local and editable.
+    blocks = blocks.map((block) => {
+      const editable = {
+        ...block,
+        ...(block.cache_control ? { cache_control: { ...block.cache_control } } : {}),
+      };
+      if (sessionSharedSystemBlocks.has(block)) {
+        sessionSharedSystemBlocks.add(editable);
+      }
+      return editable;
+    });
   }
   if (isOAuthToken) {
     // The stable application prompt covers the OAuth preamble too; keep slots for history.
@@ -254,82 +293,30 @@ export function applyAnthropicRequestCacheControl(
       lastTool.cache_control = cacheControl;
     }
   }
-  const usedMarkers =
+  const messages = payload.messages;
+  let usedMarkers =
     countAnthropicCacheControlMarkers(payload.system) +
     countAnthropicCacheControlMarkers(payload.tools);
-  applyAnthropicCacheControlToMessages(
-    payload.messages,
-    cacheControl,
-    ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers,
-    cacheBreakpointOptOutMessageIndexes,
-  );
-}
-
-function normalizeAnthropicSystemBlocks(
-  system: unknown,
-  cacheControl: AnthropicEphemeralCacheControl | undefined,
-): void {
-  if (!Array.isArray(system)) {
-    return;
-  }
-
-  const normalizedBlocks: Array<unknown> = [];
-  for (const block of system) {
-    if (!block || typeof block !== "object") {
-      normalizedBlocks.push(block);
-      continue;
-    }
-    const record = block as Record<string, unknown>;
-    const blockText = record.text;
-    if (record.type !== "text" || typeof blockText !== "string") {
-      normalizedBlocks.push(block);
-      continue;
-    }
-    if (!cacheControl) {
-      record.text = stripSystemPromptCacheBoundary(blockText);
-      continue;
-    }
-    // This transport relocates nothing, so the relocatable marker must not
-    // survive into the payload; the cache boundary stays for the breakpoint.
-    const text = stripSystemPromptRelocatableBoundary(blockText);
-    record.text = text;
-    const split = splitSystemPromptCacheBoundary(text);
-    if (!split) {
-      if (record.cache_control === undefined) {
-        record.cache_control = cacheControl;
+  // A new session otherwise rewrites the whole dynamic suffix because the Runtime facts that
+  // end it name the session. Its opening request has no history to protect, so one of the two
+  // history checkpoints lets the next session read that suffix instead. Later requests keep both.
+  const opensSession =
+    Array.isArray(messages) &&
+    !messages.some((message) => isRecord(message) && message.role === "assistant");
+  if (opensSession && Array.isArray(payload.system)) {
+    for (const block of payload.system) {
+      if (
+        usedMarkers < ANTHROPIC_CACHE_CONTROL_LIMIT - 1 &&
+        isRecord(block) &&
+        sessionSharedSystemBlocks.has(block) &&
+        block.cache_control === undefined
+      ) {
+        block.cache_control = cacheControl;
+        usedMarkers++;
       }
-      normalizedBlocks.push(record);
-      continue;
-    }
-
-    const { cache_control: existingCacheControl, ...rest } = record;
-    if (split.stablePrefix) {
-      normalizedBlocks.push({
-        ...rest,
-        text: split.stablePrefix,
-        cache_control: existingCacheControl ?? cacheControl,
-      });
-    }
-    if (split.dynamicSuffix) {
-      normalizedBlocks.push({
-        ...rest,
-        text: split.dynamicSuffix,
-      });
     }
   }
-
-  if (cacheControl) {
-    system.splice(0, system.length, ...normalizedBlocks);
-  }
-}
-
-/** Apply one shared deepest-stable-message cache breakpoint policy. */
-function applyAnthropicCacheControlToMessages(
-  messages: unknown,
-  cacheControl: AnthropicEphemeralCacheControl,
-  markerLimit: number,
-  cacheBreakpointOptOutMessageIndexes: ReadonlySet<number>,
-): void {
+  const markerLimit = ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers;
   if (!Array.isArray(messages) || messages.length === 0 || markerLimit <= 0) {
     return;
   }
@@ -362,14 +349,89 @@ function applyAnthropicCacheControlToMessages(
         blockRecord.type === "tool_result"
       ) {
         // Keep a prior write reachable beyond the 20-block lookback, before transient context.
-        blockRecord.cache_control = cacheControl;
-        if (typeof content === "string") {
-          record.content = blocks;
+        if (Object.isFrozen(record) || Object.isFrozen(blocks) || Object.isFrozen(blockRecord)) {
+          const markedBlocks = blocks.slice();
+          markedBlocks[j] = { ...blockRecord, cache_control: cacheControl };
+          messages[i] = { ...record, content: markedBlocks };
+        } else {
+          blockRecord.cache_control = cacheControl;
+          if (typeof content === "string") {
+            record.content = blocks;
+          }
         }
         marked++;
         break;
       }
     }
+  }
+}
+
+function normalizeAnthropicSystemBlocks(
+  system: unknown,
+  cacheControl: AnthropicEphemeralCacheControl | undefined,
+): void {
+  if (!Array.isArray(system)) {
+    return;
+  }
+
+  const normalizedBlocks: Array<unknown> = [];
+  for (const block of system) {
+    if (!block || typeof block !== "object") {
+      normalizedBlocks.push(block);
+      continue;
+    }
+    const record = block as Record<string, unknown>;
+    const blockText = record.text;
+    if (record.type !== "text" || typeof blockText !== "string") {
+      normalizedBlocks.push(block);
+      continue;
+    }
+    if (!cacheControl) {
+      record.text = stripSystemPromptCacheBoundary(blockText);
+      continue;
+    }
+    // This transport relocates nothing, so the relocatable marker must not
+    // survive into the payload; the cache boundary stays for the breakpoint.
+    record.text = stripSystemPromptRelocatableBoundary(blockText);
+    const split = splitSystemPromptCacheBoundary(blockText);
+    if (!split) {
+      // An already split prompt keeps its shared block for the opening-request checkpoint.
+      if (record.cache_control === undefined && !sessionSharedSystemBlocks.has(record)) {
+        record.cache_control = cacheControl;
+      }
+      normalizedBlocks.push(record);
+      continue;
+    }
+
+    const { cache_control: existingCacheControl, ...rest } = record;
+    const stablePrefix = stripSystemPromptRelocatableBoundary(split.stablePrefix);
+    if (stablePrefix) {
+      normalizedBlocks.push({
+        ...rest,
+        text: stablePrefix,
+        cache_control: existingCacheControl ?? cacheControl,
+      });
+    }
+    const runtimeFactsStart = splitSystemPromptRelocatableBoundary(split.dynamicSuffix)
+      ? split.dynamicSuffix.indexOf(SYSTEM_PROMPT_RELOCATABLE_BOUNDARY.trim())
+      : -1;
+    const sessionShared =
+      runtimeFactsStart > 0 ? split.dynamicSuffix.slice(0, runtimeFactsStart).trimEnd() : "";
+    const sessionOwned = stripSystemPromptRelocatableBoundary(
+      sessionShared ? split.dynamicSuffix.slice(runtimeFactsStart) : split.dynamicSuffix,
+    ).trimEnd();
+    const dynamicSuffix = stripSystemPromptRelocatableBoundary(split.dynamicSuffix);
+    if (sessionShared && sessionOwned) {
+      const sharedBlock = { ...rest, text: sessionShared };
+      sessionSharedSystemBlocks.add(sharedBlock);
+      normalizedBlocks.push(sharedBlock, { ...rest, text: sessionOwned });
+    } else if (dynamicSuffix) {
+      normalizedBlocks.push({ ...rest, text: dynamicSuffix });
+    }
+  }
+
+  if (cacheControl) {
+    system.splice(0, system.length, ...normalizedBlocks);
   }
 }
 

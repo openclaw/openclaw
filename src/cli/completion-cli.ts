@@ -27,6 +27,7 @@ import { getCoreCliCompletionGroups } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
 import { removeCommandGroupNames } from "./program/register-command-groups.js";
 import { getSubCliCompletionGroups } from "./program/register.subclis.js";
+import { quotePowerShellArg } from "./quote-cli-arg.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
   return createCompletionScriptGenerator(program)(shell);
@@ -49,40 +50,9 @@ function createCompletionScriptGenerator(program: Command): (shell: CompletionSh
   };
 }
 
-async function writeCompletionCache(params: {
-  program: Command;
-  shells: CompletionShell[];
-  binName: string;
-}): Promise<void> {
-  const generateScript = createCompletionScriptGenerator(params.program);
-  for (const shell of params.shells) {
-    const script = generateScript(shell);
-    await publishOutputFileAtomically({
-      filePath: resolveCompletionCachePath(shell, params.binName),
-      tempPrefix: ".openclaw-completion-cache",
-      writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, script, { encoding: "utf-8", flag: "wx" });
-      },
-    });
-  }
-}
-
 function writeCompletionRegistrationWarning(message: string): void {
   const diagnostic = `[completion] ${message}`;
   process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message: diagnostic })}\n`);
-}
-
-async function registerSubcommandsForCompletion(program: Command): Promise<void> {
-  for (const { name, entry } of getSubCliCompletionGroups()) {
-    try {
-      removeCommandGroupNames(program, entry);
-      await entry.register(program);
-    } catch (error) {
-      writeCompletionRegistrationWarning(
-        `skipping subcommand \`${name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
 }
 
 export function registerCompletionCli(program: Command) {
@@ -131,7 +101,16 @@ export function registerCompletionCli(program: Command) {
         }
       }
 
-      await registerSubcommandsForCompletion(program);
+      for (const { name, entry } of getSubCliCompletionGroups()) {
+        try {
+          removeCommandGroupNames(program, entry);
+          await entry.register(program);
+        } catch (error) {
+          writeCompletionRegistrationWarning(
+            `skipping subcommand \`${name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
 
       if (process.env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV] !== "1") {
         const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
@@ -149,11 +128,23 @@ export function registerCompletionCli(program: Command) {
 
       if (options.writeState) {
         const writeShells = options.shell ? [shell] : [...COMPLETION_SHELLS];
-        await writeCompletionCache({
-          program,
-          shells: writeShells,
-          binName: program.name(),
-        });
+        const binName = program.name();
+        const generateScript = createCompletionScriptGenerator(program);
+        for (const writeShell of writeShells) {
+          const script = generateScript(writeShell);
+          // Windows PowerShell otherwise decodes Unicode command and choice literals as ANSI.
+          const content =
+            writeShell === "powershell" && process.platform === "win32" && /\P{ASCII}/u.test(script)
+              ? `\uFEFF${script}`
+              : script;
+          await publishOutputFileAtomically({
+            filePath: resolveCompletionCachePath(writeShell, binName),
+            tempPrefix: ".openclaw-completion-cache",
+            writeTemp: async (tempPath) => {
+              await fs.writeFile(tempPath, content, { encoding: "utf-8", flag: "wx" });
+            },
+          });
+        }
       }
 
       if (options.install) {
@@ -179,9 +170,9 @@ function generateZshCompletion(program: Command): string {
   return `
 #compdef ${rootCmd}
 
-${generateZshCommandGroup(program, `_${rootCmd}_root_completion`, `_${rootCmd}`)}
+${generateZshCommandGroup(program, `_${rootCmd}_root_completion`, `_${rootCmd}_command`)}
 
-${generateZshSubcommands(program, rootCmd)}
+${generateZshSubcommands(program, `_${rootCmd}_command`)}
 
 _${rootCmd}_register_completion() {
   if (( ! $+functions[compdef] )); then
@@ -216,10 +207,12 @@ function generateZshArgs(cmd: Command): string {
         opt.required || opt.optional
           ? `${opt.optional ? "::" : ":"}${opt.attributeName()}:${choices ? `(${choices})` : ""}`
           : "";
+      // `=` permits long-option values both after an equals sign and in the next word.
+      const optionSpec = (flag: string) => (argument && flag.startsWith("--") ? `${flag}=` : flag);
       if (alternate) {
-        return `"${visibility}(${name} ${alternate})"{${name},${alternate}}"[${desc}]${argument}"`;
+        return `"${visibility}(${name} ${alternate})"{${optionSpec(name)},${optionSpec(alternate)}}"[${desc}]${argument}"`;
       }
-      return `"${visibility}${name}[${desc}]${argument}"`;
+      return `"${visibility}${optionSpec(name)}[${desc}]${argument}"`;
     })
     .join(" \\\n    ");
 }
@@ -229,18 +222,13 @@ function escapeZshCompletionChoice(choice: string): string {
   return escapeZshDoubleQuotedDescription(choice.replace(/([\\\s:()[\]{}*?!|&;<>"'$`])/g, "\\$1"));
 }
 
-function generateZshSubcmdList(cmd: Command): string {
-  const list = visibleCompletionCommands(cmd)
-    .flatMap((c) => {
-      const desc = escapeZshDoubleQuotedDescription(c.description()).replace(/'/g, "'\\''");
-      return commandNameVariants(c).map((name) => `'${name}[${desc}]'`);
-    })
-    .join(" ");
-  return `"1: :_values 'command' ${list}"`;
-}
-
 function escapeZshDoubleQuotedDescription(description: string): string {
   return description.replace(/[\\$"`[\]]/g, "\\$&");
+}
+
+function zshSubcommandFunctionName(parentFunctionName: string, index: number): string {
+  // Sibling indices preserve node identity across hyphens, underscores, and nested paths.
+  return `${parentFunctionName}_${index}`;
 }
 
 function generateZshCommandGroup(
@@ -248,30 +236,36 @@ function generateZshCommandGroup(
   functionName: string,
   childPrefix = functionName,
 ): string {
+  const args = generateZshArgs(command);
+  const list = visibleCompletionCommands(command)
+    .flatMap((c) => {
+      const desc = escapeZshDoubleQuotedDescription(c.description()).replace(/'/g, "'\\''");
+      return commandNameVariants(c).map((name) => `'${name}[${desc}]'`);
+    })
+    .join(" ");
   return `${functionName}() {
   local -a commands
   local -a options
   
   _arguments -s -C \\
-    ${generateZshArgs(command)} \\
-    ${generateZshSubcmdList(command)} \\
+    ${args} \\
+    "1: :_values 'command' ${list}" \\
     "*::arg:->args"
 
   case $state in
     (args)
       case $line[1] in
-        ${command.commands.map((cmd) => `(${commandNameVariants(cmd).join("|")}) ${childPrefix}_${cmd.name().replace(/-/g, "_")} ;;`).join("\n        ")}
+        ${command.commands.map((cmd, index) => `(${commandNameVariants(cmd).join("|")}) ${zshSubcommandFunctionName(childPrefix, index)} ;;`).join("\n        ")}
       esac
       ;;
   esac
 }`;
 }
 
-function generateZshSubcommands(program: Command, prefix: string): string {
+function generateZshSubcommands(program: Command, parentFunctionName: string): string {
   return program.commands
-    .map((cmd) => {
-      const nextPrefix = `${prefix}_${cmd.name().replace(/-/g, "_")}`;
-      const funcName = `_${nextPrefix}`;
+    .map((cmd, index) => {
+      const funcName = zshSubcommandFunctionName(parentFunctionName, index);
       const body =
         cmd.commands.length > 0
           ? `\n${generateZshCommandGroup(cmd, funcName)}\n`
@@ -281,7 +275,7 @@ ${funcName}() {
     ${generateZshArgs(cmd)}
 }
 `;
-      return generateZshSubcommands(cmd, nextPrefix) + body;
+      return generateZshSubcommands(cmd, funcName) + body;
     })
     .join("");
 }
@@ -290,15 +284,14 @@ function generatePowerShellCompletion(tree: ShellCompletionCommandTree): string 
   const { root, descendants: contexts } = tree;
   const rootCmd = root.command.name();
   const formatPowerShellArray = (entries: string[]) =>
-    entries.length > 0
-      ? `@(${entries.map((entry) => `'${entry.replaceAll("'", "''")}'`).join(",")})`
-      : "@()";
+    `@(${entries.map(quotePowerShellArg).join(",")})`;
   const commandPathCases = contexts
     .flatMap((context) =>
       context.pathVariants.map(
-        (pathSegments) => `            '${pathSegments.join(" ")}' {
+        (pathSegments) => `            ${quotePowerShellArg(pathSegments.join(" "))} {
                 $commandPath = $candidatePath
                 $valueOptions = ${formatPowerShellArray(context.valueOptions)}
+                $requiredValueOptions = ${formatPowerShellArray(context.requiredValueOptions)}
             }`,
       ),
     )
@@ -319,7 +312,7 @@ ${commandPathCases}
         .filter(Boolean)
         .map(
           (fullPath) => `
-            if ($commandPath -eq '${fullPath}') {
+            if ($commandPath -eq ${quotePowerShellArg(fullPath)}) {
                 $completions = ${allCompletions}
                 $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
                     [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterName', $_)
@@ -346,7 +339,7 @@ ${commandPathCases}
                 $choiceValue = if ($_ -match '^[A-Za-z0-9_./:+-]+$') {
                     $_
                 } else {
-                    "'" + $_.Replace("'", "''") + "'"
+                    "'" + [regex]::Replace($_, "['‘-‛]", '$0$0') + "'"
                 }
                 $completionText = "$choiceCompletionPrefix$choiceValue"
                 [System.Management.Automation.CompletionResult]::new($completionText, $_, 'ParameterValue', $_)
@@ -358,9 +351,7 @@ ${commandPathCases}
         )
         .join("\n");
       return pathVariants.map(
-        (
-          pathSegments,
-        ) => `    if ($commandPath -eq '${pathSegments.join(" ").replaceAll("'", "''")}') {
+        (pathSegments) => `    if ($commandPath -eq ${quotePowerShellArg(pathSegments.join(" "))}) {
 ${optionChoiceCases}
     }`,
       );
@@ -375,9 +366,23 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     $commandElements = @($commandAst.CommandElements.Where({ $_.Extent.StartOffset -lt $cursorPosition }))
     $commandPath = ""
     $valueOptions = ${formatPowerShellArray(root.valueOptions)}
-    $previousElementIndex = if ($wordToComplete -eq '') { $commandElements.Count - 1 } else { $commandElements.Count - 2 }
+    $requiredValueOptions = ${formatPowerShellArray(root.requiredValueOptions)}
+    $pendingRequiredValue = $false
+    $hasCurrentWord = $wordToComplete -ne ''
+    $previousElementIndex = if ($hasCurrentWord) { $commandElements.Count - 2 } else { $commandElements.Count - 1 }
     $previousElement = if ($previousElementIndex -ge 1) { $commandElements[$previousElementIndex].Extent.Text } else { '' }
     $choiceFlag = $previousElement
+    # Native completion includes the suffix after the cursor in both the word and AST.
+    if ($hasCurrentWord -and $commandElements[-1].Extent.EndOffset -gt $cursorPosition) {
+        $wordPrefix = $commandElements[-1].Extent.Text.Substring(0, $cursorPosition - $commandElements[-1].Extent.StartOffset)
+        $prefixAst = [System.Management.Automation.Language.Parser]::ParseInput("openclaw $wordPrefix", [ref]$null, [ref]$null)
+        $commandElements[-1] = $prefixAst.EndBlock.Statements[0].PipelineElements[0].CommandElements[-1]
+        $wordToComplete = if ($commandElements[-1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $commandElements[-1].Value
+        } else {
+            $wordPrefix
+        }
+    }
     $choicePrefix = $wordToComplete
     # PowerShell retains quotes in wordToComplete, even for an unfinished literal.
     if ($wordToComplete -ne '' -and $commandElements[-1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
@@ -391,11 +396,18 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     }
 
     for ($i = 1; $i -lt $commandElements.Count; $i++) {
-        $element = $commandElements[$i].Extent.Text
-        if ($i -eq $commandElements.Count - 1 -and $wordToComplete -ne "") { break }
+        $element = if ($commandElements[$i] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $commandElements[$i].Value
+        } else {
+            $commandElements[$i].Extent.Text
+        }
+        if ($i -eq $commandElements.Count - 1 -and $hasCurrentWord) { break }
         if ($element -like "-*") {
             $flag = ($element -split '=', 2)[0]
             if ($element -notlike '*=*' -and $valueOptions -contains $flag) {
+                if ($i -eq $previousElementIndex -and $requiredValueOptions -contains $flag) {
+                    $pendingRequiredValue = $true
+                }
                 $i++
             }
             continue
@@ -431,6 +443,7 @@ ${commandPathUpdate}
     }
 
 ${choiceCompletion}
+    if ($pendingRequiredValue) { return }
     
     # Root command
     if ($commandPath -eq "") {

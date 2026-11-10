@@ -55,11 +55,13 @@ def load_payload(input_path: Optional[str], provider: str) -> Dict[str, Any]:
         else:
             with open(input_path, "r", encoding="utf-8") as handle:
                 raw = handle.read()
-        data = json.loads(raw)
+        data = json.loads(raw.removeprefix("\ufeff"))
     else:
         data = run_codexbar_cost(provider)
 
     if isinstance(data, dict):
+        if data.get("provider", provider) != provider:
+            raise RuntimeError(f"Provider '{provider}' not found in codexbar payload.")
         return data
 
     if isinstance(data, list):

@@ -57,6 +57,11 @@ function createMockApi(overrides: Partial<API> = {}): API {
   } as unknown as API;
 }
 
+function groupApi(groupId: string, name: string) {
+  const getGroupInfo = vi.fn(async () => ({ gridInfoMap: { [groupId]: { groupId, name } } }));
+  return { api: createMockApi({ getGroupInfo }), getGroupInfo };
+}
+
 async function withStoredSession<T>(profile: string, api: API, run: () => Promise<T>): Promise<T> {
   const stateDir = tempDirs.make("openclaw-zalouser-message-");
   await saveStoredZaloCredentials(
@@ -188,11 +193,24 @@ it("extracts quote metadata and implicit mentions", async () => {
 
   expect(message).toMatchObject({
     quotedGlobalMsgId: "987654321234",
-    quotedOwnerId: "555444333",
     quotedBody: "Previous bot message content",
     implicitMention: true,
   });
 });
+
+it.each([
+  ["/btw why?\n  first frame\n\n    second frame", "/btw why?\n  first frame\n\n    second frame"],
+  ["/loop 5m check\n  deploy status", "/loop 5m check\n  deploy status"],
+  ["/btw   progress?", "/btw progress?"],
+])(
+  "preserves the argument text of a bot-mentioned %j for command dispatch",
+  async (command, expected) => {
+    const [message] = await captureInbound([
+      { content: `@Bot ${command}`, mentions: [{ uid: "555444333", pos: 0, len: 4 }] },
+    ]);
+    expect(message?.commandContent).toBe(expected);
+  },
+);
 
 it.each([
   [1_764_000_000, 1_764_000_000_000],
@@ -209,21 +227,17 @@ it.each([
 });
 
 it("reuses group context until its five-minute TTL expires", async () => {
-  const getGroupInfo = vi.fn(async () => ({
-    gridInfoMap: { "group-ttl": { groupId: "group-ttl", name: "Group" } },
-  }));
-  const api = createMockApi({ getGroupInfo } as Partial<API>);
-  const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  const { api, getGroupInfo } = groupApi("group-ttl", "Group");
+  const now = vi.spyOn(performance, "now").mockReturnValue(0);
 
   await withStoredSession("cache-ttl", api, async () => {
     await expect(resolveZaloGroupContext("cache-ttl", "group-ttl")).resolves.toMatchObject({
-      groupId: "group-ttl",
       name: "Group",
     });
-    now.mockReturnValue(1_700_000_299_999);
+    now.mockReturnValue(299_999);
     await resolveZaloGroupContext("cache-ttl", "group-ttl");
     expect(getGroupInfo).toHaveBeenCalledOnce();
-    now.mockReturnValue(1_700_000_300_000);
+    now.mockReturnValue(300_000);
     await resolveZaloGroupContext("cache-ttl", "group-ttl");
   });
 
@@ -232,48 +246,30 @@ it("reuses group context until its five-minute TTL expires", async () => {
 
 it("keeps group lookups profile-scoped and refreshes them after logout", async () => {
   const groupId = "shared-group";
-  const getGroupInfoA = vi.fn(async () => ({
-    gridInfoMap: { [groupId]: { groupId, name: "Alpha" } },
-  }));
-  const getGroupInfoB = vi.fn(async () => ({
-    gridInfoMap: { [groupId]: { groupId, name: "Beta" } },
-  }));
-  await withStoredSession(
-    "cache-alpha",
-    createMockApi({ getGroupInfo: getGroupInfoA }),
-    async () => {
-      await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
-        name: "Alpha",
+  const alpha = groupApi(groupId, "Alpha");
+  const beta = groupApi(groupId, "Beta");
+  await withStoredSession("cache-alpha", alpha.api, async () => {
+    await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
+      name: "Alpha",
+    });
+    await withStoredSession("cache-beta", beta.api, async () => {
+      await expect(resolveZaloGroupContext("cache-beta", groupId)).resolves.toMatchObject({
+        name: "Beta",
       });
-      await withStoredSession(
-        "cache-beta",
-        createMockApi({ getGroupInfo: getGroupInfoB }),
-        async () => {
-          await expect(resolveZaloGroupContext("cache-beta", groupId)).resolves.toMatchObject({
-            name: "Beta",
-          });
-        },
-      );
-      await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
-        name: "Alpha",
-      });
-      expect(getGroupInfoA).toHaveBeenCalledOnce();
-      expect(getGroupInfoB).toHaveBeenCalledOnce();
-      await logoutZaloProfile("cache-alpha");
-    },
-  );
+    });
+    await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
+      name: "Alpha",
+    });
+    expect(alpha.getGroupInfo).toHaveBeenCalledOnce();
+    expect(beta.getGroupInfo).toHaveBeenCalledOnce();
+    await logoutZaloProfile("cache-alpha");
+  });
 
-  const getGroupInfoAfterLogin = vi.fn(async () => ({
-    gridInfoMap: { [groupId]: { groupId, name: "New Alpha" } },
-  }));
-  await withStoredSession(
-    "cache-alpha",
-    createMockApi({ getGroupInfo: getGroupInfoAfterLogin }),
-    async () => {
-      await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
-        name: "New Alpha",
-      });
-    },
-  );
-  expect(getGroupInfoAfterLogin).toHaveBeenCalledOnce();
+  const replacement = groupApi(groupId, "New Alpha");
+  await withStoredSession("cache-alpha", replacement.api, async () => {
+    await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
+      name: "New Alpha",
+    });
+  });
+  expect(replacement.getGroupInfo).toHaveBeenCalledOnce();
 });

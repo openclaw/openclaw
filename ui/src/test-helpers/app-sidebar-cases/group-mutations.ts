@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import "../../lib/toast-host.ts";
+import * as groupDefaultsDialog from "../../components/session-group-defaults-dialog.tsx";
+import "../../lib/toast-host.tsx";
+import { editSessionGroupDefaults } from "../../components/session-organizer-menu.runtime.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -13,8 +15,8 @@ import {
 } from "../app-sidebar.ts";
 import { createDataTransferStub } from "../drag-data.ts";
 import { installDialogPolyfill, submitInputDialog } from "../modal-dialog.ts";
-import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.tsx";
+import { waitForFast } from "../wait-for.ts";
 
 function requiredElement(root: ParentNode, selector: string): HTMLElement {
   const element = root.querySelector<HTMLElement>(selector);
@@ -119,7 +121,7 @@ describe("AppSidebar group mutation collapsed state", () => {
 
   function confirmButton() {
     return waitForFast(() =>
-      requiredElement(document.body, "openclaw-modal-dialog .exec-approval-actions .btn.danger"),
+      requiredElement(document.body, "openclaw-modal-dialog openclaw-modal-actions .btn.danger"),
     );
   }
 
@@ -289,7 +291,7 @@ describe("AppSidebar group mutation collapsed state", () => {
       } else {
         const cancel = await waitForFast(() => {
           const buttons = document.body.querySelectorAll<HTMLButtonElement>(
-            "openclaw-modal-dialog .exec-approval-actions .btn",
+            "openclaw-modal-dialog openclaw-modal-actions .btn",
           );
           expect(buttons).toHaveLength(2);
           return buttons[1]!;
@@ -309,9 +311,11 @@ describe("AppSidebar group mutation collapsed state", () => {
         });
         await waitForFast(() =>
           expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
-            'Gateway connection replaced before "Alpha" was deleted. Try again.',
+            "The connection changed before “Alpha” was deleted.",
           ),
         );
+        expect(toast.querySelector(".app-toast__description")?.textContent).toBe("Try again.");
+        expect(toast.querySelector('.app-toast[role="alert"]')).not.toBeNull();
         toast.remove();
       }
     },
@@ -338,10 +342,20 @@ describe("AppSidebar group mutation collapsed state", () => {
       const gatewayHarness = createGatewayHarness(client);
       const harness = createSessionsHarness("main", ["agent:main:main"]);
       const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+      harness.sessions.state.groupSettings = [{ name: "Alpha", position: 0, cwd: "/repos/client" }];
+      const opened =
+        deferred<Parameters<typeof groupDefaultsDialog.showSessionGroupDefaultsDialog>[0]>();
+      vi.spyOn(groupDefaultsDialog, "showSessionGroupDefaultsDialog").mockImplementation(
+        async (options) => {
+          opened.resolve(options);
+        },
+      );
+      await editSessionGroupDefaults(sidebar.sessionOrganizer, "Alpha");
+      const options = await opened.promise;
       const pending =
         kind === "folders"
-          ? sidebar.listSessionGroupFolders("/repos/client")
-          : sidebar.inspectSessionGroupRepository("/repos/client");
+          ? options.listDirectory("/repos/client")
+          : options.inspectRepository("/repos/client");
       reconnect(gatewayHarness);
       result.resolve(kind === "folders" ? folders : repository);
       await expect(pending).rejects.toThrow(

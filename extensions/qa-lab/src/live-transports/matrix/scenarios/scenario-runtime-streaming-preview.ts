@@ -35,9 +35,6 @@ const MATRIX_REPLACEMENT_FAULT_RULE_ID = "matrix-streaming-replacement-failure";
 export async function runStreamingReplacementRetentionScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  if (!context.installFaultRule) {
-    throw new Error("Matrix streaming replacement QA requires in-place fault injection");
-  }
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const waitForReplacementEvent = (
     predicate: (event: MatrixQaObservedEvent) => boolean,

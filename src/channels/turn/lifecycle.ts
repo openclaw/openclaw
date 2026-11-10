@@ -8,6 +8,7 @@ import {
   settleReplyPendingFinalDelivery,
   suppressPendingFinalDelivery,
 } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
+import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { isReplyDispatchDeliveryPending } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
 import { withReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
@@ -388,8 +389,9 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const pendingAttempts: PendingChannelDeliveryAttempt[] = [];
   const suppressedAttempts: PendingChannelDeliveryAttempt[] = [];
   let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];
-  const replyOptions: NonNullable<AssembledChannelTurn["replyOptions"]> = {
+  const replyOptions: InternalGetReplyOptions = {
     ...replyPipeline.replyOptions,
+    assertChannelAuthority: params.assertAuthority,
     ...observeAgentRunStart(replyPipeline.replyOptions, (start) => {
       agentRun = [start.runId, start.executionIdentityToken];
     }),
@@ -548,7 +550,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
           const custody = await createDirectPendingFinalCustody(effectivePayload, params.storePath);
           releaseCustody = custody?.release;
           await custody?.onPlatformSendDispatch();
-          result = await operation.deliver(effectiveValue, toCoreManagedDeliveryInfo(info));
+          result = await operation.deliver(
+            effectiveValue,
+            toCoreManagedDeliveryInfo(info, effectivePayload),
+          );
         }
       }
     } catch (error: unknown) {

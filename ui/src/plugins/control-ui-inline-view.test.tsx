@@ -1,0 +1,138 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { PRESENTATION_CHANGED_EVENT } from "../lib/presentation.ts";
+import { createInitializationContext } from "../pages/chat/chat-application-context.test-support.ts";
+import { threadFixture } from "../pages/chat/components/chat-transcript-fixture.test-support.tsx";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+  threadProps,
+} from "../pages/chat/components/chat-transcript.test-support.ts";
+import { render } from "../pages/chat/test-helpers/chat-transcript-native.tsx";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { createViewRuntime, recordReplacement } from "./control-ui-view.test-support.ts";
+
+beforeEach(installTranscriptDomMocks);
+afterEach(resetTranscriptTestDom);
+
+it.each([true, false])("uses the latest queued visibility from presented=%s", async (presented) => {
+  const Observer = globalThis.IntersectionObserver;
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class extends Observer {
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        super(
+          (entries, observer) =>
+            callback(
+              entries.flatMap((entry) => [
+                {
+                  target: entry.target,
+                  boundingClientRect: entry.boundingClientRect,
+                  intersectionRect: entry.intersectionRect,
+                  rootBounds: entry.rootBounds,
+                  time: entry.time - 1,
+                  isIntersecting: false,
+                  intersectionRatio: 0,
+                },
+                entry,
+              ]),
+              observer,
+            ),
+          options,
+        );
+      }
+    },
+  );
+  const { view, contexts, dispose } = recordReplacement("workspace", "Incident detail");
+  const runtime = createViewRuntime(view);
+  const registration = runtime.context.plugins.selectedReplacement("workspace")!;
+  Object.assign(runtime.context.plugins, {
+    selectedReplacement: () => undefined,
+    isLoading: () => false,
+    inlineViewLabel: () => "Incident",
+    registrations: (kind: string) =>
+      kind === "inlineViews" ? [{ ...registration, key: "review/fixture@1" }] : [],
+  });
+  const applicationContext = Object.assign(createInitializationContext(), {
+    plugins: runtime.context.plugins,
+  });
+  const presentation = new EventTarget();
+  let visible = true;
+  const props = threadProps(
+    "retained-inline",
+    "agent:main:incident",
+    [
+      {
+        role: "toolResult",
+        timestamp: 1_000,
+        details: {
+          pluginView: {
+            type: "plugin_view",
+            toolCallId: "incident-call",
+            toolName: "show_incident",
+            pluginId: "review",
+            viewId: "fixture",
+            version: 1,
+            payload: { incidentId: "INC-42" },
+            summary: "Incident summary",
+          },
+        },
+      },
+    ],
+    {
+      applicationContext,
+      presented,
+      transcriptVisible: { owner: presentation, isPresented: () => visible },
+    },
+  );
+  const { transcript, container, rerender } = threadFixture(props);
+  try {
+    rerender();
+    transcript.start();
+    const initialRow = container.querySelector(".chat-virtual-row");
+    if (!presented) {
+      flush();
+      expect(contexts).toHaveLength(0);
+      props.presented = true;
+      rerender();
+    }
+    await waitForSolid(() => expect(contexts).toHaveLength(1));
+    const row = container.querySelector(".chat-virtual-row");
+    expect(row).toBe(initialRow);
+    const placeholder = container.querySelector(".chat-plugin-inline-view");
+    expect(row).not.toBeNull();
+    expect(placeholder?.textContent).toContain("Incident detail");
+    const original = contexts[0]!;
+
+    // Keep row props and the last near-viewport receipt unchanged. The canonical
+    // transcript presentation owner must retire work before another IO receipt.
+    visible = false;
+    presentation.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    flush();
+    await waitForSolid(() => expect(dispose).toHaveBeenCalledOnce());
+    expect(original.signal.aborted).toBe(true);
+    expect(placeholder?.querySelector("openclaw-plugin-view")).toBeNull();
+    await expect(original.host.request("fixture.hidden")).rejects.toThrow("view has ended");
+    expect(runtime.request).not.toHaveBeenCalled();
+
+    visible = true;
+    presentation.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    flush();
+    await waitForSolid(() => expect(contexts).toHaveLength(2));
+    expect(container.querySelector(".chat-virtual-row")).toBe(row);
+    expect(container.querySelector(".chat-plugin-inline-view")).toBe(placeholder);
+    expect(placeholder?.textContent).toContain("Incident detail");
+    expect(contexts[1]?.props).toEqual(original.props);
+    expect(contexts[1]?.signal.aborted).toBe(false);
+    await expect(original.host.request("fixture.retired")).rejects.toThrow("view has ended");
+    expect(runtime.request).not.toHaveBeenCalled();
+    await expect(contexts[1]!.host.request("fixture.successor")).resolves.toEqual({ ok: true });
+
+    render(null, container);
+    transcript.dispose();
+    await waitForSolid(() => expect(dispose).toHaveBeenCalledTimes(2));
+    expect(contexts[1]?.signal.aborted).toBe(true);
+  } finally {
+    render(null, container);
+    transcript.dispose();
+  }
+});

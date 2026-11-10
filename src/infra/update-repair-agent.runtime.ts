@@ -18,8 +18,10 @@ import {
   LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { SystemAgentConfiguredRoute } from "../system-agent/inference-route.js";
+import { settleWithCleanup } from "./error-graph-internal.js";
 import { GatewayScheduler } from "./gateway-scheduler.js";
 import { sanitizeHostExecEnv, withHostExecInheritedEnvOmitted } from "./host-env-security.js";
 import {
@@ -120,7 +122,7 @@ async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
     host.bindScheduler(scheduler);
   }
   const resources = createOpenClawDatabaseMaintenanceScope();
-  const [outcome] = await Promise.allSettled([
+  return settleWithCleanup(
     Promise.resolve().then(() => {
       host.assertOpen();
       scheduler.signal.throwIfAborted();
@@ -132,44 +134,39 @@ async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
         }),
       );
     }),
-  ]);
-  try {
-    const [sdkCleanup] = await Promise.allSettled([
-      existingHost ? Promise.resolve() : scheduler.stop().then(() => host.close()),
-    ]);
-    if (sdkCleanup.status === "rejected" && hasRetainedPluginRuntimeCloseError(sdkCleanup.reason)) {
-      throw sdkCleanup.reason;
-    }
-    try {
-      await resources.close();
-    } catch (error) {
-      if (sdkCleanup.status === "rejected") {
-        throw new AggregateError(
-          [sdkCleanup.reason, error],
-          "Repair SDK and database resource cleanup failed.",
-          { cause: error },
-        );
+    async () => {
+      try {
+        const [sdkCleanup] = await Promise.allSettled([
+          existingHost ? Promise.resolve() : scheduler.stop().then(() => host.close()),
+        ]);
+        if (
+          sdkCleanup.status === "rejected" &&
+          hasRetainedPluginRuntimeCloseError(sdkCleanup.reason)
+        ) {
+          throw sdkCleanup.reason;
+        }
+        try {
+          await resources.close();
+        } catch (error) {
+          if (sdkCleanup.status === "rejected") {
+            throw new AggregateError(
+              [sdkCleanup.reason, error],
+              "Repair SDK and database resource cleanup failed.",
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+        if (sdkCleanup.status === "rejected") {
+          throw sdkCleanup.reason;
+        }
+      } catch (error) {
+        recordAgentCleanupFailure();
+        throw error;
       }
-      throw error;
-    }
-    if (sdkCleanup.status === "rejected") {
-      throw sdkCleanup.reason;
-    }
-  } catch (error) {
-    recordAgentCleanupFailure();
-    if (outcome.status === "rejected") {
-      throw new AggregateError(
-        [outcome.reason, error],
-        "Repair turn and database resource cleanup failed.",
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-  if (outcome.status === "rejected") {
-    throw outcome.reason;
-  }
-  return outcome.value;
+    },
+    "Repair turn and database resource cleanup failed.",
+  );
 }
 
 export async function prepareUpdateRepairInference(signal: AbortSignal, timeoutMs: number) {
@@ -340,7 +337,7 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
     abort: (reason) => controller.abort(reason),
     isCurrent: params.isCurrent,
   });
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = monotonicDeadlineAfter(params.timeoutMs);
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;
@@ -406,6 +403,7 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
                   assertCurrent();
                   return runEmbeddedAgent({
                     ...options,
+                    ...(options.authProfileId ? { authProfileIdSource: "user" as const } : {}),
                     preparedRunAdmission,
                     runId,
                     sessionId: runId,
@@ -431,7 +429,7 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
                     cleanupBundleMcpOnRunEnd: true,
                     disableTrajectory: true,
                     trigger: "manual",
-                    timeoutMs: Math.max(1, deadline - Date.now()),
+                    timeoutMs: Math.max(1, remainingMonotonicMs(deadline)),
                     abortSignal: signal,
                     lane: sessionKey,
                   });

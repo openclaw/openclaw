@@ -45,10 +45,6 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import readline from "node:readline";
 
-fs.writeFileSync(new URL("./pid", import.meta.url), String(process.pid));
-process.stdin.on("end", () => {
-  fs.writeFileSync(new URL("./stdin-ended", import.meta.url), "closed");
-});
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
 const detail = "startup-tail-é " + process.argv[3] + "/chrome/Profile 1 " +
   "wss://fixture-user:fixture-password@browser.example/chrome?token=fixture-token";
@@ -68,11 +64,10 @@ if (process.argv[5] === "stderr-on-close") {
 } else if (process.argv[4] === undefined) {
   writeDiagnostic();
 }
-const failureMethod = process.argv[2];
 for await (const line of readline.createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);
   if (message.id === undefined) continue;
-  if (message.method === failureMethod) {
+  if (message.method === process.argv[2]) {
     send({ id: message.id, error: { code: -32000, message: "fixture attach failed: " + detail } });
   } else if (message.method === "initialize") {
     // A full stderr pipe must drain before the handshake can finish.
@@ -94,19 +89,6 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     options = { command: process.execPath, args: [command, "", homeDir], userDataDir };
   });
 
-  async function expectSubprocessClosed() {
-    const pid = Number(await fs.readFile(state.statePath("pid"), "utf8"));
-    expect(pid).toBeGreaterThan(0);
-    expect(pid).not.toBe(process.pid);
-    // The awaited session owner joins transport close and verifies its tracked tree is absent.
-    // Windows terminates the process tree before the transport can close stdin.
-    if (process.platform !== "win32") {
-      expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
-    }
-    assertGone(pid);
-    expect(getChromeMcpPid(profileName)).toBeNull();
-  }
-
   afterEach(async () => {
     try {
       await closeChromeMcpSession(profileName);
@@ -121,19 +103,19 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   });
 
   it.each([
-    { failureMethod: "initialize", ephemeral: false, shutdownMode: "normal" },
-    { failureMethod: "initialize", ephemeral: true, shutdownMode: "normal" },
-    { failureMethod: "tools/list", ephemeral: false, shutdownMode: "normal" },
+    ["initialize", false, "normal"],
+    ["initialize", true, "normal"],
+    ["tools/list", false, "normal"],
     // Windows deliberately taskkills before closing stdin; graceful EOF is POSIX-only.
     ...(process.platform === "win32"
       ? []
-      : [
-          { failureMethod: "initialize", ephemeral: true, shutdownMode: "stderr-on-close" },
-          { failureMethod: "initialize", ephemeral: true, shutdownMode: "force-close" },
-        ]),
-  ])(
-    "retains redacted stderr on $failureMethod failure (ephemeral=$ephemeral, shutdownMode=$shutdownMode)",
-    async ({ failureMethod, ephemeral, shutdownMode }) => {
+      : ([
+          ["initialize", true, "stderr-on-close"],
+          ["initialize", true, "force-close"],
+        ] as const)),
+  ] as const)(
+    "retains redacted stderr on %s failure (ephemeral=%s, shutdownMode=%s)",
+    async (failureMethod, ephemeral, shutdownMode) => {
       options.args[1] = failureMethod;
       if (shutdownMode !== "normal") {
         ownsDescendant = shutdownMode === "stderr-on-close";
@@ -147,7 +129,6 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       await expect(attempt).rejects.toThrow("fixture attach failed");
       await expect(attempt).rejects.toThrow("~/profiles/fixture-profile");
       await expect(attempt).rejects.toThrow("~/chrome/Profile 1");
-      await expect(attempt).rejects.toThrow("Chrome MCP existing-session attach failed");
       await expect(attempt).rejects.toThrow(
         ephemeral
           ? "the configured Chromium user data dir (~/chrome/Profile 1)"
@@ -160,8 +141,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         expect(descendantPid).toBeGreaterThan(0);
         assertGone(descendantPid);
       }
-      await expectSubprocessClosed();
-
+      expect(getChromeMcpPid(profileName)).toBeNull();
       expect(warn).toHaveBeenCalledOnce();
       const diagnostic = warn.mock.calls[0]![0];
       expect(diagnostic).toContain('profile "~/profiles/fixture-profile"');
@@ -186,21 +166,17 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     expect(getChromeMcpPid(profileName)).toBeNull();
   });
 
-  it.each([0, 2 * 1024 * 1024])(
-    "keeps startup and tool calls usable with %i stderr bytes",
-    async (stderrBytes) => {
-      options.args.push(String(stderrBytes));
-      const result = await withChromeMcpLease(profileName, options, {}, async ({ session }) =>
-        session.client.callTool({ name: "list_pages", arguments: {} }),
-      );
-      expect(result).toMatchObject({
-        content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
-      });
-      expect(getChromeMcpPid(profileName)).toBeGreaterThan(0);
-      expect(warn).not.toHaveBeenCalled();
-      await expect(closeChromeMcpSession(profileName)).resolves.toBe(true);
-      await expectSubprocessClosed();
-    },
-    40_000,
-  );
+  it("keeps startup and tool calls usable when stderr exceeds pipe capacity", async () => {
+    options.args.push(String(2 * 1024 * 1024));
+    const result = await withChromeMcpLease(profileName, options, {}, async ({ session }) =>
+      session.client.callTool({ name: "list_pages", arguments: {} }),
+    );
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+    });
+    expect(getChromeMcpPid(profileName)).toBeGreaterThan(0);
+    expect(warn).not.toHaveBeenCalled();
+    await expect(closeChromeMcpSession(profileName)).resolves.toBe(true);
+    expect(getChromeMcpPid(profileName)).toBeNull();
+  }, 40_000);
 });

@@ -47,12 +47,9 @@ function readInheritedActiveManagedProxyLoopbackMode(): ActiveManagedProxyLoopba
 /** Registers the process's single active managed proxy. */
 export function registerActiveManagedProxyUrl(
   proxyUrl: URL,
-  options: ActiveManagedProxyLoopbackMode | RegisterActiveManagedProxyOptions = "gateway-only",
+  { loopbackMode = "gateway-only", proxyTls }: RegisterActiveManagedProxyOptions = {},
 ): ActiveManagedProxyRegistration {
   const normalizedProxyUrl = new URL(proxyUrl.href);
-  const loopbackMode =
-    typeof options === "string" ? options : (options.loopbackMode ?? "gateway-only");
-  const proxyTls = typeof options === "string" ? undefined : options.proxyTls;
   if (activeProxyUrl !== undefined) {
     if (activeProxyUrl.href !== normalizedProxyUrl.href) {
       throw new Error(

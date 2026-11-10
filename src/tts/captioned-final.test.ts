@@ -11,6 +11,18 @@ describe("mergeDeferredFinalText", () => {
   it("keeps distinct streamed and final text", () => {
     expect(mergeDeferredFinalText("first", "second")).toBe("first\nsecond");
   });
+
+  it("keeps equivalent text once when only paragraph separators differ", () => {
+    const streamed = "First paragraph.\nSecond paragraph.\nFIN";
+    const final = "First paragraph.\n\nSecond paragraph.\n\nFIN";
+    expect(mergeDeferredFinalText(streamed, final)).toBe(final);
+  });
+
+  it("keeps code literals with distinct internal spaces", () => {
+    expect(mergeDeferredFinalText('print("a  b")', 'print("a b")')).toBe(
+      'print("a  b")\nprint("a b")',
+    );
+  });
 });
 
 describe("cleanDeferredFinalText", () => {

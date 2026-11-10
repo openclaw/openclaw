@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { findFilesByName } from "./scenario-runtime-find-files.js";
+import { findMatrixStateDatabases } from "./scenario-runtime-find-files.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 const MATRIX_PLUGIN_ID = "matrix";
@@ -84,11 +84,7 @@ function readMatrixSyncCacheFromRows(rows: Array<{ entryKey?: unknown; valueJson
 async function readMatrixSyncCacheCursorsFromSqlite(
   params: MatrixStateIdentity & { stateDir: string },
 ): Promise<MatrixSyncStoreCursor[]> {
-  const databasePaths = await findFilesByName({
-    filename: "openclaw.sqlite",
-    rootDir: params.stateDir,
-    maxDepth: 10,
-  });
+  const databasePaths = await findMatrixStateDatabases(params.stateDir);
   const cursors: MatrixSyncStoreCursor[] = [];
   for (const databasePath of databasePaths) {
     try {
@@ -290,11 +286,7 @@ async function hasPersistedMatrixIngressCompletion(params: {
   eventId: string;
   stateDir: string;
 }): Promise<string | null> {
-  const databasePaths = await findFilesByName({
-    filename: "openclaw.sqlite",
-    rootDir: params.stateDir,
-    maxDepth: 10,
-  });
+  const databasePaths = await findMatrixStateDatabases(params.stateDir);
   for (const databasePath of databasePaths) {
     try {
       const db = openNodeSqliteDatabase(databasePath, { readOnly: true });

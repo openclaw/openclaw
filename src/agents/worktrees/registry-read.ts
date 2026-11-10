@@ -5,7 +5,7 @@ import {
 import type { RegisteredStateReadCommand } from "../../state/openclaw-state-read-operation-registry.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import { registryAuthorityChanged } from "./errors.js";
+import { registryAuthorityChanged, WorktreeRecordNotFoundError } from "./errors.js";
 import type { WorktreeRegistryListOptions } from "./registry-read.kernel.js";
 import {
   captureWorktreeRegistryAuthority,
@@ -25,6 +25,7 @@ import type {
 } from "./types.js";
 
 type RowGuardKind = WorktreeRegistryPredicate["kind"] | "lifecycle" | "publication";
+type WorktreeRegistrySelection = Pick<ManagedWorktreeRecord, "id" | "ownerKind" | "ownerId">;
 
 export async function readWorktreeRegistryCommand<
   Command extends Extract<RegisteredStateReadCommand, { type: `worktrees.${string}` }>,
@@ -36,7 +37,7 @@ export async function readWorktreeRegistryCommand<
   const reply = await executeExistingOpenClawStateRead<Command>(
     { env: context.environment, path: context.admission.databasePath },
     command,
-    { context, current: true, signal },
+    { context, current: true, signal, preferIndependentWarmRead: true },
   );
   context.admission.assertCurrent();
   return reply;
@@ -103,7 +104,7 @@ function predicateRevisions(predicate: WorktreeRegistryPredicate): WorktreeRegis
   ];
 }
 
-/** Capture before a row read, then narrow the unchanged owner witness to its returned ID. */
+/** Known selections stay scoped while the read is in flight; discovery narrows after the read. */
 export function captureWorktreeRegistryReadGuard(
   context: OpenClawStateWorkerContext,
   kind:
@@ -117,9 +118,25 @@ export function captureWorktreeRegistryReadGuard(
     | "projection"
     | "source-owner"
     | "lifecycle",
-): (record: Pick<ManagedWorktreeRecord, "id" | "ownerKind" | "ownerId"> | undefined) => () => void {
+  selection?: WorktreeRegistrySelection,
+): (record: WorktreeRegistrySelection | undefined) => () => void {
   const fields = predicateFields(kind);
-  const assertRead = captureWorktreeRegistryAuthority(context, [{ id: "*", fields }]);
+  const changes = (record: WorktreeRegistrySelection): WorktreeRegistryChange[] => [
+    { id: record.id, fields },
+    ...((kind === "source-owner" || kind === "publication") && record.ownerId !== undefined
+      ? [
+          {
+            id: worktreeOwnerSelectionKey(record.ownerKind, record.ownerId),
+            fields: ["identity"] as const,
+          },
+          { id: WORKTREE_UNKNOWN_OWNER_SELECTION, fields: ["identity"] as const },
+        ]
+      : []),
+  ];
+  const assertRead = captureWorktreeRegistryAuthority(
+    context,
+    selection ? changes(selection) : [{ id: "*", fields }],
+  );
   const verify = (assertCurrent: () => void) => {
     try {
       assertCurrent();
@@ -131,18 +148,7 @@ export function captureWorktreeRegistryReadGuard(
     context.admission.assertCurrent();
     verify(assertRead);
     const assertRow = record
-      ? captureWorktreeRegistryAuthority(context, [
-          { id: record.id, fields },
-          ...((kind === "source-owner" || kind === "publication") && record.ownerId !== undefined
-            ? [
-                {
-                  id: worktreeOwnerSelectionKey(record.ownerKind, record.ownerId),
-                  fields: ["identity"] as const,
-                },
-                { id: WORKTREE_UNKNOWN_OWNER_SELECTION, fields: ["identity"] as const },
-              ]
-            : []),
-        ])
+      ? captureWorktreeRegistryAuthority(context, changes(record))
       : assertRead;
     return () => {
       context.admission.assertCurrent();
@@ -254,7 +260,7 @@ export function requireActiveWorktreeRecord(
   record: ManagedWorktreeRecord | undefined,
 ): ManagedWorktreeRecord {
   if (!record || record.removedAt !== undefined) {
-    throw new Error(`unknown active worktree: ${id}`);
+    throw new WorktreeRecordNotFoundError(`unknown active worktree: ${id}`);
   }
   return record;
 }

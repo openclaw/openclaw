@@ -75,8 +75,8 @@ suite.define(() => {
             await gateway.deferNext("wizard.next");
             await gateway.resolveDeferred("wizard.next");
             await page.getByText("DEMO-1234", { exact: true }).waitFor();
-            await page.getByRole("link", { name: "Open sign-in" }).waitFor();
-            await page.getByRole("button", { name: "Cancel", exact: true }).waitFor();
+            await page.getByRole("link", { name: "Reopen browser tab" }).waitFor();
+            await page.getByRole("button", { name: "Cancel sign-in", exact: true }).waitFor();
           } else {
             await page
               .getByText('No API key found for provider "openai".', { exact: true })
@@ -84,7 +84,7 @@ suite.define(() => {
           }
           if (state === "after") {
             await gateway.resolveDeferred("wizard.next");
-            await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+            await page.getByRole("heading", { name: "Model verified" }).waitFor();
           }
         },
       );

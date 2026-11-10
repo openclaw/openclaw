@@ -43,10 +43,7 @@ suite.define(() => {
           let appliedText: string | null = null;
           let storageFailed = false;
           let currentWins = false;
-          let observeRestore!: () => void;
-          const observed = new Promise<void>((resolve) => {
-            observeRestore = resolve;
-          });
+          const { promise: observed, resolve: observeRestore } = Promise.withResolvers<void>();
           const persistence = new composer.DurableChatComposerPersistence(
             () => {
               storageFailed = true;
@@ -199,7 +196,7 @@ suite.define(() => {
           await page.screenshot({ path: `${artifacts}/mobile.png`, animations: "disabled" });
         }
         expect(await notice.getByRole("alert").textContent()).toContain(
-          "We could not access your saved messages.",
+          "Couldn’t access your saved messages.",
         );
         expect(await notice.textContent()).not.toContain("older browser");
         expect(await notice.textContent()).not.toContain("Free browser storage");

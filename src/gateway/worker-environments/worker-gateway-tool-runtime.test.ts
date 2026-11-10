@@ -1,35 +1,45 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import {
   isWorkerGatewayToolFrameWithinBudget,
+  WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
   WorkerToolSurfaceSchema,
   type WorkerGatewayToolInvokeParams,
   type WorkerGatewayToolUpdateFrame,
   type WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { validateWorkerGatewayToolResponseFrame } from "../../../packages/gateway-protocol/src/worker-response-validators.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import {
+  buildBlockedToolResult,
+  wrapToolWithBeforeToolCallHook,
+} from "../../agents/agent-tools.before-tool-call.js";
+import {
+  createCatalogCodeModeHarness,
+  mcpTool,
+  resetCodeModeTestState,
+} from "../../agents/code-mode.test-support.js";
+import { projectMcpCallToolResult } from "../../agents/mcp-content.js";
+import { stringEnum } from "../../agents/schema/string-enum.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createWorkerGatewayToolProxies } from "../../worker/worker-gateway-tools.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 
-const identity: WorkerConnectionIdentity = {
-  environmentId: "environment",
-  credentialHash: "credential-hash",
-  bundleHash: "a".repeat(64),
+const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(null, {
   sessionId: "session",
   runId: "run",
-  turnClaim: null,
-  ownerEpoch: 1,
-  rpcSetVersion: 1,
   protocolFeatures: ["worker-gateway-tools-v1"],
   credentialExpiresAtMs: 1,
-};
+});
 const policy: WorkerToolSurface["policy"] = {
   workspaceOnly: true,
   readOnly: false,
@@ -47,12 +57,11 @@ function tool(
   execute: AnyAgentTool["execute"] = async () => success,
   overrides: Partial<AnyAgentTool> = {},
 ): AnyAgentTool {
-  const parameters = Type.Object({ value: Type.String() }, { additionalProperties: false });
   const result = {
     name,
     label: name,
     description: `Run ${name}`,
-    parameters,
+    parameters: Type.Object({ value: Type.String() }, { additionalProperties: false }),
     execute,
     ...overrides,
   };
@@ -64,13 +73,12 @@ function fixture(tools: AnyAgentTool[], prepare = async () => preparedTools(tool
   let current = true;
   const controller = new AbortController();
   const prepareTools = vi.fn(prepare);
-  const assertCurrent = vi.fn(() => {
-    if (!current) {
-      throw new Error("turn authority lost");
-    }
-  });
   const runtime = createWorkerGatewayToolRuntime({
-    assertCurrent,
+    assertCurrent: () => {
+      if (!current) {
+        throw new Error("turn authority lost");
+      }
+    },
     signal: controller.signal,
     prepare: prepareTools,
   });
@@ -130,6 +138,171 @@ function request(
   return { generation, toolId: entry.id, toolCallId: call, arguments: { value: "input" } };
 }
 
+it("enforces the deployment action policy when dispatching an issued worker handle", async () => {
+  const config: OpenClawConfig = {
+    tools: { gatewayPolicy: { allow: ["remote"], actions: { remote: ["list"] } } },
+  };
+  const execute = vi.fn().mockResolvedValue(success);
+  const source = tool("remote", execute);
+  source.parameters = Type.Object(
+    { action: stringEnum(["list", "patch"]), value: Type.String() },
+    { additionalProperties: false },
+  );
+  const { invoke, invocation } = await issued([wrapToolWithBeforeToolCallHook(source, { config })]);
+  await expect(
+    invoke({ ...invocation, toolCallId: "allowed", arguments: { action: "list", value: "input" } }),
+  ).resolves.toEqual(success);
+  await expect(
+    invoke({ ...invocation, toolCallId: "denied", arguments: { action: "patch", value: "input" } }),
+  ).resolves.toMatchObject({
+    details: { status: "error", error: expect.stringContaining("Gateway tool policy denies") },
+  });
+  expect(execute).toHaveBeenCalledTimes(1);
+});
+
+function gatewayMcpTool(audio: string) {
+  const raw = {
+    content: [
+      { type: "text", text: "created item 42" },
+      { type: "audio", data: audio, mimeType: "audio/wav" },
+    ],
+    structuredContent: { id: 42 },
+    isError: false,
+    _meta: { privateNote: "not guest data" },
+  };
+  const execute = vi.fn(async () => projectMcpCallToolResult(raw));
+  const source = mcpTool({ name: "docs__create", serverName: "docs", toolName: "create", execute });
+  bindAgentToolExecutionLocation(source, { kind: "gateway" });
+  return { runtime: fixture([source]).runtime, raw, execute };
+}
+
+const mcpIdentity = {
+  ...identity,
+  protocolFeatures: [
+    ...identity.protocolFeatures,
+    WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
+  ],
+};
+
+async function gatewayMcpProxy(
+  runtime: ReturnType<typeof createWorkerGatewayToolRuntime>,
+  inspectWire?: (wire: string) => void,
+) {
+  const surface = await runtime.getSurface(mcpIdentity);
+  const [proxy] = createWorkerGatewayToolProxies(surface, {
+    invokeGatewayTool: async (params) => {
+      const payload = await runtime.invoke(mcpIdentity, params, sink);
+      // Cross the serialization and validation boundary used by the worker WebSocket.
+      const wire = JSON.stringify({ type: "res", id: "r1", ok: true, payload });
+      inspectWire?.(wire);
+      const frame: unknown = JSON.parse(wire);
+      if (!validateWorkerGatewayToolResponseFrame(frame)) {
+        throw new Error("Invalid Gateway tool response");
+      }
+      return frame;
+    },
+    cancelGatewayTool: vi.fn(),
+  });
+  assert.isDefined(proxy);
+  return proxy;
+}
+
+it("delivers the Gateway's owned MCP result to the worker Code Mode namespace", async () => {
+  onTestFinished(resetCodeModeTestState);
+  const { runtime, raw, execute } = gatewayMcpTool("YXVkaW8=");
+  const proxy = await gatewayMcpProxy(runtime, (wire) =>
+    expect(wire).not.toContain(raw._meta.privateNote),
+  );
+  const workerExecute = vi.spyOn(proxy, "execute");
+  const result = await createCatalogCodeModeHarness([proxy]).complete(
+    "return await MCP.docs.create();",
+  );
+  expect(result.status).toBe("completed");
+  expect(result.value).toEqual({
+    content: raw.content,
+    structuredContent: raw.structuredContent,
+    isError: false,
+  });
+  expect(await workerExecute.mock.results[0]?.value).not.toHaveProperty("mcpGuestResult");
+  expect(execute).toHaveBeenCalledTimes(1);
+});
+
+it("returns the Gateway action denial to Code Mode before the MCP tool executes", async () => {
+  onTestFinished(resetCodeModeTestState);
+  const execute = vi.fn<AnyAgentTool["execute"]>();
+  const source = mcpTool({
+    name: "remote",
+    serverName: "docs",
+    toolName: "write",
+    execute,
+    parameters: Type.Object({ action: stringEnum(["list", "patch"]) }),
+  });
+  bindAgentToolExecutionLocation(source, { kind: "gateway" });
+  const config = { tools: { gatewayPolicy: { allow: ["remote"], actions: { remote: ["list"] } } } };
+  const { runtime } = fixture([wrapToolWithBeforeToolCallHook(source, { config })]);
+  const proxy = await gatewayMcpProxy(runtime);
+  const { value } = await createCatalogCodeModeHarness([proxy]).complete(
+    'return await MCP.docs.write({ action: "patch" });',
+  );
+  expect(value).toMatchObject({
+    isError: true,
+    content: [
+      { type: "text", text: expect.stringContaining("Gateway tool policy denies remote action") },
+    ],
+  });
+  expect(execute).not.toHaveBeenCalled();
+});
+
+it.each(["marked", "oversized", "unmarked"])(
+  "handles a %s MCP resource refusal",
+  async (scenario) => {
+    onTestFinished(resetCodeModeTestState);
+    const prefix = "Workspace policy blocked resource access";
+    const reason =
+      scenario === "oversized" ? prefix + "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) : prefix;
+    const source = mcpTool({
+      name: "docs__resources_list",
+      serverName: "docs",
+      toolName: "resources_list",
+      operation: "resources_list",
+      execute: async () => {
+        const blocked = buildBlockedToolResult({ reason });
+        return scenario === "unmarked" ? { ...blocked } : blocked;
+      },
+    });
+    bindAgentToolExecutionLocation(source, { kind: "gateway" });
+    const proxy = await gatewayMcpProxy(fixture([source]).runtime);
+    const { value } = await createCatalogCodeModeHarness([proxy]).complete(
+      "try { await MCP.docs.resources.list(); } catch (error) { return error.message; }",
+    );
+    expect(value).toContain(
+      scenario === "unmarked" ? "missing its owned guest projection" : prefix,
+    );
+  },
+);
+
+it.each(["legacy worker", "oversized guest result"])(
+  "keeps the ordinary MCP receipt for a %s",
+  async (scenario) => {
+    const worker = scenario === "legacy worker" ? identity : mcpIdentity;
+    const { runtime, execute } = gatewayMcpTool(
+      scenario === "legacy worker" ? "YXVkaW8=" : "A".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES),
+    );
+    const surface = await runtime.getSurface(worker);
+    const result = await runtime.invoke(
+      worker,
+      {
+        ...request(surface),
+        arguments: {},
+      },
+      sink,
+    );
+    expect(result.content).toContainEqual({ type: "text", text: "created item 42" });
+    expect(result).not.toHaveProperty("mcpGuestResult");
+    expect(execute).toHaveBeenCalledTimes(1);
+  },
+);
+
 it("prepares deferred discovery guidance with the model tool projection", async () => {
   const { runtime } = fixture([], async () => ({
     tools: [tool("web_fetch")],
@@ -167,12 +340,11 @@ it("issues one finite surface and invokes only an issued Gateway handle with val
   });
   const placement = tool("read", execute);
   bindAgentToolExecutionLocation(placement, { kind: "placement" });
-  const { runtime, prepareTools } = fixture([
+  const { runtime, surface, invocation, invoke, prepareTools } = await issued([
     remote,
     placement,
     createSessionsYieldTool({ sessionId: "session" }),
   ]);
-  const surface = await runtime.getSurface(identity);
   expect(Value.Check(WorkerToolSurfaceSchema, surface)).toBe(true);
   expect(await runtime.getSurface(identity)).toEqual(surface);
   expect(prepareTools).toHaveBeenCalledTimes(1);
@@ -186,21 +358,20 @@ it("issues one finite surface and invokes only an issued Gateway handle with val
     definition: { outputSchema: remote.outputSchema, catalogMode: "direct-only" },
   });
   expect(surface.tools[2]?.definition).toMatchObject({ name: "sessions_yield", async: false });
-  const invocation = request(surface);
   for (const invalid of [
     { ...invocation, generation: "stale" },
     { ...invocation, toolId: "remote" },
     request(surface, "placement", 1),
   ]) {
-    await expect(runtime.invoke(identity, invalid, sink)).rejects.toThrow("handle is unavailable");
+    await expect(invoke(invalid)).rejects.toThrow("handle is unavailable");
   }
   for (const argumentsValue of [{ value: 1 }, { value: "input", unexpected: true }]) {
-    await expect(
-      runtime.invoke(identity, { ...invocation, arguments: argumentsValue }, sink),
-    ).rejects.toThrow("arguments are invalid");
+    await expect(invoke({ ...invocation, arguments: argumentsValue })).rejects.toThrow(
+      "arguments are invalid",
+    );
   }
   expect(execute).not.toHaveBeenCalled();
-  await expect(runtime.invoke(identity, invocation, sink)).resolves.toEqual(success);
+  await expect(invoke()).resolves.toEqual(success);
   expect(execute).toHaveBeenCalledTimes(1);
 });
 
@@ -404,16 +575,16 @@ it.each(["call", "socket read", "socket replay"] as const)(
 
 it("preserves error text through worker tool execution", async () => {
   const message = "API_TOKEN = computeToken(); Authorization: Bearer sk-fixture1234567890";
-  const execute = vi.fn(async () => {
+  const execute = async () => {
     throw new Error(message);
-  });
+  };
   const { invoke } = await issued([tool("remote", execute)]);
   const result = await invoke();
   expect(result).toEqual({
     content: [{ type: "text", text: JSON.stringify({ status: "error", error: message }, null, 2) }],
     details: { status: "error", error: message },
+    isError: true,
   });
-  expect(execute).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])("bounds result and update control bytes with images=%s", async (image) => {

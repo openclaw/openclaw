@@ -19,7 +19,7 @@ import * as publications from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { progressCardStore } from "./progress-card-store.js";
-import { createProgressCardHandlers } from "./server-methods/progress-card.js";
+import { progressCardHandlers } from "./server-methods/progress-card.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
@@ -61,7 +61,7 @@ it.each([false, true])(
     await withCardSession(custom, async (cfg) => {
       const target = { agentId: "main", path: cfg.session?.store };
       const db = openOpenClawAgentDatabase(target).db;
-      const handlers = createProgressCardHandlers();
+      const handlers = progressCardHandlers;
       const broadcast = vi.fn();
       const invoke = async (params: unknown) => {
         const respond = vi.fn<RespondFn>();

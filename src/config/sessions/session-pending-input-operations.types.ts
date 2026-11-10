@@ -30,6 +30,7 @@ export type PendingInputSourceSnapshot = {
   current: boolean;
   pending?: SessionPendingInputRow;
   committed?: PersistedUserTurnMessage;
+  committedMessageSeq?: number;
 };
 
 export type PendingInputSnapshot = {
@@ -63,6 +64,7 @@ export type PendingInputMutation =
       kind: "finish";
       inputId: string;
       disposition: "cancelled" | "interrupted";
+      cancelledByUser?: true;
     });
 
 export type PendingInputMutationReceipt = PendingInputIdentity & {

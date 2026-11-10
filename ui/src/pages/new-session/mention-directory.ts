@@ -1,6 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import type { HumanMentionDirectory } from "../chat/components/chat-composer-mention-menu.tsx";
+import type { HumanMentionDirectory } from "../chat/components/chat-composer-mention-menu-state.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 
 /** Both creation surfaces query people for the selected destination, not the foreground chat. */

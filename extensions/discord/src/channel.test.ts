@@ -120,9 +120,7 @@ function installDiscordRuntime(
   openKeyedStore: (options: Record<string, unknown>) => unknown = vi.fn(commandDeployStore),
 ) {
   setDiscordRuntime({
-    logging: {
-      shouldLogVerbose: () => false,
-    },
+    logging: { shouldLogVerbose: () => false },
     state: { openKeyedStore },
   } as unknown as PluginRuntime);
 }
@@ -245,6 +243,54 @@ it.each(guildPolicyCases)(
   },
 );
 
+it.each([
+  [
+    " channel:1510164477642014999 ",
+    { conversationId: "channel:1510164477642014999", matchPriority: 1 },
+  ],
+  ["1510164477642014740", { conversationId: "1510164477642014740", matchPriority: 2 }],
+  ["channel:other", null],
+] as const)("discordPlugin matches configured binding %s", (configuredId, expected) => {
+  const provider = discordPlugin.bindings;
+  assert(provider);
+  const binding: NonNullable<OpenClawConfig["bindings"]>[number] = {
+    type: "acp",
+    agentId: "main",
+    match: { channel: "discord", peer: { kind: "channel", id: configuredId } },
+  };
+  const compiledBinding = provider.compileConfiguredBinding({
+    binding,
+    conversationId: configuredId,
+  });
+  assert(compiledBinding);
+  expect(compiledBinding.conversationId).toBe(configuredId.trim());
+  expect(
+    provider.matchInboundConversation({
+      binding,
+      compiledBinding,
+      conversationId: "1510164477642014740",
+      parentConversationId: "channel:1510164477642014999",
+    }),
+  ).toEqual(expected);
+  expect(provider.compileConfiguredBinding({ binding, conversationId: "  " })).toBeNull();
+});
+
+it.each([
+  [
+    " original message ",
+    [
+      { type: "text", text: " original message " },
+      { type: "divider" },
+      { type: "context", text: "From Origin" },
+    ],
+  ],
+  ["  ", [{ type: "context", text: "From Origin" }]],
+] as const)("discordPlugin presents cross-context text '%s'", (message, blocks) => {
+  const present = discordPlugin.messaging?.buildCrossContextPresentation;
+  assert(present);
+  expect(present({ cfg: {}, originLabel: "Origin", message })).toEqual({ tone: "neutral", blocks });
+});
+
 describe("discordPlugin outbound", () => {
   it("builds tool context with separate native and routable DM targets", () => {
     const buildToolContext = discordPlugin.threading?.buildToolContext;
@@ -253,7 +299,7 @@ describe("discordPlugin outbound", () => {
 
     expect(
       buildToolContext({
-        cfg: {} as OpenClawConfig,
+        cfg: {},
         context: {
           To: "user:123456789",
           NativeChannelId: "987654321",
@@ -276,7 +322,7 @@ describe("discordPlugin outbound", () => {
     assert(resolveAutoThreadId);
     const resolveFor = (to: string, currentThreadTs?: string) =>
       resolveAutoThreadId({
-        cfg: {} as OpenClawConfig,
+        cfg: {},
         to,
         toolContext: { currentChannelId: "channel:111", currentThreadTs },
       });
@@ -386,9 +432,7 @@ describe("discordPlugin outbound", () => {
         await releaseWorkers.promise;
         return new Response(null, { status: 204 });
       });
-      const rest = new RequestClient("synthetic-token", {
-        fetch,
-      });
+      const rest = new RequestClient("synthetic-token", { fetch });
       const post = rest.post.bind(rest);
       vi.spyOn(rest, "post").mockImplementation((...args) => {
         const pending = post(...args);

@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import http, { type IncomingHttpHeaders } from "node:http";
-import type { AddressInfo } from "node:net";
+import http from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { readImageProbeFromHeader } from "../media/image-ops.js";
 import {
@@ -14,6 +17,7 @@ import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import {
   createFixture,
   prepareManagedSessionStore,
+  requestManagedImageHttp,
   usePreparedManagedImageState,
 } from "./managed-image-attachments.test-support.js";
 import { resolveManagedImageThumbnail } from "./managed-image-thumbnail-cache.js";
@@ -50,6 +54,18 @@ const {
   resolveManagedOutgoingMediaArtifactDownload,
 } = await import("./managed-image-attachments.js");
 
+const etagFor = (body: Buffer) => `"${createHash("sha256").update(body).digest("base64url")}"`;
+const png = (width = 16, height = 8) =>
+  createSolidPngBuffer(width, height, { r: 24, g: 64, b: 128 });
+function expectThumbnail(result: { status: number; body: Buffer }, width: number, height: number) {
+  expect(result.status).toBe(200);
+  expect(readImageProbeFromHeader(result.body)).toMatchObject({ format: "webp", width, height });
+}
+function expectNotModified(result: { status: number; body: Buffer }) {
+  expect(result.status).toBe(304);
+  expect(result.body).toHaveLength(0);
+}
+
 describe("managed thumbnail conditional HTTP", () => {
   let stateDir: string;
   let origin: string;
@@ -84,106 +100,75 @@ describe("managed thumbnail conditional HTTP", () => {
         clients,
       }).catch((error: unknown) => res.destroy(error instanceof Error ? error : undefined));
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    origin = await listenLoopback(server);
   });
   afterEach(() => clearArtifactDownloads());
-  afterAll(async () => {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  });
+  afterAll(() => closeHttpServer(server));
 
-  function request(pathName: string, method = "GET", tag?: string) {
-    return new Promise<{ status: number; headers: IncomingHttpHeaders; body: Buffer }>(
-      (resolve, reject) => {
-        const req = http.request(
-          `${origin}${pathName}`,
-          { method, headers: tag === undefined ? {} : { "If-None-Match": tag }, agent: false },
-          (response) => {
-            const chunks: Buffer[] = [];
-            response.on("data", (chunk: Buffer) => chunks.push(chunk));
-            response.on("error", reject);
-            response.on("end", () =>
-              resolve({
-                status: response.statusCode ?? 0,
-                headers: response.headers,
-                body: Buffer.concat(chunks),
-              }),
-            );
-          },
-        );
-        req.on("error", reject);
-        req.end();
-      },
+  async function request(pathName: string, method = "GET", tag?: string) {
+    const result = await requestManagedImageHttp(
+      origin,
+      pathName,
+      method,
+      tag === undefined ? {} : { "If-None-Match": tag },
     );
+    return { ...result, status: result.statusCode };
   }
 
-  async function prepare(
-    client?: GatewayClient,
-    body = createSolidPngBuffer(16, 8, { r: 24, g: 64, b: 128 }),
-  ) {
+  async function prepare(client?: GatewayClient, body = png()) {
     const fixture = await createFixture(stateDir, { body });
     const full = `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`;
     mocks.transcript.mockResolvedValue([
       { role: "assistant", content: [{ type: "image", url: full }], __openclaw: { id: "msg-1" } },
     ]);
-    const source = client
-      ? await resolveManagedOutgoingMediaArtifactDownload({
-          sessionKey: fixture.sessionKey,
-          artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${fixture.attachmentId}`,
-          stateDir,
-        })
-      : undefined;
-    const download =
-      client && source
-        ? createManagedArtifactDownload({
-            client,
-            path: source.url,
-            assertCurrent() {},
-            release() {},
-          })
-        : undefined;
-    if (client && !download) {
-      throw new Error("Missing fixture artifact ticket");
-    }
+    let url = full;
     if (client) {
+      const source = await resolveManagedOutgoingMediaArtifactDownload({
+        sessionKey: fixture.sessionKey,
+        artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${fixture.attachmentId}`,
+        stateDir,
+      });
+      const download =
+        source &&
+        createManagedArtifactDownload({
+          client,
+          path: source.url,
+          assertCurrent() {},
+          release() {},
+        });
+      if (!download) {
+        throw new Error("Missing fixture artifact ticket");
+      }
+      url = download.url;
       clients.add(client);
     }
-    return { ...fixture, url: (download?.url ?? full).replace(/\/full(?=\?|$)/, "/thumbnail") };
+    return { ...fixture, url: url.replace(/\/full(?=\?|$)/, "/thumbnail") };
   }
 
   it.each([false, true])("revalidates final thumbnail bytes for ticket=%s", async (ticket) => {
     using connection = ticket ? createSessionFileDownloadClient() : null;
     const fixture = await prepare(connection?.client);
     const first = await request(fixture.url);
-    expect(first.status).toBe(200);
-    expect(first.headers["content-type"]).toBe("image/webp");
-    expect(readImageProbeFromHeader(first.body)).toMatchObject({
-      format: "webp",
-      width: 16,
-      height: 8,
+    expectThumbnail(first, 16, 8);
+    const etag = etagFor(first.body);
+    expect(first.headers).toMatchObject({
+      "content-type": "image/webp",
+      etag,
+      "cache-control": ticket ? "private, no-store" : "private, max-age=31536000, immutable",
+      "content-disposition": expect.stringContaining("cat-thumbnail.webp"),
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer",
     });
-    const etag = `"${createHash("sha256").update(first.body).digest("base64url")}"`;
-    expect(first.headers.etag).toBe(etag);
-    expect(first.headers["cache-control"]).toBe(
-      ticket ? "private, no-store" : "private, max-age=31536000, immutable",
-    );
-    expect(first.headers["content-disposition"]).toContain("cat-thumbnail.webp");
-    expect(first.headers["x-content-type-options"]).toBe("nosniff");
-    expect(first.headers["referrer-policy"]).toBe("no-referrer");
     const head = await request(fixture.url, "HEAD");
-    expect(head.headers.etag).toBe(etag);
-    expect(head.headers["content-length"]).toBe(String(first.body.byteLength));
+    expect(head.headers).toMatchObject({ etag, "content-length": String(first.body.byteLength) });
     expect(head.body).toHaveLength(0);
     for (const method of ["GET", "HEAD"]) {
       const unchanged = await request(fixture.url, method, `"other", W/${etag}`);
-      expect(unchanged.status).toBe(304);
-      expect(unchanged.headers.etag).toBe(etag);
-      expect(unchanged.headers["cache-control"]).toBe(first.headers["cache-control"]);
-      expect(unchanged.body).toHaveLength(0);
+      expectNotModified(unchanged);
+      expect(unchanged.headers).toMatchObject({
+        etag,
+        "cache-control": first.headers["cache-control"],
+      });
       expect(unchanged.headers["content-length"]).toBeUndefined();
     }
     const stale = await request(fixture.url, "GET", '"stale"');
@@ -192,35 +177,18 @@ describe("managed thumbnail conditional HTTP", () => {
   });
 
   it("revalidates the selected rendition without reusing another width's validator", async () => {
-    const fixture = await prepare(
-      undefined,
-      createSolidPngBuffer(1600, 800, { r: 24, g: 64, b: 128 }),
-    );
+    const fixture = await prepare(undefined, png(1600, 800));
     const normal = await request(fixture.url);
-    expect(normal.status).toBe(200);
-    expect(readImageProbeFromHeader(normal.body)).toMatchObject({
-      format: "webp",
-      width: 960,
-      height: 480,
-    });
+    expectThumbnail(normal, 960, 480);
     const smallUrl = `${fixture.url}?width=480`;
     const small = await request(smallUrl, "GET", normal.headers.etag);
-    expect(small.status).toBe(200);
-    expect(readImageProbeFromHeader(small.body)).toMatchObject({
-      format: "webp",
-      width: 480,
-      height: 240,
-    });
-    expect(small.headers.etag).toBe(
-      `"${createHash("sha256").update(small.body).digest("base64url")}"`,
-    );
+    expectThumbnail(small, 480, 240);
+    expect(small.headers.etag).toBe(etagFor(small.body));
     expect(small.headers.etag).not.toBe(normal.headers.etag);
     const unchanged = await request(smallUrl, "GET", small.headers.etag);
-    expect(unchanged.status).toBe(304);
-    expect(unchanged.body).toHaveLength(0);
+    expectNotModified(unchanged);
     const defaultWidth = await request(`${fixture.url}?width=960`, "HEAD", normal.headers.etag);
-    expect(defaultWidth.status).toBe(304);
-    expect(defaultWidth.body).toHaveLength(0);
+    expectNotModified(defaultWidth);
   });
 
   it("keeps validators byte-stable across eviction and changes them with the rendition", async () => {
@@ -242,9 +210,7 @@ describe("managed thumbnail conditional HTTP", () => {
     expect(changed.status).toBe(200);
     expect(changed.body).not.toEqual(first.body);
     expect(changed.headers.etag).not.toBe(first.headers.etag);
-    expect(changed.headers.etag).toBe(
-      `"${createHash("sha256").update(changed.body).digest("base64url")}"`,
-    );
+    expect(changed.headers.etag).toBe(etagFor(changed.body));
   });
 
   it("does not expose validators for invalid tickets or denied owners", async () => {

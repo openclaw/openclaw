@@ -3,6 +3,9 @@ import path from "node:path";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveStateClientCredentialEnvironment } from "../infra/client-credential-paths.js";
+import { readClientCredentialFileIdentity } from "../infra/client-credential-receipt.js";
+import { capturePortClientCredentialBinding } from "../infra/client-credential-restore.js";
 import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import {
@@ -14,8 +17,35 @@ import { readBackupEngine } from "../snapshot/database-backup.js";
 import {
   type Context,
   postgresConfig,
+  privatePaths,
   readDatabasePortConfigSnapshot,
+  refuse,
 } from "./doctor-database-port-context.js";
+
+export function assertLocalCredentialPortCompanion(
+  ctx: Context,
+  file: string,
+  sharedPath: string,
+  sharedFamily: string | undefined,
+) {
+  ctx.target = file;
+  privatePaths(ctx, [file]);
+  const sourceFile = readClientCredentialFileIdentity(sharedPath);
+  const env = resolveStateClientCredentialEnvironment({ path: sharedPath, env: ctx.env });
+  if (
+    sharedFamily !== "state" ||
+    readBackupEngine(file).engine !== "sqlite" ||
+    !sourceFile ||
+    !env ||
+    !capturePortClientCredentialBinding({ env, sourcePath: sharedPath, sourceFile })
+  ) {
+    refuse(
+      ctx,
+      "unmatched local credentials",
+      "an admitted shared target and its bound local store",
+    );
+  }
+}
 
 export async function withDatabasePortStateOwner<T>(
   ctx: Context,
@@ -76,7 +106,7 @@ export async function prepareSharedStatePortSource(
 ) {
   const shared = path.join(ctx.stateDir, "state", "openclaw.sqlite");
   if (dryRun || from !== "sqlite" || to !== "postgres" || fs.existsSync(shared)) {
-    return;
+    return undefined;
   }
   const { captureOpenClawStateWorkerContext } =
     await import("../state/openclaw-state-worker-context.js");
@@ -89,4 +119,5 @@ export async function prepareSharedStatePortSource(
     { assertCurrent: ctx.assertCurrent },
   );
   await closeDatabasePortState(ctx);
+  return shared;
 }

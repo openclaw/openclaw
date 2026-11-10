@@ -72,7 +72,63 @@ describe("Codex Code Mode transcript projection", () => {
         }),
       }),
     );
+    expect(result.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "apply_patch", isError: true }),
+    ]);
   });
+
+  it.each(["code-mode", "custom", "function"] as const)(
+    "retains a rejected %s patch in counts after a successful retry",
+    async (mode) => {
+      const projector = await createProjector();
+      const callId = "rejected-patch";
+      const input = "*** Begin Patch\n*** Add File: example.txt\ninvalid hunk\n*** End Patch";
+      const rejection = "apply_patch verification failed: invalid hunk at line 3";
+      await fixture.notify(projector, "rawResponseItem/completed", {
+        item: {
+          type: mode === "function" ? "function_call" : "custom_tool_call",
+          call_id: callId,
+          name: mode === "code-mode" ? "exec" : "apply_patch",
+          ...(mode === "function"
+            ? { arguments: JSON.stringify({ input }) }
+            : {
+                input:
+                  mode === "code-mode"
+                    ? `text(await tools.apply_patch(${JSON.stringify(input)}));`
+                    : input,
+              }),
+        },
+      });
+      const output =
+        mode === "code-mode"
+          ? execOutput(callId, `Script error: ${rejection}`)
+          : {
+              type: mode === "function" ? "function_call_output" : "custom_tool_call_output",
+              call_id: callId,
+              output: rejection,
+            };
+      await fixture.notify(projector, "rawResponseItem/completed", { item: output });
+      await fixture.notify(projector, "rawResponseItem/completed", { item: output });
+      await fixture.complete(projector, {
+        type: "fileChange",
+        id: "corrected-patch",
+        changes: [{ path: "example.txt", kind: { type: "add" } }],
+        status: "completed",
+      });
+
+      const result = fixture.result(projector);
+      expect(result.toolMetas).toEqual([
+        expect.objectContaining({ toolName: "apply_patch", isError: true }),
+        expect.objectContaining({ toolName: "apply_patch", isError: false }),
+      ]);
+      expect(
+        result.messagesSnapshot.filter(
+          (message) => message.role === "toolResult" && message.toolCallId === callId,
+        ),
+      ).toEqual([expect.objectContaining({ toolName: "apply_patch", isError: true })]);
+      expect(result.lastToolError).toBeUndefined();
+    },
+  );
 
   it.each([
     {

@@ -4,6 +4,7 @@ import { readAskUserQuestionId } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type { ChannelMessageDeferredDeliveryAdmissionResult } from "../../channels/message/types.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -14,7 +15,10 @@ import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { runWithQuestionChannelDeliveries } from "../question-channel-runtime.js";
 import { throwIfAborted } from "./abort.js";
-import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
+import {
+  resolveOutboundChannelMessageAdapter,
+  resolveOutboundChannelPluginAsync,
+} from "./channel-resolution.js";
 import { prepareDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import { resolveOutboundDurableFinalDeliverySupport } from "./deliver-channel.js";
 import type {
@@ -89,8 +93,13 @@ export async function runOutboundDelivery(
 export async function runOutboundDeliveryInternal(
   initialInput: InternalDeliverOutboundPayloadsParams,
   stateContext?: DeliveryQueueStateContext,
+  admittedReasoning?: true,
 ): Promise<OutboundDeliveryResult[]> {
-  return await runDelivery(initialInput, prepareOutboundPayloadBatch, stateContext);
+  return await runDelivery(
+    initialInput,
+    (delivery, options) => prepareOutboundPayloadBatch(delivery, { ...options, admittedReasoning }),
+    stateContext,
+  );
 }
 
 export async function runStructuredOutboundDeliveryInternal(
@@ -245,11 +254,12 @@ async function deliverWithProducerLease(
 }
 
 async function runOutboundDeliveryWithQueue(
-  params: InternalDeliverOutboundPayloadsParams,
+  initialParams: InternalDeliverOutboundPayloadsParams,
   prepare: typeof prepareOutboundPayloadBatch,
   stableIntentClaimHeld: boolean,
   stablePreparationOwner?: StableDeliveryPreparationOwner,
 ): Promise<OutboundDeliveryResult[]> {
+  let params = initialParams;
   const auditStartedAt = Date.now();
   const { channel, to, payloads } = params;
   const assertDeliveryCurrent = (): void => {
@@ -283,9 +293,8 @@ async function runOutboundDeliveryWithQueue(
         channel,
         to,
         accountId: params.accountId,
-        sessionKeyForInternalHooks: params.mirror?.sessionKey ?? params.session?.key,
-        isGroup: params.mirror?.isGroup,
-        groupId: params.mirror?.groupId,
+        sessionKeyForInternalHooks: params.session?.key,
+        isGroup: params.session?.conversationType === "group",
         runId: params.replyPayloadSendingHook?.runId,
         logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
       });
@@ -329,6 +338,23 @@ async function runOutboundDeliveryWithQueue(
     if (admission.status === "permanent_rejection") {
       emitPreQueueFailure();
       throw new Error(admission.reason);
+    }
+  }
+  if (!params.skipQueue && params.accountId === undefined) {
+    const plugin = await resolveOutboundChannelPluginAsync({
+      channel,
+      cfg: params.cfg,
+      agentId: params.session?.agentId,
+      allowBootstrap: true,
+      assertCurrent: assertDeliveryCurrent,
+    });
+    assertDeliveryCurrent();
+    if (plugin) {
+      // Queue custody retains this sender even if the configured default changes before retry.
+      params = {
+        ...params,
+        accountId: resolveChannelDefaultAccountId({ plugin, cfg: params.cfg }),
+      };
     }
   }
   const queuePolicy = params.queuePolicy ?? "best_effort";

@@ -44,6 +44,10 @@ Explicit `decision_evaluate` remains independent of Labs.
 
 Configure the provider plugin before selecting its model:
 
+- [Liquid AI](/providers/liquid-ai) connects directly to hosted d1 and d1 Ultra.
+  Install the plugin candidate from a compatible development checkout and
+  configure a Liquid AI API key. Text/JSON and inline image evidence use the
+  native Decision endpoint; connecting it does not change the chat model.
 - [ONNX](/plugins/onnx) runs local CPU classifiers in a persistent subprocess.
   Follow its development-checkout or compatible-package setup, then explicitly
   download the model or prepare a local export. Inference needs no hosted API credential.
@@ -51,6 +55,12 @@ Configure the provider plugin before selecting its model:
   and the OpenAI Platform Decisions API. Configure an OpenAI API key;
   ChatGPT/Codex subscription credentials do not authorize this endpoint.
   Evaluations send the supplied evidence to OpenAI and incur Platform usage charges.
+- [Rerank](/providers/rerank) is bundled and uses any reranker behind a
+  `/rerank` endpoint: vLLM, Hugging Face TEI, Infinity, llama.cpp, Cohere,
+  Jina, or Voyage. List the endpoint and model under `models.providers.rerank`;
+  self-hosted servers need no credential. A reranker answers `boolean`,
+  `choice`, and `sort` questions with relevance scores, which suits matching
+  judgments such as the Knowledge recall gate, not rubric scoring.
 - [SubQ](/plugins/subq) connects to hosted SubQ Snap for text/JSON decisions.
   Configure a protected SubQ credential. This V1 adapter supports text/JSON
   input only; it does not expose the vendor API's image input.
@@ -78,6 +88,9 @@ The current plugins declare these model references:
 | `typesafe/jev-1.13.0`                | Jev 1.13.0             | TypeSafe credential                                    |
 | `typesafe/jev-latest`                | Jev                    | TypeSafe credential; follows the vendor's latest model |
 | `typesafe/kev-latest`                | Kev (local server)     | Running System One server and explicit loopback URL    |
+
+Rerank models have no fixed list: any model you configure under
+`models.providers.rerank` is selectable as `rerank/<model id>`.
 
 The ONNX, SubQ, and TypeSafe AI plugins are currently unpublished candidates. Their setup pages explain
 source-checkout use and the packaged host floor. The table describes the plugins' declared models,
@@ -262,7 +275,10 @@ The host selects the provider and model from the owning agent's configuration.
 `purpose` identifies the consumer operation; `rubricVersion` identifies its rubric
 in result provenance. They do not replace question instructions. Change the
 rubric version when its meaning changes. Omit `agentId` only when intentionally
-using global-default selection.
+using global-default selection. Optional `assertCurrent` is the caller's own
+authority check (for example a revocable data grant); the host re-runs it at every
+provider dispatch and retry, and a throw rejects the evaluation before more data
+leaves.
 
 An `ok` outcome contains `outcome.result.answers`, keyed by the submitted question
 IDs, plus the provider-reported model, optional usage, and provider/rubric/runtime provenance.
@@ -336,7 +352,8 @@ Provider limits differ:
 | SubQ        | 2–255               | 2–10         | Up to 16 questions; text/JSON state; question IDs at most 100 characters           |
 | TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                   |
 
-The host bounds JSON evidence to one MiB, 20,000 nodes, depth 32, and 256 questions.
+The host bounds JSON evidence to one MiB, 20,000 nodes, and depth 32. V1 accepts
+up to 256 questions; V2 accepts up to 400, subject to the selected provider's limit.
 Version 2 image state has a separate four-MiB decoded image limit. It admits at most four
 requests per provider and caps each deadline at 30 seconds. Optional assistance
 leaves the fourth slot for requested evaluations; under contention, the tool
@@ -411,3 +428,32 @@ The [provider contract](/plugins/sdk-overview/capabilities#decision-models-contr
 owns the full SDK rules; the [manifest reference](/plugins/manifest/capabilities#decision-models-reference)
 owns discovery fields. For existing integrations, use the [ONNX](/plugins/onnx)
 or [TypeSafe AI](/plugins/typesafe) setup pages.
+
+## Contract ownership
+
+The Decision SDK separates supplied evidence and typed answers from execution.
+Plugins continue to import `openclaw/plugin-sdk/decisions`; V1 and V2 provider
+interfaces and evaluation calls keep their existing shapes.
+
+| Responsibility                                                     | Owner                                            |
+| ------------------------------------------------------------------ | ------------------------------------------------ |
+| Evidence, question and answer shapes                               | Shared Decision contracts                        |
+| Declared answer semantics and route support                        | Canonical schemas in the model catalog workspace |
+| Native request/response translation and model restrictions         | Provider plugin                                  |
+| Credentials, network policy, admission, deadlines and cancellation | OpenClaw host and prepared provider context      |
+| Runtime provenance and accepted usage accounting                   | OpenClaw host                                    |
+
+Result validation accepts answer semantics without requiring a catalog route:
+
+```ts
+import { validateDecisionResultV2 } from "openclaw/plugin-sdk/decisions";
+
+const valid = validateDecisionResultV2(batch, response, { confidence: "none" });
+```
+
+An existing full route capability object remains accepted. This validates the
+supplied result against the batch; it does not dispatch a provider, establish
+host authority or record accepted usage. Providers still return provider outcomes.
+The host attaches provenance during evaluation. Accepted usage is recorded only
+after the consuming operation passes its final checks. Keep those host
+responsibilities out of codecs and application result handling.

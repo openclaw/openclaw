@@ -82,9 +82,8 @@ function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TRes
   const duplicateNames = new Set<string>();
   for (const source of sourceTools) {
     const name = source.name;
-    if (sourcesByUniqueName.has(name)) {
+    if (sourcesByUniqueName.delete(name)) {
       duplicateNames.add(name);
-      sourcesByUniqueName.delete(name);
       continue;
     }
     if (!duplicateNames.has(name)) {

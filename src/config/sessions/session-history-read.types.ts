@@ -43,6 +43,11 @@ export type SessionModelContextLimits = {
   toolResultOverflow?: "omit";
 };
 
+/** Compaction keeps the complete semantic window, independent of replay byte limits. */
+export type SessionTranscriptContextSelection =
+  | { maxBytes: number; maxEvents: number }
+  | { compaction: true };
+
 export type SessionTranscriptModelContext = {
   events: TranscriptEvent[];
   version?: SessionTranscriptContextVersion;
@@ -73,7 +78,6 @@ export type PreparedSessionTranscriptHydration =
   | {
       kind: "full";
       snapshot: SessionTranscriptReadSnapshot;
-      compaction?: SessionCompactionPreparation;
     }
   | {
       kind: "bounded";
@@ -81,6 +85,8 @@ export type PreparedSessionTranscriptHydration =
       transcript?: SessionTranscriptAnchorFacts;
       /** Byte and sequence facts for the actor's bounded context residency. */
       residentRows?: Array<{ rawSeq: number; serializedBytes: number }>;
+      /** Compaction reads its session facts in the same snapshot as its bounded view. */
+      compaction?: SessionCompactionPreparation;
     };
 
 export type SessionPendingInputReceipt =
@@ -99,6 +105,25 @@ export type SessionTranscriptEventMatch =
       deliveryMirror?: boolean;
     }
   | { kind: "active-assistant"; runId: string };
+
+export type SessionTranscriptMatchCaller =
+  | "background-result"
+  | "internal-source-reply"
+  | "committed-source-reply"
+  | "subagent-final-answer"
+  | "canvas-widget"
+  | "public-session-widget";
+
+/** Fixed-size attribution emitted only with an existing slow transaction hold. */
+export type SessionTranscriptMatchDiagnostics = {
+  caller?: SessionTranscriptMatchCaller;
+  selector: SessionTranscriptEventMatch["kind"];
+  outcome: "incomplete" | "hit" | "miss";
+  rowsVisited: number;
+  projectedRows: number;
+  identityRows: number;
+  coldRows: number;
+};
 
 export type SessionContextMessagesWorkerInput = {
   kind: "context-messages";
