@@ -22,7 +22,13 @@ const scenarios = [
   }),
   makeDetection({
     recommendedInstalls: [
-      { id: "ollama", label: "Ollama", hint: "Run models locally", website: "https://ollama.com" },
+      {
+        id: "ollama",
+        label: "Ollama",
+        hint: "Run models locally",
+        website: "https://ollama.com",
+        icon: "https://example.test/ollama.svg",
+      },
     ],
   }),
 ];
