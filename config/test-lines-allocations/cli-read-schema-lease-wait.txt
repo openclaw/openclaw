@@ -1,0 +1,2 @@
+# Read-only state opens wait for a foreign CLI schema lease and still refuse offline maintenance.
+78

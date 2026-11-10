@@ -393,7 +393,7 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   pathname: string,
 ): T {
   const env = options.env ?? process.env;
-  openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+  openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshReadAllowedAtPath(pathname, env);
   if (synchronousReadSnapshots.currentAuthorityPath === pathname) {
     const maintained = withMaintenanceOpenClawStateDatabaseReadOnly(operation, pathname);
     if (maintained.reused) {

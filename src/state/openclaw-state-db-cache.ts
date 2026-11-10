@@ -1,6 +1,7 @@
 import {
   assertStateDatabaseAccessAllowed,
   assertStateDatabaseReadAllowed,
+  withStateDatabaseColdAdmission,
 } from "../infra/gateway-state-owner.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-cache-state.js";
 import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
@@ -28,11 +29,12 @@ import { createStateDatabaseCacheAdmission } from "./openclaw-state-db-cache.adm
 import { createStateDatabaseIdleRetirement } from "./openclaw-state-db-cache.idle.js";
 import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
 import { createStateDatabaseWalOwner } from "./openclaw-state-db-cache.wal.js";
-import type {
-  OpenClawStateDatabase,
-  OpenClawStateDatabaseCloseOptions,
-  OpenClawStateDatabaseLifecycleEvent,
-  StateDatabaseHandle,
+import {
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  type OpenClawStateDatabase,
+  type OpenClawStateDatabaseCloseOptions,
+  type OpenClawStateDatabaseLifecycleEvent,
+  type StateDatabaseHandle,
 } from "./openclaw-state-db-contract.js";
 import {
   closeStateDatabaseHandle,
@@ -476,6 +478,18 @@ function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   }
 }
 
+/** Fresh read-only opens wait out another CLI's transient schema lease, as cold writers do. */
+function assertOpenClawStateDatabaseFreshReadAllowedAtPath(
+  pathname: string,
+  env: NodeJS.ProcessEnv,
+): void {
+  // Only a foreign schema lease is retried; offline maintenance (Doctor) still refuses at once.
+  withStateDatabaseColdAdmission(
+    { databasePath: pathname, busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+    () => assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env),
+  );
+}
+
 /** SQLite owns checkpoint exclusion; retirement joins the actual native handle. */
 function retireOpenClawStateDatabaseHandle(
   database: StateDatabaseHandle,
@@ -662,6 +676,7 @@ export function assertPublishedOpenClawStateDatabaseLifecycle(): void {
 /** Process-wide owner for cached shared-state handles and terminal open failures. */
 export const openClawStateDatabaseCache = {
   assertOpenClawStateDatabaseFreshOpenAllowedAtPath,
+  assertOpenClawStateDatabaseFreshReadAllowedAtPath,
   assertOpenClawStateDatabaseOpenAllowed,
   clearOpenClawStateDatabaseOpenFailure,
   closeOpenClawStateDatabase,
