@@ -320,13 +320,6 @@ export function isQuestionNotFoundError(error: unknown): boolean {
   );
 }
 
-/** Gateway restarts drop pending questions; name that cause instead of a bare expiry. */
-export function questionExpiredLabelKey(prompt: QuestionPrompt) {
-  return prompt.resolvedBy === "gateway-restart"
-    ? "chat.questions.expiredGatewayRestart"
-    : "chat.questions.expired";
-}
-
 function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPrompt): void {
   // QUESTION_NOT_FOUND means the gateway tombstone aged out. It proves the prompt is
   // no longer actionable, but not whether it was answered, cancelled, or expired.

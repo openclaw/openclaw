@@ -152,7 +152,7 @@ export function connectControlUiFavicon(
         ? snapshot.client
         : null;
     if (questions.client !== questionClient) {
-      setQuestionPromptClient(questions, questionClient, snapshot.hello?.server?.bootId);
+      setQuestionPromptClient(questions, questionClient);
       if (questionClient) {
         refreshPendingQuestionsWithRetry(
           questions,

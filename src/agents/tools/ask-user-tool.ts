@@ -36,6 +36,7 @@ import {
   createGatewayQuestionCanceller,
   createQuestionPromptLifetime,
   readQuestionRejection,
+  waitThroughGatewayRestart,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
@@ -583,11 +584,14 @@ export function createAskUserTool(params: {
           cancelOnAbort();
           signal.throwIfAborted();
         }
-        const answerPromise = gatewayCall(
-          "question.waitAnswer",
-          { timeoutMs: timeoutMs + QUESTION_RPC_GRACE_MS },
-          { id: questionId, timeoutMs, includeResolutionId: true },
-          signal ? { signal } : undefined,
+        const answerPromise = waitThroughGatewayRestart(
+          gatewayCall(
+            "question.waitAnswer",
+            { timeoutMs: timeoutMs + QUESTION_RPC_GRACE_MS },
+            { id: questionId, timeoutMs, includeResolutionId: true },
+            signal ? { signal } : undefined,
+          ),
+          signal,
         ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
         state.claim.setAnswer(answerPromise);
         delivery.markReady();

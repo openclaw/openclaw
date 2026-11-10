@@ -76,7 +76,7 @@ export function createSessionAttention(
         disposeQuestionPromptState(questions);
       }
       client = next;
-      setQuestionPromptClient(questions, next, snapshot.hello?.server?.bootId);
+      setQuestionPromptClient(questions, next);
       if (next) {
         refreshPendingQuestionsWithRetry(
           questions,

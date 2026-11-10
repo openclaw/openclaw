@@ -5,7 +5,8 @@ import {
   QuestionWaitAnswerResultSchema,
   type QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { createAbortError } from "../../infra/abort-signal.js";
+import { isGatewayRestartUnavailableError } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type { callGatewayTool } from "./gateway.js";
 
 /** Grace added to Gateway RPC deadlines so the question's own timeout wins. */
@@ -46,6 +47,20 @@ export function readQuestionRejection(
 export function isTerminalQuestionResolveError(error: unknown): boolean {
   const reason = readQuestionRejection(error)?.reason;
   return reason !== undefined && TERMINAL_QUESTION_ERROR_REASONS.has(reason);
+}
+
+/**
+ * A restart drain refuses a still-waiting answer RPC before the restart aborts the run.
+ * The restart marker carries the question, so this wait ends only with that abort: the
+ * model never acts on a synthetic error, and the restored answer continues the session.
+ */
+export function waitThroughGatewayRestart<T>(wait: Promise<T>, signal?: AbortSignal): Promise<T> {
+  return wait.catch((error: unknown) => {
+    if (!signal || !isGatewayRestartUnavailableError(error)) {
+      throw error;
+    }
+    return racePromiseWithAbortSignal(new Promise<never>(() => {}), signal);
+  });
 }
 
 export async function awaitGatewayQuestionAnswer(params: {

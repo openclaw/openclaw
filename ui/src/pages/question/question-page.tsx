@@ -12,7 +12,6 @@ import {
   handleQuestionPromptEvent,
   isQuestionNotFoundError,
   listQuestionPrompts,
-  questionExpiredLabelKey,
   setQuestionPromptClient,
   submitQuestionPrompt,
   type QuestionPrompt,
@@ -241,7 +240,10 @@ function QuestionPageContent(
       {
         answered: "chat.questions.answered",
         cancelled: "chat.questions.skipped",
-        expired: questionExpiredLabelKey(value),
+        expired:
+          value.resolvedBy === "gateway-restart"
+            ? "chat.questions.expiredGatewayRestart"
+            : "chat.questions.expired",
         pending: "chat.questions.unavailable",
         unavailable: "chat.questions.unavailable",
       }[value.status],
