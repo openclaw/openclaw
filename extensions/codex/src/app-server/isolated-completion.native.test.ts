@@ -15,6 +15,7 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 const transport = vi.hoisted(() => ({
   upstream: "",
   models: [] as string[],
+  bodies: [] as Record<string, unknown>[],
   paths: [] as string[],
 }));
 vi.unmock("node:child_process");
@@ -50,6 +51,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (original) => {
       params.beforeRequest?.();
       const body = JSON.parse(await new Response(params.init.body).text());
       transport.models.push(body.model);
+      transport.bodies.push(body);
       transport.paths.push(params.url);
       return {
         response: new Response(
@@ -105,7 +107,7 @@ it.skipIf(process.platform === "win32")(
       JSON.stringify({
         models: [
           {
-            slug: "gpt-5.4",
+            slug: "gpt-6-luna",
             display_name: "Synthetic isolated inference model",
             supported_reasoning_levels: [],
             shell_type: "local",
@@ -138,6 +140,7 @@ it.skipIf(process.platform === "win32")(
     vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_BIN", undefined);
     setManagedCodexPluginRoot(path.resolve("extensions/codex"));
     transport.models = [];
+    transport.bodies = [];
     transport.paths = [];
     const upstream = createServer();
     const wss = new WebSocketServer({ server: upstream });
@@ -151,6 +154,7 @@ it.skipIf(process.platform === "win32")(
             : Buffer.from(data);
         const body = JSON.parse(bytes.toString("utf8"));
         transport.models.push(body.model);
+        transport.bodies.push(body);
         expect(body.tool_choice).toBe("none");
         for (const event of events()) {
           socket.send(JSON.stringify(event));
@@ -173,13 +177,16 @@ it.skipIf(process.platform === "win32")(
     });
     const params = isolatedParams({ version: 1, profiles: {} }, "unused", root, native.cwd);
     params.timeoutMs = 45_000;
+    params.modelId = "gpt-6-luna";
+    params.streamParams = { maxTokens: 240, temperature: 0.2 };
     params.authorization = {
       owner: "host",
       model: {
         provider: "openai",
-        id: "gpt-5.4",
+        id: "gpt-6-luna",
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
+        compat: { supportsTemperature: false },
       } as Model,
       auth: {
         mode: "api-key",
@@ -199,14 +206,16 @@ it.skipIf(process.platform === "win32")(
     });
     expect(result.assistant).toMatchObject({
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-6-luna",
       api: "openai-responses",
       content: [{ type: "text", text: "NATIVE_BOUNDARY_OK" }],
     });
     await expect(resolveManagedCodexClientVersion("package-first")).resolves.toBe(
       CODEX_APP_SERVER_VERSION,
     );
-    expect(transport.models).toEqual(["gpt-5.4"]);
+    expect(transport.models).toEqual(["gpt-6-luna"]);
+    expect(transport.bodies).toEqual([expect.objectContaining({ max_output_tokens: 240 })]);
+    expect(transport.bodies[0]).not.toHaveProperty("temperature");
     // Native startup may prepare multiple sockets; models records actual inference calls.
     expect(transport.paths.length).toBeGreaterThan(0);
     for (const target of transport.paths) {

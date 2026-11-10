@@ -124,6 +124,12 @@ agent capabilities.
 Host-authorized calls must use the supplied model and credential without substitution.
 Harnesses using the shared host-prepared completion helper
 preserve the exact route, deadline, sampling options, and empty tool surface.
+`streamParamsMode: "preferred"` marks internal defaults that a harness may omit
+when the selected route cannot support them, without changing credentials or
+endpoints. Utility completions use this mode unless the caller supplies an
+explicit `streamParams.maxTokens` limit. Calls without this mode keep required
+limits; model-declared unsupported temperature is omitted by Codex API-key calls,
+matching the normal OpenAI transport.
 Harness-authorized calls may resolve only the supplied prepared
 route and scoped profiles, or the harness's native account when the plan leaves
 auth to the harness. The harness must not switch routes, reuse a native thread,

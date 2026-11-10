@@ -81,9 +81,15 @@ async function post(url: string, body: JsonObject, key: string) {
   });
 }
 
-it.each(["api-key", "siwc"] as const)(
-  "preserves %s identity and the selected Responses endpoint through native bounded dispatch",
-  async (mode) => {
+it.each([
+  { mode: "api-key", model: "gpt-5.4", supportsTemperature: true, preferred: false },
+  { mode: "api-key", model: "gpt-6-luna", supportsTemperature: false, preferred: false },
+  { mode: "api-key", model: "gpt-6-luna", supportsTemperature: true, preferred: true },
+  { mode: "siwc", model: "gpt-5.4", supportsTemperature: true, preferred: false },
+  { mode: "siwc", model: "gpt-6-luna", supportsTemperature: false, preferred: true },
+] as const)(
+  "preserves $mode/$model identity with supported sampling (preferred=$preferred)",
+  async ({ mode, model, supportsTemperature, preferred }) => {
     const endpoint =
       mode === "api-key" ? "https://selected-api.example/v1" : "https://api.openai.com/v1";
     const calls: Array<{ method: string; params?: JsonObject }> = [];
@@ -130,7 +136,7 @@ it.each(["api-key", "siwc"] as const)(
           return respond({ account: { type: "apiKey" }, requiresOpenaiAuth: true });
         }
         if (rpc.method === "model/list") {
-          return respond({ data: [codexModel()], nextCursor: null });
+          return respond({ data: [codexModel(model)], nextCursor: null });
         }
         if (rpc.method === "configRequirements/read") {
           return respond({ requirements: null });
@@ -150,7 +156,7 @@ it.each(["api-key", "siwc"] as const)(
           if (typeof modelProvider !== "string") {
             throw new Error("Missing model provider");
           }
-          return respond(threadStartResult("gpt-5.4", modelProvider));
+          return respond(threadStartResult(model, modelProvider));
         }
         if (rpc.method === "turn/start") {
           respond(turnStartResult("turn-native"));
@@ -161,7 +167,7 @@ it.each(["api-key", "siwc"] as const)(
             throw new Error("Missing prepared endpoint");
           }
           const body = {
-            model: "gpt-5.4",
+            model,
             input: [{ role: "user", content: "A bounded question" }],
             stream: true,
             store: false,
@@ -198,6 +204,11 @@ it.each(["api-key", "siwc"] as const)(
       },
     });
     const params = isolatedParams(siwcStore(), profileId);
+    params.modelId = model;
+    if (preferred) {
+      params.streamParams = { maxTokens: 300, temperature: 0.2 };
+      params.streamParamsMode = "preferred";
+    }
     if (params.authorization.owner !== "harness") {
       throw new Error("fixture");
     }
@@ -212,9 +223,10 @@ it.each(["api-key", "siwc"] as const)(
         owner: "host",
         model: {
           provider: "openai",
-          id: "gpt-5.4",
+          id: model,
           api: "openai-responses",
           baseUrl: endpoint,
+          compat: { supportsTemperature },
         } as Extract<IsolatedParams["authorization"], { owner: "host" }>["model"],
         auth: { mode: "api-key", apiKey: "synthetic-selected-key", profileId, source: "profile" },
       };
@@ -243,7 +255,7 @@ it.each(["api-key", "siwc"] as const)(
       expect(result.assistant).toMatchObject({
         api: "openai-responses",
         provider: "openai",
-        model: "gpt-5.4",
+        model,
         content: [{ type: "text", text: "Bounded native answer" }],
       });
       expect(transport.fetch).toHaveBeenCalledOnce();
@@ -254,12 +266,20 @@ it.each(["api-key", "siwc"] as const)(
       );
       const body = transport.bodies[0];
       expect(body).toMatchObject({
-        model: "gpt-5.4",
+        model,
         stream: true,
         store: false,
         tool_choice: "none",
-        ...(mode === "api-key" ? { max_output_tokens: 37, temperature: 0 } : {}),
+        ...(mode === "api-key" ? { max_output_tokens: 37 } : {}),
       });
+      if (mode === "api-key" && supportsTemperature) {
+        expect(body).toHaveProperty("temperature", 0);
+      } else {
+        expect(body).not.toHaveProperty("temperature");
+      }
+      if (mode === "siwc") {
+        expect(body).not.toHaveProperty("max_output_tokens");
+      }
       expect(body).not.toHaveProperty("previous_response_id");
       expect(calls.filter((call) => call.method === "turn/start")).toHaveLength(1);
       expect(refresh).toHaveBeenCalledTimes(mode === "siwc" ? 1 : 0);

@@ -8,10 +8,34 @@ import {
   resetIsolatedCompletionTestState,
   runIsolatedCompletion,
 } from "./isolated-completion.test-support.js";
+import { runUtilityCompletion } from "./utility-completion.js";
 
 beforeEach(resetIsolatedCompletionTestState);
 
 describe("isolated completion token budgets", () => {
+  it.each([undefined, 37])(
+    "makes utility defaults advisory without relaxing an explicit cap of %s",
+    async (maxTokens) => {
+      const dispatch = vi.fn(async () => ({
+        assistant: isolatedAssistant([{ type: "text", text: "recap" }]),
+      }));
+      registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
+      const result = await runUtilityCompletion({
+        ...isolatedRequest(),
+        answerTokenBudget: 240,
+        thinkLevel: "off",
+        streamParams: { maxTokens, temperature: 0.2 },
+      });
+      expect(result.text).toBe("recap");
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          streamParamsMode: maxTokens === undefined ? "preferred" : undefined,
+          streamParams: { maxTokens: maxTokens ?? 240, temperature: 0.2 },
+        }),
+      );
+    },
+  );
+
   it.each(["host-v1", "host-v2", "harness-v2", "cli"] as const)(
     "reserves requested reasoning while preserving explicit limits through %s",
     async (route) => {

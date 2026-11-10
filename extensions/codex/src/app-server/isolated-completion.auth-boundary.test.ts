@@ -28,8 +28,12 @@ const storedProfile: AuthProfileStore = {
   },
 };
 
-const createParams = (agentDir: string) =>
-  isolatedParams(storedProfile, "openai:stored-b", agentDir, agentDir);
+const createParams = (agentDir: string) => ({
+  ...isolatedParams(storedProfile, "openai:stored-b", agentDir, agentDir),
+  modelId: "gpt-6-luna",
+  streamParams: { maxTokens: 240, temperature: 0.2 },
+  streamParamsMode: "preferred" as const,
+});
 
 function createNativeBoundary(accountType = "chatgpt") {
   const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
@@ -75,7 +79,7 @@ function createNativeBoundary(accountType = "chatgpt") {
       const replies: Record<string, unknown> = {
         initialize: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
         "account/read": { account: { type: accountType, id: account }, requiresOpenaiAuth: true },
-        "model/list": { data: [codexModel()], nextCursor: null },
+        "model/list": { data: [codexModel("gpt-6-luna")], nextCursor: null },
         get "config/read"() {
           const name = {
             type: "user",
@@ -92,7 +96,7 @@ function createNativeBoundary(accountType = "chatgpt") {
         },
         "hooks/list": { data: [{ cwd, hooks: [], warnings: [], errors: [] }] },
         "configRequirements/read": { requirements: null },
-        "thread/start": threadStartResult("gpt-5.4"),
+        "thread/start": threadStartResult("gpt-6-luna"),
         "mcpServerStatus/list": { data: [], nextCursor: null },
       };
       if (Object.hasOwn(replies, request.method)) {

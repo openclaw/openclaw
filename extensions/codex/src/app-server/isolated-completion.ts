@@ -1,4 +1,5 @@
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { supportsOpenAITemperature } from "openclaw/plugin-sdk/llm";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import type { CodexAppServerPreparedAuth } from "./auth-types.js";
 import { resolveCodexBoundedTurnIsolation } from "./bounded-turn-isolation.js";
@@ -30,6 +31,7 @@ export async function runCodexIsolatedCompletion(
   let baseUrl: string | undefined;
   let authRequirement: "api-key" | "subscription" | undefined;
   let modelId = params.modelId;
+  let streamParams = params.streamParams;
   if (authorization.owner === "host") {
     const { model, auth } = authorization;
     // The host resolved this exact endpoint and credential. Never reinterpret
@@ -47,6 +49,9 @@ export async function runCodexIsolatedCompletion(
       throw new Error("Codex native isolated completion requires its prepared Responses endpoint.");
     }
     modelId = model.id;
+    if (streamParams?.temperature !== undefined && !supportsOpenAITemperature(model)) {
+      streamParams = { ...streamParams, temperature: undefined };
+    }
     authRequirement = "api-key";
     preparedAuth = { kind: "api-key", apiKey: auth.apiKey };
   } else {
@@ -70,8 +75,16 @@ export async function runCodexIsolatedCompletion(
   }
   params.assertCurrent?.();
   const outputSchema = isJsonObject(params.outputSchema) ? params.outputSchema : undefined;
+  // Native subscription inference owns sampling. Utility defaults are advisory;
+  // never change its credential/endpoint just to apply API-only parameters.
+  if (
+    params.streamParamsMode === "preferred" &&
+    (authRequirement === "subscription" || isCodexResponsesOAuth(preparedAuth))
+  ) {
+    streamParams = undefined;
+  }
   const hasStreamParams =
-    params.streamParams?.maxTokens !== undefined || params.streamParams?.temperature !== undefined;
+    streamParams?.maxTokens !== undefined || streamParams?.temperature !== undefined;
   if (hasStreamParams && isCodexResponsesOAuth(preparedAuth)) {
     throw new Error(
       "ChatGPT token sharing does not support explicit token or temperature limits; select an API-key model.",
@@ -103,7 +116,7 @@ export async function runCodexIsolatedCompletion(
     requireInferenceRoute: authRequirement === "api-key" || hasStreamParams,
     timeoutMs: params.timeoutMs,
     thinkLevel: params.thinkLevel,
-    streamParams: params.streamParams,
+    streamParams,
     signal: params.abortSignal,
     assertCurrent: params.assertCurrent,
     agentDir: params.agentDir,

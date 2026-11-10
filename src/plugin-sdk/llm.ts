@@ -4,6 +4,7 @@ export { resolveOpenAIRequestReasoning } from "../../packages/ai/src/providers/o
 export {
   resolveOpenAIModelReasoningEfforts,
   resolveOpenAIReasoningEffortMapping,
+  supportsOpenAITemperature,
 } from "../../packages/ai/src/providers/openai-reasoning-effort.js";
 export { resolveOpenAIReasoningEffortMap } from "../../packages/ai/src/transports/openai-reasoning-compat.js";
 export type {

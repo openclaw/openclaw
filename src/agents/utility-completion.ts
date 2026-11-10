@@ -81,7 +81,14 @@ export async function runUtilityCompletion(
   const complete = run ?? (await import("./isolated-completion.js")).runIsolatedCompletion;
   const attempt = (candidate: Parameters<typeof runIsolatedCompletion>[0]) => {
     onAttempt?.(candidate);
-    return complete(candidate);
+    // Utility answer budgets and sampling defaults must not disable a subscription
+    // route. An explicit token cap retains the isolated caller's strict contract.
+    return complete({
+      ...candidate,
+      streamParamsMode:
+        candidate.streamParamsMode ??
+        (candidate.streamParams?.maxTokens === undefined ? "preferred" : undefined),
+    });
   };
   const utility = params.useUtilityModel
     ? readUtilityModelSetting(params.config ?? {}, params.agentId)

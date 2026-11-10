@@ -392,6 +392,9 @@ logical Off, and scalar-effort disablement through the shared transport owner.
 Translate its `effort` and `thinkingEnabled` results into the provider's wire
 dialect instead of defining another effort ladder. Read the level from each
 stream call's options before falling back to the wrapper context.
+The same subpath exports `supportsOpenAITemperature(model)`. Use it before
+serializing temperature so catalog compatibility overrides and the shared
+OpenAI transport policy apply equally to native and direct inference.
 
 Bundled and trusted official plugins can also export
 `resolveToolSearchMode(ctx)` from their lightweight `provider-policy-api`
