@@ -522,20 +522,16 @@ describe("Tool Search input schemas", () => {
   });
 
   it.each(["mcp"] as const)(
-    "does not traverse an untrusted %s schema during dispatch",
+    "does not validate an untrusted %s schema during dispatch",
     async (source) => {
       const target = fakeTool("external_instruction");
-      const hostileSchema = new Proxy(
-        {},
-        {
-          get: () => {
-            throw new Error("untrusted tool schema must remain deferred");
-          },
-          ownKeys: () => {
-            throw new Error("untrusted tool schema must remain deferred");
-          },
-        },
-      );
+      // The owning server validates MCP input and output; OpenClaw must not reject either.
+      const hostileSchema = {
+        type: "object",
+        required: ["never"],
+        properties: { never: { type: "string" } },
+        additionalProperties: false,
+      };
       const entry: ToolSearchCatalogEntry = {
         id: `${source}:external:external_instruction`,
         source,

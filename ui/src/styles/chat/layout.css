@@ -42,7 +42,7 @@ openclaw-pending-session-create {
 
 /* The long discard label would squeeze the message into a sliver on phones. */
 @media (max-width: 560px) {
-  .chat-error .app-toast__content > .chat-error__discard {
+  .chat-error .app-toast__content > .chat-error__actions:has(> .chat-error__discard) {
     grid-row: auto;
     grid-column: 1 / -1;
     justify-self: start;

@@ -58,9 +58,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Causal lookup: measured 1,298,464 B (+386 B on #196181), plus 64 B headroom.
-  // Its qualification-base turn gains of 12.6–20.2% are coordinator-accepted.
-  chatBootJsGzipBytes: 1_298_528,
+  // Receipt narrowing: 1,298,156 → 1,298,697 B (+541 B), coordinator-accepted.
+  // Use the measured head with no added headroom.
+  chatBootJsGzipBytes: 1_298_697,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
   newBootJsGzipBytes: 803_364,
   startupCssRequests: 1,
