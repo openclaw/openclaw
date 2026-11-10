@@ -1,4 +1,4 @@
-190
+156
 # One-shot sandbox browser bridge ownership and agent exec cleanup sequencing regressions.
 # Covers concurrent bridge ownership, replacement races, config restoration, and retained state after teardown failure.
 # Exact net test-line growth for PR #196589; no shared test budget scalar change.
