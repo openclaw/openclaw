@@ -465,8 +465,13 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       await current.writeConfig(config);
       delete instance.env.VITEST;
       delete instance.env.NODE_ENV;
-      // Canonical startup owns migration completion; only delivery and recovery need CLI processes.
-      const snapshot = await bootstrap();
+      // Preflight owns migration completion; full runtime bootstrap belongs to the real Gateways.
+      const preflight = await runStartupConfigPreflight({ gateway: true, observe: false });
+      try {
+        expect(preflight.snapshot.valid).toBe(true);
+      } finally {
+        await preflight.pluginCache?.[Symbol.asyncDispose]();
+      }
       await closeOpenClawAgentDatabasesAsync(current.stateDir);
       await closeStateDatabaseForTest();
       const bootstrapAnchor = await readAnchor(current);
@@ -479,7 +484,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
           [`webhookListeners:${current.configPath}`],
         ),
       ).toEqual([{ value_json: "true" }]);
-      await installGatewayDatabaseEngine(snapshot);
+      await installGatewayDatabaseEngine(preflight.snapshot, preflight.databaseEngineSelection);
       const sessionKey = "agent:main:final-receipt-crash";
       const target = "provenance-final-receipt-crash";
       const scope = {
