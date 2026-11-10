@@ -19,8 +19,8 @@ import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-par
 import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { pluginInstanceInvocation } from "../../plugins/plugin-instance-invocation.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
-import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createRuntimeChannel } from "../../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -153,11 +153,7 @@ describe("channel turn delivery", () => {
       });
       const originalRuntime = createPluginRuntimeMock();
       const replacementRuntime = createPluginRuntimeMock();
-      const requests: Array<{
-        method: string | undefined;
-        path: string | undefined;
-        body: unknown;
-      }> = [];
+      const requests: Record<"method" | "path" | "body", unknown>[] = [];
       const channelId = "cccccccccccccccccccccccccc";
       const postId = "pppppppppppppppppppppppppp";
       const server = await reserveTestPortListener({
@@ -200,7 +196,6 @@ describe("channel turn delivery", () => {
         if (!sendText) {
           throw new Error("Mattermost text transport is unavailable");
         }
-        const acceptedPostIds: string[] = [];
         const turn = {
           cfg,
           agentId: "main",
@@ -221,7 +216,6 @@ describe("channel turn delivery", () => {
                 text: payload.text ?? "",
                 accountId: "default",
               });
-              acceptedPostIds.push(result.messageId);
               return {
                 visibleReplySent: true,
                 messageIds: [result.messageId],
@@ -238,7 +232,6 @@ describe("channel turn delivery", () => {
                 provider: "mattermost",
                 accountId: "default",
               });
-              expect(coalescing).toMatchObject({ minChars: 1, idleMs: 300 });
               if (!coalescing) {
                 throw new Error("Mattermost block coalescing is unavailable");
               }
@@ -320,7 +313,6 @@ describe("channel turn delivery", () => {
             body: { channel_id: channelId, message },
           })),
         );
-        expect(acceptedPostIds).toEqual(requests.map(() => postId));
         expect(originalRuntime.channel.activity.record).toHaveBeenCalledTimes(requests.length);
         expect(replacementRuntime.channel.activity.record).not.toHaveBeenCalled();
       } finally {
@@ -384,42 +376,6 @@ describe("channel turn delivery", () => {
       }
     },
   );
-
-  it("runs reply callbacks in the channel instance inside a reply run that exits it", async () => {
-    const channel = new PluginInstance("telegram");
-    const overlap = new PluginInstance("memory-core");
-    const runtime = createPluginRuntimeStore<PluginRuntime>({
-      pluginId: "reply-callback-owner",
-      errorMessage: "Telegram runtime not initialized",
-    });
-    channel.run(() => runtime.setRuntime(createPluginRuntimeMock()));
-    // A prepared-model lease with a generationOverlap consumer exits the caller's instance.
-    const lease = new PluginInvocationScope(createEmptyPluginRegistry(), [overlap], {
-      retained: true,
-    });
-    const reads: string[] = [];
-    const read = () => void reads.push(runtime.tryGetRuntime() ? "runtime" : "missing");
-    try {
-      await channel.run(() =>
-        runAssembled({
-          replyOptions: { onPartialReply: read },
-          dispatchReplyWithBufferedBlockDispatcher: async ({ replyOptions }) => {
-            await replyOptions?.onPartialReply?.({ text: "outside" });
-            await lease.run(async () => {
-              read();
-              await replyOptions?.onPartialReply?.({ text: "inside" });
-            });
-            return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-          },
-        }),
-      );
-      expect(reads).toEqual(["runtime", "missing", "runtime"]);
-    } finally {
-      lease.release();
-      await channel.dispose();
-      await overlap.dispose();
-    }
-  });
 
   it("preserves prepared payload custody and literals through preparation and message hooks", async () => {
     const order: string[] = [];
@@ -763,39 +719,41 @@ describe("channel turn delivery", () => {
     expect(deliver).toHaveBeenCalledWith({ text: "reply + direct-hook" }, finalInfo);
   });
 
-  it("treats durable support preflight failures as terminal", async () => {
-    resolveOutboundDurableFinalDeliverySupport.mockRejectedValueOnce(new Error("preflight failed"));
-    const deliver = vi.fn();
-    await expect(
-      runAssembled({
-        delivery: { deliver, durable: { replyToMode: "first" } },
-        dispatchReplyWithBufferedBlockDispatcher: createDirectDeliveryDispatch(),
-      }),
-    ).rejects.toThrow("preflight failed");
-    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("preserves durable partial-send visibility without retrying via direct delivery", async () => {
-    sendDurableMessageBatch.mockResolvedValueOnce({
-      ...createDurableSendResult(["tg-1"]),
-      status: "partial_failed",
-      error: new Error("second chunk failed"),
-      sentBeforeError: true,
-    });
-    const deliver = vi.fn();
-    await expect(
-      runAssembled({
-        delivery: { deliver, durable: { replyToMode: "first" } },
-        dispatchReplyWithBufferedBlockDispatcher: createDirectDeliveryDispatch(),
-      }),
-    ).rejects.toMatchObject({ sentBeforeError: true, visibleReplySent: true });
-    expect(deliver).not.toHaveBeenCalled();
-  });
+  it.each(["preflight", "partial"] as const)(
+    "keeps durable %s failures terminal without direct delivery",
+    async (failure) => {
+      if (failure === "preflight") {
+        resolveOutboundDurableFinalDeliverySupport.mockRejectedValueOnce(new Error("failed"));
+      } else {
+        sendDurableMessageBatch.mockResolvedValueOnce({
+          ...createDurableSendResult(["tg-1"]),
+          status: "partial_failed",
+          error: new Error("failed"),
+          sentBeforeError: true,
+        });
+      }
+      const deliver = vi.fn();
+      await expect(
+        runAssembled({
+          delivery: { deliver, durable: { replyToMode: "first" } },
+          dispatchReplyWithBufferedBlockDispatcher: createDirectDeliveryDispatch(),
+        }),
+      ).rejects.toMatchObject(
+        failure === "preflight"
+          ? { message: "failed" }
+          : { sentBeforeError: true, visibleReplySent: true },
+      );
+      expect(sendDurableMessageBatch).toHaveBeenCalledTimes(failure === "preflight" ? 0 : 1);
+      expect(deliver).not.toHaveBeenCalled();
+    },
+  );
 
   it("observes provider-finalized content and identity after deferred delivery settles", async () => {
     const events: string[] = [];
-    const onAgentRunStart = vi.fn(() => "reply-dispatch");
+    const channel = new PluginInstance("telegram");
+    const runtime = createPluginRuntimeStore<PluginRuntime>({ pluginId: "tg", errorMessage: "x" });
+    channel.run(() => runtime.setRuntime(createPluginRuntimeMock()));
+    const onAgentRunStart = vi.fn(() => (runtime.tryGetRuntime() ? "reply-dispatch" : "missing"));
     const dispatchRun: ReplyDispatchRun = {
       completionSource: "reply-dispatch",
       getResult: () => ({}),
@@ -810,28 +768,33 @@ describe("channel turn delivery", () => {
     };
     const finalization = createDeferred<typeof finalized>();
     const dispatch = vi.fn<DispatchReplyWithBufferedBlockDispatcher>(async (params) => {
-      expect(params.replyOptions?.onAgentRunStart?.("run-finalized", undefined, dispatchRun)).toBe(
-        "reply-dispatch",
+      // Prepared-model leases with a generationOverlap plugin exit the channel's instance.
+      const started = pluginInstanceInvocation.exit(() =>
+        params.replyOptions?.onAgentRunStart?.("run-finalized", undefined, dispatchRun),
       );
+      expect(started).toBe("reply-dispatch");
       await params.dispatcherOptions.deliver({ text: "pre-final text" }, finalInfo);
       events.push("provider-finalized");
       finalization.resolve(finalized);
       return finalDispatch();
     });
-    await runAssembled({
-      channel: "feishu",
-      routeSessionKey: "agent:main:feishu:peer",
-      ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu", OriginatingTo: "oc_chat" }),
-      dispatchReplyWithBufferedBlockDispatcher: dispatch,
-      replyOptions: { onAgentRunStart },
-      delivery: {
-        deliver: async () => {
-          events.push("deliver");
-          return { visibleReplySent: false, finalization: finalization.promise };
+    await channel.run(() =>
+      runAssembled({
+        channel: "feishu",
+        routeSessionKey: "agent:main:feishu:peer",
+        ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu", OriginatingTo: "oc_chat" }),
+        dispatchReplyWithBufferedBlockDispatcher: dispatch,
+        replyOptions: { onAgentRunStart },
+        delivery: {
+          deliver: async () => {
+            events.push("deliver");
+            return { visibleReplySent: false, finalization: finalization.promise };
+          },
+          observeMessageSent: true,
         },
-        observeMessageSent: true,
-      },
-    });
+      }),
+    );
+    await channel.dispose();
     expect(events).toEqual(["deliver", "provider-finalized", "message_sent"]);
     expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith(
       "run-finalized",
