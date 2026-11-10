@@ -33,6 +33,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { resolvePluginArtifactDeclaredSurface } from "../plugins/capability-artifact.js";
 import { resolvePluginCapabilityConsent } from "../plugins/capability-consent.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
@@ -628,6 +629,11 @@ it.for(["resume", "followup", "failed-reload"] as const)(
       expect(
         hooks.filter((hook) => hook.event === "llm_output" && hook.runId === parentRunId),
       ).toHaveLength(1);
+    } catch (error) {
+      process.stderr.write(
+        `RELOAD_PRODUCT_FAILURE ${scenario} ${formatErrorMessageWithCode(error)}\n`,
+      );
+      throw error;
     } finally {
       unwatch();
       stopEvents();

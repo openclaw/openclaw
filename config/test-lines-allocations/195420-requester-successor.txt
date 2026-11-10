@@ -1,2 +1,2 @@
-268
-# Real Gateway ownership, requester adoption, and completion before a child parks or a later turn finishes.
+274
+# Real Gateway requester ownership, adoption, completion ordering, and reload failure diagnostics.
