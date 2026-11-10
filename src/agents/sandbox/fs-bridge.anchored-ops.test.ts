@@ -149,6 +149,36 @@ describe("sandbox fs bridge anchored ops", () => {
     ).resolves.toBeNull();
   });
 
+  it("recognizes a missing parent directory where /bin/sh is dash", async () => {
+    // Debian and Ubuntu images ship dash as /bin/sh, which reports a failed `cd`
+    // as "can't cd to <dir>" rather than bash's "No such file or directory".
+    // The script marks that case on stdout so the outcome does not depend on
+    // the shell's wording.
+    mockStat((script) => ({
+      stdout: Buffer.from(script.includes('elif [ ! -d "$1" ]') ? "openclaw-missing-parent" : ""),
+      stderr: Buffer.from("sh: 1: cd: can't cd to /workspace/missing\n"),
+      code: 0,
+    }));
+
+    await expect(bridge.stat({ filePath: "missing/note.txt" })).resolves.toBeNull();
+    await expect(
+      bridge.stat({
+        filePath: "missing/note.txt",
+        expectedPolicyPath: "/workspace/missing/note.txt",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps a non-missing cd failure as an error", async () => {
+    mockStat(() => ({
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.from("sh: 1: cd: can't cd to /workspace/locked\n"),
+      code: 1,
+    }));
+
+    await expect(bridge.stat({ filePath: "locked/note.txt" })).rejects.toThrow("stat failed for");
+  });
+
   it("keeps non-missing stat failures as errors", async () => {
     mockStat(() => ({
       stdout: Buffer.alloc(0),
