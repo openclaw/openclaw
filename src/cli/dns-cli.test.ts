@@ -365,6 +365,41 @@ describe("dns-cli probe bounds", () => {
     );
   }
 
+  /**
+   * Build a CoreDNS fixture whose access policy denies an excluded reader.
+   *
+   * The ancestors are traversable and a control file proves the excluded
+   * principal can reach the directory, so a later refusal is the file's own
+   * policy and not an unreachable ancestor. The entries are applied in order,
+   * and macOS inserts each of them at the front, so the last entry ends up
+   * first in the policy.
+   */
+  function createDeniedConfig(options: { file?: string; entries?: string[] } = {}): {
+    etcDir: string;
+    configPath: string;
+    importGlob: string;
+  } {
+    const etcDir = path.join(brewPrefix, "etc", "coredns");
+    const configPath = path.join(etcDir, options.file ?? "Corefile");
+    fs.chmodSync(brewPrefix, 0o755);
+    fs.mkdirSync(etcDir, { recursive: true });
+    fs.writeFileSync(configPath, ".:53 {\n  errors\n}\n");
+    fs.chmodSync(configPath, 0o644);
+    const controlFile = path.join(etcDir, "control.txt");
+    fs.writeFileSync(controlFile, "readable control\n");
+    for (const entry of options.entries ?? ["user:nobody deny read"]) {
+      const applied = actualSpawnSync("chmod", ["+a", entry, configPath], { encoding: "utf-8" });
+      expect(applied.status).toBe(0);
+    }
+    // The same principal reads the unrestricted control file, so the later
+    // refusal on the configured file is the file's own policy.
+    const control = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", controlFile], {
+      encoding: "utf-8",
+    });
+    expect(control.status).toBe(0);
+    return { etcDir, configPath, importGlob: path.join(etcDir, "conf.d", "*.server") };
+  }
+
   it("escapes the dry-run zone path without writing it or starting setup", async () => {
     testState.zonePath = path.join(brewPrefix, "café\x1b[31m\nforged\tzone\r\x00\x85end.db");
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
@@ -507,28 +542,10 @@ describe("dns-cli probe bounds", () => {
     "keeps the excluded reader denied through the privileged restoration",
     { timeout: 30_000 },
     async () => {
-      const etcDir = path.join(brewPrefix, "etc", "coredns");
-      const corefilePath = path.join(etcDir, "Corefile");
-      const importGlob = path.join(etcDir, "conf.d", "*.server");
       // Traversable ancestors first: an excluded principal must be able to
       // reach the files, or a denial proves nothing about the file policy.
-      fs.chmodSync(brewPrefix, 0o755);
-      fs.mkdirSync(etcDir, { recursive: true });
+      const { etcDir, configPath: corefilePath, importGlob } = createDeniedConfig();
       fs.mkdirSync(path.join(etcDir, "conf.d"));
-      fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
-      fs.chmodSync(corefilePath, 0o644);
-      const controlFile = path.join(etcDir, "control.txt");
-      fs.writeFileSync(controlFile, "readable control\n");
-      const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", corefilePath], {
-        encoding: "utf-8",
-      });
-      expect(denied.status).toBe(0);
-      // The same principal reads the unrestricted control file, so the later
-      // refusal on the configured file is the file's own policy.
-      const control = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", controlFile], {
-        encoding: "utf-8",
-      });
-      expect(control.status).toBe(0);
       const grant = actualSpawnSync("sudo", ["-n", "chown", "root:wheel", etcDir], {
         encoding: "utf-8",
       });
@@ -630,31 +647,21 @@ describe("dns-cli probe bounds", () => {
   });
 
   // macOS carries per-file ACLs beside the mode; a replacement inode does not
-  // inherit them, so the access policy has to be restored explicitly.
+  // inherit them, so the access policy has to be restored explicitly. The
+  // publication restores it at the recorded positions: chmod +a would
+  // canonicalize the order, and an allow that moved in front of a deny would
+  // hand the excluded account its read back.
   it.runIf(realPlatform === "darwin")(
-    "keeps the operator's macOS access policy across a publication",
+    "keeps the operator's macOS access policy and its order across a publication",
     async () => {
-      const etcDir = path.join(brewPrefix, "etc", "coredns");
-      const corefilePath = path.join(etcDir, "Corefile");
-      const importGlob = path.join(etcDir, "conf.d", "*.server");
-      // Traversable ancestors and a control read: the refusal later must be
-      // the file's own policy, not an unreachable ancestor.
-      fs.chmodSync(brewPrefix, 0o755);
-      fs.mkdirSync(etcDir, { recursive: true });
-      fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
-      fs.chmodSync(corefilePath, 0o644);
-      const controlFile = path.join(etcDir, "control.txt");
-      fs.writeFileSync(controlFile, "readable control\n");
-      const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", corefilePath], {
-        encoding: "utf-8",
+      // The allow is added first, so the deny ends up in front of it: that is
+      // the order the publication has to preserve.
+      const { configPath: corefilePath, importGlob } = createDeniedConfig({
+        entries: ["group:staff allow read", "user:nobody deny read"],
       });
-      expect(denied.status).toBe(0);
-      const control = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", controlFile], {
-        encoding: "utf-8",
-      });
-      expect(control.status).toBe(0);
       const policy = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
-      expect(policy.stdout).toContain("deny read");
+      const beforeEntries = accessPolicyEntries(policy.stdout ?? "");
+      expect(beforeEntries.length).toBe(2);
 
       await runDnsSetup();
 
@@ -662,6 +669,9 @@ describe("dns-cli probe bounds", () => {
         `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
       );
       const published = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
+      // The same entries at the same positions: the policy and its order
+      // survived the replacement of the file.
+      expect(accessPolicyEntries(published.stdout ?? "")).toEqual(beforeEntries);
       expect(published.stdout).toContain("deny read");
       const asReader = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", corefilePath], {
         encoding: "utf-8",
@@ -673,69 +683,21 @@ describe("dns-cli probe bounds", () => {
   // The publication restores the access policy at the recorded positions:
   // chmod +a would canonicalize the order, and an allow that moved in front
   // of a deny would hand the excluded account its read back.
-  it.runIf(realPlatform === "darwin")(
-    "keeps the access-policy order across a publication",
-    async () => {
-      const etcDir = path.join(brewPrefix, "etc", "coredns");
-      const corefilePath = path.join(etcDir, "Corefile");
-      fs.chmodSync(brewPrefix, 0o755);
-      fs.mkdirSync(etcDir, { recursive: true });
-      fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
-      fs.chmodSync(corefilePath, 0o644);
-      // The allow is added first, so the deny ends up in front of it: that is
-      // the order the publication has to preserve.
-      const allowed = actualSpawnSync("chmod", ["+a", "group:staff allow read", corefilePath], {
-        encoding: "utf-8",
-      });
-      expect(allowed.status).toBe(0);
-      const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", corefilePath], {
-        encoding: "utf-8",
-      });
-      expect(denied.status).toBe(0);
-      const before = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
-      const beforeEntries = accessPolicyEntries(before.stdout ?? "");
-      expect(beforeEntries.length).toBe(2);
-
-      await runDnsSetup();
-
-      const after = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
-      // The same entries at the same positions: the order survived the
-      // replacement of the file.
-      expect(accessPolicyEntries(after.stdout ?? "")).toEqual(beforeEntries);
-      const asReader = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", corefilePath], {
-        encoding: "utf-8",
-      });
-      expect(asReader.status).not.toBe(0);
-    },
-  );
-
   // The same policy preservation on the symlinked managed target: the link
   // survives, the target's deny entry survives, and the excluded principal is
   // still refused after the target is replaced.
   it.runIf(realPlatform === "darwin")(
     "keeps the managed target's access policy across a symlinked publication",
     async () => {
-      const etcDir = path.join(brewPrefix, "etc", "coredns");
+      const {
+        etcDir,
+        configPath: managedPath,
+        importGlob,
+      } = createDeniedConfig({
+        file: "managed-Corefile",
+      });
       const corefilePath = path.join(etcDir, "Corefile");
-      const managedPath = path.join(etcDir, "managed-Corefile");
-      const importGlob = path.join(etcDir, "conf.d", "*.server");
-      // Traversable ancestors and a control read prove that the later refusal
-      // is the file's own policy, not an unreachable ancestor.
-      fs.chmodSync(brewPrefix, 0o755);
-      fs.mkdirSync(etcDir, { recursive: true });
-      fs.writeFileSync(managedPath, ".:53 {\n  errors\n}\n");
-      fs.chmodSync(managedPath, 0o644);
       fs.symlinkSync("managed-Corefile", corefilePath);
-      const controlFile = path.join(etcDir, "control.txt");
-      fs.writeFileSync(controlFile, "readable control\n");
-      const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", managedPath], {
-        encoding: "utf-8",
-      });
-      expect(denied.status).toBe(0);
-      const control = actualSpawnSync("sudo", ["-n", "-u", "nobody", "cat", controlFile], {
-        encoding: "utf-8",
-      });
-      expect(control.status).toBe(0);
 
       await runDnsSetup();
 
