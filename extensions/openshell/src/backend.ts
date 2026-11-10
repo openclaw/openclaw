@@ -44,6 +44,7 @@ import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from
 import { OpenShellFsBridge } from "./fs-bridge.js";
 import {
   DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+  isOpenShellMirrorPathExcluded,
   replaceDirectoryContents,
   stageDirectoryContents,
 } from "./mirror.js";
@@ -449,11 +450,7 @@ class OpenShellSandboxBackendImpl {
         return normalized;
       }
       const parts = relative.split("/");
-      if (
-        DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS.some(
-          (excluded) => excluded === normalizeLowercaseStringOrEmpty(parts[0]),
-        )
-      ) {
+      if (isOpenShellMirrorPathExcluded(parts)) {
         return null;
       }
       let local = root.local;
