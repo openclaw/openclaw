@@ -8,7 +8,7 @@ export function parseImageDimensionError(raw: string): {
   messageIndex?: number;
   contentIndex?: number;
 } | null {
-  if (!/image dimensions exceed max allowed size/i.test(raw)) {
+  if (!isImageDimensionErrorMessage(raw)) {
     return null;
   }
   const limitMatch = raw.match(IMAGE_DIMENSION_ERROR_RE);
@@ -21,13 +21,13 @@ export function parseImageDimensionError(raw: string): {
 }
 
 export function isImageDimensionErrorMessage(raw: string): boolean {
-  return Boolean(parseImageDimensionError(raw));
+  return /image dimensions exceed max allowed size/i.test(raw);
 }
 
 export function parseImageSizeError(raw: string): {
   maxMb?: number;
 } | null {
-  if (!/image exceeds[\s\S]*mb/i.test(raw)) {
+  if (!isImageSizeError(raw)) {
     return null;
   }
   const match = raw.match(IMAGE_SIZE_ERROR_RE);
@@ -37,5 +37,5 @@ export function parseImageSizeError(raw: string): {
 }
 
 export function isImageSizeError(errorMessage?: string): boolean {
-  return Boolean(errorMessage && parseImageSizeError(errorMessage));
+  return Boolean(errorMessage && /image exceeds[\s\S]*mb/i.test(errorMessage));
 }
