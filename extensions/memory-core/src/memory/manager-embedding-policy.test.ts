@@ -116,13 +116,18 @@ describe("memory embedding policy", () => {
   });
 
   it("retries transient rate limit and 5xx errors", async () => {
+    const failure = Object.assign(new Error("openai embeddings failed: 429 rate limit"), {
+      status: 429,
+    });
     const run = vi.fn(async () => {
       const call = run.mock.calls.length;
       if (call === 1) {
-        throw new Error("openai embeddings failed: 429 rate limit");
+        throw failure;
       }
       if (call === 2) {
-        throw new Error("openai embeddings failed: 502 Bad Gateway (cloudflare)");
+        failure.message = "openai embeddings failed: 502 Bad Gateway (cloudflare)";
+        failure.status = 502;
+        throw failure;
       }
       return "ok";
     });
