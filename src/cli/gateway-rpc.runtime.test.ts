@@ -51,7 +51,6 @@ const extra = {
   requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
   requireLocalBackendSharedAuth: true,
   signal: new AbortController().signal,
-  prepareAuthenticatedRequest: async () => ({ expectedProfileId: "selected-profile" }),
 } satisfies NonNullable<Parameters<typeof call>[3]>;
 const message = { key: "agent:main:main", message: "Human request" };
 type CallArgs = Parameters<typeof call>;

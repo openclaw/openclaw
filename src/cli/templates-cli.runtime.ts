@@ -9,7 +9,6 @@ import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isGatewayProtocolResponseError } from "../gateway/client.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import {
@@ -55,7 +54,6 @@ import {
   formatTemplateDiagnostics,
   logTemplateAgentConfiguration,
 } from "./templates-cli-output.js";
-import { captureTemplateCronOwner } from "./templates-cli.cron-owner.js";
 import type { TemplatesAddOptions, TemplatesInspectOptions } from "./templates-cli.js";
 
 type TemplateCliSkillWarning =
@@ -252,7 +250,10 @@ export async function runTemplatesAddCommand(
     method: "templates.add",
     params: {},
     target: "Template configuration and provenance",
-    onForeignOwner: "refuse",
+    onForeignOwner: async ({ requestOwner }) => {
+      const { runTemplatesAddThroughOwner } = await import("./templates-cli.gateway-add.js");
+      await runTemplatesAddThroughOwner(sourcePath, opts, requestOwner);
+    },
     runLocal: async ({ assertCurrent, signal }) => run({ mode: "apply", assertCurrent, signal }),
   });
 }

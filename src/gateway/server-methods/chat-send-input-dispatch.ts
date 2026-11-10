@@ -186,8 +186,7 @@ export async function handleChatSendWithStorage(
     let assertAcceptedInputCurrent: (() => void) | undefined;
     const pendingAdmission = createChatSendPendingInputAdmission({
       runId: clientRunId,
-      // Explicit absence stays guarded by mutation authority; no human selection is retained.
-      expectedProfileId: req.expectedProfileId ?? undefined,
+      expectedProfileId: req.expectedProfileId,
       sessionMutationAuthorization,
       sessionMutationCommitGuard,
       assertCustodyLifetimeCurrent,

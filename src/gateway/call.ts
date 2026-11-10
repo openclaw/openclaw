@@ -54,7 +54,6 @@ import {
   GatewayClient,
   isGatewayConnectAssemblyError,
   type GatewayClientCloseInfo,
-  type GatewayClientRequestOptions,
 } from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
@@ -748,14 +747,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
             if (opts.prepareDispatchCurrent) {
               await opts.prepareDispatchCurrent();
             }
-            let preparedDispatch: Pick<GatewayClientRequestOptions, "expectedProfileId"> | void =
-              undefined;
-            if (opts.prepareAuthenticatedRequest) {
-              preparedDispatch = await opts.prepareAuthenticatedRequest(
-                client.request.bind(client),
-                startAbort.signal,
-              );
-            }
             if (settled || opts.signal?.aborted || dispatchGeneration !== connectionGeneration) {
               return;
             }
@@ -764,7 +755,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
             opts.assertDispatchCurrent?.();
             primaryRequestStarted = true;
             const result = await client.request<T>(opts.method, opts.params, {
-              ...preparedDispatch,
               expectFinal: opts.expectFinal,
               timeoutMs: opts.timeoutMs,
               signal: opts.signal,
