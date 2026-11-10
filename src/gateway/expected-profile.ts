@@ -44,7 +44,7 @@ export class ExpectedProfileMismatchError extends SessionMutationAuthorizationCh
 
 /** Request-local selection precondition, independent of socket and accepted-run lifetime. */
 export async function createExpectedProfileBinding(
-  expectedProfileId: string | null | undefined,
+  expectedProfileId: string | undefined,
   client: GatewayClient | null,
   assertRequestCurrent?: () => void,
 ) {
@@ -57,7 +57,7 @@ export async function createExpectedProfileBinding(
   let profileReference = client?.authenticatedUserProfile?.profileId;
   try {
     assertRequestCurrent?.();
-    if (expectedProfileId !== null && !profileReference && synchronizeProfile) {
+    if (!profileReference && synchronizeProfile) {
       await synchronizeProfile();
       assertRequestCurrent?.();
       if (
@@ -68,18 +68,22 @@ export async function createExpectedProfileBinding(
       }
       profileReference = client?.authenticatedUserProfile?.profileId;
     }
-    prepared =
-      expectedProfileId !== null && profileReference
-        ? await prepareUserProfileSelectionAuthority(profileReference)
-        : undefined;
+    prepared = profileReference
+      ? await prepareUserProfileSelectionAuthority(profileReference)
+      : undefined;
     assertRequestCurrent?.();
   } catch {
     // Unavailable canonical identity cannot prove the selected account.
     prepared = undefined;
   }
   let invoked = false;
-  const mismatchError = () =>
-    errorShape(
+  const resolvedProfileError = (profileId: string | undefined) => {
+    // Only the authenticated side follows merges. A selection must never silently
+    // move to another account because its former ID now aliases that account.
+    if (profileId === expectedProfileId) {
+      return undefined;
+    }
+    return errorShape(
       ErrorCodes.INVALID_REQUEST,
       "Selected account changed or is unavailable. Select the account again before retrying.",
       {
@@ -89,20 +93,8 @@ export async function createExpectedProfileBinding(
         },
       },
     );
-  const resolvedProfileError = (profileId: string | undefined) => {
-    // Only the authenticated side follows merges. A selection must never silently
-    // move to another account because its former ID now aliases that account.
-    if ((profileId ?? null) === expectedProfileId) {
-      return undefined;
-    }
-    return mismatchError();
   };
   const currentError = () => {
-    if (expectedProfileId === null) {
-      return !client?.authenticatedUserId && !client?.authenticatedUserProfile?.profileId
-        ? undefined
-        : mismatchError();
-    }
     let resolvedProfileId: string | undefined;
     try {
       resolvedProfileId =
@@ -126,7 +118,7 @@ export async function createExpectedProfileBinding(
     },
     /** Compare a profile resolved by the storage owner on its transaction connection. */
     assertMatchesResolvedProfile: (profileId: string | undefined) => {
-      const error = currentError() ?? resolvedProfileError(profileId);
+      const error = resolvedProfileError(profileId);
       if (error) {
         throw new ExpectedProfileMismatchError(error);
       }

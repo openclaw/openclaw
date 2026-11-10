@@ -26,11 +26,6 @@ export type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
     signal?: AbortSignal;
     assertConnectionCurrent?: () => void;
     prepareDispatchCurrent?: () => Promise<void>;
-    /** Wire-only identity preparation; native in-process preparation has no socket. */
-    prepareAuthenticatedRequest?: (
-      request: GatewayRequestFunction,
-      signal: AbortSignal,
-    ) => Promise<void | Pick<GatewayClientRequestOptions, "expectedProfileId">>;
     assertDispatchCurrent?: () => void;
     onAccepted?: GatewayClientRequestOptions["onAccepted"];
     onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;

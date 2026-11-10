@@ -9,10 +9,8 @@ import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isGatewayProtocolResponseError } from "../gateway/client.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
-import { monotonicNow } from "../shared/monotonic-time.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -47,9 +45,6 @@ import {
   type TemplateAddPlan,
   type TemplateReadResult,
 } from "../templates/types.js";
-import { sleep } from "../utils/sleep.js";
-import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
-import { callGatewayFromCli, callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
@@ -59,7 +54,6 @@ import {
   formatTemplateDiagnostics,
   logTemplateAgentConfiguration,
 } from "./templates-cli-output.js";
-import { captureTemplateCronOwner } from "./templates-cli.cron-owner.js";
 import type { TemplatesAddOptions, TemplatesInspectOptions } from "./templates-cli.js";
 
 type TemplateCliSkillWarning =
@@ -74,9 +68,6 @@ function addPlanSkillWarnings(plan: TemplateAddPlan): TemplateCliSkillWarning[] 
     return warning;
   });
 }
-
-const TEMPLATE_AGENT_RELOAD_TIMEOUT_MS = 15_000;
-const TEMPLATE_AGENT_RELOAD_POLL_MS = 100;
 
 function logTemplateAddPlanSummary(plan: TemplateAddPlan): void {
   runtime.log(`Agent: ${sanitizeTerminalText(plan.agent.finalId)}`);
@@ -251,7 +242,10 @@ export async function runTemplatesAddCommand(
     method: "templates.add",
     params: {},
     target: "Template configuration and provenance",
-    onForeignOwner: "refuse",
+    onForeignOwner: async ({ requestOwner }) => {
+      const { runTemplatesAddThroughOwner } = await import("./templates-cli.gateway-add.js");
+      await runTemplatesAddThroughOwner(sourcePath, opts, requestOwner);
+    },
     runLocal: run,
   });
 }
@@ -334,6 +328,18 @@ async function runTemplatesAddFromSource(
       );
       logTemplateAddPlanSummary(plan);
     }
+    return;
+  }
+
+  if (plan.summary.cronJobActions > 0) {
+    const message =
+      "Template automations require a running Gateway. Start the Gateway and Add a published ClawHub package by name without --workspace. For local sources, use --dry-run or publish the Template to ClawHub first.";
+    emitTemplateFailure(opts.json, message, {
+      schemaVersion: TEMPLATE_ADD_RESULT_SCHEMA_VERSION,
+      stability: TEMPLATE_OUTPUT_STABILITY,
+      status: "failed",
+      error: { code: "automation_requires_gateway", message },
+    });
     return;
   }
 
@@ -458,102 +464,6 @@ async function runTemplatesAddFromSource(
           reloadPlugins: await resolvePluginBatchReload(),
           consentPlanIntegrity: plan.planIntegrity,
           runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
-          cronGateway: {
-            add: async (input, options) => {
-              let expectedProfileId: string | null | undefined;
-              try {
-                return await callGatewayFromCli("cron.add", {}, input, {
-                  prepareAuthenticatedRequest: async (request, signal) => {
-                    const prepared = await captureTemplateCronOwner(request, signal, options);
-                    expectedProfileId = prepared.expectedProfileId;
-                    return prepared;
-                  },
-                });
-              } catch (error) {
-                // An older Gateway rejects the null header before cron.add can run.
-                if (
-                  expectedProfileId === null &&
-                  isGatewayProtocolResponseError(error) &&
-                  error.gatewayCode === "INVALID_REQUEST" &&
-                  error.message === "invalid request frame: at /expectedProfileId: must be string"
-                ) {
-                  throw new Error(
-                    "Gateway does not support this automation creator check. Update OpenClaw on the Gateway host to match this CLI, restart the Gateway, then retry Template Add.",
-                    { cause: error },
-                  );
-                }
-                throw error;
-              }
-            },
-            list: async (agentId) =>
-              await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
-            get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
-            writeScratch: async (id, content, commitGuard) => {
-              commitGuard();
-              const scratchResult = await callGatewayFromCli(
-                "cron.scratch.set",
-                {},
-                {
-                  id,
-                  content,
-                  expectedRevision: 0,
-                },
-              );
-              if (!scratchResult.ok) {
-                throw new Error("Template automation scratch changed before import.");
-              }
-            },
-            enable: async (id, expectedConfigRevision, commitGuard) => {
-              commitGuard();
-              await callGatewayFromCli(
-                "cron.update",
-                {},
-                {
-                  id,
-                  patch: { enabled: true },
-                  expectedConfigRevision,
-                },
-              );
-            },
-            remove: async (id, options) =>
-              await callGatewayFromCli(
-                "cron.remove",
-                {},
-                {
-                  id,
-                  expectedConfigRevision: options.expectedConfigRevision,
-                },
-              ),
-            waitUntilAgentAvailable: async (agentId) => {
-              const deadline = monotonicNow() + TEMPLATE_AGENT_RELOAD_TIMEOUT_MS;
-              let lastError: unknown;
-              while (monotonicNow() < deadline) {
-                try {
-                  const response = await callGatewayFromCliWithTransport<{
-                    config?: OpenClawConfig;
-                    configRevisionHash?: unknown;
-                    appliedConfigHash?: unknown;
-                  }>("config.get", { timeout: "5000" }, {});
-                  // Matching tokens can describe a cached roster from before this agent was added.
-                  if (
-                    Object.hasOwn(response.config?.agents?.entries ?? {}, agentId) &&
-                    typeof response.configRevisionHash === "string" &&
-                    response.configRevisionHash === response.appliedConfigHash
-                  ) {
-                    return;
-                  }
-                  lastError = undefined;
-                } catch (error) {
-                  lastError = error;
-                }
-                await sleep(TEMPLATE_AGENT_RELOAD_POLL_MS);
-              }
-              const suffix = lastError instanceof Error ? `: ${lastError.message}` : "";
-              throw new Error(
-                `Gateway did not apply the Template agent configuration in time${suffix}`,
-              );
-            },
-          },
         });
       },
     );

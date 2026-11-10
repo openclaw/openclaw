@@ -30,8 +30,6 @@ const mocks = vi.hoisted(() => ({
   withOpenClawStateLease: vi.fn(),
   leaseAssertOwned: vi.fn(),
   preflightTemplatePackage: vi.fn(),
-  callGatewayFromCli: vi.fn(),
-  sleep: vi.fn(),
 }));
 
 vi.mock("../runtime.js", async (importOriginal) => ({
@@ -77,15 +75,6 @@ vi.mock("./local-state-owner.js", () => ({
   runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<void> }) =>
     await runLocal(),
 }));
-vi.mock("./gateway-rpc.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
-  callGatewayFromCliWithTransport: mocks.callGatewayFromCli,
-}));
-vi.mock("../utils/sleep.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../utils/sleep.js")>()),
-  sleep: mocks.sleep,
-}));
-
 const { registerTemplatesCli } = await import("./templates-cli.js");
 const { runTemplatesAddCommand } = await import("./templates-cli.runtime.js");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -117,28 +106,6 @@ function output() {
 }
 const logLines = () => mocks.runtime.log.mock.calls.map(([line]) => String(line));
 
-function gatewayConfig(agent = "worker", revision = "revision-new", applied = revision) {
-  return {
-    config: { agents: { entries: { [agent]: {} } } },
-    configRevisionHash: revision,
-    appliedConfigHash: applied,
-  };
-}
-
-async function addWithAgentReadiness(beforeWait?: () => void) {
-  const path = await writeManifest({ ...cliTestHelpers.minimalManifest, agent: { id: "worker" } });
-  const apply = mocks.applyTemplateAddPlanStateless.getMockImplementation();
-  if (!apply) {
-    throw new Error("Missing Add fixture implementation");
-  }
-  mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (plan, options) => {
-    beforeWait?.();
-    await options.cronGateway.waitUntilAgentAvailable(plan.agent.finalId);
-    return apply(plan, options);
-  });
-  return await add(["--json"], path);
-}
-
 describe("templates cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -148,8 +115,6 @@ describe("templates cli", () => {
       ok: true,
       mcpServers: {},
     });
-    mocks.callGatewayFromCli.mockReset();
-    mocks.sleep.mockReset().mockResolvedValue(undefined);
     mocks.preflightTemplatePackage.mockReset().mockResolvedValue({
       ok: false,
       code: "package_install_unavailable",
@@ -368,6 +333,41 @@ describe("templates cli", () => {
     });
   });
 
+  it.for(["disabled-job", "portable-heartbeat"])(
+    "previews %s but refuses offline Add before creating the agent",
+    async (kind) => {
+      const source = await writeManifest({
+        ...cliTestHelpers.minimalManifest,
+        agent: {
+          ...cliTestHelpers.minimalManifest.agent,
+          ...(kind === "portable-heartbeat" ? { heartbeat: { every: "0m" } } : {}),
+        },
+        automations:
+          kind === "disabled-job"
+            ? [
+                {
+                  id: "weekly",
+                  enabled: false,
+                  schedule: { cron: "0 9 * * 1", timezone: "UTC" },
+                  session: "isolated",
+                  message: "Compare public sources.",
+                },
+              ]
+            : [],
+      });
+      expect(await add(["--dry-run", "--json"], source)).toMatchObject({
+        summary: { cronJobActions: 1 },
+      });
+      mocks.runtime.writeJson.mockClear();
+      expect(await add(["--json"], source)).toMatchObject({
+        status: "failed",
+        error: { code: "automation_requires_gateway", message: expect.stringContaining("ClawHub") },
+      });
+      expect(mocks.withOpenClawStateLease).not.toHaveBeenCalled();
+      expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not Add when Labs was switched off after planning", async () => {
     mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
     expect(await add(["--json"])).toMatchObject({
@@ -444,36 +444,6 @@ describe("templates cli", () => {
     const [, options] = mocks.applyTemplateAddPlanStateless.mock.calls[0]!;
     options.assertCurrent();
     expect(mocks.leaseAssertOwned).toHaveBeenCalledOnce();
-  });
-
-  it.for([false, true])("accepts an applied revision after cached response: %s", async (cached) => {
-    if (cached) {
-      mocks.callGatewayFromCli
-        .mockResolvedValueOnce(gatewayConfig("other", "revision-old"))
-        .mockResolvedValueOnce(gatewayConfig("worker", "revision-new", "revision-old"));
-    }
-    mocks.callGatewayFromCli.mockResolvedValue(gatewayConfig());
-    expect(await addWithAgentReadiness()).toMatchObject({ status: "complete" });
-    expect(mocks.sleep).toHaveBeenCalledTimes(cached ? 2 : 0);
-    if (cached) {
-      expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(3);
-    }
-  });
-
-  it("reports the last Gateway error after the reload deadline", async () => {
-    mocks.callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
-    await addWithAgentReadiness(() => {
-      let reads = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => (reads++ < 2 ? 0 : 15_000));
-    });
-    expect(output()).toMatchObject({
-      status: "failed",
-      error: {
-        code: "add_failed",
-        message:
-          "Gateway did not apply the Template agent configuration in time: gateway unavailable",
-      },
-    });
   });
 });
 

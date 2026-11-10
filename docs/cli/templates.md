@@ -286,6 +286,17 @@ openclaw templates add @openclaw/api-integration-engineer --dry-run --json
 openclaw templates add @openclaw/api-integration-engineer
 ```
 
+With a running Gateway, Add sends the ClawHub name to that Gateway for an exact
+version review and installation. The Gateway chooses the new workspace;
+`--workspace` is rejected instead of being ignored. Local paths still take
+precedence over registry names and require the Gateway to be stopped.
+
+Offline Add supports local Templates without automations. If the plan includes
+any automation, including a disabled job or portable heartbeat, Add refuses
+before creating an agent, workspace, or dependency. Preview local sources with
+`--dry-run`; publish the reviewed Template to ClawHub and Add its package name
+with the Gateway running to install its automations.
+
 A registry name resolves the latest published release to an exact version and
 immutable artifact digest before planning. OpenClaw uses its existing registry
 trust checks, verifies the downloaded artifact, and safely extracts it under
@@ -306,9 +317,10 @@ or configure the agent afterward. The Control UI opens the new agent's chat
 and starts with "What can you do?" after a successful Add.
 
 `--dry-run --json` remains available for automation or local-source inspection.
-`--agent-id` and `--workspace` override the default destination with an
-unused ID or new path. Ordinary Add does not require a separate plan or
-review token. Exceptional trust warnings can still require explicit consent.
+`--agent-id` selects an unused ID. `--workspace` selects a new path for local
+preview or offline Add. Ordinary Add binds its review internally and does not
+require a separate plan token. Trust warnings and plugin capabilities still
+require their separate explicit acknowledgements.
 
 For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
 to use the default unused ID.
@@ -352,6 +364,10 @@ There is no Template ownership record or reverse-install operation.
 
 Use `--json` for experimental machine-readable output. Validation errors,
 blocked requirements, and failed additions exit `1`.
+Gateway-owned Add reports the native `agentId`, `status`, and `readiness` result.
+A partial result exits `1`. A lost Gateway reply reports an unknown outcome;
+inspect the agent and its automations before retrying, since no local fallback
+or automatic replay is attempted.
 
 Human-readable reports sanitize terminal control characters in Template fields
 and project paths. `--json` retains the original field values for machine processing.

@@ -26,30 +26,6 @@ export function registerGatewayCallDispatchPreparationTests(
     return { ...harness, entered, prepared, call };
   }
 
-  it.each(["selected-profile", null])(
-    "binds the same-connection prepared profile %s before sending",
-    async (expectedProfileId) => {
-      const harness = setup();
-      const sent: Array<{ method: string; expectedProfileId?: string | null }> = [];
-      harness.setRequest(async (method, _params, options) => {
-        sent.push({ method, expectedProfileId: options?.expectedProfileId });
-        return { ok: true };
-      });
-      await harness.call({
-        method: "cron.add",
-        prepareAuthenticatedRequest: async (request, signal) => {
-          expect(signal.aborted).toBe(false);
-          await request("users.self", {}, { signal });
-          return { expectedProfileId };
-        },
-      });
-      expect(sent).toEqual([
-        { method: "users.self", expectedProfileId: undefined },
-        { method: "cron.add", expectedProfileId },
-      ]);
-    },
-  );
-
   it.each([
     ["secrets.resolve", undefined, undefined],
     ["gateway.restart.request", "gateway-restart-target-safe-v1", undefined],

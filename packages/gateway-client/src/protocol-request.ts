@@ -19,8 +19,6 @@ export function isGatewayProtocolResponseError(
 }
 
 export type GatewayProtocolRequestOptions = {
-  /** Bind mutation authority to this profile, or to an explicitly unprofiled caller. */
-  expectedProfileId?: string | null;
   timeoutMs?: number | null;
   expectFinal?: boolean;
   onSent?: (requestId: string) => void;

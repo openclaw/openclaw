@@ -1,3 +1,0 @@
-# CLI native lost-reply/rollback and identity-transfer proof, canonical absence
-# guards, same-connection preparation, and request/retry header preservation.
-321
