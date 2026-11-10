@@ -45,7 +45,7 @@ it.each([
   ["preparing_context", "Preparing reply…"],
   ["answer", null],
   ["finishing", null],
-] as const)("keeps Stop available during %s", (phase, status) => {
+] as const)("keeps Stop available during %s", async (phase, status) => {
   const onAbort = vi.fn();
   const onSend = vi.fn();
   const container = renderChatView({
@@ -61,7 +61,7 @@ it.each([
     expect(workingStatus(container)).toContain(status);
     expect(container.querySelector(".chat-error")).toBeNull();
   } else {
-    expect(container.textContent).toContain("The answer is ready.");
+    await waitForSolid(() => expect(container.textContent).toContain("The answer is ready."));
     expect(container.querySelector(".chat-working-indicator")).toBeNull();
     expect(
       container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
