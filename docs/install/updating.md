@@ -33,6 +33,11 @@ backup.
 
 ## Update implementation contract
 
+Pre-update config copies publish through a temporary file and same-directory
+rename. An interrupted write preserves the previous `.pre-update` copy, and a
+later snapshot attempt can retry. This repair must be present in the updater
+taking the snapshot; it does not establish power-loss durability.
+
 SQLite header-probe timeouts report the discovery path count and link to the
 manual package-manager hop. A probe batch that misses its 10-second deadline now
 splits and retries, so slow or cold storage gets an answer; a path that cannot

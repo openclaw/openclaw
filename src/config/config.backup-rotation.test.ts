@@ -48,7 +48,13 @@ describe("config backup rotation", () => {
         await fs.writeFile(manualBackupPath, manualBackupContent, "utf-8");
         await createPreUpdateConfigSnapshot({
           configPath,
-          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+          fs: {
+            writeFile: fs.writeFile,
+            readFile: fs.readFile,
+            rename: fs.rename,
+            rm: fs.rm,
+            existsSync,
+          },
         });
         for (let version = 1; version <= 6; version += 1) {
           await runRegisteredConfigCommand([
@@ -245,7 +251,13 @@ describe("config backup rotation", () => {
       const { existsSync } = await import("node:fs");
       await createPreUpdateConfigSnapshot({
         configPath,
-        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+        fs: {
+          writeFile: fs.writeFile,
+          readFile: fs.readFile,
+          rename: fs.rename,
+          rm: fs.rm,
+          existsSync,
+        },
       });
       await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(current);
 
@@ -253,7 +265,13 @@ describe("config backup rotation", () => {
       await fs.writeFile(configPath, second);
       await createPreUpdateConfigSnapshot({
         configPath,
-        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+        fs: {
+          writeFile: fs.writeFile,
+          readFile: fs.readFile,
+          rename: fs.rename,
+          rm: fs.rm,
+          existsSync,
+        },
       });
       await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(current);
     });
@@ -266,12 +284,68 @@ describe("config backup rotation", () => {
 
       await createPreUpdateConfigSnapshot({
         configPath,
-        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+        fs: {
+          writeFile: fs.writeFile,
+          readFile: fs.readFile,
+          rename: fs.rename,
+          rm: fs.rm,
+          existsSync,
+        },
       });
 
       await expectPathMissing(`${configPath}.pre-update`);
     });
   });
+
+  it.each(["write", "rename"] as const)(
+    "preserves the published rollback point after an interrupted snapshot %s",
+    async (failure) => {
+      await withTempHome(async () => {
+        const configPath = resolveConfigPathFromTempState();
+        const snapshotPath = `${configPath}.pre-update`;
+        const previous = '{"gateway":{"mode":"local","port":19000}}\n';
+        const next = '{"gateway":{"mode":"local","port":19001}}\n';
+        await fs.writeFile(configPath, next, { mode: 0o600 });
+        await fs.writeFile(snapshotPath, previous, { mode: 0o600 });
+        let visibleDuringWrite: string | undefined;
+
+        const interrupt = async () => {
+          throw new Error("injected snapshot publication failure");
+        };
+        await createPreUpdateConfigSnapshot({
+          configPath,
+          fs: {
+            ...fs,
+            existsSync: fsNode.existsSync,
+            rename: failure === "rename" ? interrupt : fs.rename,
+            writeFile: async (file, content, options) => {
+              if (failure === "rename") {
+                await fs.writeFile(file, content, options);
+                visibleDuringWrite = await fs.readFile(snapshotPath, "utf8");
+                return;
+              }
+              await fs.writeFile(file, content.slice(0, 20), options);
+              visibleDuringWrite = await fs.readFile(snapshotPath, "utf8");
+              await interrupt();
+            },
+          },
+        });
+
+        expect(visibleDuringWrite).toBe(previous);
+        expect(await fs.readFile(snapshotPath, "utf8")).toBe(previous);
+        expectPosixMode((await fs.stat(snapshotPath)).mode, 0o600);
+        expect(await fs.readdir(path.dirname(configPath))).toEqual(
+          expect.not.arrayContaining([expect.stringMatching(/\.tmp$/)]),
+        );
+        await createPreUpdateConfigSnapshot({
+          configPath,
+          fs: { ...fs, existsSync: fsNode.existsSync },
+        });
+        expect(await fs.readFile(snapshotPath, "utf8")).toBe(next);
+        expectPosixMode((await fs.stat(snapshotPath)).mode, 0o600);
+      });
+    },
+  );
 
   it("retries snapshot after transient read and write errors (#105431)", async () => {
     await withTempHome(async () => {
@@ -293,6 +367,8 @@ describe("config backup rotation", () => {
           fs: {
             readFile: failingOperation === "read" ? rejectingReadFile : fs.readFile,
             writeFile: failingOperation === "write" ? rejectingWriteFile : fs.writeFile,
+            rename: fs.rename,
+            rm: fs.rm,
             existsSync,
           },
         });
@@ -300,7 +376,13 @@ describe("config backup rotation", () => {
 
         await createPreUpdateConfigSnapshot({
           configPath,
-          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+          fs: {
+            writeFile: fs.writeFile,
+            readFile: fs.readFile,
+            rename: fs.rename,
+            rm: fs.rm,
+            existsSync,
+          },
         });
 
         const snapshotPath = `${configPath}.pre-update`;

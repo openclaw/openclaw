@@ -62,6 +62,7 @@ export async function runUpdateSnapshotIsolationProof(
   }
   const writeFile = fsp.writeFile.bind(fsp);
   const copyFile = fsp.copyFile.bind(fsp);
+  const rename = fsp.rename.bind(fsp);
   const openSync = fs.openSync.bind(fs);
   for (const name of [
     "appendFile",
@@ -115,6 +116,11 @@ export async function runUpdateSnapshotIsolationProof(
     writes.push(destination);
     return copyFile(source, destination, ...args);
   };
+  fsp.rename = async (source, destination) => {
+    checkTarget(source);
+    checkTarget(destination);
+    return rename(source, destination);
+  };
   fs.openSync = (file, flags, ...args) => {
     assert.ok(flags === "r" || flags === 0, "Only read-only opens are allowed");
     const filename = file instanceof URL ? fileURLToPath(file) : file.toString();
@@ -125,6 +131,7 @@ export async function runUpdateSnapshotIsolationProof(
   const outside = path.join(root, "..", "synthetic-outside-snapshot-fixture");
   await assert.rejects(() => fsp.writeFile(outside, "must never be written"));
   await assert.rejects(() => fsp.copyFile(configA, outside));
+  await assert.rejects(() => fsp.rename(configA, outside));
   assert.deepEqual(writes, []);
 
   const { CONFIG_PATH } = await import("../../config/paths.js");
@@ -154,7 +161,9 @@ export async function runUpdateSnapshotIsolationProof(
   if (process.platform !== "win32") {
     assert.equal(fs.statSync(`${configB}.pre-update`).mode & 0o777, 0o600);
   }
-  assert.deepEqual(writes, [`${configB}.pre-update`]);
+  assert.equal(writes.length, 1);
+  assert.equal(path.dirname(writes[0]!), path.dirname(configB));
+  assert.notEqual(writes[0], `${configB}.pre-update`);
   assert.deepEqual(blocked, []);
   assert.deepEqual(
     new Set(fs.readdirSync(root, { recursive: true, encoding: "utf8" })),
