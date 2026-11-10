@@ -32,6 +32,7 @@ const native = vi.hoisted(() => ({
   start: vi.fn(),
   restart: vi.fn(),
 }));
+// mock-isolation: Keep native launchd reads and mutations outside the synthetic service fixture.
 vi.mock("./launchd.js", () => ({
   installLaunchAgent: native.install,
   stageLaunchAgent: native.stage,
@@ -85,7 +86,6 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
-
 function pinFixture(env: NodeJS.ProcessEnv, kind: "gateway" | "node") {
   const scope = { kind, env };
   const pin = { runtime: "node" as const, path: "/runtime/node" };
