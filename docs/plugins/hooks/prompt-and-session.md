@@ -28,13 +28,16 @@ provider payloads, start the Gateway with `--raw-stream` and
 
 Use the phase-specific hooks for new plugins:
 
-- `before_model_resolve`: receives only the current prompt and attachment
-  metadata. Return `providerOverride`, `modelOverride`, or `fallbacksOverride`.
+- `before_model_resolve`: receives only the current prompt and optional
+  attachment metadata (currently populated for prompt images as
+  `{ kind: "image", mimeType }`, and omitted when none are attached). Return
+  `providerOverride`, `modelOverride`, or `fallbacksOverride`.
   When provided, `fallbacksOverride` replaces the fallback chain for this run;
   `[]` disables model fallback, so a failed primary fails the run. A value that
   is not an array of strings is treated as `[]`. Omit it to preserve configured
-  fallback behavior. Results returned after the source run is canceled or
-  superseded are discarded before model preparation.
+  fallback behavior. If the source run is canceled or superseded while routing
+  runs, OpenClaw discards the hook result and aborts preflight before model
+  preparation.
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
@@ -55,11 +58,17 @@ Use the phase-specific hooks for new plugins:
   `prependSystemContext`, `appendSystemContext`, or `toolsAllow`. `toolsAllow`
   can only narrow the host-resolved tool surface for the current turn; `[]`
   submits no optional tools, while omitting it leaves the existing surface unchanged.
-  Restrictions returned by multiple hooks are intersected. The embedded runner
-  and Copilot harness apply this field to their turn-scoped submitted tool
-  surfaces. The Codex app-server harness rejects restrictive values because its
-  dynamic tools are thread-scoped and Codex `turn/start` has no tool-surface
-  override; use the embedded or Copilot runtime when a plugin requires this
+  Restrictions returned by multiple hooks are intersected. The embedded runner,
+  worker turns, and the Copilot harness apply this field to their turn-scoped
+  submitted tool surfaces. The CLI runner filters the OpenClaw tools it exposes
+  and rejects a restrictive value when the backend's native tools cannot be
+  limited exactly (`always-on`, or `selectable` without declared exact
+  tool-availability enforcement). The Codex app-server harness rejects any
+  value without `"*"` because its dynamic tools are thread-scoped and Codex
+  `turn/start` has no tool-surface override. ACPX rejects every returned
+  `toolsAllow`, including `["*"]`. The Agents API harness ignores the field: it
+  neither narrows native or declared tools nor rejects the run. Use a runtime
+  that enforces turn-scoped tool restrictions when a plugin requires this
   policy.
 - `before_prompt_build` with `{ requiresToolAuthority: true }`: runs in a
   second, post-policy phase. Use it when prompt enrichment reads data through
@@ -67,14 +76,20 @@ Use the phase-specific hooks for new plugins:
   tool. See [Authorized prompt
   enrichment](/plugins/hooks/prompt-and-session#authorized-prompt-enrichment).
 - `heartbeat_prompt_contribution`: retains its public name for receipt-owned
-  proactive automation jobs and returns `prependContext` or `appendContext`.
-  It adds monitoring context without changing user-initiated turns. It does not
-  run as a generic prompt-preparation hook or create a separate heartbeat turn.
+  proactive automation jobs, receives `{ sessionKey?, agentId?, heartbeatName? }`,
+  and returns `prependContext` or `appendContext`. Contributions from all
+  handlers are joined in priority order, then the combined `prependContext` and
+  `appendContext` are each truncated to a 1,000-character budget measured with
+  OpenClaw's CJK-weighted estimate, so lower-priority text is cut first. It adds
+  monitoring context without changing user-initiated turns.
+  It does not run as a generic prompt-preparation hook or create a separate
+  heartbeat turn.
 
-On embedded, CLI, and harness runtime prompt-preparation paths (including
-ACPX, Agents API, Codex, and Copilot), ordering is: drain queued injections →
-`agent_turn_prepare` → ordinary
-`before_prompt_build` → finalized tool policy → authorized prompt enrichment.
+On embedded, CLI, worker-turn, and harness runtime prompt-preparation paths
+(including ACPX, Agents API, Codex, and Copilot), ordering is: drain queued
+injections → `agent_turn_prepare` → ordinary `before_prompt_build` → finalized
+tool policy → authorized prompt enrichment (skipped on runtimes such as ACPX
+that do not supply `toolAuthority`).
 
 For multiple registrations, the first defined provider/model/fallback override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
@@ -175,8 +190,9 @@ api.on(
 The host excludes this handler from the ordinary prompt-build phase. After all
 ordinary hooks and tool restrictions settle, a supported runtime invokes it
 with `ctx.toolAuthority` bound to that exact active turn and finalized tool
-surface. Embedded, CLI, Copilot, and Codex runtimes support this phase. If a
-runtime cannot prove the authority, it skips the handler.
+surface. Embedded, CLI, worker-turn, Agents API, Copilot, and Codex runtimes
+support this phase. If a runtime cannot prove the authority (for example, ACPX),
+it skips the handler.
 
 Treat `toolAuthority` as an ephemeral capability:
 
@@ -211,20 +227,26 @@ treat an unknown option as an ordinary pre-policy hook.
 
 On the embedded and CLI runners, `before_agent_run` runs after prompt
 construction and before model submission, including `llm_input` observation.
-On the embedded path it also precedes prompt-local image loading. It receives
-the current user input as `prompt`, plus loaded session history in `messages`
-and the active system prompt. Return `{ outcome: "block", reason, message? }`
-to stop the run before the model reads the prompt. `reason` is internal;
-`message` is the user-facing replacement. Only `pass` and `block` outcomes are
-supported; unsupported decision shapes are rejected.
+On the embedded path it also precedes prompt-local image loading. OpenClaw
+worker turns run it at Gateway admission instead (see
+[Choose a hook](/plugins/hooks#choose-a-hook)). It receives the current turn's
+model-bound prompt as `prompt` (the user input plus any context that prompt
+hooks or the runtime added), loaded session
+history in `messages`, optional `systemPrompt`, and optional `accountId`,
+`channelId`, `senderId`, and `senderIsOwner`. Return `void` or
+`{ outcome: "pass" }` to allow the run, or
+`{ outcome: "block", reason, message?, category?, metadata? }` to stop it before
+the model reads the prompt. `reason` is internal; `message` is the user-facing
+replacement detail. Handlers have a 15s default timeout and fail closed:
+thrown errors, timeouts, or unsupported decision shapes block the run.
 
-When a run is blocked, OpenClaw stores only the replacement text in
-`message.content` plus non-sensitive block metadata such as the blocking
-plugin id and timestamp. The original user text is not retained in transcript
-or future context. Internal block reasons are treated as sensitive and
-excluded from transcript, history, broadcast, log, and diagnostics payloads.
-Observability should use sanitized fields such as blocker id, outcome,
-timestamp, or a safe category.
+When a run is blocked, OpenClaw stores only the formatted user-facing block
+notice (`Your message could not be sent: ...`) in `message.content` plus
+non-sensitive block metadata such as the blocking plugin id and timestamp. The
+original user text is not retained in transcript or future context. Internal
+block reasons are treated as sensitive and excluded from transcript, history,
+broadcast, log, and diagnostics payloads. Observability should use sanitized
+fields such as blocker id, outcome, timestamp, or a safe `category`.
 
 Hooks that expose `event.runId`, such as `agent_end` and
 `before_agent_finalize`, receive it when OpenClaw can identify the active run;
@@ -236,10 +258,11 @@ scheduled job. Do not assume every agent event carries it. `ctx.jobId` is not
 part of the `before_tool_call` tool context.
 
 For `before_prompt_build`, `ctx.inputProvenance` carries the host-classified
-origin of the turn's user-role input on the embedded, CLI, Codex, and Copilot
-prompt paths. Its `kind` is `external_user`, `inter_session`, or
+origin of the turn's user-role input on the embedded, CLI, Agents API, Codex,
+and Copilot prompt paths. Its `kind` is `external_user`, `inter_session`, or
 `internal_system`. Optional source fields are `originSessionId`,
-`sourceSessionKey`, `sourceChannel`, and `sourceTool`.
+`sourceSessionKey`, `sourceChannel`, `sourceTool`, `sourceRole`,
+`sourcePromptPrefix`, `jobId`, and `runId`.
 
 The field is optional. It is absent when the producer does not supply a
 classification, including ordinary human turns on some paths. Absence does
@@ -252,6 +275,17 @@ Inter-session deliveries such as `sessions_send`, `subagent_settle`, and
 distinguish those inputs; do not parse prompt prefixes. Provenance describes
 origin and does not grant authority to use tools or access another session.
 
+For admitted session turns where the host resolves a memory audience, agent hook
+contexts may also include `ctx.memoryAudience` and
+`ctx.assertMemoryAudienceCurrent()`. `ctx.memoryAudience` is the host-resolved
+[`MemoryAudience`](/plugins/sdk-overview/memory-and-context#memory-audience)
+object, either `{ kind: "owner-private", agentId }` or
+`{ kind: "conversation", agentId, sessionKey, sessionId }`; branch on
+`ctx.memoryAudience.kind`, not on the field itself. Revalidate with
+`ctx.assertMemoryAudienceCurrent?.()` after awaited work and before releasing
+memory data or performing an effect; do not infer memory authority from
+`senderIsOwner` or session-key patterns.
+
 For channel-originated runs, `ctx.channel` and `ctx.messageProvider` identify
 the provider surface such as `discord` or `telegram`, while `ctx.channelId` is
 the conversation target identifier when OpenClaw can derive one from the
@@ -262,14 +296,20 @@ When sender identity is available, agent hook contexts also include:
 - `ctx.senderId` - channel-scoped sender ID (e.g. Feishu `open_id`, Discord
   user ID). Populated when the run originates from a user message with known
   sender metadata.
-- `ctx.chatId` - transport-native conversation identifier (e.g. Feishu
-  `chat_id`, Telegram `chat_id`). Populated when the originating channel
-  provides a native conversation ID.
+- `ctx.chatId` - conversation identifier. On user-triggered runs, embedded hooks
+  and CLI hooks other than `agent_turn_prepare` and `before_prompt_build`
+  receive the transport-native ID (e.g. Feishu `chat_id`, Telegram `chat_id`)
+  when the originating channel provides one. Elsewhere, including those two CLI
+  preparation hooks and the Codex, Copilot, and Agents API harnesses, it can
+  mirror `ctx.channelId` as a compatibility fallback, so do not assume it is
+  native.
 - `ctx.channelContext.sender.id` - the same sender ID as `ctx.senderId`, under
   a channel-owned object plugins can extend with channel-specific fields.
-- `ctx.channelContext.chat.id` - the same conversation ID as `ctx.chatId`,
-  under a channel-owned object plugins can extend with channel-specific
-  fields.
+- `ctx.channelContext.chat.id` - the conversation ID under a channel-owned
+  object plugins can extend with channel-specific fields. When the host sets a
+  transport-native `ctx.chatId` for a user-triggered run, it sets this to the
+  same value. CLI `agent_turn_prepare` and `before_prompt_build` contexts omit
+  `ctx.channelContext` entirely.
 
 Core only defines the nested `id` fields. Channel plugins that pass richer
 sender or chat metadata through the inbound helper can augment
@@ -297,8 +337,9 @@ buildChannelInboundEventContext({
 });
 ```
 
-These fields are optional and absent for system-originated runs (heartbeat,
-cron, exec-event).
+`ctx.channelContext` and native sender/chat identity fields are optional and
+absent for system-originated runs (heartbeat, cron, exec-event), though
+`ctx.chatId` can still mirror `ctx.channelId` when a channel target is present.
 
 `ctx.senderExternalId` remains as a deprecated source-compatibility field for
 older plugins. Core does not populate it; new channel-specific sender
@@ -351,21 +392,25 @@ request or complete native history.
 final assistant answer. It is not the `/stop` cancellation path and does not
 run when the user aborts a turn. Return `{ action: "revise", reason }` to ask
 the harness for one more model pass before finalization, `{ action:
-"finalize", reason? }` to force finalization, or omit a result to continue.
+"finalize", reason? }` to force finalization, or `{ action: "continue", reason? }`
+(or `void`) to continue.
 Handlers have a 15s default budget; on timeout, OpenClaw logs the failure and
-keeps decisions from other handlers. With no revision decision, normal
-finalization continues. Multiple `revise` reasons are combined; any `finalize`
-decision overrides revision requests. This hook requires a finalization
-integration: the embedded runner and native hook relay provide it, but the
-Copilot harness does not dispatch it.
-Codex native `Stop` hooks are relayed into this hook as OpenClaw
-`before_agent_finalize` decisions.
+keeps decisions from other handlers. With no revision decision (or a `revise`
+with neither `reason` nor `retry`), normal finalization continues. Multiple
+`revise` reasons are combined; any `finalize` decision overrides revision
+requests. This hook requires a finalization integration: the embedded runner
+and native hook relay provide it, but the Copilot harness does not dispatch it.
+Codex native `Stop` hook invocations are relayed into `before_agent_finalize`,
+and the resulting OpenClaw decision is translated back into the native Codex
+`Stop` response.
 
-When returning `action: "revise"`, plugins can include `retry` metadata to
-bound repeated revision requests within a run:
+When returning `action: "revise"`, plugins can include a `retry` object to
+bound repeated revision requests within a run. The SDK types it through
+`api.on("before_agent_finalize", ...)`; its shape is:
 
 ```typescript
-type BeforeAgentFinalizeRetry = {
+// Shape of the `retry` field on a before_agent_finalize result.
+type FinalizeRetry = {
   instruction: string;
   idempotencyKey?: string;
   maxAttempts?: number;
@@ -398,7 +443,7 @@ durable context queued for the next prompt build (the top-level
 behavior). OpenClaw drains queued injections before prompt hooks on embedded,
 CLI, and harness runtime paths, even when no prompt hooks are registered.
 It drops expired entries and entries
-whose plugin is inactive or has prompt injection disabled. `idempotencyKey`
+whose plugin is inactive or has prompt modification disabled. `idempotencyKey`
 deduplicates unexpired pending entries for the same plugin and session; the
 key can be reused after consumption. Drained entries are reused across retries
 within the active run, but consuming an entry is not a receipt that the model
@@ -424,30 +469,37 @@ steering, or the runtime rejects it. Acceptance does not wait for transcript
 commitment. Repeating an `idempotencyKey` within the same active run reuses the
 original accepted result without queueing another model input, including when
 calls overlap. A key already stored in the session also prevents delivery to a
-later run: the host returns the original `runId` when its steering receipt is
-available, or `{ steered: false, reason: "duplicate" }` otherwise. A duplicate is
+later run: the host returns `{ steered: true, runId }` when the original
+steering receipt is available, or `{ steered: false, reason: "duplicate" }`
+otherwise. A duplicate is
 a terminal no-op; do not enqueue fallback guidance for it. A rejected attempt
 does not reserve the key, so it can be retried.
 Internal Codex guidance is appended to the transcript only after native
 acceptance. A pre-dispatch rejection leaves no guidance in later model context
 and does not prevent retrying the key.
 
-Active steering requires a guarded (V2) runtime, such as the built-in OpenClaw
-runtime or Codex. Legacy V1 runtimes, including Copilot, return
+Active steering requires a runtime that exposes guarded steering
+(`messageInjectionV2`), such as the built-in OpenClaw runtime or Codex. Runtimes
+that expose only unguarded V1 `messageInjection` handles, including the Copilot
+harness, return
 `{ steered: false, reason: "active runtime does not support guarded steering" }`
 without queueing the guidance. The API does not automatically enqueue a later
 turn; use the explicit fallback below when needed.
 
 Steering requires `plugins.entries.<id>.hooks.allowPromptModification` (enabled
 unless explicitly set to `false`) and a live plugin instance. Disabled prompt
-injection returns `steered: false`; an expired plugin instance cannot dispatch.
-The host and guarded runtime recheck the plugin instance before dispatch,
-including after transcript persistence. Disabling or disposing the plugin while
-guidance is pending rejects the steer rather than silently dropping it.
+modification returns `steered: false`. Calling `steerActiveRun` from an already
+unloaded plugin instance, or disabling or disposing the plugin while the host is
+still preparing the steer, rejects the returned promise with an error. Once the
+host hands the guidance to the active run, the guarded runtime rechecks the
+plugin instance before dispatch, including after transcript persistence, and an
+unload detected there returns `steered: false`. Neither path silently drops the
+guidance, so handle both the rejection and `result.steered`.
 The input remains hidden, plugin-authored internal context, with provenance
 `{ kind: "internal_system", sourceTool: "plugin:<id>" }`. It carries no sender or
 owner authority and never answers a pending user question. The Control UI alone
-shows it as a collapsed **Plugin name guidance** notice with its timestamp;
+shows it as a collapsed **`<plugin>` guidance** notice (using the plugin's
+display name) with its timestamp;
 expanding the notice reveals the guidance without starting a new chat turn.
 The notice confirms recorded guidance, not delivery: a runtime can reject steering
 after its transcript row has been persisted.
