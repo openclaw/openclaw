@@ -60,6 +60,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 - WebChat excludes reasoning-flagged reply payloads (`isReasoning: true`) from assistant content, transcript replay text, and audio content blocks. Thinking-only payloads therefore do not surface as visible assistant messages or playable audio.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run). When session keys share a transcript, such as a cron base key and its isolated run key, the note is appended under the transcript's owner. The Control UI reconciles each note by transcript identity, so identical notes remain separate and do not become run activity or duplicate after a history reload.
 - Aborted runs can keep partial assistant output visible in the UI. Gateway persists that partial text into transcript history when buffered output exists, and marks the entry with abort metadata.
+- Accepted background image, video, and music generation hands the conversation off until its result arrives. Control UI does not mark that handoff as **Interrupted**, including after reload; actual stops and failures remain visible.
 
 ### Transcript and delivery model
 
@@ -151,7 +152,7 @@ selection remain unchanged. Browser microphone capture requires a secure context
 
 The Control UI binds each [selected person](/concepts/multi-user#mentioning-people) to the submitted message text. `chat.send`, the initial message on `sessions.create`, and `sessions.send` accept an optional `mentions` array of `{ profileId, start, end }` annotations. There are at most ten annotations. `start` is inclusive and `end` is exclusive, measured in UTF-16 code units. The Gateway validates their text ranges and recipients before accepting the input. Plain `@name` text and agent output do not create human mentions. Copying or quoting text does not copy its recipient selections.
 
-When the message selects people and its remaining text does not match the agent's mention patterns (see [Mentioning people](/concepts/multi-user#mentioning-people)), `chat.send` commits the human message and finishes the run without an agent turn: the `chat` terminal event carries no assistant message, the run does not steer or queue behind an active run, and the agent sees the message as transcript context on its next turn.
+When the message starts with a selected person and its remaining text does not match the agent's mention patterns (see [Mentioning people](/concepts/multi-user#mentioning-people)), `chat.send` commits the human message and finishes the run without an agent turn: the `chat` terminal event carries no assistant message, the run does not steer or queue behind an active run, and the agent sees the message as transcript context on its next turn.
 
 The mention becomes eligible for an Inbox entry and optional browser push only after the original human message is newly committed to the transcript. An early `status: "started"` acknowledgment, a staged initial message, or durable pending-input custody is not that commit. A queued or remotely placed first message therefore does not notify while it is still waiting to be recorded. A later agent failure does not undo a mention whose human message was already committed.
 

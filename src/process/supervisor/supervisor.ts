@@ -685,8 +685,8 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       }
       if (!runtimeWarning || !staleRuntimeReported) {
         staleRuntimeReported ||= runtimeWarning !== undefined;
-        const { warnProcessSupervisorSpawnFailure } = await loadSupervisorLogRuntime();
-        warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
+        const { warnProcessSupervisorFailure } = await loadSupervisorLogRuntime();
+        warnProcessSupervisorFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
       }
       throw err;
     }
@@ -754,22 +754,19 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     return pending;
   };
 
-  const shutdown = (): Promise<void> => {
-    // Publish the admission fence before cancellation can invoke owner callbacks.
-    return (shutdownPromise ??= Promise.resolve().then(async () => {
-      while (ownedRuns.size) {
-        for (const owner of ownedRuns) {
-          owner.cancel("manual-cancel");
-        }
-        // A failed startup owns no live process; only failed owner extinction
-        // must keep the process-wide supervisor fenced for operator recovery.
-        await waitForRuns(null, true);
+  // Publish the admission fence before cancellation can invoke owner callbacks.
+  const shutdown = (): Promise<void> =>
+    (shutdownPromise ??= Promise.resolve().then(async () => {
+      for (const owner of ownedRuns) {
+        owner.cancel("manual-cancel");
       }
+      // The admission fence is closed; this join includes pending starts and fails on live cleanup.
+      await waitForRuns(null, true);
       if (cleanupFailure) {
-        throw cleanupFailure.error;
+        const { warnProcessSupervisorFailure } = await loadSupervisorLogRuntime();
+        warnProcessSupervisorFailure(`Earlier cleanup failed: ${String(cleanupFailure.error)}`);
       }
     }));
-  };
 
   return {
     acquireScopeCleanup,

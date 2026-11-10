@@ -5,9 +5,6 @@ import type {
 } from "./templates-catalog-client.ts";
 
 export type TemplatesCatalogViewProps = {
-  /** Read only inside the catalog Loading/Errored slot. */
-  readEntries: () => TemplateCatalogEntry[];
-  catalogRequest: Promise<TemplateCatalogEntry[]> | undefined;
   basePath: string;
   modal?: boolean;
   selected: TemplateCatalogEntry | null;
@@ -32,7 +29,6 @@ export type TemplatesCatalogViewProps = {
   onClosePreview?: () => void;
   onOpenPreview: (kind: "instruction" | "skill", name: string) => void;
   onBack: () => void;
-  onRetryCatalog: () => void;
   onRetryDetail: () => void;
   onConfirm: () => void | Promise<void>;
   onConfirmConsent: () => void | Promise<void>;

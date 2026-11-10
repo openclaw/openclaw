@@ -110,7 +110,7 @@ describe("chat pane assistant identity snapshots", () => {
     expect(pane.chatProps!.widgetLayout!.read(row)).toBe(400);
   });
 
-  it("keeps an unknown transcript loading before hello and reconciles cached or live history", () => {
+  it("keeps an unknown transcript loading before hello and reconciles cached or live history", async () => {
     installTranscriptDomMocks();
     const pane = createRenderTestChatPane();
     const state = pane.initialize(createInitializationContext());
@@ -123,17 +123,21 @@ describe("chat pane assistant identity snapshots", () => {
     try {
       draw();
       expect(container.querySelector(".agent-chat__empty")).toBeNull();
-      expect(container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
+      await waitForSolid(() =>
+        expect(container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull(),
+      );
 
       state.currentSessionId = "cached-session";
       state.chatMessages = [{ role: "assistant", content: "Cached mission briefing." }];
       draw();
-      expect(container.textContent).toContain("Cached mission briefing.");
+      await waitForSolid(() => expect(container.textContent).toContain("Cached mission briefing."));
       expect(container.querySelector(".agent-chat__empty")).toBeNull();
 
       state.chatMessages = [];
       draw();
-      expect(container.querySelector(".agent-chat__empty")?.textContent).toBe("No messages yet");
+      await waitForSolid(() =>
+        expect(container.querySelector(".agent-chat__empty")?.textContent).toBe("No messages yet"),
+      );
 
       state.currentSessionId = null;
       state.connected = true;
@@ -143,7 +147,9 @@ describe("chat pane assistant identity snapshots", () => {
 
       state.chatLoading = false;
       draw();
-      expect(container.querySelector(".agent-chat__empty")?.textContent).toBe("No messages yet");
+      await waitForSolid(() =>
+        expect(container.querySelector(".agent-chat__empty")?.textContent).toBe("No messages yet"),
+      );
     } finally {
       disposeChatView(container);
       resetTranscriptTestDom();

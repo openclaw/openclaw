@@ -1,0 +1,4 @@
+# Failed child-evidence gh transport: distinguish primary/secondary rate limits,
+# permission rejection, and unknown responses without exposing private output or
+# adding a request. The existing retry test covers unchanged terminal behavior.
+37

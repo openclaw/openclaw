@@ -181,7 +181,7 @@ describe("setupWizardShellCompletion", () => {
   );
 
   it("shows a concrete PowerShell profile reload command after setup", async () => {
-    await withEnvAsync({ HOME: "/Users/ada" }, async () => {
+    await withEnvAsync({ HOME: "/Users/ada", XDG_CONFIG_HOME: undefined }, async () => {
       const prompter = createPrompter();
       const deps = createDeps("powershell");
 

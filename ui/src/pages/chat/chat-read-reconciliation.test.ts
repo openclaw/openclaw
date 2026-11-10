@@ -125,7 +125,7 @@ it.each(
       },
       () => false,
     );
-    expect(published).not.toHaveBeenCalled();
+    expect(published).toHaveBeenCalledTimes(matching && event === "chat" ? 1 : 0);
     commitFrame?.(0);
     expect(published).toHaveBeenCalledTimes(matching ? 1 : 0);
     if (matching && event === "chat") {

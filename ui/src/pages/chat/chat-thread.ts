@@ -592,8 +592,11 @@ export function setExpansionState<T>(values: Map<string, T>, key: string, value:
 }
 
 function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
+  const previous = values.get(key);
   if (values.delete(key)) {
-    expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+    if (previous !== false) {
+      expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+    }
   }
 }
 
@@ -704,7 +707,12 @@ export function syncToolCardExpansionState(
     }
     if (!initialized.has(id)) {
       if (!explicit.has(id)) {
-        writeExpansionState(expanded, id, autoExpandToolCalls);
+        if (autoExpandToolCalls) {
+          writeExpansionState(expanded, id, true);
+        } else {
+          // Closed is already the rendering default; discovering it changes only inventory.
+          expanded.set(id, false);
+        }
       }
       initialized.add(id);
     }

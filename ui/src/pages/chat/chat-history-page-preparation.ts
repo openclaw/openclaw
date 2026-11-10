@@ -200,7 +200,7 @@ export function extendChatHistoryWindow(
         ];
   } else {
     let retained = held;
-    if (direction !== "tail" && page.sources.some((source) => known.has(source))) {
+    if (page.sources.some((source) => known.has(source))) {
       const positions = new Map(page.sources.map((source, index) => [source, index] as const));
       const boundary =
         direction === "older"

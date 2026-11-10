@@ -2,6 +2,7 @@ import type { Virtualizer } from "@tanstack/virtual-core";
 import type { ChatReadingBookmark, ChatScrollToEndOptions } from "../scroll.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../scroll.ts";
 import type { ChatMessageReveal } from "./chat-message-reveal.ts";
+import type { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
   isTranscriptRangeCommitted,
   maxTranscriptScrollOffset,
@@ -36,6 +37,79 @@ export function cancelPendingScrollRetry(
   if (owner.pendingScrollFrame !== null) {
     cancelAnimationFrame(owner.pendingScrollFrame);
     owner.pendingScrollFrame = null;
+  }
+}
+
+type TranscriptScrollCancellationOwner = {
+  readonly offsetState: TranscriptOffsetState;
+  readonly bookmarkState: { bookmark?: ChatReadingBookmark };
+  readonly virtualizer: Pick<
+    Virtualizer<HTMLDivElement, HTMLElement>,
+    "cancelScroll" | "scrollToOffset"
+  >;
+  readonly initialRange: Pick<TranscriptInitialRange, "finishEnd" | "finishEndWhenSettled">;
+  readonly endAnchor: Pick<TranscriptEndAnchor, "capture" | "clear">;
+  readonly prependAnchor: Pick<TranscriptPrependAnchor, "clear">;
+  readonly scrollRestoreHost: Pick<TranscriptScrollRestoreHost, "pendingScrollFrame">;
+  getScrollElement(): HTMLDivElement | null;
+  getLifecycle(): unknown;
+  measureRowsWithoutScrollAdjustment(): void;
+};
+
+export function cancelTranscriptScroll(
+  owner: TranscriptScrollCancellationOwner,
+  preserveEnd = false,
+): void {
+  const command = owner.offsetState.scrollCommand;
+  const pendingOffset = owner.offsetState.pendingScrollOffset;
+  const unissuedEnd = command?.target === "end" && command.offset === undefined && !pendingOffset;
+  const element = owner.getScrollElement();
+  const lifecycle = owner.getLifecycle();
+  owner.bookmarkState.bookmark = undefined;
+  // Retire the old owner before range work can refresh and admit another command.
+  owner.offsetState.scrollCommand = null;
+  owner.offsetState.pendingScrollOffset = null;
+  cancelPendingScrollRetry(owner.scrollRestoreHost);
+  // Completing a smooth journey can reveal skipped row sizes. Retain its
+  // resting edge before that measurement moves the end; reader input clears it.
+  if (preserveEnd) {
+    owner.endAnchor.capture(element);
+  } else {
+    owner.endAnchor.clear();
+  }
+  owner.prependAnchor.clear();
+  if (!preserveEnd || unissuedEnd) {
+    // Retire the vendor target before range work can admit a replacement.
+    // Unissued preparation must not manufacture a native offset target.
+    owner.virtualizer.cancelScroll();
+  }
+  if (preserveEnd) {
+    owner.initialRange.finishEndWhenSettled();
+  } else {
+    owner.initialRange.finishEnd();
+  }
+  if (
+    unissuedEnd ||
+    (!command && !pendingOffset) ||
+    owner.offsetState.hasPendingCommand ||
+    element !== owner.getScrollElement() ||
+    lifecycle !== owner.getLifecycle()
+  ) {
+    return;
+  }
+  // An issued smooth journey keeps its established measurement/instant-stop order.
+  if (command?.behavior === "smooth") {
+    owner.measureRowsWithoutScrollAdjustment();
+  }
+  if (
+    element &&
+    !owner.offsetState.hasPendingCommand &&
+    element === owner.getScrollElement() &&
+    lifecycle === owner.getLifecycle()
+  ) {
+    // The measured end owner renews later; a dynamic destination would also
+    // follow new rows before end preparation admits their native geometry.
+    owner.virtualizer.scrollToOffset(element.scrollTop, { behavior: "instant" });
   }
 }
 

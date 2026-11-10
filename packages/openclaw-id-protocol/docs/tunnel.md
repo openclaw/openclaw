@@ -111,6 +111,8 @@ listed in `Connection`; `Forwarded`; every `X-Forwarded-*`, `X-OpenClaw-Id-*` an
 `X-Tcid-*`; the identity headers `X-Forwarded-User`, `X-Forwarded-Email`,
 `X-Forwarded-Groups`, `X-Forwarded-Preferred-Username`, `X-OpenClaw-Scopes`, `Remote-User`,
 `X-Remote-User`; for WebSockets the `Sec-WebSocket-*` handshake headers. `Origin` is preserved.
+The child also strips client `Content-Length` and uses chunked transfer encoding for HTTP
+requests so each DATA frame and FIN determine the body sent to the Gateway.
 
 Headers the child **sets** (proposal; final names belong to the Gateway ingress contract):
 

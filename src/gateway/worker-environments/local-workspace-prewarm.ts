@@ -2,15 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
-import { withWorktreeMutationLease } from "../../agents/worktrees/allocation.js";
-import { resolveWorktreeBase } from "../../agents/worktrees/base-ref.js";
-import { resolveRepository } from "../../agents/worktrees/repository-paths.js";
-import { withWorktreeRunEnd } from "../../agents/worktrees/run-end-lifecycle.js";
-import { withWorktreeSources } from "../../agents/worktrees/service-preparation.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { prepareLocalWorkspaceTemplate } from "./local-workspace-template.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -36,6 +30,22 @@ export async function prewarmLocalWorkspaceTemplates(params: {
       continue;
     }
     try {
+      commitGuard();
+      const [
+        { withWorktreeMutationLease },
+        { resolveWorktreeBase },
+        { resolveRepository },
+        { withWorktreeRunEnd },
+        { withWorktreeSources },
+        { prepareLocalWorkspaceTemplate },
+      ] = await Promise.all([
+        import("../../agents/worktrees/allocation.js"),
+        import("../../agents/worktrees/base-ref.js"),
+        import("../../agents/worktrees/repository-paths.js"),
+        import("../../agents/worktrees/run-end-lifecycle.js"),
+        import("../../agents/worktrees/service-preparation.js"),
+        import("./local-workspace-template.js"),
+      ]);
       commitGuard();
       const repository = await resolveRepository(resolveAgentWorkspaceDir(config, agentId));
       await withWorktreeRunEnd(env, () =>

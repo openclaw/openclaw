@@ -201,12 +201,14 @@ export function measureTranscriptRow(
     const size = readTranscriptRowHeight(element);
     if (
       size !== 0 ||
-      (element.getBoundingClientRect().width !== 0 && virtualizer.scrollElement?.clientHeight !== 0)
+      (element.getBoundingClientRect().width !== 0 &&
+        virtualizer.scrollElement?.clientHeight !== 0 &&
+        element.offsetHeight === 0)
     ) {
       return size;
     }
   }
-  // Parked rows have no layout box. Retain their geometry until preparation or
+  // Parked rows have no visible extent. Retain their geometry until preparation or
   // presentation resumes, also while a whole pane is hidden or awaiting layout.
   const index = virtualizer.indexFromElement(element);
   return (

@@ -45,6 +45,8 @@ export type TranscriptCallbacks = {
   onReaderScroll?: (towardEnd?: boolean, source?: "bookmark") => void;
   onNativeScroll?: (scroll: TranscriptNativeScroll) => void;
   onHistoryIntent?: (event: Event) => void;
+  /** Plain End uses the pane's manual Latest action and its follow policy. */
+  onRequestEnd?: () => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
   canFollowEnd?: () => boolean;
   /** A queued send/latest command supersedes reader anchoring before its first frame. */

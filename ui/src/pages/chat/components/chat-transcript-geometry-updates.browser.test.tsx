@@ -524,7 +524,7 @@ it.each([120, 360, 1200])(
   },
 );
 
-it("parks retained rows without layout and restores their resized geometry and nested scroll", async () => {
+it("parks retained rows at zero size and restores their resized geometry and nested scroll", async () => {
   const prose = "A retained paragraph wraps to the current conversation width. ".repeat(20);
   const source = [prose, "```text", "wide".repeat(160), "```"].join("\n\n");
   // Only split completed runs retain DOM. The ordinary tail crosses the
@@ -571,7 +571,7 @@ it("parks retained rows without layout and restores their resized geometry and n
   await settleLayout();
   // Other fixture rows have fixed heights. This row uses its real Markdown
   // height so the narrower pane must produce a new browser measurement.
-  row.style.height = "auto";
+  row.style.setProperty("--geometry-row-height", "auto");
   await settleLayout();
   const key = expectDefined(row.dataset.virtualRowKey, "retained row key");
   const code = requireElement(row, ".code-block-viewport");
@@ -602,9 +602,9 @@ it("parks retained rows without layout and restores their resized geometry and n
     await expect.poll(() => row.hasAttribute("data-prepared-row")).toBe(true);
     await settleLayout();
     expect(row.isConnected).toBe(true);
-    // Parked DOM must create no layout box, while its cached height still
+    // Parked DOM keeps a zero-height box, while its cached height still
     // contributes to the native scroll extent after the real zero-size receipt.
-    expect(row.getClientRects()).toHaveLength(0);
+    expect(row.getBoundingClientRect().height).toBe(0);
     expect(deliveredHeights).toContain(0);
     expect(virtualizer.itemSizeCache.get(key)).toBeCloseTo(height, 1);
     expect(Math.abs(viewport.scrollHeight - extent)).toBeLessThanOrEqual(1);
@@ -612,7 +612,7 @@ it("parks retained rows without layout and restores their resized geometry and n
     host.style.width = "480px";
     session.syncViewportGeometry();
     await settleLayout();
-    expect(row.getClientRects()).toHaveLength(0);
+    expect(row.getBoundingClientRect().height).toBe(0);
     expect(virtualizer.itemSizeCache.get(key)).toBeCloseTo(height, 1);
     expect(Math.abs(viewport.scrollHeight - extent)).toBeLessThanOrEqual(1);
 

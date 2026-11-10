@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { constants, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import corePackagePolicy from "../../scripts/lib/npm-core-release-packages.json" with { type: "json" };
@@ -242,7 +242,7 @@ function buildCoreEvidenceSource() {
   return { source, targetSha };
 }
 
-function coreEvidenceFixture() {
+function coreEvidenceFixture(sdkEntry?: string) {
   sourceTemplate ??= buildCoreEvidenceSource();
   const source = tempDirs.make("publish-preflight-source-");
   // Mutable Git state belongs to each case; only the pristine source seed is reused.
@@ -295,7 +295,54 @@ function coreEvidenceFixture() {
   const manifestPath = join(artifacts, "preflight-manifest.json");
   const writeManifest = () => writeJsonFile(manifestPath, manifest);
   writeManifest();
+  let downloadedArtifacts: unknown[] = [];
+  if (sdkEntry) {
+    const files = Object.fromEntries(
+      readdirSync(artifacts).map((name) => [name, readFileSync(join(artifacts, name))]),
+    );
+    const archives = [
+      makeStoredZip(files),
+      makeStoredZip({
+        "plugin-sdk-api-release-diff.json": "{}",
+        "plugin-sdk-api-release-evidence.json": JSON.stringify(
+          sdkEntry === "evidence mismatch" ? {} : manifest.pluginSdkApi,
+        ),
+        [sdkEntry.endsWith(".md") ? sdkEntry : "plugin-sdk-api-release-diff.md"]: "# SDK diff",
+      }),
+    ];
+    const bin = join(artifacts, "bin");
+    mkdirSync(bin);
+    downloadedArtifacts = archives.map((bytes, index) => {
+      writeFileSync(join(bin, String(index + 90) + ".zip"), bytes);
+      return {
+        id: index + 90,
+        name:
+          index === 0 ? "openclaw-npm-preflight-v" + version : "plugin-sdk-api-release-diff-2-1",
+        expired: false,
+        size_in_bytes: bytes.length,
+        digest:
+          "sha256:" +
+          (sdkEntry === "digest mismatch" && index === 1 ? "0".repeat(64) : sha256(bytes)),
+      };
+    });
+    const script = [
+      "#!" + process.execPath,
+      'const fs = require("node:fs");',
+      "const endpoint = process.argv[3];",
+      'const id = endpoint.split("/").at(-2);',
+      'if (!["90", "91"].includes(id) || !endpoint.endsWith("/zip")) throw new Error("Unexpected archive request");',
+      'process.stdout.write(fs.readFileSync(require("node:path").join(__dirname, id + ".zip")));',
+    ].join(String.fromCharCode(10));
+    writeFileSync(join(bin, "gh"), script, { mode: 0o755 });
+    vi.stubEnv("PATH", bin + delimiter + (process.env.PATH ?? ""));
+  }
   const runGh = (args: string[]) => {
+    if (sdkEntry && args[1]?.includes("/artifacts?")) {
+      return JSON.stringify({
+        artifacts: downloadedArtifacts,
+        total_count: downloadedArtifacts.length,
+      });
+    }
     if (args[1]?.includes("/compare/")) {
       return JSON.stringify({ status: "identical" });
     }
@@ -335,12 +382,29 @@ function coreEvidenceFixture() {
           currentSelectorSha: targetSha,
           runGh,
         },
-        { npmManifest: manifest, npmManifestPath: manifestPath },
+        sdkEntry ? {} : { npmManifest: manifest, npmManifestPath: manifestPath },
       ),
   };
 }
 
 describe("publish preflight immutable npm evidence", () => {
+  it.skipIf(process.platform === "win32").each([
+    ["plugin-sdk-api-release-diff.md", undefined],
+    ["unexpected.md", "Unexpected, duplicate, or aliased"],
+    ["nested/plugin-sdk-api-release-diff.md", "Unexpected, duplicate, or aliased"],
+    ["../plugin-sdk-api-release-diff.md", "path"],
+    ["PLUGIN-SDK-API-RELEASE-DIFF.md", "Unexpected, duplicate, or aliased"],
+    ["digest mismatch", "archive size or digest"],
+    ["evidence mismatch", "SDK evidence differs"],
+  ])("validates downloaded SDK archive: %s", async (entry, error) => {
+    const fixture = coreEvidenceFixture(entry);
+    if (error) {
+      await expect(fixture.verify()).rejects.toThrow(error);
+    } else {
+      expect((await fixture.verify()).corePackages).toEqual(fixture.corePackages);
+    }
+  });
+
   it("qualifies the complete prepared core package set against exact source metadata", async () => {
     const fixture = coreEvidenceFixture();
     expect((await fixture.verify()).corePackages).toEqual(fixture.corePackages);

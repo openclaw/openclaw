@@ -143,3 +143,31 @@ it("retires memo dependencies without changing a peer's published bundles", () =
     completed: true,
   });
 });
+
+it("keeps prose memo identity through reassembly until its canonical source retires", () => {
+  const text = { type: "text", text: "Retained commentary" };
+  const source = assistant([text, toolCall("prose-call")]);
+  const output = { role: "toolResult", content: [result("prose-call")] };
+  const sibling = invocation("sibling");
+  const items = () => [
+    item(source, "prose-owner"),
+    item(output, "prose-result"),
+    ...sibling.items(),
+  ];
+  const prose = (rows: unknown[]) =>
+    rows.find((message) => (message as { content?: unknown[] }).content?.includes(text));
+  const initial = prose(messages(items()));
+  expect(initial).toBeDefined();
+  const published = JSON.stringify(initial);
+
+  // Change a sibling to bypass the full-turn cache without changing this source.
+  sibling.output.content = [{ ...result("sibling"), text: "updated sibling" }];
+  expect(prose(messages(items()))).toBe(initial);
+  retireCoalescedMessageSources([sibling.output]);
+  expect(prose(messages(items()))).toBe(initial);
+
+  const retired = retireCoalescedMessageSources([source]);
+  expect(retired).toContain(initial);
+  expect(prose(messages(items()))).not.toBe(initial);
+  expect(JSON.stringify(initial)).toBe(published);
+});

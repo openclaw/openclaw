@@ -1,4 +1,9 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import type {
+  MessageReactionSummary,
+  SessionSharingRole,
+  SessionSuggestion,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -13,10 +18,36 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import type { ChatTypingActorView, ChatTypingOverflow } from "./chat-typing-presence.ts";
 import type { ChatProps } from "./chat-view.tsx";
+import type { ChatSessionSharingState } from "./components/chat-session-sharing-shared.tsx";
 import { dismissChatRunError, hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 registerChatSessionEnglish();
+
+export function createChatPaneCollaborationState(): {
+  sharingStates: Map<string, ChatSessionSharingState>;
+  suggestions: SessionSuggestion[];
+  role: SessionSharingRole | undefined;
+  busyIds: Set<string>;
+  addOperation: symbol | undefined;
+  editOperation: symbol | undefined;
+  typingViews: ChatTypingActorView[];
+  typingOverflow: ChatTypingOverflow | undefined;
+  reactions: Map<string, MessageReactionSummary[]>;
+} {
+  return {
+    sharingStates: new Map(),
+    suggestions: [],
+    role: undefined,
+    busyIds: new Set(),
+    addOperation: undefined,
+    editOperation: undefined,
+    typingViews: [],
+    typingOverflow: undefined,
+    reactions: new Map(),
+  };
+}
 
 export function createChatPaneRunRecoveryActions(
   state: Pick<

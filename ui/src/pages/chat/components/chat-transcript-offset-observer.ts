@@ -122,7 +122,24 @@ export function scrollTranscriptToEnd(
   measureSkippedRows: () => void,
   endAnchor: TranscriptEndAnchor,
   prepareEnd: (ready: () => void, isCurrent: () => boolean, native: boolean) => void,
+  preparingEnd: boolean,
 ): void {
+  if (source === "auto" && preparingEnd && state.scrollCommand?.target === "end") {
+    // The stream can outlive virtual-core's finite scroll journey. New rows
+    // must finish measurement before renewing its destination, too.
+    const command = state.scrollCommand;
+    if (
+      command.offset !== undefined &&
+      command.offset !== maxTranscriptScrollOffset(instance.scrollElement)
+    ) {
+      prepareEnd(
+        () => instance.scrollToEnd({ behavior: command.behavior }),
+        () => state.scrollCommand === command,
+        true,
+      );
+    }
+    return;
+  }
   if (source === "auto" && endAnchor.capture(instance.scrollElement)) {
     return;
   }
@@ -211,9 +228,11 @@ type OffsetOwner = {
   onLayoutCorrection(before: number, after: number): void;
   invalidate(): void;
   onOffset(readerDelta: number): void;
+  onWheel?(delta: number): void;
   onReaderScroll(towardEnd?: boolean): void;
   onNativeScroll?: (scroll: TranscriptNativeScroll) => void;
   onHistoryIntent?: (event: Event) => void;
+  onRequestEnd?(): void;
   onComposerLayout(changed: boolean): void;
 };
 
@@ -509,6 +528,40 @@ export function observeTranscriptOffset(
       owner.endAnchor.capture(element);
     }
   };
+  const wheelForecastDelta = (event: WheelEvent): number => {
+    if (
+      !owner.onWheel ||
+      event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      event.shiftKey ||
+      !event.deltaY ||
+      Math.abs(event.deltaX) > Math.abs(event.deltaY)
+    ) {
+      return 0;
+    }
+    for (const target of event.composedPath()) {
+      if (target === element) {
+        break;
+      }
+      if (!(target instanceof HTMLElement)) {
+        continue;
+      }
+      const style = getComputedStyle(target);
+      if (
+        /^(auto|scroll)$/.test(style.overflowY) &&
+        ((event.deltaY < 0
+          ? target.scrollTop > 0
+          : target.scrollTop + target.clientHeight < target.scrollHeight - 1) ||
+          style.overscrollBehaviorY === "contain" ||
+          style.overscrollBehaviorY === "none")
+      ) {
+        return 0;
+      }
+    }
+    return event.deltaY;
+  };
   const interrupt = (event: Event) => {
     if (
       event.defaultPrevented ||
@@ -535,6 +588,7 @@ export function observeTranscriptOffset(
       owner.state.touching = contactIds.size > 0;
       touchY = localTouchY(event);
     }
+    const wheelDelta = event instanceof WheelEvent ? wheelForecastDelta(event) : 0;
     owner.endAnchor.cancelComposerResize();
     owner.state.pendingInteractionAnchor = null;
     maintenanceTarget = owner.state.maintenanceScrollOffset = null;
@@ -551,13 +605,40 @@ export function observeTranscriptOffset(
     ) {
       owner.cancelScroll();
     }
+    const beforeSync = nativeOffset;
     syncOffset();
+    if (
+      event instanceof KeyboardEvent &&
+      event.key === "End" &&
+      event.target === element &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      owner.onRequestEnd
+    ) {
+      // Own End on the transcript itself; nested controls keep native navigation.
+      event.preventDefault();
+      owner.onRequestEnd();
+      return;
+    }
     const towardEnd =
       (event instanceof WheelEvent && event.deltaY > 0) ||
       (event instanceof KeyboardEvent &&
         (["ArrowDown", "PageDown", "End"].includes(event.key) ||
           (event.key === " " && !event.shiftKey)));
     publishReaderIntent(towardEnd ? true : event instanceof KeyboardEvent ? false : undefined);
+    if (wheelDelta) {
+      // Native travel can precede this listener. It is not a wheel receipt;
+      // reduce speculation by same-direction travel without claiming a causal match.
+      const observed = nativeOffset - beforeSync;
+      const remaining =
+        Math.sign(observed) === Math.sign(wheelDelta)
+          ? Math.sign(wheelDelta) * Math.max(0, Math.abs(wheelDelta) - Math.abs(observed))
+          : wheelDelta;
+      // A consumed wheel still identifies a fling whose next viewport needs preparation.
+      owner.onWheel?.(remaining);
+    }
     // Keydown policy runs after the thread's delegated link handling instead.
     if (event.type === "wheel" || event.type === "touchstart") {
       owner.onHistoryIntent?.(event);
@@ -617,9 +698,10 @@ export function observeTranscriptOffset(
   if (element) {
     listen(element, "scroll", captureScroll, { ...passive, capture: true });
     listen(element, "touchmove", moveTouch, passive);
-    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
+    for (const type of ["wheel", "touchstart", "pointerdown"]) {
       listen(element, type, interrupt, passive);
     }
+    listen(element, "keydown", interrupt, { signal: listeners.signal });
     listen(element, "scrollend", finishScroll, passive);
     listen(element, "touchend", finishTouch, passive);
     listen(element, "touchcancel", finishTouch, passive);

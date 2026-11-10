@@ -42,7 +42,7 @@ openclaw-pending-session-create {
 
 /* The long discard label would squeeze the message into a sliver on phones. */
 @media (max-width: 560px) {
-  .chat-error .app-toast__content > .chat-error__discard {
+  .chat-error .app-toast__content > .chat-error__actions:has(> .chat-error__discard) {
     grid-row: auto;
     grid-column: 1 / -1;
     justify-self: start;
@@ -178,7 +178,7 @@ openclaw-pending-session-create {
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 0.88rem;
+  font-size: calc(0.88rem * var(--control-ui-text-scale));
 }
 
 .agent-chat__search-bar input:focus-visible {
@@ -238,13 +238,13 @@ openclaw-pending-session-create {
 .chat-workspace-conflict-ref > span,
 .chat-workspace-conflict-commands span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-workspace-conflict-command-help {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-workspace-conflict-ref,
@@ -261,7 +261,7 @@ openclaw-pending-session-create {
   padding: 4px 7px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--bg) 72%, transparent);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .chat-workspace-conflict-commands {
@@ -315,7 +315,7 @@ openclaw-pending-session-create {
   display: grid;
   min-width: 0;
   gap: 2px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.35;
 }
 
@@ -420,7 +420,7 @@ openclaw-pending-session-create {
 .chat-topbar-notices .chat-composer-neighbor-card__copy {
   display: block;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -503,7 +503,7 @@ openclaw-pending-session-create {
 .chat-workspace-conflict-commands-disclosure > summary {
   color: var(--muted);
   cursor: var(--cursor-action);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-workspace-conflict-commands-disclosure[open] > summary {
@@ -606,12 +606,6 @@ openclaw-pending-session-create {
   overflow-clip-margin: 10px;
 }
 
-/* Message jumps need real mounted-row sizes before their target settles. */
-.chat-thread-inner[data-measuring-rows] .chat-virtual-row:not([data-prepared-row]) {
-  content-visibility: visible;
-  contain: none;
-}
-
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   /* Revealed 44px footer targets can overhang the compact row by half their
      height. Widen the paint clip instead of changing containment on hover.
@@ -699,7 +693,7 @@ openclaw-pending-session-create {
   gap: 10px;
   padding: 0 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   user-select: none;
 }
 
@@ -751,9 +745,9 @@ openclaw-pending-session-create {
   max-width: 100%;
   overflow: hidden;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 400;
-  line-height: 12px;
+  line-height: var(--control-ui-text-sm);
   text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -982,7 +976,7 @@ openclaw-pending-session-create {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--control-ui-text-scale));
 
   svg {
     width: 11px;
@@ -1021,7 +1015,7 @@ openclaw-pending-session-create {
   box-shadow: inset 0 0 0 1px var(--border-strong);
   color: var(--text-strong);
   font: inherit;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--control-ui-text-scale));
   font-weight: 500;
 }
 .chat-context__compact:disabled {
@@ -1044,14 +1038,14 @@ openclaw-pending-session-create {
   gap: 4px 8px;
   min-height: 26px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 .context-usage__stats {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   margin: 0 0 0 auto;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   div {
     display: inline-flex;
     align-items: baseline;
@@ -1098,7 +1092,7 @@ openclaw-pending-session-create {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
   white-space: nowrap;
   mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
@@ -1113,7 +1107,7 @@ openclaw-pending-session-create {
   padding: 0 6px;
   border-radius: 5px;
   color: var(--muted-strong);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
   text-decoration: none;
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--muted) 40%, transparent);
@@ -1166,7 +1160,7 @@ openclaw-pending-session-create {
   min-width: 0;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1176,7 +1170,7 @@ openclaw-pending-session-create {
   align-items: center;
   gap: 4px;
   color: color-mix(in oklab, var(--muted-strong) 50%, var(--text));
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
   white-space: nowrap;
   svg {
@@ -1187,7 +1181,7 @@ openclaw-pending-session-create {
 .context-usage__limit-value {
   margin-inline-start: auto;
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 650;
   white-space: nowrap;
 }
@@ -1406,7 +1400,7 @@ openclaw-chat-video-player {
   width: 62px;
   flex: none;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   line-height: 1;
   white-space: nowrap;
@@ -1549,32 +1543,60 @@ openclaw-chat-video-player {
   gap: 6px;
   min-height: 24px;
   padding: 3px 8px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 
-/* The conversation's top-right gutter, owned by one column so its members
-   stack instead of overlapping (the positioned ancestor is
-   .chat-main__conversation); content scrolls underneath it. The column is as
-   wide as its widest member — the suggestion tray, which deliberately overhangs
-   the transcript — and narrower members right-align inside it. */
+/* One gutter stacks notices and suggestions. On wide panes the tray deliberately
+   overhangs the transcript; the full-width notice lane passes pointer input through. */
 .chat-gutter-stack {
   position: absolute;
   z-index: 24;
   top: calc(var(--chat-mobile-pane-header-height, 0px) + 10px);
   right: 14px;
   display: grid;
-  width: min(450px, calc(100% - 28px));
+  grid-template-rows: auto minmax(0, 1fr);
+  width: calc(100% - 28px);
+  min-height: 0;
+  max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
   justify-items: end;
   gap: var(--space-3);
-  /* The column spans the tray's width even when only a narrow member renders,
-     so it must not swallow clicks aimed at the transcript beneath it. */
   pointer-events: none;
 }
 
 .chat-gutter-stack > * {
   pointer-events: auto;
 }
+
+/* A tray wider than half the pane has no usable side gutter. Let the existing
+   conversation flex flow reserve its real height, including expanded instructions;
+   bound that share so the transcript and composer remain available. */
+@container chat-conversation (max-width: 900px) {
+  .chat-gutter-stack:has(> .task-suggestions) {
+    position: relative;
+    inset: auto;
+    order: -1;
+    flex: 0 1 auto;
+    align-self: flex-end;
+    max-height: 40cqh;
+    margin: 10px 14px 18px;
+  }
+}
+.chat-gutter-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  width: 100%;
+  pointer-events: none;
+}
+
+.chat-gutter-header .chat-topbar-notices {
+  position: static;
+  justify-self: center;
+  max-width: min(34rem, 100%);
+  transform: none;
+}
+
 .task-suggestions {
   --task-suggestion-card-bg: color-mix(in srgb, var(--panel-strong) 72%, var(--panel-hover) 28%);
   --task-suggestion-path-bg: color-mix(in srgb, var(--panel-hover) 84%, var(--text) 16%);
@@ -1586,7 +1608,8 @@ openclaw-chat-video-player {
      against this box. Geometry otherwise comes from .chat-gutter-stack. */
   position: relative;
   display: grid;
-  width: 100%;
+  width: min(450px, 100%);
+  min-height: 0;
   overflow: visible;
   overscroll-behavior: contain;
 }
@@ -1625,7 +1648,7 @@ openclaw-chat-video-player {
 .session-suggestion__state {
   border-radius: 999px;
   padding: 3px 8px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -1644,7 +1667,7 @@ openclaw-chat-video-player {
   overflow: auto;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   white-space: pre-wrap;
 }
 
@@ -1681,7 +1704,7 @@ openclaw-chat-video-player {
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
   /* Keep header and launch controls inside short panes while the body scrolls. */
-  max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
+  max-height: 100%;
   padding: 14px 16px 17px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
@@ -1740,7 +1763,7 @@ openclaw-chat-video-player {
   gap: 8px;
   min-width: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1797,7 +1820,7 @@ openclaw-chat-video-player {
   overflow: auto;
   overflow-wrap: anywhere;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.35;
 }
 
@@ -1818,7 +1841,7 @@ openclaw-chat-video-player {
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   list-style: none;
   user-select: none;
 }
@@ -1870,7 +1893,7 @@ openclaw-chat-video-player {
   margin: 0;
   border: 1px solid var(--border);
   color: var(--text);
-  font: 11px/1.4 var(--mono);
+  font: var(--control-ui-text-xs)/1.4 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -1959,7 +1982,7 @@ openclaw-chat-video-player {
   corner-shape: superellipse(1.5);
   background: var(--task-suggestion-action-bg);
   color: var(--task-suggestion-action-fg);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1;
   white-space: nowrap;
   user-select: none;
@@ -2024,7 +2047,7 @@ openclaw-chat-video-player {
   padding: 6px 12px;
   border: 1px solid var(--border);
   background: var(--panel);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .chat-pr[data-state="merged"] {
@@ -2099,7 +2122,7 @@ openclaw-chat-video-player {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font: 12px/1.4 var(--mono);
+  font: var(--control-ui-text-sm)/1.4 var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2122,7 +2145,7 @@ openclaw-chat-video-player {
 .chat-pr__diff {
   display: inline-flex;
   gap: 5px;
-  font: 12px/1.4 var(--mono);
+  font: var(--control-ui-text-sm)/1.4 var(--mono);
 }
 
 button.chat-pr__diff {
@@ -2157,7 +2180,7 @@ button.chat-pr__diff {
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, currentColor 12%, transparent);
   cursor: var(--cursor-action);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   list-style: none;
   user-select: none;
@@ -2202,7 +2225,7 @@ button.chat-pr__diff {
   background: var(--panel);
   box-shadow: var(--shadow-md);
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
 }
 
@@ -2213,7 +2236,7 @@ button.chat-pr__diff {
   gap: 12px;
   margin-bottom: 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-pr__checks-menu-header a {
@@ -2231,7 +2254,7 @@ button.chat-pr__diff {
   flex-wrap: wrap;
   gap: 4px 14px;
   margin-bottom: 8px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .chat-pr__checks-row {
@@ -2274,7 +2297,7 @@ button.chat-pr__diff {
   padding: 7px 4px;
   border-radius: 5px;
   cursor: var(--cursor-action);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   line-height: 1.4;
 }
@@ -2300,7 +2323,7 @@ button.chat-pr__diff {
 .chat-ci__automation-status {
   margin: 4px 4px 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
   line-height: 1.5;
 }
@@ -2312,7 +2335,7 @@ button.chat-pr__diff {
   gap: 8px;
   margin: 8px 4px 0;
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
   line-height: 1.5;
 }
@@ -2351,7 +2374,7 @@ button.chat-pr__diff {
 .chat-ci__automation-job-error {
   margin: 0 4px 6px 28px;
   color: var(--danger);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -2360,7 +2383,7 @@ button.chat-pr__diff {
 .chat-ci__automation-warning {
   margin: 8px 4px 0;
   color: var(--warn);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
   line-height: 1.5;
 }
@@ -2415,7 +2438,7 @@ openclaw-chat-ci-details {
 
 .chat-ci__duration {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
@@ -2441,7 +2464,7 @@ openclaw-chat-ci-details {
   min-height: 28px;
   padding: 4px 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
   line-height: 1.4;
 }
@@ -2455,7 +2478,7 @@ openclaw-chat-ci-details {
   align-items: center;
   gap: 5px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .chat-ci__job-link:hover {
@@ -2465,7 +2488,7 @@ openclaw-chat-ci-details {
 .chat-ci__empty-steps {
   margin-bottom: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
 }
 
@@ -2480,7 +2503,7 @@ openclaw-chat-ci-details {
   gap: 10px;
   padding: 8px 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -2517,7 +2540,7 @@ openclaw-chat-ci-details {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--muted) 10%, transparent);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -2542,7 +2565,7 @@ openclaw-chat-ci-details {
   column-gap: 8px;
   row-gap: 2px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
 }
 
@@ -2602,7 +2625,7 @@ openclaw-chat-ci-details {
 
 .chat-pr__publication-history {
   padding: 2px 12px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-pr__publication-history > summary {
@@ -2783,7 +2806,7 @@ openclaw-chat-ci-details {
   gap: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-md);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .agent-chat__disabled-banner--compact .callout__content {
@@ -2827,7 +2850,7 @@ openclaw-chat-ci-details {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-subagent-detail__stop:hover {
@@ -2884,7 +2907,7 @@ openclaw-chat-ci-details {
   max-width: 200px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2895,7 +2918,7 @@ openclaw-chat-ci-details {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -3091,7 +3114,7 @@ openclaw-chat-ci-details {
   background: var(--popover);
   box-shadow: var(--shadow-lg);
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.5;
 }
 
@@ -3126,8 +3149,8 @@ openclaw-chat-ci-details {
   min-height: 28px;
   padding: 3px 10px;
   border-radius: var(--radius-full);
-  font-size: 12px;
-  line-height: 20px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(20px * var(--control-ui-text-scale));
 }
 
 .chat-annotation-editor .btn,
@@ -3185,7 +3208,7 @@ openclaw-chat-ci-details {
 }
 
 .chat-provider-review-dialog h3 {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .chat-provider-review-dialog blockquote {
@@ -3206,7 +3229,7 @@ openclaw-chat-ci-details {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: nowrap;
 }
 

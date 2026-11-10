@@ -242,7 +242,9 @@ it.each([
     rerender(true);
     await flushDeferredRowPrune();
 
-    const preview = container.querySelector<HTMLButtonElement>(inlineReply);
+    const preview = await waitForSolid(() =>
+      expectDefined(container.querySelector<HTMLButtonElement>(inlineReply), "reply preview"),
+    );
     if (!textless) {
       expect(preview?.getAttribute("aria-label")).toBe("Replying to Molty");
     }

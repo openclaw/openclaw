@@ -2,9 +2,6 @@ import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/
 import type {
   SessionCatalogHost,
   SessionCatalogSession,
-  SessionSharingRole,
-  MessageReactionSummary,
-  SessionSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -51,19 +48,17 @@ import { createChatPaneDiscussionState } from "./chat-pane-discussion-state.ts";
 import { createChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
 import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
-import { SessionParticipationTracker } from "./chat-pane-state.ts";
+import {
+  createChatPaneCollaborationState,
+  SessionParticipationTracker,
+} from "./chat-pane-state.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import type {
-  ChatTypingActorState,
-  ChatTypingActorView,
-  ChatTypingOverflow,
-} from "./chat-typing-presence.ts";
+import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.types.ts";
-import type { ChatSessionSharingState } from "./components/chat-session-sharing-shared.tsx";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { ComposerActivityLayout } from "./components/chat-transcript-layout-owner.ts";
@@ -455,6 +450,7 @@ export abstract class ChatPaneStateOwner {
     onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
     onReaderScroll: (towardEnd, source) =>
       this.state && handleChatScrollTakeover(this.state, towardEnd, source),
+    onRequestEnd: () => this.state?.scrollToBottom({ smooth: true }),
   });
   protected get progressCards() {
     return sessionProgressCardsForGateway(this.context.gateway);
@@ -590,27 +586,7 @@ export abstract class ChatPaneStateOwner {
       selfInstanceId: snapshot?.client?.instanceId,
     };
   });
-  readonly collaboration: {
-    sharingStates: Map<string, ChatSessionSharingState>;
-    suggestions: SessionSuggestion[];
-    role: SessionSharingRole | undefined;
-    busyIds: Set<string>;
-    addOperation: symbol | undefined;
-    editOperation: symbol | undefined;
-    typingViews: ChatTypingActorView[];
-    typingOverflow: ChatTypingOverflow | undefined;
-    reactions: Map<string, MessageReactionSummary[]>;
-  } = {
-    sharingStates: new Map(),
-    suggestions: [],
-    role: undefined,
-    busyIds: new Set(),
-    addOperation: undefined,
-    editOperation: undefined,
-    typingViews: [],
-    typingOverflow: undefined,
-    reactions: new Map(),
-  };
+  readonly collaboration = createChatPaneCollaborationState();
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
   readonly resetConfirmation: {

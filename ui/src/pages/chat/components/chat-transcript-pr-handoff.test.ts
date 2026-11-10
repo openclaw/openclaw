@@ -317,3 +317,84 @@ describe("workspace publication handoff", () => {
     expect(JSON.stringify(messagesIn(frames))).toContain(report);
   });
 });
+
+describe("background media handoff", () => {
+  const receipt = { status: "started", async: true, taskId: "media-task", runId: "media-task" };
+  function mediaHistory(name: string, details: unknown = receipt, isError = false) {
+    return [
+      makeMessage("media-request", 1, {
+        role: "user",
+        runId: "media-run",
+        content: "Revise the poster.",
+      }),
+      {
+        role: "assistant",
+        runId: "media-run",
+        stopReason: "toolUse",
+        content: [
+          { type: "text", text: "Revising the poster." },
+          { type: "toolCall", id: "media-call", name, arguments: { prompt: "Pixel poster" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        runId: "media-run",
+        toolCallId: "media-call",
+        toolName: name,
+        details,
+        isError,
+        content: [{ type: "text", text: JSON.stringify(details) }],
+      },
+    ];
+  }
+
+  it.each(["image_generate", "video_generate", "music_generate"])(
+    "recognizes accepted %s without inventing a child-session wait",
+    (name) => {
+      const messages = mediaHistory(name);
+      for (const live of [false, true]) {
+        const persisted = live ? messages.slice(0, 2) : messages;
+        const toolMessages = live
+          ? [
+              {
+                ...messages[2],
+                __openclawToolStreamLive: true,
+                __openclawToolStreamResultReceived: true,
+              },
+            ]
+          : [];
+        for (const showToolCalls of [false, true]) {
+          const chain = projectHistory(persisted, {
+            messages: persisted,
+            toolMessages,
+            showToolCalls,
+          });
+          expect(framesOf(chain).map((frame) => frame.outcome.kind)).toEqual(["completed"]);
+          expect(JSON.stringify(messagesIn(framesOf(chain)))).toContain("Revising the poster.");
+          if (!showToolCalls) {
+            expect(JSON.stringify(chain.transcriptItems)).not.toContain(name);
+          }
+        }
+      }
+      expect(pendingSessionsYield(messages)).toBeNull();
+    },
+  );
+
+  it.each([
+    { name: "failed receipt", details: receipt, isError: true },
+    { name: "synchronous result", details: { status: "completed" } },
+    { name: "missing task identity", details: { status: "started", async: true } },
+    { name: "unrelated tool", details: receipt, tool: "exec" },
+  ])("does not hide an unfinished run with $name", ({ details, isError, tool }) => {
+    const messages = mediaHistory(tool ?? "image_generate", details, isError);
+    expect(framesOf(projectHistory(messages, { messages }))[0]?.outcome.kind).toBe("interrupted");
+  });
+
+  it.each(["aborted", "error", "timeout"])("preserves a real %s after acceptance", (stopReason) => {
+    const messages = [
+      ...mediaHistory("image_generate"),
+      { role: "assistant", runId: "media-run", stopReason, content: "Generation stopped." },
+    ];
+    expect(framesOf(projectHistory(messages, { messages }))[0]?.outcome.kind).toBe("failed");
+  });
+});

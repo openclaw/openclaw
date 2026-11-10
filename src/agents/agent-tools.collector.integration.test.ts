@@ -38,12 +38,18 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
 });
 
-it.each<[string[] | undefined]>([[undefined], [[]]])("collector surface %j", async (toolsAllow) => {
+it.each<[string[] | undefined, boolean]>([
+  [undefined, false],
+  [[], false],
+  [undefined, true],
+])("collector surface %j, deny all=%s", async (toolsAllow, denyAll) => {
+  const toolConfig = denyAll ? { ...config, tools: { ...config.tools, deny: ["*"] } } : config;
+  setRuntimeConfigSnapshot(toolConfig);
   await addRun({ runId, childSessionKey: sessionKey, collect: true, outputSchema: schema });
   const context = buildRunContext({ toolsAllow, swarmCollector: true, swarmOutputSchema: schema });
   const constructedTools = createOpenClawCodingTools({
     ...context,
-    config,
+    config: toolConfig,
     agentId: "main",
     modelProvider: "openai",
     modelId: "gpt-5.6-luna",
@@ -59,13 +65,13 @@ it.each<[string[] | undefined]>([[undefined], [[]]])("collector surface %j", asy
     const tool = tools.find((candidate) => candidate.name === name);
     return expectDefined(tool, name);
   }
-  if (toolsAllow) {
-    expect(names.toSorted()).toEqual([...toolsAllow, "structured_output"].toSorted());
+  if (toolsAllow || denyAll) {
+    expect(names.toSorted()).toEqual([...(toolsAllow ?? []), "structured_output"].toSorted());
   }
   for (const forbidden of ["ask_user", "sessions_send", "sessions_yield", "message"]) {
     expect(names).not.toContain(forbidden);
   }
-  if (!toolsAllow) {
+  if (!toolsAllow && !denyAll) {
     expect(names).toEqual(
       expect.arrayContaining(["read", "write", "edit", "apply_patch", "exec", "process"]),
     );

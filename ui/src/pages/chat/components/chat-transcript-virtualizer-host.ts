@@ -44,6 +44,7 @@ import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
   applyPendingScrollOffset,
   cancelPendingScrollRetry,
+  cancelTranscriptScroll,
   completeTranscriptLayout,
   canFollowTranscriptEnd,
   type TranscriptScrollRestoreHost,
@@ -245,7 +246,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         this.acceptedRows?.[index]?.estimatedSize ?? CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
       initialRect: initialTranscriptRect(),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
-      anchorTo: "end",
+      // Structural key changes opt into end anchoring in commitTranscriptRows.
+      // ReaderAnchor owns measurements; end-follow is explicitly managed below.
+      anchorTo: "start",
       scrollToFn: (...args) =>
         scrollTranscriptOffset(this.offsetState, this, this.headerHeight, ...args),
       observeElementRect: this.viewportRect.observe,
@@ -264,8 +267,10 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             invalidate,
             // Nested or canceled input must not admit offscreen measurements.
             onOffset: (delta) => void (delta && this.initialRange.recordReaderMovement(delta)),
+            onWheel: (delta) => this.initialRange.recordWheel(delta),
             onComposerLayout: (changed) => this.commitComposerResize(changed),
             onReaderScroll: (towardEnd) => this.callbacks.onReaderScroll?.(towardEnd),
+            onRequestEnd: callbacks.onRequestEnd,
             onNativeScroll: (event) => {
               // Measurement may have consumed this offset before its native event.
               // Commit its queued rows now, ahead of this frame's paint.
@@ -592,13 +597,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.captureInteractionResize,
           measureRowRefFor: this.measureRowRefFor,
-          measureRows:
-            // The first correction reveals new rows; their real sizes must land before retiring the anchor.
-            this.initialRange.pending ||
-            this.initialRange.preparingEnd ||
-            this.prependAnchor.messageKey !== null ||
-            this.offsetState.scrollCommand?.target === "message" ||
-            this.offsetState.scrollCommand?.target === "index",
         });
       },
       () =>
@@ -655,9 +653,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.initialRange.finish(true);
     } else if (this.offsetState.pendingScrollOffset || !this.canAutoFollow()) {
       return false;
-    } else if (this.initialRange.preparingEnd && this.offsetState.scrollCommand?.target === "end") {
-      // Preparation and native settling already own this destination.
-      return true;
     }
     scrollTranscriptToEnd(
       this.offsetState,
@@ -667,73 +662,28 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       () => this.presentation.queueRowMeasure(),
       this.endAnchor,
       this.initialRange.prepareEnd,
+      this.initialRange.preparingEnd,
     );
     return true;
   }
 
   cancelScroll(preserveEnd = false): void {
-    const command = this.offsetState.scrollCommand;
-    const pendingOffset = this.offsetState.pendingScrollOffset;
-    const unissuedEnd = command?.target === "end" && command.offset === undefined && !pendingOffset;
-    const element = this.scrollElement;
-    const lifecycle = this.cleanupVirtualizer;
-    this.bookmarkState.bookmark = undefined;
-    // Retire the old owner before range work can refresh and admit another command.
-    this.offsetState.scrollCommand = null;
-    this.offsetState.pendingScrollOffset = null;
-    cancelPendingScrollRetry(this.scrollRestoreHost);
-    // Completing a smooth journey can reveal skipped row sizes. Retain its
-    // resting edge before that measurement moves the end; reader input clears it.
-    if (preserveEnd) {
-      this.endAnchor.capture(element);
-    } else {
-      this.endAnchor.clear();
-    }
-    this.prependAnchor.clear();
-    if (!preserveEnd || unissuedEnd) {
-      // Retire the vendor target before range work can admit a replacement.
-      // Unissued preparation must not manufacture a native offset target.
-      this.virtualizer.cancelScroll();
-    }
-    if (preserveEnd) {
-      this.initialRange.finishEndWhenSettled();
-    } else {
-      this.initialRange.finishEnd();
-    }
-    if (
-      unissuedEnd ||
-      (!command && !pendingOffset) ||
-      this.offsetState.hasPendingCommand ||
-      element !== this.scrollElement ||
-      lifecycle !== this.cleanupVirtualizer
-    ) {
-      return;
-    }
-    // An issued smooth journey keeps its established measurement/instant-stop order.
-    if (command?.behavior === "smooth") {
-      this.presentation.measureRowsWithoutScrollAdjustment();
-    }
-    if (
-      element &&
-      !this.offsetState.hasPendingCommand &&
-      element === this.scrollElement &&
-      lifecycle === this.cleanupVirtualizer
-    ) {
-      if (preserveEnd) {
-        // Completed end journeys keep their dynamic target through late measurements.
-        this.virtualizer.scrollToEnd({ behavior: "instant" });
-        // Native scroll subscribers can replace the command or reconnect this host.
-        if (
-          !this.offsetState.hasPendingCommand &&
-          element === this.scrollElement &&
-          lifecycle === this.cleanupVirtualizer
-        ) {
-          this.endAnchor.capture(element);
-        }
-      } else {
-        this.virtualizer.scrollToOffset(element.scrollTop, { behavior: "instant" });
-      }
-    }
+    cancelTranscriptScroll(
+      {
+        offsetState: this.offsetState,
+        bookmarkState: this.bookmarkState,
+        virtualizer: this.virtualizer,
+        initialRange: this.initialRange,
+        endAnchor: this.endAnchor,
+        prependAnchor: this.prependAnchor,
+        scrollRestoreHost: this.scrollRestoreHost,
+        getScrollElement: () => this.scrollElement,
+        getLifecycle: () => this.cleanupVirtualizer,
+        measureRowsWithoutScrollAdjustment: () =>
+          this.presentation.measureRowsWithoutScrollAdjustment(),
+      },
+      preserveEnd,
+    );
   }
 
   syncMessageRows(

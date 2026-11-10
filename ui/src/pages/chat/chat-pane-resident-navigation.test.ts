@@ -20,7 +20,9 @@ import { buildMessageItems } from "./chat-thread-items.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems } from "./chat-thread.ts";
 import type { ChatProps } from "./chat-view.tsx";
+import { createTranscriptActions } from "./components/chat-transcript-actions.ts";
 import { createTranscriptMessageElements } from "./components/chat-transcript-message-elements.ts";
+import { threadProps } from "./components/chat-transcript.test-support.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
@@ -657,6 +659,13 @@ it("collects retired concrete bodies and dormant projections while the pane and 
     });
     buildCachedChatItems(input, "visible");
     buildCachedChatItems(input, "unfiltered");
+    const actionContext: Parameters<typeof createTranscriptActions>[0] = {};
+    const onFocusComposer = vi.fn();
+    const actionProps = threadProps(pane.presentationId, state.sessionKey, state.chatMessages, {
+      toolMessages: state.chatToolMessages,
+      onFocusComposer,
+    });
+    const actions = createTranscriptActions(actionContext, actionProps).actions;
     const catalog = Reflect.get(pane, "attachmentCatalog") as PaneAttachmentCatalog;
     const chatProps = {
       paneId: pane.presentationId,
@@ -676,9 +685,9 @@ it("collects retired concrete bodies and dormant projections while the pane and 
     };
     expect(catalog.read(catalogInput)?.entries.length).toBeGreaterThan(0);
     catalog.read({ ...catalogInput, workspacePresented: false });
-    return new WeakRef({ unowned: true });
+    return { control: new WeakRef({ unowned: true }), actionContext, actions, onFocusComposer };
   };
-  const control = populateDormantOwners();
+  const { control, actionContext, actions, onFocusComposer } = populateDormantOwners();
   await collectGarbageForTest();
   expect(isAlive(control)).toBe(false);
   expect(isAlive(retired!.content)).toBe(true);
@@ -698,6 +707,9 @@ it("collects retired concrete bodies and dormant projections while the pane and 
   expect(state.currentSessionId).toBe("resident-session");
   expect(state.chatHistoryPagination.hasNewer).toBe(true);
   expect(pane.state).toBe(state);
+  expect(actionContext.actions?.onFocusComposer).toBe(onFocusComposer);
+  actions.onFocusComposer?.();
+  expect(onFocusComposer).toHaveBeenCalledOnce();
 });
 
 it.each(["plain", "bundle"] as const)(

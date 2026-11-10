@@ -3,7 +3,7 @@
 # 4 LF for joined warm-boot and native-maintenance fixture contracts.
 # 14 retained own test LF previously used the older base's spare headroom;
 # these are not new cases. Fixed b59c593cb0b7ad88ba2118768840c010e3253d95 has none.
-# Existing 6461 + 7055 + this 537 = 14053 own LF after 4 LF canonical fixture consolidation
+# Existing 6461 + 7055 + this 725 = 14241 own LF after 4 LF canonical fixture consolidation
 # and 5 LF preserving concrete offset-owner callback/mock types across contextual return inference,
 # less 3 LF from canonical cold-owner import consolidation; no cases or oracles removed.
 # plus 10 LF separate native image reads from snapshot Fetch across remount and policy invalidation.
@@ -14,4 +14,6 @@
 # plus 145 LF for abort-before-module-delivery, late real-command/current-view/hidden-raw coverage, and visible import-failure controls.
 # plus 105 LF for abortable active-run delivery, empty-event/trimmed-ID recovery, and visible import-failure controls.
 # plus 155 LF for fresh-input paging, native Latest ownership, settlement callback replacement, and commandless retarget coverage.
-537
+# plus 188 net LF for joined native-input families and isolated action/prose custody regressions,
+# after preserving incoming moved coverage and consolidating shared observer fixtures.
+725

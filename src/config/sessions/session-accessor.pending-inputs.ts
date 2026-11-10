@@ -214,6 +214,7 @@ type PendingInputStageOptions = PendingInputRequest & {
   lifecycleAdmission?: SessionInputLifecycleAdmission;
   onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
+  recoverySource?: SessionPendingInputOwner["recoverySource"];
   trackCompletion?: boolean;
   /** A current explicit operation may retry its cancelled, unconsumed input. */
   retryCancelled?: boolean;
@@ -518,6 +519,21 @@ async function stagePreparedPendingInput(
       ...(complete ? { complete, completeAsync } : {}),
       settled: store.settled,
     };
+    const ownerScope = {
+      runId: options.runId,
+      recoverySource: options.recoverySource,
+      sessionActor: scope.sessionActor,
+      agentId: scope.agentId,
+      databaseAgentId: store.databaseAgentId,
+      sessionId: scope.sessionId,
+      sessionKey: store.sessionKey,
+      databasePath: store.path,
+      workerDatabasePath: store.workerDatabasePath,
+      idempotencyKey: identity.idempotencyKey,
+      lifecycleGeneration,
+      config: options.config,
+      authority: options.authority,
+    };
     if (committed) {
       if (options.trackCompletion) {
         const committedHash = resolveCommittedPendingInputRequestHash(
@@ -540,24 +556,14 @@ async function stagePreparedPendingInput(
         await assertCurrent();
       }
       owner = {
-        sessionActor: scope.sessionActor,
-        agentId: scope.agentId,
-        databaseAgentId: store.databaseAgentId,
+        ...ownerScope,
         inputId: randomUUID(),
         transcriptInputId: committed.messageId,
-        sessionId: scope.sessionId,
-        sessionKey: store.sessionKey,
-        databasePath: store.path,
-        workerDatabasePath: store.workerDatabasePath,
-        idempotencyKey: identity.idempotencyKey,
-        lifecycleGeneration,
         messageJson: JSON.stringify(committed.message),
-        config: options.config,
         assertCurrent: () => {
           store.assertCurrent();
           options.assertCurrent();
         },
-        authority: options.authority,
         consumed: true,
         finish,
       };
@@ -635,24 +641,14 @@ async function stagePreparedPendingInput(
               );
             }
             owner = {
-              sessionActor: scope.sessionActor,
-              agentId: scope.agentId,
-              databaseAgentId: store.databaseAgentId,
+              ...ownerScope,
               inputId: staged.input_id,
               transcriptInputId: staged.input_id,
-              sessionId: scope.sessionId,
-              sessionKey: store.sessionKey,
-              databasePath: store.path,
-              workerDatabasePath: store.workerDatabasePath,
-              idempotencyKey: identity.idempotencyKey,
-              lifecycleGeneration,
               messageJson: staged.message_json,
-              config: options.config,
               assertCurrent: () => {
                 store.assertCurrent();
                 assertAdmittedCurrent();
               },
-              authority: options.authority,
               ...(existing ? { dedupeRetryAvailable: true as const } : {}),
               finish,
             };
