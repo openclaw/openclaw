@@ -15,7 +15,7 @@ Adds Nace model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/nace`
-- Install route: included in OpenClaw, and also from npm or ClawHub: `@openclaw/nace`
+- Install route: npm or ClawHub: `@openclaw/nace`
 
 ## Surface
 

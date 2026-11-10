@@ -15,7 +15,7 @@ Adds Celeris model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/celeris`
-- Install route: included in OpenClaw, and also from npm or ClawHub: `@openclaw/celeris`
+- Install route: npm or ClawHub: `@openclaw/celeris`
 
 ## Surface
 

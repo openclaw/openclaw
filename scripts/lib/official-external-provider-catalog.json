@@ -292,6 +292,51 @@
       }
     },
     {
+      "name": "@openclaw/celeris",
+      "description": "OpenClaw Celeris native Decision provider.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "celeris",
+          "label": "Celeris"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "celeris-native",
+            "hosts": [
+              "inference.celeris.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "celeris",
+            "name": "Celeris",
+            "docs": "/providers/celeris",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "CELERIS_API_KEY"
+            ]
+          }
+        ],
+        "contracts": {
+          "decisionProviders": [
+            "celeris"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/celeris",
+          "npmSpec": "@openclaw/celeris",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.11.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/cerebras-provider",
       "description": "OpenClaw Cerebras provider plugin.",
       "source": "official",
@@ -735,6 +780,43 @@
       }
     },
     {
+      "name": "@openclaw/fastino-provider",
+      "description": "OpenClaw Fastino GLiDE Decision provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "fastino",
+          "label": "Fastino GLiDE"
+        },
+        "providers": [
+          {
+            "id": "fastino",
+            "name": "Fastino GLiDE",
+            "docs": "/providers/fastino",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "FASTINO_API_KEY"
+            ]
+          }
+        ],
+        "contracts": {
+          "decisionProviders": [
+            "fastino"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/fastino-provider",
+          "npmSpec": "@openclaw/fastino-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.11.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/featherless-provider",
       "description": "OpenClaw Featherless AI provider plugin.",
       "source": "official",
@@ -1036,6 +1118,51 @@
           "npmSpec": "@openclaw/mistral-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/nace",
+      "description": "OpenClaw Nace native Decision provider.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "nace",
+          "label": "Nace"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "nace-native",
+            "hosts": [
+              "console.nace.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "nace",
+            "name": "Nace",
+            "docs": "/providers/nace",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "NACE_API_KEY"
+            ]
+          }
+        ],
+        "contracts": {
+          "decisionProviders": [
+            "nace"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/nace",
+          "npmSpec": "@openclaw/nace",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.11.2"
         }
       }
     },

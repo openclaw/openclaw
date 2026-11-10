@@ -15,7 +15,7 @@ Native GLiDE Boolean, Choice and Score decisions.
 ## Distribution
 
 - Package: `@openclaw/fastino-provider`
-- Install route: included in OpenClaw, and also from npm or ClawHub: `@openclaw/fastino-provider`
+- Install route: npm or ClawHub: `@openclaw/fastino-provider`
 
 ## Surface
 
