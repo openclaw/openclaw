@@ -6,8 +6,8 @@ import { writePackageDistInventory } from "../../scripts/lib/package-dist-invent
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { UpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import type { NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import * as tmpOpenClawDir from "../infra/tmp-openclaw-dir.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import type { prepareGitCandidateNodeRuntime } from "../infra/update-runner-git-node-preflight.js";
