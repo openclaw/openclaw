@@ -1,2 +1,2 @@
-70
-# Replace dialog-gesture acceptance with in-place selected/unselected editing, Enter/blur/Escape, identity rejection, and live permission retirement.
+115
+# Selected/unselected in-place editing, save/cancel/blur, immutable identity, live permission retirement, and rejected-draft recovery.

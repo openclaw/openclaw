@@ -69,6 +69,11 @@ suite.define(() => {
           expect(await input.inputValue()).toBe("Stale rename");
           await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
         }
+        if (surface === "inline") {
+          await expect.poll(() => input.isEditable()).toBe(true);
+          expect(await input.inputValue()).toBe("Stale rename");
+          await input.press("Escape");
+        }
         await input.waitFor({ state: "detached" });
         await expect
           .poll(() => page.getByText(/changed before patch\. Retry\./).count())

@@ -7,6 +7,7 @@ import {
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  captureUiProof,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -293,6 +294,45 @@ suite.define(() => {
         await expect.poll(() => row.textContent()).toContain("Renamed session");
       }),
   );
+
+  it("retains a rejected inline draft and allows correction without a duplicate write", () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const original = sessionRow(renameKey, "Original name", 1);
+      const gateway = await installMockGateway(page, {
+        sessionKey: renameKey,
+        sessions: [original],
+        deferredMethods: ["sessions.patch"],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, renameKey));
+      const row = page.locator(`[data-session-key="${renameKey}"]`);
+      await row.locator(".sidebar-recent-session__name").dblclick();
+      const input = row.locator("input");
+      await input.fill("Planning");
+      await input.press("Enter");
+      const rejected = await waitForPatch(gateway, (params) => params.label === "Planning");
+      expect(rejected.params).toMatchObject({
+        key: renameKey,
+        expectedSessionId: original.sessionId,
+      });
+      await expect.poll(() => input.isEditable()).toBe(false);
+      await input.press("Enter");
+      await input.press("Tab");
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
+      await gateway.rejectDeferred("sessions.patch", {
+        code: "INVALID_REQUEST",
+        message: "label already in use: Planning",
+      });
+      await expect.poll(() => page.getByText(/label already in use/).count()).toBeGreaterThan(0);
+      await expect.poll(() => input.isEditable()).toBe(true);
+      expect(await input.inputValue()).toBe("Planning");
+      await captureUiProof(suite, page, "sidebar-inline-rejected.png");
+      await input.fill("Recovered name");
+      await input.press("Enter");
+      await waitForPatch(gateway, (params) => params.label === "Recovered name");
+      await input.waitFor({ state: "detached" });
+      await expect.poll(() => row.textContent()).toContain("Recovered name");
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
+    }));
 
   it.each(["scope", "ownership"] as const)("retires an inline draft after losing %s", (cause) =>
     suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {

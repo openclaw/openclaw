@@ -174,7 +174,8 @@ conversation tree; the source group does not require another import.
 On desktop, double-click a session name in the sidebar to edit it in place, or
 click its name in the session header. The name is prefilled and selected. Press
 **Enter** or move focus away to save, or **Escape** to cancel. Read-only sessions
-cannot be renamed. The sidebar menu’s **Rename…** action still opens its dialog.
+cannot be renamed. A rejected sidebar rename keeps your text in place for correction.
+The sidebar menu’s **Rename…** action still opens its dialog.
 
 ## Automatic session names
 

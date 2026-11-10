@@ -1,16 +1,21 @@
-import { Show, createMemo } from "solid-js";
+import { Show, createMemo, onSettled } from "solid-js";
 import { SessionColorDot } from "../../../components/session-color.tsx";
 import { GatewayStatus } from "../../../components/solid/gateway-status.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
-import { SessionRenameInput } from "../../../components/solid/session-rename-input.tsx";
-import "../../../components/workspace-icon.tsx";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
+import "../../../components/workspace-icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../../lib/ime.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending } from "../../../lib/session-display.ts";
+import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -151,6 +156,52 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
     >
       <SessionRenameInput {...props} />
     </Show>
+  );
+}
+
+export function SessionRenameInput(
+  props: Pick<
+    ChatPaneHeaderProps,
+    "renameValue" | "renameDisabledReason" | "onRenameInput" | "onCommitRename" | "onCancelRename"
+  > & { class?: string; renameBusy?: boolean },
+) {
+  let input!: HTMLInputElement;
+  onSettled(() => {
+    input.focus();
+    input.select();
+  });
+  return (
+    <input
+      class={["chat-pane__session-title-input", props.class]}
+      value={props.renameValue}
+      readonly={props.renameBusy}
+      aria-busy={props.renameBusy ? "true" : undefined}
+      aria-label={t("chat.sessionHeader.renameInputAria")}
+      placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
+      onInput={(event) => props.onRenameInput(event.currentTarget.value)}
+      onCompositionEnd={recordCompositionEnd}
+      ref={[(element) => (input = element), nativeListener("keyup", clearCompositionEnd)]}
+      onKeyDown={(event) => {
+        if (isComposingKeyboardEvent(event)) {
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          if (!props.renameDisabledReason) {
+            props.onCommitRename();
+          }
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          props.onCancelRename();
+        }
+      }}
+      onBlur={(event) => {
+        clearCompositionEnd(event);
+        if (!props.renameDisabledReason) {
+          props.onCommitRename();
+        }
+      }}
+    />
   );
 }
 

@@ -37,9 +37,7 @@ import { InlineAlert } from "./solid/inline-alert.tsx";
 import "./tooltip.ts";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 
-const SidebarSessionRename = lazy(() => import("./sidebar-session-rename.tsx"), {
-  export: "SidebarSessionRename",
-});
+const SidebarSessionRename = lazy(() => import("./sidebar-session-rename.tsx"));
 
 /** Compose independently owned session state and context indicators. */
 
