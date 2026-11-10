@@ -329,6 +329,37 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.bufferedText).toBe("");
   });
 
+  it.each([
+    [
+      "Chinese",
+      "今天天气很好，适合出门。我们去公园散步吧！晚上再一起吃饭好吗？",
+      ["今天天气很好，适合出门。", "我们去公园散步吧！", "晚上再一起吃饭好吗？"],
+    ],
+    [
+      "Japanese",
+      "今日はとても良い天気です。公園を散歩しましょう！夜は一緒にご飯を食べませんか？",
+      ["今日はとても良い天気です。", "公園を散歩しましょう！", "夜は一緒にご飯を食べませんか？"],
+    ],
+    [
+      "Hindi",
+      "आज मौसम बहुत अच्छा है। चलो पार्क में टहलते हैं। बाद में खाना खाएंगे।",
+      ["आज मौसम बहुत अच्छा है।", " चलो पार्क में टहलते हैं।", " बाद में खाना खाएंगे।"],
+    ],
+    [
+      "Arabic",
+      "الطقس جميل اليوم. هل نذهب إلى الحديقة؟ سنأكل معًا في المساء.",
+      ["الطقس جميل اليوم.", " هل نذهب إلى الحديقة؟", " سنأكل معًا في المساء."],
+    ],
+  ])("breaks %s text at its own sentence ends", (_language, source, sentences) => {
+    const { chunks } = streamChunks(
+      paragraphChunker(8, 28, { breakPreference: "sentence" }),
+      source,
+      1,
+    );
+
+    expect(chunks).toEqual(sentences);
+  });
+
   it("reconciles an empty pending tail without replaying drained source", () => {
     const chunker = paragraphChunker(10, 16, { breakPreference: "sentence" });
     for (const sentence of ["Hello world.", "Next sentence."]) {
