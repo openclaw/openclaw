@@ -31,7 +31,12 @@ async function mountKit(accountEmail: string | null = "owner@example.test") {
         saved={saved()}
         onContinue={continued}
       >
-        <RecoveryKitPanel details={details} saved={saved()} onSaved={setSaved} />
+        <RecoveryKitPanel
+          details={details}
+          accountEmail={accountEmail}
+          saved={saved()}
+          onSaved={setSaved}
+        />
         <button type="submit" disabled={!saved()}>
           Continue
         </button>

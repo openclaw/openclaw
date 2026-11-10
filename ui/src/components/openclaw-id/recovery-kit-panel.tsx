@@ -11,22 +11,27 @@ import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id
 import { t } from "../../lib/reactive/i18n.ts";
 import { handleCopyButton } from "../copy-button-state.ts";
 import { Checkbox } from "../solid/checkbox.tsx";
+import { Icon } from "../solid/icon.tsx";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
-import { RecoveryCodeField } from "./recovery-kit-form.tsx";
+import { RecoveryAccountField, RecoveryCodeField } from "./recovery-kit-form.tsx";
 
 /** The kit, its save options and the "I've saved it" checkbox. */
 export function RecoveryKitPanel(props: {
   details: RecoveryKitDetails;
+  accountEmail?: string | null;
   saved: boolean;
   onSaved: (saved: boolean) => void;
 }) {
   let copyLabel!: HTMLSpanElement;
   const [note, setNote] = createSignal<OpenClawIdUiError | null>(null);
+  const [downloaded, setDownloaded] = createSignal(false);
+  const [printed, setPrinted] = createSignal(false);
   // Marks the kit saved after a save action, as ticking the box does.
-  const save = async (action: () => boolean | Promise<boolean>) => {
+  const save = async (action: () => boolean | Promise<boolean>, onSuccess?: () => void) => {
     setNote(null);
     try {
       if (await action()) {
+        onSuccess?.();
         props.onSaved(true);
       } else {
         setNote({ message: t("openclawId.kitActionUnavailable"), detail: "" });
@@ -39,24 +44,22 @@ export function RecoveryKitPanel(props: {
     <>
       <div class="openclaw-id-kit">
         <RecoveryCodeField code={props.details.kit.text} />
-        <div class="list openclaw-id-facts">
-          <div>
-            <span class="muted">{t("openclawId.kitOwnerFingerprint")}</span>{" "}
-            {props.details.kit.rootFingerprint}
+        <div class="oc-dialog__rows">
+          <RecoveryAccountField
+            accountEmail={props.accountEmail}
+            hostname={props.details.hostname}
+          />
+          <div class="oc-dialog__row">
+            <span class="oc-dialog__row-label">{t("openclawId.kitOwnerFingerprint")}</span>
+            <span>{props.details.kit.rootFingerprint}</span>
           </div>
-          <Show when={props.details.owner}>
-            {(owner) => (
-              <div>
-                <span class="muted">{t("openclawId.kitOwner")}</span> {owner()}
-              </div>
-            )}
-          </Show>
-          <div>
-            <span class="muted">{t("openclawId.kitClaw")}</span> https://{props.details.hostname}
+          <div class="oc-dialog__row">
+            <span class="oc-dialog__row-label">{t("openclawId.kitClaw")}</span>
+            <span>https://{props.details.hostname}</span>
           </div>
-          <div>
-            <span class="muted">{t("openclawId.kitCreated")}</span>{" "}
-            {props.details.createdAt.toLocaleDateString()}
+          <div class="oc-dialog__row">
+            <span class="oc-dialog__row-label">{t("openclawId.kitCreated")}</span>
+            <span>{props.details.createdAt.toLocaleDateString()}</span>
           </div>
         </div>
       </div>
@@ -66,19 +69,37 @@ export function RecoveryKitPanel(props: {
           type="button"
           class="btn btn--sm"
           onClick={() =>
-            void save(() => {
-              downloadRecoveryKit(props.details);
-              return true;
-            })
+            void save(
+              () => {
+                downloadRecoveryKit(props.details);
+                return true;
+              },
+              () => setDownloaded(true),
+            )
           }
         >
+          <Icon
+            name="check"
+            class="openclaw-id-kit__exported"
+            style={{ visibility: downloaded() ? "visible" : "hidden" }}
+          />
           {t("openclawId.downloadKit")}
         </button>
         <button
           type="button"
           class="btn btn--sm"
-          onClick={() => void save(() => printRecoveryKit(props.details))}
+          onClick={() =>
+            void save(
+              () => printRecoveryKit(props.details),
+              () => setPrinted(true),
+            )
+          }
         >
+          <Icon
+            name="check"
+            class="openclaw-id-kit__exported"
+            style={{ visibility: printed() ? "visible" : "hidden" }}
+          />
           {t("openclawId.printKit")}
         </button>
         <button
@@ -95,13 +116,9 @@ export function RecoveryKitPanel(props: {
           <span ref={(element) => (copyLabel = element)}>{t("common.copy")}</span>
         </button>
       </div>
-      <Show when={note()}>
-        {(message) => (
-          <div class="secret-reveal__note" role="status">
-            <OpenClawIdErrorMessage error={message()} />
-          </div>
-        )}
-      </Show>
+      <div class="openclaw-id-setup__status" role="status">
+        <Show when={note()}>{(message) => <OpenClawIdErrorMessage error={message()} />}</Show>
+      </div>
       <label class="openclaw-id-kit__saved">
         <Checkbox
           checked={props.saved}

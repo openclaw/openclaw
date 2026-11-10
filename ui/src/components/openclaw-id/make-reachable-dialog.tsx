@@ -1,6 +1,16 @@
 import "../../styles/secret-reveal.css";
 import "./make-reachable-dialog.css";
-import { createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  Loading,
+  Match,
+  onSettled,
+  Show,
+  Switch,
+} from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
@@ -121,9 +131,10 @@ export function showMakeReachableDialog(params: {
       const [name, setName] = createSignal(DEFAULT_CLAW_NAME);
       const [check, setCheck] = createSignal<NameCheck | null>(null);
       const [nameError, setNameError] = createSignal<OpenClawIdUiError | null>(null);
-      const [codeFromAccount, setCodeFromAccount] = createSignal(false);
-      const [codeNote, setCodeNote] = createSignal<string | null>(null);
+      const [codeFromAccount, setCodeFromAccount] = createSignal(Boolean(params.signedIn));
       const [codeError, setCodeError] = createSignal<OpenClawIdUiError | null>(null);
+      const [closeAttempt, setCloseAttempt] = createSignal<{ result: Promise<boolean> }>();
+      const closeResult = createMemo(() => closeAttempt()?.result.then(() => null) ?? null);
       const nameRequest = () => ({
         enrollmentCode: enrollmentCode().trim(),
         name: name().trim().toLowerCase(),
@@ -149,15 +160,13 @@ export function showMakeReachableDialog(params: {
       };
       // Fills the link code from the signed-in account, then checks the default name.
       const fillCodeFromAccount = async (signedIn: OpenClawIdSignedIn) => {
-        const account = signedIn.email ?? t("openclawId.accountFallback");
         try {
           const code = await requestOpenClawIdLinkCode(params.client, signedIn);
           setEnrollmentCode(code);
-          setCodeFromAccount(true);
-          setCodeNote(t("openclawId.signedInLinkCode", { account }));
           // Solid writes settle later; check the acquired code, not the stale signal.
           await checkName(code);
         } catch (error) {
+          setCodeFromAccount(false);
           setCodeError(openClawIdUiError(error, "linkCode"));
         }
       };
@@ -292,17 +301,23 @@ export function showMakeReachableDialog(params: {
           return;
         }
         // Every user exit confirms before dropping the once-shown kit.
-        if (
-          step().kind === "kit" &&
-          !(await showConfirmDialog({
+        if (step().kind === "kit") {
+          const result = showConfirmDialog({
             title: t("common.cancel"),
             message: t("openclawId.kitBody"),
             confirmLabel: t("common.cancel"),
             cancelLabel: t("common.back"),
             signal: lifetime.signal,
-          }))
-        ) {
-          return;
+          });
+          setCloseAttempt({ result });
+          try {
+            if (!(await result)) {
+              return;
+            }
+          } catch {
+            // The retained outcome slot shows the error without discarding the kit.
+            return;
+          }
         }
         if (!modal.settled) {
           finish(step().kind === "done");
@@ -314,6 +329,7 @@ export function showMakeReachableDialog(params: {
       };
       return (
         <openclaw-modal-dialog
+          class="openclaw-id-setup-dialog"
           label={t("openclawId.dialogTitle")}
           description={t("openclawId.dialogDescription")}
           onModal-cancel={cancel}
@@ -321,9 +337,18 @@ export function showMakeReachableDialog(params: {
           <div class="oc-dialog openclaw-id-setup">
             <DialogHeader
               title={t("openclawId.dialogTitle")}
-              description={step().kind === "name" ? codeNote() : undefined}
-              closeDisabled={step().kind === "linking"}
-              onClose={() => void requestClose()}
+              description={
+                step().kind === "name" && codeFromAccount()
+                  ? t("openclawId.signedInLinkCode", {
+                      account: signedIn?.email ?? t("openclawId.accountFallback"),
+                    })
+                  : undefined
+              }
+              onClose={
+                step().kind === "kit" || step().kind === "linking"
+                  ? undefined
+                  : () => void requestClose()
+              }
             />
             <div class="oc-dialog__body">
               <Switch>
@@ -334,6 +359,7 @@ export function showMakeReachableDialog(params: {
                       <div class="openclaw-id-setup__inline">
                         <input
                           id="openclaw-id-link-code"
+                          class="settings-input"
                           type="text"
                           autocomplete="off"
                           spellcheck="false"
@@ -370,6 +396,7 @@ export function showMakeReachableDialog(params: {
                     <label for="openclaw-id-claw-name">{t("openclawId.clawName")}</label>
                     <input
                       id="openclaw-id-claw-name"
+                      class="settings-input"
                       type="text"
                       autocomplete="off"
                       spellcheck="false"
@@ -450,9 +477,23 @@ export function showMakeReachableDialog(params: {
                       >
                         <RecoveryKitPanel
                           details={kitStep().details}
+                          accountEmail={params.signedIn?.email}
                           saved={saved()}
                           onSaved={setSaved}
                         />
+                        <Loading on={closeAttempt()}>
+                          <Errored
+                            fallback={(error) => (
+                              <div class="callout danger" role="alert">
+                                <OpenClawIdErrorMessage
+                                  error={openClawIdUiError(error(), "setup")}
+                                />
+                              </div>
+                            )}
+                          >
+                            {closeResult()}
+                          </Errored>
+                        </Loading>
                         <openclaw-modal-actions>
                           <button type="button" class="btn" onClick={() => void requestClose()}>
                             {t("common.cancel")}

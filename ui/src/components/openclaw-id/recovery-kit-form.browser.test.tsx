@@ -23,7 +23,12 @@ it("emits a real submit with credential fields only after explicit confirmation"
         saved={saved()}
         onContinue={continued}
       >
-        <RecoveryKitPanel details={details} saved={saved()} onSaved={setSaved} />
+        <RecoveryKitPanel
+          details={details}
+          accountEmail="owner@example.test"
+          saved={saved()}
+          onSaved={setSaved}
+        />
         <button type="submit" disabled={!saved()}>
           Continue
         </button>

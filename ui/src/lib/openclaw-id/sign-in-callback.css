@@ -9,3 +9,7 @@ body.openclaw-id-callback {
   text-align: center;
   color-scheme: light dark;
 }
+
+.openclaw-id-callback > main {
+  margin-block-end: 12dvh;
+}

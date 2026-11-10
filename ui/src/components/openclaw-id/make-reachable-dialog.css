@@ -1,3 +1,12 @@
+openclaw-modal-dialog.openclaw-id-setup-dialog {
+  --openclaw-modal-height-limit: calc(100dvh - min(128px, 16dvh) - 24px);
+}
+
+/* Keep the title in place as the name, kit, and progress bodies change height. */
+.openclaw-id-setup-dialog > .oc-modal-dialog {
+  margin-block: min(128px, 16dvh) auto;
+}
+
 .openclaw-id-setup p {
   margin: 0;
 }
@@ -46,22 +55,15 @@
 
 .openclaw-id-setup #openclaw-recovery-kit {
   display: grid;
-  gap: 16px;
-}
-
-.openclaw-id-setup #openclaw-recovery-kit > .field {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .openclaw-id-kit {
   display: grid;
-  gap: 16px;
-  padding: 16px;
+  gap: 12px;
+  padding: 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   background: var(--secondary);
 }
 
@@ -77,24 +79,23 @@
   font-size: var(--control-ui-text-sm);
 }
 
-.openclaw-id-kit .openclaw-id-facts {
-  display: grid;
-  gap: 8px;
-  font-size: var(--control-ui-text-sm);
+.openclaw-id-kit .oc-dialog__row {
+  min-height: 26px;
 }
 
-.openclaw-id-facts > div {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 16px;
-  text-align: end;
-  overflow-wrap: anywhere;
+.openclaw-id-kit .oc-dialog__rows {
+  gap: 0;
 }
 
-.openclaw-id-facts .muted {
-  flex-shrink: 0;
-  text-align: start;
+.openclaw-id-kit__account {
+  flex: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-overflow: ellipsis;
 }
 
 .openclaw-id-kit__warning {
@@ -114,15 +115,26 @@
   gap: 12px;
 }
 
+.openclaw-id-kit__exported {
+  color: var(--ok);
+}
+
 .openclaw-id-kit__saved input {
   flex-shrink: 0;
   margin-top: 2px;
 }
 
+.openclaw-id-linking__title {
+  min-height: 3em;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .openclaw-id-steps {
   display: grid;
-  gap: 16px;
-  margin: 32px 0 16px;
+  gap: 2px;
+  margin: 14px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -131,8 +143,15 @@
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
   align-items: start;
-  gap: 12px;
+  gap: 10px;
+  padding-block: 6px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
   overflow-wrap: anywhere;
+}
+
+.openclaw-id-steps__item[data-state="waiting"] {
+  color: var(--muted);
 }
 
 .openclaw-id-steps__mark {
