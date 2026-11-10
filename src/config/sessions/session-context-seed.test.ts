@@ -45,45 +45,24 @@ it("bounds full payload hydration at the native seed worker operation, not its o
         }
         return parse(text, reviver);
       });
-      const start = performance.now();
       try {
-        return {
-          result: run(),
-          get ms() {
-            return performance.now() - start;
-          },
-          get count() {
-            return count;
-          },
-          get bytes() {
-            return bytes;
-          },
-        };
+        const result = run();
+        return { result, count, bytes };
       } finally {
         spy.mockRestore();
       }
     };
-    const samples = [];
-    for (let sample = 0; sample < 5; sample++) {
-      const baseline = measure(unbounded);
-      const baselineMs = baseline.ms;
-      const candidate = measure(bounded);
-      const candidateMs = candidate.ms;
-      expect(baseline.count).toBe(16);
-      expect(candidate.count).toBe(1); // Only the first overflowing row, not all omitted bodies.
-      expect(candidate.bytes).toBeLessThan(baseline.bytes / 8);
-      expect(candidate.result).toMatchObject({
-        messages: boundContextEngineAssembly({ messages: full, estimatedTokens: 0 }, 4096, 1024)
-          .messages,
-        seed: { omittedCount: 16, omittedNonSummary: true, retainedInputTokens: 0 },
-      });
-      expect(baseline.result).toMatchObject({ messages: full });
-      samples.push({
-        baseline: { count: baseline.count, bytes: baseline.bytes, ms: baselineMs },
-        candidate: { count: candidate.count, bytes: candidate.bytes, ms: candidateMs },
-      });
-    }
-    console.info("native-seed-read-samples", JSON.stringify(samples));
+    const baseline = measure(unbounded);
+    const candidate = measure(bounded);
+    expect(baseline.count).toBe(16);
+    expect(candidate.count).toBe(1); // Only the first overflowing row, not all omitted bodies.
+    expect(candidate.bytes).toBeLessThan(baseline.bytes / 8);
+    expect(candidate.result).toMatchObject({
+      messages: boundContextEngineAssembly({ messages: full, estimatedTokens: 0 }, 4096, 1024)
+        .messages,
+      seed: { omittedCount: 16, omittedNonSummary: true, retainedInputTokens: 0 },
+    });
+    expect(baseline.result).toMatchObject({ messages: full });
   });
 });
 

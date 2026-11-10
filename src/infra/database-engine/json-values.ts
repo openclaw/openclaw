@@ -407,14 +407,26 @@ export function jsonLastStringValue(
     const token = sql`(${value}::jsonb #> ARRAY[${sql.join(keys.map((key) => sql.lit(key)))}]::text[])`;
     selected = sql`CASE WHEN jsonb_typeof(${token}) = 'string' THEN ${token} #>> '{}' END`;
   } else {
+    const dbQuery = getNodeSqliteKysely(db);
     let object: Expression<unknown> = value;
     for (const [index, key] of keys.entries()) {
       const last = index === keys.length - 1;
-      // json_each enumerates duplicates; descending IDs select JSON.parse's final member.
-      object = /* kysely-allow-raw: SQLite-only ordered object-member lookup. */ sql`(SELECT CASE
-        WHEN type = ${sql.lit(last ? "text" : "object")} THEN value
-        ELSE ${last ? sql`NULL` : sql.lit("{}")} END
-        FROM json_each(${object}) WHERE key = ${key} ORDER BY id DESC LIMIT 1)`;
+      // JSON1 enumerates duplicates; descending IDs select JSON.parse's final member.
+      const entries = dbQuery.fn<JsonFieldRow & { id: number }>("json_each", [object]).as("member");
+      object = dbQuery
+        .selectFrom(entries)
+        .select((eb) =>
+          eb
+            .case()
+            .when("member.type", "=", last ? "text" : "object")
+            .then(eb.ref("member.value"))
+            .else(last ? null : "{}")
+            .end()
+            .as("value"),
+        )
+        .where("member.key", "=", key)
+        .orderBy("member.id", "desc")
+        .limit(1);
     }
     selected = sql`${object}`;
   }
