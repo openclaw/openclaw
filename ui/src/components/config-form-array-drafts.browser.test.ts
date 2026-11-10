@@ -170,6 +170,27 @@ describe.runIf("__vitest_browser__" in globalThis)("config array row drafts", ()
         .toBe(draftText);
     },
   );
+
+  it("keeps an unfinished new item when an existing item is edited", async () => {
+    const { page } = await import("vitest/browser");
+    // Pattern items have no safe default, so Add opens a draft (as delegateToolsTo does).
+    const item = { type: "string", pattern: "^[a-z0-9][a-z0-9_-]{0,63}$" };
+    const { state, container } = mountForm(
+      { values: { type: "array", items: item } },
+      { values: ["coder"] },
+    );
+    container.querySelector<HTMLButtonElement>("button[aria-label='Add']")!.click();
+    flush();
+    const draft = () => container.querySelector<HTMLInputElement>("[data-collection-draft-value]");
+    await page.elementLocator(draft()!).fill("writer");
+    const existing = container.querySelector<HTMLInputElement>(".cfg-array__value input")!;
+    await page.elementLocator(existing).fill("coder2");
+    expect(state.configForm).toEqual({ settings: { values: ["coder2"] } });
+    expect(draft()?.value).toBe("writer");
+
+    container.querySelector<HTMLElement>(".cfg-collection-draft button")!.click();
+    expect(state.configForm).toEqual({ settings: { values: ["coder2", "writer"] } });
+  });
 });
 
 function removeControls(container: HTMLElement, label: string) {
