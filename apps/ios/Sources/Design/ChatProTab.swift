@@ -480,7 +480,7 @@ struct ChatProTab: View {
             VStack(spacing: 0) {
                 if self.activeAgent?.workspacegit == true {
                     self.chatActionButton(
-                        title: "New chat in worktree",
+                        title: String(localized: "New chat in worktree"),
                         systemImage: "arrow.triangle.branch",
                         disabled: self.areSessionActionsDisabled)
                     {
@@ -489,7 +489,7 @@ struct ChatProTab: View {
                 }
 
                 self.chatActionButton(
-                    title: "New session options…",
+                    title: String(localized: "New session options…"),
                     systemImage: "slider.horizontal.3",
                     disabled: self.areSessionActionsDisabled)
                 {
@@ -518,14 +518,14 @@ struct ChatProTab: View {
                 .accessibilityIdentifier("chat-show-reasoning-toggle")
 
                 self.chatActionButton(
-                    title: "Export transcript",
+                    title: String(localized: "Export transcript"),
                     systemImage: "square.and.arrow.up",
                     disabled: self.viewModel == nil)
                 {
                     self.pendingChatAction = .exportTranscript
                 }
 
-                self.chatActionButton(title: "Gateway settings", systemImage: "network") {
+                self.chatActionButton(title: String(localized: "Gateway settings"), systemImage: "network") {
                     self.pendingChatAction = .gatewaySettings
                 }
                 .accessibilityIdentifier("chat-gateway-settings")
