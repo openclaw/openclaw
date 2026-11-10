@@ -68,7 +68,6 @@ import {
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import {
   buildPreparedContext,
-  createPreparedCliContext,
   type PreparedContextOverrides,
 } from "./cli-runner/prepared-context.test-support.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
