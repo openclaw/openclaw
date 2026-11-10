@@ -1,9 +1,30 @@
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { prepareInitialAssistantTranscript } from "../config/sessions/session-accessor.sqlite-transcript-message-append.js";
-import { isAgentHarnessSessionKeyOwnedBy } from "../sessions/agent-harness-session-key.js";
+import {
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+  isAgentHarnessSessionKeyOwnedBy,
+} from "../sessions/agent-harness-session-key.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { invalidSessionRequest, unavailableSessionRequest } from "./session-request-error.js";
+
+/** Reject reserved harness targets before preparation and again at commit. */
+export function validateSessionCreateTarget(
+  key: string | undefined,
+  entry: Pick<SessionEntry, "modelSelectionLocked"> | undefined,
+  authorizedHarnessCreation: boolean,
+) {
+  if (
+    key &&
+    isAgentHarnessSessionKey(key) &&
+    !authorizedHarnessCreation &&
+    (!entry || entry.modelSelectionLocked === true)
+  ) {
+    return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+  }
+  return undefined;
+}
 
 type FreshSessionConstraints = {
   params: Pick<

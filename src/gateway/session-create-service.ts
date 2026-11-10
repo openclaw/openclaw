@@ -37,10 +37,6 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import {
-  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
-  isAgentHarnessSessionKey,
-} from "../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { recordSessionCreated } from "../sessions/session-created.js";
@@ -77,6 +73,7 @@ import {
 import {
   resolveSessionCreateTrustedOwners,
   validateFreshSessionConstraints,
+  validateSessionCreateTarget,
   withInitialAssistantTranscript,
 } from "./session-create-initial-assistant.js";
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
@@ -258,13 +255,13 @@ async function createGatewaySessionInScope(
   if (params.deferInitialization && initialTargetEntry) {
     return invalidSessionRequest("deferred initialization requires a new ordinary session");
   }
-  if (
-    explicitTargetKey &&
-    isAgentHarnessSessionKey(explicitTargetKey) &&
-    !authorizedHarnessCreation &&
-    (!initialTargetEntry || initialTargetEntry.modelSelectionLocked === true)
-  ) {
-    return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+  const initialTargetError = validateSessionCreateTarget(
+    explicitTargetKey,
+    initialTargetEntry,
+    authorizedHarnessCreation,
+  );
+  if (initialTargetError) {
+    return initialTargetError;
   }
 
   const childIntentError = resolveSessionCreateChildIntentError(params, parentSessionKey);
@@ -677,12 +674,13 @@ async function createGatewaySessionInScope(
             return { ok: false, error: creationError };
           }
         }
-        if (
-          isAgentHarnessSessionKey(target.canonicalKey) &&
-          !authorizedHarnessCreation &&
-          (!existingEntry || existingEntry.modelSelectionLocked === true)
-        ) {
-          return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+        const targetError = validateSessionCreateTarget(
+          target.canonicalKey,
+          existingEntry,
+          authorizedHarnessCreation,
+        );
+        if (targetError) {
+          return targetError;
         }
         const freshSessionError = validateFreshSessionConstraints({
           params,
