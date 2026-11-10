@@ -17,6 +17,10 @@ const Recommendation = lazy(() => import("./chat-clawhub-card.tsx"), {
   export: "ChatClawHubCard",
 });
 
+const TemplatePluginReceipt = lazy(() => import("./chat-template-plugin-card.tsx"), {
+  export: "ChatTemplatePluginCard",
+});
+
 // Pending New Session images use this adapter; transcript images render with the row.
 // Empty collections keep deferred renderers and their players asleep.
 export function MessageImages(
@@ -93,6 +97,16 @@ export function ChatClawHubCard(
   return (
     <ChatLazyBoundary>
       <Recommendation {...props} />
+    </ChatLazyBoundary>
+  );
+}
+
+export function ChatTemplatePluginCard(
+  props: Parameters<typeof import("./chat-template-plugin-card.tsx").ChatTemplatePluginCard>[0],
+) {
+  return (
+    <ChatLazyBoundary>
+      <TemplatePluginReceipt {...props} />
     </ChatLazyBoundary>
   );
 }

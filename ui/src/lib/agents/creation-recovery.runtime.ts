@@ -98,7 +98,7 @@ export async function executeAgentCreation(
 
 /** Creation-only roster work stays lazy; the capability owns synchronous provisional navigation. */
 export async function createAgentInRoster(
-  state: Pick<AgentsState, "agentsList" | "agentsError" | "recentlyCreatedAgentId">,
+  state: Pick<AgentsState, "agentsError">,
   loadList: () => Promise<AgentsListResult | null>,
   attempt: ReturnType<ReturnType<typeof createAgentCreationRecovery>["prepare"]>,
   isCurrent: () => boolean,
@@ -119,18 +119,5 @@ export async function createAgentInRoster(
   if (!created || !isCurrent()) {
     return null;
   }
-  // Publish the authoritative create receipt immediately. Config events own
-  // the full roster refresh; opening this chat must not wait for another read.
-  const current = state.agentsList ?? previous;
-  const row = current.agents.find((agent) => agent.id === created.agentId) ?? {
-    id: created.agentId,
-    name: created.name,
-  };
-  state.agentsList = {
-    ...current,
-    agents: [row, ...current.agents.filter((agent) => agent.id !== created.agentId)],
-  };
-  state.recentlyCreatedAgentId = created.agentId;
-  state.agentsError = null;
   return created;
 }

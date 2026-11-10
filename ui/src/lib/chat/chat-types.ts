@@ -406,6 +406,7 @@ export type MessageImageSource = {
 
 export type MessageContentItem =
   | import("../../../../src/shared/plugin-inline-view.js").PluginInlineViewBlock
+  | import("../../../../src/shared/template-install-notice.js").TemplatePluginInstallNotice
   | ClawHubRecommendation
   | {
       type: "image";

@@ -313,7 +313,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
               !props.view.canAdd ||
               !props.view.detail ||
               props.view.applying ||
-              Boolean(props.view.consentWarning || props.view.reviewPlan || props.view.addedAgentId)
+              Boolean(props.view.consentWarning || props.view.reviewPlan)
             }
             onClick={() => void props.view.onConfirm()}
           >

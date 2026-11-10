@@ -18,9 +18,10 @@ export type TemplatesCatalogViewProps = {
   installedPluginPackages: ReadonlySet<string>;
   addError: string | null;
   applying: boolean;
+  reviewing: boolean;
+  canStartAdd: boolean;
   consentWarning: string | null;
   reviewPlan: TemplateAddReviewPlan | null;
-  addedAgentId: string | null;
   canAdd: boolean;
   preview?: {
     kind: "instruction" | "skill";
@@ -39,5 +40,4 @@ export type TemplatesCatalogViewProps = {
   onCancelConsent: () => void;
   onConfirmReview: () => void | Promise<void>;
   onCancelReview: () => void;
-  onRetryOpenChat: () => void | Promise<void>;
 };

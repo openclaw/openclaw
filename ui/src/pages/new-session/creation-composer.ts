@@ -80,6 +80,7 @@ export class CreationComposer {
   private readonly unregisterReload;
   private accepted: SessionCreateOutcome | undefined;
   private transferred = false;
+  private initializationPending = false;
   private transfer: CreationComposerTransfer | undefined;
   private disposed = false;
 
@@ -148,7 +149,7 @@ export class CreationComposer {
   canAdopt(): boolean {
     // This is local custody, not send admission. The destination must keep its
     // draft even if connection recovery has not yet authorized outbox writes.
-    return this.canDisplay() && this.accepted !== undefined;
+    return this.canDisplay() && this.accepted !== undefined && !this.initializationPending;
   }
 
   readonly notify = () => {
@@ -211,8 +212,9 @@ export class CreationComposer {
     this.notify();
   }
 
-  accept(result: SessionCreateOutcome): void {
+  accept(result: SessionCreateOutcome, options?: { initializationPending: true }): void {
     this.accepted = result;
+    this.initializationPending = options?.initializationPending === true;
   }
 
   take(onComplete: () => void = () => {}): CreationComposerTransfer | undefined {

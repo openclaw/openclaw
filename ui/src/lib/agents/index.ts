@@ -257,6 +257,44 @@ export function createAgentCapability(gateway: AgentGateway) {
     return (await request.promise)?.result ?? null;
   };
 
+  const beginCreation = (agent: GatewayAgentRow) => {
+    const client = state.client;
+    if (!client || !state.connected || disposed || state.pendingAgent) {
+      return null;
+    }
+    const isCurrent = () =>
+      !disposed && state.client === client && state.connected && state.pendingAgent === agent;
+    const clear = () => {
+      if (state.pendingAgent === agent) {
+        state.pendingAgent = undefined;
+        publish();
+      }
+    };
+    state.pendingAgent = agent;
+    publish();
+    return {
+      isCurrent,
+      clear,
+      complete(created: GatewayAgentRow) {
+        if (!isCurrent()) {
+          return false;
+        }
+        const roster = state.agentsList;
+        if (roster) {
+          const row = roster.agents.find((entry) => entry.id === created.id) ?? created;
+          state.agentsList = {
+            ...roster,
+            agents: [row, ...roster.agents.filter((entry) => entry.id !== created.id)],
+          };
+        }
+        state.recentlyCreatedAgentId = created.id;
+        state.agentsError = null;
+        clear();
+        return true;
+      },
+    };
+  };
+
   // Retire cached agent and file reads when connection or access authority changes.
   const stopGateway = gateway.subscribe((snapshot) => {
     const hadList = state.agentsList !== null;
@@ -313,6 +351,7 @@ export function createAgentCapability(gateway: AgentGateway) {
     },
     ensureList: () => loadList(false),
     refreshList: () => loadList(true),
+    beginCreation,
     async create(
       name: string,
       onStarted?: (agentId: string) => void,
@@ -324,25 +363,27 @@ export function createAgentCapability(gateway: AgentGateway) {
       }
       const attempt = creations.prepare(client, name, identity?.avatar);
       const { agentId } = attempt;
-      const pendingAgent = { id: agentId, name: attempt.name };
-      const isCurrent = () =>
-        !disposed &&
-        state.client === client &&
-        state.connected &&
-        state.pendingAgent === pendingAgent;
-      state.pendingAgent = pendingAgent;
-      publish();
+      const pending = beginCreation({ id: agentId, name: attempt.name });
+      if (!pending) {
+        return null;
+      }
       try {
         // The UI can open a display-only chat immediately. Persistence still waits
         // for the new agent's own inference route to pass verification.
         onStarted?.(agentId);
         const { createAgentInRoster } = await import("./creation-recovery.runtime.ts");
-        return await createAgentInRoster(state, () => loadList(false), attempt, isCurrent);
-      } finally {
-        if (state.pendingAgent === pendingAgent) {
-          state.pendingAgent = undefined;
-          publish();
+        const created = await createAgentInRoster(
+          state,
+          () => loadList(false),
+          attempt,
+          pending.isCurrent,
+        );
+        if (created) {
+          pending.complete({ id: created.agentId, name: created.name });
         }
+        return created;
+      } finally {
+        pending.clear();
       }
     },
     files(agentId: string | null | undefined): AgentFilesStatus {

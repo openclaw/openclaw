@@ -1,9 +1,5 @@
 import { createMemo, onSettled, Show } from "solid-js";
-import {
-  templateCatalogPackageNameFromPath,
-  pathForTemplateCatalogEntry,
-  pathForRoute,
-} from "../../app-route-paths.ts";
+import { templateCatalogPackageNameFromPath, pathForRoute } from "../../app-route-paths.ts";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -11,7 +7,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { TemplatesCatalogDialog } from "../agents-home/templates-catalog-dialog.tsx";
-import { TemplatesExplore } from "../agents-home/templates-explore.tsx";
 import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";
 import { isTemplatesAvailable } from "./availability.ts";
 import { templateCreatorFlow } from "./creator-flow.ts";
@@ -82,19 +77,7 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
           when={connectedDraftTarget()}
           keyed
           fallback={
-            <Show
-              when={packageName()}
-              keyed
-              fallback={
-                <TemplatesExplore
-                  onSelect={(entry) =>
-                    context.navigate("templates", {
-                      pathname: pathForTemplateCatalogEntry(entry.packageName, context.basePath),
-                    })
-                  }
-                />
-              }
-            >
+            <Show when={packageName()} keyed fallback={<TemplatesCatalogDialog />}>
               {(selectedPackage) => (
                 <TemplatesCatalogDialog
                   initialPackageName={selectedPackage}
@@ -103,7 +86,6 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
                       pathname: pathForRoute("templates", context.basePath),
                     })
                   }
-                  onAdded={() => void context.agents.refreshList()}
                 />
               )}
             </Show>
