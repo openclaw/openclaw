@@ -217,6 +217,13 @@ suite.define(() => {
         );
         const exact = (text: string) => summary.getByText(text, { exact: true });
         await exact(label).waitFor();
+        expect(
+          await summary.evaluate(
+            (node) =>
+              node.getBoundingClientRect().width -
+              node.querySelector(".chat-reply-attribution")!.getBoundingClientRect().width,
+          ),
+        ).toBeLessThanOrEqual(40);
         const artifacts = createControlUiE2eArtifactDir(`source-update-typography-${width}`);
         const frame = await takeControlUiScreenshotFrame(
           page,

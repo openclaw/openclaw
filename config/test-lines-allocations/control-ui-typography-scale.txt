@@ -1,2 +1,2 @@
-73
+80
 # Regression coverage: compact source-update rows on desktop/mobile, code size and line-height in main/Side chat, Settings preference application/reset, and rebuilt plugin text scaling. Extends existing product-boundary scenarios and retains their navigation/recovery assertions.

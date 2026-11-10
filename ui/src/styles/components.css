@@ -2479,7 +2479,7 @@ td.data-table-key-col {
   padding: 4px 12px;
   font-size: calc(13px * var(--control-ui-text-scale));
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--field-radius);
   background: var(--card);
   color: var(--text);
   transition:
@@ -2632,9 +2632,7 @@ select.data-table-pagination__size {
 }
 
 .agent-scope-control .agent-select__trigger {
-  min-height: 34px;
   border-color: var(--border);
-  border-radius: var(--radius-full);
   background: var(--bg-elevated);
   font-size: var(--control-ui-text-sm);
   font-weight: 600;

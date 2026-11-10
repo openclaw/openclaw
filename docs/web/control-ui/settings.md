@@ -656,8 +656,11 @@ Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 ## Templates (Labs)
 
 Enable **Settings → Labs → Templates** to browse official Template packages from
-ClawHub on the **Agents** page. Search the catalog, review the files and
+ClawHub on the **Templates** page. Search the catalog, review the files and
 capabilities a Template will install, then select **Add** to create its agent.
+Opening a catalog entry keeps the selected published version in its detail link,
+so the files you review and the agent you add use the same release. A detail link
+without a version opens the latest published release.
 Add creates an ordinary agent and opens its chat. It does not create a separate
 installed Template to update or remove. Delete the agent through normal agent
 controls; shared plugins and MCP servers remain installed. See
