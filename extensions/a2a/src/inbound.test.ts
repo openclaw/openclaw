@@ -223,6 +223,27 @@ describe("A2A channel inbound dispatch", () => {
     },
   );
 
+  it.each([false, true])(
+    "requires an actual terminal outcome for an empty reply (%s)",
+    async (completed) => {
+      fixture.dispatch.mockImplementation(async (turn) => {
+        if (completed) {
+          turn.replyOptions?.onAgentRunTerminalOutcome?.("completed");
+        }
+        return dispatched(turn);
+      });
+      await fixture.run();
+      expect(fixture.task.status.state).toBe(
+        completed ? "TASK_STATE_COMPLETED" : "TASK_STATE_WORKING",
+      );
+      await fixture.store.stop();
+      expect(fixture.task.status.state).toBe(
+        completed ? "TASK_STATE_COMPLETED" : "TASK_STATE_FAILED",
+      );
+      expect(fixture.task.artifacts).toEqual([]);
+    },
+  );
+
   it.each(["hermes", "crew"])(
     "correlates interleaved same-context replies from %s",
     async (peerName) => {
@@ -322,7 +343,10 @@ describe("A2A channel inbound dispatch", () => {
   it("routes a stable peer binding before account fallback while preserving exact context overrides", async () => {
     const exactTask = fixture.store.create("ctx-exact", "hermes", "exact-message");
     await fixture.store.start(exactTask.id);
-    fixture.dispatch.mockImplementation(async (turn) => dispatched(turn));
+    fixture.dispatch.mockImplementation(async (turn) => {
+      turn.replyOptions?.onAgentRunTerminalOutcome?.("completed");
+      return dispatched(turn);
+    });
     const bindings = [
       ["a2a_context", "hermes:ctx-exact"],
       ["a2a_restricted", "hermes"],
