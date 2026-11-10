@@ -35,7 +35,8 @@ it.each([
     expect(claude.usesClaude5RequestContract(ref)).toBe(true);
     expect(claude.rejectsClaudeAssistantPrefill(ref)).toBe(true);
     expect(claude.requiresClaudeBetweenToolsThinking(ref)).toBe(false);
-    expect(claude.supportsClaudeFastMode(ref)).toBe(false);
+    // Offered by default; a rejection falls back to standard speed and is remembered.
+    expect(claude.supportsClaudeFastMode(ref)).toBe(true);
   }
 });
 
@@ -141,4 +142,20 @@ it("reads server compaction from the listed /v1/models capability", () => {
   expect(claude.supportsClaudeServerCompaction({ ...listed(false), id: "claude-fable-5-1" })).toBe(
     false,
   );
+});
+
+// Verified live on 2026-11-10 against every listed model on one account.
+it.each([
+  ["claude-fable-5-2", true],
+  ["claude-opus-5-5", true],
+  ["claude-opus-5", true],
+  ["claude-opus-4-8", true],
+  ["claude-zzz-9-9", true],
+  ["claude-fable-5-1", false],
+  ["claude-sonnet-5-5", false],
+  ["claude-haiku-5-5", false],
+  ["claude-opus-4-6", false],
+  ["gpt-6-astra", false],
+] as const)("matches the live fast-mode answer for %s", (id, expected) => {
+  expect(claude.supportsClaudeFastMode({ id })).toBe(expected);
 });

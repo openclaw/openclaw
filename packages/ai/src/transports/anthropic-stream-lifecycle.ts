@@ -11,6 +11,7 @@ import type { AnthropicOptions } from "../provider-options.js";
 import {
   usesClaudeStreamingRefusalContract,
   mapAnthropicStopReason,
+  isUnsupportedClaudeFastModeError,
   raiseClaudeCodeVersionFloor,
   readRequiredClaudeCodeVersion,
 } from "../providers/anthropic-model-contract.js";
@@ -63,6 +64,15 @@ import {
 
 type LifecycleOptions = AnthropicOptions & { authProfileId?: string };
 
+// Owner callbacks record learned facts; a failing recorder must not fail the request.
+function notifyOwner(callback: () => void): void {
+  try {
+    callback();
+  } catch {
+    // Best effort; this request already proceeds with the learned behavior.
+  }
+}
+
 type PreparedAnthropicRequest = {
   context: Context;
   options: LifecycleOptions | undefined;
@@ -100,7 +110,10 @@ export async function runAnthropicStreamLifecycle(params: {
     : undefined;
   let replayedCompaction: AnthropicCompactionBlock | undefined;
   try {
-    const send = async (canRetry: boolean): Promise<SentAnthropicRequest> => {
+    const send = async (retry: {
+      version: boolean;
+      speed: boolean;
+    }): Promise<SentAnthropicRequest> => {
       const prepared = await params.prepare();
       const built = await buildAnthropicRequest(
         model,
@@ -123,6 +136,9 @@ export async function runAnthropicStreamLifecycle(params: {
         prepared.directApiKeyBetaHeader,
       );
       const wireBody = { ...body, stream: true as const };
+      if (!retry.speed) {
+        delete wireBody.speed;
+      }
       try {
         const { response, events } = await prepared.request(wireBody, headers, () =>
           serializeAnthropicRequestBody(wireBody, messageSources),
@@ -134,18 +150,24 @@ export async function runAnthropicStreamLifecycle(params: {
         // Anthropic names the Claude Code version a model needs. Adopt it and
         // resend once instead of shipping a release for every new model.
         const required = prepared.isOAuthToken ? readRequiredClaudeCodeVersion(error) : undefined;
-        if (canRetry && required && raiseClaudeCodeVersionFloor(required)) {
-          try {
-            prepared.options?.onClaudeCodeVersionRequired?.(required);
-          } catch {
-            // Persistence is best effort; this process already uses the learned version.
-          }
-          return send(false);
+        if (retry.version && required && raiseClaudeCodeVersionFloor(required)) {
+          notifyOwner(() => prepared.options?.onClaudeCodeVersionRequired?.(required));
+          return send({ ...retry, version: false });
+        }
+        // New models are offered fast mode by default; one that lacks it answers
+        // with this 400. Resend at standard speed and let the owner stop offering it.
+        if (
+          retry.speed &&
+          wireBody.speed !== undefined &&
+          isUnsupportedClaudeFastModeError(error)
+        ) {
+          notifyOwner(() => prepared.options?.onFastModeUnsupported?.(model.id));
+          return send({ ...retry, speed: false });
         }
         throw error;
       }
     };
-    const { prepared, built, events } = await send(true);
+    const { prepared, built, events } = await send({ version: true, speed: true });
     await (async () => {
       const reducerOptions = prepared.options ?? {};
       const isOAuthToken = prepared.isOAuthToken;
