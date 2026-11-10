@@ -1008,6 +1008,7 @@ AFTER_CD
     expect(steps.indexOf(setup)).toBeLessThan(steps.indexOf(materialize));
     const postpublish = requiredWorkflowStep(steps, "Verify published npm bytes with main tooling");
     expect(postpublish.run).toContain("../scripts/openclaw-npm-postpublish-verify.ts");
+    expect(postpublish.env?.GH_TOKEN).toBe("${{ github.token }}");
     expect(postpublish.env?.TSX_TSCONFIG_PATH).toBe("${{ github.workspace }}/tsconfig.json");
     const pluginSdk = requiredWorkflowStep(
       steps,

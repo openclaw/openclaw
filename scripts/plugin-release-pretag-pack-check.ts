@@ -141,6 +141,7 @@ export async function runPluginReleasePretagPackCheck(
   try {
     const packEnv = {
       ...process.env,
+      ...(options.toolingRoot ? { TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json") } : {}),
       CLAWHUB_CLI_PACKAGE: process.env.CLAWHUB_CLI_PACKAGE?.trim() || DEFAULT_CLAWHUB_CLI_PACKAGE,
       PATH: `${wrapperDir}${delimiter}${process.env.PATH ?? ""}`,
     };
@@ -162,12 +163,7 @@ export async function runPluginReleasePretagPackCheck(
         {
           commandLabel: `node --import tsx ${join(toolingRoot, "scripts/check-plugin-npm-runtime-builds.mts")} --package ${target.packageDir}`,
           cwd: sourceRoot,
-          env: {
-            ...packEnv,
-            ...(options.toolingRoot
-              ? { TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json") }
-              : {}),
-          },
+          env: packEnv,
           stage: `plugin runtime build for ${target.packageName}`,
           timeoutMs,
         },

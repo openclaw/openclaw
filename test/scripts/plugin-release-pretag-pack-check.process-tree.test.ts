@@ -344,13 +344,22 @@ writeFileSync("build-proof", marker + ":" + process.argv.slice(2).join(" "));
     resolve("scripts/lib/npm-publish-plan.mjs"),
     join(tooling.repoDir, "scripts/lib/npm-publish-plan.mjs"),
   );
+  symlinkSync(
+    resolve("scripts/lib/tsx-cli-shim.mjs"),
+    join(tooling.repoDir, "scripts/lib/tsx-cli-shim.mjs"),
+  );
   tooling.writeScript("generate-npm-package-lock.mjs", "");
   tooling.writeScript(
     "lib/plugin-npm-package-manifest.mjs",
+    readFileSync("scripts/lib/plugin-npm-package-manifest.mjs", "utf8"),
+  );
+  tooling.writeScript(
+    "lib/plugin-npm-package-manifest.mts",
     `
+import { marker } from "fixture-proof";
 import { readFileSync, writeFileSync } from "node:fs";
 const pkg = JSON.parse(readFileSync(process.argv[3] + "/package.json", "utf8"));
-writeFileSync("npm-proof", pkg.version);
+writeFileSync("npm-proof", marker + ":" + pkg.version);
 `,
   );
   const npm = join(tooling.repoDir, "npm");
@@ -358,7 +367,7 @@ writeFileSync("npm-proof", pkg.version);
   chmodSync(npm, 0o755);
   vi.stubEnv("PATH", `${tooling.repoDir}${delimiter}${process.env.PATH ?? ""}`);
   await runPluginReleasePretagPackCheck(source.repoDir, { toolingRoot: tooling.repoDir });
-  expect(readFileSync(join(source.repoDir, "npm-proof"), "utf8")).toBe("2026.8.26");
+  expect(readFileSync(join(source.repoDir, "npm-proof"), "utf8")).toBe("trusted:2026.8.26");
   expect(readFileSync(join(source.repoDir, "build-proof"), "utf8")).toBe(
     "trusted:--package extensions/demo-plugin",
   );

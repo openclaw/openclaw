@@ -77,6 +77,7 @@ jobs:
       - name: Verify published npm bytes with main tooling
         working-directory: shipped
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           TSX_TSCONFIG_PATH: ${{ github.workspace }}/tsconfig.json
         run: node --import ../scripts/tsx.mjs ../scripts/openclaw-npm-postpublish-verify.ts "$RELEASE_VERSION"
