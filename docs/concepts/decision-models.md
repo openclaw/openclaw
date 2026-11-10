@@ -484,3 +484,26 @@ host authority or record accepted usage. Providers still return provider outcome
 The host attaches provenance during evaluation. Accepted usage is recorded only
 after the consuming operation passes its final checks. Keep those host
 responsibilities out of codecs and application result handling.
+
+## Native provider live verification
+
+From a matching development checkout, the opt-in native Decision smoke suite
+exercises Celeris, Fastino, Nace, and Perplexity through their registered V2
+adapters and real HTTPS transport:
+
+```sh
+OPENCLAW_LIVE_TEST=1 node scripts/run-vitest.mjs --config test/vitest/vitest.live.config.ts test/decision-index-providers.live.test.ts
+```
+
+Supply only the providers you intend to test through protected credentials:
+`CELERIS_API_KEY`, `FASTINO_API_KEY`, `NACE_API_KEY`, or `PERPLEXITY_API_KEY`. Each
+configured provider receives one synthetic text batch with Boolean, Choice, and
+Score questions and incurs its normal API charges. No customer content is used.
+The suite uses the supported environment-proxy transport when a proxy is present
+and does not read or change the running Gateway configuration or model selection.
+
+Missing keys skip those providers; skips are **not** live proof. A successful case
+checks native decoding, typed answers, and reported usage, not benchmark ranking,
+cache billing, distribution-shift calibration, or production reliability.
+Results contain only synthetic answers, model identity, and usage, never headers
+or credential-bearing prepared configuration.

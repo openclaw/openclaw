@@ -1,0 +1,2 @@
+# Opt-in real registered-provider HTTPS proof; fixtures cannot establish vendor contracts.
+97
