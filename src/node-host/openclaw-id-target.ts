@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  clampFreshnessState,
   isClawId,
   isEd25519PublicKey,
   isKeyFingerprint,
@@ -81,7 +82,8 @@ export function parseSavedNodeHostOpenClawIdTarget(value: unknown): SavedNodeHos
         !isRecord(marker) ||
         !isNonNegativeInteger(marker.seq) ||
         !isNonNegativeInteger(marker.issued_at) ||
-        !isNonNegativeInteger(marker.binding_seq)
+        !isNonNegativeInteger(marker.binding_seq) ||
+        (marker.k_gw !== undefined && !isEd25519PublicKey(marker.k_gw))
       ) {
         throw new Error("invalid OpenClaw ID node freshness state");
       }
@@ -91,6 +93,7 @@ export function parseSavedNodeHostOpenClawIdTarget(value: unknown): SavedNodeHos
           seq: marker.seq,
           issued_at: marker.issued_at,
           binding_seq: marker.binding_seq,
+          ...(marker.k_gw !== undefined ? { k_gw: marker.k_gw } : {}),
         },
       };
     }
@@ -119,7 +122,8 @@ export function parseSavedNodeHostOpenClawIdTarget(value: unknown): SavedNodeHos
     evidence: { root_pub: value.evidence.root_pub, binding: binding.statement },
     relayUrl,
     ...(discoveryUrl ? { discoveryUrl } : {}),
-    ...(freshness ? { freshness } : {}),
+    // Only verified bindings raise the high-water; a marker saved before that rule is capped.
+    ...(freshness ? { freshness: clampFreshnessState(freshness, value.pin.binding_seq) } : {}),
   };
 }
 
