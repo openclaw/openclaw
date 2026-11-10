@@ -20,7 +20,10 @@ function requirement(rows: Map<string, Row>, installed?: string, openStore?: () 
   });
 }
 
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+const settle = () =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 
 it("starts a restarted process at the version Anthropic last required", async () => {
   const rows = new Map<string, Row>();
