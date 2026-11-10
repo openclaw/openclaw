@@ -15,6 +15,7 @@ import {
   removeBackfillDiaryEntries,
   updateDreamsFile,
   writeBackfillDiaryEntries,
+  writeDreamsFileAtomic,
 } from "./dreaming-dreams-file.js";
 import { writeDailyDreamingPhaseBlock, writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { runDreamNarrative } from "./dreaming-narrative.js";
@@ -222,6 +223,24 @@ it.each([false, true])("keeps file and workspace permissions (new=%s)", async (f
     expect((await fs.stat(workspaceDir)).mode & 0o7777).toBe(fresh ? 0o700 : 0o770);
   }
 });
+
+// Root ignores directory permissions, so a read-only parent cannot force the
+// in-place fallback there; those cases would silently prove atomic replacement.
+const readOnlyParentRejectsWrites = process.getuid?.() !== 0;
+
+it.runIf(process.platform !== "win32" && readOnlyParentRejectsWrites)(
+  "writes an existing DREAMS.md in place when the parent rejects a sibling temp file",
+  async () => {
+    await fs.writeFile(dreamsPath, "# Dream Diary\n\nAn existing entry.\n", "utf8");
+    await fs.chmod(workspaceDir, 0o555);
+    try {
+      await writeDreamsFileAtomic(dreamsPath, "# Dream Diary\n\nA new entry.\n");
+      expect(await readDiary()).toBe("# Dream Diary\n\nA new entry.\n");
+    } finally {
+      await fs.chmod(workspaceDir, 0o755);
+    }
+  },
+);
 
 it("serializes concurrent writes and deduplication", async () => {
   const entry = "*April 11, 2026, 8:00 AM*\n\nThe server room smelled like rain.";

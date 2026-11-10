@@ -8,6 +8,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
+import { isAtomicReplacePermissionError } from "./short-term-promotion-memory-write.js";
 import { readStore } from "./short-term-promotion-store.js";
 import { resolveWorkspaceCreationMode, type WorkspaceFileMode } from "./workspace-file-mode.js";
 
@@ -87,6 +88,38 @@ async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
   }
 }
 
+async function writeDreamsFileInPlace(dreamsPath: string, content: string): Promise<boolean> {
+  const original = await fs.readFile(dreamsPath).catch(() => null);
+  if (original === null) {
+    return false;
+  }
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(dreamsPath, "r+");
+  } catch {
+    return false;
+  }
+  try {
+    await handle.writeFile(content, { encoding: "utf-8" });
+    await handle.truncate(Buffer.byteLength(content));
+    await handle.sync();
+    return true;
+  } catch (error) {
+    // Best effort: leave the previous diary intact when the in-place write
+    // fails partway, mirroring the MEMORY.md writer's restore.
+    try {
+      await handle.writeFile(original);
+      await handle.truncate(original.length);
+      await handle.sync();
+    } catch {
+      // Keep the original write error.
+    }
+    throw error;
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function writeDreamsFileAtomic(
   dreamsPath: string,
   content: string,
@@ -101,16 +134,28 @@ export async function writeDreamsFileAtomic(
   }
   const mode = resolveWorkspaceCreationMode(workspaceFileMode);
   await assertSafeDreamsPath(dreamsPath);
-  await replaceFileAtomic({
-    filePath: dreamsPath,
-    content,
-    dirMode: "preserve",
-    mode,
-    preserveExistingMode: true,
-    tempPrefix: `${path.basename(dreamsPath)}.dreams`,
-    throwOnCleanupError: true,
-    assertBeforeMutation: assertCurrent,
-  });
+  try {
+    await replaceFileAtomic({
+      filePath: dreamsPath,
+      content,
+      dirMode: "preserve",
+      mode,
+      preserveExistingMode: true,
+      tempPrefix: `${path.basename(dreamsPath)}.dreams`,
+      throwOnCleanupError: true,
+      assertBeforeMutation: assertCurrent,
+    });
+  } catch (error) {
+    // A read-only workspace with a writable bind-mounted DREAMS.md cannot host
+    // the sibling temp file atomic replacement needs; write the existing file
+    // in place instead, like the MEMORY.md writer does (see #196508).
+    if (
+      !isAtomicReplacePermissionError(error) ||
+      !(await writeDreamsFileInPlace(dreamsPath, content))
+    ) {
+      throw error;
+    }
+  }
 }
 
 export async function updateDreamsFile<T>(params: {
