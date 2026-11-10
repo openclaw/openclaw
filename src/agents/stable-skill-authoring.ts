@@ -31,7 +31,19 @@ export function createStableSkillAuthoring() {
       return authoring;
     }
     if (authoring?.expired) {
-      return authoring;
+      const shape = shapes.get(key);
+      return shape
+        ? {
+            ...authoring,
+            ...shape,
+            assertWorkspaceCurrent: () => {
+              throw new SkillLibraryError(
+                "AUTHORITY_EXPIRED",
+                "Skill authoring authority expired.",
+              );
+            },
+          }
+        : authoring;
     }
     if (authoring) {
       shapes.delete(key);

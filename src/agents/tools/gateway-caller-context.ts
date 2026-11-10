@@ -1,6 +1,9 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
+import {
+  inheritSessionEventToolPolicy,
+  narrowSessionEventSettings,
+} from "../../auto-reply/reply/session-event-policy.js";
 import type { SessionEntriesCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import {
   composeSessionSourceAssertion,
@@ -622,21 +625,7 @@ export async function withGatewayToolCallerIdentity<T>(
               identity.sessionEventSettings,
             )
           : (identity.sessionEventSettings ?? inheritedOwner?.sessionEventSettings),
-      sessionEventToolsAllow:
-        identity.sessionEventToolsAllow && inheritedOwner?.sessionEventToolsAllow
-          ? identity.sessionEventToolsAllow.filter((name) =>
-              inheritedOwner.sessionEventToolsAllow!.includes(name),
-            )
-          : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
-      // Only an owner of the same session with no narrower surface of its own keeps the exemption.
-      sessionEventToolsAllowSessionScoped:
-        !inheritedOwner ||
-        (inheritedOwner.agentId === identity.agentId.trim() &&
-          inheritedOwner.sessionKey === identity.sessionKey.trim() &&
-          (!inheritedOwner.sessionEventToolsAllow ||
-            inheritedOwner.sessionEventToolsAllowSessionScoped))
-          ? identity.sessionEventToolsAllowSessionScoped
-          : undefined,
+      ...inheritSessionEventToolPolicy(identity, inheritedOwner),
       workspaceBaseRefreshSandbox: inheritedValue("workspaceBaseRefreshSandbox"),
       workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
       workspacePublicationRunId: inheritedValue("workspacePublicationRunId"),

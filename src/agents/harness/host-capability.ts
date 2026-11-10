@@ -96,13 +96,7 @@ export function createAgentHarnessHostCapabilities(params: {
   requiredNodeCommands?: readonly string[];
   nativeModelPolicySupport?: "exact";
   toolCalls?: "deny";
-}): {
-  capabilities: AgentHarnessHostCapabilities;
-  close: () => void;
-  setInputAttachmentReadAllowed: (allowed: boolean) => void;
-  setToolPolicyScope: (scope: "conversation" | "turn" | undefined) => void;
-  runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
-} {
+}) {
   const attempt = params.attempt;
   // Set by host policy preparation; a plugin cannot widen continuation lifetime through options.
   let toolPolicyScope: "conversation" | "turn" | undefined;
@@ -694,10 +688,10 @@ export function createAgentHarnessHostCapabilities(params: {
   return {
     capabilities,
     setInputAttachmentReadAllowed: media.setInputAttachmentReadAllowed,
-    setToolPolicyScope: (scope) => {
+    setToolPolicyScope: (scope: "conversation" | "turn" | undefined) => {
       toolPolicyScope = scope;
     },
-    runWithScope: async (run) => {
+    runWithScope: async <T>(run: () => Promise<T>) => {
       const preparedCaller = getGatewayToolCallerIdentity();
       if (preparedCaller?.operationalRunInstance === operationalRunInstance) {
         personalToolParticipants ??= preparedCaller.personalToolParticipants;

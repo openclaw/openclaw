@@ -1,3 +1,3 @@
-286
+288
 # Regression coverage for same-session completion authority, host-owned policy scope,
 # expired skill-authoring grants, and stable WebChat wake context.

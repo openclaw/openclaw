@@ -45,10 +45,13 @@ describe("createStableSkillAuthoring", () => {
     const { expireSkillLibraryAuthoring } =
       await import("../auto-reply/reply/transcript-followup-run.js");
     resolveStableSkillAuthoring("agent:main:a", human("workspace"));
-    resolveStableSkillAuthoring(
+    const followup = resolveStableSkillAuthoring(
       "agent:main:a",
       expireSkillLibraryAuthoring(human("workspace"), "expired"),
     );
+    expect(followup).toMatchObject({ defaultTarget: "workspace", expired: true });
+    await expect(followup!.invoke({ action: "list" })).rejects.toThrow("expired");
+    expect(() => followup!.assertWorkspaceCurrent?.({ sandboxed: false })).toThrow("expired");
     expect(resolveStableSkillAuthoring("agent:main:a", undefined)).toMatchObject({
       defaultTarget: "workspace",
     });
