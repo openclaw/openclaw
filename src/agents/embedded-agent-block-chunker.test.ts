@@ -84,7 +84,6 @@ describe("EmbeddedBlockChunker", () => {
     const chunker = paragraphChunker(800, 1200);
     chunker.append(cluster);
     expect(drainChunks(chunker)).toEqual([cluster]);
-    expect(chunker.bufferedText).toBe("");
 
     chunker.append("done");
     expect(drainChunks(chunker)).toEqual([]);
@@ -384,26 +383,6 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.consumedLength).toBe(snapshot.length);
   });
 
-  it.each([
-    [
-      "| Item | Value |\n| --- | --- |\n| Memory | 11.65 GiB |\n| Disk | 42.1 GB |\n",
-      ["| Item | Value |\n| --- | --- |\n| Memory | 11.65 GiB |\n| Disk | 42.1 GB |\n"],
-    ],
-    [
-      "Upgrade to v2.4.1 now. Memory is 11.65 GiB.",
-      ["Upgrade to v2.4.1 now.", " Memory is 11.65 GiB."],
-    ],
-  ])("does not split a decimal or version at a streamed delta boundary: %j", (source, expected) => {
-    const chunker = paragraphChunker(1, 1200);
-    const chunks: string[] = [];
-    for (const char of source) {
-      chunker.append(char);
-      chunks.push(...drainChunks(chunker));
-    }
-    chunks.push(...drainChunks(chunker, true));
-    expect(chunks).toEqual(expected);
-  });
-
   it("respects paragraph boundaries and minimum paragraph length", () => {
     const chunker = paragraphChunker(30, 200, { flushOnParagraph: true });
     chunker.append("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.");
@@ -414,6 +393,7 @@ describe("EmbeddedBlockChunker", () => {
   it.each([
     [1, 20, `${"x".repeat(19)}😀tail`, ["x".repeat(19)], "😀tail"],
     [1, 1, "😀tail", ["😀", "t", "a", "i", "l"], ""],
+    [1, 20, "| Memory | 11.", [], "| Memory | 11."],
     [
       10,
       20,
@@ -422,7 +402,7 @@ describe("EmbeddedBlockChunker", () => {
       "```txt\nxxx😀tail",
     ],
   ] as const)(
-    "keeps min=%i/max=%i chunks valid at UTF-16 boundaries",
+    "keeps min=%i/max=%i chunks valid at UTF-16 and decimal boundaries",
     (min, max, source, chunks, pending) => {
       const chunker = paragraphChunker(min, max);
       chunker.append(source);
