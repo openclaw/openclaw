@@ -24,6 +24,7 @@ it.each([
   ["claude-opus-5", "Claude Opus 5", [5, 25, 0.5, 6.25], false],
   ["claude-sonnet-5-5", "Claude Sonnet 5.5", [2, 10, 0.1, 2.5], true],
   ["claude-sonnet-5", "Claude Sonnet 5", [2, 10, 0.2, 2.5], false],
+  ["claude-fable-5-2", "Claude Fable 5.2", [8, 40, 0.2, 10], true],
   ["claude-fable-5-1", "Claude Fable 5.1", [10, 50, 0.25, 12.5], true],
   ["claude-fable-5", "Claude Fable 5", [10, 50, 1, 12.5], true],
 ] as const)(

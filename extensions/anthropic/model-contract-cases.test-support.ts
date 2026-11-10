@@ -51,6 +51,15 @@ export const claude5ContractCases: Claude5ContractCase[] = [
   },
   {
     ...commonContract,
+    name: "resolves Claude Fable 5.2 with its always-adaptive model contract",
+    defaultLevel: "medium",
+    modelId: "claude-fable-5-2",
+    cost: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 },
+    thinkingLevels: mandatoryThinkingLevels,
+    checksCliPolicy: true,
+  },
+  {
+    ...commonContract,
     name: "resolves Claude Fable 5.1 with its always-adaptive model contract",
     defaultLevel: "medium",
     modelId: "claude-fable-5-1",

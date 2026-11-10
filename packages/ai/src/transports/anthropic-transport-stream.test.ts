@@ -931,7 +931,7 @@ describe("anthropic transport stream", () => {
       (item) => requireRecord(item, "system item").text,
     );
     expect(system[0]).toBe(
-      "x-anthropic-billing-header: cc_version=2.1.280; cc_entrypoint=sdk-cli;",
+      "x-anthropic-billing-header: cc_version=2.1.290; cc_entrypoint=sdk-cli;",
     );
     expect(system).toEqual(
       expect.arrayContaining([

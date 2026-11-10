@@ -168,7 +168,7 @@ describe("Anthropic cache checkpoint transport parity", () => {
         expect(markerPaths(payload)).toEqual(["messages[0].content[0]", "system[1]", "tools[0]"]);
         expect(payload.system).toEqual(
           expect.arrayContaining([
-            textBlock("x-anthropic-billing-header: cc_version=2.1.280; cc_entrypoint=sdk-cli;"),
+            textBlock("x-anthropic-billing-header: cc_version=2.1.290; cc_entrypoint=sdk-cli;"),
             {
               ...textBlock("You are Claude Code, Anthropic's official CLI for Claude."),
               cache_control: { type: "ephemeral" },

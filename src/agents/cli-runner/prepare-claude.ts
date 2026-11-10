@@ -11,6 +11,7 @@ const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
   "sonnet-4-6": "claude-sonnet-4-6",
   fable: "claude-fable-5-1",
   "fable-5": "claude-fable-5",
+  "fable-5-2": "claude-fable-5-2",
   "fable-5-1": "claude-fable-5-1",
 };
 

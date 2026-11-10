@@ -431,6 +431,28 @@ fallback to Sonnet 5 for `cyber` and `frontier_llm` declines, at the same price.
 See Anthropic's [migration guide](https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide)
 for model-switching and response-shape changes.
 
+## Use Claude Fable 5.2
+
+After setting up either auth route above, select the standard model ref:
+
+```bash
+openclaw models set anthropic/claude-fable-5-2
+```
+
+Fable 5.2 keeps the Fable 5.1 request contract: a 1,000,000-token context window,
+a 128,000-token output limit, always-on adaptive thinking with native `low`,
+`medium`, `high`, `xhigh`, and `max` effort, and no forced tool calls. OpenClaw
+defaults to `medium`.
+For API-key billing, input and output cost `$8/$40` per million tokens and
+cache reads cost `$0.20` per million tokens.
+See Anthropic's [Fable 5.2 specifications](https://platform.claude.com/docs/en/models/fable-5-2/overview)
+and [migration guide](https://platform.claude.com/docs/en/models/fable-5-2/migration-guide).
+
+Claude CLI authentication needs Claude Code 2.1.290 or newer for this model.
+
+Select it with `fable-5.2` or the full ref. The bare `fable` alias still
+selects `anthropic/claude-fable-5-1`.
+
 ## Use Claude Fable 5.1
 
 After setting up either auth route above, select the standard model ref:

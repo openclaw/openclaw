@@ -121,6 +121,8 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
     const anthropicAliases: Record<string, string> = {
       fable: "claude-fable-5-1",
       "fable-5": "claude-fable-5",
+      "fable-5.2": "claude-fable-5-2",
+      "fable-5-2": "claude-fable-5-2",
       "fable-5.1": "claude-fable-5-1",
       "fable-5-1": "claude-fable-5-1",
       haiku: "claude-haiku-5-5",
