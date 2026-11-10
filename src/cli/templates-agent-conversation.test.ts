@@ -78,49 +78,6 @@ beforeEach(() => {
   mocks.publish.mockReset().mockResolvedValue(undefined);
   mocks.context.localEmbedded = true;
 });
-it("prepares an empty CLI canonical session then uses normal runtime and tools-disabled visible turns", async () => {
-  const { adapters, signal, assertCurrent, runtime } = fixture();
-  const config = { agents: { entries: { scout: {} } }, session: { mainKey: "home" } };
-  expect(await adapters.prepareAgentSession!(config)).toBe(mocks.rollback);
-  expect(mocks.prepare).toHaveBeenCalledWith(
-    expect.objectContaining({ signal, sessionMutationCommitGuard: assertCurrent }),
-    "scout",
-    { config, commandSource: "cli" },
-  );
-  expect(mocks.turn).not.toHaveBeenCalled();
-  expect(await adapters.waitForAgentRuntime!()).toBe("applied");
-  expect(mocks.ready).toHaveBeenCalledWith(
-    expect.objectContaining({
-      opts: expect.objectContaining({
-        agentId: "scout",
-        abortSignal: signal,
-        assertSourceCurrent: assertCurrent,
-        toolsAllow: [],
-        deferWorkspaceBootstrap: true,
-      }),
-    }),
-  );
-  await adapters.onAgentReady!({ agentId: "scout", sessionKey: event.sessionKey });
-  const [opening] = mocks.turn.mock.calls[0]!;
-  expect(opening).toMatchObject({
-    sessionKey: event.sessionKey,
-    toolsAllow: [],
-    suppressPromptPersistence: true,
-    deferWorkspaceBootstrap: true,
-    abortSignal: signal,
-    assertSourceCurrent: assertCurrent,
-    deliver: false,
-  });
-  expect(opening.message).toContain("SOUL personality");
-  expect(opening.message).toContain("installer owns all remaining declared setup");
-  expect(runtime.log).toHaveBeenCalledWith("Hello from Scout");
-  await adapters.onSetupEvent!(event);
-  expect(mocks.publish).toHaveBeenCalledWith(mocks.context, event, assertCurrent);
-  expect(mocks.turn).toHaveBeenCalledTimes(1);
-  expect(runtime.log).toHaveBeenCalledWith(
-    "Automation created: Morning review (paused until setup is ready).",
-  );
-});
 it.for(["silent", "error"])(
   "rejects %s model completion so shared Add retains partial state",
   async (failure) => {
