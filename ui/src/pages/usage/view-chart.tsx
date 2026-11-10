@@ -1,9 +1,10 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { formatUsd } from "../../lib/reactive/format.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import "../../components/tooltip.ts";
 import {
   formatAnalysisCost,
@@ -51,12 +52,7 @@ const TOKEN_TYPE_COLORS = {
 function formatAxisCost(value: number, scale: number): string {
   const digits =
     scale >= 10 ? 0 : scale > 0 ? Math.min(8, Math.max(2, Math.ceil(-Math.log10(scale / 2)))) : 2;
-  return value.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
+  return formatUsd(value, digits);
 }
 
 /** Rounds an axis maximum up to 1, 2 or 5 times a power of ten. */
@@ -79,6 +75,7 @@ export function DailyChartCompact(props: {
   onSelectDay: UsageProps["callbacks"]["filters"]["onSelectDay"];
   range: UsageChartRange;
 }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const calendar = createMemo((): { days: CostDailyEntry[]; pending: Set<string> } => {
     /**
      * Every calendar day of the range, so columns never move as a report fills in. Missing days are
@@ -186,13 +183,13 @@ export function DailyChartCompact(props: {
       ? active.index !== index
       : selected().size > 0 && !selected().has(dates()[index] ?? "");
   };
-  const dayLabel = (index: number) => {
+  const dayLabel = (index: number, dateLabel: string) => {
     const day = days()[index];
     if (day && calendar().pending.has(day.date)) {
-      return `${formatFullDate(day.date)}: ${t("usage.daily.pending")}`;
+      return `${dateLabel}: ${t("usage.daily.pending")}`;
     }
     const tokens = `${formatUsageTokens(day?.totalTokens ?? 0)} ${t("usage.metrics.tokens").toLowerCase()}`;
-    return `${formatFullDate(day?.date ?? "")}: ${tokens}, ${formatAnalysisCost(day?.totalCost ?? 0)}`;
+    return `${dateLabel}: ${tokens}, ${formatAnalysisCost(day?.totalCost ?? 0)}`;
   };
   const tipPosition = (index: number) => {
     const share = (index + 0.5) / Math.max(1, dates().length);
@@ -237,64 +234,70 @@ export function DailyChartCompact(props: {
           <div class="daily-chart-plot" onPointerLeave={() => setHover(null)}>
             <div class="daily-chart-bars" style={{ "--daily-columns": String(dates().length) }}>
               <For each={dates()} keyed={false}>
-                {(date, index) => (
-                  <button
-                    type="button"
-                    class={[
-                      "daily-bar-wrapper",
-                      {
-                        selected: selected().has(date()),
-                        "daily-bar-wrapper--dim": dimmed(index),
-                        "daily-bar-wrapper--pending": calendar().pending.has(date()),
-                      },
-                    ]}
-                    aria-pressed={selected().has(date()) ? "true" : "false"}
-                    aria-label={dayLabel(index)}
-                    onPointerEnter={() => setHover({ index })}
-                    onFocus={() => setHover({ index })}
-                    onBlur={() => setHover(null)}
-                    onKeyDown={(event: KeyboardEvent) => {
-                      // Shift+Space and Shift+Enter extend the range like Shift-click.
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        props.onSelectDay(date(), event.shiftKey, dates());
-                      }
-                    }}
-                    onClick={(event: MouseEvent) =>
-                      props.onSelectDay(date(), event.shiftKey, dates())
-                    }
-                  >
-                    <span
-                      class={["daily-bar", { "daily-bar--empty": !totals()[index] }]}
-                      style={{
-                        height: `${scale() > 0 ? (((totals()[index] ?? 0) / scale()) * 100).toFixed(2) : 0}%`,
-                      }}
-                    >
-                      <For
-                        each={series().filter((entry) => (entry.values[index] ?? 0) > 0)}
-                        keyed={(entry) => entry.id}
-                      >
-                        {(entry) => (
-                          <span
-                            class="cost-segment"
-                            style={{
-                              background: entry().color,
-                              "flex-grow": String(entry().values[index] ?? 0),
-                            }}
-                          />
-                        )}
-                      </For>
-                    </span>
-                    <span
+                {(date, index) => {
+                  const dateLabel = createMemo(() => {
+                    getLocale();
+                    return formatFullDate(date());
+                  });
+                  return (
+                    <button
+                      type="button"
                       class={[
-                        "daily-bar-label",
-                        { "daily-bar-label--hidden": index % labelEvery() !== 0 },
+                        "daily-bar-wrapper",
+                        {
+                          selected: selected().has(date()),
+                          "daily-bar-wrapper--dim": dimmed(index),
+                          "daily-bar-wrapper--pending": calendar().pending.has(date()),
+                        },
                       ]}
+                      aria-pressed={selected().has(date()) ? "true" : "false"}
+                      aria-label={dayLabel(index, dateLabel())}
+                      onPointerEnter={() => setHover({ index })}
+                      onFocus={() => setHover({ index })}
+                      onBlur={() => setHover(null)}
+                      onKeyDown={(event: KeyboardEvent) => {
+                        // Shift+Space and Shift+Enter extend the range like Shift-click.
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          props.onSelectDay(date(), event.shiftKey, dates());
+                        }
+                      }}
+                      onClick={(event: MouseEvent) =>
+                        props.onSelectDay(date(), event.shiftKey, dates())
+                      }
                     >
-                      {index % labelEvery() === 0 ? formatDayLabel(date()) : ""}
-                    </span>
-                  </button>
-                )}
+                      <span
+                        class={["daily-bar", { "daily-bar--empty": !totals()[index] }]}
+                        style={{
+                          height: `${scale() > 0 ? (((totals()[index] ?? 0) / scale()) * 100).toFixed(2) : 0}%`,
+                        }}
+                      >
+                        <For
+                          each={series().filter((entry) => (entry.values[index] ?? 0) > 0)}
+                          keyed={(entry) => entry.id}
+                        >
+                          {(entry) => (
+                            <span
+                              class="cost-segment"
+                              style={{
+                                background: entry().color,
+                                "flex-grow": String(entry().values[index] ?? 0),
+                              }}
+                            />
+                          )}
+                        </For>
+                      </span>
+                      <span
+                        class={[
+                          "daily-bar-label",
+                          { "daily-bar-label--hidden": index % labelEvery() !== 0 },
+                        ]}
+                      >
+                        {index % labelEvery() === 0 ? formatDayLabel(date()) : ""}
+                      </span>
+                    </button>
+                  );
+                }}
               </For>
             </div>
             <Show when={hover()}>

@@ -266,10 +266,10 @@ suite.define(() => {
         await expect
           .poll(async () => detail.locator(".settings-row__desc").allTextContents())
           .toContain(
-            "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
+            "No saved WhatsApp session was cleared. It may already be gone or need manual cleanup.",
           );
         await expect(qr.getAttribute("src")).resolves.toBe(QR_DATA_URL);
-        await expect(detail.getByText("Logged out.", { exact: true }).count()).resolves.toBe(0);
+        await expect(detail.getByText("Signed out.", { exact: true }).count()).resolves.toBe(0);
         await expectRequests(gateway, "channels.logout", 1);
         expect((await gateway.getRequests("channels.logout"))[0]?.params).toEqual({
           channel: "whatsapp",
@@ -353,14 +353,9 @@ suite.define(() => {
   });
 
   it("preserves standard channel details and the complete Telegram setup wizard", async () => {
-    const channelEntries = [
-      ["discord", "Discord"],
-      ["googlechat", "Google Chat"],
-      ["imessage", "iMessage"],
-      ["signal", "Signal"],
-      ["slack", "Slack"],
-      ["telegram", "Telegram"],
-    ] as const;
+    const channelEntries = "Discord|Google Chat|iMessage|Signal|Slack|Telegram"
+      .split("|")
+      .map((label) => [label.toLowerCase().replace(" ", ""), label] as const);
     const running = { configured: true, running: true };
     const details: Record<string, Record<string, unknown>> = {
       googlechat: {
@@ -380,6 +375,8 @@ suite.define(() => {
       status: "running",
       step: { id, type, ...values },
     });
+    const sessionId = "channel-standard-proof";
+    const tokenStep = step("token", "text", { message: "Telegram bot token", sensitive: true });
     await withChannels(
       {
         "channels.status": channelStatus(
@@ -394,7 +391,7 @@ suite.define(() => {
           },
         ),
         "wizard.start": {
-          sessionId: "channel-standard-proof",
+          sessionId,
           ...step("account", "select", {
             message: "Choose Telegram account",
             initialValue: "personal",
@@ -406,7 +403,8 @@ suite.define(() => {
         },
         "wizard.next": {
           sequence: [
-            step("token", "text", { message: "Telegram bot token", sensitive: true }),
+            tokenStep,
+            { ...tokenStep, error: "Token must not contain spaces" },
             step("features", "multiselect", {
               initialValue: ["alpha"],
               options: [
@@ -428,9 +426,8 @@ suite.define(() => {
         };
         for (const [channelId, label] of channelEntries) {
           const detail = await openChannel(page, label);
-          await expect
-            .poll(() => detail.locator(".oc-dialog__title").textContent())
-            .toContain(label);
+          const heading = detail.locator(".oc-dialog__title");
+          await expect.poll(() => heading.textContent()).toContain(label);
           await detail.getByRole("button", { name: "Check connection" }).waitFor();
           if (channelId === "googlechat" || channelId === "signal") {
             await detail.locator("summary", { hasText: "Details" }).click();
@@ -450,22 +447,27 @@ suite.define(() => {
         await selectPickerValue(account, "1");
         await button(wizard, "Continue").click();
         await expectRequests(gateway, "wizard.next", 1);
-        await expect
-          .poll(() => account.locator(".picker-select__trigger").getAttribute("disabled"))
-          .not.toBeNull();
+        await expect.poll(() => account.locator(".picker-select__trigger").isDisabled()).toBe(true);
         const busyButton = wizard.locator('button[aria-busy="true"]');
         await expect.poll(() => busyButton.getAttribute("disabled")).not.toBeNull();
         await expect.poll(() => busyButton.locator(".btn__label").textContent()).toBe("Continue");
         await expect.poll(() => busyButton.locator(".btn__spinner").count()).toBe(1);
-        await expect
-          .poll(() => wizard.locator(".channels-wizard__spinner", { hasText: "Working…" }).count())
-          .toBe(0);
+        await expect.poll(() => wizard.locator(".channels-wizard__spinner").count()).toBe(0);
         await gateway.resolveDeferred("wizard.next");
 
         const token = wizard.getByLabel("Telegram bot token");
         await expect.poll(() => token.getAttribute("type")).toBe("password");
-        await token.fill("123456:proof-secret");
-        await button(wizard, "Continue").click();
+        await token.fill("123456 proof-secret");
+        await gateway.deferNext("wizard.next");
+        await token.press("Enter");
+        await expect.poll(() => token.isDisabled()).toBe(true);
+        await gateway.resolveDeferred("wizard.next");
+        await wizard.getByRole("alert").filter({ hasText: "must not contain spaces" }).waitFor();
+        // The rejected field regains focus, so a keyboard correction needs no click.
+        await expect.poll(() => token.evaluate((input) => input.matches(":focus"))).toBe(true);
+        await page.keyboard.press("ControlOrMeta+A");
+        await page.keyboard.type("123456:proof-secret");
+        await page.keyboard.press("Enter");
         const beta = wizard.getByRole("button", { name: /Beta/u });
         await expect.poll(() => beta.getAttribute("aria-pressed")).toBe("false");
         await beta.click();
@@ -476,16 +478,14 @@ suite.define(() => {
 
         const userAnswers = [
           ["account", "work"],
+          ["token", "123456 proof-secret"],
           ["token", "123456:proof-secret"],
           ["features", ["alpha", "beta"]],
           ["confirm", true],
         ] as const;
         expect((await gateway.getRequests("wizard.next")).map(({ params }) => params)).toEqual([
-          ...userAnswers.map(([stepId, value]) => ({
-            sessionId: "channel-standard-proof",
-            answer: { stepId, value },
-          })),
-          { sessionId: "channel-standard-proof" },
+          ...userAnswers.map(([stepId, value]) => ({ sessionId, answer: { stepId, value } })),
+          { sessionId },
         ]);
       },
       contextOptions,

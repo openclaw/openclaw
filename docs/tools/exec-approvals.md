@@ -708,7 +708,7 @@ native approval clients), see
 
 ## Control UI editing
 
-Use the **Control UI -> Nodes -> Exec approvals** card to edit defaults,
+Use the **Control UI → Devices → Command approvals** card to edit defaults,
 per-agent overrides, and allowlists. Pick a scope (Defaults or an agent),
 tweak the policy, add/remove allowlist patterns, then **Save**. The UI
 shows last-used metadata per pattern so you can keep the list tidy.

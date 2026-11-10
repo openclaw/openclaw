@@ -78,8 +78,8 @@ export type ModelProvidersPageTestElement = Pick<
 
 const modelPickerLabels = {
   primary: "Model",
-  utility: "Utility Model",
-  fallback: "Fallback Model",
+  utility: "Utility model",
+  fallback: "Fallback model",
   decision: "Decision model",
 };
 
@@ -208,7 +208,7 @@ export async function saveKey(page: ModelProvidersPageTestElement, value: string
   page.view.props.onOpenKeyEditor("openai");
   page.view.props.onKeyDraftChange(value);
   await page.updateComplete;
-  page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
+  page.querySelector<HTMLButtonElement>(".model-providers__inline-form .btn.primary")!.click();
 }
 
 export async function openApiKeyProvider(page: ModelProvidersPageTestElement, provider: string) {
@@ -254,6 +254,8 @@ export function createHarness(initialScopeId: string) {
       }
       case "models.list":
         return { models: [] };
+      case "models.probe":
+        return { provider: "fixture", status: "ok", results: [] };
       case "config.get":
         return {
           config: { agents: { defaults: { thinkingDefault: "low", fastModeDefault: "auto" } } },

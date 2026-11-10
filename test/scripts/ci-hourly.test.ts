@@ -120,9 +120,16 @@ describe("hourly main CI admission", () => {
       steps: {
         diff_base: { outputs: { sha: baseSha } },
         guard_setup: { outputs: {}, outcome: "success" },
+        guard_ripgrep: { outputs: {}, outcome: "success" },
       },
     } as const;
     expect(evaluate(guards.if, context)).toBe(true);
+    expect(
+      evaluate(guards.if, {
+        ...context,
+        steps: { ...context.steps, guard_ripgrep: { outputs: {}, outcome: "failure" } },
+      }),
+    ).toBe(false);
     for (const name of ["BASE_SHA", "PROTOCOL_SINCE_BASE_SHA"]) {
       expect(evaluate(guards.env[name], context)).toBe(baseSha);
     }

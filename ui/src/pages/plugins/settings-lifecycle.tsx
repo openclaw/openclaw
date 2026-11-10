@@ -73,7 +73,7 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
         {(serverName) => (
           <button
             type="button"
-            class="btn primary oc-action oc-action-primary plugin-catalog-detail__sign-in"
+            class="btn primary plugin-catalog-detail__sign-in"
             aria-label={t("pluginsPage.auth.connectAccount", { name: serverName() })}
             disabled={props.mcpLoginBusy}
             onClick={() => props.onMcpLogin?.(serverName())}
@@ -88,7 +88,7 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
         label={t(
           enableAction() === "disable" ? "pluginsPage.detailDisable" : "pluginsPage.detailEnable",
         )}
-        class={props.enabled ? "oc-action-secondary" : "primary oc-action-primary"}
+        class={props.enabled ? "oc-action-secondary" : "primary"}
         blockedReason={
           props.mutationBlockedReason ??
           (props.plugin.state === "needs-setup" ? t("pluginsPage.setupRequiredNotice") : null)

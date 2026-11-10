@@ -73,13 +73,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/app-sidebar-session-indicators.tsx",
-      "text": "0ms"
-    },
-    {
-      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/components/app-topbar-solid.tsx",
@@ -91,6 +84,48 @@
       "name": "text",
       "path": "ui/src/components/app-topbar-solid.tsx",
       "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "AWS"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "Azure"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "Daytona"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "Google Cloud"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "Hetzner"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/cloud-profile-icon-data.ts",
+      "text": "Machine0"
     },
     {
       "count": 1,
@@ -153,49 +188,21 @@
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/components/mcp-servers-form.tsx",
-      "text": "https://mcp.example.com/mcp · npx some-mcp-server"
+      "text": "https://mcp.example.com/mcp"
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "AWS"
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/components/mcp-servers-form.tsx",
+      "text": "npx some-mcp-server"
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "Azure"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "Daytona"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "Google Cloud"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "Hetzner"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/components/provider-icon-data.ts",
-      "text": "Machine0"
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/openclaw-id/recovery-kit-panel.tsx",
+      "text": "https://"
     },
     {
       "count": 1,
@@ -230,7 +237,14 @@
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/lib/chat/commands.ts",
-      "text": "Clear chat history"
+      "text": "Clear conversation"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/lib/openclaw-id/kit-export.ts",
+      "text": "OpenClaw Recovery Kit"
     },
     {
       "count": 1,
@@ -278,29 +292,8 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-stream-view.tsx",
-      "text": "Assistant"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-timestamp-view.tsx",
       "text": "% ctx"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-welcome.tsx",
-      "text": "Assistant"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-welcome.tsx",
-      "text": "Assistant"
     },
     {
       "count": 1,
@@ -308,34 +301,6 @@
       "name": "text",
       "path": "ui/src/pages/cloud-workers/cloud-worker-snapshot-rows.tsx",
       "text": ".openclaw/worktree-setup.sh"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/mcp.tsx",
-      "text": "openclaw mcp doctor --probe"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/mcp.tsx",
-      "text": "openclaw mcp login &lt;name&gt;"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/mcp.tsx",
-      "text": "openclaw mcp reload"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/config/mcp.tsx",
-      "text": "openclaw mcp status --verbose"
     },
     {
       "count": 1,
@@ -411,13 +376,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/devices/view-exec-approvals.tsx",
-      "text": "exec host=gateway/node"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw config set nodeHost.workerRuns.enabled true"
     },
@@ -460,20 +418,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/plugins/overview.tsx",
-      "text": "Clean"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/plugins/overview.tsx",
-      "text": "Review"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/skills/library-detail.tsx",
       "text": "SKILL.md"
     },
@@ -481,7 +425,7 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/pages/skills/library-view.tsx",
+      "path": "ui/src/pages/skills/library-dialog-content.tsx",
       "text": "SKILL.md"
     },
     {

@@ -16,12 +16,13 @@ import type { AgentFileEntry } from "../../api/types.ts";
 import type { OpenClawModalDialog } from "../../components/modal-dialog.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
-import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/modal-dialog.tsx";
-import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/tooltip.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
@@ -177,9 +178,9 @@ export function AgentFiles(
           <AgentFileStatus
             request={params.readData().agentFileOutcome}
             fallback={(message) => (
-              <div class="callout danger" role="alert">
+              <InlineAlert tone="danger" role="alert">
                 {message}
-              </div>
+              </InlineAlert>
             )}
           >
             <AgentReadNotice request={params.listRead} />
@@ -187,7 +188,7 @@ export function AgentFiles(
         }
       >
         {(name) => (
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             <AgentFileStatus
               request={params.readData().agentFileOutcome}
               fallback={(message) => <span>{message}</span>}
@@ -212,7 +213,7 @@ export function AgentFiles(
                 {t("agents.files.overwrite")}
               </button>
             </div>
-          </div>
+          </InlineAlert>
         )}
       </Show>
       <SettingsSection
@@ -294,7 +295,7 @@ export function AgentFiles(
             >
               <Show
                 when={activeEntry()}
-                fallback={<div class="muted">{t("agents.files.selectFile")}</div>}
+                fallback={<SettingsEmpty message={t("agents.files.selectFile")} />}
               >
                 {(entry) => {
                   let previewModal: OpenClawModalDialog | undefined;
@@ -339,11 +340,11 @@ export function AgentFiles(
                         </div>
                       </div>
                       {showMissing() ? (
-                        <div class="callout info">
+                        <InlineAlert tone="info">
                           {entry().expectedAbsent === true
                             ? t("agents.files.createHint")
                             : t("agents.files.missingHint")}
-                        </div>
+                        </InlineAlert>
                       ) : undefined}
                       <label class="field agent-file-field">
                         <span>{t("agents.files.content")}</span>
@@ -442,7 +443,7 @@ export function AgentFiles(
                                     <button
                                       type="button"
                                       class={[
-                                        "oc-dialog__close md-preview-expand-btn",
+                                        "oc-icon-button oc-icon-button--28 oc-dialog__close md-preview-expand-btn",
                                         { "is-fullscreen": fullscreen() },
                                       ]}
                                       aria-label={fullscreenLabel()}
@@ -460,7 +461,7 @@ export function AgentFiles(
                                   <openclaw-tooltip prop:content={t("agents.files.closePreview")}>
                                     <button
                                       type="button"
-                                      class="oc-dialog__close"
+                                      class="oc-icon-button oc-icon-button--28 oc-dialog__close"
                                       aria-label={t("agents.files.closePreview")}
                                       onClick={() => closePreview()}
                                     >

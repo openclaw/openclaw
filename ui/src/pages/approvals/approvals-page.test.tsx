@@ -19,7 +19,7 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ApprovalsPage } from "./approvals-page.tsx";
 
 const historyTable = ".approval-log";
-const grantsTable = ".standing-grants-table";
+const grantsTable = ".settings-section";
 const oldAutomation = "Old Gateway automation";
 const currentAutomation = "Current Gateway automation";
 const operatorHello = (scopes?: string[], recoveryScope?: string) =>

@@ -13,6 +13,7 @@ import {
   type Accessor,
 } from "solid-js";
 import { resolveNodeIdFromCandidates } from "../../../../src/shared/node-match.js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
@@ -23,8 +24,8 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/devices.css";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import type { DevicePolicyRead } from "./devices-policy-reads.ts";
 import { ExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.tsx";
 import { DeviceInventory } from "./view-inventory-readiness.tsx";
@@ -49,25 +50,27 @@ export function DevicesView(props: DevicesProps) {
       {/* Inventory belongs above policy; wait for its first snapshot before painting either. */}
       <Show when={props.initialInventoryReady} fallback={<SettingsLoadingSkeleton />}>
         {props.connected && (!props.canManagePairing || !props.canAdmin) ? (
-          <div class="callout info" role="note">
+          <InlineAlert tone="info" role="note">
             {t(
-              !props.canManagePairing && !props.canAdmin
-                ? "devices.readOnly.pairingAndAdminRequired"
-                : !props.canManagePairing
-                  ? "devices.readOnly.pairingRequired"
-                  : "devices.readOnly.adminRequired",
+              props.roleAllowsAdmin === true
+                ? "devices.readOnly.browserPairingRequired"
+                : !props.canManagePairing && !props.canAdmin
+                  ? "devices.readOnly.pairingAndAdminRequired"
+                  : !props.canManagePairing
+                    ? "devices.readOnly.pairingRequired"
+                    : "devices.readOnly.adminRequired",
             )}
-          </div>
+          </InlineAlert>
         ) : undefined}
         {props.devicesError ? (
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {props.devicesError}
-          </div>
+          </InlineAlert>
         ) : undefined}
         {props.lastError ? (
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {props.lastError}
-          </div>
+          </InlineAlert>
         ) : undefined}
         <DeviceInventory {...props} />
         <PolicyRead

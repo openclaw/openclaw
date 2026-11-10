@@ -11,13 +11,18 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
+import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import {
   createConfigMutationRunner,
   type ConfigMutationOwner,
 } from "../config/config-mutation-runner.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
+import { registerEnglishCatalog } from "../reactive/i18n.ts";
 import type { ClawHubSearchResult } from "./clawhub-search.ts";
 import { loadSkillStatusReport } from "./status-report.ts";
+
+registerEnglishCatalog(registerSkillsBrowserEnglish);
 
 export type ClawHubSkillDetail = SkillsDetailResult;
 export type ClawHubSkillSecurityVerdict = SkillsSecurityVerdictsResult["items"][number];
@@ -232,6 +237,7 @@ export async function loadSkills(
   state: SkillsState,
   options?: {
     clearMessages?: boolean;
+    reportRead?: Promise<SkillStatusReport | undefined>;
     operation?: Exclude<SkillOperation, null>;
   },
 ) {
@@ -262,7 +268,7 @@ export async function loadSkills(
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = await loadSkillStatusReport(client, agentId);
+    const res = await (options?.reportRead ?? loadSkillStatusReport(client, agentId));
     if (!isCurrent()) {
       return;
     }
@@ -287,7 +293,7 @@ export async function loadSkills(
   }
 }
 
-export function acceptSkillsReport(state: SkillsState, report: SkillStatusReport) {
+function acceptSkillsReport(state: SkillsState, report: SkillStatusReport) {
   state.skillsReport = report;
   const result = state.clawhubInstallMessage;
   if (
@@ -596,7 +602,7 @@ export async function updateSkillEnabled(
     state,
     skillKey,
     { enabled },
-    enabled ? "Skill enabled" : "Skill disabled",
+    i18n.t(enabled ? "skillsPage.skillEnabled" : "skillsPage.skillDisabled"),
     canDispatch,
   );
 }
@@ -707,7 +713,7 @@ export async function installFromClawHub(state: SkillsState, ref: string, versio
     return {
       kind: "success",
       message: formatClawHubInstallMessage(
-        formatUiExternalText(result?.message, `Installed ${ref}`),
+        formatUiExternalText(result?.message, i18n.t("skillsPage.installedRef", { ref })),
         result?.warning ? formatUiExternalText(result.warning) : undefined,
       ),
     };

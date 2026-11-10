@@ -103,6 +103,12 @@ keep native work from appearing stalled. Terminal interaction also informs proce
 cleanup. These notifications remain enabled. Older app-servers that do not recognize
 the optional capability ignore it; the normal minimum-version check still applies.
 
+Local app-server process creation and stdio forwarding run in a dedicated worker
+thread. A slow executable launch therefore leaves the Gateway event loop available
+for other requests. The worker preserves the Gateway's parent-process identity,
+so existing orphan registration and descendant cleanup still apply. Each retained
+app-server has one transport worker; shared-client idle retirement closes both.
+
 The native session catalog keeps one resident index per Codex home, shared across
 agents, working-directory filters, searches, and pages. Lists normally filter and page
 bounded display rows in memory. They do not expire or restart native discovery

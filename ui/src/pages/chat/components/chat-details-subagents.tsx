@@ -1,5 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
@@ -85,7 +86,10 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
         onClick={() => props.onOpenSubagent(props.row.key)}
       >
         <SubagentAvatar row={props.row} />
-        <span class="chat-details-subagents__name" ref={nameOverflow}>
+        <span
+          class={["chat-details-subagents__name", { "text-shimmer": isWorking(props.row) }]}
+          ref={nameOverflow}
+        >
           {props.row.label}
         </span>
         <span
@@ -98,6 +102,13 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
         >
           {statusLabel(props.row, props.workingLabel)}
         </span>
+        <span class="chat-subagent-activity__elapsed-compact" aria-hidden="true">
+          <Show when={props.row.status !== "queued" && props.row.session?.startedAt}>
+            {(startedAt) => (
+              <ElapsedTime startMs={startedAt()} endMs={props.row.session?.endedAt ?? null} />
+            )}
+          </Show>
+        </span>
         <Show when={props.mobile}>
           <Icon name="chevronRight" class="chat-details-subagents__chevron" />
         </Show>
@@ -108,9 +119,16 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
 
 /** Controlled Details content. The parent owns section chrome and navigation. */
 export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
-  const presentation = createMemo(
-    () => props.presentation ?? projectDetailsSubagents(props.rows, props.mobile),
-  );
+  const presentation = createMemo(() => {
+    const value = props.presentation ?? projectDetailsSubagents(props.rows, props.mobile);
+    return {
+      total:
+        value.total -
+        value.counts.reduce((sum, entry) => sum + (entry.listed === false ? entry.count : 0), 0),
+      rows: value.rows.filter((row) => row.listed !== false),
+      counts: value.counts.filter((entry) => entry.listed !== false).slice(0, 2),
+    };
+  });
   const workingCount = () =>
     presentation().counts.reduce((sum, row) => sum + (isWorking(row) ? row.count : 0), 0);
   const countLabel = (status: Subagent["status"]) =>
@@ -167,7 +185,13 @@ export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
               <span class="chat-details-subagents__counts">
                 <For each={presentation().counts} keyed={(entry) => entry.status}>
                   {(entry) => (
-                    <span class="chat-details-subagents__count" data-status={entry().status}>
+                    <span
+                      class={[
+                        "chat-details-subagents__count",
+                        { "text-shimmer": entry().status === "running" },
+                      ]}
+                      data-status={entry().status}
+                    >
                       <span>{entry().count}</span>{" "}
                       <span class="chat-details-subagents__count-label">
                         {countLabel(entry().status)}

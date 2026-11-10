@@ -86,6 +86,9 @@ const MAX_URL_LENGTH = 1024;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY = "split-changelog-release-v1";
+// GitHub can leave runnerless same-name copies after any rerun request; they never settle.
+export const GHOST_JOBS_ADVICE =
+  "GitHub ghost jobs detected; stop rerunning, cancel that attempt, and start a fresh all-group FRV";
 
 export function assertReleasePublicationKnownBudget(plan, context, reusedManifest) {
   serializeReleaseArtifact(plan);
@@ -273,7 +276,7 @@ const CHILD_SPECS = Object.freeze([
     displayName: "OpenClaw Release Checks",
     key: "releaseChecksCandidate",
     parentJobName: "Run release checks candidate validation",
-    rerunGroups: ["all", "cross-os", "windows-node", "live-e2e", "package"],
+    rerunGroups: ["all", "cross-os", "windows-node", "live-e2e", "package", "qualified-package"],
     suffix: "-release-checks-candidate",
     workflow: "openclaw-release-checks.yml",
   },
@@ -429,9 +432,18 @@ export function isReleaseGhServerError(error) {
   return GH_SERVER_ERROR_PATTERN.test(releaseGhTransportErrorText(error));
 }
 
-export async function readReleaseJobListing(readListing) {
-  for (const [index, perPage] of RELEASE_JOB_LISTING_PAGE_SIZES.entries()) {
-    const smallerPageFallback = index < RELEASE_JOB_LISTING_PAGE_SIZES.length - 1;
+export async function readReleaseJobListing(
+  readListing,
+  pageSizes = RELEASE_JOB_LISTING_PAGE_SIZES,
+) {
+  if (
+    !pageSizes.length ||
+    pageSizes.some((size) => !RELEASE_JOB_LISTING_PAGE_SIZES.includes(size))
+  ) {
+    throw new Error("Invalid release job page size");
+  }
+  for (const [index, perPage] of pageSizes.entries()) {
+    const smallerPageFallback = index < pageSizes.length - 1;
     try {
       return await readListing(perPage, { smallerPageFallback });
     } catch (error) {
@@ -654,7 +666,7 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
       if (identityNames.has(name)) {
         throw Object.assign(
           new Error(
-            `release child attempt ${expectedAttempt} is unsealable due to duplicate job identity: ${name || "(unnamed)"}`,
+            `release child attempt ${expectedAttempt} is unsealable due to duplicate job identity: ${name || "(unnamed)"}; ${GHOST_JOBS_ADVICE}`,
           ),
           { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
         );
@@ -784,7 +796,14 @@ function candidatePreparationRequired(input) {
     return false;
   }
   if (
-    ["all", "plugin-prerelease", "cross-os", "windows-node", "package"].includes(input.rerunGroup)
+    [
+      "all",
+      "plugin-prerelease",
+      "cross-os",
+      "windows-node",
+      "package",
+      "qualified-package",
+    ].includes(input.rerunGroup)
   ) {
     return true;
   }
@@ -803,7 +822,9 @@ function releaseExecutionChildRequired(spec, input, npmTelegramForAll) {
       return input.rerunGroup === "npm-telegram" || npmTelegramForAll;
     case "releaseChecksCandidate":
       return (
-        ["all", "cross-os", "windows-node", "package"].includes(input.rerunGroup) ||
+        ["all", "cross-os", "windows-node", "package", "qualified-package"].includes(
+          input.rerunGroup,
+        ) ||
         (input.rerunGroup === "live-e2e" && !stringValue(input.liveSuiteFilter).trim())
       );
     default:

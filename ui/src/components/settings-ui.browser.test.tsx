@@ -30,9 +30,9 @@ it("animates Applying before lazy settings styles load", async () => {
     { container: target },
   );
   await waitForSolid(() =>
-    expect(target.querySelector(".settings-save-indicator__spinner svg")).not.toBeNull(),
+    expect(target.querySelector(".settings-save-indicator__spinner")).not.toBeNull(),
   );
-  const spinner = target.querySelector<SVGElement>(".settings-save-indicator__spinner svg")!;
+  const spinner = target.querySelector<HTMLElement>(".settings-save-indicator__spinner")!;
   const animation = spinner.getAnimations()[0]!;
   expect(animation).toBeDefined();
   const duration = Number(animation.effect!.getComputedTiming().duration);

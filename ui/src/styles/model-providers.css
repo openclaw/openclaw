@@ -2,8 +2,25 @@
    provider-usage-* styles from usage.css and .provider-brand-icon from
    components.css. Structural surfaces come from settings.css. */
 
-.model-providers__catalog-feedback {
-  min-block-size: 3.6rem;
+/* Discovery sits on the section's heading line, so nothing moves when it comes and goes. */
+.settings-section__header:has(.model-providers__catalog-feedback) {
+  position: relative;
+}
+
+.settings-section__actions:has(.model-providers__catalog-feedback) {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+}
+
+/* A failure has to be read and retried, so it takes a line of its own. */
+.settings-section__header:has(.model-providers__catalog-progress[role="alert"]) {
+  flex-wrap: wrap;
+}
+
+.settings-section__actions:has(.model-providers__catalog-progress[role="alert"]) {
+  position: static;
+  flex-basis: 100%;
 }
 
 .model-providers__installed-agent .settings-row__desc {
@@ -15,8 +32,6 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -83,7 +98,7 @@
 .model-providers__profile-copy strong {
   color: var(--text-strong);
   font-size: var(--control-ui-text-sm);
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .model-providers__profiles-heading-actions,
@@ -105,27 +120,36 @@
   font-size: var(--control-ui-text-xs);
 }
 
+/* A credential: its identity, then only the word and actions it actually has. */
 .model-providers__profile {
   display: grid;
-  grid-template-columns: max-content 28px minmax(0, 1fr) max-content max-content;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: var(--space-1) var(--space-3);
+  row-gap: var(--space-1);
   min-width: 0;
-  padding-block: var(--space-3);
-  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  min-block-size: var(--settings-control-height);
 }
 
-/* The accounts section already has its divider. */
-.model-providers__profile:first-child {
-  border-top: 0;
+.model-providers__profile:has(> .model-providers__profile-order) {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  column-gap: 0;
+}
+
+.model-providers__profile-order {
+  margin-inline-end: var(--space-2);
+}
+
+.model-providers__profile-status:not(:empty),
+.model-providers__profile-actions:not(:empty) {
+  margin-inline-start: var(--space-3);
 }
 
 .model-providers__profile-grip,
 .model-providers__profile-logout {
   display: inline-grid;
-  width: 44px;
-  min-width: 44px;
-  height: 44px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
   padding: 0;
   place-items: center;
   border: 0;
@@ -138,10 +162,15 @@
   cursor: default;
 }
 
+/* The icon sits on the row's end, in line with the values; the target grows inward. */
+.model-providers__profile-logout {
+  place-items: center end;
+}
+
 .model-providers__profile-grip svg,
 .model-providers__profile-logout svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
 }
 
 .model-providers__profile-grip {
@@ -223,26 +252,27 @@
   color: var(--danger);
 }
 
-@container provider-profiles (max-width: 640px) {
-  .model-providers__profile {
-    grid-template-columns: max-content minmax(0, 1fr) max-content;
-    gap: var(--space-1) var(--space-2);
+/* Narrow rows keep an account's problem under its name so the name keeps its width. */
+@container provider-profiles (max-width: 480px) {
+  .model-providers__profile-status:not(:empty) {
+    grid-row: 2;
+    grid-column: 1;
+    justify-self: start;
+    margin-inline-start: 0;
   }
 
-  .model-providers__profile-avatar {
-    display: none;
+  .model-providers__profile:has(> .model-providers__profile-order)
+    .model-providers__profile-status:not(:empty) {
+    grid-column: 2;
   }
 
-  .model-providers__profile-copy {
-    grid-column: 2 / -1;
+  .model-providers__profile:not(:has(.model-providers__profile-grip)) {
+    grid-template-columns: minmax(0, 1fr) max-content;
   }
 
-  .model-providers__profile-status {
-    grid-column: 1 / 3;
-  }
-
-  .model-providers__profile-actions {
-    justify-self: end;
+  .model-providers__profile:not(:has(.model-providers__profile-grip))
+    > :is(.model-providers__profile-copy, .model-providers__profile-status) {
+    grid-column: 1 / -1;
   }
 }
 
@@ -264,35 +294,24 @@
   gap: 8px;
 }
 
-.model-providers__card-actions {
-  padding-top: 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+/* One line where it fits: the field takes what its actions leave. */
+.model-providers__inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
-.model-providers__inline-form,
+.model-providers__inline-form > .field {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
 .model-providers__probe {
   display: grid;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-muted);
-}
-
-.model-providers__probe {
-  font-size: 12px;
-}
-
-.model-providers__probe--success {
-  border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
-}
-
-.model-providers__probe--warning {
-  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
-}
-
-.model-providers__probe--error {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  gap: var(--space-2);
+  font-size: var(--control-ui-text-sm);
 }
 
 .model-providers__probe-summary,
@@ -305,8 +324,7 @@
 
 .model-providers__probe-target {
   flex-wrap: wrap;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  gap: 2px var(--space-3);
 }
 
 .model-providers__probe-target small {
@@ -319,11 +337,6 @@
   align-items: center;
   gap: var(--space-2);
   width: fit-content;
-}
-
-.model-providers__label-with-help .settings-section__help-button svg {
-  width: 14px;
-  height: 14px;
 }
 
 .model-providers__help-button {
@@ -359,17 +372,13 @@
 }
 
 .model-providers__defaults .settings-row__control {
-  flex: 0 1 420px;
-  width: 420px;
+  flex: 0 1 340px;
+  width: 340px;
 }
 
 .model-providers__defaults .model-picker,
 .model-providers__defaults .settings-segmented {
   width: 100%;
-}
-
-.model-providers__defaults .model-picker .picker-select__trigger {
-  min-height: 48px;
 }
 
 /* Access metadata belongs to the option list, beside the model name. */
@@ -398,7 +407,7 @@
   white-space: normal;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
   .model-providers__defaults .settings-row {
     flex-direction: column;
     align-items: stretch;
@@ -423,19 +432,25 @@
   }
 }
 
-/* Codex account limits span the whole account row. */
+/* Codex limits belong to their account: they start under its name and run to the row's end. */
 .model-providers__account-limits {
   grid-column: 1 / -1;
   display: grid;
   gap: var(--space-2);
   min-width: 0;
-  padding: 0 var(--space-4) var(--space-3);
+  margin-block-start: var(--space-2);
+  color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
 
-.model-providers__account-limits > strong {
+.model-providers__profile:has(> .model-providers__profile-order) .model-providers__account-limits {
+  grid-column: 2 / -1;
+}
+
+.model-providers__account-plan {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
   text-transform: capitalize;
-  font-weight: 600;
 }
 
 /* Agent-scoped provider connection picker; the secure wizard keeps its own layout. */
@@ -565,16 +580,10 @@
   flex: none;
 }
 
-.model-providers__installed-agent + .model-providers__installed-agent,
-.settings-row + .model-providers__installed-agent {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
 /* Apps missing from the Gateway computer share one quiet line instead of rows with switches. */
 .model-providers__agents-missing {
   margin: 0;
   padding: var(--space-3) var(--space-4);
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -612,11 +621,16 @@
   margin-top: var(--oc-space-2);
 }
 
+.provider-row {
+  --provider-row-icon: 22px;
+  --provider-row-gap: var(--space-3);
+}
+
 .provider-row__summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto minmax(9.5rem, auto) auto;
+  grid-template-columns: var(--provider-row-icon) minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--provider-row-gap);
   inline-size: 100%;
   min-height: var(--list-row-min-height);
   padding: var(--list-row-padding);
@@ -660,28 +674,20 @@
   font-weight: var(--list-row-title-weight);
 }
 
-.provider-row__plan {
-  padding: 0 var(--oc-space-1);
-  border: 1px solid var(--oc-border-subtle);
-  background: var(--surface-hover);
-  border-radius: var(--oc-radius-control);
-  color: var(--oc-text-secondary);
-  font-family: var(--oc-font-mono);
-  font-size: var(--oc-font-size-xs);
-  font-weight: 400;
-  line-height: 1.5;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .provider-row__meta {
   overflow: hidden;
   color: var(--oc-text-muted);
   font-size: var(--control-ui-text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.provider-row__meta-part:empty {
+  display: none;
+}
+
+.provider-row__meta-part:not(:empty) ~ .provider-row__meta-part:not(:empty)::before {
+  content: " · ";
 }
 
 .provider-row__status {
@@ -693,6 +699,7 @@
   inline-size: var(--list-row-icon-size);
   block-size: var(--list-row-icon-size);
   color: var(--oc-text-muted);
+  stroke-width: var(--list-row-icon-stroke);
   transition: transform var(--oc-duration-fast, 140ms) var(--oc-ease-out, ease-out);
 }
 
@@ -700,44 +707,39 @@
   transform: rotate(180deg);
 }
 
+/* The open provider hangs off its name: credentials, what they allow, then its actions. */
 .provider-row__detail {
   display: grid;
-  gap: var(--oc-space-3);
-  padding: var(--oc-space-4) var(--oc-space-4) var(--oc-space-4)
-    calc(var(--oc-space-4) + 22px + var(--oc-space-4));
-  border-top: 1px solid var(--oc-border-subtle);
-  background: color-mix(in srgb, var(--oc-bg-page) 45%, var(--oc-bg-surface));
+  gap: var(--space-4);
+  padding: var(--space-1) var(--space-4) var(--space-4)
+    calc(var(--space-4) + var(--provider-row-icon) + var(--provider-row-gap));
 }
 
-.provider-row .model-providers__profile-avatar svg {
-  width: 14px;
-  height: 14px;
-}
-
+/* Rows touch and carry their own spacing: dragging reads their slots as one column. */
 .provider-row__accounts {
   display: grid;
-  gap: var(--oc-space-2);
   min-width: 0;
+  margin-block: calc(var(--space-2) * -1);
 }
 
-.provider-row__limits-pane + .provider-row__accounts {
-  padding-top: var(--oc-space-3);
-  border-top: 1px solid var(--oc-border-subtle);
+.provider-row__accounts .model-providers__profile {
+  padding-block: var(--space-2);
 }
 
 /* Destructive action on its own side; routine actions sit together at the end. */
 .provider-row__footer {
   justify-content: flex-end;
-  padding-top: var(--oc-space-3);
-  border-top: 1px solid var(--oc-border-subtle);
 }
 
+/* Text on the detail's left edge, not a button shape floating beside it. */
 .provider-row__footer .provider-row__remove {
   margin-inline-end: auto;
+  padding-inline: 0;
+  background: transparent;
 }
 
 .provider-row--quiet .provider-row__summary {
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: var(--provider-row-icon) minmax(0, 1fr) auto;
   box-shadow: none;
 }
 
@@ -753,14 +755,10 @@
   color: var(--oc-text-secondary);
 }
 
-.provider-row--quiet .model-providers__card-actions {
-  padding: 0;
-  border: 0;
-}
-
 .provider-row--quiet .model-providers__inline-form,
 .provider-row--quiet > .callout {
-  margin: 0 var(--oc-space-4) var(--oc-space-3);
+  margin: 0 var(--space-4) var(--space-3)
+    calc(var(--space-4) + var(--provider-row-icon) + var(--provider-row-gap));
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -770,57 +768,33 @@
   }
 }
 
-@media (max-width: 1100px) {
-  .provider-row__summary {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
-  }
-
-  .provider-row__summary .provider-usage__chips {
-    display: none;
-  }
-}
-
 @media (max-width: 640px) {
-  .provider-row__summary {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
-    gap: var(--oc-space-3);
-  }
-
   /* An expanded provider stays inside the card: tracks shrink, and long text wraps. */
   .provider-list,
-  .provider-row__detail,
-  .provider-row__detail :is(.provider-usage, .provider-usage__group) {
+  .provider-row__detail {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* A phone has no width to spare for hanging the detail off the name. */
   .provider-row__detail {
-    padding-inline-start: var(--oc-space-4);
+    padding-inline-start: var(--space-4);
   }
 
-  .provider-row__detail .provider-usage__rows {
-    grid-template-columns: max-content minmax(0, 1fr);
+  .provider-row--quiet .model-providers__inline-form,
+  .provider-row--quiet > .callout {
+    margin-inline-start: var(--space-4);
   }
 
-  .provider-row__detail .provider-usage__row {
-    align-items: baseline;
-  }
-
-  .provider-row__detail .provider-usage__row > span:empty {
-    display: none;
-  }
-
-  .provider-row__detail .provider-usage__row .oc-menu-panel-usage-value {
-    overflow-wrap: anywhere;
-  }
-
-  /* Phones have no room for the trend beside its totals; the totals keep their single line. */
-  .provider-row__detail .provider-usage__trend .oc-sparkline {
-    display: none;
+  /* Routine actions keep their line; removing a provider takes the one under it. */
+  .provider-row__footer .provider-row__remove {
+    flex-basis: 100%;
+    order: 1;
+    justify-content: flex-start;
   }
 
   /* Status takes its own line so it never squeezes the provider's meta into an ellipsis. */
   .provider-row:not(.provider-row--quiet) .provider-row__summary {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: var(--provider-row-icon) minmax(0, 1fr) auto;
     row-gap: 2px;
   }
 
@@ -838,13 +812,17 @@
     justify-content: flex-start;
   }
 
+  .provider-row:not(.provider-row--quiet) .provider-row__status:empty {
+    display: none;
+  }
+
   .provider-row:not(.provider-row--quiet) .provider-row__chevron {
     grid-row: 1 / span 2;
     grid-column: 3;
   }
 
   .provider-row--quiet .provider-row__summary {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: var(--provider-row-icon) minmax(0, 1fr);
   }
 
   .provider-row--quiet .model-providers__card-actions {

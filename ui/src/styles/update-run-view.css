@@ -176,15 +176,6 @@
   overflow-wrap: anywhere;
 }
 
-.update-run-view__report--succeeded {
-  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
-}
-
-.update-run-view__report--failed,
-.update-run-view__report--rolled-back {
-  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
-}
-
 .update-run-view__report-body {
   height: 9em;
   overflow: auto;

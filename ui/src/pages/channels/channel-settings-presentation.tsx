@@ -156,7 +156,9 @@ export function createChannelSettingsPresentation(
       entry.dispose?.();
       entry.dispose = undefined;
       entry.update = undefined;
-      entry.node.replaceChildren(formatUiError(error, "Settings presentation could not load."));
+      entry.node.replaceChildren(
+        formatUiError(error, i18n.t("channels.config.presentationLoadFailed")),
+      );
     };
     entry.fail = fail;
     void plugins

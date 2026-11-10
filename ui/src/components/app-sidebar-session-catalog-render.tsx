@@ -19,12 +19,12 @@ import {
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { createCatalogSessionRowRef } from "./app-sidebar-session-catalog-row.ts";
 import {
   catalogErrorMessages,
   formatSidebarTimestamp,
   normalizeCatalogTimestamp,
   type CatalogSessionMenuRequest,
-  type CatalogBackingSessionDisplay,
   type CatalogRowControls,
   catalogSessionActivity,
   catalogSessionRowsByKey,
@@ -42,14 +42,6 @@ import {
   SessionRowBadges,
   sessionRunVisibility,
 } from "./solid/session-presentation.tsx";
-const CATALOG_CONTROLS = [
-  ["link", ".sidebar-recent-session__link"],
-  ["children", "[data-child-session-toggle]"],
-  ["pin", "[data-sidebar-session-pin]"],
-  ["archive", "[data-sidebar-session-archive]"],
-  ["menu", "[data-sidebar-session-menu]"],
-  ["catalogMenu", "[data-catalog-session-menu]"],
-] as const;
 const CATALOG_SESSION_GROUP_LIMIT = 5;
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows use canonical local labels and title snapshots; native catalog
@@ -139,38 +131,12 @@ function renderCatalogHostGroup(
         ? readLiveRowsByKeyValue.get(readSessionValue.sessionKey)
         : undefined;
     });
-    const rowRef: NonNullable<CatalogBackingSessionDisplay["rowRef"]> = (
-      element,
-      controls,
-      previousFocus,
-    ) => {
-      const stop = params.host.sessionProjection.mountCatalogRow(key());
-      const active = previousFocus instanceof HTMLElement ? previousFocus : null;
-      const activeRow = active?.closest<HTMLElement>("[data-session-key]");
-      const control = CATALOG_CONTROLS.find(([, selector]) => active?.matches(selector))?.[0];
-      const restoreFocus =
-        control !== undefined &&
-        (activeRow?.dataset.catalogSessionKey === identityKey() ||
-          activeRow?.dataset.sessionKey === identityKey() ||
-          activeRow?.dataset.sessionKey === key());
-      if (menuOpen()) {
-        params.host.sidebarMenus.catalogMenu.retargetTrigger(
-          catalogKey(),
-          controls.catalogMenu ?? controls.link,
-        );
-      }
-      if (restoreFocus && control) {
-        queueMicrotask(() => {
-          if (element.isConnected && document.activeElement === document.body) {
-            const focusTarget = controls[control];
-            (focusTarget && element.contains(focusTarget) ? focusTarget : controls.link)?.focus({
-              preventScroll: true,
-            });
-          }
-        });
-      }
-      return stop;
-    };
+    const rowRef = createCatalogSessionRowRef(params.host, () => ({
+      key: key(),
+      identityKey: identityKey(),
+      catalogKey: catalogKey(),
+      nativeSessionKey: adoptedRow()?.key,
+    }));
     const color = createMemo(() => normalizeSessionColorValue(readSession().color ?? ""));
     const active = createMemo(() => key() === params.snapshot.routeSessionKey);
     const ownRunActive = () => {
@@ -219,6 +185,7 @@ function renderCatalogHostGroup(
               "sidebar-recent-session--active": active(),
               "sidebar-recent-session--catalog-project-child": projectChild,
               "session-row-host--running": running(),
+              "sidebar-recent-session--menu-open": menuOpen(),
             },
           ]}
           style={color() ? `--session-color: var(--session-color-${color()})` : undefined}
@@ -300,7 +267,6 @@ function renderCatalogHostGroup(
             session={params.snapshot.toSidebarSession(liveRow())}
             display={{
               catalogIdentityKey: identityKey(),
-              catalogMenu: catalogMenu(),
               rowRef,
               pullRequest: readSession().pullRequest,
             }}

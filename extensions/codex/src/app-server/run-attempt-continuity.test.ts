@@ -27,6 +27,7 @@ it("retains a protected parent through private completion and owner reentry", as
   const codexHome = resolveCodexAppServerHomeDir(agentDir);
   const rolloutPath = path.join(codexHome, "sessions", "continuity-parent.jsonl");
   let creationPolicy = "";
+  let creationBase = "";
   const policy = "Persistent synthetic operator policy.";
   let recorded: unknown;
   const harness = createStartedThreadHarness(
@@ -38,6 +39,7 @@ it("retains a protected parent through private completion and owner reentry", as
         expect(request).toHaveProperty(["config", "hooks.PreToolUse", 0]);
         creationPolicy =
           typeof request.developerInstructions === "string" ? request.developerInstructions : "";
+        creationBase = typeof request.baseInstructions === "string" ? request.baseInstructions : "";
         await writeNativeCatalogFixture(rolloutPath, "thread-1", request.dynamicTools);
         const result = threadStartResult("thread-1");
         return { ...result, thread: { ...result.thread, path: rolloutPath } };
@@ -92,7 +94,9 @@ it("retains a protected parent through private completion and owner reentry", as
       );
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       const result = await run;
-      const expected = instructions.replace("Native model-owned policy", creationPolicy);
+      // Reports count the OpenClaw base pinned at creation ahead of the developer carrier.
+      expect(creationBase).toContain("## Codex Runtime");
+      const expected = `${creationBase}\n\n${instructions.replace("Native model-owned policy", creationPolicy)}`;
       expect(recorded).toHaveProperty("systemPrompt", expected);
       expect(result.systemPromptReport?.systemPrompt.chars).toBe(expected.length);
     }

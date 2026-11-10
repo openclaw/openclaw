@@ -152,42 +152,92 @@ describe("config form renderer", () => {
     }
   });
 
-  it("appends complete sections without replacing focused edits or hiding later fields", async () => {
+  it("defers first sections and appends without replacing focused edits or hiding later fields", async () => {
+    const yields: Array<() => void> = [];
+    vi.stubGlobal("scheduler", {
+      yield: () =>
+        new Promise<void>((resolve) => {
+          yields.push(resolve);
+        }),
+    });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
     const properties = Object.fromEntries(
-      Array.from({ length: 8 }, (_, index) => [
+      Array.from({ length: 16 }, (_, index) => [
         `part${index}`,
         object({ field: { type: "string", title: `Field ${index}` } }),
       ]),
     );
     const value = Object.fromEntries(
-      Array.from({ length: 8 }, (_, index) => [`part${index}`, { field: `Value ${index}` }]),
+      Array.from({ length: 16 }, (_, index) => [`part${index}`, { field: `Value ${index}` }]),
     );
     const props = { schema: object(properties), value, progressive: true };
     renderRaw(props);
-    const first = query("input.settings-input", HTMLInputElement);
-    expect(all("input.settings-input")).toHaveLength(1);
+    expect(all("input.settings-input")).toHaveLength(0);
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    yields.shift()!();
+    await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(7));
+    const first = query("input.settings-input", HTMLInputElement);
     first.focus();
     edit(first, "Editing the first field");
     first.setSelectionRange(2, 8);
 
-    await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(8));
+    yields.shift()!();
+    await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(16));
     expect(container.querySelector('[aria-busy="true"]')).toBeNull();
     expect(query("input.settings-input", HTMLInputElement)).toBe(first);
     expect(document.activeElement).toBe(first);
     expect(first.value).toBe("Editing the first field");
     expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);
-    expect(container.textContent).toContain("Field 7");
+    expect(container.textContent).toContain("Field 15");
 
     renderRaw({
       ...props,
-      schema: object({ ...properties, part8: object({ field: { type: "string" } }) }),
-      value: { ...value, part8: { field: "Added after completion" } },
+      schema: object({ ...properties, part16: object({ field: { type: "string" } }) }),
+      value: { ...value, part16: { field: "Added after completion" } },
     });
-    expect(all("input.settings-input")).toHaveLength(9);
+    expect(all("input.settings-input")).toHaveLength(17);
     expect(query("input.settings-input", HTMLInputElement)).toBe(first);
     expect(first.value).toBe("Editing the first field");
     expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);
+  });
+
+  it("yields a large map while retaining its edited first entry", async () => {
+    const yields: Array<() => void> = [];
+    vi.stubGlobal("scheduler", {
+      yield: () =>
+        new Promise<void>((resolve) => {
+          yields.push(resolve);
+        }),
+    });
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const entries = Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => [`entry${index}`, `Value ${index}`]),
+    );
+    renderRaw({
+      schema: object({ entries: { type: "object", additionalProperties: { type: "string" } } }),
+      value: { entries },
+      progressive: true,
+    });
+    yields.shift()!();
+    const values = () => all<HTMLInputElement>('.cfg-map input:not([aria-label^="Key:"])');
+    await waitForSolid(() => expect(values()).toHaveLength(2));
+    const first = values()[0]!;
+    first.focus();
+    edit(first, "Edited first entry");
+    first.setSelectionRange(1, 5);
+    for (const count of [7, 12]) {
+      yields.shift()!();
+      await waitForSolid(() => expect(values()).toHaveLength(count));
+    }
+    expect(values()[0]).toBe(first);
+    expect(first.value).toBe("Edited first entry");
+    expect(document.activeElement).toBe(first);
+    expect([first.selectionStart, first.selectionEnd]).toEqual([1, 5]);
+    expect(container.querySelector('.cfg-map[aria-busy="true"]')).toBeNull();
   });
 
   it.each(["Ingress", "Portals"])(
@@ -299,7 +349,7 @@ describe("config form renderer", () => {
       };
       for (const [locale, expectedLabel, expectedHelp] of [
         ["tr", translated, translatedHelp],
-        ["en", label, help],
+        ["en", field ? "Gateway token" : label, help],
       ] as const) {
         await i18n.setLocale(locale);
         renderForm(analysis, props);
@@ -361,7 +411,7 @@ describe("config form renderer", () => {
       revealSensitive: false,
     });
 
-    for (const label of ["Encrypt Key", "Private Key", "FOO"]) {
+    for (const label of ["Encrypt key", "Private key", "FOO"]) {
       const input = query(`input[aria-label='${label}']`, HTMLInputElement);
       expect(input).toMatchObject({ readOnly: true, value: "" });
       expect(input.classList.contains("cfg-redacted")).toBe(true);
@@ -493,7 +543,7 @@ describe("config form renderer", () => {
     });
     const checkbox = query('.settings-toggle__input[role="switch"]', HTMLInputElement);
     const row = expectElement(checkbox.closest(".settings-row"), "toggle row");
-    const label = wildcard ? "Plugin Enabled" : "Beta";
+    const label = wildcard ? "Plugin enabled" : "Beta";
     expect(row.tagName).toBe("DIV");
     expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe(label);
     expect(
@@ -517,7 +567,7 @@ describe("config form renderer", () => {
     });
 
     expect(container.querySelector('.settings-toggle__input[role="switch"]')).toBeNull();
-    const select = query('select[aria-label="Automations Enabled"]', HTMLSelectElement);
+    const select = query('select[aria-label="Automations enabled"]', HTMLSelectElement);
     expect(select.selectedOptions[0]?.textContent?.trim()).toBe("Default: On");
     expect(onPatch).not.toHaveBeenCalled();
     edit(select, "1", "change");
@@ -689,8 +739,15 @@ describe("config form renderer", () => {
 
     if (!hasDocs) {
       expect(container.querySelector(".settings-section__help-button")).toBeNull();
+      expect(texts(".settings-section__desc")).toEqual([
+        "Gateway server settings (port, auth, binding)",
+      ]);
       return;
     }
+    expect(container.querySelector(".settings-section__desc")).toBeNull();
+    expect(query(".settings-section__help-panel p", HTMLElement).textContent?.trim()).toBe(
+      "Gateway server settings (port, auth, binding)",
+    );
     const button = query(".settings-section__help-button", HTMLButtonElement);
     expect(button.getAttribute("aria-label")).toBe("Help for Gateway");
     const tooltip = expectElement(button.closest("openclaw-tooltip"), "section help tooltip");

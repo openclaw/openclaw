@@ -116,21 +116,21 @@ describe("slackPlugin actions", () => {
     { to: "channel:C999", provider: undefined, workspaceAware: false },
   ])("selects the workspace-aware send path for $to", ({ to, provider, workspaceAware }) => {
     const payload = { text: "hello" };
-    const prepared = slackPlugin.actions!.prepareSendPayload!({
-      ctx: {
-        action: "send",
-        channel: "slack",
-        cfg: {},
-        params: {},
-        toolContext: {
-          currentChannelId: "team:T123:channel:C123",
-          currentChannelProvider: provider,
+    for (const replyBroadcast of [undefined, false, true]) {
+      const prepared = slackPlugin.actions!.prepareSendPayload!({
+        ctx: {
+          action: "send",
+          params: { threadId: "111.222", replyBroadcast },
+          toolContext: {
+            currentChannelId: "team:T123:channel:C123",
+            currentChannelProvider: provider,
+          },
         },
-      },
-      to,
-      payload,
-    } as never);
-    expect(prepared).toBe(workspaceAware ? null : payload);
+        to,
+        payload,
+      } as never);
+      expect(prepared).toBe(workspaceAware || replyBroadcast ? null : payload);
+    }
   });
 
   it.each([

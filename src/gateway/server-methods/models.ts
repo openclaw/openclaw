@@ -27,6 +27,7 @@ import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
 import { UnknownModelCatalogProviderError } from "./models-list-capabilities.js";
 import { buildModelsListResult } from "./models-list-result.js";
+import { projectModelsProviderPresentation } from "./models-provider-presentation.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
@@ -184,7 +185,16 @@ export const modelsHandlers: GatewayRequestHandlers = {
               })?.forAgent(resolved.agentId, projected.models);
               respond(
                 true,
-                projectModelFastModeCatalog(policy ? policy.catalog(projected) : projected, client),
+                projectModelsProviderPresentation(
+                  projectModelFastModeCatalog(
+                    policy ? policy.catalog(projected) : projected,
+                    client,
+                  ),
+                  currentConfig,
+                  // Settings reads the configured catalog; only unrestricted whole-catalog
+                  // reads may also disclose configured providers with no model rows.
+                  params.view !== "all" && !params.provider && !scope && !policy,
+                ),
                 undefined,
               );
             };

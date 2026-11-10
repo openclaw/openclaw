@@ -73,7 +73,9 @@ command handling is enabled for the surface.
 Command replies delivered through the shared dispatcher are part of the conversation
 on every channel. Native command menus and button selections on Discord and
 Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
-These exchanges appear in session history and later model context.
+These exchanges appear in session history and later model context, except read-only
+`/status` replies: their command and reply remain visible in history but do not enter
+model context or interrupt an active turn.
 Login codes, pairing codes,
 login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
 recorded copy; delivered instructions and command execution are unchanged.
@@ -338,7 +340,7 @@ plugins, and installed skills.
         | Update the global default | `/model <model> -g` (or `--global`) | Changes this session and requests an update for `agents.defaults.model` |
         | Use the configured default again | `/model default -s` | Clears this session's model selection without writing defaults; compatible auth pins remain and incompatible pins clear |
 
-        With `modelSelectionScope` unset, `/model <model>` changes only the current session, including for owners/admins. Without owner/admin authority, bare commands remain session-only and explicit `-a` and `-g` requests are rejected. Selecting the effective configured default clears the session model pin, but agent/global scope still requests the configured-default write. Immutable configuration stays unchanged. Asynchronous write errors do not revert the session selection.
+        With `modelSelectionScope` unset, `/model <model>` changes only the current session, including for owners/admins. Without owner/admin authority, bare commands remain session-only and explicit `-a` and `-g` requests are rejected. Selecting the effective configured default clears the session model pin, but agent/global scope still requests the configured-default write. Immutable configuration stays unchanged. Requested default updates continue after the command reply; asynchronous write errors do not revert the session selection.
 
         - If the agent is idle, the next run uses it right away.
         - If a run is active, the switch is marked pending and applied at the next clean retry point.

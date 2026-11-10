@@ -8,8 +8,8 @@ import type {
 } from "../../../src/gateway/control-ui-contract.js";
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
 import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
+import { formatNumber } from "../lib/reactive/format.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { sessionOwnerInitials } from "../lib/session-owner.ts";
 import {
   displaySessionPullRequests,
@@ -21,14 +21,8 @@ import { formatGitHubItemReference } from "./github-link-target.ts";
 import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createHovercardControlRef, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
-import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { SessionGitDiff } from "./session-git-diff.tsx";
-import {
-  participantLabel,
-  formatSessionAge,
-  sessionAttribution,
-  writeHovercardExcerpt,
-} from "./session-hovercard.ts";
+import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { progressCardHeadsUp } from "./session-progress-card.ts";
 import { ChannelAvatar } from "./solid/channel-avatar.tsx";
@@ -444,8 +438,8 @@ function PullRequestRow(props: { request: SessionDisplayPullRequest }) {
     [
       state(),
       checks(),
-      props.request.additions === undefined ? null : `+${props.request.additions.toLocaleString()}`,
-      props.request.deletions === undefined ? null : `−${props.request.deletions.toLocaleString()}`,
+      props.request.additions === undefined ? null : `+${formatNumber(props.request.additions)}`,
+      props.request.deletions === undefined ? null : `−${formatNumber(props.request.deletions)}`,
       props.request.sourceSessionKey
         ? t("sessionHovercard.taskBranch", { branch: props.request.branch })
         : null,
@@ -529,24 +523,6 @@ function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnaps
   );
 }
 
-function HovercardExcerpt(props: { text: string }) {
-  let element!: HTMLDivElement;
-  createLayoutMeasurement(
-    () => props.text,
-    (text) => () => writeHovercardExcerpt(element, text!),
-    { targets: () => [element], fonts: true, changeTiming: "sync" },
-  );
-  return (
-    <div
-      class="session-hovercard__excerpt"
-      dir="auto"
-      ref={(node) => {
-        element = node;
-      }}
-    />
-  );
-}
-
 export function SessionHovercard(props: SessionHovercardInput) {
   const controls = useContext(HovercardControlsContext);
   const headsUp = createMemo(() =>
@@ -574,8 +550,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
       (props.row?.placementProviderId && props.row?.placementProfileId),
     );
   const commentary = () => props.progressCard?.markdown?.trim() || undefined;
-  const preview = () =>
-    props.progressCard ? undefined : props.row?.lastMessagePreview?.trim() || undefined;
   return (
     <Show
       when={Boolean(props.row || hasContext() || hasPullRequestSection() || props.progressCard)}
@@ -599,16 +573,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
             </Show>
           </div>
         </Show>
-        <Show when={props.row?.attention?.kind === "error"}>
-          <section class="session-hovercard__section session-hovercard__error">
-            <span class="session-hovercard__error-icon" aria-hidden="true">
-              <Icon name="alertTriangle" />
-            </span>
-            <span>
-              {props.row?.attention ? sessionAttentionSubtitle(props.row.attention, t) : ""}
-            </span>
-          </section>
-        </Show>
         <Show when={commentary() || headsUp()}>
           <section
             class="session-hovercard__section session-hovercard__task session-hovercard__notepad"
@@ -628,11 +592,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
               </div>
             </Show>
             <ProgressHeadsUp headsUp={headsUp()} />
-          </section>
-        </Show>
-        <Show when={preview()}>
-          <section class="session-hovercard__section session-hovercard__task">
-            <HovercardExcerpt text={preview()!} />
           </section>
         </Show>
         <Show when={hasPullRequestSection()}>

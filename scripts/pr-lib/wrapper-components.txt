@@ -2,6 +2,7 @@
 cli-invocation.mjs
 cli-parent-lifetime.mjs
 cli-root-options.mjs
+config/ci-adaptive-markdown.json
 config/ci-test-timings.json
 node-compile-cache.mjs
 gateway-run-argv.mjs
@@ -152,6 +153,7 @@ packages/normalization-core/src/stable-node-path.ts
 packages/normalization-core/src/stable-stringify.ts
 packages/normalization-core/src/string-coerce.ts
 packages/normalization-core/src/string-normalization.ts
+packages/normalization-core/src/stringified-error.ts
 packages/normalization-core/src/text-decoding.ts
 packages/normalization-core/src/utf16-slice.ts
 packages/plugin-package-contract/package.json
@@ -197,6 +199,7 @@ packages/worker-runtime/src/worker.ts
 scripts/changed-lanes.mts
 scripts/check-changelog-attributions.mjs
 scripts/check-changelog-attributions.mts
+scripts/check-file-utils.ts
 scripts/crabbox-untrusted-bootstrap.sh
 scripts/generate-kysely-types.mts
 scripts/lib/arg-utils.mts
@@ -204,6 +207,7 @@ scripts/lib/arg-utils.runtime.mjs
 scripts/lib/bundled-plugin-paths.mjs
 scripts/lib/changed-extensions.mts
 scripts/lib/changed-path-facts.mjs
+scripts/lib/ci-adaptive-markdown.mjs
 scripts/lib/ci-test-timings-schema.mts
 scripts/lib/ci-test-timings.mts
 scripts/lib/direct-run.mjs
@@ -250,6 +254,7 @@ scripts/lib/vitest-cli-mode.mts
 scripts/lib/vitest-cli.mts
 scripts/lib/vitest-home-selection.mts
 scripts/lib/vitest-local-scheduling.mts
+scripts/lib/vitest-node-args.mts
 scripts/lib/vitest-outcome.mts
 scripts/lib/vitest-plan-scheduling.mts
 scripts/lib/vitest-process-env.mts
@@ -270,6 +275,7 @@ scripts/lib/watch-pr-ci-run.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
+scripts/pr-lib/dependency-hold-release.mjs
 scripts/run-vitest.mts
 scripts/stage-openclaw-bun.sh
 scripts/test-projects.test-support.mts
@@ -401,12 +407,14 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
+src/config/cron-default-destinations.ts
 src/config/zod-schema.database.ts
 src/infra/directory-walk.ts
 src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/capability-unavailable.ts
 src/infra/database-engine/context.ts
+src/infra/database-engine/database-store-live-read.worker.ts
 src/infra/database-engine/index-hint.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
@@ -431,11 +439,13 @@ src/infra/database-engine/sqlite-full-text.ts
 src/infra/database-engine/sqlite-memory-search-fragments.ts
 src/infra/database-engine/sqlite-memory-vector-schema.ts
 src/infra/database-engine/sqlite-search-schema.ts
+src/infra/database-engine/sqlite-store-inspection.ts
 src/infra/database-engine/sqlite-vector-subprocess.ts
 src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
 src/infra/database-engine/text-bytes.ts
 src/infra/database-engine/vector-contract.ts
+src/infra/doctor-progress.ts
 src/infra/gateway-shutdown-budget.ts
 src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
@@ -537,6 +547,7 @@ src/commands/doctor/shared/legacy-config-compat.ts
 src/commands/doctor/shared/legacy-config-issues.ts
 src/commands/doctor/shared/legacy-config-migrations.audio.ts
 src/commands/doctor/shared/legacy-config-migrations.channels.ts
+src/commands/doctor/shared/legacy-config-migrations.plugin-prompts.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot-account.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
@@ -660,6 +671,7 @@ src/config/io.write-values.ts
 src/config/issue-format.ts
 src/config/json5-comments.ts
 src/config/legacy-codex-provider.ts
+src/config/legacy-workboard-database.ts
 src/config/legacy.default-agent-owner-state.ts
 src/config/legacy.default-agent-owner.ts
 src/config/legacy.default-agent-roles.ts
@@ -850,6 +862,7 @@ src/config/zod-schema.cloud-workers.ts
 src/config/zod-schema.core.ts
 src/config/zod-schema.desktop.ts
 src/config/zod-schema.gateway.ts
+src/config/zod-schema.gateway-openclaw-id.ts
 src/config/zod-schema.hooks.ts
 src/config/zod-schema.implicit-mentions.ts
 src/config/zod-schema.installs.ts
@@ -873,6 +886,7 @@ src/config/zod-schema.ts
 src/cron/automation-result.ts
 src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
+src/cron/expression.ts
 src/cron/run-diagnostics-normalize.ts
 src/cron/run-history-detail.ts
 src/cron/scratch-contract.ts
@@ -1158,6 +1172,7 @@ src/infra/package-update-publication-tree.ts
 src/infra/package-update-recovery-contract.ts
 src/infra/package-update-refusal.ts
 src/infra/path-case.ts
+src/infra/path-containment.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
 src/infra/plain-object.ts
@@ -1208,6 +1223,7 @@ src/infra/sqlite-database-admission-delta.ts
 src/infra/sqlite-database-admission-record.ts
 src/infra/sqlite-database-admission-seal.ts
 src/infra/sqlite-database-admission-turn.ts
+src/infra/sqlite-database-admission-wait.ts
 src/infra/sqlite-database-admission.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
@@ -1276,10 +1292,13 @@ src/infra/sqlite-schema-lifetime.ts
 src/infra/sqlite-schema-mutation.ts
 src/infra/sqlite-schema-scope.ts
 src/infra/sqlite-schema-sql.ts
+src/infra/sqlite-snapshot-capacity-error.ts
 src/infra/sqlite-snapshot-diagnostics.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
+src/infra/sqlite-snapshot-reclamation.ts
 src/infra/sqlite-snapshot-retirement.ts
+src/infra/sqlite-snapshot-reuse.ts
 src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-temp-generation-schema.ts
 src/infra/sqlite-snapshot-source.ts
@@ -1428,6 +1447,7 @@ src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-state-inspection-protocol.ts
 src/infra/update-step-identity.ts
+src/infra/utf8-input.ts
 src/infra/warning-filter.ts
 src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
@@ -1584,6 +1604,7 @@ src/plugins/doctor-compatibility-migration.ts
 src/plugins/doctor-contract-artifact.ts
 src/plugins/doctor-contract-legacy-setup.ts
 src/plugins/doctor-contract-module.ts
+src/plugins/doctor-contract-preparation.ts
 src/plugins/doctor-contract-registry.ts
 src/plugins/doctor-contract-relevance.ts
 src/plugins/loader-channel-setup.ts
@@ -1819,6 +1840,7 @@ src/process/child-memory.ts
 src/process/child-process-tree.ts
 src/process/child-process.ts
 src/process/command-error.ts
+src/process/command-reservation-census.ts
 src/process/darwin-process-inspection.ts
 src/process/exec-output.ts
 src/process/exec-result.ts
@@ -1837,6 +1859,7 @@ src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
 src/process/spawn-broker/child-completion.ts
 src/process/spawn-broker/child-diagnostics.ts
+src/process/spawn-broker/admission.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/commands.ts
@@ -1853,6 +1876,7 @@ src/process/spawn-broker/resource-client.ts
 src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-broker/resource-socket.ts
+src/process/spawn-broker/socket-directory.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-to-file.ts
 src/process/spawn-utils.ts
@@ -1941,6 +1965,7 @@ src/shared/freebsd-process-identity-native.ts
 src/shared/freebsd-process-identity.ts
 src/shared/gateway-edge-auth-headers.ts
 src/shared/gateway-tailscale-auth-policy.ts
+src/shared/environment-key.ts
 src/shared/global-singleton.ts
 src/shared/http-error-response.ts
 src/shared/immutable-data.ts
@@ -2068,6 +2093,7 @@ src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
+src/state/openclaw-agent-active-event-facts-schema.ts
 src/state/openclaw-agent-memory-path-migration.ts
 src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
@@ -2207,6 +2233,7 @@ src/state/openclaw-state-lease-heartbeat-carrier.ts
 src/state/openclaw-state-lease-heartbeat-cleanup.ts
 src/state/openclaw-state-lease-heartbeat-shared.ts
 src/state/openclaw-state-lease-heartbeat.ts
+src/state/openclaw-state-lease-native-heartbeat.ts
 src/state/openclaw-state-lease-heartbeat.worker.ts
 src/state/openclaw-state-lease-options.ts
 src/state/openclaw-state-lease-process-exit.ts
@@ -2320,6 +2347,7 @@ test/vitest/vitest.extension-whatsapp-paths.mjs
 test/vitest/vitest.extension-zalo-paths.mjs
 test/vitest/vitest.gateway-server-paths.mjs
 test/vitest/vitest.include-patterns.ts
+test/vitest/vitest.markdown-paths.mjs
 test/vitest/vitest.package-contract-paths.mjs
 test/vitest/vitest.pattern-file.ts
 test/vitest/vitest.performance-config.ts
@@ -2358,6 +2386,7 @@ src/config/sessions/session-accessor.sqlite-transcript-metadata-read.ts
 src/config/sessions/session-cold-storage-read.ts
 src/config/sessions/session-entry-read-errors.ts
 src/config/sessions/session-transcript-append-postimage.ts
+src/config/sessions/session-transcript-active-facts.ts
 src/config/sessions/session-transcript-fts.ts
 src/config/sessions/session-transcript-index-postgres.ts
 src/config/sessions/session-transcript-index.ts
@@ -2744,6 +2773,7 @@ src/shared/text/assistant-visible-text.ts
 src/shared/text/code-ranges.ts
 src/shared/text/code-regions.ts
 src/shared/text/downgraded-tool-call-text.ts
+src/shared/text/duplicate-paragraphs.ts
 src/shared/text/escape-markdown.ts
 src/shared/text/final-tags.ts
 src/shared/text/glm-arg-key-payload.ts
@@ -2754,6 +2784,7 @@ src/shared/text/native-tool-marker.ts
 src/shared/text/reasoning-tags.ts
 src/shared/text/strip-leading-empty-lines.ts
 src/shared/text/tag-name-probe.ts
+src/shared/text/text-projection-types.ts
 src/shared/text/text-projection.ts
 src/shared/text/trim-code-text.ts
 src/shared/text/tool-call-xml.ts
