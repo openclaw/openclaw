@@ -143,10 +143,12 @@ to the current Gateway and your profile in this browser. A signed-in profile
 without a saved choice starts with **My sessions**, except guests: a role that can
 only view other people's sessions and has no general read access (the role
 [Visitor Access](/start/multiplayer#invite-guests) requires) starts with **Involving me**.
-A saved choice wins unless a newly authenticated connection restricts access to
-other people's activity. An old filter for someone else then changes to
-**Involving me**, and the browser saves the recovered choice. Explicit choices
-made on that connection remain selected and show any server refusal.
+A saved choice stays selected across reconnects and permission changes. The owner
+picker lists owners from sessions you can read, not everyone in Users or Online.
+Selecting an owner only narrows those readable sessions; it never grants access
+to that person's other conversations or private profile. People with no readable
+owned sessions do not appear as owner choices. If a selected owner no longer has
+matching sessions, the list stays empty instead of switching to **All owners**.
 Before a profile is identified,
 or when the connection has no durable profile, the list shows **All owners**.
 Identifying the profile restores its saved choice or the default for that role.

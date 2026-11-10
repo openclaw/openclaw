@@ -276,18 +276,27 @@ describe("gateway presence audience", () => {
           payload: { session: { sessionId: sharedSessionId } },
         });
         expect(await rpcReq(guest.ws, "sessions.list", personActivity)).toMatchObject({
-          ok: false,
-          error: { code: "FORBIDDEN" },
+          ok: true,
+          payload: { sessions: [{ key: sharedKey }] },
         });
         const afterDemotion = await rpcReq<SessionsListResult>(guest.ws, "sessions.list", activity);
         expect(afterDemotion).toMatchObject({
           ok: true,
           payload: {
             totalCount: 2,
-            people: [{ identity: { id: guestProfile.id } }],
-            owners: [{ id: guestProfile.id }],
-            ownerSessionCounts: [{ profileId: guestProfile.id, open: 1 }],
-            peopleSessionCount: 1,
+            people: expect.arrayContaining([
+              expect.objectContaining({ identity: { type: "profile", id: guestProfile.id } }),
+              expect.objectContaining({ identity: { type: "profile", id: creator.id } }),
+            ]),
+            owners: expect.arrayContaining([
+              expect.objectContaining({ id: guestProfile.id }),
+              expect.objectContaining({ id: creator.id }),
+            ]),
+            ownerSessionCounts: expect.arrayContaining([
+              expect.objectContaining({ profileId: guestProfile.id, open: 1 }),
+              expect.objectContaining({ profileId: creator.id, open: 1 }),
+            ]),
+            peopleSessionCount: 2,
           },
         });
         expect(afterDemotion.payload?.sessions.map((session) => session.key)).toEqual(
