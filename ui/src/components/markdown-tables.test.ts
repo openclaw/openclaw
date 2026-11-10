@@ -208,6 +208,8 @@ describe("Markdown table interactions", () => {
     await Promise.resolve();
     expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
+    const readStyle = vi.fn(window.getComputedStyle.bind(window));
+    vi.stubGlobal("getComputedStyle", readStyle);
     deliverTableResize(viewport, 100);
     expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
@@ -215,6 +217,7 @@ describe("Markdown table interactions", () => {
     vi.advanceTimersToNextFrame();
     expect(changedWidth).not.toHaveBeenCalled();
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
+    expect(readStyle).not.toHaveBeenCalledWith(viewport);
 
     changedWidth.mockClear();
     query(shell, ".markdown-table__copy").replaceChildren(document.createElement("span"));

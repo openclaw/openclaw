@@ -12,7 +12,7 @@ const cpuMetrics = ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcS
 
 export async function sampleTranscriptScrollFrames(
   element: HTMLElement | SVGElement,
-  options: { direction: "top" | "bottom"; trajectory: boolean; count: number },
+  options: { direction: "top" | "bottom"; trajectory: boolean; count: number; geometry?: boolean },
 ) {
   if (!(element instanceof HTMLElement)) {
     throw new Error("Transcript is not an HTML scroll element");
@@ -20,7 +20,7 @@ export async function sampleTranscriptScrollFrames(
   const frames: Array<{
     atMs: number;
     intervalMs: number;
-    coverage: number;
+    coverage: number | undefined;
     rows: number;
     scrollTop: number;
     scrollHeight: number;
@@ -32,29 +32,34 @@ export async function sampleTranscriptScrollFrames(
   let previous = performance.now();
   for (let frame = 0; frame < options.count; frame++) {
     const now = await new Promise<number>(requestAnimationFrame);
-    const viewport = element.getBoundingClientRect();
     const rows = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")];
-    // Retained preparation rows are outside the active range. Measuring their
-    // skipped descendants here would turn the coverage probe into scroll work.
-    const segments = rows
-      .filter((row) => row.dataset.preparedRow !== "true")
-      .map((row) => row.getBoundingClientRect())
-      .map(
-        (rect) =>
-          [Math.max(viewport.top, rect.top), Math.min(viewport.bottom, rect.bottom)] as const,
-      )
-      .filter(([top, bottom]) => bottom > top)
-      .toSorted((a, b) => a[0] - b[0]);
-    let covered = 0;
-    let end = viewport.top;
-    for (const [top, bottom] of segments) {
-      covered += Math.max(0, bottom - Math.max(top, end));
-      end = Math.max(end, bottom);
+    let coverage: number | undefined;
+    // Geometry reads can force an extra layout; timing runs collect coverage separately.
+    if (options.geometry !== false) {
+      const viewport = element.getBoundingClientRect();
+      // Retained preparation rows are outside the active range. Measuring their
+      // skipped descendants here would turn the coverage probe into scroll work.
+      const segments = rows
+        .filter((row) => row.dataset.preparedRow !== "true")
+        .map((row) => row.getBoundingClientRect())
+        .map(
+          (rect) =>
+            [Math.max(viewport.top, rect.top), Math.min(viewport.bottom, rect.bottom)] as const,
+        )
+        .filter(([top, bottom]) => bottom > top)
+        .toSorted((a, b) => a[0] - b[0]);
+      let covered = 0;
+      let end = viewport.top;
+      for (const [top, bottom] of segments) {
+        covered += Math.max(0, bottom - Math.max(top, end));
+        end = Math.max(end, bottom);
+      }
+      coverage = covered / viewport.height;
     }
     frames.push({
       atMs: now,
       intervalMs: now - previous,
-      coverage: covered / viewport.height,
+      coverage,
       rows: rows.length,
       scrollTop: element.scrollTop,
       scrollHeight: element.scrollHeight,

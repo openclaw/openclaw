@@ -343,9 +343,6 @@ export class StorageEdits extends StoragePublication {
         appended: landed.body.length - text.length,
         destinationId,
       });
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
       return {
         record: landed,
         previous: target,
@@ -421,9 +418,6 @@ export class StorageEdits extends StoragePublication {
               .map((i) => i.code)
               .join(", "),
         );
-      }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
       }
       return {
         previous,
@@ -593,9 +587,6 @@ export class StorageEdits extends StoragePublication {
       if (Buffer.byteLength(record.raw) > RECORD_MAX_BYTES) {
         throw new Error("Annotation exceeds record limits.");
       }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
       return {
         previous,
         record,
@@ -701,9 +692,6 @@ export class StorageEdits extends StoragePublication {
         hash: digest(raw),
         revision: metadata.revision,
       };
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during automatic recall validation.");
-      }
       return { record, previous, data, snapshot, artifacts: {}, metadataOnly: true };
     });
     return this.accept(input.requestId, intent, prepared, access, actor);

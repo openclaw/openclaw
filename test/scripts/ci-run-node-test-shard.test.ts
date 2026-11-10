@@ -15,6 +15,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseCLI } from "vitest/node";
 import {
   buildChildEnv,
   clonePersistentCacheSlots,
@@ -30,7 +31,12 @@ import nativeBunQualification from "../../scripts/lib/ci-test-native-bun-qualifi
 import { resolveCiTestRuntimeSelections } from "../../scripts/lib/ci-test-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
-import { shouldUseRuntimeOnlyVitestWorkers } from "../../scripts/lib/vitest-runtime-selection.mts";
+import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
+import {
+  selectVitestWorkerPreset,
+  shouldUseRuntimeOnlyVitestWorkers,
+  shouldUseToolingOnlyVitestWorkers,
+} from "../../scripts/lib/vitest-runtime-selection.mts";
 import * as workerOwner from "../../scripts/lib/vitest-worker-run.mts";
 import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
 import * as groupOwner from "../../scripts/vitest-process-group.mts";
@@ -179,6 +185,116 @@ afterEach(() => {
 
 describe("scripts/ci-run-node-test-shard.mts", () => {
   it.each([
+    ["target", undefined],
+    ["group", undefined],
+    ["target", "--run=false"],
+    ["target", "--watch"],
+  ] as const)("settles E2E builds before admitting shared %s readers (%s)", async (kind, arg) => {
+    vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
+    const events: string[] = [];
+    vi.spyOn(buildPrerequisites, "prepareE2eVitestRuntime").mockImplementation(async () => {
+      await nextTurn();
+      events.push("prepared");
+      return { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" };
+    });
+    const createWorkerRun = workerOwner.createVitestWorkerRun;
+    vi.spyOn(workerOwner, "createVitestWorkerRun").mockImplementation((...args) => {
+      events.push("owner");
+      return createWorkerRun(...args);
+    });
+    const gateway = "src/agents/bash-tools.exec-gateway-approval.e2e.test.ts";
+    // Match admission to the real child command, including named run overrides.
+    const specs = createVitestRunSpecs([gateway, ...(arg ? ["--", arg] : [])], { baseEnv: {} });
+    expect(specs).toHaveLength(1);
+    for (const spec of specs) {
+      const cliArgs = spec.pnpmArgs.slice(
+        spec.pnpmArgs.indexOf(buildPrerequisites.resolveVitestCliEntry()) + 1,
+      );
+      expect(parseVitestExecutionArgs(cliArgs, parseCLI)).not.toBeNull();
+    }
+    const plans = resolveShardPlans(
+      kind === "target"
+        ? {
+            OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify([
+              "src/utils/string-readers.test.ts",
+              gateway,
+            ]),
+          }
+        : {
+            OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
+              {
+                configs: ["test/vitest/vitest.unit.config.ts"],
+                includePatterns: ["src/utils/string-readers.test.ts"],
+              },
+              {
+                configs: ["test/vitest/vitest.e2e.config.ts"],
+                includePatterns: [gateway],
+                env: { OPENCLAW_E2E_USE_PREBUILT_DIST: "0" },
+              },
+            ]),
+          },
+    );
+    await expect(
+      runShardPlans(plans, {
+        env: arg ? { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([arg]) } : {},
+        scratchDir: makeScratchDir(),
+        runChild: async (_args, env) => {
+          expect(events.slice(0, 2)).toEqual(["prepared", "owner"]);
+          expect(env.OPENCLAW_E2E_USE_PREBUILT_DIST).toBe("1");
+          events.push("reader");
+          return 0;
+        },
+      }),
+    ).resolves.toBe(0);
+    expect(events).toEqual(["prepared", "owner", "reader", "reader"]);
+  });
+  it("admits no workers or readers when E2E preparation fails", async () => {
+    const worker = vi.spyOn(workerOwner, "createVitestWorkerRun");
+    const runChild = vi.fn().mockResolvedValue(0);
+    vi.spyOn(buildPrerequisites, "prepareE2eVitestRuntime").mockRejectedValue(
+      new Error("build failed"),
+    );
+    await expect(
+      runShardPlans(
+        resolveShardPlans({
+          OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify([
+            "src/utils/string-readers.test.ts",
+            "src/agents/bash-tools.exec-gateway-approval.e2e.test.ts",
+          ]),
+        }),
+        { env: {}, scratchDir: makeScratchDir(), runChild },
+      ),
+    ).rejects.toThrow("build failed");
+    expect(worker).not.toHaveBeenCalled();
+    expect(runChild).not.toHaveBeenCalled();
+  });
+
+  it.each(["--help", "--invalid-fixture-option"])(
+    "keeps %s E2E invocations out of shared build preparation",
+    async (arg) => {
+      vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
+      const prepare = vi
+        .spyOn(buildPrerequisites, "prepareE2eVitestRuntime")
+        .mockRejectedValue(new Error("unexpected build"));
+      await expect(
+        runShardPlans(
+          resolveShardPlans({
+            OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify([
+              "src/agents/bash-tools.exec-gateway-approval.e2e.test.ts",
+            ]),
+          }),
+          {
+            env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([arg]) },
+            scratchDir: makeScratchDir(),
+            runChild: vi.fn().mockResolvedValue(0),
+          },
+        ),
+      ).resolves.toBe(0);
+      expect(prepare).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
     {
       configs: ["test/vitest/vitest.unit-fast.config.ts"],
       files: [
@@ -197,10 +313,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
+        "src/state/dreaming-startup-admission.test.ts",
         "test/canonical-descendant.integration.test.ts",
         "test/codex-web-search-native.integration.test.ts",
         "test/cron-conversation-delivery.codex.integration.test.ts",
+        "test/runtime-agent.codex-initialization.integration.test.ts",
         "test/skill-usage.codex.integration.test.ts",
+        "test/slack-outbound-permanent-rejection-loopback.test.ts",
       ],
       preset: "runtime",
     },
@@ -238,12 +357,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     {
       configs: ["test/vitest/vitest.plugins.config.ts"],
-      files: ["src/plugins/plugin-generation-worker.test.ts"],
+      files: ["src/plugins/plugin-generation-source-inspection.worker.test.ts"],
       preset: "runtime",
     },
     {
       configs: ["test/vitest/vitest.plugins.config.ts"],
-      files: ["src/plugins/plugin-generation-worker.test.ts", "unknown.test.ts"],
+      files: ["src/plugins/plugin-generation-source-inspection.worker.test.ts", "unknown.test.ts"],
       preset: "full",
     },
     {
@@ -251,6 +370,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "src/agents/agent-tools.delegated-authority.test.ts",
         "src/agents/session-placement-computer.test.ts",
+        "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
       ],
       preset: "runtime",
     },
@@ -287,6 +407,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "test/codex-settled-turn-finalization.integration.test.ts",
         "test/conversation-tools.codex.integration.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
         "test/scripts/eager-import-closure.test.ts",
         "test/scripts/lint-suppressions.test.ts",
         "test/scripts/plugin-sdk-surface-report.test.ts",
@@ -298,10 +419,92 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       configs: ["test/vitest/vitest.tooling.config.ts"],
       files: [
-        "test/codex-settled-turn-finalization.integration.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
         "test/scripts/vitest-worker-shutdown.test.ts",
       ],
       preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+      files: ["test/codex-account-usage.integration.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+      files: ["test/codex-account-usage.integration.test.ts", "unknown.test.ts"],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+      files: [],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: [
+        "test/scripts/ci-changed-build-selection.test.ts",
+        "test/scripts/ci-changed-node-test-plan.integration.test.ts",
+        "test/scripts/test-projects.test.ts",
+      ],
+      preset: "tooling",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: [
+        "test/scripts/vitest-runtime-worker-selection.test.ts",
+        "test/scripts/ci-workflow-cost.test.ts",
+        "test/scripts/vitest-isolated.test.ts",
+        "test/scripts/update-restart-module-outcome.test.ts",
+        "test/scripts/eager-import-closure.test.ts",
+        "test/scripts/pr-wrapper-source-closure.test.ts",
+      ],
+      preset: "tooling",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: ["test/scripts/test-extension.test.ts", "unknown.test.ts"],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: ["test/scripts/plugin-sdk-surface-report.test.ts"],
+      sibling: {
+        configs: ["test/vitest/vitest.runtime-config.config.ts"],
+        includePatterns: ["src/config/io.load-async.test.ts"],
+      },
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: undefined,
+      sibling: {
+        configs: ["test/vitest/vitest.tooling.config.ts"],
+        includePatterns: [
+          "test/scripts/test-projects.test.ts",
+          "test/scripts/ci-ui-e2e-selection.test.ts",
+        ],
+      },
+      preset: "tooling",
+    },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: ["src/infra/boundary-path.test.ts"],
+      preset: "tooling",
+    },
+    { configs: ["test/vitest/vitest.boundary.config.ts"], files: [], preset: "full" },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: ["test/unknown-boundary.test.ts"],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.commands.config.ts"],
+      files: ["src/commands/doctor-maintenance.stopped-systemd.test.ts"],
+      sibling: {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        includePatterns: ["src/flows/doctor-health.update-schema.test.ts"],
+      },
+      preset: "runtime",
     },
     { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
     { configs: [gatewayDatabaseConfig], files: null, preset: "full" },
@@ -318,7 +521,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   ])(
     "shares compatible $preset workers for $configs / $files",
-    async ({ configs, files, preset }) => {
+    async ({ configs, files, preset, sibling }) => {
       machine(8, 31);
       const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
       const inheritedInclude = path.join(makeScratchDir(), "include.json");
@@ -326,31 +529,44 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         inheritedInclude,
         JSON.stringify(["test/plugins/chat-abort-codex.gateway.test.ts"]),
       );
-      const code = await runPlans(groupPlans([{ configs, includePatterns: files }]), {
-        env: {
-          OPENCLAW_VITEST_INCLUDE_FILE: inheritedInclude,
-          OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
-        },
-        runChild: async (args, env) => {
-          if (preset === "runtime") {
-            expect(readList(env.OPENCLAW_VITEST_INCLUDE_FILE!)).toEqual(files);
-            const specs = createVitestRunSpecs(args, { baseEnv: env });
-            expect(specs).toHaveLength(1);
-            for (const spec of specs) {
-              expect(
-                shouldUseRuntimeOnlyVitestWorkers(
+      const code = await runPlans(
+        groupPlans([{ configs, includePatterns: files }, ...(sibling ? [sibling] : [])]),
+        {
+          env: {
+            OPENCLAW_VITEST_INCLUDE_FILE: inheritedInclude,
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
+          },
+          runChild: async (args, env) => {
+            if (preset !== "full") {
+              if (!sibling) {
+                expect(readList(env.OPENCLAW_VITEST_INCLUDE_FILE!)).toEqual(files);
+              }
+
+              const specs = createVitestRunSpecs(args, { baseEnv: env });
+              expect(specs).toHaveLength(1);
+              for (const spec of specs) {
+                const selectionArgs = [
                   spec.config,
-                  args,
+                  spec.pnpmArgs.slice(
+                    spec.pnpmArgs.indexOf(buildPrerequisites.resolveVitestCliEntry()) + 1,
+                  ),
                   spec.env,
                   undefined,
                   spec.includePatterns ?? undefined,
-                ),
-              ).toBe(true);
+                ] as const;
+                expect(
+                  selectVitestWorkerPreset(
+                    shouldUseRuntimeOnlyVitestWorkers(...selectionArgs),
+                    shouldUseToolingOnlyVitestWorkers(...selectionArgs),
+                    preset === "runtime" ? "runtime" : "tooling",
+                  ),
+                ).toBe(preset);
+              }
             }
-          }
-          return 0;
+            return 0;
+          },
         },
-      });
+      );
       expect(code).toBe(0);
       expect(createWorker).toHaveBeenCalledTimes(1);
       expect(createWorker.mock.results[0]!.value.descriptor.preset).toBe(preset);
@@ -361,13 +577,34 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     { extra: [], args: [], jobArgs: undefined, preset: "runtime" },
     {
       targets: [
-        "src/config/io.load-async.test.ts",
-        "src/plugins/loader.runtime-registry.test.ts",
-        "src/plugins/plugin-generation-worker.test.ts",
+        "src/flows/doctor-health.update-schema.test.ts",
+        "src/commands/doctor-config-preflight.container-upgrade.test.ts",
+        "src/commands/doctor-maintenance.schema-preflight.test.ts",
+        "src/commands/doctor-maintenance.stopped-systemd.test.ts",
+        "src/commands/doctor-plugin-package-consent.test.ts",
+        "test/scripts/type-suppression-inventory.test.ts",
       ],
       args: [],
       jobArgs: undefined,
       preset: "runtime",
+    },
+    {
+      targets: [
+        "src/config/io.load-async.test.ts",
+        "src/plugins/loader.runtime-registry.test.ts",
+        "src/plugins/plugin-generation-worker.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
+        "test/scripts/type-suppression-inventory.test.ts",
+      ],
+      args: [],
+      jobArgs: undefined,
+      preset: "runtime",
+    },
+    {
+      targets: ["test/scripts/run-vitest.test.ts"],
+      args: [],
+      jobArgs: undefined,
+      preset: "tooling",
     },
     { extra: [nodeTarget], args: [], jobArgs: undefined, preset: "full" },
     { extra: [], args: ["--root", "custom-root"], jobArgs: undefined, preset: "full" },
@@ -395,7 +632,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const owner = createWorker.mock.results[0]!.value;
       expect(owner.descriptor.preset).toBe(preset);
       const child = resolveShardChildCommand(["run"], "node", "scripts/test-projects.mts", owner);
-      expect(child.args.includes("--worker-preset=runtime")).toBe(preset === "runtime");
+      for (const narrow of ["runtime", "tooling"]) {
+        expect(child.args.includes(`--worker-preset=${narrow}`)).toBe(preset === narrow);
+      }
     },
   );
 

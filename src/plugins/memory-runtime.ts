@@ -16,10 +16,10 @@ import {
   prepareMemoryCallerRead,
 } from "./memory-audience.js";
 import { adaptLegacyMemoryProvider, bindMemoryProvider } from "./memory-provider-adapter.js";
+import type { MemoryProviderCapabilities } from "./memory-provider-runtime-types.js";
 import type {
   ActiveMemoryProviderResult,
   MemoryCallerContext,
-  MemoryProviderCapabilities,
   MemoryProviderOpenParams,
 } from "./memory-provider-types.js";
 import {

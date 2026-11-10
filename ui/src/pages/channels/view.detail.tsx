@@ -316,7 +316,7 @@ export function renderChannelDetail(params: {
           </Show>
         </div>
         <ChannelConfigFeedback channelId={params.channelId} props={params.props} />
-        <openclaw-modal-actions class="channels-detail__footer">
+        <openclaw-modal-actions class="oc-dialog__footer channels-detail__footer">
           <ChannelConfigStatus channelId={params.channelId} props={params.props} />
           <a
             class="btn btn--sm"

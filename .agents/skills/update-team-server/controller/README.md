@@ -57,6 +57,13 @@ the Gateway. The native backup remains on disk. This also applies to
 `ROLLBACK_FAILED` with the candidate still selected. An absent or unverifiable
 candidate follows the existing compatibility-checked rollback path.
 
+For a distinct-release `ROLLBACK_FAILED` journal without a native-update backup,
+recovery records `verified/<current-sha>` after full acceptance and final recovery
+checks, before retiring the journal. This covers both the selected candidate and
+the restored predecessor, including config reconciliation. Failed marker
+publication retains the journal for retry. Existing `failed/<sha>` markers remain
+historical failed-attempt records, even after a later verified success.
+
 Native transaction roots under `<runtime-home>/.openclaw-update/` stay on disk
 until the controller next prunes releases with no activation journal present:
 before a deployment, after an accepted one, and in `--cleanup`. Without a

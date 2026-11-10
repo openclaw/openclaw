@@ -151,6 +151,7 @@ navigation chrome:
 | Sidebar destination | Dashboard path            |
 | ------------------- | ------------------------- |
 | Activity            | `/activity`               |
+| Systems             | `/systems`                |
 | Workboard           | `/workboard`              |
 | Skill Workshop      | `/skills/workshop`        |
 | Instances           | `/settings/devices`       |
@@ -734,6 +735,8 @@ Expected operator flow:
 
 When iOS wakes the app for a silent push, background refresh, or significant-location event, the app attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`. The Gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.
 
+When chat messages are waiting in the offline outbox, a silent push or background refresh wake then stays open for up to 8 seconds while they send, in order and with the usual retry backoff; a slow reconnect leaves less of that time, and a wake that does not reach the Gateway does not wait.
+
 A wake that finds the node still connected skips the beacon while the last recorded beacon is less than 10 minutes old, so `lastSeenAtMs`/`lastSeenReason` keep their earlier values. A wake that finds the node disconnected reconnects and sends regardless of that window. Significant-location wakes run only while the node is disconnected, at most once every 3 minutes.
 
 The app treats a background wake as successfully recorded only when the Gateway response includes `handled: true`. Older Gateways may acknowledge `node.event` with `{ "ok": true }`; that response is compatible but does not count as a durable last-seen update.
@@ -822,6 +825,7 @@ Agents can still operate the iOS app through OpenClaw by invoking node commands,
 
 - Voice wake and Talk mode are available on the Dashboard's **Settings -> Talk** page.
 - Voice wake sends recognized commands to the active session; use Talk mode for spoken assistant replies.
+- Switching chats or Gateways cancels pending Voice Wake commands and discards buffered recognition from the previous capture.
 - OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).
 - Talk-capable iOS nodes advertise the `talk` capability and can declare `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`; the Gateway allows those push-to-talk commands by default for trusted Talk-capable nodes.
 - iOS may suspend background audio; treat voice features as best-effort when the app is not active.

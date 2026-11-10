@@ -405,8 +405,9 @@ if (mode === "all" || mode === "cpu") {
       actualDurationMs: result.capture.result.actualDurationMs,
       startBlockedMs: result.capture.result.startBlockedMs,
       nativeSampleCount:
-        result.capture.result.profile?.samples?.length ??
-        ("sampleCount" in result.capture.result ? result.capture.result.sampleCount : 0),
+        "profile" in result.capture.result
+          ? result.capture.result.profile.samples.length
+          : result.capture.result.summary.sampleCount,
       responseBytes: result.responseBytes,
       warnings,
     });

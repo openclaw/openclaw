@@ -37,6 +37,7 @@ import {
 } from "../worktrees/preparation-timing.js";
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
+import { resolveSandboxDependencyStore } from "./config-contract.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
 import { retainSandboxContainerUsage } from "./container-usage.js";
@@ -186,7 +187,7 @@ async function ensureSandboxWorkspaceLayout(
   if (createdSkillMountSources && localWorkspace) {
     // Finish producer-created layout before first use, so source admission does
     // not mistake protected mount directories for unsaved guest work.
-    await localWorkspace.checkpoint();
+    await localWorkspace.checkpoint({ knownMutation: true });
     assertCurrent?.();
   }
 
@@ -276,6 +277,7 @@ async function prepareSandboxWorkspaceSelection(
       ? {
           ...resolved.cfg,
           scope: "session" as const,
+          docker: resolveSandboxDependencyStore(resolved.cfg.docker),
           workspaceAccess:
             resolveSandboxConfigForAgent(params.config, runtime.agentId).workspaceAccess === "ro"
               ? ("ro" as const)

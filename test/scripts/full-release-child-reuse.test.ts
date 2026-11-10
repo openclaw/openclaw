@@ -3,7 +3,10 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { releaseChildSpec } from "../../scripts/full-release-validation-policy.mjs";
+import {
+  compareReleaseJobsByName,
+  releaseChildSpec,
+} from "../../scripts/full-release-validation-policy.mjs";
 import { canonicalizeJsonValue } from "../../scripts/lib/canonical-json.mjs";
 import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
 import {
@@ -13,6 +16,15 @@ import {
 import { createReleaseEvidenceReplay } from "../../scripts/lib/release-evidence-replay.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+// Keep promise-based retry sleeps on the same clock as the deadline assertions.
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: (delay: number) =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, delay);
+    }),
+}));
+
 const REPOSITORY = "openclaw/openclaw";
 const TOOLING = "a".repeat(40);
 const TARGET = "b".repeat(40);
@@ -20,6 +32,7 @@ const PUBLISHER = "Seal full release child evidence / Seal child receipt";
 const NOW = Date.parse("2026-09-23T12:00:00Z");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -36,6 +49,8 @@ async function fixture(
   role = "normalCi",
   dispatchInputs?: Record<string, string>,
   workflowSha = TOOLING,
+  workloadJobCount = 2,
+  runAttemptCount = 1,
 ) {
   const { workflow, suffix, displayName } = releaseChildSpec(role);
   const workflowRef = workflowSha === TARGET ? `release-ci/${TARGET.slice(0, 12)}-123` : "main";
@@ -54,7 +69,7 @@ async function fixture(
   };
   const run = {
     id: 101,
-    run_attempt: 1,
+    run_attempt: runAttemptCount,
     event: "workflow_dispatch",
     path: `.github/workflows/${workflow}@refs/heads/${workflowRef}`,
     display_title: `${displayName} ${dispatchId}`,
@@ -70,6 +85,7 @@ async function fixture(
   const parent = {
     ...run,
     id: 77,
+    run_attempt: 1,
     path: ".github/workflows/full-release-validation.yml",
     status: "completed",
     conclusion: "failure" as string | null,
@@ -87,24 +103,32 @@ async function fixture(
     html_url: `https://github.com/${REPOSITORY}/actions/runs/101/job/${id}`,
     steps: [] as { name: string; status: string; conclusion: string }[],
   });
-  const jobs = [rawJob(1, "node tests"), rawJob(2, "resolve target"), rawJob(3, PUBLISHER)];
-  jobs[2]!.steps = [
+  const jobs = [
+    ...Array.from({ length: workloadJobCount }, (_, index) =>
+      rawJob(index + 1, ["node tests", "resolve target"][index] ?? `workload ${index + 1}`),
+    ),
+    rawJob(workloadJobCount + 1, PUBLISHER),
+  ];
+  jobs.at(-1)!.steps = [
     "Checkout trusted child evidence tooling",
     "Seal exact child attempt evidence",
     "Upload sealed child evidence",
   ].map((name) => ({ name, status: "completed", conclusion: "success" }));
   const composite = {
-    effectiveRunAttempt: 1,
+    effectiveRunAttempt: runAttemptCount,
     plannedRunAttempt: 1,
-    jobs: jobs.slice(0, 2).map((job) => ({
-      acceptedRunAttempt: 1,
-      completedAt: job.completed_at,
-      conclusion: job.conclusion,
-      name: job.name,
-      startedAt: job.started_at,
-      status: job.status,
-      url: job.html_url,
-    })),
+    jobs: jobs
+      .slice(0, -1)
+      .toSorted(compareReleaseJobsByName)
+      .map((job) => ({
+        acceptedRunAttempt: runAttemptCount,
+        completedAt: job.completed_at,
+        conclusion: job.conclusion,
+        name: job.name,
+        startedAt: job.started_at,
+        status: job.status,
+        url: job.html_url,
+      })),
   };
   const receipt = {
     schema: "openclaw.full-release-child-evidence/v1",
@@ -120,18 +144,18 @@ async function fixture(
     sourceParentAttempt: 1,
     workloadConclusion: "success",
     inputs: { ...request.inputs },
-    publisher: { jobId: "3", jobName: PUBLISHER },
+    publisher: { jobId: String(workloadJobCount + 1), jobName: PUBLISHER },
     ...composite,
     compositeJobsSha256: jsonDigest(composite),
     dispatchActor: "github-actions[bot]",
     triggeringActor: "github-actions[bot]",
-    observedRunAttempts: [1],
+    observedRunAttempts: Array.from({ length: runAttemptCount }, (_, index) => index + 1),
     runId: "101",
     sha256: "",
   };
   const artifact = {
     id: 301,
-    name: `full-release-child-evidence-${TARGET}-${role}-101-1`,
+    name: `full-release-child-evidence-${TARGET}-${role}-101-${runAttemptCount}`,
     digest: "",
     expired: false,
     expires_at: "2026-10-01T00:00:00Z",
@@ -153,7 +177,9 @@ async function fixture(
   await seal();
   const lineage = { status: "ahead", merge_base_commit: { sha: TOOLING } };
   const runInventory = [run];
-  const attempts = [jobs];
+  const attempts = Array.from({ length: runAttemptCount }, (_, index) =>
+    index === 0 ? jobs : jobs.map((job) => ({ ...job, run_attempt: index + 1 })),
+  );
   const reads: string[] = [];
   const responses: Record<string, () => unknown> = {
     "actions/runs/101": () => run,
@@ -184,10 +210,14 @@ async function fixture(
         return { total_count: 0, artifacts: [] };
       }
       const attempt =
-        /^actions\/runs\/101\/attempts\/([1-9][0-9]*)\/jobs\?per_page=100&page=1$/u.exec(endpoint);
+        /^actions\/runs\/101\/attempts\/([1-9][0-9]*)\/jobs\?per_page=(100|50|30)&page=([1-9][0-9]*)$/u.exec(
+          endpoint,
+        );
       if (attempt) {
         const attemptJobs = attempts[Number(attempt[1]) - 1]!;
-        return { total_count: attemptJobs.length, jobs: attemptJobs };
+        const perPage = Number(attempt[2]);
+        const start = (Number(attempt[3]) - 1) * perPage;
+        return { total_count: attemptJobs.length, jobs: attemptJobs.slice(start, start + perPage) };
       }
       throw new Error(`Unexpected evidence read: ${endpoint}`);
     },
@@ -212,8 +242,222 @@ async function fixture(
 }
 
 describe("independent release child reuse", () => {
-  it("replays exact raw child evidence but refuses fresh child and source-parent attempts", async () => {
-    const data = await fixture();
+  it("reads twelve complete inventories four at a time within the shared deadline", async () => {
+    const data = await fixture("normalCi", undefined, TOOLING, 261, 12);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    vi.useFakeTimers();
+    const started = Date.now();
+    // Thirteen reads per attempt exceed 120s serially; skew also exercises out-of-order completion.
+    let active = 0;
+    let peak = 0;
+    const reads = new Map<number, string[]>();
+    const completed: number[] = [];
+    const github = async (endpoint: string) => {
+      const match = /attempts\/(\d+)\/jobs\?(.*)$/u.exec(endpoint);
+      if (!match) {
+        return data.deps.github(endpoint);
+      }
+      const attempt = Number(match[1]);
+      const pages = reads.get(attempt) ?? [];
+      reads.set(attempt, pages);
+      pages.push(match[2]!);
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 2_000 + (4 - (attempt % 4)) * 100);
+        });
+        if (/per_page=(100|50)&page=2$/u.test(endpoint)) {
+          throw new Error("gh: Server Error (HTTP 502)");
+        }
+        if (endpoint.endsWith("per_page=30&page=9")) {
+          completed.push(attempt);
+        }
+        return await data.deps.github(endpoint);
+      } finally {
+        active -= 1;
+      }
+    };
+    const verification = validateReusableReleaseChild(selection, data.request, {
+      ...data.deps,
+      github,
+      deadlineMs: started + 120_000,
+    });
+    const checked = expect(verification).resolves.toMatchObject({ receipt: data.receipt });
+    await vi.runAllTimersAsync();
+    await checked;
+    expect(peak).toBe(4);
+    expect(active).toBe(0);
+    expect(Date.now() - started).toBeLessThan(120_000);
+    expect(completed).toHaveLength(12);
+    expect(completed.slice(0, 4)).toEqual([3, 2, 1, 4]);
+    expect([...reads.keys()]).toEqual(Array.from({ length: 12 }, (_, index) => index + 1));
+    for (const pages of reads.values()) {
+      expect(pages).toEqual([
+        "per_page=100&page=1",
+        "per_page=100&page=2",
+        "per_page=50&page=1",
+        "per_page=50&page=2",
+        ...Array.from({ length: 9 }, (_, index) => `per_page=30&page=${index + 1}`),
+      ]);
+    }
+  });
+
+  it("settles started inventories after failure without claiming more attempts", async () => {
+    const data = await fixture("normalCi", undefined, TOOLING, 2, 12);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    data.reads.length = 0;
+    vi.useFakeTimers();
+    let active = 0;
+    let settled = false;
+    const started: number[] = [];
+    const github = async (endpoint: string) => {
+      const match = /attempts\/(\d+)\/jobs\?/u.exec(endpoint);
+      if (!match) {
+        return data.deps.github(endpoint);
+      }
+      const attempt = Number(match[1]);
+      started.push(attempt);
+      active += 1;
+      try {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, attempt === 1 ? 1_000 : 2_000);
+        });
+        if (attempt === 1) {
+          throw new Error("gh: Forbidden (HTTP 403)");
+        }
+        return await data.deps.github(endpoint);
+      } finally {
+        active -= 1;
+      }
+    };
+    const verification = validateReusableReleaseChild(selection, data.request, {
+      ...data.deps,
+      github,
+    }).finally(() => {
+      settled = true;
+    });
+    const checked = expect(verification).rejects.toThrow("HTTP 403");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).toBe(false);
+    expect(active).toBe(3);
+    await vi.runAllTimersAsync();
+    await checked;
+    expect(active).toBe(0);
+    expect(started).toEqual([1, 2, 3, 4]);
+    expect(data.reads).not.toContain("actions/runs/77/attempts/1");
+    expect(data.reads.filter((endpoint) => endpoint === "actions/runs/101")).toHaveLength(1);
+  });
+
+  it.each([
+    { status: 502, failures: 1 },
+    { status: 502, failures: 4 },
+    { status: 403, failures: 1 },
+  ])(
+    "bounds metadata HTTP $status retries after $failures failures",
+    async ({ status, failures }) => {
+      const data = await fixture();
+      const selection = await discoverReusableReleaseChild(data.request, data.deps);
+      vi.useFakeTimers();
+      const started = Date.now();
+      let reads = 0;
+      const github = async (endpoint: string) => {
+        if (endpoint === "actions/runs/101" && reads++ < failures) {
+          throw Object.assign(new Error("private CLI output"), {
+            stderr: `gh: Server Error (HTTP ${status}) private response body`,
+          });
+        }
+        return data.deps.github(endpoint);
+      };
+      const verification = validateReusableReleaseChild(selection, data.request, {
+        ...data.deps,
+        github,
+      });
+      const succeeds = status === 502 && failures === 1;
+      const checked = succeeds
+        ? expect(verification).resolves.toMatchObject({ receipt: { jobs: data.receipt.jobs } })
+        : expect(verification).rejects.toMatchObject({
+            message: `Full release child evidence API GET repos/openclaw/openclaw/actions/runs/101 failed (HTTP ${status})`,
+          });
+      await vi.runAllTimersAsync();
+      await checked;
+      expect(reads).toBe(succeeds ? 3 : failures);
+      expect(Date.now() - started).toBe(status === 403 ? 0 : failures === 4 ? 14_000 : 2_000);
+    },
+  );
+
+  it("keeps job fallback and retry backoff within the default two-minute deadline", async () => {
+    const data = await fixture("normalCi", undefined, TOOLING, 261);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    vi.useFakeTimers();
+    const started = Date.now();
+    const jobReads: string[] = [];
+    const github = async (endpoint: string) => {
+      if (endpoint.includes("/jobs?")) {
+        jobReads.push(endpoint);
+        if (!endpoint.includes("per_page=100&page=1")) {
+          vi.setSystemTime(started + 119_000);
+          throw new Error("gh: Server Error (HTTP 502)");
+        }
+      }
+      return data.deps.github(endpoint);
+    };
+    await expect(
+      validateReusableReleaseChild(selection, data.request, {
+        ...data.deps,
+        github,
+      }),
+    ).rejects.toThrow(/API GET .*per_page=30&page=1 exceeded its time budget/);
+    expect(jobReads).toEqual([
+      "actions/runs/101/attempts/1/jobs?per_page=100&page=1",
+      "actions/runs/101/attempts/1/jobs?per_page=100&page=2",
+      "actions/runs/101/attempts/1/jobs?per_page=50&page=1",
+      "actions/runs/101/attempts/1/jobs?per_page=30&page=1",
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([502, 403, "header"])(
+    "handles HTTP %s at the child job listing boundary",
+    async (status) => {
+      const data = await fixture("normalCi", undefined, TOOLING, 261);
+      const selection = await discoverReusableReleaseChild(data.request, data.deps);
+      const jobReads: string[] = [];
+      const github = async (endpoint: string) => {
+        if (!endpoint.includes("/jobs?")) {
+          return data.deps.github(endpoint);
+        }
+        jobReads.push(endpoint);
+        if (status === 403 || endpoint.includes("per_page=100&page=2")) {
+          throw status === "header"
+            ? Object.assign(new Error("gh failed"), { stdout: "HTTP/2 502\nprivate response body" })
+            : new Error(`gh: Server Error (HTTP ${status})`);
+        }
+        return data.deps.github(endpoint);
+      };
+      const verified = validateReusableReleaseChild(selection, data.request, {
+        ...data.deps,
+        github,
+      });
+      if (status !== 403) {
+        await expect(verified).resolves.toMatchObject({ receipt: { jobs: data.receipt.jobs } });
+        expect(jobReads).toEqual([
+          "actions/runs/101/attempts/1/jobs?per_page=100&page=1",
+          "actions/runs/101/attempts/1/jobs?per_page=100&page=2",
+          ...Array.from(
+            { length: 6 },
+            (_, index) => `actions/runs/101/attempts/1/jobs?per_page=50&page=${index + 1}`,
+          ),
+        ]);
+      } else {
+        await expect(verified).rejects.toThrow("HTTP 403");
+        expect(jobReads).toHaveLength(1);
+      }
+    },
+  );
+
+  it("replays a pinned parent origin but rejects changed origins and child attempts", async () => {
+    const data = await fixture("normalCi", undefined, TOOLING, 261);
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
     const { downloadArchive, ...deps } = data.deps;
     const { archiveBytes } = await downloadArchive();
@@ -225,8 +469,18 @@ describe("independent release child reuse", () => {
       }
       return Response.json(data.artifact);
     });
-    const github = async (endpoint: string) =>
-      endpoint === "actions/runs/77" ? data.parent : deps.github(endpoint);
+    // The source parent retried after dispatch; its original attempt is still exact.
+    const currentParent = { ...data.parent, run_attempt: 2 };
+    let jobReads = 0;
+    const github = async (endpoint: string) => {
+      if (endpoint.includes("/jobs?")) {
+        jobReads += 1;
+        if (endpoint.includes("per_page=100&page=2")) {
+          throw new Error("gh: Server Error (HTTP 502)");
+        }
+      }
+      return endpoint === "actions/runs/77" ? currentParent : deps.github(endpoint);
+    };
     const writer = createReleaseEvidenceReplay(data.request);
     await validateReusableReleaseChild(selection, data.request, {
       ...deps,
@@ -236,6 +490,7 @@ describe("independent release child reuse", () => {
     });
     expect(zipReads).toBe(1);
     const payload = JSON.parse(writer.serialize());
+    const acquiredJobReads = jobReads;
     const replay = createReleaseEvidenceReplay(data.request, payload);
     await validateReusableReleaseChild(selection, data.request, {
       ...deps,
@@ -244,6 +499,10 @@ describe("independent release child reuse", () => {
       immutableReads: replay,
     });
     expect(zipReads).toBe(1);
+    expect(jobReads).toBe(acquiredJobReads);
+    expect(
+      payload.entries.some(([route]: [string]) => route === "actions/runs/77/attempts/1"),
+    ).toBe(false);
     data.parent.run_attempt = 2;
     await expect(
       validateReusableReleaseChild(selection, data.request, {
@@ -252,7 +511,7 @@ describe("independent release child reuse", () => {
         token: "synthetic",
         immutableReads: createReleaseEvidenceReplay(data.request, payload),
       }),
-    ).rejects.toThrow(/source parent attempt/);
+    ).rejects.toThrow(/source parent origin/);
     data.parent.run_attempt = 1;
     data.run.run_attempt = 2;
     await expect(

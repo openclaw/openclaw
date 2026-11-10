@@ -1778,13 +1778,8 @@ function resolveAgentCoreShardName(file: string): string {
 }
 
 function createAgentCoreSplitShards(): NodeTestSplitShard[] {
-  const excludedTests = new Set(agentVitestProjectOwners.core.exclude);
   const groups = groupBy(
-    listTrackedTestFiles("src/agents").filter(
-      (file) =>
-        !relative("src/agents", file).replaceAll("\\", "/").includes("/") &&
-        !excludedTests.has(file),
-    ),
+    listScopedOwnerTestFiles(agentVitestProjectOwners.core),
     resolveAgentCoreShardName,
   );
 
@@ -2491,7 +2486,7 @@ const canonicalNodeTestOwners = fullSuiteVitestShards.map((shard) => ({
   ...shard,
   projects: [...shard.projects],
 }));
-let canonicalMetadataConfigs: ReadonlySet<string> | undefined;
+const canonicalMetadataConfigs = new Map<string, ReadonlySet<string>>();
 type CanonicalTargetInventory = {
   configsByFile: Map<string, Set<string>>;
   configs: Set<string>;
@@ -2638,12 +2633,11 @@ function resolveSplitNodeShards(name: string): NodeTestSplitShard[] | undefined 
 export function nodeTestConfigRequiresCanonicalMetadata(config: string): boolean {
   // Aggregate configs can be exclusive without owning canonical shard metadata.
   // Check immutable project descriptors before discovering unrelated test files.
-  if (!canonicalNodeTestOwners.some((owner) => owner.projects.includes(config))) {
+  const owners = canonicalNodeTestOwners.filter((owner) => owner.projects.includes(config));
+  if (owners.length === 0) {
     return false;
   }
-  const toolingOwner = canonicalNodeTestOwners.some(
-    (owner) => owner.name === "core-tooling" && owner.projects.includes(config),
-  );
+  const toolingOwner = owners.some((owner) => owner.name === "core-tooling");
   if (config === TOOLING_CONFIG) {
     return toolingOwner;
   }
@@ -2662,19 +2656,23 @@ export function nodeTestConfigRequiresCanonicalMetadata(config: string): boolean
   ) {
     return false;
   }
-  canonicalMetadataConfigs ??= new Set(
-    createNodeTestShardsForOwners(canonicalNodeTestOwners, {
-      includeReleaseOnlyPluginShards: false,
-    })
-      .filter(
-        (shard) =>
-          shard.env ||
-          shard.shardName.startsWith("core-tooling") ||
-          shard.configs.some(isExclusiveCiTestConfig),
-      )
-      .flatMap((shard) => shard.configs),
-  );
-  return canonicalMetadataConfigs.has(config);
+  return owners.some((owner) => {
+    let configs = canonicalMetadataConfigs.get(owner.name);
+    if (!configs) {
+      configs = new Set(
+        createNodeTestShardsForOwners([owner], { includeReleaseOnlyPluginShards: false })
+          .filter(
+            (shard) =>
+              shard.env ||
+              shard.shardName.startsWith("core-tooling") ||
+              shard.configs.some(isExclusiveCiTestConfig),
+          )
+          .flatMap((shard) => shard.configs),
+      );
+      canonicalMetadataConfigs.set(owner.name, configs);
+    }
+    return configs.has(config);
+  });
 }
 
 function formatNodeTestShardCheckName(shardName: string): string {

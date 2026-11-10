@@ -11,6 +11,8 @@ and workspace-file scale do not participate in commit negotiation. Pack bytes
 measure received compressed objects, not transport framing or physical disk IO.
 Native CPU includes Git's local upload-pack server; RSS is peak resident memory,
 not cumulative allocation. No network or production data is used.
+Use --restore to start shallow, explicitly unshallow, and compare pathspec-file
+restore with a negotiated commit fetch followed by lazy blob-only restore.
 
 Acceptance: normal fetch sends haves, reduces new pack bytes by >99%, preserves
 the requested checkout, and improves wall/CPU without >20% peak-RSS growth.
@@ -37,10 +39,12 @@ parser.add_argument("--pairs", type=int, default=5)
 parser.add_argument("--aa-pairs", type=int, default=2)
 parser.add_argument("--baseline-root", type=Path)
 parser.add_argument("--candidate-root", type=Path)
+parser.add_argument("--restore", action="store_true")
 options = parser.parse_args()
 assert options.commits >= 100 and options.tree_depth >= 1
 assert options.pairs >= 1 and options.aa_pairs >= 0
 assert bool(options.baseline_root) == bool(options.candidate_root)
+assert not (options.restore and options.baseline_root)
 root = options.directory.resolve()
 root.mkdir()
 environment = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
@@ -78,7 +82,12 @@ for index in range(options.commits):
     ).encode())
 process.stdin.close()
 assert process.wait() == 0
-git(root, "clone", "--filter=blob:none", "--no-checkout", origin.as_uri(), str(seed))
+git(root, "clone", "--filter=blob:none", "--no-checkout",
+    *(["--depth=2"] if options.restore else []), origin.as_uri(), str(seed))
+if options.restore:
+    assert git(seed, "rev-parse", "--is-shallow-repository") == "true"
+    git(seed, "fetch", "--unshallow", "--filter=blob:none", "origin")
+    assert git(seed, "rev-parse", "--is-shallow-repository") == "false"
 git(seed, "checkout", "--detach", "origin/main")
 base = git(seed, "rev-parse", "HEAD")
 blob = git(origin, "hash-object", "-w", "--stdin", data=b"synthetic pull request\n")
@@ -137,6 +146,13 @@ def run(label, candidate):
         command = ["bash", "-c", 'set -euo pipefail; source "$1/scripts/pr-lib/common.sh"; '
                    'source "$1/scripts/pr-lib/worktree.sh"; canonical_repo_root="$PWD"; '
                    'checkout_pr_worktree_target 42 "$2" temp/pr-42', "bench", str(selected), target]
+    elif options.restore:
+        command = ["bash", "-c", 'set -euo pipefail; '
+                   + ('git fetch --no-tags --no-write-fetch-head origin "$1"; '
+                      if candidate else '')
+                   + 'printf "%s\\0" "$2" | git --literal-pathspecs restore '
+                   '--source="$1" --staged --worktree --pathspec-from-file=- '
+                   '--pathspec-file-nul', "bench", target, path]
     elif candidate:
         command = ["bash", "-c", 'set -euo pipefail; '
                    'git fetch --no-tags --no-write-fetch-head origin "$1"; '
@@ -154,18 +170,25 @@ def run(label, candidate):
             assert magic == b"PACK" and version in (2, 3)
             object_count += count
     packets = trace.read_text()
+    wanted = re.findall(r"fetch> want ([0-9a-f]{40})", packets)
+    if options.restore:
+        assert wanted == [target, blob], wanted
+        assert bool(re.search(r"fetch> have ", packets)) == candidate
     result.update(label=label, candidate=candidate, newPacks=len(additions),
                   newPackBytes=sum(pack.stat().st_size for pack in additions),
                   receivedObjects=object_count,
                   havePackets=len(re.findall(r"fetch> have [0-9a-f]{40}", packets)),
-                  wants=len(re.findall(r"fetch> want [0-9a-f]{40}", packets)),
+                  wants=len(wanted), wantedObjects=wanted,
                   load=os.getloadavg())
-    assert git(clone, "rev-parse", "HEAD") == target
+    assert git(clone, "rev-parse", "HEAD") == (base if options.restore else target)
     assert git(clone, "rev-parse", "origin/main") == base
     assert (clone / ".git/config").read_bytes() == configuration
     assert checkpoint.read_bytes() == retained_checkpoint
     assert (clone / path).read_text() == "synthetic pull request\n"
-    assert git(clone, "status", "--porcelain") == ""
+    assert git(clone, "write-tree") == git(origin, "rev-parse", f"{target}^{{tree}}")
+    assert git(clone, "diff", "--exit-code") == ""
+    if not options.restore:
+        assert git(clone, "status", "--porcelain") == ""
     shutil.rmtree(clone)
     print(json.dumps(result), flush=True)
     return result
@@ -192,8 +215,8 @@ def summary(values):
 
 report = {"git": git(root, "--version"), "commits": options.commits,
           "trees": options.commits * options.tree_depth,
-          "base": base, "target": target, "rows": rows, "aa": controls,
-          "owner": bool(options.baseline_root),
+          "base": base, "target": target, "blob": blob, "rows": rows, "aa": controls,
+          "owner": bool(options.baseline_root), "restore": options.restore,
           "ownerHashes": {name: hashlib.sha256((source.resolve() / "scripts/pr-lib/worktree.sh").read_bytes()).hexdigest()
                           for name, source in (("baseline", options.baseline_root),
                                                ("candidate", options.candidate_root)) if source},

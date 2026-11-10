@@ -96,7 +96,10 @@ describe("Gateway automatic Workshop learning", () => {
       const startup = createStartupGate();
       const recovery = await import("./session-restart-resume.js");
       using recoverySpy = vi.spyOn(recovery, "resumeMarkedSessions");
-      recoverySpy.mockImplementation(startup.run);
+      recoverySpy.mockImplementation(async ({ onPrepared }) => {
+        await startup.run();
+        onPrepared?.();
+      });
       try {
         await fs.writeFile(path.join(state.workspaceDir, "AGENTS.md"), workspaceInstructions);
         await withResponsesProvider(
