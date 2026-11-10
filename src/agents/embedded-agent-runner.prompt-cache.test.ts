@@ -1,4 +1,4 @@
-// End-to-end prompt reuse through the admitted runner, durable transcript and real serializers.
+// End-to-end prompt reuse through the admitted runner, the durable transcript and real serializers.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
