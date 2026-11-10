@@ -626,7 +626,12 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
       producerRunAttempt: options.npmPreflightLineage.producerRunAttempt,
     };
     if (manifest.sourceAdmission?.qualificationAdmission || manifest.receiptRecovery) {
-      validateCandidateOwnedArtifactBinding(manifest, lineage.sourceSha, lineage.toolingSha, evidence);
+      validateCandidateOwnedArtifactBinding(
+        manifest,
+        lineage.sourceSha,
+        lineage.toolingSha,
+        evidence,
+      );
       validateNpmPreflightQualification(lineage);
     } else {
       await verifyNpmPreflightPublicationLineage(lineage);
