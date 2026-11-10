@@ -34,6 +34,8 @@ export type TranscriptCallbacks = {
   onViewportResize?: () => void;
   /** Explicit keys report direction; undefined reconciles geometry or neutral contact. */
   onReaderScroll?: (towardEnd?: boolean) => void;
+  /** Plain End uses the pane's manual Latest action and its follow policy. */
+  onRequestEnd?: () => void;
   onNativeScroll?: (event: Event) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
   canFollowEnd?: () => boolean;

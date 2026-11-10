@@ -258,6 +258,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             onOffset: (delta) => void (delta && this.initialRange.recordReaderMovement(delta)),
             onComposerLayout: (changed) => this.commitComposerResize(changed),
             onReaderScroll: (towardEnd) => this.callbacks.onReaderScroll?.(towardEnd),
+            onRequestEnd: callbacks.onRequestEnd,
             onNativeScroll: (event) => {
               // Measurement may have consumed this offset before its native event.
               // Commit its queued rows now, ahead of this frame's paint.
@@ -630,9 +631,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.initialRange.finish(true);
     } else if (this.offsetState.pendingScrollOffset || !this.canAutoFollow()) {
       return false;
-    } else if (this.initialRange.preparingEnd && this.offsetState.scrollCommand?.target === "end") {
-      // Preparation and native settling already own this destination.
-      return true;
     }
     scrollTranscriptToEnd(
       this.offsetState,
@@ -642,6 +640,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       () => this.presentation.queueRowMeasure(),
       this.endAnchor,
       this.initialRange.prepareEnd,
+      this.initialRange.preparingEnd,
     );
     return true;
   }
