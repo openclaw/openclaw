@@ -110,6 +110,7 @@ public actor GatewayNodeSession {
     var reactionAccess: GatewayReactionAccessFacts?
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
+    private var controlUiBasePath: String?
     // `computer.act` is not safe to repeat after a response is lost. Keep recent
     // in-flight/results on the long-lived node session so a channel reconnect can
     // replay the receipt without posting input twice. App restart intentionally
@@ -248,6 +249,11 @@ public actor GatewayNodeSession {
         else { throw CancellationError() }
         await self.notifyConnectedIfNeeded(
             admissionGeneration: expectedAdmissionGeneration)
+    }
+
+    public func connectedDeviceId() async -> String? {
+        guard let channel else { return nil }
+        return await channel.connectedDeviceId()
     }
 
     public func disconnect() async {
@@ -617,8 +623,50 @@ public actor GatewayNodeSession {
         self.currentRouteValue(self.operatorScopes, ifCurrentRoute: route)
     }
 
+    /// The released Control UI accepts only shared startup credentials. Return
+    /// them only when this exact live operator route selected them.
+    public func controlUIDashboardLegacyCredentials(
+        ifCurrentRoute route: GatewayNodeSessionRoute) async -> [String: String]?
+    {
+        guard self.isCurrentRoute(route),
+              let channel = self.channel,
+              self.connectOptions?.role == "operator",
+              self.connectOptions?.clientMode == "ui"
+        else { return nil }
+        let credentials = await channel.controlUIDashboardLegacyCredentials(
+            ifCurrentConnectionGeneration: route.socketGeneration)
+        guard self.isCurrentRoute(route), self.channel === channel else { return nil }
+        return credentials
+    }
+
+    /// Builds a native Dashboard challenge response from the current operator
+    /// socket. Route and scope checks bracket the channel's signing operation.
+    public func controlUIDashboardAuthorization(
+        ifCurrentRoute route: GatewayNodeSessionRoute,
+        nonce: String,
+        signedAtMs: Int64) async throws -> Data
+    {
+        guard self.isCurrentRoute(route),
+              let channel = self.channel,
+              self.connectOptions?.role == "operator",
+              self.connectOptions?.clientMode == "ui",
+              let scopes = self.currentOperatorScopes(ifCurrentRoute: route)
+        else { throw CancellationError() }
+        let data = try await channel.controlUIDashboardAuthorization(
+            ifCurrentConnectionGeneration: route.socketGeneration,
+            scopes: scopes.sorted(),
+            nonce: nonce,
+            signedAtMs: signedAtMs)
+        guard self.isCurrentRoute(route), self.channel === channel else { throw CancellationError() }
+        return data
+    }
+
     public func currentAttachmentLimits(ifCurrentRoute route: GatewayNodeSessionRoute) -> GatewayAttachmentLimits? {
         self.currentRouteValue(self.attachmentLimits, ifCurrentRoute: route)
+    }
+
+    public func currentControlUiBasePath(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {
+        self.currentRouteValue(self.controlUiBasePath, ifCurrentRoute: route)
     }
 
     private func currentRouteValue<T>(
@@ -793,6 +841,7 @@ extension GatewayNodeSession {
         self.reactionAccess = GatewayReactionAccessFacts(hello: snapshot)
         self.attachmentLimits = snapshot.advertisedAttachmentLimits()
         self.mainSessionKey = snapshot.snapshot.sessiondefaults?["mainSessionKey"]?.stringValue?.trimmedNonEmpty
+        self.controlUiBasePath = snapshot.controluibasepath?.trimmedNonEmpty
     }
 
     private func handlePush(
@@ -833,6 +882,7 @@ extension GatewayNodeSession {
         self.reactionAccess = nil
         self.attachmentLimits = nil
         self.mainSessionKey = nil
+        self.controlUiBasePath = nil
     }
 
     private func handleChannelDisconnected(
@@ -982,17 +1032,9 @@ extension GatewayNodeSession {
             return
         }
         guard evt.event == "node.invoke.request" else { return }
-        self.logger.info("node invoke request received")
         guard let payload = evt.payload else { return }
         do {
             let request: NodeInvokeRequestPayload = try self.decodeEventPayload(from: payload)
-            let timeoutLabel = request.timeoutMs.map(String.init) ?? "none"
-            self.logger.info(
-                """
-                node invoke request decoded id=\(request.id, privacy: .public) \
-                command=\(request.command, privacy: .public) \
-                timeoutMs=\(timeoutLabel, privacy: .public)
-                """)
             guard let onInvoke else { return }
             let route = GatewayNodeSessionRoute(
                 channelGeneration: channelGeneration,
@@ -1053,7 +1095,6 @@ extension GatewayNodeSession {
                 socketGeneration: socketGeneration)
             return
         }
-        self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
         let bridgeRequest = BridgeInvokeRequest(
             id: request.id,
             command: request.command,
@@ -1083,8 +1124,6 @@ extension GatewayNodeSession {
         guard self.isCurrentRoute(route),
               self.channel === channel
         else { return }
-        self.logger.info(
-            "node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         await self.sendInvokeResult(
             request: request,
             response: response,
@@ -1448,8 +1487,6 @@ extension GatewayNodeSession {
         channel: GatewayChannelActor,
         socketGeneration: UInt64) async
     {
-        self.logger.info(
-            "node invoke result sending id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         var params: [String: AnyCodable] = [
             "id": AnyCodable(request.id),
             "nodeId": AnyCodable(request.nodeId),
@@ -1462,10 +1499,12 @@ extension GatewayNodeSession {
             params["payload"] = payload
         }
         if let error = response.error {
-            params["error"] = AnyCodable([
-                "code": error.code.rawValue,
-                "message": error.message,
-            ])
+            var fields: [String: Any] = ["code": error.code.rawValue, "message": error.message]
+            // v2026.10.2 closes this object to code/message; opt in through the current hello.
+            if self.serverCapabilities?.contains(.nodePermissionErrors) == true, let details = error.details {
+                fields["details"] = ["capabilities": details.capabilities, "state": details.state.rawValue]
+            }
+            params["error"] = AnyCodable(fields)
         }
         do {
             try await channel.send(

@@ -27,6 +27,7 @@ import {
   prepareTelegramHtmlTextSplitter,
   type TelegramHtmlTextSplitter,
 } from "./format-html.js";
+import { parseHtmlAttrs } from "./rich-blocks-html.js";
 import { renderTelegramMonospaceGrid } from "./text-width.js";
 
 export { escapeTelegramHtml } from "./format-html.js";
@@ -93,12 +94,38 @@ function renderTelegramHtml(ir: MarkdownIR, wrapFileRefs = true): string {
 
 function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
   const previousIndent = /^([ \t]*)[•*+-][ \t]+\S/.exec(previous)?.[1];
-  const nextIndent = /^([ \t]*)(?:\d+\.|#{1,6})[ \t]+\S/.exec(next)?.[1];
+  const nextIndent = /^([ \t]*)(?:\d+[.)]|#{1,6})[ \t]+\S/.exec(next)?.[1];
   return (
     previousIndent !== undefined &&
     nextIndent !== undefined &&
     nextIndent.length <= previousIndent.length
   );
+}
+
+const TELEGRAM_ORDERED_ITEM_PATTERN = /^([ \t]*)\d+([.)])[ \t]+(?=\S)/;
+
+function continuesEnclosingOrderedList(lines: readonly string[], index: number): boolean {
+  const next = TELEGRAM_ORDERED_ITEM_PATTERN.exec(lines[index] ?? "");
+  if (!next) {
+    return false;
+  }
+  const nextIndent = next[1]?.length ?? 0;
+  const bulletIndent = /^[ \t]*/.exec(lines[index - 1] ?? "")?.[0].length ?? 0;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const line = lines[cursor] ?? "";
+    const indent = /^[ \t]*/.exec(line)?.[0].length ?? 0;
+    if (!line.trim() || indent > nextIndent) {
+      continue;
+    }
+    const parent = TELEGRAM_ORDERED_ITEM_PATTERN.exec(line);
+    return (
+      parent !== null &&
+      indent === nextIndent &&
+      parent[2] === next[2] &&
+      bulletIndent >= parent[0].length
+    );
+  }
+  return false;
 }
 
 function preserveTelegramListBoundarySpacing(markdown: string): string {
@@ -107,12 +134,13 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
   let previousLine = "";
   let previousOffset = 0;
   let offset = 0;
-  return markdown
-    .split("\n")
-    .map((line) => {
+  const lines = markdown.split("\n");
+  return lines
+    .map((line, index) => {
       const normalizedLine = line.replace(/\r$/, "");
       const insertBoundary =
         shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine) &&
+        !continuesEnclosingOrderedList(lines, index) &&
         !isInsideCode(previousOffset, (codeRegions ??= findCodeRegions(markdown))) &&
         !isInsideCode(offset, codeRegions);
       previousLine = normalizedLine;
@@ -197,9 +225,16 @@ function isSupportedTelegramHtmlTag(closing: boolean, name: string, attrs: strin
   return pattern !== undefined && (closing ? attrs.trim() === "" : pattern.test(attrs));
 }
 
+type AuthoredTelegramTags = {
+  open: Array<{ name: string; ordinal: number }>;
+  nextOrdinal: number;
+  /** Start tags, by source ordinal, that an earlier pass left without an end tag. */
+  unmatched?: ReadonlySet<number>;
+};
+
 function preserveTelegramHtmlTag(
   rawTag: string,
-  openTags: string[],
+  tags: AuthoredTelegramTags,
   escapeTag: (rawTag: string) => string,
 ): string {
   const match = HTML_MODE_TAG_PATTERN.exec(rawTag);
@@ -209,40 +244,75 @@ function preserveTelegramHtmlTag(
   const closing = match[1] === "/";
   const tagName = normalizeLowercaseStringOrEmpty(match[2]);
   const attrs = match[3] ?? "";
-  if (!closing && tagName === "code" && TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN.test(attrs)) {
-    openTags.push(tagName);
-    return openTags.includes("pre") ? rawTag : "<code>";
-  }
-  if (!isSupportedTelegramHtmlTag(closing, tagName, attrs)) {
+  const languageCode =
+    !closing && tagName === "code" && TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN.test(attrs);
+  if (!languageCode && !isSupportedTelegramHtmlTag(closing, tagName, attrs)) {
     return escapeTag(rawTag);
   }
   if (closing) {
-    return popLastTagName(openTags, tagName) ? rawTag : escapeTag(rawTag);
+    const index = tags.open.findLastIndex((tag) => tag.name === tagName);
+    if (index < 0) {
+      return escapeTag(rawTag);
+    }
+    tags.open.splice(index, 1);
+    return rawTag;
   }
-  openTags.push(tagName);
-  return rawTag;
+  const ordinal = tags.nextOrdinal++;
+  if (tags.unmatched?.has(ordinal)) {
+    return escapeTag(rawTag);
+  }
+  tags.open.push({ name: tagName, ordinal });
+  return languageCode && !tags.open.some((tag) => tag.name === "pre") ? "<code>" : rawTag;
+}
+
+// Telegram rejects a start tag without an end tag, like an unmatched end tag, and the plain
+// fallback then drops the tag text. Escape those start tags so they display literally.
+// Escaping one cannot change which start tag a later end tag closes, so a second pass is final.
+function balanceAuthoredTelegramTags(render: (tags: AuthoredTelegramTags) => string): string {
+  const tags: AuthoredTelegramTags = { open: [], nextOrdinal: 0 };
+  const html = render(tags);
+  if (tags.open.length === 0) {
+    return html;
+  }
+  const unmatched = new Set(tags.open.map((tag) => tag.ordinal));
+  return render({ open: [], nextOrdinal: 0, unmatched });
+}
+
+// A `<` followed by another `<` before any `>` is text (`a < b <i>c</i>`): the
+// `>` closes the later tag, which must not be escaped along with it.
+function findTelegramHtmlTagEnd(text: string, start: number): number {
+  for (let index = start + 1; index < text.length; index += 1) {
+    if (text[index] === ">") {
+      return index;
+    }
+    if (text[index] === "<") {
+      return -1;
+    }
+  }
+  return -1;
 }
 
 function escapeUnsupportedTelegramHtml(text: string): string {
-  let result = "";
-  const openTags: string[] = [];
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index]!;
-    const end =
-      char === "&"
-        ? findTelegramHtmlEntityEnd(text, index)
-        : char === "<"
-          ? text.indexOf(">", index + 1)
-          : -1;
-    if (end === -1) {
-      result += char === "&" || char === "<" || char === ">" ? escapeTelegramHtml(char) : char;
-      continue;
+  return balanceAuthoredTelegramTags((tags) => {
+    let result = "";
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index]!;
+      const end =
+        char === "&"
+          ? findTelegramHtmlEntityEnd(text, index)
+          : char === "<"
+            ? findTelegramHtmlTagEnd(text, index)
+            : -1;
+      if (end === -1) {
+        result += char === "&" || char === "<" || char === ">" ? escapeTelegramHtml(char) : char;
+        continue;
+      }
+      const raw = text.slice(index, end + 1);
+      result += char === "&" ? raw : preserveTelegramHtmlTag(raw, tags, escapeTelegramHtml);
+      index = end;
     }
-    const raw = text.slice(index, end + 1);
-    result += char === "&" ? raw : preserveTelegramHtmlTag(raw, openTags, escapeTelegramHtml);
-    index = end;
-  }
-  return result;
+    return result;
+  });
 }
 
 export function resolveTelegramHtmlVisibleText(html: string): string {
@@ -284,33 +354,153 @@ export function telegramHtmlToPlainTextFallback(html: string): string {
   return resolveTelegramHtmlVisibleText(withPlainLinks);
 }
 
-function promoteEscapedSupportedTelegramTags(text: string, openTags: string[]): string {
+function promoteEscapedSupportedTelegramTags(text: string, tags: AuthoredTelegramTags): string {
   ESCAPED_HTML_TAG_PATTERN.lastIndex = 0;
   return text.replace(
     ESCAPED_HTML_TAG_PATTERN,
     (match, closing: string, name: string, attrs: string) =>
-      preserveTelegramHtmlTag(`<${closing}${name}${attrs}>`, openTags, () => match),
+      preserveTelegramHtmlTag(`<${closing}${name}${attrs}>`, tags, () => match),
   );
 }
 
 function renderSupportedTelegramHtml(html: string): string {
-  const openEscapedTags: string[] = [];
   const promoted = html.includes("&lt;")
-    ? transformUnprotectedTelegramHtmlText(html, ["code", "pre"], (text) =>
-        promoteEscapedSupportedTelegramTags(text, openEscapedTags),
+    ? balanceAuthoredTelegramTags((tags) =>
+        transformUnprotectedTelegramHtmlText(html, ["code", "pre"], (text) =>
+          promoteEscapedSupportedTelegramTags(text, tags),
+        ),
       )
     : html;
   return protectTelegramAssistantTranscriptRoleHeaders(promoted);
 }
 
+/** Project authored rich tags, leaving entity-escaped examples and code literal. */
+function downgradeRichBlockTags(text: string, markdown: boolean): string {
+  if (!text.includes("<")) {
+    return text;
+  }
+  const codeRegions = markdown ? findCodeRegions(text) : [];
+  const lists: Array<{ name: string; next: number }> = [];
+  const items: number[] = [];
+  const parts: string[] = [];
+  let codeDepth = 0;
+  let cursor = 0;
+  let lineStart = true;
+  let trailingBoundary = -1;
+  const append = (value: string) => {
+    parts.push(value);
+    if (value) {
+      if (trailingBoundary >= 0 && value.startsWith("\n")) {
+        parts[trailingBoundary] = "";
+      }
+      trailingBoundary = -1;
+      lineStart = value.endsWith("\n");
+    }
+  };
+  const boundary = () => {
+    if (!lineStart) {
+      append("\n");
+      trailingBoundary = parts.length - 1;
+    }
+  };
+  for (const tag of tokenizeHtmlTags(text)) {
+    const raw = tag.raw;
+    append(text.slice(cursor, tag.start));
+    cursor = tag.end;
+    let escapeStart = tag.start;
+    if (markdown) {
+      while (escapeStart > 0 && text[escapeStart - 1] === "\\") {
+        escapeStart -= 1;
+      }
+    }
+    if (isInsideCode(tag.start, codeRegions) || (tag.start - escapeStart) % 2 === 1) {
+      append(raw);
+      continue;
+    }
+    if (tag.name === "code" || tag.name === "pre") {
+      codeDepth = tag.closing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+      append(raw);
+      continue;
+    }
+    if (codeDepth > 0) {
+      append(raw);
+      continue;
+    }
+    switch (tag.name) {
+      case "ul":
+      case "ol":
+        boundary();
+        if (tag.closing) {
+          lists.pop();
+        } else {
+          const listStart =
+            tag.name === "ol" ? Number(parseHtmlAttrs(tag.raw).get("start") ?? 1) : 1;
+          lists.push({
+            name: tag.name,
+            next: Number.isInteger(listStart) && listStart > 0 ? listStart : 1,
+          });
+        }
+        break;
+      case "li":
+        if (tag.closing) {
+          items.pop();
+        } else {
+          boundary();
+          const list = lists.at(-1);
+          const indent = "  ".repeat(Math.max(0, lists.length - 1));
+          append(markdown ? indent.replaceAll(" ", "&#32;") : indent);
+          items.push(parts.length);
+          const marker = list?.name === "ol" ? `${list.next++}. ` : "• ";
+          // Entity-encode generated prefixes so Markdown cannot renumber or de-indent them.
+          append(markdown ? marker.replace(/^\d/, (digit) => `&#${digit.charCodeAt(0)};`) : marker);
+        }
+        break;
+      case "input": {
+        const attrs = parseHtmlAttrs(tag.raw);
+        if (!tag.closing && attrs.get("type")?.toLowerCase() === "checkbox") {
+          const marker = attrs.has("checked") ? "[x] " : "[ ] ";
+          const item = items.at(-1);
+          if (item !== undefined) {
+            parts[item] = marker;
+          } else {
+            append(marker);
+          }
+        } else {
+          append(raw);
+        }
+        break;
+      }
+      case "aside":
+        append(tag.closing ? "</blockquote>" : "<blockquote>");
+        break;
+      case "hr":
+        break;
+      default:
+        append(raw);
+    }
+  }
+  append(text.slice(cursor));
+  if (trailingBoundary >= 0) {
+    parts[trailingBoundary] = "";
+  }
+  return parts.join("");
+}
+
 export function renderTelegramHtmlText(
   text: string,
-  options: { textMode?: "markdown" | "html"; tableMode?: MarkdownTableMode } = {},
+  options: {
+    textMode?: "markdown" | "html";
+    tableMode?: MarkdownTableMode;
+    downgradeRichPromptTags?: boolean;
+  } = {},
 ): string {
-  if (options.textMode === "html") {
-    return escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(text));
-  }
-  return markdownToTelegramHtml(text, { tableMode: options.tableMode });
+  const source =
+    options.downgradeRichPromptTags === true
+      ? downgradeRichBlockTags(text, options.textMode !== "html")
+      : text;
+  return options.textMode === "html"
+    ? escapeUnsupportedTelegramHtml(normalizeTelegramLegacyHtmlTables(source))
+    : markdownToTelegramHtml(source, { tableMode: options.tableMode });
 }
 
 function normalizeTelegramLegacyHtmlTables(html: string): string {

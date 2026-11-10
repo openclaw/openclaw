@@ -1,90 +1,81 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
 const owners: MemoryIndexDatabase[] = [];
-const directories: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const owner of owners.splice(0)) {
     await owner.closeShadow();
   }
-  for (const directory of directories.splice(0)) {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
 });
 
 async function createShadow(filename: string) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "memory-shadow-owner-"));
-  directories.push(directory);
+  const directory = tempDirs.make("memory-shadow-owner-");
   const owner = await MemoryIndexDatabase.openShadow(path.join(directory, filename), false);
   owners.push(owner);
   await owner.admitSchema({ cacheEnabled: false, ftsEnabled: true });
   return owner;
 }
 
-function sessionReplacement(sessionId: string, text: string): MemorySourceIndexReplacement {
-  return {
-    source: "sessions",
-    agentId: "main",
-    sessionId,
-    model: "fts-only",
-    now: 1,
-    vectorReady: false,
-    entry: { path: `sessions/${sessionId}`, hash: "source", mtimeMs: 1, size: 1 },
-    embeddings: [],
-    chunks: [
-      {
-        startLine: 1,
-        endLine: 1,
-        text,
-        hash: "chunk",
-        importance: null,
-        triggers: null,
-        projectKey: null,
-      },
-    ],
-  };
+const chunk = { startLine: 1, endLine: 1, text: "retained text", hash: "chunk" };
+const replacement: MemorySourceIndexReplacement = {
+  source: "sessions",
+  agentId: "main",
+  sessionId: "one",
+  model: "fts-only",
+  now: 1,
+  vectorReady: false,
+  entry: { path: "sessions/one", hash: "source", mtimeMs: 1, size: 1 },
+  embeddings: [],
+  chunks: [{ ...chunk, importance: null, triggers: null, projectKey: null }],
+};
+
+function interceptWorkerClose(intercept: (close: () => Promise<void>) => Promise<void>) {
+  const open = sqliteRuntime.openSqliteWorkerStore;
+  vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockImplementation(async (options) => {
+    const store = await open(options);
+    if (store) {
+      const close = store.close.bind(store);
+      vi.spyOn(store, "close").mockImplementationOnce(() => intercept(close));
+    }
+    return store;
+  });
 }
+const assertCurrent = () => undefined;
+const prepare = async () => true;
+const replace = (owner: MemoryIndexDatabase) =>
+  owner.replaceSource(replacement, assertCurrent, prepare);
 
 describe("private shadow admission", () => {
   it("joins its retained worker before releasing the read-only shadow handle", async () => {
     const entered = createDeferred<void>();
     const released = createDeferred<void>();
-    const open = sqliteRuntime.openSqliteWorkerStore;
-    vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockImplementation(async (options) => {
-      const store = await open(options);
-      if (store) {
-        const close = store.close.bind(store);
-        vi.spyOn(store, "close").mockImplementationOnce(async () => {
-          entered.resolve();
-          await released.promise;
-          await close();
-        });
-      }
-      return store;
+    interceptWorkerClose(async (close) => {
+      entered.resolve();
+      await released.promise;
+      await close();
     });
     const owner = await createShadow("retiring.sqlite");
-    expect(() => owner.db.exec("DELETE FROM memory_index_chunks")).toThrow(/readonly/i);
+    const db = owner.db;
+    expect(() => db.exec("DELETE FROM memory_index_chunks")).toThrow(/readonly/i);
     const closing = owner.closeShadow();
     try {
       await entered.promise;
-      expect(owner.db.isOpen).toBe(true);
+      expect(db.isOpen).toBe(true);
       expect(owner.shadowReleased).toBe(false);
-      released.resolve();
-      await closing;
-      expect(owner.db.isOpen).toBe(false);
-      expect(owner.shadowReleased).toBe(true);
     } finally {
       released.resolve();
       await closing;
     }
+    expect(db.isOpen).toBe(false);
+    expect(owner.shadowReleased).toBe(true);
   });
 
   it("queues inherited reentrant callbacks until the native writer settles", async () => {
@@ -121,24 +112,11 @@ describe("private shadow admission", () => {
     writer.exec(
       "CREATE TRIGGER refuse_source BEFORE INSERT ON memory_index_sources BEGIN SELECT RAISE(ABORT, 'source refused'); END",
     );
-    const replacement = sessionReplacement("one", "retained text");
     await owner.closePublicationWorker();
     const refusedOpen = new Error("controlled publication open refusal");
     vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockRejectedValueOnce(refusedOpen);
-    await expect(
-      owner.replaceSource(
-        replacement,
-        () => undefined,
-        async () => true,
-      ),
-    ).rejects.toBe(refusedOpen);
-    await expect(
-      owner.replaceSource(
-        replacement,
-        () => undefined,
-        async () => true,
-      ),
-    ).rejects.toMatchObject({
+    await expect(replace(owner)).rejects.toBe(refusedOpen);
+    await expect(replace(owner)).rejects.toMatchObject({
       code: "ERR_SQLITE_ERROR",
       errcode: 1811,
       entered: true,
@@ -147,40 +125,22 @@ describe("private shadow admission", () => {
     expect(owner.db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual([]);
     expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
     writer.exec("DROP TRIGGER refuse_source");
-    await expect(
-      owner.replaceSource(
-        replacement,
-        () => undefined,
-        async () => true,
-      ),
-    ).resolves.toBe(true);
+    await expect(replace(owner)).resolves.toBe(true);
     expect(owner.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
       { text: "retained text" },
     ]);
   });
 
   it("retains committed data when the publication worker reports a close failure", async () => {
-    const open = sqliteRuntime.openSqliteWorkerStore;
-    vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockImplementation(async (options) => {
-      const store = await open(options);
-      if (store) {
-        const close = store.close.bind(store);
-        vi.spyOn(store, "close").mockImplementationOnce(async () => {
-          await close();
-          throw new Error("controlled native close failure");
-        });
-      }
-      return store;
+    interceptWorkerClose(async (close) => {
+      await close();
+      throw new Error("controlled native close failure");
     });
     const owner = await createShadow("shadow # committed.sqlite");
-    await owner.replaceSource(
-      sessionReplacement("committed", "committed text"),
-      () => undefined,
-      async () => true,
-    );
+    await replace(owner);
     await expect(owner.closePublicationWorker()).rejects.toThrow("controlled native close failure");
     expect(owner.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-      { text: "committed text" },
+      { text: "retained text" },
     ]);
     await owner.closePublicationWorker();
   });

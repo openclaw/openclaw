@@ -3,6 +3,7 @@ import {
   dispatchChannelInboundTurn,
   hasVisibleInboundReplyDispatch,
   isChannelPartialDeliveryError,
+  type BuiltChannelInboundEventContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -16,7 +17,6 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, type createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
-import type { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import {
   DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
@@ -27,15 +27,15 @@ import {
 import type { DiscordConfig, DiscordDispatchReplyFromConfig } from "./native-command.types.js";
 
 export async function dispatchDiscordNativeAgentReply(params: {
+  assertAuthority?: () => void;
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
   interaction: CommandInteraction | BaseComponentInteraction;
-  ctxPayload: Awaited<ReturnType<typeof buildDiscordNativeCommandContext>>;
+  ctxPayload: BuiltChannelInboundEventContext;
   effectiveRoute: Pick<ResolvedAgentRoute, "accountId" | "agentId" | "sessionKey">;
   channelConfig: DiscordChannelConfigResolved | null;
   mediaLocalRoots: ReturnType<typeof getAgentScopedMediaLocalRoots>;
-  preferFollowUp: boolean;
   responseEphemeral?: boolean;
   suppressReplies?: boolean;
   dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
@@ -48,6 +48,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   let finalReplyOutcome: "accepted" | "failed" | "suppressed" | undefined;
   let hiddenFinalReply: ReplyPayload | undefined;
   const turnResult = await dispatchChannelInboundTurn({
+    assertAuthority: params.assertAuthority,
     cfg: params.cfg,
     channel: "discord",
     accountId: params.effectiveRoute.accountId,
@@ -76,7 +77,6 @@ export async function dispatchDiscordNativeAgentReply(params: {
           },
           mediaLocalRoots: params.mediaLocalRoots,
           ...resolveDiscordInteractionReplyOptions(params),
-          preferFollowUp: params.preferFollowUp || didReply,
           responseEphemeral: params.responseEphemeral,
         });
         didReply ||= payloadDelivered;
@@ -150,7 +150,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
     !(turnResult.dispatched && hasVisibleInboundReplyDispatch(turnResult.dispatchResult))
   ) {
     await safeDiscordInteractionCall("interaction empty fallback", () =>
-      params.interaction[params.preferFollowUp ? "followUp" : "reply"]({
+      params.interaction.followUp({
         content: DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
         ephemeral: true,
       }),

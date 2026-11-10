@@ -49,12 +49,13 @@ describe.skipIf(Boolean(process.versions.bun))("worker heap limits", () => {
     },
   );
 
-  it.each(["--freeze-flags-after-init", "--abort-on-contradictory-flags"])(
-    "keeps the process alive with %s",
-    (flag) => {
-      const [before, after, worker] = measure(["--max-old-space-size=1024", flag]);
-      expect(after).toBe(before);
-      expect(worker).toBe(before);
-    },
-  );
+  it.each([
+    "--freeze-flags-after-init",
+    "--abort-on-contradictory-flags",
+    "--exit-on-contradictory-flags",
+  ])("keeps the process alive with %s", (flag) => {
+    const [before, after, worker] = measure(["--max-old-space-size=1024", flag]);
+    expect(after).toBe(before);
+    expect(worker).toBe(before);
+  });
 });

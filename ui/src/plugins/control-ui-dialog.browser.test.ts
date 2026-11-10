@@ -32,6 +32,7 @@ it("keeps plugin dialog content and cancellation policy across handle updates", 
   await modal.updateComplete;
   const dialog = modal.querySelector("dialog")!;
   expect(dialog.matches(":modal")).toBe(true);
+  expect(document.activeElement).toBe(content);
   content.value = "Unsaved notes";
 
   const veto = vi.fn(() => false);
@@ -59,5 +60,8 @@ it("keeps plugin dialog content and cancellation policy across handle updates", 
   await hidden;
   expect(onCancel).toHaveBeenCalledOnce();
   expect(dialog.open).toBe(false);
+  handle.dispose();
+  modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+  expect(onCancel).toHaveBeenCalledOnce();
   expect(onError).not.toHaveBeenCalled();
 });

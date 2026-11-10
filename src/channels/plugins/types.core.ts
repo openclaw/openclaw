@@ -32,6 +32,7 @@ import type { ChannelMessageActionName } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
+export type { ChannelMeta } from "./channel-meta.types.js";
 export type { ChannelLegacyStateMigrationPlan } from "./legacy-state-migration.types.js";
 export type { ChannelSetupInput } from "./setup-input.js";
 
@@ -114,33 +115,6 @@ export type ChannelAccountState =
 export type ChannelHeartbeatDeps = {
   webAuthExists?: () => Promise<boolean>;
   hasActiveWebListener?: (accountId?: string) => boolean;
-};
-
-/** User-facing metadata used in docs, pickers, and setup surfaces. */
-export type ChannelMeta = {
-  id: ChannelId;
-  label: string;
-  selectionLabel: string;
-  docsPath: string;
-  docsLabel?: string;
-  blurb: string;
-  order?: number;
-  aliases?: readonly string[];
-  selectionDocsPrefix?: string;
-  selectionDocsOmitLabel?: boolean;
-  selectionExtras?: readonly string[];
-  detailLabel?: string;
-  systemImage?: string;
-  markdownCapable?: boolean;
-  exposure?: {
-    configured?: boolean;
-    setup?: boolean;
-    docs?: boolean;
-  };
-  quickstartAllowFrom?: boolean;
-  forceAccountBinding?: boolean;
-  preferSessionLookupForAnnounceTarget?: boolean;
-  preferOver?: readonly string[];
 };
 
 /** Snapshot row returned by channel status and lifecycle surfaces. */
@@ -226,6 +200,14 @@ export type ChannelGroupContext = {
   senderE164?: string | null;
 };
 
+/** Authenticated direct-conversation facts evaluated against an admitted config snapshot. */
+export type ChannelDirectToolPolicyContext = Omit<
+  ChannelGroupContext,
+  "groupId" | "groupChannel" | "groupSpace"
+> & {
+  conversationId: string;
+};
+
 export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
@@ -277,7 +259,17 @@ export type ChannelSecurityContext<ResolvedAccount = unknown> = {
   account: ResolvedAccount;
 };
 
+/** Display-only native references; never recipients, routing, or sender authority. */
+export type ChannelDisplayMention = {
+  start: number;
+  end: number;
+  senderId: string;
+  fallbackLabel?: string;
+};
+
 export type ChannelMentionAdapter = {
+  /** Return ordered, non-overlapping native ranges using canonical sender IDs. */
+  readDisplayMentions?: (text: string) => readonly ChannelDisplayMention[];
   stripRegexes?: (params: {
     ctx: MsgContext;
     cfg: OpenClawConfig | undefined;
@@ -635,10 +627,16 @@ export type ChannelMessagingAdapter = {
     };
     replyToId?: string | null;
     threadId?: string | number | null;
+    /** Revalidates transport authority before new route-discovery network requests. */
+    assertDirectAdapterHandoff?: () => void;
   }) => ChannelOutboundSessionRoute | Promise<ChannelOutboundSessionRoute | null> | null;
 };
 
 export type ChannelAgentPromptAdapter = {
+  /** Native controls that can present and resolve structured user questions. */
+  questionInputMode?: "buttons";
+  /** The channel supplies its own inline-button guidance through messageToolHints. */
+  customInlineButtonHint?: boolean;
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
   messageToolCapabilities?: (
     params: Parameters<NonNullable<ChannelAgentPromptAdapter["messageToolHints"]>>[0],
@@ -718,6 +716,11 @@ export type ChannelMessageActionContext = {
   onPlatformSendDispatch?: () => Promise<void>;
   /** Revalidate the same owner synchronously after waits and immediately before platform I/O. */
   assertDirectAdapterHandoff?: () => void;
+  /**
+   * Host-owned cancellation for the originating invocation. Plugins may drop
+   * work that was never issued; platform I/O already dispatched settles normally.
+   */
+  abortSignal?: AbortSignal;
   /** Ephemeral-authority sends must not enter replayable recovery. */
   skipQueue?: boolean;
 };
@@ -856,6 +859,7 @@ export type ChannelPollContext = Pick<
   | "silent"
   | "isAnonymous"
   | "gatewayClientScopes"
+  | "signal"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"
 > & {

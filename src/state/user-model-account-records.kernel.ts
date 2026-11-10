@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { parseUserModelAuthProfileId } from "./user-model-account-id.js";
@@ -16,7 +16,7 @@ export function invalidUserModelAccounts(): Error {
 }
 
 export function readUserModelAccountRecord(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: string,
   name: UserModelAccountRecordName,
 ): string | undefined {
@@ -47,15 +47,10 @@ export function userModelAccountRecordValue(row: {
   return row.value;
 }
 
-/** Read only selected records through their current one-hop owners, preserving selection order. */
-export function readSelectedUserModelAccountRecords(
-  db: DatabaseSync,
-  profileIds: readonly string[],
+function readUserModelAccountRecords(
+  db: EngineConnection,
+  selected: readonly { owner: string; name: UserModelAccountRecordName }[],
 ) {
-  const selected = [...new Set(profileIds)].flatMap((id) => {
-    const locator = parseUserModelAuthProfileId(id);
-    return locator ? [{ id, owner: locator.ownerProfileId }] : [];
-  });
   if (
     selected.length === 0 ||
     !tableExists(db, "user_profiles") ||
@@ -63,7 +58,7 @@ export function readSelectedUserModelAccountRecords(
   ) {
     return [];
   }
-  const rows = executeSqliteQuerySync(
+  return executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<UserProfilesDatabase & Pick<DB, "secret_store_entries">>(db)
       .selectFrom("user_profiles as source")
@@ -100,12 +95,35 @@ export function readSelectedUserModelAccountRecords(
       )
       .where((eb) =>
         eb.or(
-          selected.map(({ id, owner }) =>
-            eb.and([eb("source.id", "=", owner), eb("name", "=", `model-account:${id}`)]),
+          selected.map(({ owner, name }) =>
+            eb.and([eb("source.id", "=", owner), eb("name", "=", name)]),
           ),
         ),
       ),
   ).rows;
+}
+
+export function readUserModelAccountLinksRecord(
+  db: EngineConnection,
+  profileId: string,
+): string | undefined {
+  const row = readUserModelAccountRecords(db, [{ owner: profileId, name: "model-accounts" }])[0];
+  return row ? userModelAccountRecordValue(row) : undefined;
+}
+
+/** Read only selected records through their current one-hop owners, preserving selection order. */
+export function readSelectedUserModelAccountRecords(
+  db: EngineConnection,
+  profileIds: readonly string[],
+) {
+  const selected = [...new Set(profileIds)].flatMap((id) => {
+    const locator = parseUserModelAuthProfileId(id);
+    return locator ? [{ id, owner: locator.ownerProfileId }] : [];
+  });
+  const rows = readUserModelAccountRecords(
+    db,
+    selected.map(({ id, owner }) => ({ owner, name: `model-account:${id}` })),
+  );
   const records = new Map(rows.map((row) => [row.name, row]));
   return selected.flatMap(({ id }) => {
     const row = records.get(`model-account:${id}`);

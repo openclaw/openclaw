@@ -23,7 +23,7 @@ function createCli(callGateway: typeof callGatewayFromCli) {
     program,
     resolveGatewayTimeoutMs: () => 1_000,
   });
-  return program;
+  return (...args: string[]) => program.parseAsync(["testmeetings", ...args], { from: "user" });
 }
 
 describe("meeting plugin CLI options", () => {
@@ -32,44 +32,47 @@ describe("meeting plugin CLI options", () => {
     vi.restoreAllMocks();
   });
 
-  it("rejects misspelled setup modes and transports before gateway dispatch", async () => {
+  it.each([
+    ["setup", "--mode", "agnt", "mode must be agent, bidi, or transcribe; received agnt"],
+    [
+      "setup",
+      "--transport",
+      "invalid",
+      "transport must be chrome or chrome-node; received invalid",
+    ],
+    ["join", "--mode", "", "mode must be agent, bidi, or transcribe; received "],
+    ["join", "--transport", "", "transport must be chrome or chrome-node; received "],
+    ["test-listen", "--timeout-ms", "", "timeout-ms must be a positive integer"],
+  ])("rejects %s %s '%s' before dispatch", async (command, option, value, error) => {
     const callGateway = vi.fn();
-    const cli = createCli(callGateway as unknown as typeof callGatewayFromCli);
-
-    await expect(
-      cli.parseAsync(["testmeetings", "setup", "--mode", "agnt"], { from: "user" }),
-    ).rejects.toThrow("mode must be agent, bidi, or transcribe; received agnt");
-    await expect(
-      cli.parseAsync(["testmeetings", "setup", "--transport", "definitely-not-a-transport"], {
-        from: "user",
-      }),
-    ).rejects.toThrow(
-      "transport must be chrome or chrome-node; received definitely-not-a-transport",
-    );
+    const args = command === "setup" ? [] : ["https://meet.example.test/room"];
+    await expect(createCli(callGateway)(command, ...args, option, value)).rejects.toThrow(error);
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("rejects an explicitly empty timeout before gateway dispatch", async () => {
-    const callGateway = vi.fn();
-    const cli = createCli(callGateway as unknown as typeof callGatewayFromCli);
-
-    await expect(
-      cli.parseAsync(
-        ["testmeetings", "test-listen", "https://meet.example.test/room", "--timeout-ms", ""],
-        { from: "user" },
-      ),
-    ).rejects.toThrow("timeout-ms must be a positive integer");
-    expect(callGateway).not.toHaveBeenCalled();
+  it.each([
+    { options: [], enums: {} },
+    {
+      options: ["--mode", "transcribe", "--transport", "chrome-node"],
+      enums: { mode: "transcribe", transport: "chrome-node" },
+    },
+  ])("preserves omitted or valid enums ($options)", async ({ options, enums }) => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const callGateway = vi.fn(async () => ({ ok: true }));
+    await createCli(callGateway)("join", "https://meet.example.test/room", ...options);
+    expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+      "testmeetings.join",
+      { json: true, timeout: "1000" },
+      { url: "https://meet.example.test/room", ...enums },
+      { progress: false, scopes: ["operator.admin"] },
+    );
   });
 
   it("sets a failing process exit code for unhealthy setup status", async () => {
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const callGateway = vi.fn(async () => ({ ok: false, checks: [] }));
 
-    await createCli(callGateway as unknown as typeof callGatewayFromCli).parseAsync(
-      ["testmeetings", "setup"],
-      { from: "user" },
-    );
+    await createCli(callGateway)("setup");
 
     expect(callGateway).toHaveBeenCalledOnce();
     expect(process.exitCode).toBe(1);

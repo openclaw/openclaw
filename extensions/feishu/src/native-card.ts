@@ -1,4 +1,3 @@
-// Feishu native interactive card helpers shared by action and outbound delivery.
 import {
   isRecord,
   normalizeOptionalLowercaseString,

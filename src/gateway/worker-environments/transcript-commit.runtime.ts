@@ -9,11 +9,9 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { sanitizeTranscriptMessageForStorage } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
-import { withTranscriptWriteTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-write-snapshot.js";
 import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import { restoreSessionColdTranscript } from "../../config/sessions/session-cold-storage.js";
-import { captureIncognitoSessionOperation } from "../../config/sessions/session-incognito-binding.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
@@ -28,7 +26,6 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
@@ -48,10 +45,6 @@ import type {
   WorkerTranscriptCommitApplication,
   WorkerTranscriptCommitterOptions,
 } from "./transcript-commit.js";
-import {
-  applyPreparedTranscriptCommit,
-  prepareTranscriptCommit,
-} from "./transcript-commit.kernel.js";
 import type {
   ApplyTranscriptCommitResult,
   CommittedAgentMessage,
@@ -64,6 +57,7 @@ const moduleUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.workerTransc
 
 async function applyWorkerTranscriptCommit(params: {
   assertCurrent: () => undefined;
+  assertOwned: ReturnType<typeof captureOwnedTranscriptWriteAssertion>;
   config: OpenClawConfig;
   identity: WorkerConnectionIdentity;
   messages: readonly CommittedAgentMessage[];
@@ -81,14 +75,9 @@ async function applyWorkerTranscriptCommit(params: {
     expectedLifecycleRevision: params.target.expectedLifecycleRevision,
     expectedWriterRunId: params.target.expectedWriterRunId,
   });
-  const options = toDatabaseOptions(resolveSqliteTranscriptScope(target));
-  const incognito = getSessionActorStorageBinding(target)
-    ? undefined
-    : captureIncognitoSessionOperation(target);
-  const assertOwned = captureOwnedTranscriptWriteAssertion(target);
   const assertCurrent = () => {
     params.assertCurrent();
-    assertOwned();
+    params.assertOwned();
   };
   assertCurrent();
   const normalizedMessages = params.messages.map((message) =>
@@ -101,6 +90,7 @@ async function applyWorkerTranscriptCommit(params: {
     lifecycleRevision: target.expectedLifecycleRevision,
     requestedBaseLeafId: params.requestedBaseLeafId,
     recoverPersistedBatch: params.recoverPersistedBatch,
+    runId: params.runId,
     cwd: process.cwd(),
   };
   const prepareFresh = (recoveredCount: number) => {
@@ -144,69 +134,8 @@ async function applyWorkerTranscriptCommit(params: {
     const committed = readSessionActorStorageResult(outcome);
     applied = committed.result;
     memoryOutcome = committed.outcome;
-  } else if (incognito) {
-    const preparedMessages = prepareFresh(0);
-    if (!preparedMessages) {
-      return { ok: false, reason: "invalid-batch" };
-    }
-    const { scope: _scope, ...batch } = input;
-    const committed = await incognito.actor.sessions.transcript(
-      {
-        assertCurrent: () => {
-          incognito.authority.assertCurrent();
-          assertCurrent();
-        },
-      },
-      {
-        type: "session.workerTranscript.commit",
-        input: {
-          sessionKey: target.sessionKey,
-          sessionId: target.sessionId,
-          fence: {
-            expectedLifecycleRevision: target.expectedLifecycleRevision,
-            expectedWriterRunId: target.expectedWriterRunId,
-            expectedOwner: target.expectedOwner,
-          },
-          batch,
-          preparedMessages,
-        },
-      },
-      incognito.admissionSignal,
-      undefined,
-      ({ projectionNeedsReconcile }) => {
-        if (projectionNeedsReconcile) {
-          startSessionTranscriptIndexReconcile({
-            ...options,
-            preferredSessionId: target.sessionId,
-          });
-        }
-      },
-    );
-    applied = committed.result;
-  } else if (isIncognitoSessionKey(target.sessionKey)) {
-    // Incognito retains its process-held database until the worker-owned cutover.
-    let projectionNeedsReconcile = false;
-    applied = await withTranscriptWriteTransaction(target, (): ApplyTranscriptCommitResult => {
-      assertCurrent();
-      const nativeInput = { ...input, scope: target };
-      const plan = prepareTranscriptCommit(nativeInput);
-      if (!plan.result.ok || plan.result.messages.length === input.messages.length) {
-        return plan.result;
-      }
-      const messages = prepareFresh(plan.result.messages.length);
-      if (!messages) {
-        return { ok: false, reason: "invalid-batch" };
-      }
-      const result = applyPreparedTranscriptCommit(nativeInput, plan, messages, () => {
-        projectionNeedsReconcile = true;
-      });
-      assertCurrent();
-      return result;
-    });
-    if (projectionNeedsReconcile) {
-      startSessionTranscriptIndexReconcile({ ...options, preferredSessionId: target.sessionId });
-    }
   } else {
+    const options = toDatabaseOptions(resolveSqliteTranscriptScope(target));
     await restoreSessionColdTranscript(target, assertCurrent);
     assertCurrent();
     const execution = captureOpenClawAgentDatabaseExecution(options);
@@ -246,6 +175,7 @@ async function applyWorkerTranscriptCommit(params: {
             databaseIdentity: databaseIdentity.physicalIdentity,
             sessionKey: target.sessionKey,
             entry: committed.entry,
+            fullEntry: committed.entry,
           });
         }
         if (committed.projectionNeedsReconcile) {
@@ -290,10 +220,19 @@ async function applyWorkerTranscriptCommit(params: {
     }
     applied = outcome.value;
   }
-  if (!applied.ok) {
-    return { ...applied, ...(memoryOutcome ? { memoryOutcome } : {}) };
-  }
+  return { ...applied, ...(memoryOutcome ? { memoryOutcome } : {}) };
+}
 
+async function publishWorkerTranscriptCommit(
+  applied: ApplyTranscriptCommitResult,
+  params: Pick<
+    Parameters<typeof applyWorkerTranscriptCommit>[0],
+    "assertCurrent" | "assertOwned" | "assistantItemIds" | "runId" | "target"
+  >,
+): Promise<void> {
+  if (!applied.ok) {
+    return;
+  }
   for (const message of applied.messages) {
     const itemId =
       message.message.role === "assistant"
@@ -305,7 +244,8 @@ async function applyWorkerTranscriptCommit(params: {
       continue;
     }
     const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
-    assertCurrent();
+    params.assertCurrent();
+    params.assertOwned();
     await publishTranscriptUpdate(params.target, {
       lifecycleRevision: applied.lifecycleRevision,
       message: message.message,
@@ -315,7 +255,6 @@ async function applyWorkerTranscriptCommit(params: {
       ...(runId ? { runId } : {}),
     });
   }
-  return { ...applied, ...(memoryOutcome ? { memoryOutcome } : {}) };
 }
 
 export async function commitWorkerTranscript(
@@ -339,6 +278,7 @@ export async function commitWorkerTranscript(
     expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision,
     expectedWriterRunId: params.sessionTarget.expectedWriterRunId,
   });
+  const assertOwned = captureOwnedTranscriptWriteAssertion(target);
   const assistantItemIds = new Map<string, string>();
   // Correlation belongs to the commit receipt, never stored or provider-visible content.
   const messages = params.request.messages.map((message, index) => {
@@ -354,34 +294,46 @@ export async function commitWorkerTranscript(
     }
     return { ...structuredClone(message), idempotencyKey };
   });
-  const requestedBaseLeafId = params.request.baseLeafId;
+  const application = {
+    assertCurrent: params.assertCurrent,
+    assertOwned,
+    config,
+    identity: params.identity,
+    messages,
+    assistantItemIds,
+    requestedBaseLeafId: params.request.baseLeafId,
+    runId: params.identity.runId,
+    target,
+  };
   if (getSessionActorStorageBinding(target)) {
     const applied = await applyWorkerTranscriptCommit({
-      assertCurrent: params.assertCurrent,
-      config,
-      identity: params.identity,
-      messages,
-      assistantItemIds,
+      ...application,
       recoverPersistedBatch: false,
       memoryReceipt: input,
-      requestedBaseLeafId,
-      runId: params.identity.runId,
-      target,
     });
-    if (!applied.memoryOutcome) {
-      throw new Error("Memory transcript commit omitted its batch receipt");
+    try {
+      if (!applied.memoryOutcome) {
+        throw new Error("Memory transcript commit omitted its batch receipt");
+      }
+      await params.onCommitted?.(applied.memoryOutcome);
+      return applied.memoryOutcome;
+    } finally {
+      await publishWorkerTranscriptCommit(applied, application);
     }
-    return applied.memoryOutcome;
   }
   if (!store) {
     throw new Error("Durable transcript commit requires its ledger");
   }
-  const complete = (outcome: WorkerTranscriptCommitOutcome) =>
-    store.complete({ ...input, outcome }, params.assertCurrent);
+  const complete = async (outcome: WorkerTranscriptCommitOutcome) => {
+    const committed = await store.complete({ ...input, outcome }, params.assertCurrent);
+    await params.onCommitted?.(committed);
+    return committed;
+  };
   params.assertCurrent();
   const started = await store.begin(input, params.assertCurrent);
   if (started.kind === "replay") {
     params.assertCurrent();
+    await params.onCommitted?.(started.outcome);
     return started.outcome;
   }
   if (started.kind === "rejected") {
@@ -393,6 +345,7 @@ export async function commitWorkerTranscript(
   let applied: ApplyTranscriptCommitResult;
   try {
     applied = await applyWorkerTranscriptCommit({
+      ...application,
       assertCurrent: () => {
         try {
           params.assertCurrent();
@@ -401,14 +354,7 @@ export async function commitWorkerTranscript(
           throw error;
         }
       },
-      config,
-      identity: params.identity,
-      messages,
-      assistantItemIds,
       recoverPersistedBatch: started.kind === "recover",
-      requestedBaseLeafId,
-      runId: params.identity.runId,
-      target,
     });
   } catch (error) {
     // A callback refusal has rolled back the agent transaction. Free only
@@ -418,13 +364,18 @@ export async function commitWorkerTranscript(
     }
     throw error;
   }
-  if (!applied.ok) {
-    return await complete({ ok: false, reason: applied.reason });
+  try {
+    if (!applied.ok) {
+      return await complete({ ok: false, reason: applied.reason });
+    }
+    const entryIds = applied.messages.map((message) => message.messageId);
+    const newLeafId = entryIds.at(-1);
+    if (entryIds.length !== messages.length || !newLeafId) {
+      return await complete({ ok: false, reason: "invalid-batch" });
+    }
+    return await complete({ ok: true, result: { entryIds, newLeafId } });
+  } finally {
+    // Publication can replace the claim, and still runs if replay bookkeeping fails.
+    await publishWorkerTranscriptCommit(applied, application);
   }
-  const entryIds = applied.messages.map((message) => message.messageId);
-  const newLeafId = entryIds.at(-1);
-  if (entryIds.length !== messages.length || !newLeafId) {
-    return await complete({ ok: false, reason: "invalid-batch" });
-  }
-  return await complete({ ok: true, result: { entryIds, newLeafId } });
 }

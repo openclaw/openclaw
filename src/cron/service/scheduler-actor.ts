@@ -15,33 +15,87 @@ import {
   type OpenClawStateWorkerLease,
 } from "../../state/openclaw-state-worker-store.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
-import { noteCronJobsStoreCommit } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
-import type { CronSchedulerResult } from "../store/scheduler-actor.types.js";
+import { getCronJobsStoreRevision } from "../store.js";
+import type {
+  CronSchedulerOperations,
+  CronSchedulerResult,
+} from "../store/scheduler-actor.types.js";
+import { locked } from "./locked.js";
 import { registerCronSchedulerRefresh } from "./run-queue-wake.js";
-import { adoptCronRunRequests, drainCronRunQueue } from "./run-queue.js";
+import {
+  adoptCronRunRequests,
+  getCronRunQueueRequests,
+  launchCronRunQueueResult,
+} from "./run-queue.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { captureCronSchedulerSnapshot } from "./scheduler-config.js";
 import { runCronSchedulerMaintenance } from "./scheduler-maintenance.js";
 import { emit, type CronServiceState } from "./state.js";
-import { runPostPersistCronNotifications } from "./store.js";
+import { noteLoadedCronStoreCommit, runPostPersistCronNotifications } from "./store.js";
 
 type ActorConnection = {
-  lease: OpenClawStateWorkerLease;
+  lease?: OpenClawStateWorkerLease;
+  borrowedLease?: OpenClawStateWorkerLease;
+  acquireLease: () => OpenClawStateWorkerLease;
   channel: BroadcastChannel;
   channelName: string;
   unsubscribe: () => void;
   unregister: () => void;
   releaseRefresh: () => void;
   pending: Promise<void>;
+  refreshAfter?: Promise<unknown>;
 };
 
 const connections = new WeakMap<CronServiceState, ActorConnection>();
 
-async function publish(state: CronServiceState, result: CronSchedulerResult): Promise<void> {
+function executeScheduler(
+  state: CronServiceState,
+  connection: ActorConnection,
+  command: {
+    type: "cron.schedulerStart" | "cron.schedulerRefresh";
+    input: CronSchedulerOperations["cron.schedulerStart"]["input"];
+  },
+): Promise<CronSchedulerResult> {
+  if (connection.lease) {
+    return connection.lease.execute(command);
+  }
+  // Disabled scheduling needs reconciliation, but no timer that pins the native actor.
+  // Serialize each borrow through Stop so one finalizer cannot remove its successor.
+  const pending = connection.pending
+    .catch(() => {})
+    .then(async () => {
+      if (connections.get(state) !== connection || state.stopped) {
+        throw new Error("Cron scheduler is closed");
+      }
+      const lease = connection.acquireLease();
+      connection.borrowedLease = lease;
+      try {
+        // A prior borrow may have retired the actor. With automatic runs disabled,
+        // Start performs the same snapshot/settlement work as Refresh without catch-up.
+        return await lease.execute({ type: "cron.schedulerStart", input: command.input });
+      } finally {
+        try {
+          await lease.release();
+        } finally {
+          connection.borrowedLease = undefined;
+        }
+      }
+    });
+  connection.pending = pending.then(
+    () => {},
+    () => {},
+  );
+  return pending;
+}
+
+async function publish(
+  state: CronServiceState,
+  result: CronSchedulerResult,
+  observedRevision: number,
+): Promise<number> {
   if (result.jobs.length > 0) {
-    noteCronJobsStoreCommit(cronStoreKey(state.deps.storePath));
     applyCronRuntimeRowsToState(state, result.jobs);
+    noteLoadedCronStoreCommit(state, observedRevision);
   }
   for (const log of result.logs) {
     state.deps.log[log.level](log.fields, log.message);
@@ -59,7 +113,9 @@ async function publish(state: CronServiceState, result: CronSchedulerResult): Pr
       nextRunAtMs: job.state.nextRunAtMs,
     });
   }
+  const publishedRevision = getCronJobsStoreRevision(state.deps.storeKey);
   await runPostPersistCronNotifications(state, result.notifications);
+  return publishedRevision;
 }
 
 export async function startCronScheduler(
@@ -71,15 +127,18 @@ export async function startCronScheduler(
   }
   const channelName = `openclaw.cron.${randomUUID()}`;
   const generation = state.lifecycleGeneration;
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   const channel = new BroadcastChannel(channelName);
   channel.unref();
   const context = captureOpenClawStateWorkerContext();
-  const lease = createOpenClawStateWorkerLease(context, async (scope) => {
-    await scope.execute({ type: "cron.schedulerStop", input: { storeKey, channelName } });
-  });
+  const acquireLease = () =>
+    createOpenClawStateWorkerLease(context, async (scope) => {
+      await scope.execute({ type: "cron.schedulerStop", input: { storeKey, channelName } });
+    });
+  const lease = state.deps.cronEnabled ? acquireLease() : undefined;
   const connection: ActorConnection = {
     lease,
+    acquireLease,
     channel,
     channelName,
     unsubscribe: () => {},
@@ -124,8 +183,9 @@ export async function startCronScheduler(
   });
   let started = false;
   try {
-    await lease.ready;
-    const result = await lease.execute({
+    await lease?.ready;
+    const observedRevision = getCronJobsStoreRevision(storeKey);
+    const result = await executeScheduler(state, connection, {
       type: "cron.schedulerStart",
       input: {
         storeKey,
@@ -135,6 +195,9 @@ export async function startCronScheduler(
         monotonicMs: performance.now(),
         skipJobIds: [...skipJobIds],
         deferAgentWork: true,
+        liveSinceMs: state.liveSinceMs,
+        paused: state.schedulingPaused,
+        requests: getCronRunQueueRequests(state),
       },
     });
     const requests = adoptCronRunRequests(
@@ -146,9 +209,17 @@ export async function startCronScheduler(
     );
     started = true;
     state.schedulerStarted = true;
-    await publish(state, result);
-    await drainCronRunQueue(state);
-    const completed = await Promise.allSettled(requests.map((request) => request.completion));
+    const publishedRevision = await publish(state, result, observedRevision);
+    await locked(state, () => launchCronRunQueueResult(state, result, context, publishedRevision));
+    // Readiness observers keep queued custody without holding Gateway initialization.
+    const preparingReceiptIds = new Set(
+      result.preparing.map(({ runReceipt }) => runReceipt.receiptId),
+    );
+    const completed = await Promise.allSettled(
+      requests
+        .filter((request) => !preparingReceiptIds.has(request.runReceipt.receiptId))
+        .map((request) => request.completion),
+    );
     const failed = completed.find((completion) => completion.status === "rejected");
     if (failed?.status === "rejected") {
       throw failed.reason;
@@ -164,7 +235,7 @@ export async function startCronScheduler(
 /** The worker decides which slots are due; the host only launches committed requests. */
 function tickCronScheduler(state: CronServiceState): Promise<void> {
   const connection = connections.get(state);
-  if (!connection || state.stopped || state.schedulingPaused) {
+  if (!connection?.lease || state.stopped || state.schedulingPaused) {
     return Promise.resolve();
   }
   const tick = connection.pending
@@ -178,7 +249,8 @@ async function runCronSchedulerTick(
   state: CronServiceState,
   connection: ActorConnection,
 ): Promise<void> {
-  if (connections.get(state) !== connection || state.stopped || state.schedulingPaused) {
+  const lease = connection.lease;
+  if (!lease || connections.get(state) !== connection || state.stopped || state.schedulingPaused) {
     return;
   }
   const generation = state.lifecycleGeneration;
@@ -203,20 +275,24 @@ async function runCronSchedulerTick(
         return;
       }
       await runCronSchedulerMaintenance(state);
-      const result = await connection.lease.execute({
+      const observedRevision = getCronJobsStoreRevision(state.deps.storeKey);
+      const result = await lease.execute({
         type: "cron.schedulerTick",
         input: {
-          storeKey: cronStoreKey(state.deps.storePath),
+          storeKey: state.deps.storeKey,
           channelName: connection.channelName,
           paused: false,
+          requests: getCronRunQueueRequests(state),
           snapshot: await captureCronSchedulerSnapshot(state),
           nowMs: state.deps.nowMs(),
           monotonicMs: performance.now(),
         },
       });
       adoptCronRunRequests(state, result.accepted, { source: "scheduled" }, undefined, generation);
-      await publish(state, result);
-      await drainCronRunQueue(state);
+      const publishedRevision = await publish(state, result, observedRevision);
+      await locked(state, () =>
+        launchCronRunQueueResult(state, result, undefined, publishedRevision),
+      );
     });
   } finally {
     admission.release();
@@ -229,24 +305,35 @@ export function refreshCronScheduler(state: CronServiceState): void {
   if (!connection || state.stopped) {
     return;
   }
-  void state.op
+  const operation = state.op;
+  if (connection.refreshAfter === operation) {
+    return;
+  }
+  connection.refreshAfter = operation;
+  void operation
     .then(async () => {
+      // Share only notifications before capture, behind this same mutation boundary.
+      if (connection.refreshAfter === operation) {
+        connection.refreshAfter = undefined;
+      }
       if (connections.get(state) !== connection || state.stopped) {
         return;
       }
       const snapshot = await captureCronSchedulerSnapshot(state);
+      const observedRevision = getCronJobsStoreRevision(state.deps.storeKey);
       await publish(
         state,
-        await connection.lease.execute({
+        await executeScheduler(state, connection, {
           type: "cron.schedulerRefresh",
           input: {
-            storeKey: cronStoreKey(state.deps.storePath),
+            storeKey: state.deps.storeKey,
             snapshot,
             channelName: connection.channelName,
             paused: state.schedulingPaused,
             nowMs: state.deps.nowMs(),
           },
         }),
+        observedRevision,
       );
     })
     .catch((error: unknown) => {
@@ -271,7 +358,10 @@ async function closeConnection(
   connection.unsubscribe();
   connection.channel.close();
   connection.releaseRefresh();
+  if (retired) {
+    await connection.borrowedLease?.retire();
+  }
   await connection.pending.catch(() => {});
-  await (retired ? connection.lease.retire() : connection.lease.release());
+  await (retired ? connection.lease?.retire() : connection.lease?.release());
   connection.unregister();
 }

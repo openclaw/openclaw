@@ -1,25 +1,23 @@
+import { listen } from "./reactive/listener.ts";
+
 type ReadErrorMessage = string | (() => string);
 
-export function readBlobAsDataUrl(
-  blob: Blob,
-  {
-    readError = "Blob read failed",
-    invalidResultError = "Blob read returned no data",
-  }: { readError?: ReadErrorMessage; invalidResultError?: ReadErrorMessage } = {},
-): Promise<string> {
-  const error = (message: ReadErrorMessage) =>
-    new Error(typeof message === "function" ? message() : message);
+export function readBlobAsDataUrl(blob: Blob, errorMessage?: ReadErrorMessage): Promise<string> {
+  const error = (fallback: string) =>
+    new Error(typeof errorMessage === "function" ? errorMessage() : (errorMessage ?? fallback));
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.addEventListener("error", () => reject(reader.error ?? error(readError)), {
+    // The private reader owns these one-shot handlers for its single read.
+    listen(reader, "error", () => reject(reader.error ?? error("Blob read failed")), {
       once: true,
     });
-    reader.addEventListener(
+    listen(
+      reader,
       "load",
       () =>
         typeof reader.result === "string"
           ? resolve(reader.result)
-          : reject(error(invalidResultError)),
+          : reject(error("Blob read returned no data")),
       { once: true },
     );
     reader.readAsDataURL(blob);

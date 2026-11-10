@@ -1,5 +1,4 @@
 import type { Static, TSchema } from "typebox";
-// Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { ApprovalChannelReviewerSchema, ApprovalScopeSchema } from "./approvals.js";
 import { closedObject } from "./closed-object.js";
@@ -79,7 +78,7 @@ export const PluginApprovalRequestParamsSchema = closedObject({
     nullableMetadata(
       Type.Array(NonEmptyString, {
         description:
-          "Trusted approval-runtime metadata naming operator devices that may review this approval; ordinary Gateway clients may send the field, but the Gateway only binds it for internal approval-runtime requests.",
+          "Trusted runtime metadata naming operator devices that may review this approval; ordinary Gateway clients may send the field, but the Gateway only binds it for host-authorized requests.",
       }),
     ),
   ),

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { buildItems } from "./chat-thread.test-support.ts";
 
 const notice = {
@@ -21,35 +22,67 @@ const notice = {
 };
 
 describe("model fallback transcript dividers", () => {
-  it.each([false, true])(
-    "renders a durable switch as a divider after history reload=%s",
-    (reload) => {
-      const source = reload ? structuredClone(notice) : notice;
-      const history = [
-        { role: "user", content: "Continue the work", timestamp: 1000 },
-        source,
-        { role: "assistant", content: "The work continued", timestamp: 3000 },
-      ];
-      const items = buildItems({ messages: history });
-      expect(items.filter((item) => item.kind === "divider")).toEqual([
-        expect.objectContaining({
-          label: "Model fallback: primary/model-a → secondary/model-b",
-          description: "Reason: empty response",
-          timestamp: 2000,
-        }),
-      ]);
-      expect(
-        items.some(
-          (item) =>
-            item.kind === "group" && item.messages.some(({ message }) => message === history[1]),
-        ),
-      ).toBe(false);
-      expect(items.filter((item) => item.kind === "group")).toHaveLength(2);
-      expect(source).toEqual(notice);
-    },
-  );
+  it.each([false, true])("keeps one status surface with a separate answer=%s", (separateAnswer) => {
+    const answer = { type: "text", text: "The work continued." };
+    const media = { type: "image", url: "https://example.com/synthetic.png" };
+    const status = {
+      role: "assistant",
+      text: "A transport-specific status notice.",
+      content: [
+        {
+          type: "text",
+          text: "A transport-specific status notice.",
+          openclawStatusNotice: true,
+          openclawFallback: true,
+        },
+        ...(!separateAnswer ? [answer, media] : []),
+      ],
+      timestamp: 2500,
+      __openclaw: { id: "status-1", replyToId: "input-1" },
+    };
+    const messages = [
+      notice,
+      status,
+      ...(separateAnswer ? [{ role: "assistant", content: [answer, media], timestamp: 3000 }] : []),
+    ];
+    const before = structuredClone(messages);
+    const items = buildItems({ messages });
+    expect(items.filter((item) => item.kind === "divider")).toHaveLength(1);
+    const rendered = items.flatMap((item) =>
+      item.kind === "group" ? item.messages.map(({ message }) => message) : [],
+    );
+    expect(rendered).toHaveLength(1);
+    expect(normalizeMessage(rendered[0]).content).toMatchObject([answer, { type: "image" }]);
+    expect(rendered[0]).toBe(separateAnswer ? messages[2] : status);
+    expect(messages).toEqual(before);
+  });
 
-  it.each([false, true])("renders a successful return after history reload=%s", (reload) => {
+  it("renders a durable switch as a divider", () => {
+    const source = structuredClone(notice);
+    const history = [
+      { role: "user", content: "Continue the work", timestamp: 1000 },
+      source,
+      { role: "assistant", content: "The work continued", timestamp: 3000 },
+    ];
+    const items = buildItems({ messages: history });
+    expect(items.filter((item) => item.kind === "divider")).toEqual([
+      expect.objectContaining({
+        label: "Model fallback: primary/model-a → secondary/model-b",
+        description: "Reason: empty response",
+        timestamp: 2000,
+      }),
+    ]);
+    expect(
+      items.some(
+        (item) =>
+          item.kind === "group" && item.messages.some(({ message }) => message === history[1]),
+      ),
+    ).toBe(false);
+    expect(items.filter((item) => item.kind === "group")).toHaveLength(2);
+    expect(source).toEqual(notice);
+  });
+
+  it("renders a successful return", () => {
     const restored = {
       ...notice,
       timestamp: 4000,
@@ -63,7 +96,7 @@ describe("model fallback transcript dividers", () => {
       },
     };
     const history = [notice, restored];
-    const items = buildItems({ messages: reload ? structuredClone(history) : history });
+    const items = buildItems({ messages: structuredClone(history) });
     expect(items.filter((item) => item.kind === "divider")).toEqual([
       expect.objectContaining({ label: "Model fallback: primary/model-a → secondary/model-b" }),
       expect.objectContaining({

@@ -1,11 +1,22 @@
-import { createSignal, onCleanup } from "@solidjs/signals";
-import { For, Show } from "solid-js";
+import { createSignal } from "@solidjs/signals";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
   SettingKey,
 } from "../../app/native-device-settings.ts";
+import { NativeChromeSetup } from "../../components/native-chrome-setup.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -16,25 +27,18 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import "../../components/native-chrome-setup.ts";
+import { LaunchAtLoginSetting } from "./launch-at-login-setting.tsx";
 import "./device.css";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-native-chrome-setup": HTMLAttributes<HTMLElement>;
-    }
-  }
-}
 
 registerEnglishCatalog(registerAppsEnglish);
 registerEnglishCatalog(registerSettingsEnglish);
@@ -71,17 +75,18 @@ function settleCookieSyncEdit(
   }
 }
 
-function DevicePageContent() {
+export function DevicePage() {
   const capability = useApplication().nativeDeviceSettings;
   const projection = capability ? projectNativeDeviceSettings(capability) : null;
   const snapshot = () => projection?.read();
   const [newDomain, setNewDomain] = createSignal("");
   const [editRevision, setEditRevision] = createSignal(0);
-  const [gatewayHostingEdit, setGatewayHostingEdit] = createSignal<{
-    pending: boolean;
-    error?: Error;
-  } | null>(null);
-  let gatewayHostingRequest = 0;
+  const [gatewayHostingPending, setGatewayHostingPending] = createOptimistic(false);
+  const [gatewayHostingCompletion, setGatewayHostingCompletion] = createSignal<Promise<void>>();
+  const gatewayHostingResult = createMemo(
+    () => gatewayHostingCompletion()?.then(() => null) ?? null,
+  );
+  let finishGatewayHosting: (() => void) | undefined;
   let targetProfileTimer: ReturnType<typeof setTimeout> | null = null;
 
   const pendingEdits = () => {
@@ -90,9 +95,16 @@ function DevicePageContent() {
     return capability ? pendingCookieSyncEdits.get(capability) : undefined;
   };
   let disposed = false;
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
+    finishGatewayHosting?.();
     flushTargetProfile();
+  });
+  const presentGatewayHosting = action(function* (pending: Promise<void>) {
+    setGatewayHostingPending(true);
+    // The completion reader owns failures; this action only owns saving.
+    yield pending.catch(() => undefined);
+    finishGatewayHosting = undefined;
   });
   const invalidateEdits = () => {
     if (!disposed) {
@@ -109,7 +121,7 @@ function DevicePageContent() {
     const profile = pendingCookieSyncEdits.get(capability)?.targetProfile;
     if (profile && !profile.sent) {
       profile.sent = true;
-      capability.set("browser.cookieSync.targetProfile", profile.value, () => {
+      void capability.set("browser.cookieSync.targetProfile", profile.value, () => {
         settleCookieSyncEdit(capability, "targetProfile", profile);
         invalidateEdits();
       });
@@ -145,7 +157,7 @@ function DevicePageContent() {
     ];
     retainCookieSyncEdits(capability).domains = values;
     invalidateEdits();
-    capability.set("browser.cookieSync.domains", values, () => {
+    void capability.set("browser.cookieSync.domains", values, () => {
       settleCookieSyncEdit(capability, "domains", values);
       invalidateEdits();
     });
@@ -165,7 +177,7 @@ function DevicePageContent() {
           description={props.description}
           checked={props.checked ?? false}
           disabled={props.disabled}
-          onChange={(value) => capability?.set(props.setting, value)}
+          onChange={(value) => void capability?.set(props.setting, value)}
         />
       </Show>
     );
@@ -184,31 +196,23 @@ function DevicePageContent() {
         title={title()}
         description={props.description}
         control={
-          <select
-            class="settings-select"
+          <SettingsSelect
             aria-label={title()}
             ref={liveValue(() => props.value)}
+            value={props.value}
+            options={props.options.map((option) => ({
+              value: option.id,
+              label: option.name,
+              disabled: option.disabled,
+            }))}
             disabled={props.disabled}
-            onChange={(event) => capability?.set(props.setting, event.currentTarget.value)}
-          >
-            <For each={props.options} keyed={(option) => option.id}>
-              {(_option, index) => (
-                <option
-                  value={props.options[index()]!.id}
-                  selected={props.options[index()]!.id === props.value}
-                  disabled={props.options[index()]!.disabled}
-                >
-                  {props.options[index()]!.name}
-                </option>
-              )}
-            </For>
-          </select>
+            onChange={(event) => void capability?.set(props.setting, event.currentTarget.value)}
+          />
         }
       />
     );
   }
   function GatewayHosting(props: { app: NonNullable<NativeDeviceSettingsSnapshot["app"]> }) {
-    const edit = gatewayHostingEdit;
     return (
       <Show when={props.app.keepGatewayRunning !== undefined && capability}>
         <SettingsToggleRow
@@ -216,31 +220,39 @@ function DevicePageContent() {
           description={
             <>
               {t("configPage.deviceSettings.keepGatewayRunningHint")}
-              <Show when={edit()?.error}>
-                {(error) => (
-                  <>
-                    <br />
-                    <span role="alert">
-                      {t("configPage.deviceSettings.keepGatewayRunningFailed")} {error().message}
-                    </span>
-                  </>
-                )}
-              </Show>
+              <Loading on={gatewayHostingCompletion()}>
+                <Errored
+                  fallback={(error) => (
+                    <>
+                      <br />
+                      <span role="alert">
+                        {t("configPage.deviceSettings.keepGatewayRunningFailed")}{" "}
+                        {formatUiError(error())}
+                      </span>
+                    </>
+                  )}
+                >
+                  {gatewayHostingResult()}
+                </Errored>
+              </Loading>
             </>
           }
           checked={props.app.keepGatewayRunning ?? false}
-          disabled={props.app.keepGatewayRunningAvailable !== true || edit()?.pending === true}
+          disabled={props.app.keepGatewayRunningAvailable !== true}
+          saving={gatewayHostingPending()}
           onChange={(value) => {
-            if (!capability) {
+            if (!capability || disposed || finishGatewayHosting) {
               return;
             }
-            const request = ++gatewayHostingRequest;
-            setGatewayHostingEdit({ pending: true });
-            capability.set("app.keepGatewayRunning", value, (error) => {
-              if (!disposed && gatewayHostingRequest === request) {
-                setGatewayHostingEdit({ pending: false, error });
-              }
+            const pending = Promise.withResolvers<void>();
+            // Navigation releases presentation without cancelling the native write.
+            finishGatewayHosting = () => pending.resolve();
+            void capability.set("app.keepGatewayRunning", value, (error) => {
+              return error ? pending.reject(error) : pending.resolve();
             });
+            void setGatewayHostingCompletion(pending.promise);
+            // Publish the new feedback receipt before joining the saving action.
+            void Promise.resolve().then(() => presentGatewayHosting(pending.promise));
           }}
         />
       </Show>
@@ -259,7 +271,7 @@ function DevicePageContent() {
             stacked
             control={
               <div class="device-extension-setup">
-                <openclaw-native-chrome-setup auto-inspect />
+                <NativeChromeSetup />
                 <div class="device-extension-setup__actions">
                   <a
                     href="https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig"
@@ -450,17 +462,7 @@ function DevicePageContent() {
               label="iconAnimations"
               description={t("configPage.deviceSettings.iconAnimationsHint")}
             />
-            <Toggle
-              setting="app.launchAtLogin"
-              checked={props.snapshot.app!.launchAtLogin}
-              label="launchAtLogin"
-              description={
-                props.snapshot.app!.launchAtLoginAvailable === false
-                  ? t("configPage.deviceSettings.launchAtLoginUnavailable")
-                  : undefined
-              }
-              disabled={props.snapshot.app!.launchAtLoginAvailable === false}
-            />
+            <LaunchAtLoginSetting app={props.snapshot.app!} />
             <GatewayHosting app={props.snapshot.app!} />
             <Toggle
               setting="app.quickChatEnabled"
@@ -660,7 +662,7 @@ function DevicePageContent() {
     );
   }
   return (
-    <>
+    <openclaw-device-page>
       <SettingsPageHeader
         title={t(deviceSettingsGroupLabelKey(snapshot()))}
         subtitle={
@@ -680,7 +682,11 @@ function DevicePageContent() {
         <SettingsPage>
           <Show
             when={capability}
-            fallback={<SettingsEmpty message={t("configPage.deviceSettings.appOnly")} />}
+            fallback={
+              <SettingsSection>
+                <SettingsUnavailable message={t("configPage.deviceSettings.appOnly")} />
+              </SettingsSection>
+            }
           >
             <Show
               when={Boolean(snapshot())}
@@ -691,10 +697,6 @@ function DevicePageContent() {
           </Show>
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-device-page>
   );
 }
-
-export const DevicePage = defineSolidBridge("openclaw-device-page", DevicePageContent, {
-  properties: {},
-});

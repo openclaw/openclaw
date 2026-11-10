@@ -14,6 +14,9 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { projectExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { Conversations } from "../state/openclaw-agent-db.generated.js";
@@ -21,7 +24,7 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
+import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
 
 const GENERAL_TOPIC_ID = "1";
 const LEGACY_GENERAL_TARGET = /^telegram:(-?\d+):topic:1$/u;
@@ -52,7 +55,7 @@ function canonicalIdentity(row: Conversations) {
   };
 }
 
-function listLegacyRows(database: import("node:sqlite").DatabaseSync): Conversations[] {
+function listLegacyRows(database: EngineConnection): Conversations[] {
   const db = getSessionKysely(database);
   return executeSqliteQuerySync(
     database,
@@ -85,24 +88,33 @@ function resolveRepairScopes(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
 }
 
 /** Finds stale General-topic rows without creating or migrating agent databases. */
-export function detectTelegramGeneralTopicConversationRepairs(params: {
+export async function detectTelegramGeneralTopicConversationRepairs(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }) {
   const env = params.env ?? process.env;
-  return resolveRepairScopes(params.cfg, env).flatMap(({ scope, storePath }) => {
+  const signal = resolveSqliteInspectionSignal();
+  const repairs: { agentId: string }[] = [];
+  for (const { scope, storePath } of resolveRepairScopes(params.cfg, env)) {
+    signal?.throwIfAborted();
     const databaseOptions = toDatabaseOptions(scope);
-    const inspected = runDoctorAgentDatabaseOperation({
+    const inspected = await runDoctorAgentDatabaseOperationAsync({
       agentId: scope.agentId,
       path: databaseOptions.path ?? storePath,
-      run: () =>
-        withOpenClawAgentDatabaseReadOnly(
+      run: async () => {
+        await prepareArtifactPreservingSqliteRead(databaseOptions.path ?? storePath, signal);
+        return withOpenClawAgentDatabaseReadOnly(
           (database) => listLegacyRows(database.db).map(() => ({ agentId: scope.agentId })),
           databaseOptions,
-        ),
+        );
+      },
     });
-    return inspected.ok && inspected.value.found ? inspected.value.value : [];
-  });
+    signal?.throwIfAborted();
+    if (inspected.ok && inspected.value.found) {
+      repairs.push(...inspected.value.value);
+    }
+  }
+  return repairs;
 }
 
 const roleRank = { related: 0, participant: 1, primary: 2 } as const;

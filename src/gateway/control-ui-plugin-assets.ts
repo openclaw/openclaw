@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   PluginControlUiActivation,
   PluginControlUiDiagnostic,
@@ -7,15 +8,21 @@ import type {
   PluginsControlUiCatalog,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readPluginControlUiAssets,
+  pluginControlUiRevision,
   type PluginControlUiAsset,
 } from "../plugins/control-ui-assets.js";
+import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import { loadPluginManifest, type PluginManifestControlUi } from "../plugins/manifest.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { hasCanonicalPluginDistribution } from "../plugins/plugin-runtime-artifact-binding.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry.js";
+import { catalogOperations, createPluginBrowserCompiler } from "../plugins/runtime-compiler.js";
 import { getPluginRegistryForContext } from "../plugins/runtime.js";
+import { isOpenClawIdPluginVisible } from "../shared/openclaw-id-policy.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import {
   controlUiPluginAssetPrefix,
@@ -38,6 +45,8 @@ import {
 import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
+const log = createSubsystemLogger("gateway/control-ui");
+
 const MAX_CONTROL_UI_PLUGINS = 64;
 const MAX_CONTROL_UI_CATALOG_BYTES = 64 * 1024 * 1024;
 const MAX_CONTROL_UI_CATALOG_REVISIONS = 256;
@@ -58,7 +67,6 @@ type BrowserPluginState = {
 // Exact backend records retain advertised bytes and browser receipts across unrelated
 // registry publications. Replaced records cannot inherit their predecessor's snapshots.
 const browserPluginStates = new WeakMap<PluginRecord, BrowserPluginState>();
-let pendingCatalogOperation: Promise<void> | undefined;
 
 function getActiveBrowserRegistry(): PluginRegistry | null {
   const registry = getPluginRegistryForContext();
@@ -80,59 +88,19 @@ function pluginState(record: PluginRecord): BrowserPluginState {
 
 function browserOwners(registry: PluginRegistry): PluginRecord[] {
   return registry.plugins
-    .filter((record) => record.enabled && record.status === "loaded" && record.controlUi)
+    .filter(
+      (record) =>
+        isOpenClawIdPluginVisible(record.id, getRuntimeConfigSnapshot()) &&
+        record.enabled &&
+        record.status === "loaded" &&
+        record.controlUi &&
+        record.controlUi.activation !== "settings-only",
+    )
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-async function staticBrowserImports(
-  entryUrl: string,
-  assets: ReadonlyMap<string, PluginControlUiAsset>,
-  assetUrl: (name: string) => string,
-): Promise<string[]> {
-  const { parse } = await import("@babel/parser");
-  const modules = new Map(
-    [...assets]
-      .filter(([name]) => /\.m?js$/u.test(name))
-      .map(([name, asset]) => [new URL(assetUrl(name), "http://localhost").href, asset]),
-  );
-  const entry = new URL(entryUrl, "http://localhost").href;
-  const visited = new Set([entry]);
-  const pending = [entry];
-  for (const url of pending) {
-    const asset = modules.get(url);
-    if (!asset) {
-      continue;
-    }
-    let statements;
-    try {
-      statements = parse(asset.body.toString("utf8"), { sourceType: "module" }).program.body;
-    } catch {
-      // Preloading is optional; parser support must not change browser build admission.
-      continue;
-    }
-    for (const statement of statements) {
-      if (
-        statement.type !== "ImportDeclaration" &&
-        statement.type !== "ExportNamedDeclaration" &&
-        statement.type !== "ExportAllDeclaration"
-      ) {
-        continue;
-      }
-      const specifier = statement.source?.value;
-      if (!specifier || (!specifier.startsWith("./") && !specifier.startsWith("../"))) {
-        continue;
-      }
-      const target = new URL(specifier, url).href;
-      if (modules.has(target) && !visited.has(target)) {
-        visited.add(target);
-        pending.push(target);
-      }
-    }
-  }
-  return pending.slice(1).map((url) => new URL(url).pathname);
-}
-
 async function snapshotBrowserBuild(
+  compile: ReturnType<typeof createPluginBrowserCompiler>,
   record: PluginRecord,
   declaration = record.controlUi,
   uiCapabilities?: PluginRecord["uiCapabilities"],
@@ -140,22 +108,54 @@ async function snapshotBrowserBuild(
   if (!declaration || !record.rootDir || !isControlUiPluginAllowed(record)) {
     throw new Error("plugin is no longer active");
   }
-  const { entryName, styles, assets, bytes } = await readPluginControlUiAssets(
+  const { entryName, styles, assets, bytes, panelIcon } = await readPluginControlUiAssets(
     record.rootDir,
     declaration,
+    {
+      rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+        origin: record.origin,
+        rootDir: record.rootDir,
+      }),
+    },
   );
-  const digest = createHash("sha256").update(JSON.stringify({ declaration, uiCapabilities }));
-  for (const [name, asset] of [...assets].toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    digest.update(`${name}\0${asset.body.length}\0`).update(asset.body);
-  }
-  const revision = digest.digest("hex");
+  const revision = pluginControlUiRevision(declaration, uiCapabilities, assets, panelIcon?.dataUrl);
   const basePath = getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath;
   const prefix = `${controlUiPluginAssetPrefix(record.id, basePath)}${revision}/`;
   const assetUrl = (name: string) =>
     `${prefix}${name.split("/").map(encodeURIComponent).join("/")}`;
-  const imports = await staticBrowserImports(assetUrl(entryName), assets, assetUrl);
+  const modules = new Map(
+    [...assets]
+      .filter(([name]) => /\.m?js$/u.test(name))
+      .map(([name, asset]) => [new URL(assetUrl(name), "http://localhost").href, asset]),
+  );
+  const entry = new URL(assetUrl(entryName), "http://localhost").href;
+  const pending = new Set(modules.has(entry) ? [entry] : []);
+  for (const url of pending) {
+    // SAFETY: Every queued URL belongs to this immutable asset snapshot.
+    const asset = modules.get(url)!;
+    let imports;
+    try {
+      // The native compiler reads imports without constructing a JavaScript AST on the Gateway.
+      imports = await compile.imports(asset.body.toString("utf8"));
+    } catch {
+      // Preloading is optional; parser support must not change browser build admission.
+      continue;
+    }
+    for (const imported of imports) {
+      const specifier = imported.path;
+      if (
+        imported.kind !== "import-statement" ||
+        (!specifier.startsWith("./") && !specifier.startsWith("../"))
+      ) {
+        continue;
+      }
+      const target = new URL(specifier, url).href;
+      if (modules.has(target)) {
+        pending.add(target);
+      }
+    }
+  }
+  const imports = [...pending].slice(1).map((url) => new URL(url).pathname);
   return {
     assets,
     bytes,
@@ -166,12 +166,22 @@ async function snapshotBrowserBuild(
       entryUrl: assetUrl(entryName),
       imports,
       styles: styles.map(assetUrl),
+      ...(panelIcon ? { panelIcon: panelIcon.dataUrl } : {}),
       ...(uiCapabilities !== undefined ? { uiCapabilities } : {}),
+      ...(hasCanonicalPluginDistribution(record) && record.packageName && record.packageVersion
+        ? {
+            bundledDistribution: {
+              packageName: record.packageName,
+              packageVersion: record.packageVersion,
+            },
+          }
+        : {}),
     },
   };
 }
 
 async function refreshBrowserCatalog(
+  compile: ReturnType<typeof createPluginBrowserCompiler>,
   registry: PluginRegistry,
   pluginId?: string,
   reloadManifest = false,
@@ -198,16 +208,27 @@ async function refreshBrowserCatalog(
       if (reloadManifest) {
         // Explicit UI reload owns a fresh metadata read without replacing the
         // backend's process-stable manifest, imports, or registration authority.
+        const rootDir = record.rootDir;
+        if (!rootDir) {
+          throw new Error("plugin is no longer active");
+        }
+        const rejectManifestHardlinks = shouldRejectHardlinkedPluginFiles({
+          origin: record.origin,
+          rootDir,
+        });
         const loaded = withPluginCache(createPluginCache(), () =>
-          loadPluginManifest(record.rootDir!, true, record.rootDir),
+          loadPluginManifest(rootDir, rejectManifestHardlinks, rootDir),
         );
-        if (!loaded.ok || loaded.manifest.id !== record.id || !loaded.manifest.controlUi) {
+        if (!loaded.ok) {
+          throw new Error(loaded.error);
+        }
+        if (loaded.manifest.id !== record.id || !loaded.manifest.controlUi) {
           throw new Error("active plugin browser declaration is missing or invalid");
         }
         declaration = loaded.manifest.controlUi;
         uiCapabilities = loaded.manifest.uiCapabilities;
       }
-      const build = await snapshotBrowserBuild(record, declaration, uiCapabilities);
+      const build = await snapshotBrowserBuild(compile, record, declaration, uiCapabilities);
       const revisionKey = build.module.revision;
       if (!state.revisions.has(revisionKey)) {
         let bytes = build.bytes;
@@ -238,7 +259,10 @@ async function refreshBrowserCatalog(
       state.revisions.set(revisionKey, build);
       state.build = build;
       delete state.diagnostic;
-    } catch {
+    } catch (error) {
+      log.warn(
+        `Browser assets unavailable for plugin ${record.id}: ${formatErrorMessage(error, { includeCode: true })}`,
+      );
       state.diagnostic = {
         pluginId: record.id,
         message: "Control UI assets could not be loaded. Build the plugin and reload its UI.",
@@ -288,26 +312,20 @@ async function loadControlUiPluginCatalog(
   if (!capturePluginLifecycleAuthority(registry)?.()) {
     throw new Error("plugin registry is no longer active");
   }
-  const operation = (pendingCatalogOperation ?? Promise.resolve()).then(async () => {
+  const operation = (catalogOperations.pending ?? Promise.resolve()).then(async () => {
     // A concurrent backend reload may finish this read against its old record.
     // The next request selects the new registry; cached bytes never transfer owners.
-    await refreshBrowserCatalog(registry, pluginId, reloadManifest);
+    await using compile = createPluginBrowserCompiler();
+    await refreshBrowserCatalog(compile, registry, pluginId, reloadManifest);
     return projectBrowserCatalog(registry);
   });
   // Serialize the shared byte budget and retained owners across registry publications.
   // Failed requests own their rejection; later readers wait only for settlement.
-  const pending = operation.then(
+  catalogOperations.pending = operation.then(
     () => undefined,
     () => undefined,
   );
-  pendingCatalogOperation = pending;
-  try {
-    return await operation;
-  } finally {
-    if (pendingCatalogOperation === pending) {
-      pendingCatalogOperation = undefined;
-    }
-  }
+  return operation;
 }
 
 /** Explicit UI-only refresh; never imports or replaces backend plugin code. */

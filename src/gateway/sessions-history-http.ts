@@ -9,8 +9,12 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/io.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+  type CapturedSessionActorStorageOwner,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { PaginatedSessionHistory } from "../config/sessions/session-history-types.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -39,6 +43,7 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
+import { operatorSessionCap } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { resolveSessionHistoryUnavailableMessage } from "./session-history-error.js";
 import {
@@ -51,7 +56,7 @@ import {
   type PreparedSessionSourceFacts,
   type SessionFactsRead,
 } from "./session-sharing-preparation.js";
-import { prepareProjectedSessionSharing, resolveSessionSharingTarget } from "./session-sharing.js";
+import { createSessionListEntryFilter } from "./session-sharing.js";
 import { resolveSessionStoreIdentity, resolveSessionStoreKey } from "./session-store-key.js";
 import {
   resolveTranscriptPathForComparison,
@@ -167,23 +172,6 @@ export async function handleSessionHistoryHttpRequest(
   }
 
   const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
-  let selected: Result<ReturnType<typeof captureIncognitoSessionSource>, unknown>;
-  let assertSourceCurrent = () => {};
-  try {
-    const source = captureIncognitoSessionSource({ sessionKey: canonicalKey });
-    if (source && !("kind" in source)) {
-      const claim = source.actor.sessions.captureCurrent(canonicalKey);
-      assertSourceCurrent = () => {
-        source.admissionSignal?.throwIfAborted();
-        source.actor.assertReadable();
-        claim.assertCurrent();
-      };
-    }
-    selected = ok(source);
-  } catch (error) {
-    selected = err(error);
-  }
-
   // Session history intentionally uses the shared-secret HTTP trust model:
   // token/password bearer auth grants default operator scopes so simple API key
   // callers can read their own history without a scope header.
@@ -196,23 +184,30 @@ export async function handleSessionHistoryHttpRequest(
   if (!authResult) {
     return true;
   }
-  if (!selected.ok) {
-    throw selected.error;
-  }
-  const source = selected.value;
-  assertSourceCurrent();
-  const serve = () =>
-    serveAuthorizedSessionHistory(
-      req,
-      res,
-      opts,
-      url,
-      source ? canonicalKey : sessionKey,
-      authResult,
-      source,
-      assertSourceCurrent,
-    );
-  return source && !("kind" in source) ? source.actor.sessions.withSharedState(serve) : serve();
+  const assertResponseCurrent = () => {
+    if (res.destroyed || res.writableEnded) {
+      throw new Error("Session history response closed");
+    }
+  };
+  const source = captureSessionActorStorageOwner(
+    { sessionKey: canonicalKey },
+    { assertCurrent: assertResponseCurrent, authorize: assertResponseCurrent },
+  );
+  const assertSessionCurrent = source?.owner?.captureSessionReadGuard(canonicalKey);
+  const assertSourceCurrent = () => {
+    source?.authority.assertCurrent();
+    assertSessionCurrent?.();
+  };
+  return serveAuthorizedSessionHistory(
+    req,
+    res,
+    opts,
+    url,
+    source ? canonicalKey : sessionKey,
+    authResult,
+    source,
+    assertSourceCurrent,
+  );
 }
 
 async function serveAuthorizedSessionHistory(
@@ -222,10 +217,11 @@ async function serveAuthorizedSessionHistory(
   url: URL,
   sessionKey: string,
   authResult: NonNullable<Awaited<ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply>>>,
-  source: ReturnType<typeof captureIncognitoSessionSource>,
+  source: CapturedSessionActorStorageOwner | undefined,
   assertSourceCurrent: () => void,
 ): Promise<boolean> {
   const { cfg, requestAuth, operatorScopes } = authResult;
+  const historyClient = resolveSessionHistoryHttpClient(requestAuth, operatorScopes);
   let sharing: SessionFactsRead<PreparedSessionSourceFacts> | undefined;
   using sharingLifetime = {
     transferred: false,
@@ -239,30 +235,24 @@ async function serveAuthorizedSessionHistory(
   let entry: ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>;
   try {
     if (source) {
-      if ("kind" in source) {
-        source.assertCurrent();
-        sendJson(res, 404, {
-          ok: false,
-          error: { type: "not_found", message: `Session not found: ${sessionKey}` },
-        });
-        return true;
-      }
-      const { actor, admissionSignal } = source;
-      const read = await actor.sessions.read(
-        { assertCurrent: assertSourceCurrent },
-        { sessionKey },
-        admissionSignal,
-      );
       assertSourceCurrent();
-      entry = read.entry;
+      entry = readCapturedSessionActorEntry(source, sessionKey);
       target = {
-        agentId: actor.agentId,
+        agentId: source.agentId,
         canonicalKey: sessionKey,
-        storePath: actor.path,
+        storePath: source.path,
         storeKeys: [sessionKey],
         store: entry ? { [sessionKey]: entry } : {},
-        readSource: { agentId: actor.agentId, path: actor.path },
+        readSource: { agentId: source.agentId, path: source.path },
       };
+      if (operatorSessionCap(historyClient, cfg) === "invited") {
+        sharing = await prepareSessionMutationFacts({
+          cfg,
+          agentId: source.agentId,
+          sessionKey,
+          allowMissing: true,
+        });
+      }
     } else {
       const { agentId } = resolveSessionStoreIdentity({ cfg, sessionKey });
       sharing = await prepareSessionMutationFacts({
@@ -304,15 +294,30 @@ async function serveAuthorizedSessionHistory(
         message: `Session not found: ${sessionKey}`,
       },
     });
-  const historyClient = resolveSessionHistoryHttpClient(requestAuth, operatorScopes);
-  if (
-    !entry?.sessionId ||
-    prepareProjectedSessionSharing({
-      cfg,
-      client: historyClient,
-      isMember: () => false,
-    }).entryFilter?.(target.canonicalKey, entry) === false
-  ) {
+  const canReadHistory = (
+    client: GatewayClient | null,
+    currentCfg: OpenClawConfig,
+    selected: {
+      agentId: string;
+      canonicalKey: string;
+      storePath: string;
+      entry: NonNullable<typeof entry>;
+    },
+  ) => {
+    const current = sharing?.readCurrent(currentCfg);
+    const membership =
+      current?.target?.storePath === selected.storePath &&
+      current.target.entry.sessionId === selected.entry.sessionId
+        ? current.membership
+        : undefined;
+    return (
+      createSessionListEntryFilter({ client, cfg: currentCfg, membership })?.(
+        selected.canonicalKey,
+        selected.entry,
+      ) !== false
+    );
+  };
+  if (!entry?.sessionId || !canReadHistory(historyClient, cfg, { ...target, entry })) {
     sendSessionNotFound();
     return true;
   }
@@ -384,13 +389,19 @@ async function serveAuthorizedSessionHistory(
     }
     let currentTarget;
     try {
-      currentTarget = source
-        ? resolveSessionSharingTarget({
-            cfg: currentConfig,
-            sessionKey: target.canonicalKey,
-            agentId: target.agentId,
-          })
-        : sharing!.readCurrent(currentConfig).target;
+      if (source) {
+        const currentEntry = readCapturedSessionActorEntry(source, sessionKey);
+        currentTarget = currentEntry
+          ? {
+              agentId: source.agentId,
+              canonicalKey: sessionKey,
+              storePath: source.path,
+              entry: currentEntry,
+            }
+          : null;
+      } else {
+        currentTarget = sharing!.readCurrent(currentConfig).target;
+      }
     } catch {
       return false;
     }
@@ -403,11 +414,7 @@ async function serveAuthorizedSessionHistory(
       currentTarget.entry.lifecycleRevision !== entry.lifecycleRevision ||
       (entry.sessionStartedAt !== undefined &&
         currentTarget.entry.sessionStartedAt !== entry.sessionStartedAt) ||
-      prepareProjectedSessionSharing({
-        cfg: currentConfig,
-        client: currentClient,
-        isMember: () => false,
-      }).entryFilter?.(currentTarget.canonicalKey, currentTarget.entry) === false
+      !canReadHistory(currentClient, currentConfig, currentTarget)
     ) {
       return false;
     }
@@ -504,7 +511,7 @@ async function serveAuthorizedSessionHistory(
       ...projectHistory(snapshot, presentation),
     });
     // Send the entire requested page before bounding private live state.
-    // Cursor refreshes reread SQLite, so their next page remains complete.
+    // Cursor refreshes reread the owner, so their next page remains complete.
     sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
   }
 
@@ -524,9 +531,7 @@ async function serveAuthorizedSessionHistory(
       return;
     }
     streamStopped = true;
-    if (streamResources.heartbeat) {
-      clearInterval(streamResources.heartbeat);
-    }
+    clearInterval(streamResources.heartbeat);
     streamResources.unsubscribe?.();
     sharing?.release();
     streamClosed.resolve();
@@ -561,8 +566,8 @@ async function serveAuthorizedSessionHistory(
 
   function handleResponseStreamClose() {
     releaseStreamResources();
-    req.off("close", handleRequestStreamClose);
-    req.off("error", handleRequestStreamError);
+    // The request can emit its abort error after the response closes. Its own
+    // close handler releases those listeners once request errors have settled.
     res.off("close", handleResponseStreamClose);
     res.off("finish", handleResponseStreamFinish);
     res.off("error", handleResponseStreamError);

@@ -19,34 +19,26 @@ export type AcpSessionStore = {
   deleteSession: (sessionId: string) => boolean;
 };
 
-type InMemoryAcpSessionStore = AcpSessionStore & {
-  /** Releases every record when the registry's lifecycle owner shuts down. */
-  dispose: () => void;
-};
-
-type AcpSessionStoreOptions = {
-  maxSessions?: number;
-  idleTtlMs?: number;
-  now?: () => number;
-  /**
-   * Invoked for every session that leaves the store, whichever path removes it:
-   * explicit delete, idle reaping, capacity eviction, or dispose. Consumers that
-   * mirror session identity elsewhere use this to stay in step with the store,
-   * since eviction and reaping produce no ACP request a peer could observe.
-   */
-  onSessionRemoved?: (sessionId: string) => void;
-};
-
 const DEFAULT_MAX_SESSIONS = 5_000;
 const DEFAULT_IDLE_TTL_MS = 24 * 60 * 60 * 1_000;
 
 /** Creates the bounded in-memory ACP session registry used by local ACP runtime clients. */
 export function createInMemorySessionStore(
-  options: AcpSessionStoreOptions = {},
-): InMemoryAcpSessionStore {
+  options: {
+    maxSessions?: number;
+    /**
+     * Invoked for every session that leaves the store, whichever path removes it:
+     * explicit delete, idle reaping, capacity eviction, or dispose. Consumers that
+     * mirror session identity elsewhere use this to stay in step with the store,
+     * since eviction and reaping produce no ACP request a peer could observe.
+     */
+    onSessionRemoved?: (sessionId: string) => void;
+  } = {},
+): AcpSessionStore & {
+  /** Releases every record when the registry's lifecycle owner shuts down. */
+  dispose: () => void;
+} {
   const maxSessions = resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 });
-  const idleTtlMs = resolveIntegerOption(options.idleTtlMs, DEFAULT_IDLE_TTL_MS, { min: 1_000 });
-  const now = options.now ?? Date.now;
   const onSessionRemoved = options.onSessionRemoved;
   const sessions = new Map<string, AcpSession>();
 
@@ -62,7 +54,7 @@ export function createInMemorySessionStore(
   };
 
   const reapIdleSessions = (nowMs: number) => {
-    const idleBefore = nowMs - idleTtlMs;
+    const idleBefore = nowMs - DEFAULT_IDLE_TTL_MS;
     for (const [sessionId, session] of sessions.entries()) {
       if (session.activeRunId || session.abortController) {
         continue;
@@ -96,12 +88,12 @@ export function createInMemorySessionStore(
   const releaseActiveRun = (session: AcpSession) => {
     session.activeRunId = null;
     session.abortController = null;
-    session.lastTouchedAt = now();
+    session.lastTouchedAt = Date.now();
   };
 
   return {
     createSession(params) {
-      const nowMs = now();
+      const nowMs = Date.now();
       const sessionId = params.sessionId ?? randomUUID();
       const existingSession = sessions.get(sessionId);
       if (existingSession) {
@@ -138,7 +130,7 @@ export function createInMemorySessionStore(
     getSession(sessionId) {
       const session = sessions.get(sessionId);
       if (session) {
-        session.lastTouchedAt = now();
+        session.lastTouchedAt = Date.now();
       }
       return session;
     },
@@ -149,7 +141,7 @@ export function createInMemorySessionStore(
       }
       session.activeRunId = runId;
       session.abortController = abortController;
-      session.lastTouchedAt = now();
+      session.lastTouchedAt = Date.now();
     },
     clearActiveRun(sessionId, expectedRunId) {
       const session = sessions.get(sessionId);

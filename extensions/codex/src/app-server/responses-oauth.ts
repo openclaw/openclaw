@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import {
-  findPersistedAuthProfileCredential,
   findPersistedAuthProfileCredentialAsync,
   isPendingOAuthRefreshFence,
   isSameOAuthRefreshGeneration,
@@ -10,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { decodeOpenAICodexJwtPayload } from "openclaw/plugin-sdk/provider-auth";
 import type { CodexAppServerPreparedAuth } from "./auth-types.js";
+import type { CodexAppServerHomeScope } from "./config-contracts.js";
 
 // A distinct native provider selects HTTP and local summarization. OpenClaw's
 // public provider remains `openai`; this id belongs only to its private process.
@@ -22,6 +22,27 @@ export function isCodexResponsesOAuthRun(params: {
     params.runtimePlan?.auth.selectedAuthMode === "oauth" &&
     params.runtimePlan.auth.selectedAuthFlow === "chatgpt-token-sharing"
   );
+}
+
+/** Validate grants actually handed to native; a user home keeps its own native account. */
+export function resolveCodexInferenceCredential(params: {
+  authProfileId?: string;
+  authProfileStore: AuthProfileStore;
+  homeScope: CodexAppServerHomeScope;
+}): AuthProfileCredential | undefined {
+  const credential = params.authProfileId
+    ? params.authProfileStore.profiles[params.authProfileId]
+    : undefined;
+  if (
+    params.homeScope !== "user" &&
+    credential?.type === "oauth" &&
+    credential.authFlow === "chatgpt-identity"
+  ) {
+    throw new Error(
+      "ChatGPT subscription sharing was not granted; sign in again and enable sharing.",
+    );
+  }
+  return credential;
 }
 
 export function isCodexResponsesOAuthCredential(credential: AuthProfileCredential | undefined) {
@@ -151,13 +172,11 @@ export async function createCodexResponsesOAuth(params: {
       const resolvedCredential = resolved.credential;
       validate(resolvedCredential);
       lastCredential = resolvedCredential;
+      if (persisted && !resolved.readCurrentCredential) {
+        throw new Error("ChatGPT subscription sharing credential authority is unavailable.");
+      }
       const readCredential =
-        resolved.readCurrentCredential === null
-          ? () =>
-              persisted
-                ? findPersistedAuthProfileCredential(params)
-                : params.store.profiles[params.profileId]
-          : resolved.readCurrentCredential;
+        resolved.readCurrentCredential ?? (() => params.store.profiles[params.profileId]);
       const assertCurrent = () => validateCurrent(readCredential(), resolvedCredential);
       return { token: resolved.apiKey, assertCurrent };
     },

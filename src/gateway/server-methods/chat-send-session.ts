@@ -9,11 +9,11 @@ import {
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
+import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
-} from "../../agents/agent-scope.js";
-import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
+} from "../../agents/model-selection-config.js";
 import {
   findNormalizedProviderValue,
   parseModelRef,
@@ -34,6 +34,7 @@ import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/sessio
 import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -42,8 +43,8 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
-import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
@@ -63,7 +64,7 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
-import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
+import { readIncognitoActivePath } from "./chat-send-active-leaf.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -73,6 +74,8 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 // These inputs prepare model/runtime selection, native restrictions, command/retry
 // semantics, and creator defaults. Sharing authorization rechecks live policy;
 // unrelated logging and UI publications do not invalidate a prepared send.
+// Plugin-owned settings belong to the admitted runtime generation; core plugin
+// admission policy still affects preparation and must remain current.
 function chatSendPreparationConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -89,6 +92,7 @@ function chatSendPreparationConfig(
         cfg,
         agentId,
         sessionKey,
+        selectedModel: selected,
         hasSessionModelOverride: Boolean(entry?.modelOverride),
         modelOverrideSource:
           entry?.modelOverrideSource === "default" ? undefined : entry?.modelOverrideSource,
@@ -137,7 +141,6 @@ function chatSendPreparationConfig(
     runtime: agent?.runtime,
     models: { mode: cfg.models?.mode, providers },
     auth: cfg.auth,
-    plugins: cfg.plugins,
     workspace: agent?.workspace ?? defaults?.workspace,
     agentDir: agent?.agentDir,
     timeoutSeconds: defaults?.timeoutSeconds,
@@ -145,6 +148,18 @@ function chatSendPreparationConfig(
     agentSandbox: agent?.sandbox,
     tools: cfg.tools,
     agentTools: agent?.tools,
+    plugins: {
+      enabled: cfg.plugins?.enabled,
+      allow: cfg.plugins?.allow,
+      deny: cfg.plugins?.deny,
+      load: cfg.plugins?.load,
+      slots: cfg.plugins?.slots,
+      entries: Object.fromEntries(
+        Object.entries(cfg.plugins?.entries ?? {}).map(
+          ([id, { enabled, hooks, subagent, llm }]) => [id, { enabled, hooks, subagent, llm }],
+        ),
+      ),
+    },
     channels: {
       defaults: cfg.channels?.defaults,
       selected: Object.fromEntries(channels.map((channel) => [channel, cfg.channels?.[channel]])),
@@ -228,6 +243,13 @@ async function loadChatSendSessionContext(params: {
     { sessionKey: rawSessionKey, agentId: requestedAgentId },
   ]);
   const assertConfigCurrent = () => assertRoutingCurrent(context.getRuntimeConfig());
+  if (!request.stopCommand) {
+    await waitForAgentInputAdmission(requestedAgentId, {
+      cfg: runtimeConfig,
+      sessionKey: sessionLoadKey,
+      owner: context.agentDatabaseStartup,
+    });
+  }
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = await measureDiagnosticsTimelineSpan(
     "gateway.chat_send.load_session",
@@ -311,7 +333,6 @@ async function loadChatSendSessionContext(params: {
 
 /** Load and validate the session/model facts shared by later admission and dispatch phases. */
 export async function prepareChatSendSession(params: {
-  isDirectExternalUser?: boolean;
   request: NormalizedChatSendRequest;
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
@@ -323,7 +344,7 @@ export async function prepareChatSendSession(params: {
   }
   const loadedValue = loaded.value;
   const { request, client } = params;
-  const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
+  const { p } = request;
   const { cfg, agentId, sessionKey, entry, legacyKey } = loadedValue;
   if (isIncognitoSessionKey(sessionKey) && !entry) {
     return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
@@ -369,27 +390,6 @@ export async function prepareChatSendSession(params: {
   });
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideMs: p.timeoutMs });
   const now = Date.now();
-  const restartSafeRequest = await createRestartSafeChatRequest({
-    goalRequestFingerprint: request.goalOperation?.requestFingerprint,
-    cfg,
-    eligible:
-      (isBrowserOperatorUiClient(request.clientInfo) || params.isDirectExternalUser === true) &&
-      turnKind === "main" &&
-      normalizedAttachments.length === 0 &&
-      !request.reconnectResumeRequested &&
-      explicitOrigin === undefined &&
-      p.deliver !== true &&
-      p.thinking === undefined &&
-      p.fastMode === undefined &&
-      p.fastAutoOnSeconds === undefined &&
-      p.timeoutMs === undefined &&
-      request.systemInputProvenance === undefined &&
-      request.systemProvenanceReceipt === undefined &&
-      !request.suppressCommandInterpretation,
-    message: rawMessage,
-    mentions: p.mentions,
-    senderIsOwner: hasGatewayAdminScope(client),
-  });
 
   return {
     ok: true as const,
@@ -401,7 +401,6 @@ export async function prepareChatSendSession(params: {
       resolvedSessionAuthProvider,
       timeoutMs,
       now,
-      restartSafeRequest,
     },
   };
 }
@@ -413,14 +412,16 @@ export type LoadedChatSendSession = Extract<
 
 export type PreparedChatSendSession = LoadedChatSendSession & {
   sessionTarget: QualifiedSessionEntryAccessTarget;
-  assertSessionTargetCurrent: () => void;
-  releaseSessionTarget: () => void;
+  releaseSessionStorage?: () => void;
   activeRunScopeKey: string;
   readSource?: CapturedSessionEntryReadSource;
 };
 
-export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedChatSendSession {
-  const qualified = prepareQualifiedSessionEntryTarget(
+export async function qualifyChatSendSession(
+  loaded: LoadedChatSendSession,
+  releaseSessionStorage?: () => void,
+): Promise<PreparedChatSendSession> {
+  const qualified = await prepareQualifiedSessionEntryTarget(
     {
       ...loaded,
       canonicalKey: loaded.sessionKey,
@@ -432,11 +433,10 @@ export function qualifyChatSendSession(loaded: LoadedChatSendSession): PreparedC
   );
   return {
     ...loaded,
-    sessionTarget: qualified.target,
-    assertSessionTargetCurrent: qualified.assertCurrent,
-    releaseSessionTarget: qualified.release,
-    activeRunScopeKey: qualified.target.canonicalKey,
-    readSource: qualified.target.readSource,
+    sessionTarget: qualified,
+    releaseSessionStorage,
+    activeRunScopeKey: qualified.canonicalKey,
+    readSource: qualified.readSource,
   };
 }
 
@@ -448,14 +448,14 @@ function assertCurrentChatSendSession(
   if (session.sessionRoutingChanged(latest.cfg)) {
     throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
   }
-  if (
-    latest.agentId !== session.sessionTarget.agentId ||
-    (latest.legacyKey ?? latest.canonicalKey) !== session.sessionTarget.storeKey ||
-    !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource)
-  ) {
-    throw new Error("Session storage changed while starting work. Retry.");
+  const { agentId, storeKey, readSource } = session.sessionTarget;
+  const changed =
+    (latest.agentId !== agentId && "agent") ||
+    ((latest.legacyKey ?? latest.canonicalKey) !== storeKey && "store key") ||
+    (readSource && !isDeepStrictEqual(latest.capturedReadSource, readSource) && "store source");
+  if (changed) {
+    throw new Error(`Session storage changed while starting work (${changed}). Retry.`);
   }
-  session.assertSessionTargetCurrent();
 }
 
 export function withCurrentChatSendSession<T>(params: {
@@ -463,7 +463,6 @@ export function withCurrentChatSendSession<T>(params: {
   getRuntimeConfig: () => OpenClawConfig;
   includeMembership: boolean;
   includeActivePath?: boolean;
-  includeLifecycle?: boolean;
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
 }) {
   const { session } = params;
@@ -502,19 +501,39 @@ export function withCurrentChatSendSession<T>(params: {
     return params.consume(latest, membership, assertSourceCurrent);
   };
   if (isIncognitoSessionKey(session.sessionKey)) {
-    return withGatewaySessionEntry(
-      session.sessionLoadKey,
-      { ...session.sessionLoadOptions, includeMembership: params.includeMembership },
-      consume,
-      session.cfg,
-      assertConfigCurrent,
-    );
+    const expectedLeafEntryId = session.expectedLeafEntryId;
+    const readEntry = (transcript?: SessionTranscriptAnchorFacts) =>
+      withGatewaySessionEntry(
+        session.sessionLoadKey,
+        { ...session.sessionLoadOptions, includeMembership: params.includeMembership },
+        transcript
+          ? (latest, membership, assertSourceCurrent) => {
+              // Matches the facts qualified worker reads attach to their entry snapshot.
+              const current = { ...latest, transcript };
+              return consume(current, membership, assertSourceCurrent);
+            }
+          : consume,
+        session.cfg,
+        assertConfigCurrent,
+      );
+    return params.includeActivePath && expectedLeafEntryId !== undefined
+      ? readIncognitoActivePath(
+          {
+            canonicalKey: session.sessionTarget.storeKey,
+            entry: session.entry,
+            storePath: session.storePath,
+          },
+          session.agentId,
+          expectedLeafEntryId,
+        ).then(readEntry)
+      : readEntry();
   }
   return withQualifiedGatewaySessionEntry({
     cfg: session.cfg,
     target: session.sessionTarget,
     logicalStorePath: session.storePath,
     includeMembership: params.includeMembership,
+    includeLifecycle: true,
     transcript:
       params.includeActivePath && session.expectedLeafEntryId !== undefined
         ? {
@@ -525,7 +544,6 @@ export function withCurrentChatSendSession<T>(params: {
             includeSession: true,
           }
         : undefined,
-    includeLifecycle: params.includeLifecycle,
     consume,
     assertConfigCurrent,
   }).catch((error: unknown) => {
@@ -655,11 +673,10 @@ export async function prepareChatSendNativeRuntimeRestriction(params: {
       ...scope,
       activeSessionKey: sessionKey,
       expectedRevision: snapshot.revision,
+      databaseSource: snapshot.databaseSource,
       sessionEntry: prepared.entry,
       commitGuard: () => {
         params.assertCurrent?.();
-        // The initialization CAS checks absence; the qualified target keeps its physical store.
-        session.assertSessionTargetCurrent();
         prepared.assertSkillSelection();
         const currentConfig = context.getRuntimeConfig();
         const currentCreation = resolveOperatorSessionCreation(client);

@@ -31,7 +31,6 @@ import type {
   DispatchReplyFromConfig,
 } from "./reply/dispatch-from-config.types.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
-import { REPLY_ADMISSION_TICKET } from "./reply/reply-admission-ticket.js";
 import {
   createReplyDispatchSettledCounts,
   REPLY_DISPATCH_OUTCOME_COUNTS,
@@ -44,6 +43,7 @@ import {
   type ReplyDispatcher,
 } from "./reply/reply-dispatcher.types.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply/reply-operation-run-state.js";
+import { clearReplySourceInput } from "./reply/reply-source-binding.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./reply/source-turn-id.js";
 import { withReplySystemEventContext } from "./reply/system-event-session-key.js";
 import type { FinalizedMsgContext } from "./templating.js";
@@ -166,7 +166,7 @@ function prepareParticipant(
     ctx,
     dispatcher: participantDispatcher(params.dispatcher),
     replyOptions: withReplySystemEventContext(
-      {
+      clearReplySourceInput({
         ...original,
         abortSignal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
         turnAdoptionLifecycle: undefined,
@@ -190,12 +190,11 @@ function prepareParticipant(
         onSessionPrepared: undefined,
         replyOperation: undefined,
         [REPLY_OPERATION_RUN_STATE]: undefined,
-        [REPLY_ADMISSION_TICKET]: undefined,
         onQueuedFollowupReplyBatch: undefined,
         onQueuedFollowupAdmitted: undefined,
         onQueuedFollowupSettled: undefined,
         queuedDeliveryCorrelations: undefined,
-      },
+      }),
       { sessionKey },
     ),
   };

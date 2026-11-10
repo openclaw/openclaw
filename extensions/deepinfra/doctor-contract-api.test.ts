@@ -1,49 +1,44 @@
-// DeepInfra tests cover plugin-owned doctor compatibility migrations.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
-
-function deepinfraConfig(provider: Record<string, unknown>): OpenClawConfig {
-  return { models: { providers: { deepinfra: provider } } } as unknown as OpenClawConfig;
-}
 
 function migratedProvider(cfg: OpenClawConfig): Record<string, unknown> {
   const providers = cfg.models?.providers as Record<string, Record<string, unknown>> | undefined;
   return providers?.deepinfra ?? {};
 }
 
+const nativeUrl = "https://api.deepinfra.com/v1/inference";
+const baseUrl = "https://api.deepinfra.com/v1/openai";
+const deepinfraConfig = (provider: Record<string, unknown>): OpenClawConfig =>
+  ({ models: { providers: { deepinfra: provider } } }) as unknown as OpenClawConfig;
+const migrate = (provider: Record<string, unknown>) =>
+  normalizeCompatibilityConfig({ cfg: deepinfraConfig(provider) });
 // Assemble credential-shaped fixture URLs at runtime to avoid scanner false positives.
-function credentialUrl(rest: string): string {
-  return ["https://user", `password@${rest}`].join(":");
-}
+const credentialUrl = (rest: string) => ["https://user", `password@${rest}`].join(":");
 
 describe("DeepInfra doctor contract", () => {
   it("flags legacy nativeBaseUrl and /v1/inference baseUrl values", () => {
     const nativeRule = legacyConfigRules.find((rule) => rule.path.at(-1) === "nativeBaseUrl");
     const baseUrlRule = legacyConfigRules.find((rule) => rule.path.at(-1) === "baseUrl");
     expect(nativeRule?.message).toContain("openclaw doctor --fix");
-    expect(baseUrlRule?.match?.("https://api.deepinfra.com/v1/inference")).toBe(true);
-    expect(baseUrlRule?.match?.("https://api.deepinfra.com/v1/openai")).toBe(false);
+    expect([baseUrlRule?.match?.(nativeUrl), baseUrlRule?.match?.(baseUrl)]).toEqual([true, false]);
   });
 
-  it("returns the same config when no deepinfra provider is configured", () => {
-    const cfg = { models: { providers: {} } } as OpenClawConfig;
+  it.each([{ models: { providers: {} } }, {}])("preserves absent provider config: %j", (cfg) => {
     expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
-    expect(normalizeCompatibilityConfig({ cfg: {} as OpenClawConfig }).changes).toEqual([]);
   });
 
-  it("replaces a default-valued nativeBaseUrl with the canonical baseUrl", () => {
-    const cfg = deepinfraConfig({
-      apiKey: "key",
-      nativeBaseUrl: "https://api.deepinfra.com/v1/inference/",
-    });
-    const result = normalizeCompatibilityConfig({ cfg });
-    expect(result.changes).toEqual([
-      "models.providers.deepinfra.nativeBaseUrl -> models.providers.deepinfra.baseUrl (OpenAI-compatible /v1/openai endpoint)",
-    ]);
-    expect(migratedProvider(result.config)).toEqual({
-      apiKey: "key",
-      baseUrl: "https://api.deepinfra.com/v1/openai",
+  it.each([
+    [
+      "nativeBaseUrl",
+      `${nativeUrl}/`,
+      "nativeBaseUrl -> models.providers.deepinfra.baseUrl (OpenAI-compatible /v1/openai endpoint)",
+    ],
+    ["baseUrl", nativeUrl, "baseUrl: /v1/inference -> /v1/openai"],
+  ])("migrates %s to the canonical endpoint", (key, url, change) => {
+    expect(migrate({ apiKey: "key", [key]: url })).toEqual({
+      config: deepinfraConfig({ apiKey: "key", baseUrl }),
+      changes: [`models.providers.deepinfra.${change}`],
     });
   });
 
@@ -72,47 +67,23 @@ describe("DeepInfra doctor contract", () => {
     });
   });
 
-  it("rewrites a /v1/inference baseUrl on the DeepInfra host only", () => {
-    const cfg = deepinfraConfig({ baseUrl: "https://api.deepinfra.com/v1/inference" });
-    const result = normalizeCompatibilityConfig({ cfg });
-    expect(result.changes).toEqual([
-      "models.providers.deepinfra.baseUrl: /v1/inference -> /v1/openai",
-    ]);
-    expect(migratedProvider(result.config)).toEqual({
-      baseUrl: "https://api.deepinfra.com/v1/openai",
-    });
-
-    const customCfg = deepinfraConfig({ baseUrl: "https://gw.example.com/v1/inference" });
-    expect(normalizeCompatibilityConfig({ cfg: customCfg })).toEqual({
-      config: customCfg,
-      changes: [],
-    });
+  it("preserves a custom host's inference endpoint", () => {
+    const cfg = deepinfraConfig({ baseUrl: "https://gw.example.com/v1/inference" });
+    expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
   });
 
   it("never echoes credentials from legacy endpoint URLs in change messages", () => {
-    const nativeCfg = deepinfraConfig({
+    const nativeChanges = migrate({
       nativeBaseUrl: credentialUrl("gw.example.com/v1/inference?token=secret"),
-    });
-    const nativeChanges = normalizeCompatibilityConfig({ cfg: nativeCfg }).changes.join("\n");
-    expect(nativeChanges).not.toContain("password");
-    expect(nativeChanges).not.toContain("secret");
-    expect(nativeChanges).not.toContain("gw.example.com");
-
-    const hostCfg = deepinfraConfig({
-      baseUrl: credentialUrl("api.deepinfra.com/v1/inference?token=secret"),
-      nativeBaseUrl: credentialUrl("api.deepinfra.com/v1/inference?token=secret"),
-    });
-    const hostResult = normalizeCompatibilityConfig({ cfg: hostCfg });
-    const hostChanges = hostResult.changes.join("\n");
-    expect(hostChanges).not.toContain("password");
-    expect(hostChanges).not.toContain("secret");
-    // Only the printed messages are redacted; the migrated config keeps the
-    // operator's own URL (path swapped, credentials untouched).
-    expect(migratedProvider(hostResult.config)).toEqual({
-      baseUrl: credentialUrl("api.deepinfra.com/v1/openai?token=secret"),
-    });
+    }).changes.join("\n");
+    expect(nativeChanges).not.toMatch(/password|secret|gw\.example\.com/);
+    const url = credentialUrl("api.deepinfra.com/v1/inference?token=secret");
+    const result = migrate({ baseUrl: url, nativeBaseUrl: url });
+    expect(result.changes.join("\n")).not.toMatch(/password|secret/);
+    // Redact messages, not the operator's migrated URL.
+    const migratedUrl = credentialUrl("api.deepinfra.com/v1/openai?token=secret");
+    expect(result.config).toEqual(deepinfraConfig({ baseUrl: migratedUrl }));
   });
-
   it("does not mutate the input config", () => {
     const provider = { nativeBaseUrl: "https://gw.example.com/v1/inference" };
     const cfg = deepinfraConfig(provider);

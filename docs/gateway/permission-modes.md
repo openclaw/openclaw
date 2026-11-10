@@ -7,14 +7,14 @@ read_when:
 title: Session permission modes
 ---
 
-Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's recorded canonical `sessionRoot`, or the selected agent's canonical workspace when no root is recorded. The mode determines what may happen inside or outside that boundary.
+Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's recorded resolved `sessionRoot`, or the selected agent's resolved workspace when no root is recorded. The mode determines what may happen inside or outside that boundary.
 
-| Mode        | Filesystem access                                         | Exec escalation reviewer                |
-| ----------- | --------------------------------------------------------- | --------------------------------------- |
-| `read-only` | Reads under `sessionRoot`; managed mutation tools omitted | None; exec is denied                    |
-| `guarded`   | Reads and writes under `sessionRoot`                      | A human after the allowlist fast path   |
-| `workspace` | Reads and writes under `sessionRoot`                      | LLM review: allow, deny, or ask a human |
-| `full`      | Unrestricted filesystem access                            | None                                    |
+| Mode        | Control UI label | Filesystem access                                         | Exec escalation reviewer                |
+| ----------- | ---------------- | --------------------------------------------------------- | --------------------------------------- |
+| `read-only` | **Read only**    | Reads under `sessionRoot`; managed mutation tools omitted | None; exec is denied                    |
+| `guarded`   | **Ask me**       | Reads and writes under `sessionRoot`                      | A human after the allowlist fast path   |
+| `workspace` | **Auto-review**  | Reads and writes under `sessionRoot`                      | LLM review: allow, deny, or ask a human |
+| `full`      | **Full access**  | Unrestricted filesystem access                            | None                                    |
 
 These tool-visibility and exec rules describe OpenClaw-managed tools. Native harnesses can retain their own tool surface under their permission controls; see [Codex runtime policy](/plugins/codex-harness-runtime).
 
@@ -30,17 +30,29 @@ Gateway approval-backed commands bind every resolved command-segment executable 
 
 ## Session root and defaults
 
-A permission mode can be set on any session. When a session has a recorded `sessionRoot`, that canonical path is its filesystem boundary. An explicit working directory and a managed worktree each pin their session's root. When no root is recorded, the boundary defaults to the selected agent's canonical workspace when the run is prepared.
+A permission mode can be set on any session. When a session has a recorded `sessionRoot`, that resolved path is its filesystem boundary. An explicit working directory and a managed worktree each pin their session's root. When no root is recorded, the boundary defaults to the selected agent's resolved workspace when the run is prepared.
 
 Managed worktree sessions use the worktree checkout as `sessionRoot`. A nested working directory remains the runtime `cwd`, so relative paths start there while filesystem containment covers the whole checkout.
 
 File tools recognize aliases of the session's trusted root and working directory, including absolute paths using those aliases. This does not expand the boundary: unrelated external symlinks pointing inward remain denied, as do symlinks and raw `symlink/..` traversal that escape the root. In `read-only` mode, OpenClaw-managed mutation tools remain omitted.
 
-New sessions, including managed worktree sessions, inherit the configured global or per-agent tool/exec policy when no mode is specified. Exec and file-tool settings are independent: `apply_patch` stays workspace-contained by default even when `tools.exec.mode` is `full`. See [apply_patch containment](/tools/apply-patch#notes) for the file settings, session-mode precedence, and whole-agent worker defaults.
+New sessions, including managed worktree sessions, inherit the configured global or per-agent tool/exec policy when no mode is specified. Exec and file-tool settings are independent: host `apply_patch` permits paths outside the workspace by default, consistently with unrestricted file tools. Set `tools.exec.applyPatch.workspaceOnly: true` or use a restricted session mode for containment. See [apply_patch containment](/tools/apply-patch#notes) for the file settings, session-mode precedence, and whole-agent worker defaults.
+
+For attended sessions created directly by a profiled operator, you can opt in to
+an explicit per-agent default with `agents.entries.<agentId>.newSessionPermissionMode`.
+Choose `read-only`, `guarded`, `workspace`, or `full`. A configured `full` default
+resolves to `workspace` for creators with `operator.write` but no `operator.admin`.
+Explicit request modes win; an explicit `full` request still requires current
+`operator.admin` authority. Existing sessions, forks,
+catalog sessions, delegated callers, and autonomous runs do not receive this
+creation-only default. Changing it does not alter already-created sessions.
+The New Session picker displays this caller-specific mode in its **Default** label;
+leaving Default selected lets the Gateway apply it with current authorization.
+Existing sessions keep their tool-policy-based Default label and clearing behavior.
 
 Creating a worktree pins the working directory without selecting a permission mode. Explicit modes and modes already saved on existing sessions remain unchanged.
 
-The Control UI permission picker labels Default with the agent's resolved exec posture when it matches a session mode, for example **Default (Guarded)** for `tools.exec.mode: "ask"` without a stricter host approval policy. Resolution includes global settings, agent overrides, and host approval floors. Without those settings or sandboxing, the default is full access. Allowlist-only policy and non-equivalent `security`/`ask` pairs, including `ask: "always"`, keep the plain **Default** label. Agents whose sandbox configuration could apply to their sessions also keep plain **Default**, because effective policy cannot be stated at agent scope. This is display metadata, not an authorization decision or a filesystem-access guarantee; tool policy still applies. Selecting Default clears the session override; it does not save the displayed mode into the session.
+When a session uses **Agent default**, the Control UI permission picker shows the agent's resolved exec posture when it matches a session mode, for example **Ask me** for `tools.exec.mode: "ask"` without a stricter host approval policy, and marks that mode's menu row **Default**. Resolution includes global settings, agent overrides, and host approval floors. Without those settings or sandboxing, the default is full access. Allowlist-only policy and non-equivalent `security`/`ask` pairs, including `ask: "always"`, keep the plain **Default** label. Agents whose sandbox configuration could apply to their sessions also keep plain **Default**, because effective policy cannot be stated at agent scope. This is display metadata, not an authorization decision or a filesystem-access guarantee; tool policy still applies. Selecting **Agent default** clears the session override; it does not save the displayed mode into the session.
 
 ## Delegated setup and repair
 
@@ -64,7 +76,7 @@ handoffs still need a direct operator session. See
 
 ## Change permissions during a task
 
-Choose a mode from the chat composer's **Execution permissions** menu. The icon-only picker immediately shows the selected mode's icon while the change settles, and temporarily blocks another selection for that session. Other clients see the mode after the Gateway publishes the updated session. If the change fails, the picker reconciles with the authoritative session state and shows an error; if that state cannot be refreshed yet, it keeps the optimistic selection until a fresh permission read or update for that session confirms the saved mode.
+Choose a mode from the chat composer's **Permissions** menu. On wider web composers, the picker shows the current mode beside its icon, including the resolved mode when using Default. Compact composers keep the icon-only control. The picker immediately shows the selected mode while the change settles, and temporarily blocks another selection for that session. Other clients see the mode after the Gateway publishes the updated session. If the change fails, the picker reconciles with the authoritative session state and shows an error; if that state cannot be refreshed yet, it keeps the optimistic selection until a fresh permission read or update for that session confirms the saved mode.
 
 - **Codex:** OpenClaw interrupts the active native turn and stops its background terminals, then continues in the same conversation with the new permissions and an internal **Permission change** notice. It does not reset the conversation or replay the original request.
 - **OpenClaw native runtime:** OpenClaw refreshes the active tool policy without restarting the conversation. Subsequent tool calls use the updated permissions.
@@ -79,7 +91,7 @@ Session-wide exec policy belongs to the permission mode. When the mode is unset,
 
 Before resuming sessions after upgrading a store with legacy session exec policy, run `openclaw doctor --fix`; the runtime no longer reads that policy. Missing policy values inherit the layered global and per-agent exec policy. When historical sandbox availability is unknown, migration uses the stricter sandbox base for automatic host selection. Restrictive policies migrate without broadening exec access to `read-only` or `guarded`. Existing permission modes remain unchanged. Legacy full-access policy is removed with a notice so configuration applies, never converted into a `full` permission grant.
 
-The retired `execSecurity` and `execAsk` fields remain in the protocol v4 schemas for `sessions.patch` and `sessions.patchMany`. Requests containing either field, including `null`, are rejected with `INVALID_REQUEST` and guidance to set `permissionMode` (`read-only`, `guarded`, `workspace`, or `full`) or use `/exec` for one run. Neither field is stored as runtime session policy.
+The retired `execSecurity` and `execAsk` fields remain in the wire schemas for `sessions.patch` and `sessions.patchMany`. Requests containing either field, including `null`, are rejected with `INVALID_REQUEST` and guidance to set `permissionMode` (`read-only`, `guarded`, `workspace`, or `full`) or use `/exec` for one run. Neither field is stored as runtime session policy.
 
 An explicit `full` mode is the admin-authorized exception to host approval-file floors: its OpenClaw exec policy remains `full` with approvals off unless a turn-scoped override tightens it. Approval-file floors continue to tighten config-driven exec policy, unset modes, and every non-full session mode. Tightening a full session's security restores those floors; tightening only `ask` does not. Sandbox restrictions and tool allow/deny policy remain independent, and a harness may clamp an unsupported mode to a compatible safer policy tuple. Codex also continues to honor externally enforced `requirements.toml` constraints.
 

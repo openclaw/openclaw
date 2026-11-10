@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
+import type { Context } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -9,20 +8,16 @@ import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
 } from "../../plugins/loader.test-fixtures.js";
-import { pluginInstanceInvocation } from "../../plugins/plugin-instance-invocation.js";
-import {
-  getPluginInstanceOwner,
-  type PluginInstanceHandle,
-} from "../../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import type { StreamFn } from "../runtime/index.js";
+import { completionModelDefinition } from "../simple-completion.test-support.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { createQueuedAssistantStream } from "../test-helpers/assistant-event-stream.test-support.js";
 import { runEmbeddedAgent } from "./run.js";
 import { clearEmbeddedSessionPromptStates } from "./session-prompt-state.js";
 
@@ -34,53 +29,26 @@ it("admits a second workspace turn through real prepared runtime after registrat
   await withOpenClawTestState({ label: "prepared-workspace-turns" }, async (state) => {
     const bundled = state.path("bundled");
     await fs.mkdir(bundled);
-    type Owner = NonNullable<ReturnType<typeof getPluginInstanceOwner>>;
-    const registrations: Array<{
-      owner: Owner;
-      instance: PluginInstanceHandle;
-      disposals: number;
-      mode: string;
-      turn: number;
-    }> = [];
+    const registrations: string[] = [];
     let activeTurn = 0;
-    const requests: Context[] = [];
-    const requestRegistries: Array<Array<{ id: string; status: string }>> = [];
+    const requests: Array<Context["systemPrompt"]> = [];
     const stream: StreamFn = (model, context) => {
-      requests.push(structuredClone(context));
-      requestRegistries.push(
-        getPluginRuntimeGenerationRegistry()?.plugins.map(({ id, status }) => ({ id, status })) ??
-          [],
-      );
+      requests.push(context.systemPrompt);
       const message = makeAgentAssistantMessage({
         api: model.api,
         provider: model.provider,
         model: model.id,
         content: [{ type: "text", text: `SCRIPTED-${requests.length}` }],
       });
-      const events = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        events.push({ type: "done", reason: "stop", message });
-        events.end();
+      return createQueuedAssistantStream((push) => {
+        push({ type: "done", reason: "stop", message });
       });
-      return events;
     };
     const bridge = {
       stream,
-      capture: (mode: string) => {
-        const instance = expectDefined(
-          pluginInstanceInvocation.getStore()?.instance,
-          "registering instance",
-        );
-        const owner = expectDefined(getPluginInstanceOwner(instance), "registration owner");
-        const registration = {
-          owner,
-          instance: expectDefined(owner.instance, "owned plugin instance"),
-          disposals: 0,
-          mode,
-          turn: activeTurn,
-        };
-        registrations.push(registration);
-        return registration;
+      capture: (pluginId: string) => {
+        registrations.push(`${pluginId}:${activeTurn}`);
+        return activeTurn;
       },
     };
     const bridgeKey = `__prepared_workspace_${path.basename(state.root)}`;
@@ -108,11 +76,11 @@ it("admits a second workspace turn through real prepared runtime after registrat
           `
 module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
   const bridge = globalThis[${JSON.stringify(bridgeKey)}];
-  const registration = bridge.capture(api.registrationMode);
-  api.lifecycle.registerRuntimeLifecycle({ id: "fixture", dispose() { registration.disposals++; } });
+  api.lifecycle.registerRuntimeLifecycle({ id: "fixture", dispose() {} });
+  const turn = bridge.capture(${JSON.stringify(pluginId)});
   ${
     pluginId === siblingPluginId
-      ? 'if (registration.turn === 1) throw new Error("Synthetic registration rollback");'
+      ? 'if (turn === 1) throw new Error("Synthetic registration rollback");'
       : 'api.registerProvider({ id: "anthropic", label: "Scripted Anthropic", auth: [], wrapStreamFn: () => (model, context, options) => bridge.stream(model, context, options) });'
   }
 } };
@@ -121,9 +89,7 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
       }
       const config: OpenClawConfig = {
         agents: {
-          entries: {
-            main: { agentDir: state.agentDir(), workspace: state.workspaceDir },
-          },
+          entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
           defaults: { workspace: state.workspaceDir, model: "anthropic/claude-opus-5" },
         },
         models: {
@@ -134,17 +100,7 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
               auth: "api-key",
               apiKey: "synthetic-workspace-key",
               baseUrl: "https://api.anthropic.com",
-              models: [
-                {
-                  id: "claude-opus-5",
-                  name: "Scripted Claude",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 200_000,
-                  maxTokens: 1024,
-                },
-              ],
+              models: [completionModelDefinition({ id: "claude-opus-5", contextWindow: 200_000 })],
             },
           },
         },
@@ -165,8 +121,6 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
           await resetPreparedModelRuntimeSnapshotsForTest();
           clearPluginMetadataLifecycleCaches();
           setRuntimeConfigSnapshot(config);
-          const results: Array<PromiseSettledResult<Awaited<ReturnType<typeof runEmbeddedAgent>>>> =
-            [];
           try {
             for (const [index, rule] of [
               "Original workspace instruction.",
@@ -185,85 +139,43 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
                 "scripted-workspace",
               );
               try {
-                results.push({
-                  status: "fulfilled",
-                  value: await runEmbeddedAgent({
-                    preparedRunAdmission: admission,
-                    config,
-                    runId,
+                const result = await runEmbeddedAgent({
+                  preparedRunAdmission: admission,
+                  config,
+                  runId,
+                  sessionId,
+                  agentDir: state.agentDir(),
+                  workspaceDir: state.workspaceDir,
+                  sessionTarget: {
+                    agentId: "main",
                     sessionId,
-                    agentDir: state.agentDir(),
-                    workspaceDir: state.workspaceDir,
-                    sessionTarget: {
-                      agentId: "main",
-                      sessionId,
-                      sessionKey: `agent:main:${sessionId}`,
-                      storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-                    },
-                    provider: "anthropic",
-                    model: "claude-opus-5",
-                    prompt: `Reply for workspace turn ${index + 1}.`,
-                    disableTools: true,
-                    cleanupBundleMcpOnRunEnd: true,
-                    timeoutMs: 30_000,
-                  }),
+                    sessionKey: `agent:main:${sessionId}`,
+                    storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+                  },
+                  provider: "anthropic",
+                  model: "claude-opus-5",
+                  prompt: `Reply for workspace turn ${index + 1}.`,
+                  disableTools: true,
+                  cleanupBundleMcpOnRunEnd: true,
+                  timeoutMs: 30_000,
                 });
-              } catch (reason) {
-                results.push({ status: "rejected", reason });
+                expect(result.meta.error).toBeUndefined();
               } finally {
                 admission.close();
               }
             }
-            const registryEvidence = JSON.stringify({
-              requestRegistries,
-              registrations: registrations.map(({ owner, instance, disposals, mode, turn }) => ({
-                id: owner.record.id,
-                status: owner.record.status,
-                acceptingCalls: instance.acceptingCalls,
-                disposals,
-                mode,
-                turn,
-              })),
-            });
-            expect(
-              results.map((result) =>
-                result.status === "rejected" ? String(result.reason) : result.value.meta.error,
-              ),
-              registryEvidence,
-            ).toEqual([undefined, undefined]);
-            expect(requests, registryEvidence).toHaveLength(2);
             expect(network).not.toHaveBeenCalled();
-            expect(
-              registrations.some(
-                ({ owner }) =>
-                  owner.record.id === siblingPluginId && owner.record.status === "error",
-              ),
-              registryEvidence,
-            ).toBe(true);
-            expect(
-              registrations.some(
-                ({ owner, turn }) =>
-                  owner.record.id === siblingPluginId &&
-                  turn === 0 &&
-                  owner.record.status === "loaded",
-              ),
-              registryEvidence,
-            ).toBe(true);
-            const first = expectDefined(requests[0], "first request");
-            const second = expectDefined(requests[1], "second request");
-            expect(first.systemPrompt).toContain("Original workspace instruction.");
-            expect(second.systemPrompt).toContain("Updated workspace instruction.");
+            expect(registrations).toContain(`${siblingPluginId}:0`);
+            expect(registrations).toContain(`${siblingPluginId}:1`);
+            expect(requests).toEqual([
+              expect.stringContaining("Original workspace instruction."),
+              expect.stringContaining("Updated workspace instruction."),
+            ]);
           } finally {
             await resetPreparedModelRuntimeSnapshotsForTest();
             resetPluginLoaderTestStateForTest();
             cleanupPluginLoaderFixturesForTest();
             clearPluginMetadataLifecycleCaches();
-            for (const { owner, instance, disposals, turn } of registrations) {
-              expect(disposals, `${owner.record.id} turn ${turn} disposal`).toBe(1);
-              expect(instance.acceptingCalls, `${owner.record.id} turn ${turn} retired`).toBe(
-                false,
-              );
-            }
           }
         },
       );

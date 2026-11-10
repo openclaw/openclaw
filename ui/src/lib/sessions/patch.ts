@@ -22,6 +22,7 @@ export type SessionPatch = Pick<
   | "contextWindow"
   | "thinkingLevel"
   | "fastMode"
+  | "cyberAccessProgram"
   | "verboseLevel"
   | "reasoningLevel"
   | "permissionMode"
@@ -51,6 +52,8 @@ export type SessionPatchOptions = {
   };
   /** Publish the write receipt before list reconciliation can fail. */
   onConfirmed?: (result: SessionPatchResult) => void;
+  /** Release a queued write's receipt after replay or discard, including failed replay. */
+  onDeferredSettled?: () => void;
   /** Called for a rejected settings write while it still owns a pending field. */
   onRejected?: (error: unknown) => void;
   /** Revalidate explicit user intent after the settings tail, before dispatch. */
@@ -64,9 +67,22 @@ export type SessionPatchOptions = {
 };
 
 export type SessionPatchResult = SessionsPatchResult & { listRefreshError?: string };
+export type SessionPatchOutcome = SessionPatchResult | { queued: true };
+
+export function isSessionDeferredPatch(patch: Record<string, unknown>): boolean {
+  const fields = Object.keys(patch);
+  return (
+    (fields.length === 1 && typeof patch.archived === "boolean") ||
+    (fields.length > 0 &&
+      fields.every(
+        (field) =>
+          field === "label" || field === "icon" || field === "color" || field === "category",
+      ))
+  );
+}
 
 export type SessionPatchRoute = (
   key: string,
   patch: SessionPatch,
   options?: SessionPatchOptions,
-) => Promise<SessionPatchResult | null>;
+) => Promise<SessionPatchOutcome | null>;

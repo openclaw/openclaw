@@ -4,7 +4,7 @@ import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
-import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
+import { buildNpmResolutionFields } from "../infra/npm-registry-spec.js";
 import {
   expectedIntegrityForUpdate,
   isPackageVersionDowngrade,
@@ -208,8 +208,8 @@ export async function updateNpmInstalledHookPacks(params: {
     outcomes.push({
       hookId,
       status,
-      currentVersion: currentVersion ?? undefined,
-      nextVersion: nextVersion ?? undefined,
+      currentVersion,
+      nextVersion,
       message:
         status === "unchanged"
           ? persistence

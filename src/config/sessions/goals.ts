@@ -98,7 +98,7 @@ function resolveGoalCommandHint(status: SessionGoalStatus): string {
     case "budget_limited":
       return "/goal resume, /goal edit <objective>, /goal clear";
     case "complete":
-      return "/goal clear";
+      return "/goal resume, /goal clear";
   }
   return "/goal";
 }
@@ -129,7 +129,7 @@ export async function getSessionGoal(
     { sessionKey: options.sessionKey, storePath: options.storePath },
     (entry) => {
       const accounted = accountSessionGoalUsage(entry, now);
-      goal = accounted ? { ...accounted } : undefined;
+      goal = accounted;
       if (!accounted || JSON.stringify(accounted) === JSON.stringify(entry.goal)) {
         return null;
       }

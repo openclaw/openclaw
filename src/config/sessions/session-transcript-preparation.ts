@@ -6,7 +6,6 @@ import type {
   SessionTranscriptTurnMessageAppend,
   TranscriptMessageAppendOptions,
 } from "./session-accessor.types.js";
-import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import { captureExternalSessionCommitGuard } from "./session-source-authority.js";
 
 export function assertLegacyTranscriptPreparation<TMessage>(
@@ -20,9 +19,7 @@ export function assertLegacyTranscriptPreparation<TMessage>(
   ) {
     return;
   }
-  const source = captureIncognitoSessionSource(scope);
   if (
-    source ||
     isIncognitoSessionKey(scope.sessionKey) ||
     (scope.storePath && resolveExplicitIncognitoAgentSqliteTarget(scope.storePath, scope))
   ) {
@@ -30,7 +27,15 @@ export function assertLegacyTranscriptPreparation<TMessage>(
       "Opaque transcript callbacks are unavailable for incognito sessions. Use withSessionTranscriptWrite and preparation.prepareMessage / preparation.source instead.",
     );
   }
-  warnSessionTranscriptPreparationDeprecation();
+  if (options?.prepareMessageAfterIdempotencyCheck) {
+    warnSessionTranscriptPreparationDeprecation(
+      "prepareMessageAfterIdempotencyCheck",
+      "preparation.prepareMessage outside the transaction",
+    );
+  }
+  if (options?.beforeFreshMessageCommit) {
+    warnSessionTranscriptPreparationDeprecation("beforeFreshMessageCommit", "preparation.source");
+  }
 }
 
 /** Turn workers serialize prepared values and source predicates, never host preparation callbacks. */

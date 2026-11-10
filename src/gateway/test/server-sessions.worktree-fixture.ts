@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { expect, onTestFinished, vi } from "vitest";
 import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import * as hostIoPressure from "../../infra/host-io-pressure.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -85,12 +86,16 @@ export function setupGatewaySessionsWorktreeTestHarness() {
     const worktreeId = created.payload?.worktree.id;
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
+    using _ = vi
+      .spyOn(hostIoPressure, "createHostIoPressureProbe")
+      .mockReturnValue(async () => false);
     const maintenance = startWorktreeMaintenance({
       scheduler,
       getRuntimeConfig: (await getGatewayConfigModule()).getRuntimeConfig,
       onComplete: vi.fn(),
       onError: vi.fn(),
     });
+    await clock.advanceBy(130_000);
     onTestFinished(async () => {
       await maintenance.stop();
       await scheduler.stop();
@@ -118,7 +123,7 @@ export function setupGatewaySessionsWorktreeTestHarness() {
     };
     const cleanupWorktrees = async () => {
       maintenance.request();
-      await tickWorktreeMaintenance();
+      await clock.advanceBy(60_000);
     };
     return {
       key,

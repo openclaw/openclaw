@@ -5,7 +5,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { createPluginToolMetadataLookup, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import type { RuntimeToolSchemaDiagnostic } from "./tool-schema-projection.js";
 import {
@@ -14,6 +14,7 @@ import {
 } from "./tools-effective-inventory-shared.js";
 import type { EffectiveToolInventoryEntry } from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { describeGitHubPublishToolPreview } from "./tools/github-publish-tool.js";
 
 // Tool metadata may be attached to the normalized tool or the raw fallback
 // before schema projection. Check both so owner attribution survives cloning.
@@ -81,23 +82,23 @@ export function buildRuntimeCompatibleToolInventory(params: RuntimeCompatibleToo
     createToolProjection: () => {
       // Provider normalization can publish registry metadata; read it afterward,
       // keyed by ownership so one plugin cannot relabel another plugin's tool.
-      const pluginToolMetadata = new Map(
-        (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
-          buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
-          entry.metadata,
-        ]),
-      );
+      const metadataFor = createPluginToolMetadataLookup(getActivePluginRegistry()?.toolMetadata);
       return (tool) => {
         const source = resolveEffectiveToolSource(tool, rawToolsByName.get(tool.name));
-        const metadata = source.pluginId
-          ? pluginToolMetadata.get(buildPluginToolMetadataKey(source.pluginId, tool.name))
-          : undefined;
+        const metadata = source.pluginId ? metadataFor(source.pluginId, tool.name) : undefined;
         const label = normalizeOptionalString(metadata?.displayName);
         const description = normalizeOptionalString(metadata?.description);
         return {
           ...source,
           ...(label ? { label } : {}),
           ...(description ? { description, rawDescription: description } : {}),
+          ...(source.source === "core" && tool.name === "github_publish"
+            ? {
+                rawDescription: describeGitHubPublishToolPreview(
+                  rawToolsByName.get(tool.name)?.parameters ?? tool.parameters,
+                ),
+              }
+            : {}),
           ...(metadata?.risk ? { risk: metadata.risk } : {}),
           ...(metadata?.tags ? { tags: metadata.tags } : {}),
         };

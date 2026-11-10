@@ -87,7 +87,9 @@ export function buildCliAgentSystemPrompt(params: {
   preparedModelRuntime?: Parameters<
     typeof buildConfiguredAgentSystemPrompt
   >[0]["preparedModelRuntime"];
+  preparedRepoRoot?: string | null;
   preparedGitCoauthorPrompt?: string;
+  preparedSessionEntry?: Parameters<typeof buildSystemPromptParams>[0]["preparedSessionEntry"];
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
@@ -95,6 +97,8 @@ export function buildCliAgentSystemPrompt(params: {
   runtimeChannel?: string;
   runtimeChatType?: ChatType;
   runtimeCapabilities?: string[];
+  customInlineButtonHint?: boolean;
+  messageToolHints?: string[];
   ownerNumbers?: string[];
   docsPath?: string;
   sourcePath?: string;
@@ -119,7 +123,9 @@ export function buildCliAgentSystemPrompt(params: {
     agentId: params.agentId,
     workspaceDir: runtimeCwd,
     cwd: runtimeCwd,
+    preparedRepoRoot: params.preparedRepoRoot,
     preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt,
+    preparedSessionEntry: params.preparedSessionEntry,
     requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,
@@ -134,6 +140,8 @@ export function buildCliAgentSystemPrompt(params: {
       channel: params.runtimeChannel,
       chatType: params.runtimeChatType,
       capabilities: params.runtimeCapabilities,
+      customInlineButtonHint: params.customInlineButtonHint,
+      blind: params.preparedSessionEntry?.blindPrompt,
     },
   });
   return buildConfiguredAgentSystemPrompt({
@@ -157,6 +165,7 @@ export function buildCliAgentSystemPrompt(params: {
       surface: "cli_backend",
     }),
     runtimeInfo,
+    messageToolHints: params.messageToolHints,
     toolNames: params.tools.map((tool) => tool.name),
     messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,
@@ -262,7 +271,7 @@ async function writeCliImages(params: {
   for (const image of params.images) {
     const fileName = resolveCliImageFileName(image);
     const buffer = Buffer.from(image.data, "base64");
-    await store.writeText(fileName, buffer);
+    await store.writeText(fileName, buffer, { durable: false });
     paths.push(store.path(fileName));
   }
   // Keep content-addressed image paths stable across Claude CLI runs so prompt
@@ -284,9 +293,10 @@ export async function writeCliSystemPromptFile(params: {
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-cli-system-prompt-",
   });
-  const filePath = await workspace.write(
+  const filePath = await workspace.store.write(
     "system-prompt.md",
     stripSystemPromptCacheBoundary(params.systemPrompt),
+    { durable: false },
   );
   return {
     filePath,
@@ -294,8 +304,7 @@ export async function writeCliSystemPromptFile(params: {
   };
 }
 
-export async function prepareCliPromptImagePayload(params: {
-  backend: CliBackendConfig;
+type CliPromptImageInput = {
   prompt: string;
   imagePrompt?: string;
   workspaceDir: string;
@@ -304,13 +313,10 @@ export async function prepareCliPromptImagePayload(params: {
   imageOrder?: PromptImageOrderEntry[];
   mediaImageLayout?: MediaImageLayout;
   media?: MediaFact[];
-  imageTurnKey?: string;
-}): Promise<{
-  prompt: string;
-  imagePaths?: string[];
-}> {
-  let prompt = params.prompt;
-  const imagePrompt = params.imagePrompt ?? prompt;
+};
+
+export async function loadCliPromptImages(params: CliPromptImageInput): Promise<ImageContent[]> {
+  const imagePrompt = params.imagePrompt ?? params.prompt;
   const needsHydration =
     params.imagePrompt !== undefined ||
     Boolean(params.media?.length) ||
@@ -334,7 +340,22 @@ export async function prepareCliPromptImagePayload(params: {
       `failed to hydrate ${imageResult.failedMediaCount} structured image attachment(s) for CLI input`,
     );
   }
-  const resolvedImages = imageResult?.images ?? params.images ?? [];
+  return imageResult?.images ?? params.images ?? [];
+}
+
+export async function prepareCliPromptImagePayload(
+  params: CliPromptImageInput & {
+    backend: CliBackendConfig;
+    imageTurnKey?: string;
+    /** Run-owned snapshot already inspected by the input gate; never reload its source paths. */
+    preparedImages?: ImageContent[];
+  },
+): Promise<{
+  prompt: string;
+  imagePaths?: string[];
+}> {
+  let prompt = params.prompt;
+  const resolvedImages = params.preparedImages ?? (await loadCliPromptImages(params));
   if (resolvedImages.length === 0) {
     return { prompt };
   }

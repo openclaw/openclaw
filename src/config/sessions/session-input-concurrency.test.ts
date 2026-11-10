@@ -12,6 +12,7 @@ import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { listSessionPendingInputs } from "./session-accessor.pending-inputs.js";
 import { patchSessionEntryCore, replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import { readSessionActorEntryFacts } from "./session-actor-replica.js";
 import * as actorScope from "./session-actor-scope.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
@@ -132,6 +133,50 @@ it("accepts input through a captured path alias using the native owner's canonic
   });
 });
 
+it("stages input from published entry facts without fetching a full actor snapshot", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const f = createSessionCompoundWorkerFixture();
+    const authority = { assertCurrent() {}, authorize() {} };
+    const input = expectDefined(
+      await acquireSessionInputActor(
+        { ...f.scope, target: f.target },
+        { assertCurrent() {}, assertReadable() {} },
+      ),
+      "admitted session actor",
+    );
+    const entry = { sessionId: f.scope.sessionId, updatedAt: 2, label: "published creation" };
+    await replaceSessionEntry(f.scope, entry);
+    expect(input.actor.snapshot(authority)).toBeUndefined();
+    const target = input.actor.target;
+    if (target.database.kind !== "file") {
+      throw new Error("Expected a durable input actor");
+    }
+    expect(
+      readSessionActorEntryFacts({ ...target, database: target.database })?.entry,
+    ).toMatchObject(entry);
+    const read = vi.spyOn(input.actor, "read");
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "Keep this input in durable custody", idempotencyKey: "entry-only-input" },
+      target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: entry },
+      updateMode: "none",
+    });
+    bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+    try {
+      await expect(
+        recorder.stageApproved?.({ runId: "entry-only-run", assertCurrent() {} }),
+      ).resolves.toBe(true);
+      expect((await listSessionPendingInputs(f.scope)).total).toBe(1);
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+      recorder.finishPendingInput?.("interrupted");
+      await recorder.waitForPendingInputSettlement?.();
+      await input.actor.release();
+    }
+  });
+});
+
 it.each(["before", "after"] as const)(
   "checks input staging lifecycle changes %s writer admission",
   async (timing) => {
@@ -152,7 +197,7 @@ it.each(["before", "after"] as const)(
       });
       bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
       const completePrevious = () =>
-        patchSessionEntryCore(f.scope, () => ({ restartRecoveryTerminalRunIds: ["previous-run"] }));
+        patchSessionEntryCore(f.scope, () => ({ status: "done", abortedLastRun: false }));
       const run = actorScope.runSessionActorCommand;
       const accept = input.actor.acceptInput;
       const competingWrite =
@@ -175,9 +220,7 @@ it.each(["before", "after"] as const)(
               })
           : vi.spyOn(input.actor, "acceptInput").mockImplementationOnce(async (...args) => {
               await completePrevious();
-              const outcome = await accept(...args);
-              expect(outcome.kind).toBe("stale-version");
-              return outcome;
+              return accept(...args);
             });
       try {
         const staged = recorder.stageApproved?.({ runId: "next-run", assertCurrent() {} });
@@ -191,7 +234,9 @@ it.each(["before", "after"] as const)(
             }),
           );
         } else {
-          await expect(staged).rejects.toThrow("lifecycle changed before its durable phase");
+          await expect(staged).rejects.toThrow(
+            /^Session actor (?:version changed before command admission|lifecycle changed before its durable phase)$/,
+          );
           expect(f.events()).toEqual([]);
         }
         expect(await listSessionPendingInputs(f.scope)).toEqual({ items: [], total: 0 });
@@ -308,9 +353,14 @@ it.each(["stage", "acceptInput", "adoptRun"] as const)(
   },
 );
 
-it.each(["lifecycle", "authority"] as const)(
-  "refuses run adoption when %s changes during version rebasing",
-  async (change) => {
+it.each([
+  { phase: "acceptInput", change: "metadata" },
+  { phase: "adoptRun", change: "metadata" },
+  { phase: "adoptRun", change: "lifecycle" },
+  { phase: "adoptRun", change: "authority" },
+] as const)(
+  "preserves input persistence and authority when $change changes before $phase admission",
+  async ({ phase, change }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       const f = createSessionCompoundWorkerFixture();
@@ -332,24 +382,48 @@ it.each(["lifecycle", "authority"] as const)(
         target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
         updateMode: "none",
       });
-      bindUserTurnInputActor(recorder, { phase: "adoptRun", acquire: async () => input });
-      const adopt = input.actor.adoptRun;
-      vi.spyOn(input.actor, "adoptRun").mockImplementationOnce(async (...args) => {
+      await input.actor.read({ assertCurrent, authorize: assertCurrent });
+      bindUserTurnInputActor(recorder, { phase, acquire: async () => input });
+      let metadataWrites = 0;
+      const afterCompetingWrite = async <T>(submit: () => Promise<T>) => {
         await patchSessionEntryCore(f.scope, () =>
-          change === "lifecycle" ? { abortedLastRun: true } : { displayName: "Updated" },
+          change === "lifecycle"
+            ? { abortedLastRun: true }
+            : { displayName: `Updated ${++metadataWrites}` },
         );
-        const outcome = await adopt(...args);
-        expect(outcome.kind).toBe("stale-version");
         current = change !== "authority";
-        return outcome;
-      });
+        return submit();
+      };
+      const accept = input.actor.acceptInput;
+      const adopt = input.actor.adoptRun;
+      // Every submission observes a real metadata write, including a cache-version retry.
+      const competingWrite =
+        phase === "acceptInput"
+          ? vi
+              .spyOn(input.actor, "acceptInput")
+              .mockImplementation((...args) => afterCompetingWrite(() => accept(...args)))
+          : vi
+              .spyOn(input.actor, "adoptRun")
+              .mockImplementation((...args) => afterCompetingWrite(() => adopt(...args)));
       try {
-        await expect(recorder.persistApproved()).rejects.toThrow(
-          change === "lifecycle" ? "refused by its current owner" : "Input authority revoked",
-        );
-        expect(recorder.hasPersisted()).toBe(false);
-        expect(f.events()).toEqual([]);
+        if (change === "metadata") {
+          await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
+          await recorder.persistFallback();
+          expect(f.read()?.displayName).toBe(`Updated ${metadataWrites}`);
+          expect(f.events().filter((event) => event.type === "message")).toEqual([
+            expect.objectContaining({
+              message: expect.objectContaining({ content: "Keep the original admission" }),
+            }),
+          ]);
+        } else {
+          await expect(recorder.persistApproved()).rejects.toThrow(
+            change === "lifecycle" ? "refused by its current owner" : "Input authority revoked",
+          );
+          expect(recorder.hasPersisted()).toBe(false);
+          expect(f.events()).toEqual([]);
+        }
       } finally {
+        competingWrite.mockRestore();
         await input.actor.release();
       }
     });

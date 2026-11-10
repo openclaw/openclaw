@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type TestContext } from "vitest";
 import WebSocket from "ws";
 import * as testInstance from "../../../helpers/openclaw-test-instance.js";
@@ -16,19 +17,11 @@ it("trusts only the fixture certificate for auxiliary HTTPS requests", async (co
   execFileSync(
     "openssl",
     [
-      "req",
-      "-x509",
-      "-newkey",
-      "rsa:2048",
-      "-nodes",
-      "-keyout",
+      ..."req -x509 -newkey rsa:2048 -nodes -keyout".split(" "),
       key,
       "-out",
       cert,
-      "-days",
-      "1",
-      "-subj",
-      "/CN=localhost",
+      ..."-days 1 -subj /CN=localhost".split(" "),
       "-addext",
       "subjectAltName=IP:127.0.0.1",
       "-addext",
@@ -106,23 +99,32 @@ it("prints bounded readiness receipts from the quota failure hook before Gateway
     ]);
     const receipt = String(print.mock.calls[0]![0]);
     expect(Buffer.byteLength(receipt)).toBeLessThan(1_024);
-    expect(receipt).toContain('"status":502');
-    expect(receipt).toContain('"error":"invalid-json"');
-    expect(receipt).toContain('"error":"timeout"');
-    expect(receipt).not.toContain("retained-only log");
-    expect(receipt).not.toContain("probes");
+    for (const text of ['"status":502', '"error":"invalid-json"', '"error":"timeout"']) {
+      expect(receipt).toContain(text);
+    }
+    for (const text of ["retained-only log", "probes"]) {
+      expect(receipt).not.toContain(text);
+    }
   } finally {
     createInstance.mockRestore();
     print.mockRestore();
   }
 });
 
-it.each(["http", "websocket"] as const)(
+it.for(["http", "websocket"] as const)(
   "keeps the catalog held through auxiliary %s success until the primary reply",
-  async (transport) => {
+  async (transport, context) => {
     const provider = await startQuotaProvider("codex_rate_limits", MARKER);
     const hold = provider.holdNextCatalog();
     const catalog = fetch(`${provider.baseUrl}/catalog/models`).then((response) => response.json());
+    context.onTestFinished(async () => {
+      hold.release();
+      try {
+        await catalog;
+      } finally {
+        await provider.stop();
+      }
+    });
     const request = async (model: string, path = "/v1/responses", generate?: boolean) => {
       const body = JSON.stringify({ type: "response.create", model, input: [], generate });
       if (transport === "http") {
@@ -141,12 +143,7 @@ it.each(["http", "websocket"] as const)(
           socket.once("error", reject);
           socket.on("message", (raw) => {
             const event: unknown = JSON.parse(rawDataToString(raw));
-            if (
-              event &&
-              typeof event === "object" &&
-              "type" in event &&
-              event.type === "response.completed"
-            ) {
+            if (isRecord(event) && event.type === "response.completed") {
               resolve();
             }
           });
@@ -160,39 +157,31 @@ it.each(["http", "websocket"] as const)(
         }
       }
     };
-    try {
-      const captured = await hold.arrived;
-      provider.setPhase("restored");
-      const observed = vi.fn(() => hold.release());
-      provider.observeNextSuccess(observed, { model: "gpt-5.5", path: "/v1/responses" });
-
-      await request("gpt-5.6-luna");
+    const captured = await hold.arrived;
+    const expectHeld = () => {
       expect(observed).not.toHaveBeenCalled();
       expect(captured.releasedAt).toBeUndefined();
-      await request("gpt-5.5", "/quota-backup/responses");
-      expect(observed).not.toHaveBeenCalled();
-      expect(captured.releasedAt).toBeUndefined();
+    };
+    provider.setPhase("restored");
+    const observed = vi.fn(() => hold.release());
+    provider.observeNextSuccess(observed, { model: "gpt-5.5", path: "/v1/responses" });
 
-      if (transport === "websocket") {
-        await request("gpt-5.5", "/v1/responses", false);
-        expect(observed).not.toHaveBeenCalled();
-        expect(captured.releasedAt).toBeUndefined();
-      }
+    await request("gpt-5.6-luna");
+    expectHeld();
+    await request("gpt-5.5", "/quota-backup/responses");
+    expectHeld();
 
-      await request("gpt-5.5", "/v1/responses?fixture=primary");
-      expect(observed).toHaveBeenCalledTimes(1);
-      await catalog;
-      expect(captured.releaseReason).toBe("explicit");
-      await request("gpt-5.5");
-      expect(observed).toHaveBeenCalledTimes(1);
-      expect(provider.errors).toEqual([]);
-    } finally {
-      hold.release();
-      try {
-        await catalog;
-      } finally {
-        await provider.stop();
-      }
+    if (transport === "websocket") {
+      await request("gpt-5.5", "/v1/responses", false);
+      expectHeld();
     }
+
+    await request("gpt-5.5", "/v1/responses?fixture=primary");
+    expect(observed).toHaveBeenCalledTimes(1);
+    await catalog;
+    expect(captured.releaseReason).toBe("explicit");
+    await request("gpt-5.5");
+    expect(observed).toHaveBeenCalledTimes(1);
+    expect(provider.errors).toEqual([]);
   },
 );

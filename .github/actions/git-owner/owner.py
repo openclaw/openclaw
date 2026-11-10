@@ -359,7 +359,11 @@ def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=N
             if deadline is not None and time.monotonic() >= deadline:
                 timed_out = True
                 raise FetchTimeout()
-            time.sleep(0.05)
+            # Wake on Git exit without delaying cancellation/deadline checks beyond 50ms.
+            try:
+                child.wait(timeout=0.05)
+            except subprocess.TimeoutExpired:
+                pass
     finally:
         # Failed inspection/cleanup permanently fences this policy process. Only
         # verified extinction permits another command, even after a caught error.
@@ -455,19 +459,28 @@ def checkout_selected_ref():
                   depth=2, blobless=True, retry_failures=True)
         except (FetchTimeout, GitFailure):
             raise GitFailure(1)
-    run_git(workspace, "checkout", "--detach", "refs/remotes/origin/checkout")
+    # Materialize the full planner input tree with bounded checkout parallelism.
+    checkout_options = ("-c", "checkout.workers=2") if kind == "preflight" else ()
+    run_git(workspace, *checkout_options, "checkout", "--detach", "refs/remotes/origin/checkout")
 
 
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
     node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
-    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh")
-    platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py")
+    security_scripts = (".github/zizmor.yml", "scripts/detect-private-keys.mts", "scripts/ci-production-audit.mjs", "scripts/ci-collect-checks.sh")
+    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/ios-test-results.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs", "scripts/lib/process-memory.mts", "packages/normalization-core/src/mountinfo-path.ts")
+    platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py", "scripts/swift-build-cache-metadata.py")
     upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
     # Preflight imports these siblings by file-relative paths.
     preflight_scripts = (
         "scripts/ci-build-manifest.mjs",
+        "scripts/lib/ci-blacksmith-capacity.mjs",
+        "scripts/ci-adaptive-priors.mjs",
+        "scripts/lib/actions-artifact-archive.mjs",
+        "scripts/lib/changed-path-facts.mjs",
+        "scripts/lib/ci-test-observations.mjs",
         "scripts/lib/ci-ios-smoke-plan.mjs",
+        "scripts/lib/ci-skills-python-plan.mjs",
         "scripts/lib/release-context.mjs",
         "scripts/lib/release-version.mjs",
     )
@@ -477,6 +490,10 @@ def checkout_harness(sha):
         "scripts/generate-npm-package-lock.mts",
         "scripts/changed-lanes.mts",
         "scripts/lib/merge-head-diff-base.mjs",
+        "scripts/lib/npm-lock-package-selection.mjs",
+        "scripts/lib/npm-lock-package-selection.d.mts",
+        "scripts/lib/record-shared.mjs",
+        "scripts/lib/record-shared.d.mts",
     )
     linux_node_scripts = (
         *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",
@@ -497,7 +514,7 @@ def checkout_harness(sha):
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
         # retained harness files without updating the index or trusting later edits.
-        pathspecs = [".github/actions", *node_setup_scripts]
+        pathspecs = [".github/actions", *(security_scripts if kind == "security-harness" else node_setup_scripts)]
         if kind in ("platform", "linux-node"):
             pathspecs += evidence_scripts
         elif kind == "preflight":
@@ -607,6 +624,13 @@ def main():
     if kind == "prepare":
         raise SystemExit(0)
     workspace = os.environ["GITHUB_WORKSPACE"]
+    if kind == "security-harness":
+        # No candidate code has run: the index still belongs to its trusted checkout.
+        if resolve_ref("HEAD") == os.environ["WORKFLOW_SHA"]:
+            checkout_harness(os.environ["WORKFLOW_SHA"])
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                output.write("reused=true\n")
+        return
     remote = f"https://github.com/{os.environ['CHECKOUT_REPO']}.git"
     # The workflow's token is repository-bound; never lend it to a sibling checkout.
     token = os.environ.pop("CHECKOUT_TOKEN", "")

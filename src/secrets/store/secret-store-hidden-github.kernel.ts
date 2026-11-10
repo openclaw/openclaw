@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { ensureSecretStoreSchema } from "../../state/openclaw-state-db-schema-additive.js";
@@ -28,7 +28,10 @@ export class PersonalGitHubStateError extends Error {
 }
 
 /** Private GitHub aggregate only; identity secrets have no generic reader or projection. */
-export function readPersonalGitHubSecret(db: DatabaseSync, profileId: string): string | undefined {
+export function readPersonalGitHubSecret(
+  db: EngineConnection,
+  profileId: string,
+): string | undefined {
   return withMissingSecretStoreFallback(() => {
     const row = executeSqliteQueryTakeFirstSync(
       db,
@@ -60,7 +63,7 @@ export function readPersonalGitHubSecret(db: DatabaseSync, profileId: string): s
 
 /** The caller owns the synchronous profile/connection transaction and its preconditions. */
 export function writePersonalGitHubSecret(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileId: string,
   value: string | null,
 ): void {
@@ -94,7 +97,7 @@ export function writePersonalGitHubSecret(
 }
 
 function upsertHiddenGitHubSecret(
-  db: DatabaseSync,
+  db: EngineConnection,
   entry: Pick<HiddenGitHubStoreRow, "scope_kind" | "scope_id" | "name" | "value" | "updated_by">,
   now: number,
 ): void {
@@ -132,7 +135,7 @@ function isLiveHiddenGitHubStoreRow(
   );
 }
 
-function selectHiddenGitHubSecretRecords(sqlite: DatabaseSync) {
+function selectHiddenGitHubSecretRecords(sqlite: EngineConnection) {
   return getNodeSqliteKysely<HiddenGitHubStoreDatabase>(sqlite)
     .selectFrom("secret_store_entries")
     .select(["name", "value", "created_at_ms", "updated_at_ms"])
@@ -144,11 +147,23 @@ function selectHiddenGitHubSecretRecords(sqlite: DatabaseSync) {
 }
 
 export function writeHiddenGitHubSecretInDatabase(
-  sqlite: DatabaseSync,
-  params: { name: string; value: string; updatedBy?: string | null; now: number },
+  sqlite: EngineConnection,
+  params: {
+    name: string;
+    value: string;
+    expectedValue?: string;
+    updatedBy?: string | null;
+    now: number;
+  },
 ): void {
   assertHiddenGitHubSecretRecordName(params.name);
   assertSecretStoreValueLength(params.value, "secret");
+  if (
+    params.expectedValue !== undefined &&
+    readHiddenGitHubSecretInDatabase(sqlite, params.name, params.now) !== params.expectedValue
+  ) {
+    throw new Error("GitHub OAuth record changed before settlement");
+  }
   ensureSecretStoreSchema(sqlite);
   upsertHiddenGitHubSecret(
     sqlite,
@@ -164,7 +179,7 @@ export function writeHiddenGitHubSecretInDatabase(
 }
 
 export function readHiddenGitHubSecretInDatabase(
-  sqlite: DatabaseSync,
+  sqlite: EngineConnection,
   name: string,
   now: number,
 ): string | undefined {
@@ -179,30 +194,38 @@ export function readHiddenGitHubSecretInDatabase(
 }
 
 export function listHiddenGitHubSecretsInDatabase(
-  sqlite: DatabaseSync,
-  prefix: HiddenGitHubStorePrefix,
+  sqlite: EngineConnection,
+  prefix: HiddenGitHubStorePrefix | undefined,
   now: number,
 ): Array<{ name: string; value: string }> {
-  const kind = hiddenGitHubStoreKindFromPrefix(prefix);
+  const kind = prefix === undefined ? undefined : hiddenGitHubStoreKindFromPrefix(prefix);
   return withMissingSecretStoreFallback(
     () =>
       executeSqliteQuerySync(
         sqlite,
         selectHiddenGitHubSecretRecords(sqlite)
-          .where("name", ">=", `${prefix}-`)
-          .where("name", "<", `${prefix}.`)
+          .where((eb) =>
+            eb.or(
+              (prefix === undefined ? ["github-device", "github-oauth"] : [prefix]).map(
+                (selected) =>
+                  eb.and([eb("name", ">=", `${selected}-`), eb("name", "<", `${selected}.`)]),
+              ),
+            ),
+          )
           .orderBy("name", "asc"),
-      ).rows.flatMap((row) =>
-        classifyHiddenGitHubStoreName(row.name) === kind &&
-        isLiveHiddenGitHubStoreRow(row, kind, now)
+      ).rows.flatMap((row) => {
+        const rowKind = classifyHiddenGitHubStoreName(row.name);
+        return (rowKind === "device" || rowKind === "oauth") &&
+          (kind === undefined || rowKind === kind) &&
+          isLiveHiddenGitHubStoreRow(row, rowKind, now)
           ? [{ name: row.name, value: row.value }]
-          : [],
-      ),
+          : [];
+      }),
     [],
   );
 }
 
-export function deleteHiddenGitHubSecretInDatabase(sqlite: DatabaseSync, name: string): void {
+export function deleteHiddenGitHubSecretInDatabase(sqlite: EngineConnection, name: string): void {
   assertHiddenGitHubSecretRecordName(name);
   withMissingSecretStoreFallback(
     () =>

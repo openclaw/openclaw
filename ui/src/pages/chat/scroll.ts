@@ -79,7 +79,7 @@ export function captureChatSessionScrollPosition(target: {
 }
 
 export type ChatScrollHost = {
-  renderLifecycle: RenderLifecycle;
+  renderLifecycle: Pick<RenderLifecycle, "afterCommit">;
   chatLastScrollTop: number;
   chatLastScrollHeight?: number;
   chatHasAutoScrolled: boolean;
@@ -107,80 +107,17 @@ type ChatScrollOptions = {
 type PendingChatScroll = { manual: boolean; cancel: () => void };
 const pendingChatScrolls = new WeakMap<ChatScrollHost, PendingChatScroll>();
 
+export function hasPendingManualChatScroll(host: ChatScrollHost): boolean {
+  return pendingChatScrolls.get(host)?.manual ?? false;
+}
+
 /** A queued reader command owns the next viewport movement, including geometric follow. */
 export function canAutoFollowChat(host: ChatScrollHost): boolean {
-  return !host.chatFollowLocked && !pendingChatScrolls.get(host)?.manual;
+  return !host.chatFollowLocked && !hasPendingManualChatScroll(host);
 }
 
 export function cancelChatScroll(host: ChatScrollHost): void {
   pendingChatScrolls.get(host)?.cancel();
-}
-
-function setNewMessagesBelow(host: ChatScrollHost, next: boolean): void {
-  if (host.chatNewMessagesBelow === next) {
-    return;
-  }
-  host.chatNewMessagesBelow = next;
-  // Scroll effects run after the render that caused them. Publish the semantic
-  // state transition so the indicator cannot wait for an unrelated update.
-  host.renderLifecycle.invalidate();
-}
-
-function applyChatScroll(
-  host: ChatScrollHost,
-  force: boolean,
-  smooth: boolean,
-  options: ChatScrollOptions,
-): void {
-  const target = host.chatScrollElement?.();
-  if (!target) {
-    return;
-  }
-  const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-  const contentGrew = target.scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
-  host.chatLastScrollHeight = target.scrollHeight;
-  const contentChanged = options.contentChanged ?? options.source !== "resize";
-  const manualScroll = options.source === "manual";
-
-  // force=true only overrides when we haven't auto-scrolled yet (initial load).
-  // After initial load, respect the user's scroll position.
-  const effectiveForce = force && !host.chatHasAutoScrolled;
-  const shouldStick =
-    manualScroll ||
-    effectiveForce ||
-    (!host.chatFollowLocked &&
-      (options.source === "resize" ||
-        host.chatUserNearBottom ||
-        distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
-
-  if (!shouldStick) {
-    if (contentChanged || (options.source === "resize" && contentGrew)) {
-      setNewMessagesBelow(host, true);
-    }
-    return;
-  }
-  const behavior = resolveScrollBehavior(smooth ? "smooth" : "auto");
-  // Restoration owns the viewport until it settles or an explicit command
-  // replaces it. Automatic follow must not change policy when it is declined.
-  if (
-    !host.chatScrollToEnd?.({
-      behavior,
-      source: manualScroll ? "manual" : "auto",
-    })
-  ) {
-    return;
-  }
-  if (effectiveForce) {
-    host.chatHasAutoScrolled = true;
-  }
-  host.chatFollowLocked = false;
-  host.chatUserNearBottom = true;
-  setNewMessagesBelow(host, false);
-  // A return issued at an already-clamped end produces no native scroll event.
-  // Settle it here; an actual smooth journey waits for its final position event.
-  if (manualScroll && distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
-    updateChatScrollPosition(host, target, "toward-end");
-  }
 }
 
 function queueChatScroll(
@@ -219,7 +156,56 @@ function queueChatScroll(
       }
       pendingChatScrolls.delete(host);
       complete?.();
-      applyChatScroll(host, force, smooth, options);
+      const target = host.chatScrollElement?.();
+      if (!target) {
+        return;
+      }
+      const scrollHeight = target.scrollHeight;
+      const distanceFromBottom = scrollHeight - target.scrollTop - target.clientHeight;
+      const contentGrew = scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
+      host.chatLastScrollHeight = scrollHeight;
+      const contentChanged = options.contentChanged ?? options.source !== "resize";
+      const manualScroll = options.source === "manual";
+
+      // force=true only overrides when we haven't auto-scrolled yet (initial load).
+      // After initial load, respect the user's scroll position.
+      const effectiveForce = force && !host.chatHasAutoScrolled;
+      const shouldStick =
+        manualScroll ||
+        effectiveForce ||
+        (!host.chatFollowLocked &&
+          (options.source === "resize" ||
+            host.chatUserNearBottom ||
+            distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
+
+      if (!shouldStick) {
+        if (contentChanged || (options.source === "resize" && contentGrew)) {
+          host.chatNewMessagesBelow = true;
+        }
+        return;
+      }
+      const behavior = resolveScrollBehavior(smooth ? "smooth" : "auto");
+      // Restoration owns the viewport until it settles or an explicit command
+      // replaces it. Automatic follow must not change policy when it is declined.
+      if (
+        !host.chatScrollToEnd?.({
+          behavior,
+          source: manualScroll ? "manual" : "auto",
+        })
+      ) {
+        return;
+      }
+      if (effectiveForce) {
+        host.chatHasAutoScrolled = true;
+      }
+      host.chatFollowLocked = false;
+      host.chatUserNearBottom = true;
+      host.chatNewMessagesBelow = false;
+      // A return issued at an already-clamped end produces no native scroll event.
+      // Settle it here; an actual smooth journey waits for its final position event.
+      if (manualScroll && distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
+        updateChatScrollPosition(host, target, true);
+      }
     };
     frame = requestAnimationFrame(() => {
       // The composer viewport and appended rows commit their measured sizes in
@@ -267,34 +253,30 @@ export function handleChatScroll(host: ChatScrollHost, event: Event): void {
   updateChatScrollPosition(host, container);
 }
 
-export function handleChatScrollTakeover(host: ChatScrollHost, towardEnd = false): void {
+export function handleChatScrollTakeover(host: ChatScrollHost, towardEnd?: boolean): void {
   cancelChatScroll(host);
   const container = host.chatScrollElement?.();
   if (container) {
     // Intent can stop a smooth scroll without moving a pixel. Retire queued
     // follow work and publish reader policy even without a native scroll event.
-    updateChatScrollPosition(host, container, towardEnd ? "toward-end" : "reader");
+    updateChatScrollPosition(host, container, towardEnd ?? "reader");
   }
 }
 
 /** Reader-controlled UI can take over even when the transcript is at its end. */
 export function lockChatScroll(host: ChatScrollHost): void {
-  const changed = !host.chatFollowLocked || host.chatUserNearBottom;
   cancelChatScroll(host);
   host.chatHasAutoScrolled = true;
   host.chatFollowLocked = true;
   host.chatUserNearBottom = false;
   // Cancelling queued page work does not retire an already issued native target.
   host.chatCancelScroll?.();
-  if (changed) {
-    host.renderLifecycle.invalidate();
-  }
 }
 
 function updateChatScrollPosition(
   host: ChatScrollHost,
   container: HTMLElement,
-  takeover: false | "reader" | "toward-end" = false,
+  takeover?: boolean | "reader",
 ): void {
   const scrollTop = Math.max(0, container.scrollTop);
   const delta = scrollTop - host.chatLastScrollTop;
@@ -303,18 +285,22 @@ function updateChatScrollPosition(
   // Ignore downward scroll events that we triggered, including intermediate
   // smooth-scroll frames. A real user scroll-up must still pass through so
   // streaming stops pinning them back to the bottom.
-  const isUserScrollUp = takeover !== false || (delta < 0 && !host.chatIsMaintenanceScroll?.());
+  const isUserScrollUp = takeover !== undefined || (delta < 0 && !host.chatIsMaintenanceScroll?.());
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  if (host.chatIsProgrammaticScroll?.() && !isUserScrollUp) {
+  if ((host.chatIsProgrammaticScroll?.() || host.chatIsMaintenanceScroll?.()) && !isUserScrollUp) {
     // A measured arrival clears the affordance even when maintenance must not
     // change the reader's follow policy.
     if (distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
-      setNewMessagesBelow(host, false);
+      host.chatNewMessagesBelow = false;
     }
     return;
   }
-  const wasReadingHistory = host.chatReadingHistory;
-  if (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
+  if (
+    takeover === false ||
+    (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
+  ) {
+    // An upward key owns the viewport before its native movement. Otherwise
+    // incoming content can restart following between keydown and that movement.
     // Taking control before initial history settles must retire its queued
     // force-scroll. Otherwise that delayed commit can overwrite the viewport.
     host.chatHasAutoScrolled = true;
@@ -322,23 +308,18 @@ function updateChatScrollPosition(
     host.chatReadingHistory = true;
   } else if (
     distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX &&
-    (delta > 0 || takeover === "toward-end")
+    (delta > 0 || takeover === true)
   ) {
     // A shrinking dock can clamp scrollTop backwards to the new end. Only
     // reader movement toward the end or fresh input resumes following.
     host.chatFollowLocked = false;
     host.chatReadingHistory = false;
   }
-  if (host.chatReadingHistory !== wasReadingHistory) {
-    host.renderLifecycle.invalidate();
-  }
   host.chatUserNearBottom = !host.chatFollowLocked && distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
 
-  setNewMessagesBelow(
-    host,
+  host.chatNewMessagesBelow =
     container.scrollHeight - container.clientHeight > CHAT_TRANSCRIPT_END_THRESHOLD_PX &&
-      distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX,
-  );
+    distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX;
 }
 
 export function resetChatScroll(host: ChatScrollHost): void {

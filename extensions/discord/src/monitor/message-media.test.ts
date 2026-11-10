@@ -11,6 +11,8 @@ import type { Message } from "../internal/discord.js";
 
 const readRemoteMediaBuffer = vi.fn();
 const saveMediaBuffer = vi.fn();
+const logVerboseMock = vi.hoisted(() => vi.fn());
+const mediaWarn = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
@@ -43,7 +45,8 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   );
   return {
     ...actual,
-    logVerbose: () => {},
+    logVerbose: logVerboseMock,
+    getChildLogger: () => ({ warn: mediaWarn }),
   };
 });
 
@@ -80,6 +83,11 @@ function attachmentFixture(
     content_type: "image/png",
     ...overrides,
   };
+}
+
+function resolveBlockedAttachmentMedia(attachment: AttachmentFixture) {
+  readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+  return resolveMediaList(asMessage({ attachments: [attachment] }), 512);
 }
 
 function stickerFixture(id: string, name: string): APIStickerItem {
@@ -337,237 +345,204 @@ describe("resolveMediaList", () => {
     });
   });
 
-  it("keeps type-only facts for attachments without a usable URL", async () => {
-    const { url: _url, ...attachment } = attachmentFixture("att-missing-url", "voice.ogg", {
-      content_type: "audio/ogg",
-    });
-    const message = asMessage({ attachments: [attachment] });
-    const result = await resolveMediaList(message, 512);
-
-    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
-    expect(result).toStrictEqual([{ contentType: "audio/ogg", kind: "audio" }]);
-  });
-
-  it("classifies audio attachments by filename when content type is missing", async () => {
-    const attachment = attachmentFixture("att-audio-fallback", "voice.ogg", {
-      content_type: undefined,
-    });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-    const message = asMessage({ attachments: [attachment] });
-
-    const result = await resolveMediaList(message, 512);
-
-    expect(result).toEqual([
-      {
-        contentType: undefined,
-        kind: "audio",
-      },
-    ]);
-  });
-
-  it("classifies Discord voice attachments by waveform metadata", async () => {
-    const attachment = attachmentFixture("att-voice-metadata", "voice", {
-      content_type: undefined,
-      duration_secs: 1.5,
-      waveform: "AAAA",
-    });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-    const message = asMessage({ attachments: [attachment] });
-
-    const result = await resolveMediaList(message, 512);
-
-    expect(result).toEqual([
-      {
-        contentType: undefined,
-        kind: "audio",
-      },
-    ]);
-  });
-
-  it("lets native Discord voice metadata override a conflicting definitive MIME", async () => {
-    const attachment = attachmentFixture("att-voice-conflicting-mime", "voice", {
-      content_type: "video/ogg",
-      duration_secs: 1.5,
-      waveform: "AAAA",
-    });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([{ contentType: undefined, kind: "audio" }]);
-  });
-
-  it.each(["application/octet-stream", "application/ogg"])(
-    "prefers the structured audio kind over non-audio MIME %s",
-    async (contentType) => {
-      const attachment = attachmentFixture("att-audio-conflicting-mime", "voice.ogg", {
-        content_type: contentType,
+  it.each([
+    { withId: true, correlation: "att-missing-url" },
+    { withId: false, correlation: "attachment" },
+  ])(
+    "keeps type-only facts without logging missing-URL filenames (withId=$withId)",
+    async ({ withId, correlation }) => {
+      const filename = "z22-private-voice-caption.ogg";
+      const {
+        url: _url,
+        id,
+        ...fields
+      } = attachmentFixture("att-missing-url", filename, {
+        content_type: "audio/ogg",
       });
-      mockDownload("/tmp/voice.ogg", { buffer: "audio", contentType });
+      const attachment = { ...fields, ...(withId ? { id } : {}) };
+      const message = asMessage({ attachments: [attachment] });
+      const result = await resolveMediaList(message, 512);
 
-      const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-      expect(result).toEqual([
-        {
-          path: "/tmp/voice.ogg",
-          contentType: undefined,
-          fileName: "voice.ogg",
-          kind: "audio",
-        },
-      ]);
+      expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+      expect(saveMediaBuffer).not.toHaveBeenCalled();
+      expect(result).toStrictEqual([{ contentType: "audio/ogg", kind: "audio" }]);
+      expect(logVerboseMock).toHaveBeenCalledExactlyOnceWith(
+        `discord: failed to download attachment ${correlation}: missing url`,
+      );
+      expect(logVerboseMock.mock.calls.flat().join(" ")).not.toContain(filename);
     },
   );
 
-  it("normalizes MIME case before classifying audio", async () => {
-    const attachment = attachmentFixture("att-audio-mime-case", "voice.bin", {
-      content_type: "Audio/OGG",
-    });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([
+  it.each([
+    [
+      "classifies audio attachments by filename when content type is missing",
+      attachmentFixture("att-audio-fallback", "voice.ogg", {
+        content_type: undefined,
+      }),
+      {
+        contentType: undefined,
+        kind: "audio",
+      },
+    ],
+    [
+      "classifies Discord voice attachments by waveform metadata",
+      attachmentFixture("att-voice-metadata", "voice", {
+        content_type: undefined,
+        duration_secs: 1.5,
+        waveform: "AAAA",
+      }),
+      {
+        contentType: undefined,
+        kind: "audio",
+      },
+    ],
+    [
+      "lets native Discord voice metadata override a conflicting definitive MIME",
+      attachmentFixture("att-voice-conflicting-mime", "voice", {
+        content_type: "video/ogg",
+        duration_secs: 1.5,
+        waveform: "AAAA",
+      }),
+      { contentType: undefined, kind: "audio" },
+    ],
+    [
+      "normalizes MIME case before classifying audio",
+      attachmentFixture("att-audio-mime-case", "voice.bin", {
+        content_type: "Audio/OGG",
+      }),
       {
         contentType: "Audio/OGG",
         kind: "audio",
       },
-    ]);
-  });
-
-  it("does not let an audio-looking filename override video MIME", async () => {
-    const attachment = attachmentFixture("att-video-audio-extension", "clip.ogg", {
-      content_type: "video/ogg",
-    });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([
+    ],
+    [
+      "does not let an audio-looking filename override video MIME",
+      attachmentFixture("att-video-audio-extension", "clip.ogg", {
+        content_type: "video/ogg",
+      }),
       {
         contentType: "video/ogg",
       },
-    ]);
+    ],
+    [
+      "does not infer audio from an .ogg filename with definitive MIME application/pdf",
+      attachmentFixture("att-definitive-application/pdf", "document.ogg", {
+        content_type: "application/pdf",
+      }),
+      { contentType: "application/pdf" },
+    ],
+    [
+      "does not infer audio from an .ogg filename with definitive MIME text/plain",
+      attachmentFixture("att-definitive-text/plain", "document.ogg", {
+        content_type: "text/plain",
+      }),
+      { contentType: "text/plain" },
+    ],
+    [
+      "does not classify a duration-bearing video attachment as audio",
+      attachmentFixture("att-video-duration", "PXL_2024.mp4", {
+        content_type: "video/mp4",
+        duration_secs: 11.262232780456543,
+      }),
+      {
+        contentType: "video/mp4",
+      },
+    ],
+    [
+      "keeps an image with a duration field as an image, not audio",
+      attachmentFixture("att-image-duration", "photo.png", {
+        content_type: "image/png",
+        duration_secs: 0.5,
+      }),
+      {
+        contentType: "image/png",
+      },
+    ],
+  ] as const)("%s", async (_name, attachment, expected) => {
+    const result = await resolveBlockedAttachmentMedia(attachment);
+
+    expect(result).toEqual([expected]);
   });
 
-  it("does not let an audio-looking filename override fetched image MIME", async () => {
-    const attachment = attachmentFixture("att-image-audio-extension", "image.ogg", {
-      content_type: undefined,
-    });
-    mockDownload("/tmp/image.png");
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([
+  it.each([
+    [
+      "prefers the structured audio kind over non-audio MIME application/octet-stream",
+      attachmentFixture("att-audio-conflicting-mime", "voice.ogg", {
+        content_type: "application/octet-stream",
+      }),
+      "/tmp/voice.ogg",
+      { buffer: "audio", contentType: "application/octet-stream" },
+      { path: "/tmp/voice.ogg", contentType: undefined, fileName: "voice.ogg", kind: "audio" },
+    ],
+    [
+      "prefers the structured audio kind over non-audio MIME application/ogg",
+      attachmentFixture("att-audio-conflicting-mime", "voice.ogg", {
+        content_type: "application/ogg",
+      }),
+      "/tmp/voice.ogg",
+      { buffer: "audio", contentType: "application/ogg" },
+      { path: "/tmp/voice.ogg", contentType: undefined, fileName: "voice.ogg", kind: "audio" },
+    ],
+    [
+      "does not let an audio-looking filename override fetched image MIME",
+      attachmentFixture("att-image-audio-extension", "image.ogg", {
+        content_type: undefined,
+      }),
+      "/tmp/image.png",
+      {},
       {
         path: "/tmp/image.png",
         contentType: "image/png",
         fileName: "image.ogg",
       },
-    ]);
-  });
-
-  it("keeps declared audio when the fetched MIME is generic", async () => {
-    const attachment = attachmentFixture("att-declared-audio-fetched-generic", "voice", {
-      content_type: "audio/ogg",
-    });
-    mockDownload("/tmp/voice", { buffer: "audio", contentType: "application/octet-stream" });
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([
+    ],
+    [
+      "keeps declared audio when the fetched MIME is generic",
+      attachmentFixture("att-declared-audio-fetched-generic", "voice", {
+        content_type: "audio/ogg",
+      }),
+      "/tmp/voice",
+      { buffer: "audio", contentType: "application/octet-stream" },
       {
         path: "/tmp/voice",
         contentType: "audio/ogg",
         fileName: "voice",
         kind: "audio",
       },
-    ]);
-  });
-
-  it.each(["application/pdf", "text/plain"])(
-    "does not infer audio from an .ogg filename with definitive MIME %s",
-    async (contentType) => {
-      const attachment = attachmentFixture(`att-definitive-${contentType}`, "document.ogg", {
-        content_type: contentType,
-      });
-      readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-
-      const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-      expect(result).toEqual([
-        {
-          contentType,
-        },
-      ]);
-    },
-  );
-
-  it("uses fetched image MIME over declared audio", async () => {
-    const attachment = attachmentFixture("att-declared-audio-fetched-image", "voice.ogg", {
-      content_type: "audio/ogg",
-    });
-    mockDownload("/tmp/image.png");
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([
+    ],
+    [
+      "uses fetched image MIME over declared audio",
+      attachmentFixture("att-declared-audio-fetched-image", "voice.ogg", {
+        content_type: "audio/ogg",
+      }),
+      "/tmp/image.png",
+      {},
       {
         path: "/tmp/image.png",
         contentType: "image/png",
         fileName: "voice.ogg",
       },
-    ]);
-  });
-
-  it("does not classify a duration-bearing video attachment as audio", async () => {
-    const attachment = attachmentFixture("att-video-duration", "PXL_2024.mp4", {
-      content_type: "video/mp4",
-      duration_secs: 11.262232780456543,
-    });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([
-      {
-        contentType: "video/mp4",
-      },
-    ]);
-  });
-
-  it("keeps a fetched video MIME over a declared duration-only attachment", async () => {
-    const attachment = attachmentFixture("att-video-duration-fetched", "PXL_2024.mov", {
-      content_type: "video/quicktime",
-      duration_secs: 5.5,
-    });
-    mockDownload("/tmp/PXL_2024.mov", { buffer: "video", contentType: "video/quicktime" });
-
-    const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
-
-    expect(result).toEqual([
+    ],
+    [
+      "keeps a fetched video MIME over a declared duration-only attachment",
+      attachmentFixture("att-video-duration-fetched", "PXL_2024.mov", {
+        content_type: "video/quicktime",
+        duration_secs: 5.5,
+      }),
+      "/tmp/PXL_2024.mov",
+      { buffer: "video", contentType: "video/quicktime" },
       {
         path: "/tmp/PXL_2024.mov",
         contentType: "video/quicktime",
         fileName: "PXL_2024.mov",
       },
-    ]);
-  });
-
-  it("keeps an image with a duration field as an image, not audio", async () => {
-    const attachment = attachmentFixture("att-image-duration", "photo.png", {
-      content_type: "image/png",
-      duration_secs: 0.5,
-    });
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    ],
+  ] as const)("%s", async (_name, attachment, downloadPath, downloadOptions, expected) => {
+    mockDownload(downloadPath, downloadOptions);
 
     const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
 
-    expect(result).toEqual([
-      {
-        contentType: "image/png",
-      },
-    ]);
+    expect(result).toEqual([expected]);
   });
 
   it("keeps a type-only fact when saveMediaBuffer fails", async () => {
@@ -597,12 +572,15 @@ describe("resolveMediaList", () => {
     });
 
     mockDownload("/tmp/good.png");
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("network timeout"));
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("private-download-response-body"));
     const message = asMessage({ attachments: [goodAttachment, badAttachment] });
 
     const result = await resolveMediaList(message, 512, { readIdleTimeoutMs: 60_000 });
 
     expect(fetchParams().readIdleTimeoutMs).toBe(60_000);
+    expect(mediaWarn).toHaveBeenCalledExactlyOnceWith(
+      "discord: failed to download attachment att-bad",
+    );
     expect(result).toEqual([
       {
         path: "/tmp/good.png",
@@ -617,12 +595,15 @@ describe("resolveMediaList", () => {
 
   it("keeps sticker metadata when sticker download fails", async () => {
     const sticker = stickerFixture("sticker-fallback", "fallback");
-    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("private-sticker-response-body"));
     const message = asMessage({ stickers: [sticker] });
 
     const result = await resolveMediaList(message, 512);
 
     expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(mediaWarn).toHaveBeenCalledExactlyOnceWith(
+      "discord: failed to download sticker sticker-fallback",
+    );
     expect(result).toEqual([
       {
         contentType: "image/png",

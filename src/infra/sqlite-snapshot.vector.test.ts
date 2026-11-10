@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import * as sqliteVec from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as sqliteVec from "./database-engine/sqlite-vec.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 

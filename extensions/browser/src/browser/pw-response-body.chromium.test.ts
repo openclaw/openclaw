@@ -1,13 +1,11 @@
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
-import { getPlaywrightCore } from "./playwright-core.runtime.js";
+import { launchChromium, readTargetId } from "./pw-chromium.test-support.js";
 import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
 import { responseBodyViaPlaywright } from "./pw-tools-core.responses.js";
-import { getFreePort } from "./test-port.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -32,23 +30,11 @@ describe.runIf(process.env.OPENCLAW_BROWSER_RESPONSE_E2E === "1")(
         server.listen(0, "127.0.0.1", resolve);
       });
       const port = (server.address() as AddressInfo).port;
-      const cdpPort = await getFreePort();
-      const cdpUrl = `http://127.0.0.1:${cdpPort}`;
-      const context = await getPlaywrightCore().chromium.launchPersistentContext(
-        path.join(rootDir, "profile"),
-        {
-          headless: true,
-          executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-          args: [`--remote-debugging-port=${cdpPort}`],
-        },
-      );
+      const { context, cdpUrl } = await launchChromium(rootDir);
       try {
         const page = context.pages()[0] ?? (await context.newPage());
         await page.goto(`http://127.0.0.1:${port}`);
-        const session = await context.newCDPSession(page);
-        const { targetInfo } = await session.send("Target.getTargetInfo");
-        await session.detach();
-        const targetId = targetInfo.targetId;
+        const targetId = await readTargetId(page);
         await getPageForTargetId({ cdpUrl, targetId });
         let outcome: unknown = "pending";
         const result = responseBodyViaPlaywright({

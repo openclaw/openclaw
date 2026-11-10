@@ -1,4 +1,8 @@
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import {
+  readDaemonRuntimePin,
+  withDaemonRuntimePinMigration,
+} from "../../daemon/runtime-pin-state.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -65,6 +69,18 @@ export async function prepareUpdateRestart(
         preManagedServiceStop: params.preManagedServiceStop,
         allowInstallRootChange: true,
       });
+      const original = params.originalManagedServiceRuntime;
+      if (original && !original.definition.runtimePin) {
+        // Doctor may have completed the legacy handoff since pre-update capture.
+        // Capture that intent before the existing native rebind owner verifies it.
+        original.definition.runtimePin = await withDaemonRuntimePinMigration(serviceState.env, () =>
+          readDaemonRuntimePin(
+            { kind: "gateway", env: serviceState.env },
+            original.definition.command,
+          ),
+        );
+        params.assertCurrent();
+      }
       gatewayServiceEnv = serviceState.env;
       serviceManagerUid ??= serviceState.runtime?.systemd?.managerUid;
       const useInstalledState =

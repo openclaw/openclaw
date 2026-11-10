@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import { failControlUiModuleForDocuments } from "./control-ui-built-module.test-support.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 export function defineGatewayModuleBoundaryTests(
@@ -19,11 +20,11 @@ export function defineGatewayModuleBoundaryTests(
             serviceWorkers: "block",
           },
           async ({ page }) => {
-            let blockedSidebarRequests = 0;
-            await page.route(moduleRequest("ui/src/components/app-sidebar.ts"), async (route) => {
-              blockedSidebarRequests += 1;
-              await route.abort("failed");
-            });
+            const failure = await failControlUiModuleForDocuments(
+              page,
+              moduleRequest("ui/src/components/app-sidebar.tsx"),
+              Infinity,
+            );
             const gateway = await installMockGateway(page, {
               // The sidebar module is deliberately unavailable, so no roster can render.
               awaitInitialRoster: false,
@@ -40,21 +41,32 @@ export function defineGatewayModuleBoundaryTests(
             ]);
             await waitForControlUiGatewayReady(page);
             await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-            await expect.poll(() => blockedSidebarRequests).toBeGreaterThan(0);
+            await expect.poll(failure.documentCount).toBeGreaterThan(0);
             expect(await page.locator(".sidebar-identity-card").isVisible()).toBe(false);
 
+            await page.clock.install();
+            await pauseVirtualClock(page);
+            const connectedSocketCount = await gateway.getSocketCount();
             await gateway.setOnline(false);
-            const connectionStatus = page.locator(".shell-connection-status");
+            await page.clock.runFor(2_001);
+            await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(connectedSocketCount);
+            const connectionStatus = page.locator(
+              width === 390
+                ? ".mobile-header__notices:visible"
+                : ".sidebar-shell__footer .gateway-status:visible",
+            );
             await connectionStatus
-              .locator(".gateway-status__label")
               .getByText("Reconnecting…", { exact: true })
               .waitFor({ state: "visible" });
-            const socketCount = await gateway.getSocketCount();
-            await connectionStatus.getByRole("button", { name: /Retry now/ }).click();
-            await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+            expect(await connectionStatus.getByRole("button").count()).toBe(0);
             await gateway.setOnline(true);
+            await page.clock.resume();
             await waitForControlUiGatewayReady(page);
-            await expect.poll(() => connectionStatus.count()).toBe(0);
+            if (width === 390) {
+              await connectionStatus.waitFor({ state: "detached" });
+            } else {
+              await connectionStatus.getByText("Connected", { exact: true }).waitFor();
+            }
           },
         );
       },

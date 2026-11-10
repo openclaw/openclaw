@@ -94,7 +94,6 @@ function createRuntime(telegramCfg: TelegramAccountConfig) {
       ownerAgentId: "main",
       opts: { botInfo: telegramBotInfoForTest },
       telegramCfg,
-      telegramDeps: { resolveStorePath: () => cfg.session!.store! },
     }),
   };
 }

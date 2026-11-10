@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -14,14 +15,14 @@ import {
   parseUserGitHubConnection,
   readUserGitHubConnectionInDatabase,
   readCanonicalUserGitHubConnectionInDatabase,
-  resolvePersonalGitHubOwnerInDatabase,
   writeUserGitHubConnectionInDatabase,
 } from "./user-github-connections.kernel.js";
-import type {
-  UserGitHubConnection,
-  UserGitHubConnectionCommit,
-  UserGitHubConnectionMutation,
-  UserGitHubRefreshMutation,
+import {
+  requirePendingUserGitHubConnection as requirePending,
+  type UserGitHubConnection,
+  type UserGitHubConnectionCommit,
+  type UserGitHubConnectionMutation,
+  type UserGitHubRefreshMutation,
 } from "./user-github-connections.types.js";
 import type { UserProfilesDatabase } from "./user-profiles.types.js";
 import type {
@@ -30,7 +31,7 @@ import type {
   WorkerWriteOperationContext,
 } from "./worker-operation-registry.js";
 
-function listUserGitHubConnections(db: DatabaseSync): Array<{
+function listUserGitHubConnections(db: EngineConnection): Array<{
   owner: string;
   connection: UserGitHubConnection;
 }> {
@@ -62,21 +63,22 @@ function listUserGitHubConnections(db: DatabaseSync): Array<{
   });
 }
 
-function requirePending(
-  current: UserGitHubConnection | undefined,
-  generation: string,
-  requestId: string,
-) {
-  if (
-    !current?.pending ||
-    current.generation !== generation ||
-    current.pending.requestId !== requestId ||
-    current.pending.expiresAtMs <= Date.now()
-  ) {
-    throw new Error("My GitHub authorization changed or expired; start again.");
-  }
-  return { ...current, pending: current.pending };
-}
+export const userGitHubConnectionReadOperations = {
+  "userGitHubConnections.read": ({ owner }: { owner: string }, db) => ({
+    type: "userGitHubConnections.read" as const,
+    connection: runSqliteReadSnapshotSync(db, () => readUserGitHubConnectionInDatabase(db, owner)),
+  }),
+  "userGitHubConnections.readCanonical": ({ profile }: { profile: string }, db) => ({
+    type: "userGitHubConnections.readCanonical" as const,
+    canonical: runSqliteReadSnapshotSync(db, () =>
+      readCanonicalUserGitHubConnectionInDatabase(db, profile),
+    ),
+  }),
+  "userGitHubConnections.list": (_input: undefined, db) => ({
+    type: "userGitHubConnections.list" as const,
+    connections: listUserGitHubConnections(db),
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 function applyMutation(
   current: UserGitHubConnection | undefined,
@@ -148,7 +150,8 @@ function applyMutation(
       if (
         current?.generation !== mutation.generation ||
         current.selection.kind !== "connected" ||
-        current.selection.profileId !== mutation.profileId
+        current.selection.profileId !== mutation.profileId ||
+        current.selection.refresh !== undefined
       ) {
         throw new Error("My GitHub selection changed.");
       }
@@ -188,12 +191,6 @@ function mutate<T>(
 }
 
 export const userGitHubConnectionOperations = {
-  "userGitHubConnections.read": ({ owner }: { owner: string }, { open }) =>
-    readUserGitHubConnectionInDatabase(open().db, owner),
-  "userGitHubConnections.resolveOwner": ({ profile }: { profile: string }, { open }) =>
-    resolvePersonalGitHubOwnerInDatabase(profile, open().db),
-  "userGitHubConnections.list": (_input: undefined, { open }) =>
-    listUserGitHubConnections(open().db),
   "userGitHubConnections.mutate": (
     input: { owner: string; mutation: UserGitHubConnectionMutation },
     context,
@@ -248,7 +245,8 @@ export const userGitHubConnectionOperations = {
             }
           : {
               ...selection,
-              refresh: undefined,
+              refresh:
+                result.kind === "materialized" || result.restore ? undefined : selection.refresh,
               ...(result.kind === "materialized"
                 ? { login: result.login, refreshFailure: undefined }
                 : { refreshFailure: result.failure }),

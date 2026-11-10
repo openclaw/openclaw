@@ -1,5 +1,4 @@
 /**
- * Sender-scoped sandbox tool policy resolver.
  * Applies per-agent toolsBySender matches before global sender policy so
  * channel delivery can narrow tool access by sender identity.
  */

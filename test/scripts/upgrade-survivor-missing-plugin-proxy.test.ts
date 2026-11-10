@@ -1,10 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { createServer, request, type Server } from "node:http";
+import { createServer, get, type IncomingMessage, type Server } from "node:http";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { afterEach, expect, it } from "vitest";
 import { z } from "zod";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { stopChildProcess } from "../helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -13,15 +15,7 @@ const children: ChildProcess[] = [];
 const servers: Server[] = [];
 afterEach(async () => {
   await Promise.all(children.splice(0).map((child) => stopChildProcess(child, 1_000)));
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve, reject) => {
-          server.closeAllConnections();
-          server.close((error) => (error ? reject(error) : resolve()));
-        }),
-    ),
-  );
+  await Promise.all(servers.splice(0).map(closeHttpServer));
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -32,19 +26,10 @@ async function startUpstream(body: string) {
     response.end(body);
   });
   servers.push(server);
-  const ready = once(server, "listening");
-  server.listen(0, "127.0.0.1");
-  await ready;
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Fixture upstream did not bind a TCP port");
-  }
-  return { url: `http://127.0.0.1:${address.port}`, requests };
+  return { url: await listenLoopback(server), requests };
 }
 
-it("pins both registry proxies to their upstream while preserving Codex availability", async ({
-  signal,
-}) => {
+it("pins registry upstreams and preserves Codex availability", async ({ signal }) => {
   const root = tempDirs.make("openclaw-missing-plugin-proxy-");
   const upstream = await startUpstream("upstream");
   const decoy = await startUpstream("decoy");
@@ -77,8 +62,7 @@ process.send(JSON.parse(readFileSync(process.argv[3], "utf8")));`,
     },
   );
   children.push(child);
-  const ready = once(child, "message");
-  const closed = once(child, "close");
+  const [ready, closed] = [once(child, "message"), once(child, "close")];
   const [ports] = await withinTest(
     awaitGateBeforeSettlement(ready, closed, `Child exited before writing ${portFile}`),
     signal,
@@ -86,24 +70,10 @@ process.send(JSON.parse(readFileSync(process.argv[3], "utf8")));`,
   const endpoints = z.object({ npm: z.url(), clawhub: z.url() }).parse(ports);
 
   for (const proxy of [endpoints.npm, endpoints.clawhub]) {
-    const body = await new Promise<string>((resolve, reject) => {
-      const outgoing = request(
-        proxy,
-        { path: `${decoy.url}/probe?package=fixture` },
-        (response) => {
-          let contents = "";
-          response.setEncoding("utf8");
-          response.on("data", (chunk: string) => {
-            contents += chunk;
-          });
-          response.on("end", () => resolve(contents));
-          response.on("error", reject);
-        },
-      );
-      outgoing.on("error", reject);
-      outgoing.end();
+    const response = await new Promise<IncomingMessage>((resolve, reject) => {
+      get(proxy, { path: `${decoy.url}/probe?package=fixture` }, resolve).on("error", reject);
     });
-    expect(body).toBe("upstream");
+    expect(await text(response)).toBe("upstream");
   }
   expect(decoy.requests).toEqual([]);
   expect(upstream.requests).toEqual(["/probe?package=fixture", "/probe?package=fixture"]);

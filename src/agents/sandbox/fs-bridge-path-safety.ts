@@ -526,7 +526,7 @@ export class SandboxFsPathGuard {
     // Remove the record terminator, not significant whitespace in the path.
     const canonical = result.stdout.toString("utf8").replace(/\n$/, "");
     if (!canonical.startsWith("/")) {
-      throw new Error(`Failed to resolve canonical sandbox path: ${params.containerPath}`);
+      throw new Error(`Failed to resolve sandbox path: ${params.containerPath}`);
     }
     return normalizeContainerPathCore(canonical);
   }

@@ -1,11 +1,11 @@
-import { isDeepStrictEqual } from "node:util";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
+import { recordToolSkillUse } from "../../agents/tool-skill-use-scope.js";
+import { enqueueSessionEventForHost } from "../../auto-reply/reply/session-event-handoff.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
-import { getRuntimeConfig } from "../../config/config.js";
-import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import {
   listImageGenerationProviders,
@@ -15,17 +15,21 @@ import {
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
-  createLazyRuntimeSurface,
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
-import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
+import {
+  listWebSearchProviders,
+  listWebSearchProvidersAsync,
+  runWebSearch,
+} from "../../web-search/runtime.js";
 import {
   resolveNativePluginModelAuth,
   resolveNativePluginModelConfig,
 } from "../loader-runtime-load.js";
+import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
+import { getInProcessGatewayRequestContext } from "./gateway-request-scope.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeBase } from "./runtime-base.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -34,8 +38,11 @@ import { createRuntimeMedia } from "./runtime-media.js";
 import { subscribeRuntimeSessionChanges } from "./session-changes.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
-const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
-const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/runtime-api.js"));
+// The host loader resolves this synchronous operation only when a plugin enqueues a turn.
+export { enqueueSessionEventForHost };
+
+const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
+const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/tts-request.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("../../media-understanding/runtime.js"),
 );
@@ -45,7 +52,7 @@ const loadGatewayPluginRuntime = createLazyRuntimeModule(
 
 function createRuntimeGateway(): PluginRuntime["gateway"] {
   return {
-    isAvailable: async () => (await loadGatewayPluginRuntime()).hasInProcessGatewayContext(),
+    isAvailable: async () => Boolean(getInProcessGatewayRequestContext()),
     request: async (method, params, options) => {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
@@ -56,6 +63,8 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       (await loadGatewayPluginRuntime()).readTrustedPluginSessionFacts(params),
     withSessionFacts: async (select, run) =>
       (await loadGatewayPluginRuntime()).withTrustedPluginSessionFacts(select, run),
+    appendAgentMessage: async (params) =>
+      (await loadGatewayPluginRuntime()).appendTrustedPluginAgentMessage(params),
     subscribeSessionChanges: subscribeRuntimeSessionChanges,
     withUserProfileIdentity: async (params, run) => {
       const captured = {
@@ -76,6 +85,7 @@ function createRuntimeTts(): PluginRuntime["tts"] {
   const bindTtsRuntime = createLazyRuntimeMethodBinder(loadTtsRuntime);
   const bindTtsRequestRuntime = createLazyRuntimeMethodBinder(loadTtsRequestRuntime);
   return {
+    buildSystemPromptHintAsync: bindTtsRuntime((runtime) => runtime.buildTtsSystemPromptHintAsync),
     prepareTtsRequest: bindTtsRequestRuntime((runtime) => runtime.prepareTtsRequest),
     textToSpeech: bindTtsRuntime((runtime) => runtime.textToSpeech),
     textToSpeechStream: bindTtsRuntime((runtime) => runtime.textToSpeechStream),
@@ -105,33 +115,14 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
   };
 }
 
-function createRuntimeLlmFacade(): PluginRuntime["llm"] {
-  const loadAcquireLocalService = createLazyRuntimeMethod(
-    () => import("../../agents/provider-local-service.js"),
-    (runtime) => runtime.createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig),
-  );
-  const loadLlm = createLazyRuntimeSurface(
-    () => import("./runtime-llm.runtime.js"),
-    (m) =>
-      m.createRuntimeLlm({
-        getConfig: getRuntimeConfig,
-        authority: {
-          allowComplete: true,
-        },
-      }),
-  );
-  return {
-    acquireLocalService: loadAcquireLocalService,
-    complete: createLazyRuntimeMethod(loadLlm, (llm) => llm.complete),
-  };
-}
-
 function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   const unavailable = () => {
     throw new RequestScopedSubagentRuntimeError();
   };
   return {
     complete: unavailable,
+    forkSession: unavailable,
+    runForkedTurn: unavailable,
     run: unavailable,
     waitForRun: unavailable,
     getSessionMessages: unavailable,
@@ -224,28 +215,19 @@ function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
 function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["sandbox"] {
   const readCurrentEntry = (
     params: Parameters<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>[0],
-    source: ReturnType<typeof captureIncognitoSessionSource>,
-  ) => {
-    source?.admissionSignal?.throwIfAborted();
-    if (!source) {
-      return agent.session.getSessionEntry({
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        ...(params.storePath ? { storePath: params.storePath } : {}),
-      });
-    }
-    if ("kind" in source) {
-      source.assertCurrent();
-      return undefined;
-    }
-    const key = resolveSqliteSessionKey(params.sessionKey, source.actor.agentId);
-    const entry = source.actor.sessions.readCapability(key);
-    return entry ? { ...entry, ...source.actor.sessions.readPolicy(key) } : undefined;
-  };
+    memory: ReturnType<typeof captureMemoryExactSessionReader>,
+  ) =>
+    memory
+      ? memory.read(params.sessionKey, "list")
+      : agent.session.getSessionEntry({
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          ...(params.storePath ? { storePath: params.storePath } : {}),
+        });
   return {
     resolveWorkspaceAuthority(params) {
-      const source = captureIncognitoSessionSource(params);
-      const sessionEntry = readCurrentEntry(params, source);
+      const memory = captureMemoryExactSessionReader(params);
+      const sessionEntry = readCurrentEntry(params, memory);
       const preparedRuntimeStatus = resolveSandboxRuntimeStatus({
         cfg: params.config,
         agentId: params.agentId,
@@ -256,16 +238,18 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
     },
     async prepareWorkspaceAuthority(input) {
       const params = { ...input };
-      const source = captureIncognitoSessionSource(params);
-      const prepare = async () => {
-        const sessionEntry = await agent.session.getSessionEntryAsync({
+      const { captureSessionEntryCurrentCheckAsyncInternal } =
+        await import("../../config/sessions/session-entry-current-check.js");
+      const prepared = await captureSessionEntryCurrentCheckAsyncInternal({
+        agentId: resolveSessionAgentId({
           agentId: params.agentId,
           sessionKey: params.sessionKey,
-          ...(params.storePath ? { storePath: params.storePath } : {}),
-        });
-        const fields = [
-          "sessionId",
-          "lifecycleRevision",
+          config: params.config,
+        }),
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        config: params.config,
+        fields: [
           "sandbox",
           "sandboxMode",
           "createdActor",
@@ -275,17 +259,11 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
           "modelProvider",
           "modelOverride",
           "providerOverride",
-        ] as const;
-        const expected = fields.map((field) => structuredClone(sessionEntry?.[field]));
-        const assertCurrent = () => {
-          const current = readCurrentEntry(params, source);
-          if (
-            fields.some((field, index) => !isDeepStrictEqual(expected[index], current?.[field]))
-          ) {
-            throw new Error("Session workspace authority changed during sandbox preparation.");
-          }
-        };
-        assertCurrent();
+        ],
+        errorMessage: "Session workspace authority changed during sandbox preparation.",
+      });
+      try {
+        const sessionEntry = prepared.entry;
         const preparedRuntimeStatus = resolveSandboxRuntimeStatus({
           cfg: params.config,
           agentId: params.agentId,
@@ -300,10 +278,10 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
           }),
         );
         if (!authority.sandboxed || authority.confinementError) {
+          prepared.source();
           return authority;
         }
         const { resolveSandboxContext } = await import("../../agents/sandbox/context.js");
-        assertCurrent();
         const sandbox = await resolveSandboxContext({
           config: params.config,
           agentId: params.agentId,
@@ -311,18 +289,17 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
           workspaceDir: params.workspaceDir,
           requireCurrentConfig: true,
           preparedRuntimeStatus,
-          assertCurrent,
+          assertCurrent: prepared.source,
         });
         try {
-          assertCurrent();
+          prepared.source();
           return authority;
         } finally {
           sandbox?.[Symbol.dispose]?.();
         }
-      };
-      return source && !("kind" in source)
-        ? source.actor.sessions.withSharedState(prepare)
-        : prepare();
+      } finally {
+        prepared.release();
+      }
     },
   };
 }
@@ -330,9 +307,9 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
 // Loaded by path from the plugin loader, so static export analysis cannot see this contract.
 export const createPluginRuntime: PluginRuntimeFactory = (
   _options = {},
-  base = createRuntimeBase(),
+  base = createRuntimeBase(enqueueSessionEventForHost),
 ) => {
-  const agent = createRuntimeAgent();
+  const agent = createRuntimeAgent(base.config);
   let modelAuth = _options.modelAuth;
   let modelConfig = _options.modelConfig;
   const runtime: PluginRuntime = {
@@ -341,6 +318,8 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     decisions: {
       evaluate: async (...args) =>
         (await import("../../decisions/runtime.js")).evaluateDecision(...args),
+      evaluateV2: async (...args) =>
+        (await import("../../decisions/runtime.js")).evaluateDecisionV2(...args),
     },
     gateway: _options.gateway ?? createRuntimeGateway(),
     config: base.config,
@@ -354,10 +333,26 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     nodes: _options.nodes ?? createUnavailableNodesRuntime(),
     sandbox: createRuntimeSandbox(agent),
     worktrees: createRuntimeWorktrees(),
+    skills: {
+      readUsage: async ({ skillFiles }) => {
+        const { isSkillUsageTracked, readSkillUsage } =
+          await import("../../skills/runtime/skill-usage.js");
+        return { tracked: isSkillUsageTracked(), usage: await readSkillUsage({}, skillFiles) };
+      },
+      recordUsed: recordToolSkillUse,
+    },
     system: base.system,
     media: createRuntimeMedia(),
     webSearch: {
-      listProviders: listWebSearchProviders,
+      listProviders: (params) => {
+        warnPluginSdkDeprecation({
+          family: "web-search-providers",
+          method: "runtime.webSearch.listProviders",
+          replacement: "runtime.webSearch.listProvidersAsync",
+        });
+        return listWebSearchProviders(params);
+      },
+      listProvidersAsync: listWebSearchProvidersAsync,
       search: runWebSearch,
     },
     channel: createRuntimeChannel(
@@ -393,7 +388,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
         (await import("../../music-generation/runtime.js")).generateMusic(params),
       listProviders: (params) => listMusicGenerationProviders(params?.config),
     },
-    llm: createRuntimeLlmFacade(),
+    llm: base.llm,
   };
   // SDK consumers retain these getter-only descriptors after lazy runtime materialization.
   for (const key of [

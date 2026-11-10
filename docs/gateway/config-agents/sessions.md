@@ -69,7 +69,7 @@ of tool and session policy.
       discord: { mode: "idle", idleMinutes: 30 },
     },
     resetTriggers: ["/new", "/reset"],
-    store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+    store: "agents/{agentId}/sessions/sessions.json",
     maintenance: {
       mode: "enforce", // enforce (default) | warn
       pruneAfter: "30d",
@@ -116,18 +116,19 @@ of tool and session policy.
   - `per-group` (default): keep each non-direct peer in its channel-scoped session.
   - `main`: route non-direct peers into the agent main session. Prefer a narrow `bindings[].session.groupScope` override when only selected trusted rooms should share main context.
 - **`notifyOnCreate`**: queue new-session awareness in the owning agent's Home conversation (default: `true`). Pending creations share one bounded summary with available title, creator, and creation source, without copying messages. Older entries are omitted when the summary is full, leaving queue capacity for reminders and other events. Home consumes it on the next turn or scheduled heartbeat. Set `false` to disable. Drafts, incognito sessions, Home itself, hidden internal sessions, and scheduled cron runs are excluded; reopening or resetting an existing session does not notify again. The summary is in memory and does not survive a Gateway restart. See [The main session](/concepts/main-session#what-flows-into-the-main-session).
-- **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
+- **`identityLinks`**: map shared identity ids to provider-prefixed peers for cross-channel session sharing.
 - **`resetTriggers`**: explicit commands or phrases that reset the session. Matching is case-insensitive; list each desired spelling because command aliases are not added automatically. For example, `["/tell"]` resets `/tell` messages, while `/steer` keeps its normal steering behavior. Follow-up text after a matching trigger is preserved, including later lines.
 - **`reset`**: primary reset policy. `none` disables automatic reset and is the default; compaction bounds active context instead. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. `/new` and `/reset` remain available in every mode. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.
   - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Doctor migrates legacy `dm` entries to `direct`; the schema rejects `dm`.
 - **`resetByChannel`**: per-channel reset overrides keyed by provider/channel id. When the session's channel has a matching entry, it wins outright over `resetByType`/`reset` for that session. Use only when one channel needs reset behavior different from the type-level policy.
 - **`mainKey`**: accepted but ignored. The per-agent main-session suffix is always `main`; omit this field. Global session scope uses `global` instead.
+- **`store`**: session-store selector. Relative paths resolve against the active state directory (`OPENCLAW_STATE_DIR`, or the selected profile's state directory), independent of the Gateway's working directory. `{agentId}` expands to the owning agent id. Absolute paths and `~` paths keep their explicit locations. If an older version created a second store from a relative path, stop the Gateway and run `openclaw doctor --fix` to merge its sessions with backups before restarting.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
   - `mode`: `enforce` applies age, count, and disk-budget cleanup and is the default; `warn` reports those policies without applying them. The separate opt-in `coldStorage.enabled` switch controls cold transcript extraction independently.
   - `pruneAfter`: age cutoff for stale entries (default `30d`). Eligible durable sessions archive in place with their identity and history intact; this does not compress or extract their transcript rows. Disposable automation rows are removed.
-  - `archiveDashboardAfter`: inactivity cutoff for archiving visible dashboard sessions (default `7d`); `false` or `0` disables only this dashboard trigger. Eligible sessions can still be archived by `pruneAfter` or `maxEntries`.
-  - `maxEntries`: maximum number of unarchived SQLite session entries (default `5000`). Archived rows do not consume the cap. Cleanup archives the oldest eligible ordinary sessions, while synthetic runtime sessions remain disposable and may be removed. Pinned sessions, active or admitted work, model-locked sessions, and durable external conversation pointers remain protected; if protection prevents reaching the cap, the unarchived store remains above it. Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately but does not unprotect rows.
+  - `archiveDashboardAfter`: inactivity cutoff for archiving visible dashboard sessions (default `7d`); `false` or `0` disables only this dashboard trigger. Eligible sessions can still be archived by `pruneAfter` or `maxEntries`. A conversation that created an enabled automation is kept by all three, because archiving it would pause the automation; disabling or removing the automation makes the conversation eligible again. After the Gateway starts, automatic archiving waits until its automations have loaded; if they fail to load, archiving stays paused until a later start succeeds. Archiving or deleting it yourself still asks for confirmation and pauses its automations.
+  - `maxEntries`: maximum number of unarchived SQLite session entries (default `5000`). Archived rows do not consume the cap. Cleanup archives the oldest eligible ordinary sessions, while synthetic runtime sessions remain disposable and may be removed. Pinned sessions, conversations that created an enabled automation, active or admitted work, model-locked sessions, and durable external conversation pointers remain protected; if protection prevents reaching the cap, the unarchived store remains above it. Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately but does not unprotect rows.
   - `preserveRecent`: optional inactivity window that protects recently active interactive sessions and all of their SQLite history generations from automatic age, count, and disk-budget history eviction (for example `"7d"`). Unset or `false` disables this protection. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible for bounded cleanup. Protection can temporarily keep the store above configured entry or disk targets and does not archive sessions.
   - Short-lived gateway model-run check sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run check rows when session-entry maintenance/cap pressure is reached. Only strict explicit check keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - Legacy `rotateBytes` is rejected by the current schema; `openclaw doctor --fix` removes it from older configs.
@@ -147,7 +148,11 @@ of tool and session policy.
   - `suggest`: allow `suggest`, where viewers can submit suggestions for the session owner or an `operator.admin` connection to send, queue, edit, or dismiss without granting direct access to send or manage the session.
   - `drafts`: allow `draft`, which hides the session from non-admin, non-owner session lists and event broadcasts.
 
-Session visibility and membership are maintained as canonical sharing state. Structured `session.sharing` events carry an attributed actor; principal-less changes use the additive `session.sharing.evidence` event. Every sharing change also emits the existing `sessions.changed` row refresh, so clients that do not recognize the evidence event still refresh canonical state. These events and `session.suggestion` do not add administrative narration to conversation transcripts. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
+Session visibility and membership are maintained in the saved sharing state. Structured `session.sharing` events carry an attributed actor; principal-less changes use the additive `session.sharing.evidence` event. Every sharing change also emits the existing `sessions.changed` row refresh, so clients that do not recognize the evidence event still refresh the saved state. These events and `session.suggestion` do not add administrative narration to conversation transcripts. These controls coordinate operators sharing one agent; they are not a security boundary between tenants. Use separate Gateways or agents when work requires isolation.
+
+For [dashboards](/web/dashboards), revocation prevents new writes from being
+admitted. A dashboard write already in progress when access is revoked may still
+complete; revocation does not retract its saved widget or layout.
 
 </Accordion>
 
@@ -165,9 +170,9 @@ read current usage. Administrator access is required.
 Turn on **Archive older transcripts** and set **Archive after (days)** to a
 positive whole number. Changes save through the normal Settings flow and apply
 without a Gateway restart. Once the policy is saved and applied, **Run now**
-starts or joins a background batch and returns promptly. The panel follows its
-status until completion or failure; leaving the page does not stop the worker.
-The worker also runs automatically without new chat activity. Inactive current
+starts or joins a maintenance batch and returns promptly. The panel follows its
+status until completion or failure; leaving the page does not stop maintenance.
+Maintenance also runs automatically without new messages. Inactive current
 and historical transcripts can become cold; opening or resuming one restores
 its history before use.
 

@@ -35,6 +35,10 @@ configure `agents.defaults.mediaModels.image`, set up a provider API key,
 or sign in with OpenAI ChatGPT/Codex OAuth.
 </Note>
 
+A key in `models.providers.<provider>.apiKey` also makes the tool available,
+including an env-backed SecretRef. Inline keys in an auth or billing cooldown
+remain unavailable.
+
 ## Quick start
 
 <Steps>
@@ -83,9 +87,13 @@ For OpenAI-compatible LAN endpoints such as LocalAI, keep the custom
 internal image endpoints remain blocked by default.
 </Warning>
 
-Custom endpoints configured under `models.providers.openai` can return either
-`b64_json` or `data[].url`. OpenClaw downloads URL results using the provider's
-existing network policy and the image size cap from `agents.defaults.mediaMaxMb`.
+OpenAI-compatible image endpoints, including LiteLLM and custom endpoints under
+`models.providers.openai`, can return either `b64_json` or `data[].url`.
+OpenClaw automatically trusts image URLs at the configured provider origin.
+Other private destinations require an explicit private-network opt-in; a local
+provider does not authorize arbitrary LAN or loopback image hosts. Every redirect
+is checked, and downloads obey the operation deadline and image size cap from
+`agents.defaults.mediaMaxMb`.
 The image server must return an image `Content-Type`. Provider HTTP credentials are
 not forwarded to image URLs; provider TLS credentials stay on the provider's
 origin, including across redirects. GPT Image models return base64 directly; OpenClaw
@@ -97,6 +105,7 @@ does not force the legacy `response_format` parameter on custom endpoints.
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | OpenAI image generation with API billing         | `openai/gpt-image-2`                                                                                | `OPENAI_API_KEY`                               |
 | OpenAI GPT Image 2.5                             | `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst`                                     | Explicit OpenAI API-key route                  |
+| OpenAI GPT Image 2.6                             | `openai/gpt-image-2.6-flare` or `openai/gpt-image-2.6-sunburst`                                     | Explicit OpenAI API-key route                  |
 | OpenAI image generation with ChatGPT/Codex OAuth | `openai/gpt-image-2`                                                                                | OpenAI ChatGPT/Codex OAuth                     |
 | OpenAI transparent-background PNG/WebP           | `openai/gpt-image-1.5`                                                                              | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth |
 | DeepInfra image generation                       | `deepinfra/black-forest-labs/FLUX-1-schnell`                                                        | `DEEPINFRA_API_KEY`                            |
@@ -112,8 +121,8 @@ for one reference or `images` for multiple. For Krea 2 models on fal, those
 references are sent as style references instead of edit inputs.
 Provider-supported output hints such as `quality`, `outputFormat`, and
 `background` are forwarded when available and reported as ignored when a
-provider does not declare support. OpenAI and fal GPT Image 2.5 declare
-transparent-background support. Other providers may still preserve PNG alpha if their
+provider does not declare support. OpenAI GPT Image 2.5 and 2.6 and fal GPT
+Image 2.5 declare transparent-background support. Other providers may still preserve PNG alpha if their
 backend emits it.
 
 OpenAI supports `low` and `auto` moderation for both text-to-image generation
@@ -195,7 +204,7 @@ the peer who requested the image.
 <ParamField path="resolution" type='"1K" | "2K" | "4K"'>Resolution hint.</ParamField>
 <ParamField path="quality" type='"low" | "medium" | "high" | "xhigh" | "max" | "auto"'>
   Quality hint when the model supports it. GPT Image 2.5 supports `xhigh`
-  and `max` through OpenAI and fal.
+  and `max` through OpenAI and fal; GPT Image 2.6 supports them through OpenAI.
 </ParamField>
 <ParamField path="outputFormat" type='"png" | "jpeg" | "webp"'>
   Output format hint when the provider supports it.
@@ -223,9 +232,12 @@ Not all providers support all parameters. When a fallback provider supports a
 nearby geometry option instead of the exact requested one, OpenClaw remaps to
 the closest supported size, aspect ratio, or resolution before submission.
 Unsupported output hints are dropped for providers that do not declare
-support and reported in the tool result. Tool results report the applied
-settings. `details.normalization` captures any requested-to-applied
-translation.
+support and reported in the tool result. Completed results keep request hints in
+`details.requested` and report each saved image in `details.outputs`. Dimensions
+and format come from the image bytes; quality is included only when the provider
+reports a concrete value. Missing output settings remain unknown.
+`details.normalization` describes adjustments before submission, not proof that
+the provider applied them. Completion messages include the observed output settings.
 </Note>
 
 ## Configuration
@@ -340,6 +352,19 @@ and ComfyUI support 1.
     fal converts aspect-ratio hints to valid dimensions, such as `3:2` to
     `1536x1024`. Invalid explicit sizes fail with a size error. fal does not accept
     `resolution` overrides for these models or infer resolution from edit inputs.
+
+  </Accordion>
+  <Accordion title="GPT Image 2.6 through OpenAI">
+    Select `openai/gpt-image-2.6-sunburst` for detailed work such as dense text
+    and complex layouts, or `openai/gpt-image-2.6-flare` for fast iteration.
+    The default stays `openai/gpt-image-2`.
+
+    Both models use the GPT Image 2.5 OpenAI rules above: generation and edits,
+    up to 5 reference images, `xhigh` and `max` quality, `auto` or flexible
+    `WIDTHxHEIGHT` sizes, and transparent PNG or WebP backgrounds through the
+    [explicit OpenAI API-key route](/providers/openai/image-and-video#gpt-image-2.5).
+    OpenClaw does not yet expose 2.6 `complexity`, markup-guided edits, SVG
+    output, or animated GIF output.
 
   </Accordion>
   <Accordion title="OpenAI gpt-image-2 (and gpt-image-1.5)">
@@ -534,7 +559,8 @@ and ComfyUI support 1.
     The bundled xAI provider uses `/v1/images/generations` for prompt-only
     requests and `/v1/images/edits` when `image` or `images` is present.
 
-    - Models: `xai/grok-imagine-image`, `xai/grok-imagine-image-quality`
+    - Models: `xai/grok-imagine-image` (default), `xai/grok-imagine-image-2.0`,
+      `xai/grok-imagine-image-quality`
     - Count: up to 4
     - References: one `image` or up to three `images`
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`,

@@ -3,7 +3,7 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
@@ -30,6 +30,11 @@ export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
 // Public join-code exchange burns SQLite state, so misses are serialized and
 // throttled before they can queue unbounded writes behind the shared DB lock.
 export const AUTH_RATE_LIMIT_SCOPE_DEVICE_JOIN = "device-join";
+// Public browser pairing writes one bounded row per request, so filing requests
+// is budgeted per source. Collect has its own budget spent only by invalid or
+// unknown requests, so filing cannot lock a waiting browser out of its answer.
+export const AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR = "browser-pair";
+export const AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR_COLLECT = "browser-pair-collect";
 // Public watchOS challenge issuance is throttled separately from credential
 // failures so challenge floods cannot displace legitimate device handshakes.
 export const AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE = "watch-challenge";
@@ -160,15 +165,21 @@ export function createGatewayAuthRateLimiter(
   let overflowLockedUntil: number | undefined;
   let disposed = false;
 
-  const pruneJob =
-    pruneIntervalMs > 0
-      ? scheduler.schedule({
-          id: `${id}:prune`,
-          atMs: scheduler.now() + pruneIntervalMs,
-          everyMs: pruneIntervalMs,
-          run: prune,
-        })
-      : null;
+  let pruneJob: GatewayScheduledJob | undefined;
+
+  function updatePruneJob(): void {
+    if (entries.size === 0) {
+      pruneJob?.cancel();
+      pruneJob = undefined;
+    } else if (!pruneJob && pruneIntervalMs > 0 && !disposed) {
+      pruneJob = scheduler.schedule({
+        id: `${id}:prune`,
+        atMs: scheduler.now() + pruneIntervalMs,
+        everyMs: pruneIntervalMs,
+        run: prune,
+      });
+    }
+  }
 
   function resolveKey(
     rawIp: string | undefined,
@@ -259,6 +270,7 @@ export function createGatewayAuthRateLimiter(
     } else if (!exempt && entry.attempts.length >= policy.maxAttempts) {
       entry.lockedUntil = now + policy.lockoutMs;
     }
+    updatePruneJob();
   }
 
   function recordFailureAndDelay(rawIp: string | undefined, rawScope?: string): Promise<void> {
@@ -295,12 +307,10 @@ export function createGatewayAuthRateLimiter(
 
   function scheduleRelease(key: string, deadline: number): ReturnType<typeof setTimeout> {
     // Auth responses still settle while Gateway maintenance is stopping.
-    const timer = setTimeout(
+    return setTimeout(
       () => releaseLoopbackWaiters(key),
       Math.max(0, deadline - scheduler.now()),
-    );
-    timer.unref?.();
-    return timer;
+    ).unref();
   }
 
   function releaseLoopbackWaiters(key: string): void {
@@ -316,6 +326,7 @@ export function createGatewayAuthRateLimiter(
   function reset(rawIp: string | undefined, rawScope?: string): void {
     const { key } = resolveKey(rawIp, rawScope);
     entries.delete(key);
+    updatePruneJob();
   }
 
   function pruneExpiredEntries(now: number): void {
@@ -328,6 +339,7 @@ export function createGatewayAuthRateLimiter(
         entries.delete(key);
       }
     }
+    updatePruneJob();
   }
 
   function checkOverflowLock(now: number): RateLimitCheckResult | undefined {
@@ -383,6 +395,7 @@ export function createGatewayAuthRateLimiter(
   function dispose(): void {
     disposed = true;
     pruneJob?.cancel();
+    pruneJob = undefined;
     entries.clear();
     overflowLockedUntil = undefined;
     for (const key of loopbackPenaltyWaiters.keys()) {

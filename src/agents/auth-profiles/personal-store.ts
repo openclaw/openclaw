@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
@@ -11,10 +13,13 @@ import {
   capturePersonalCredentialAuthority,
   withPersonalCredentialPublication,
 } from "../../state/user-model-account-authority.js";
+import { parseUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import {
   normalizeUserModelAuthProfile,
   registerUserModelAuthProfileSecrets,
 } from "../../state/user-model-accounts.js";
+import { captureUserProfileModelAccountLinksAuthority } from "../../state/user-profile-events.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import { assertPersonalAuthProfileRuntime } from "./runtime-scope.js";
@@ -29,6 +34,8 @@ export type PersonalAuthProfileStore = {
   databasePath: string;
   read(): Promise<AuthProfileStore>;
   readCurrentCredential(this: void): AuthProfileCredential | undefined;
+  /** A retry may not revive a grant whose account selection changed during provider work. */
+  captureRefreshAuthority(): Promise<() => void>;
   update(
     updater: (store: AuthProfileStore) => boolean,
     assertCurrent?: () => void,
@@ -91,6 +98,43 @@ export function withPersonalAuthProfileStore<T>(
             throw new Error("Personal model account credential has not been prepared");
           },
           read: async () => asStore(await readProfile()),
+          async captureRefreshAuthority() {
+            const locator = parseUserModelAuthProfileId(profileId);
+            if (!locator) {
+              throw new Error("Personal refresh requires an exact account ID");
+            }
+            // Account IDs keep their original locator after a canonical profile merge.
+            const locatorCurrent = captureUserProfileModelAccountLinksAuthority(
+              context.admission,
+              locator.ownerProfileId,
+            );
+            const catalog = await prepareUserProfileCatalog({
+              path: context.admission.databasePath,
+              env: context.environment,
+            });
+            try {
+              const canonical = catalog.readCurrentIdentity(locator.ownerProfileId);
+              if (!canonical) {
+                throw new Error("Personal refresh requires a current account owner");
+              }
+              const canonicalCurrent =
+                canonical.profileId === locator.ownerProfileId
+                  ? locatorCurrent
+                  : captureUserProfileModelAccountLinksAuthority(
+                      context.admission,
+                      canonical.profileId,
+                    );
+              const assertRefreshCurrent = () => {
+                if (!locatorCurrent() || !canonicalCurrent()) {
+                  throw new Error("Personal model account selection changed during refresh");
+                }
+              };
+              assertRefreshCurrent();
+              return assertRefreshCurrent;
+            } finally {
+              catalog.release();
+            }
+          },
           async update(updater, assertUpdateCurrent) {
             const expected = await readProfile();
             const store = asStore(expected ? structuredClone(expected) : undefined);
@@ -109,7 +153,7 @@ export function withPersonalAuthProfileStore<T>(
               usageStats: store.usageStats?.[profileId],
             });
             registerUserModelAuthProfileSecrets(next.credential);
-            const digest = createHash("sha256").update(JSON.stringify(next)).digest("hex");
+            const digest = createHash("sha256").update(stableStringify(next)).digest("hex");
             let nativeAdmission: SqliteWorkerOperationAdmission | undefined;
             const admission = createSqliteWorkerWriteAdmission(
               (request) => {
@@ -160,33 +204,15 @@ export function withPersonalAuthProfileStore<T>(
             if (prepared.type !== "oauth") {
               throw new Error("Personal credential codec changed the prepared credential type");
             }
-            // Accept while the actor still holds the exact-row snapshot and FIFO turn.
-            const accepted = await runOpenClawStateWorkerOperation(
-              context,
-              (reader) =>
-                reader.execute({
-                  type: "authProfiles.personalAccept",
-                  input: { profileId, credential: prepared },
-                }),
-              {
-                assertCurrent,
-                createAdmission: createSqliteWorkerWriteAdmission(
-                  (request) => {
-                    assertCurrent();
-                    assertSelectionCurrent?.(structuredClone(prepared));
-                    if (request.stage === "commit") {
-                      observeCanonicalAuthProfileCredentials(context.admission.databasePath, {
-                        [profileId]: prepared,
-                      });
-                    }
-                  },
-                  [context.admission.databasePath],
-                ),
-              },
-            );
-            if (!accepted) {
+            assertCurrent();
+            assertSelectionCurrent?.(prepared);
+            // Credential writers publish before settlement; acceptance needs no database turn.
+            if (!isDeepStrictEqual(owner.readCurrentCredential(), prepared)) {
               throw new Error("Personal model account changed during provider preparation");
             }
+            observeCanonicalAuthProfileCredentials(context.admission.databasePath, {
+              [profileId]: prepared,
+            });
             return prepared;
           },
         };

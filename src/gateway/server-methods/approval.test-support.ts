@@ -21,12 +21,7 @@ import {
   bindGatewayRequestHandlerMutationAuthority,
   bindWebSocketRequestMutationAuthority,
 } from "./session-mutation-guards.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlerOptions,
-  GatewayRequestOptions,
-} from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestOptions } from "./types.js";
 
 export function getOperatorApproval(
   params: Parameters<typeof getOperatorApprovalDetailedInDatabase>[0],
@@ -39,10 +34,10 @@ export function deleteDurableApproval(
   databaseOptions: OpenClawStateDatabaseOptions,
   id: string,
 ): void {
-  const database = openOpenClawStateDatabase(databaseOptions);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  const { db } = openOpenClawStateDatabase(databaseOptions);
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
   executeSqliteQuerySync(
-    database.db,
+    db,
     stateDb.deleteFrom("operator_approvals").where("approval_id", "=", id),
   );
 }
@@ -51,10 +46,10 @@ export function corruptDurableApprovalPresentation(
   databaseOptions: OpenClawStateDatabaseOptions,
   id: string,
 ): void {
-  const database = openOpenClawStateDatabase(databaseOptions);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  const { db } = openOpenClawStateDatabase(databaseOptions);
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
   executeSqliteQuerySync(
-    database.db,
+    db,
     stateDb
       .updateTable("operator_approvals")
       .set({ presentation_json: "{}" })
@@ -112,17 +107,9 @@ export function createContext(
 type ApprovalInvocationParams = {
   handlers: ReturnType<typeof createApprovalHandlers>;
   method:
-    | "approval.get"
-    | "approval.history"
-    | "approval.resolve"
-    | "exec.approval.get"
-    | "exec.approval.list"
-    | "exec.approval.grants.list"
-    | "exec.approval.grants.revoke"
-    | "exec.approval.resolve"
-    | "exec.approval.waitDecision"
-    | "plugin.approval.list"
-    | "plugin.approval.resolve";
+    | `approval.${"get" | "history" | "resolve"}`
+    | `exec.approval.${"get" | "list" | "grants.list" | "grants.revoke" | "resolve" | "waitDecision"}`
+    | `plugin.approval.${"list" | "resolve"}`;
   body: Record<string, unknown>;
   client: GatewayWsClient | null;
   context?: GatewayRequestHandlerOptions["context"];
@@ -168,15 +155,12 @@ export function createApprovalInvocation(params: ApprovalInvocationParams) {
     respond,
     invoke: async () => {
       try {
-        await expectDefined(
-          params.handlers[params.method],
-          "params.handlers[params.method] test invariant",
-        )(options);
-        const response = respond.mock.calls[0];
-        if (!response) {
-          throw new Error("approval handler did not respond");
-        }
-        return { ok: response[0], result: response[1], error: response[2], context };
+        await expectDefined(params.handlers[params.method], "approval handler")(options);
+        const [ok, result, error] = expectDefined(
+          respond.mock.calls[0],
+          "approval handler did not respond",
+        );
+        return { ok, result, error, context };
       } finally {
         capture.release();
       }
@@ -194,11 +178,7 @@ export async function handleApprovalResolve<
     getApprovalClientConnIds: params.context.getApprovalClientConnIds,
   };
   const options: GatewayRequestHandlerOptions = {
-    req: {
-      id: "shared-approval-test",
-      type: "req",
-      method: `${params.approvalKind}.approval.resolve`,
-    },
+    req: { id: "req", type: "req", method: `${params.approvalKind}.approval.resolve` },
     params: { id: params.inputId, decision: params.decision },
     context,
     client: params.client,
@@ -216,39 +196,4 @@ export function requestedEvent<TPayload>(record: ExecApprovalRecord<TPayload>) {
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
   };
-}
-
-type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
-
-export function createApprovalClient(params: {
-  connId: string;
-  clientId: string;
-  deviceId?: string;
-  scopes?: string[];
-  approvalRuntime?: boolean;
-}): GatewayClient {
-  return {
-    connId: params.connId,
-    connect: {
-      client: { id: params.clientId },
-      device: params.deviceId ? { id: params.deviceId } : undefined,
-      scopes: params.scopes ?? ["operator.approvals"],
-    },
-    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
-  } as GatewayClient;
-}
-
-export function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLookup {
-  return (opts = {}) =>
-    new Set(
-      clients
-        .filter((client) => {
-          if (opts.excludeConnId && client.connId === opts.excludeConnId) {
-            return false;
-          }
-          return opts.filter?.(client, opts.record) ?? true;
-        })
-        .map((client) => client.connId)
-        .filter((connId): connId is string => typeof connId === "string" && connId.length > 0),
-    );
 }

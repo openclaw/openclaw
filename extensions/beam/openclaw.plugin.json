@@ -5,6 +5,12 @@
     "onStartup": false,
     "onConfigPaths": ["plugins.entries.beam"]
   },
+  "configContracts": {
+    "secretInputs": {
+      "bundledDefaultEnabled": false,
+      "paths": [{ "path": "mirror.token", "expected": "string", "ownerKind": "capability" }]
+    }
+  },
   "uiHints": {
     "mirror.endpoint": {
       "label": "Mirror Endpoint",
@@ -54,5 +60,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Explain how to share a sanitized coding-session snapshot with Beam.",
+    "Compare Beam snapshots with Session Share for read-only team visibility."
+  ]
 }

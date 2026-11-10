@@ -1,7 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { codexNativeSubagentNotifications } from "./native-subagent-notification.js";
-import { isJsonObject, type CodexServerNotification } from "./protocol.js";
+import type { CodexNativeSubagentNotification } from "./native-subagent-notification.js";
 
 type ReceiptParent = Readonly<{
   parentThreadId: string;
@@ -60,28 +58,12 @@ export class CodexNativeSubagentDeliveryReceipts {
   private readonly pending: Receipt[] = [];
   private readonly outcomes = new Map<string, Outcome>();
 
-  observe(notification: CodexServerNotification): string[] {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
-    const item = isJsonObject(params?.item) ? params.item : undefined;
-    if (!item) {
-      return [];
-    }
-    const nativeResults = codexNativeSubagentNotifications.fromNotification(notification);
-    for (const agentPath of codexNativeSubagentNotifications.deliveredAgentPaths(notification)) {
-      const id = `${notification.method}:${readString(item, "id") ?? JSON.stringify(item)}:${agentPath}`;
+  observe(receipts: CodexNativeSubagentNotification["receipts"]): string[] {
+    for (const { id, agentPath, result } of receipts) {
       if (this.seen.has(id)) {
         continue;
       }
       this.seen.add(id);
-      let result = nativeResults.find((value) => value.agentPath === agentPath)?.result;
-      if (item.type === "agent_message" && Array.isArray(item.content)) {
-        const part = item.content[0];
-        const text = isJsonObject(part) ? readString(part, "text") : undefined;
-        result = text?.split("\nPayload:\n").slice(1).join("\nPayload:\n");
-      } else if (isJsonObject(item.agentsStates)) {
-        const child = item.agentsStates[agentPath];
-        result = isJsonObject(child) ? readString(child, "message") : result;
-      }
       this.pending.push({ agentPath, result: receiptResultKey(result) });
     }
     return this.match();
@@ -173,11 +155,11 @@ export class CodexNativeSubagentDeliveryReceipts {
 
 export function observeCodexNativeSubagentDeliveryReceipts<Parent extends ReceiptParent>(params: {
   state: Parent;
-  notification: CodexServerNotification;
+  receipts: CodexNativeSubagentNotification["receipts"];
   knownChildren: Iterable<KnownReceiptChild<Parent>>;
   applyReceipts: (runIds: readonly string[]) => void;
 }): void {
-  const { state, notification, knownChildren, applyReceipts } = params;
+  const { state, receipts, knownChildren, applyReceipts } = params;
   const trackers = new Set([state.deliveryReceipts]);
   // A fresh parent can consume a receipt before history reveals its alias.
   // Observe that current receipt in retained assignment owners too; never copy
@@ -188,7 +170,7 @@ export function observeCodexNativeSubagentDeliveryReceipts<Parent extends Receip
     }
   }
   for (const tracker of trackers) {
-    applyReceipts(tracker.observe(notification));
+    applyReceipts(tracker.observe(receipts));
   }
 }
 

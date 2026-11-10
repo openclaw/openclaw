@@ -9,6 +9,16 @@
   white-space: pre-wrap;
 }
 
+.wizard-step__message p {
+  margin: 0;
+}
+
+.wizard-step__message p + p {
+  margin-top: 12px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: 1.6;
+}
+
 .wizard-step__sign-in {
   display: grid;
   justify-items: center;
@@ -24,14 +34,9 @@
   padding: 8px 16px;
   border: 1px dashed var(--border);
   border-radius: var(--radius-md);
-  font-size: 24px;
+  font-size: calc(24px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: 0.15em;
-}
-
-.wizard-step__options {
-  display: grid;
-  gap: 8px;
 }
 
 .wizard-step__option {
@@ -74,13 +79,13 @@
   color: var(--muted);
 }
 
-.wizard-step__actions {
+.wizard-step__actions:not(openclaw-modal-actions) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.wizard-step__actions--split {
+.wizard-step__actions--split:not(openclaw-modal-actions) {
   align-items: center;
   justify-content: flex-end;
 }
@@ -100,8 +105,7 @@
   width: 18px;
   height: 18px;
   flex: 0 0 18px;
-  border: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
-  border-top-color: var(--accent);
+  color: var(--accent);
   border-radius: 50%;
   animation: btn-spinner-spin 800ms linear infinite;
 }
@@ -109,6 +113,5 @@
 @media (prefers-reduced-motion: reduce) {
   .wizard-step__spinner {
     animation: none;
-    border-color: var(--accent);
   }
 }

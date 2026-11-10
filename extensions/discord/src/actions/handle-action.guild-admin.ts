@@ -103,9 +103,13 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     options?: DiscordMessagingActionOptions,
   ) =>
     handleDiscordAction(
-      { action: runtimeAction, accountId: accountId ?? undefined, ...values },
+      { action: runtimeAction, accountId, ...values },
       cfg,
-      options,
+      // Read-policy scoping stays with the caller's options; invocation cancellation
+      // is common to metadata reads, mutations, and moderation.
+      actionOptions.callerSignal
+        ? { ...options, callerSignal: actionOptions.callerSignal }
+        : options,
     );
 
   const metadataRead = guildMetadataReads[action];
@@ -270,8 +274,8 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       {
         channelId,
         content,
-        mediaUrl: mediaUrl ?? undefined,
-        replyTo: replyTo ?? undefined,
+        mediaUrl,
+        replyTo,
         ...(readBooleanParam(actionParams, "silent") === true ? { silent: true } : {}),
       },
       actionOptions,

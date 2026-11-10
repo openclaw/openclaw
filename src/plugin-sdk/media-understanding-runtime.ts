@@ -1,10 +1,9 @@
-/**
- * Runtime SDK subpath for media understanding, image description, and audio transcription.
- */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { sendTranscriptEcho } from "../media-understanding/echo-transcript.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+
+export { formatAudioTranscriptForAgent } from "../media-understanding/echo-transcript.js";
 
 type TranscribeFirstAudio =
   typeof import("../media-understanding/audio-preflight.js").transcribeFirstAudio;
@@ -14,10 +13,6 @@ const DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';
 const loadAudioPreflightRuntime = createLazyRuntimeModule(
   () => import("../media-understanding/audio-preflight.js"),
 );
-
-export function formatAudioTranscriptForAgent(transcript: string): string {
-  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
-}
 
 /** Creates shared preflight transcription and deferred-echo behavior for a channel. */
 export function createChannelPreflightAudio<TAudio>(params: {

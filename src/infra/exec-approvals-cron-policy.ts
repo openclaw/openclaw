@@ -1,5 +1,3 @@
-// Retains cron policy eligibility through policy publication and native launch settlement.
-import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
@@ -9,10 +7,11 @@ import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-rea
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { resolveExecApprovalsDisplayPath } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecAsk, ExecSecurity } from "./exec-approvals-core.js";
-import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
 import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
 import { snapshotFromExecApprovalsRow } from "./exec-approvals-sqlite.js";
+// Retains cron policy eligibility through policy publication and native launch settlement.
+import type { EngineConnection } from "./sql-connection.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 
 type CronExecHostPolicyUse = {
@@ -132,7 +131,6 @@ export async function prepareCronExecHostPolicyUse(
         }
       },
     });
-    assertNoPendingLegacyExecApprovals({ env: context.environment });
     const reply = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
       { type: "exec-approvals.read" },
@@ -143,6 +141,7 @@ export async function prepareCronExecHostPolicyUse(
     }
     const file = snapshotFromExecApprovalsRow({
       path: resolveExecApprovalsDisplayPath(context.environment),
+      env: context.environment,
       row: reply.row,
     }).file;
     // A commit during this read permanently retires the old use, even after policy restoration.
@@ -184,7 +183,7 @@ export async function prepareCronExecHostPolicyUse(
 }
 
 export function stageCronExecHostPolicyPublication(
-  db: DatabaseSync,
+  db: EngineConnection,
   file: ExecApprovalsFile,
 ): void {
   if (cronPolicyUses.size === 0) {

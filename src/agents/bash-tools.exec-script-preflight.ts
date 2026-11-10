@@ -4,6 +4,7 @@ import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { shouldFailClosedInterpreterPreflight } from "./bash-tools.exec-script-ambiguity.js";
 import { extractScriptTargetFromCommand } from "./bash-tools.exec-script-target.js";
+import { markToolExecutionNotStarted } from "./tool-effect-receipt.js";
 
 const SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES = new Set([
   "EACCES",
@@ -176,9 +177,11 @@ export async function validateScriptFileForShellBleed(params: {
     ) {
       // Fail closed when interpreter-driven script execution is ambiguous; otherwise
       // attackers can route script content through forms our fast parser cannot validate.
-      throw new Error(
-        "exec preflight: complex interpreter invocation detected; refusing to run without script preflight validation. " +
-          "Use a direct `python <file>.py` or `node <file>.js` command.",
+      throw markToolExecutionNotStarted(
+        new Error(
+          "exec preflight: complex interpreter invocation detected; refusing to run without script preflight validation. " +
+            "Use a direct `python <file>.py` or `node <file>.js` command.",
+        ),
       );
     }
     return;
@@ -234,14 +237,16 @@ export async function validateScriptFileForShellBleed(params: {
       const before = content.slice(0, idx);
       const line = before.split(/\r\n?|\n/).length;
       const token = first[0];
-      throw new Error(
-        [
-          `exec preflight: detected likely shell variable injection (${token}) in ${target.kind} script: ${path.basename(
-            absPath,
-          )}:${line}.`,
-          `In Python, use os.environ.get(${JSON.stringify(token.slice(1))}) instead of raw ${token}.`,
-          "(If this is inside a string literal on purpose, escape it or restructure the code.)",
-        ].join("\n"),
+      throw markToolExecutionNotStarted(
+        new Error(
+          [
+            `exec preflight: detected likely shell variable injection (${token}) in ${target.kind} script: ${path.basename(
+              absPath,
+            )}:${line}.`,
+            `In Python, use os.environ.get(${JSON.stringify(token.slice(1))}) instead of raw ${token}.`,
+            "(If this is inside a string literal on purpose, escape it or restructure the code.)",
+          ].join("\n"),
+        ),
       );
     }
   }

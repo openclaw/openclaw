@@ -1,17 +1,23 @@
-import type { DatabaseSync } from "node:sqlite";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection, sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { readTrackedStateDatabaseIdentity } from "../../state/openclaw-state-db-handle.js";
+
+type PendingPublication = {
+  revision: number;
+};
 
 // Retain only live publications, never credential bodies or dormant database revisions.
 const pending = resolveGlobalSingleton(
   Symbol.for("openclaw.authProfilePendingCommits"),
-  () => new Map<string, Set<{ revision: number }>>(),
+  () => new Map<string, Set<PendingPublication>>(),
 );
 
 export function watchAuthProfileNativeCommits(databasePath: string) {
   const key = resolveIdentityPathViaExistingAncestorSync(databasePath);
-  const watches = pending.get(key) ?? new Set<{ revision: number }>();
+  const watches = pending.get(key) ?? new Set<PendingPublication>();
   const watch = { revision: 0 };
   watches.add(watch);
   pending.set(key, watches);
@@ -30,11 +36,13 @@ export function watchAuthProfileNativeCommits(databasePath: string) {
 }
 
 /** Native COMMIT can overtake a worker result before its host publication runs. */
-export function recordAuthProfileNativeCommit(database: DatabaseSync): void {
+export function recordAuthProfileNativeCommit(database: EngineConnection): void {
   if (pending.size === 0) {
     return;
   }
-  const location = database.location();
+  const location = isPostgresSqlConnection(database)
+    ? readTrackedStateDatabaseIdentity(sqlPublicationAnchor(database))?.canonicalPath
+    : database.location();
   if (!location) {
     return;
   }

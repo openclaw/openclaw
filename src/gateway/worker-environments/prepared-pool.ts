@@ -1,5 +1,5 @@
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
+import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import * as pool from "./prepared-pool-admission.js";
 import { runPreparedPoolPass } from "./prepared-pool-pass.js";
 import {
@@ -9,7 +9,7 @@ import {
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { WorkerEnvironmentRecord as Environment } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
-/** Environment rows own inventory; placement activation and explicit builds establish demand. */
+/** Environment rows own inventory; activation, explicit builds, and standing policy establish demand. */
 export function createPreparedWorkerPool(options: pool.PoolOptions) {
   const { store, signal, now } = options;
   let inFlight: Promise<void> | undefined;
@@ -17,9 +17,28 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
   let presenceInFlight: Promise<void> | undefined;
   let presenceAdmitted = false;
   const preparations = new Map<string, AbortController>();
+  let previousDiagnostics = new Set<string>();
   const presence = createPreparedPoolPresence({ ...options, schedule: () => schedule() });
-  const runPass = () =>
-    runPreparedPoolPass(options, presence, preparations, () => presenceAdmitted);
+  const runPass = async () => {
+    const diagnostics = new Set<string>();
+    try {
+      await runPreparedPoolPass(
+        options,
+        presence,
+        preparations,
+        () => presenceAdmitted,
+        (message) => {
+          if (!diagnostics.has(message) && !previousDiagnostics.has(message)) {
+            options.warn(message);
+          }
+          diagnostics.add(message);
+        },
+      );
+    } finally {
+      // Repeat only after recovery or a changed reason; retain at most one pass's diagnostics.
+      previousDiagnostics = diagnostics;
+    }
+  };
   const scheduleInventory = () => {
     if (signal.aborted) {
       return Promise.resolve();
@@ -68,7 +87,7 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
   const noteDemand = async (environmentId: string) => {
     signal.throwIfAborted();
     const record = store.get(environmentId);
-    const preparation = record && readWorkerProjectPreparation(record.profileSnapshot.project);
+    const preparation = record && readWorkerPreparation(record.profileSnapshot);
     if (record?.state !== "attached" || !record.leaseId || !preparation) {
       return;
     }
@@ -82,30 +101,42 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
       { preparationKey: preparation.key, demandAtMs },
     );
   };
-  const candidates = (intent: WorkerProviderPreparedIntent) =>
-    intent.preparationKey
-      ? store.list().filter((record) => {
-          const limits = pool.poolPolicy(options, record.profileId, record.providerId);
-          const presenceDemand = presence.current();
-          return (
-            limits.target > 0 &&
-            limits.maxTotal > 0 &&
-            record.state === "ready" &&
-            record.providerId === intent.providerId &&
-            record.preparation !== null &&
-            record.preparation.key === intent.preparationKey &&
-            record.preparation.consumedAtMs === null &&
-            ((presenceDemand?.project.key ===
-              readWorkerProjectSnapshot(record.profileSnapshot.project)?.key &&
-              (presenceDemand!.retireAtMs ?? Number.MAX_SAFE_INTEGER) > now()) ||
-              record.preparation.expiresAtMs > now()) &&
-            record.destroyRequestedAtMs === null &&
-            record.sharedHost === false &&
-            record.nodeDeviceId !== null &&
-            record.leaseId !== null
-          );
-        })
+  const candidates = (intent: WorkerProviderPreparedIntent) => {
+    const preparation =
+      intent.profileSnapshot.runtimePreparation ?? intent.profileSnapshot.project?.preparation;
+    return preparation
+      ? store
+          .list()
+          .filter((record) => {
+            const limits = pool.poolPolicy(options, record.profileId, record.providerId);
+            return (
+              limits.target > 0 &&
+              limits.maxTotal > 0 &&
+              record.state === "ready" &&
+              record.providerId === intent.providerId &&
+              record.preparation !== null &&
+              record.preparation.key === preparation.key &&
+              (readWorkerProjectSnapshot(record.profileSnapshot.project)?.baseCommit ===
+                intent.profileSnapshot.project?.baseCommit ||
+                options.resolveProvider(record.providerId)?.refreshPreparedProject !== undefined) &&
+              record.preparation.consumedAtMs === null &&
+              // Standing demand replenishes capacity; it cannot extend a restored finite deadline.
+              record.preparation.expiresAtMs > now() &&
+              record.destroyRequestedAtMs === null &&
+              record.sharedHost === false &&
+              record.nodeDeviceId !== null &&
+              record.leaseId !== null
+            );
+          })
+          .toSorted((a, b) => {
+            const commit = intent.profileSnapshot.project?.baseCommit;
+            return (
+              Number(readWorkerProjectSnapshot(b.profileSnapshot.project)?.baseCommit === commit) -
+              Number(readWorkerProjectSnapshot(a.profileSnapshot.project)?.baseCommit === commit)
+            );
+          })
       : [];
+  };
   const maintain = async (environmentId?: string) => {
     if (signal.aborted) {
       return;
@@ -125,7 +156,7 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
   };
   const canPruneDemand = (record: Environment, nowMs: number): boolean => {
     const demandAtMs = pool.demandAt(record);
-    if (demandAtMs === undefined || !readWorkerProjectPreparation(record.profileSnapshot.project)) {
+    if (demandAtMs === undefined || !readWorkerPreparation(record.profileSnapshot)) {
       return true;
     }
     const presenceDemand = matchingPreparedPoolPresenceDemand(record, presence.current());

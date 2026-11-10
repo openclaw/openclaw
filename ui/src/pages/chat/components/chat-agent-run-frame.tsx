@@ -1,0 +1,449 @@
+import { insert, type JSX } from "@solidjs/web";
+import {
+  createMemo,
+  createEffect,
+  createRoot,
+  createSignal,
+  For,
+  getOwner,
+  lazy,
+  Match,
+  onSettled,
+  runWithOwner,
+  Show,
+  Switch,
+  untrack,
+  type Accessor,
+} from "solid-js";
+import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { extractChatSourcePreviews } from "../../../lib/chat/source-previews.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
+import {
+  agentRunFrameActiveStatusParts,
+  chatItemGroups,
+  type AgentRunFrameRenderItem,
+} from "../chat-agent-run-grouping.ts";
+import type { TurnRecap } from "../chat-progress.ts";
+import { rawMessageTimestamp } from "../chat-thread-items.ts";
+import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import {
+  ActivityGroup,
+  MessageGroup,
+  MessageGroupContent,
+  type NativeMessageGroupOptions,
+} from "./chat-message-group-view.tsx";
+import {
+  StreamGroup,
+  StreamPartView,
+  type StreamGroupOptions,
+  type StreamGroupPart,
+} from "./chat-message-stream-view.tsx";
+import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.ts";
+import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
+import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
+import "../../../styles/chat/source-previews.css";
+
+const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
+  export: "ChatSourcePreviews",
+});
+
+type AgentRunFrameOptions = {
+  basePath?: string;
+  sessionPublicOrigin?: string;
+  streamOptions: StreamGroupOptions;
+  workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>;
+  renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
+  partDependencies: (part: BodyPart) => readonly unknown[];
+  isWorkExpanded: (key: string) => boolean;
+  onToggleWork: (key: string, expanded: boolean) => void;
+  turnRecap?: TurnRecap;
+};
+type FrameProps = { frame: AgentRunFrameRenderItem; options: AgentRunFrameOptions };
+type BodyPart =
+  | Exclude<AgentRunFrameRenderItem["parts"][number], { kind: "stream-run" }>
+  | StreamGroupPart;
+type PartInput = { part: BodyPart; options: AgentRunFrameOptions };
+type PartRange = {
+  dependencies: readonly unknown[];
+  start: Comment;
+  end: Comment;
+  write: (input: PartInput) => void;
+  dispose: () => void;
+};
+
+type FrameBodyProps = {
+  parts: readonly BodyPart[];
+  options: AgentRunFrameOptions;
+  children: (input: Accessor<PartInput>) => JSX.Element;
+};
+
+function FrameBody(props: FrameBodyProps & { completedFragment: boolean }): JSX.Element {
+  return (
+    <Show when={props.completedFragment} fallback={<RetainedFrameBody {...props} />}>
+      <For each={props.parts} keyed={(part) => `${part.kind}:${part.key}`}>
+        {(part) => props.children(() => ({ part: part(), options: props.options }))}
+      </For>
+    </Show>
+  );
+}
+
+/** Completion can reorder the reply after a live widget has moved into it. */
+function RetainedFrameBody(props: FrameBodyProps): JSX.Element {
+  // Canvas widgets move between these foreign-DOM ranges without disconnecting.
+  // Mount new ranges under the frame's owner, not the transient reconciliation effect.
+  const owner = getOwner();
+  const parent = document.createElement("div");
+  parent.className = "chat-agent-run-body";
+  parent.style.display = "contents";
+  const anchor = document.createComment("frame-body");
+  parent.append(anchor);
+  const ranges = new Map<string, PartRange>();
+  const retire = (range: PartRange) => {
+    // Native descendants must park their widgets while the range is still connected.
+    range.dispose();
+    const after = range.end.nextSibling;
+    for (let node: Node | null = range.start; node && node !== after;) {
+      const following: Node | null = node.nextSibling;
+      node.parentNode?.removeChild(node);
+      node = following;
+    }
+  };
+  onSettled(() => {
+    return () => {
+      for (const range of ranges.values()) {
+        retire(range);
+      }
+      ranges.clear();
+    };
+  });
+  const update = ({
+    parts,
+    options,
+    render,
+  }: {
+    parts: readonly BodyPart[];
+    options: AgentRunFrameOptions;
+    render: typeof props.children;
+  }) => {
+    const keys = new Set(parts.map((part) => `${part.kind}:${part.key}`));
+    // Park outgoing canvas views before a new range looks them up.
+    for (const [key, range] of ranges) {
+      if (!keys.has(key)) {
+        retire(range);
+        ranges.delete(key);
+      }
+    }
+    const ordered = parts.map((value) => {
+      const key = `${value.kind}:${value.key}`;
+      const dependencies = options.partDependencies(value);
+      const existing = ranges.get(key);
+      if (existing) {
+        if (!transcriptArraysEqual(existing.dependencies, dependencies)) {
+          existing.dependencies = dependencies;
+          existing.write({ part: value, options });
+        }
+        return existing;
+      }
+      const start = document.createComment("frame-part");
+      const end = document.createComment("/frame-part");
+      parent.insertBefore(start, anchor);
+      parent.insertBefore(end, anchor);
+      const range = runWithOwner(owner, () =>
+        createRoot((dispose): PartRange => {
+          // The headline's connection scope must change with its activity.
+          const [readInput, write] = createSignal(
+            { part: value, options },
+            {
+              ownedWrite: true,
+              equals: (before, after) =>
+                before.part === after.part && before.options === after.options,
+            },
+          );
+          insert(parent, render(readInput), end);
+          return { dependencies, start, end, write, dispose };
+        }),
+      );
+      ranges.set(key, range);
+      return range;
+    });
+    let reference: Node = anchor;
+    for (const range of ordered.toReversed()) {
+      if (range.end.nextSibling !== reference) {
+        const after = range.end.nextSibling;
+        for (let node: Node | null = range.start; node && node !== after;) {
+          const following: Node | null = node.nextSibling;
+          if (parent.isConnected && typeof parent.moveBefore === "function") {
+            parent.moveBefore(node, reference);
+          } else {
+            parent.insertBefore(node, reference);
+          }
+          node = following;
+        }
+      }
+      reference = range.start;
+    }
+  };
+  const input = () => ({ parts: props.parts, options: props.options, render: props.children });
+  // Sample once without subscribing the frame owner; the effect owns later range updates.
+  // Detached rows include their body immediately, while widgets still adopt after settlement.
+  update(untrack(input));
+  createEffect(input, update);
+  return parent;
+}
+
+function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions) {
+  const fragment = frame.fragment;
+  const source = fragment?.source ?? frame;
+  const groups = chatItemGroups(fragment?.first || fragment?.last ? source : frame);
+  const firstAssistant =
+    fragment?.firstAssistant ?? groups.find((group) => group.role === "assistant");
+  const sourceActionOwner = source.outcome.kind === "completed" ? source.outcome.actionOwner : null;
+  const actionOwner = !fragment || fragment.last ? sourceActionOwner : null;
+  const representative = fragment?.representative ?? firstAssistant ?? groups[0];
+  const streamStarts = frame.parts.flatMap((part) =>
+    part.kind === "stream-run" ? part.parts.map((streamPart) => streamPart.startedAt) : [],
+  );
+  const streamRun = frame.parts.find((part) => part.kind === "stream-run");
+  const shell: MessageGroupData = {
+    key: frame.key,
+    kind: "group",
+    role: "assistant",
+    senderLabel: firstAssistant?.senderLabel,
+    replyToSender: firstAssistant?.replyToSender ?? streamRun?.replyToSender,
+    replyToMessage: firstAssistant?.replyToMessage ?? streamRun?.replyToMessage,
+    replyPreviousMessageId:
+      firstAssistant?.replyPreviousMessageId ?? streamRun?.replyPreviousMessageId,
+    replyShared: firstAssistant?.replyShared,
+    replyTurnSource: firstAssistant?.replyTurnSource,
+    replyCurrentSource: firstAssistant?.replyCurrentSource,
+    // Only the outer chrome needs whole-run metadata; middle rows stay bounded.
+    messages:
+      fragment && !fragment.first && !fragment.last
+        ? (groups[0]?.messages ?? [])
+        : (representative?.messages ?? []),
+    visibleContent: representative?.visibleContent ?? "none",
+    timestamp:
+      (actionOwner ? rawMessageTimestamp(actionOwner.message) : null) ??
+      Math.min(...groups.map((group) => group.timestamp), ...streamStarts, Date.now()),
+    isStreaming: frame.outcome.kind === "active",
+    runId: frame.runId,
+  };
+  const frameReplyLine =
+    fragment && !fragment.first
+      ? NO_REPLY_LINE
+      : resolveGroupReplyLine(
+          {
+            ...((sourceActionOwner &&
+              groups.find((group) => group.messages.includes(sourceActionOwner))) ||
+              shell),
+            replyPreviousMessageId: shell.replyPreviousMessageId,
+          },
+          opts.renderGroupOptions(shell).resolveReplyPreview,
+          groups.flatMap((group) => group.messages),
+        );
+  // A preceding segment becoming history must not reparent the live answer.
+  const bodyParts = frame.parts.flatMap<BodyPart>((part) =>
+    part.kind === "stream-run" ? part.parts : [part],
+  );
+  const firstBubbleKey = fragment
+    ? fragment.firstBubbleKey
+    : (bodyParts
+        .flatMap((part) =>
+          part.kind === "stream"
+            ? part.text.trim()
+              ? [part.key]
+              : []
+            : part.kind === "group" && part.role !== "tool"
+              ? part.messages
+                  .filter((message) => message.hasVisibleContent)
+                  .map((message) => message.key)
+              : [],
+        )
+        .at(0) ?? null);
+  const sourcePreviews = actionOwner
+    ? extractChatSourcePreviews({
+        // Cited results can sit in an earlier rollup that no visible reply owns.
+        groups: frame.detachedGroups ? [...frame.detachedGroups, ...groups] : groups,
+        answer: actionOwner.message,
+        runId: frame.runId,
+        basePath: opts.basePath,
+        sessionPublicOrigin: opts.sessionPublicOrigin,
+      })
+    : [];
+  return {
+    shell,
+    actionOwner,
+    frameReplyLine,
+    bodyParts,
+    firstBubbleKey,
+    sourcePreviews,
+  };
+}
+
+export function AgentRunFrame(props: FrameProps) {
+  const statusParts = createMemo(() => agentRunFrameActiveStatusParts(props.frame));
+  return (
+    <Show when={statusParts()} fallback={<RunFrame frame={props.frame} options={props.options} />}>
+      {(parts) => <StreamGroup parts={parts()} options={props.options.streamOptions} />}
+    </Show>
+  );
+}
+
+function RunFrame(props: FrameProps) {
+  const state = createMemo(() => prepareFrame(props.frame, props.options));
+  const firstBubbleKey = createMemo(() => state().firstBubbleKey);
+  const timedWork = createMemo(() => {
+    const recap = props.options.turnRecap;
+    if (!recap) {
+      return undefined;
+    }
+    const work = props.frame.fragment
+      ? props.frame.fragment.work
+      : props.frame.parts.find(
+          (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
+        );
+    // The recap retains this run's terminal timing after the session moves on.
+    // Run duration appears only on the Worked summary; turns without one show no timing.
+    if (work?.kind !== "work-group") {
+      return undefined;
+    }
+    const durationMs = work.durationMs ?? recap.runtimeMs;
+    return durationMs > 0 ? { ...work, durationMs } : undefined;
+  });
+  const frameContent = [
+    <FrameBody
+      parts={state().bodyParts}
+      options={props.options}
+      // Completed nonfinal fragments cannot contain widgets. Keep the final
+      // reply's owner unchanged as it transitions from active to completed.
+      completedFragment={Boolean(props.frame.fragment && !props.frame.fragment.last)}
+    >
+      {(input) => {
+        const part = () => input().part;
+        const options = () => input().options;
+        const groupOptions = (group: MessageGroupData) => ({
+          ...options().renderGroupOptions(group),
+          firstBubbleKey: firstBubbleKey(),
+        });
+        const streamPart = () => {
+          const value = part();
+          return value.kind === "stream" ||
+            value.kind === "reading-indicator" ||
+            value.kind === "question"
+            ? value
+            : undefined;
+        };
+        const workPart = () => {
+          const value = part();
+          return value.kind === "work-group" ? value : undefined;
+        };
+        const activityPart = () => {
+          const value = part();
+          return value.kind === "activity-run" ? value : undefined;
+        };
+        const messageGroup = () => {
+          const value = part();
+          return value.kind === "group" ? value : undefined;
+        };
+        return (
+          <Switch>
+            <Match when={streamPart()}>
+              {(stream) => (
+                <StreamPartView
+                  part={stream()}
+                  options={{
+                    ...options().streamOptions,
+                    firstBubbleKey: firstBubbleKey(),
+                  }}
+                  presentation="standalone"
+                />
+              )}
+            </Match>
+            <Match when={workPart()}>
+              {(work) => (
+                <>
+                  <WorkGroupSummary
+                    item={timedWork()?.key === work().key ? timedWork()! : work()}
+                    options={{
+                      expanded: options().isWorkExpanded(work().key),
+                      mediaReadAllowed: options().streamOptions.mediaReadAllowed,
+                      bubbleMode: options().streamOptions.bubbleMode,
+                      onToggle: () =>
+                        options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
+                      presentation: "continuation",
+                      browserTabPreviews: options().workPreviews.get(work().key),
+                    }}
+                  />
+                  <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
+                    <For each={work().groups} keyed={(group) => group.key}>
+                      {(group) => (
+                        <MessageGroupContent group={group()} options={groupOptions(group())} />
+                      )}
+                    </For>
+                  </Show>
+                </>
+              )}
+            </Match>
+            <Match when={activityPart()}>
+              {(activity) => {
+                const groups = () => activity().groups;
+                return (
+                  <Show when={groups()[0]}>
+                    {(first) => (
+                      <ActivityGroup
+                        groups={groups()}
+                        options={options().renderGroupOptions(first())}
+                        presentation="continuation"
+                      />
+                    )}
+                  </Show>
+                );
+              }}
+            </Match>
+            <Match when={messageGroup()}>
+              {(group) => (
+                <>
+                  <MessageGroupContent group={group()} options={groupOptions(group())} />
+                  <BrowserTabPreviews
+                    previews={options().workPreviews.get(group().key)}
+                    mediaReadAllowed={options().streamOptions.mediaReadAllowed}
+                  />
+                </>
+              )}
+            </Match>
+          </Switch>
+        );
+      }}
+    </FrameBody>,
+    <Show when={state().sourcePreviews.length > 0}>
+      <ChatLazyBoundary>
+        <ChatSourcePreviews
+          sources={state().sourcePreviews}
+          fetchFavicon={props.options.streamOptions.fetchLinkFavicon}
+        />
+      </ChatLazyBoundary>
+    </Show>,
+    <Show when={props.frame.outcome.kind === "interrupted"}>
+      <div class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation" role="status">
+        {t("chat.composer.runInterrupted")}
+      </div>
+    </Show>,
+  ];
+  return (
+    <MessageGroup
+      group={state().shell}
+      options={{
+        ...props.options.renderGroupOptions(state().shell),
+        frameContent,
+        frameReplyLine: state().frameReplyLine,
+        frameActionOwner: state().actionOwner,
+        frameHeader: props.frame.fragment?.first,
+        frameFooter: props.frame.fragment?.last,
+        turnRecap:
+          !props.frame.fragment || props.frame.fragment.last ? props.options.turnRecap : undefined,
+      }}
+    />
+  );
+}

@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import {
   executeSqliteQuerySync,
@@ -9,13 +8,15 @@ import {
   withoutSqliteDatabaseWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
+  hasSessionPendingInputsSchema,
+  SESSION_INPUT_COMPLETIONS_TABLE,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   readSessionEntryIdentity,
   readSessionEntryRow,
@@ -27,8 +28,11 @@ import {
   type SessionPendingInputRow,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
-import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
+import {
+  readSessionActorTransactionState,
+  writableSessionActorMap,
+} from "./session-actor-transaction.js";
 import { readSessionPendingInputAuthorityFactsInTransaction } from "./session-pending-input-authority.kernel.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import type {
@@ -41,6 +45,7 @@ import type {
 import { readPendingInputSourceInDatabase } from "./session-pending-input-source.kernel.js";
 import {
   isFinalInputCompletion,
+  markSessionPendingInputCancelledByUser,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
 
@@ -50,8 +55,7 @@ function readPendingInputStage(
   existing: SessionPendingInputRow | undefined,
 ): PendingInputSnapshot {
   const previous =
-    input.trackCompletion &&
-    getAdmittedSqliteSchemaFacts(database.db)?.tables.has("session_input_completions")
+    input.trackCompletion && tableExists(database.db, SESSION_INPUT_COMPLETIONS_TABLE)
       ? readSessionInputCompletion(database, input)
       : undefined;
   const committed =
@@ -96,10 +100,14 @@ export function readPendingInput(database: OpenClawAgentDatabase, input: Pending
   );
 }
 
-/** Incognito uses this same kernel in its process-held owner until the actor cutover. */
 export function mutatePendingInput(
   input: PendingInputMutation,
-  { writeTransaction, admit }: Pick<AgentWorkerOperationContext, "writeTransaction" | "admit">,
+  {
+    writeTransaction,
+    admit,
+  }: Pick<AgentWorkerOperationContext, "writeTransaction"> & {
+    admit: (stage: "transaction" | "commit", publication?: unknown) => void;
+  },
   publish: (database: OpenClawAgentDatabase["db"], receipt: PendingInputMutationReceipt) => void,
 ): PendingInputMutationReceipt {
   return writeTransaction(`session.pending-input.${input.kind}`, "Pending input", (current) =>
@@ -147,9 +155,14 @@ export function mutatePendingInput(
             );
           }
         }
+        // Native SDK completion uses only "complete"; stage and finish execute in workers.
         if (input.kind === "stage") {
-          const snapshot = readPendingInputStage(current, input, row);
-          if (!isDeepStrictEqual(snapshot, input.expected)) {
+          // Compare-and-set: a restage may rebind run_id, so a concurrent reopen must lose.
+          if (
+            row?.input_id !== input.expected.existing?.input_id ||
+            row?.run_id !== input.expected.existing?.run_id ||
+            row?.state !== input.expected.existing?.state
+          ) {
             throw new SessionPendingInputCustodyError(
               "Pending input changed before staging committed",
             );
@@ -166,12 +179,11 @@ export function mutatePendingInput(
           );
         }
         withoutSqliteDatabaseWriteScope(current.db, () => admit("transaction", grant));
-        const schema = getAdmittedSqliteSchemaFacts(current.db);
         if (input.kind === "stage") {
-          if (!schema?.tables.has("session_pending_inputs")) {
+          if (!hasSessionPendingInputsSchema(current.db)) {
             ensureSessionPendingInputsSchema(current.db);
           }
-          if (input.trackCompletion && !schema?.tables.has("session_input_completions")) {
+          if (input.trackCompletion && !tableExists(current.db, SESSION_INPUT_COMPLETIONS_TABLE)) {
             ensureSessionInputCompletionsSchema(current.db);
           }
           if (row) {
@@ -179,7 +191,12 @@ export function mutatePendingInput(
               current.db,
               getSessionKysely(current.db)
                 .updateTable("session_pending_inputs")
-                .set({ state: "queued", lifecycle_generation: input.lifecycleGeneration })
+                // Same-run restages keep run_id; a reclaimed channel source turn rebinds it.
+                .set({
+                  state: "queued",
+                  run_id: input.runId,
+                  lifecycle_generation: input.lifecycleGeneration,
+                })
                 .where("input_id", "=", row.input_id)
                 .returningAll(),
             );
@@ -208,18 +225,27 @@ export function mutatePendingInput(
               "Pending input staging omitted its postimage",
             );
           }
-          actor?.pendingInputs.set(input.idempotencyKey, receipt.stagedInput);
+          if (actor && receipt.stagedInput.consumed_event_id === null) {
+            actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
+            actor.pendingInputs.set(input.idempotencyKey, receipt.stagedInput);
+          }
         } else if (input.kind === "complete") {
-          if (!schema?.tables.has("session_input_completions")) {
+          if (!tableExists(current.db, SESSION_INPUT_COMPLETIONS_TABLE)) {
             ensureSessionInputCompletionsSchema(current.db);
           }
           receipt.outcome = writeSessionInputCompletion(current, input, input.outcome);
         } else if (row) {
+          const changes = {
+            state: input.disposition,
+            ...(input.cancelledByUser
+              ? { message_json: markSessionPendingInputCancelledByUser(row.message_json) }
+              : {}),
+          };
           const result = executeSqliteQuerySync(
             current.db,
             getSessionKysely(current.db)
               .updateTable("session_pending_inputs")
-              .set({ state: input.disposition })
+              .set(changes)
               .where("input_id", "=", input.inputId)
               .where("state", "=", "queued")
               .where("consumed_event_id", "is", null),
@@ -227,8 +253,9 @@ export function mutatePendingInput(
           if (input.disposition === "cancelled" && result.numAffectedRows === 1n) {
             receipt.withdrawnInputId = input.inputId;
           }
-          if (result.numAffectedRows === 1n) {
-            actor?.pendingInputs.set(input.idempotencyKey, { ...row, state: input.disposition });
+          if (result.numAffectedRows === 1n && actor) {
+            actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
+            actor.pendingInputs.set(input.idempotencyKey, { ...row, ...changes });
           }
         }
         withoutSqliteDatabaseWriteScope(current.db, () => {

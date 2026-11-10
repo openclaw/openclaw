@@ -1,4 +1,5 @@
 import {
+  isLocalAgentAvatarFileCurrent,
   localAgentAvatarRevision,
   type LocalAgentAvatarRead,
   type LocalAgentAvatarResult,
@@ -17,6 +18,7 @@ export function prepareLocalAgentAvatar(
     key: () => JSON.stringify([input.workspaceDir, input.source, input.readBody]),
     input: (_key, knownRevision) => ({ ...input, knownRevision }),
     revision: (entry) => localAgentAvatarRevision(entry.file),
+    isCurrent: (entry) => isLocalAgentAvatarFileCurrent(input, entry.file),
     sizeOf: (entry) => entry.file.body?.byteLength ?? 0,
     prepare: (result, previous) => {
       if ("kind" in result) {

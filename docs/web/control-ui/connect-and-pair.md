@@ -10,6 +10,12 @@ sidebarTitle: "Connect and pair"
 
 Reach the Control UI from a new browser, phone, or network, and fix the connection when it fails.
 
+If the page says **No access to this Gateway**, automatic retries stop. Sign in as
+a different user or ask a Gateway administrator to grant your account operator
+access, then choose **Connect**. Returning to the tab or restoring your network
+does not retry an access denial. Temporary connection failures still reconnect
+with capped exponential backoff and jitter.
+
 ## Device pairing (first connection)
 
 After gateway auth succeeds, connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`. On the Gateway host, `openclaw dashboard` is the preferred owner path: it opens a short-lived, single-use pairing link and leaves that exact signed browser with a durable administrator credential. Opening a fresh link in the same browser also repairs a previously limited credential; another browser profile cannot inherit or replay the grant.
@@ -44,9 +50,11 @@ minutes. This error does not mean the shared Gateway token or password needs cha
 
 If the browser retries pairing with changed auth details (role/scopes/public key), the previous pending request is superseded and a new `requestId` is created; re-run `openclaw devices list` before approving.
 
-Switching an already-paired browser from read access to write/admin access through ordinary stored or shared credentials is treated as an approval upgrade, not a silent reconnect: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. The narrow exception is a fresh owner handoff issued on the Gateway host by `openclaw dashboard` or graphical onboarding; it can upgrade only the same signed browser that redeems that one-time handoff.
+Switching an already-paired browser from read access to write/admin access normally requires an approval upgrade: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. Eligible local connections can auto-approve scope upgrades under the conditions below. A fresh owner handoff issued on the Gateway host by `openclaw dashboard` or graphical onboarding can also upgrade only the same signed browser that redeems that one-time handoff.
 
 When the connected Control UI reports limited access, open **Inbox > System > Limited access**, then click **Request admin**. On mobile, open the sidebar to reach Inbox. The browser files the pending device scope-upgrade request over its existing connection; run the displayed `openclaw devices approve <requestId>` command on the Gateway host or approve from **Devices** in another admin-capable browser that also has `operator.pairing`. Keep the requesting tab connected while approval completes so it can receive and store the freshly rotated device token before reconnecting. **Retry** reattaches to the pending request. **Cancel** stops the local wait but does not reject the device request; if you cancel or disconnect before approval, use the normal pairing repair path on the next connection.
+
+Intentionally restricted guests do not receive the limited-access Inbox warning. Open **Settings > Profile > Your access** to review access even when the Inbox warning was dismissed. If the assigned role cannot grant administrator access, this section explains the limit without offering **Request admin**. Ask a Gateway administrator to change the role, then reconnect. Once the role permits administrator access, **Request admin** becomes available for this browser; separate device approval is still required. Requesting access does not grant it automatically.
 
 If the device was previously approved for admin access but its token was later narrowed, approving the request preserves that token limit. The UI explains that pairing was approved without restoring the requested access, rather than reporting rejection or offering a retry that cannot lift the limit. Run `openclaw dashboard --json` on the Gateway host and open its fresh one-time `browserUrl` in the same browser to restore administrator access through the owner handoff.
 
@@ -58,6 +66,8 @@ If the Gateway denies the upgrade because it exceeds your assigned operator role
 
 <Note>
 - Direct local Control UI connections from a loopback TCP peer (`127.0.0.1` or `::1`, typically reached as `localhost`) with no forwarded/proxy headers can auto-approve device pairing only after gateway auth succeeds and the browser presents device identity. In token/password mode, the first connection still needs the configured shared secret; this auto-approval is not a token bypass.
+- A Control UI browser in WebChat mode also qualifies as local when the TCP peer is private or loopback (including CGNAT), both `Host` and `Origin` name loopback hosts, no forwarded/proxy headers are present, and shared token/password authentication succeeds. This supports Docker-published ports opened through `localhost`, where the Gateway may see a private container-network peer instead of `127.0.0.1`. The browser must still present its signed device identity; a private peer address alone is insufficient.
+- Local scope upgrades additionally require the connection itself to authenticate with local-grade credentials (`none`, the shared token, or the shared password). A stored device token does not satisfy that requirement. Set `gateway.nodes.pairing.autoApproveLocal: false` to require explicit approval for local pairing and access upgrades.
 - Direct loopback needs no shared secret only when `gateway.auth.mode: "none"` is explicitly configured. That disables gateway auth and is not the recommended Control UI setup. Tailscale Serve and trusted-proxy modes can avoid a pasted shared secret only when their respective identity checks succeed.
 - Tailscale Serve can skip the pairing round trip for Control UI operator sessions when `gateway.auth.allowTailscale: true`, Tailscale identity verifies, and the browser presents its device identity. Device-less browsers and node-role connections still follow the normal device checks.
 - Direct Tailnet binds and LAN browser connects still require explicit approval. Browser profiles without device identity cannot use loopback auto-approval.
@@ -66,13 +76,46 @@ If the Gateway denies the upgrade because it exceeds your assigned operator role
 
 </Note>
 
+## Pair a browser with a code
+
+Use this when your own browser has no Gateway token and you can run a command on the Gateway host, including over SSH. You do not need a browser on the host, and nothing has to be pasted into the page. Approval grants administrator access; this is not a guest invitation.
+
+Code pairing is for a direct connection to the Gateway serving the page, not an OpenClaw ID tunnel or ID owner-browser enrollment. Gateways with `gateway.roles` configured require identity-aware sign-in and refuse this identity-less code flow; use the Gateway's normal sign-in method instead.
+
+<Steps>
+  <Step title="Ask for a code">
+    Open the Gateway in any browser and choose **Pair this browser**. The page shows a code such as `ABCD-EFGH` and the command to run.
+  </Step>
+  <Step title="Approve it on the host">
+    ```bash
+    openclaw pair ABCD-EFGH
+    ```
+
+    The command prints the browser's user agent, address, page, **Browser ID**, and when it asked, then waits for your answer.
+
+  </Step>
+  <Step title="Let the page connect">
+    Keep the page open. It connects by itself within a few seconds of approval. Editing the Gateway URL or choosing **Connect** ends the wait, because an approval only works on the Gateway that issued it.
+  </Step>
+</Steps>
+
+Approval pairs that browser as an operator device with the Control UI's administrator scopes, the same result as approving it with `openclaw devices approve`. It then appears in `openclaw devices list` and the Devices page, where you can remove it. **Only approve a code you requested yourself.** A code is not a secret: it names a waiting browser, and anyone can display one. Running a code someone else sent you gives their browser control of your Gateway, so answer no unless the Browser ID in the terminal matches the page in front of you.
+
+Connection interruptions keep the same request and code while the page shows that it is retrying. Approval can still complete during an interruption; the page checks the recorded result when connectivity returns.
+
+**Cancel** withdraws a pending request on the Gateway. The page confirms cancellation only after the Gateway answers, and that code can no longer be approved. If withdrawal cannot be confirmed, retry cancellation. If approval finished first, the page explains that access was already granted and offers **Continue**; cancellation does not revoke an approved device. Remove the browser in Devices to revoke its access. Leaving the page or switching Gateway URLs only stops local waiting and does not claim to withdraw the request.
+
+Codes expire after ten minutes. Only the browser that asked can collect the result, because the Gateway checks the signature of its device key. The device token it receives is bound to that key when the browser signs in over the Gateway WebSocket, but supported HTTP routes accept the token by itself as bearer auth, so treat it as a secret. The page can collect that token again until the code expires, in case a reply was lost; rotating, revoking or removing the device token ends that. A browser that is already paired with a revoked or narrowed operator token keeps that limit, so the code is refused; use the `openclaw dashboard` owner handoff described below, or remove the device first. If you answer no, the page shows that the request was declined.
+
+The page must be served by the Gateway it is connecting to. Pairing also works on plain `http://` LAN addresses, but anyone on that network can read the Gateway traffic afterwards, so prefer HTTPS. See [`openclaw pair`](/cli/pair) for the command's options.
+
 ## Pair a mobile device
 
 An already paired administrator can create the iOS/Android connection QR without opening a terminal:
 
 <Steps>
   <Step title="Open mobile pairing">
-    Select **Devices**, then click **Pair device** in the **Devices** card.
+    Select **Devices**, then click **Connect a device** in the **Devices** card.
   </Step>
   <Step title="Connect the phone">
     In the OpenClaw mobile app, open **Settings** → **Gateway** and scan the QR code. You can copy and paste the setup code instead.
@@ -82,7 +125,7 @@ An already paired administrator can create the iOS/Android connection QR without
   </Step>
 </Steps>
 
-Creating a setup code requires `operator.admin`; the button is disabled for sessions without it. A setup code contains a short-lived bootstrap credential, so treat the QR and copied code like a password while they are valid. For remote pairing, the Gateway must resolve to `wss://` (for example, through Tailscale Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses. See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the full security and fallback details.
+Creating a setup code requires `operator.admin`; **Connect a device** is disabled in the sidebar identity menu and settings for sessions without it. Operators with `operator.pairing` can still review and approve eligible operator-device requests from **Devices**. A setup code contains a short-lived bootstrap credential, so treat the QR and copied code like a password while they are valid. For remote pairing, the Gateway must resolve to `wss://` (for example, through Tailscale Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses. See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the full security and fallback details.
 
 ## Runtime config endpoint
 
@@ -117,7 +160,7 @@ Override the VAPID keypair through env vars on the Gateway process when you want
 - `OPENCLAW_VAPID_PRIVATE_KEY`
 - `OPENCLAW_VAPID_SUBJECT` (defaults to `https://openclaw.ai`)
 
-One service-worker registration scope has one browser push subscription and therefore one application-server key. If one installed PWA switches among multiple logical Gateways, configure the same public/private VAPID pair on every Gateway and set each Gateway's `gateway.publicOrigin`; otherwise registration fails closed with a VAPID-identity mismatch. Sharing the private VAPID key and browser endpoint creates one push-signing trust domain, so do this only among mutually trusted Gateways. PWAs installed from separate HTTPS origins or base-path scopes have separate registrations and do not need to share keys.
+One service-worker registration scope has one browser push subscription and therefore one application-server key. If one installed PWA switches among multiple logical Gateways, configure the same public/private VAPID pair on every Gateway and set each Gateway's `gateway.publicOrigin`; otherwise registration is rejected with a VAPID-identity mismatch. Sharing the private VAPID key and browser endpoint creates one push-signing trust domain, so do this only among mutually trusted Gateways. PWAs installed from separate HTTPS origins or base-path scopes have separate registrations and do not need to share keys.
 
 The Control UI uses these scope-gated Gateway methods to register and test browser subscriptions:
 
@@ -174,6 +217,8 @@ switch that disables device identity.
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
 ## Blank Control UI page
+
+Browsers without module-script support show **This browser is not supported**. Open the Control UI in an up-to-date browser, or update your system WebView.
 
 If the browser loads a blank dashboard and DevTools shows no useful error, an extension or early content script may have prevented the JavaScript module app from evaluating. The static page includes a plain HTML recovery panel that appears when `<openclaw-app>` does not complete its first render after startup. While the browser is still downloading the initial app modules, the panel shows **Control UI is still loading** and leaves those downloads running. Once module loading finishes without a render, automatic recovery can request a fresh page. **Keep waiting** cancels a pending recovery request and gives the current page more time; **Try again** explicitly reloads it.
 

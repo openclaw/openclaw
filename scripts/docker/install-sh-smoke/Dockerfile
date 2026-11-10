@@ -1,6 +1,6 @@
-# syntax=docker/dockerfile:1.27.1
+# syntax=docker/dockerfile:1.28.0@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 
-FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+FROM node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
 
 # Smoke images are pinned and short-lived, so skip distro upgrades here and
 # spend the time budget on installer coverage instead.
@@ -8,7 +8,7 @@ RUN --mount=type=cache,id=openclaw-install-sh-smoke-apt-cache,target=/var/cache/
   --mount=type=cache,id=openclaw-install-sh-smoke-apt-lists,target=/var/lib/apt,sharing=locked \
   set -eux; \
   for attempt in 1 2 3; do \
-    if apt-get update -o Acquire::Retries=3; then break; fi; \
+    if apt-get update -o Acquire::Retries=3 -o APT::Update::Error-Mode=any; then break; fi; \
     echo "apt-get update failed (attempt ${attempt})" >&2; \
     if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
     sleep 3; \

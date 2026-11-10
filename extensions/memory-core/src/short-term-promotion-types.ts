@@ -118,42 +118,6 @@ export type RankShortTermPromotionOptions = PromotionThresholdOptions & {
   nowMs?: number;
 };
 
-export type ApplyShortTermPromotionsOptions = PromotionThresholdOptions & {
-  agentId?: string;
-  workspaceAgentIds?: readonly string[];
-  workspaceDir: string;
-  candidates: PromotionCandidate[];
-  limit?: number;
-  nowMs?: number;
-  timezone?: string;
-  /**
-   * Maximum size of MEMORY.md on disk after a promotion write, in
-   * characters. When the post-write size would exceed this budget, the
-   * oldest auto-promotion sections may be compacted out, within
-   * `maxPriorEntryLossFraction`, so the file stays bounded and bootstrap
-   * injection keeps reaching new sessions. Pass `0` to disable compaction. Defaults to
-   * `DEFAULT_MEMORY_FILE_MAX_CHARS`. See #73691.
-   */
-  memoryFileMaxChars?: number;
-  /**
-   * Maximum visible size of each promoted short-term snippet in MEMORY.md, in
-   * estimated tokens. This keeps daily journal ranges from being copied
-   * wholesale into long-term memory while preserving the candidate's provenance
-   * metadata.
-   */
-  maxPromotedSnippetTokens?: number;
-  /** Maximum fraction of prior entries a promotion write may remove. */
-  maxPriorEntryLossFraction?: number;
-  consolidation?: {
-    subagent?: import("./dreaming-narrative.js").DreamingCompletion;
-    model?: string;
-    logger: {
-      info: (message: string) => void;
-      warn: (message: string) => void;
-    };
-  };
-};
-
 /** Fixed diagnostic labels; never include candidate identifiers or threshold values. */
 export type PromotionRejectionCategory =
   | "origin"

@@ -1,6 +1,22 @@
 #!/bin/bash
 # Shared by both installer profiles; only function definitions belong here.
 
+validate_git_checkout() {
+    local repo_dir="$1"
+    if [[ ! -e "$repo_dir/.git" ]]; then
+        [[ ! -d "$repo_dir" || -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]] && return 0
+        installer_error "Git install dir exists but is not a git repo: ${repo_dir}. Choose the checkout root containing .git or a new empty directory, then retry."
+        return 1
+    fi
+    # Git accepts directories and linked-worktree gitfiles. Explicit metadata
+    # prevents an incomplete checkout from borrowing an enclosing repo's HEAD.
+    if git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
+        return 0
+    fi
+    installer_error "Git checkout has no commit: ${repo_dir}. Move or remove this incomplete checkout, then retry."
+    return 1
+}
+
 detect_downloader() {
     if command -v curl &> /dev/null; then
         DOWNLOADER="curl"
@@ -43,6 +59,19 @@ download_file() {
         return
     fi
     wget -q --https-only --secure-protocol=TLSv1_2 --tries=3 --timeout="$UPDATE_NETWORK_TIMEOUT_SECONDS" -O "$output" "$url"
+}
+
+warn_node_security_patch() {
+    local version="${1#v}" major minor patch
+    [[ "${NODE_SECURITY_WARNING_PRINTED:-0}" != 1 ]] || return 0
+    [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]] || return 0
+    major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}" patch="${BASH_REMATCH[3]}"
+    if { ((major == 24)) && { ((minor < 22)) || ((minor == 22 && patch < 1)); }; } ||
+        { ((major == 26)) && { ((minor < 12)) || ((minor == 12 && patch < 1)); }; }; then
+        printf '%s\n' "SECURITY WARNING: Node.js ${version} may trust TLS certificates signed with keys compromised in the October 2026 eMudhra incident. Upgrade to Node 24.22.1+ on the 24.x line or Node 26.12.1+. Continuing with this compatible runtime." >&2
+        NODE_SECURITY_WARNING_PRINTED=1
+    fi
+    return 0
 }
 
 node_binary_has_safe_sqlite() {
@@ -323,18 +352,41 @@ verify_git_rebase_recovery() {
         [[ ! -d "$git_dir/rebase-merge" && ! -d "$git_dir/rebase-apply" ]]
 }
 
+probe_git_remote_ref() {
+    local repo_dir="$1" ref="$2" attempt diagnostic probe_status
+    for attempt in 1 2 3; do
+        if diagnostic="$(git -C "$repo_dir" ls-remote --exit-code origin "$ref" "${ref}^{}" 2>&1)"; then
+            printf '%s\n' "$diagnostic"
+            return 0
+        else
+            probe_status=$?
+        fi
+        # Exit 2 means an absent ref, not a failed connection or authentication.
+        (( probe_status != 2 )) || return 2
+        # Git errors can include credential-bearing URLs or HTTP trace headers.
+        printf '%s\n' "$diagnostic" | sed -E \
+            -e 's#[[:alpha:]][[:alnum:]+.-]*://[^[:space:]]+#[redacted-url]#g' \
+            -e 's/([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]):.*/\1: [redacted]/g' \
+            -e 's/(gh[pousr]_[[:alnum:]_]+|github_pat_[[:alnum:]_]+)/[redacted]/g' >&2
+        if (( attempt == 3 )) || printf '%s\n' "$diagnostic" | grep -Eqi \
+            'Authentication failed|Permission denied|Host key verification failed|could not read (Username|Password)|certificate verification failed|SSL certificate problem' ||
+            ! printf '%s\n' "$diagnostic" | grep -Eqi \
+            'Could not resolve (host|proxy)|Failed to connect|Connection.*(timed out|reset|closed|refused)|timed out|Network is unreachable|No route to host|Broken pipe|TLS connection was non-properly terminated|Empty reply from server|Send failure|Recv failure|GnuTLS recv error|Error in the pull function|SSL_ERROR_SYSCALL|transfer closed with|HTTP/2 stream .*not closed cleanly|RPC failed; curl (5|6|7|18|28|35|52|55|56|92)( |$)|requested URL returned error: (408|429|5[0-9][0-9])'; then
+            return "$probe_status"
+        fi
+        printf 'Retrying Git ref lookup (%s/3)\n' "$((attempt + 1))" >&2
+        sleep "$attempt"
+    done
+}
+
 checkout_git_openclaw_ref() {
-    local repo_dir="$1"
-    local ref="$2"
-    local original_head=""
-    local original_status=""
+    local repo_dir="$1" ref="$2"
+    local original_head="" original_status="" branch_worktree=""
     local namespaces=(heads tags)
 
     GIT_REF_KIND=""
 
-    if [[ -z "$ref" ]]; then
-        return 0
-    fi
+    [[ -n "$ref" ]] || return 0
 
     # Full commit IDs pin source bytes, even when a remote ref has the same name.
     # Bundled/existing checkouts already have the object and need no remote lookup.
@@ -354,15 +406,20 @@ checkout_git_openclaw_ref() {
         return 0
     fi
 
+    # Detach branches owned by another worktree instead of moving its ref.
+    # Main still selects the local branch before the optional remote rebase.
+    if [[ "$(git -C "$repo_dir" symbolic-ref --quiet HEAD || true)" != "refs/heads/$ref" ]]; then
+        branch_worktree="$(git -C "$repo_dir" branch --list "$ref" --format='%(worktreepath)')"
+    fi
+
     if [[ "$ref" == "main" ]]; then
         installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
-        installer_step "Checking out main" git -C "$repo_dir" checkout main
+        local checkout_args=(main)
+        [[ -z "$branch_worktree" ]] || checkout_args=(--detach refs/heads/main)
+        installer_step "Checking out main" git -C "$repo_dir" checkout "${checkout_args[@]}"
         if [[ "$GIT_UPDATE" == "1" ]]; then
-            if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
-                installer_error "Could not record repository state before updating from origin/main"
-                return 1
-            fi
-            if ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
+            if ! original_head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)" ||
+               ! original_status="$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
                 installer_error "Could not record repository state before updating from origin/main"
                 return 1
             fi
@@ -385,16 +442,26 @@ checkout_git_openclaw_ref() {
         namespaces=(tags heads)
     fi
 
-    local namespace=""
+    local namespace="" remote_refs=""
     local probe_status=0
     for namespace in "${namespaces[@]}"; do
-        if git -C "$repo_dir" ls-remote --exit-code origin "refs/${namespace}/${ref}" >/dev/null 2>&1; then
+        if remote_refs="$(probe_git_remote_ref "$repo_dir" "refs/${namespace}/${ref}")"; then
             if [[ "$namespace" == "heads" ]]; then
                 installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
-                installer_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
+                local checkout_args=(-B "$ref")
+                [[ -z "$branch_worktree" ]] || checkout_args=(--detach)
+                installer_step "Checking out ${ref}" git -C "$repo_dir" checkout "${checkout_args[@]}" "origin/$ref"
                 GIT_REF_KIND="moving"
             else
-                installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"
+                local tag_depth="" tag_commit=""
+                tag_commit="$(printf '%s\n' "$remote_refs" | awk -v ref="refs/tags/${ref}" '$2 == ref { direct=$1 } $2 == ref"^{}" { peeled=$1 } END { print peeled ? peeled : direct }')"
+                # Depth can shorten existing history. Only bound new tag commits;
+                # the peeled advertisement also handles annotated tags we lack locally.
+                if [[ "$(git -C "$repo_dir" rev-parse --is-shallow-repository)" == true ]] &&
+                    ! GIT_NO_LAZY_FETCH=1 git -C "$repo_dir" cat-file -e "${tag_commit}^{commit}" 2>/dev/null; then
+                    tag_depth="--depth=1"
+                fi
+                installer_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}" ${tag_depth:+"$tag_depth"}
                 if ! git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
                     installer_error "Requested git version is not a commit: ${ref}"
                     return 1
@@ -424,6 +491,57 @@ git_install_lockfile_flag() {
     fi
 }
 
+publish_git_clone_staging() {
+    local source="$1" target="$2" preserve_target="$3"
+    if [[ "$preserve_target" == 0 ]]; then
+        if [[ -e "$target" || -L "$target" ]]; then
+            echo "Git install dir appeared while cloning: ${target}" >&2
+            return 1
+        fi
+        mv "$source" "$target"
+        return
+    fi
+    if [[ ! -d "$target" || -L "$target" || "$(ls -A "$target")" != "$(basename "$source")" ]]; then
+        echo "Git install dir appeared while cloning: ${target}" >&2
+        return 1
+    fi
+    local entry name git_entry="" moved_count=0 publish_failed=0 rollback_failed=0 recovery
+    local -a entries=() moved=()
+    while IFS= read -r entry; do
+        name="${entry##*/}"
+        if [[ "$name" == ".git" ]]; then
+            git_entry="$name"
+        else
+            entries+=("$name")
+        fi
+    done < <(find "$source" -mindepth 1 -maxdepth 1 -print)
+    # .git moves last, so an interrupted publish never looks like a complete checkout.
+    [[ -n "$git_entry" ]] && entries+=("$git_entry")
+    if (( ${#entries[@]} > 0 )); then
+        for name in "${entries[@]}"; do
+            if ! mv "${source}/${name}" "${target}/${name}"; then
+                publish_failed=1
+                break
+            fi
+            moved+=("$name")
+            moved_count=$((moved_count + 1))
+        done
+    fi
+    if (( publish_failed == 0 )) && rmdir "$source"; then
+        return 0
+    fi
+    while (( moved_count > 0 )); do
+        moved_count=$((moved_count - 1))
+        mv "${target}/${moved[$moved_count]}" "${source}/${moved[$moved_count]}" || rollback_failed=1
+    done
+    if (( rollback_failed != 0 )); then
+        recovery="$source"
+        mv "$source" "${source}.recovery" && recovery="${source}.recovery"
+        echo "Could not publish or fully roll back the cloned checkout at ${target}; recovery files remain at ${recovery}" >&2
+    fi
+    return 1
+}
+
 clone_git_checkout_transactionally() {
     local repo_url="$1"
     local repo_dir="$2"
@@ -448,58 +566,8 @@ clone_git_checkout_transactionally() {
         return "$clone_status"
     fi
 
-    if ! node - "$staging_dir" "$repo_dir" "$preserve_repo_dir" <<'NODE'
-const fs = require("node:fs");
-const [source, target, preserveTarget] = process.argv.slice(2);
-if (preserveTarget === "0") {
-  try {
-    fs.lstatSync(target);
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-    fs.renameSync(source, target);
-    process.exit(0);
-  }
-  throw new Error(`Git install dir appeared while cloning: ${target}`);
-}
-const expected = preserveTarget === "1" ? [source.slice(source.lastIndexOf("/") + 1)] : [];
-if (!fs.statSync(target).isDirectory() || fs.readdirSync(target).sort().join("\0") !== expected.sort().join("\0")) {
-  throw new Error(`Git install dir appeared while cloning: ${target}`);
-}
-const entries = fs.readdirSync(source).sort((a, b) => (a === ".git" ? 1 : b === ".git" ? -1 : 0));
-const moved = [];
-try {
-  for (const entry of entries) {
-    fs.renameSync(`${source}/${entry}`, `${target}/${entry}`);
-    moved.push(entry);
-  }
-  fs.rmdirSync(source);
-} catch (error) {
-  const rollbackErrors = [];
-  for (const entry of moved.reverse()) {
-    try {
-      fs.renameSync(`${target}/${entry}`, `${source}/${entry}`);
-    } catch (rollbackError) {
-      rollbackErrors.push(rollbackError);
-    }
-  }
-  if (rollbackErrors.length > 0) {
-    let recovery = source;
-    try {
-      recovery = `${source}.recovery`;
-      fs.renameSync(source, recovery);
-    } catch (recoveryError) {
-      rollbackErrors.push(recoveryError);
-      recovery = source;
-    }
-    throw new AggregateError(
-      [error, ...rollbackErrors],
-      `Could not publish or fully roll back the cloned checkout at ${target}; recovery files remain at ${recovery}`,
-    );
-  }
-  throw error;
-}
-NODE
-    then
+    # Git installs provision Node after checkout, so publication must not need it.
+    if ! publish_git_clone_staging "$staging_dir" "$repo_dir" "$preserve_repo_dir"; then
         installer_clone_error "$repo_dir"
     fi
 }

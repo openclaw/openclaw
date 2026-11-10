@@ -1,3 +1,9 @@
+import {
+  monotonicDeadlineAfter,
+  monotonicNow,
+  remainingMonotonicMs,
+} from "../../../../src/shared/monotonic-time.ts";
+
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 type SessionEventRefreshCoordinatorOptions = {
@@ -29,11 +35,12 @@ export function createSessionEventRefreshCoordinator({
     if (!active || pending || !queued || timer) {
       return;
     }
-    const now = Date.now();
     const delay = debounce ? SESSION_EVENT_REFRESH_DEBOUNCE_MS * (1 - 0.2 * Math.random()) : 0;
     timer = setTimeout(
       start,
-      retryAt === null ? Math.max(delay, nextAllowed - now) : Math.max(0, retryAt - now),
+      retryAt !== null
+        ? Math.max(0, remainingMonotonicMs(retryAt))
+        : Math.max(delay, remainingMonotonicMs(nextAllowed)),
     );
   };
 
@@ -46,7 +53,7 @@ export function createSessionEventRefreshCoordinator({
     retryAt = null;
     const request = {};
     pending = request;
-    const started = Date.now();
+    const started = monotonicNow();
     const requestRevision = revision;
     void refresh(() => pending === request && requestRevision === revision)
       .catch(() => {})
@@ -55,8 +62,8 @@ export function createSessionEventRefreshCoordinator({
           return;
         }
         pending = null;
-        const completed = Date.now();
-        nextAllowed = completed + Math.min(15_000, Math.max(5_000, 3 * (completed - started)));
+        const elapsed = monotonicNow() - started;
+        nextAllowed = monotonicDeadlineAfter(Math.min(15_000, Math.max(5_000, 3 * elapsed)));
         arm();
       });
   };
@@ -84,7 +91,7 @@ export function createSessionEventRefreshCoordinator({
       }, 60_000);
     },
     scheduleRetry(delayMs: number) {
-      retryAt = Date.now() + delayMs;
+      retryAt = monotonicDeadlineAfter(delayMs);
       queued = true;
       clearTimer();
       arm(false);

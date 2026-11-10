@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw plugins` (init, build, validate, list, install, reload, marketplace, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (init, build, validate, lint, list, install, reload, marketplace, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to scaffold or validate a simple tool plugin
@@ -19,11 +19,25 @@ Stop the Gateway through its service owner before running `plugins update`,
 fallbacks. `plugins marketplace entries --offline` reads the saved feed without
 refreshing it. Refused commands report how to retry.
 
+While a plugin or config operation is running, the CLI waits and retries only if
+the Gateway confirms that it did not accept the mutation. Admission stays within
+the command's existing ten-minute budget, including `plugins reload --wait`.
+Interrupting the command cancels pending admission retries. An already accepted
+mutation may still finish; inspect plugin status before retrying it.
+Lost replies and failures after acceptance are reported without automatic replay;
+inspect plugin status before retrying them. Older Gateways that do not provide
+the admission fact keep the explicit busy response.
+
+If a command encounters offline database maintenance, it reports the reason
+without `OPENCLAW_DEBUG`. Wait for maintenance to finish, then retry the command.
+
 `plugins enable` and `plugins disable` accept case-insensitive plugin IDs, including
 when the Gateway is stopped. Reported IDs retain their manifest spelling; plugin
 policy keys in config use the required lowercase form.
 The same policy applies to live activation and the next Gateway start. Runtime
 IDs and Gateway method names retain the plugin's declared spelling.
+`plugins inspect` and its `info` alias try an exact ID, then an exact display name,
+then the canonical ID resolved from case variants or manifest legacy IDs.
 
 <CardGroup cols={2}>
   <Card title="Plugin system" href="/tools/plugin">
@@ -62,11 +76,15 @@ openclaw plugins doctor [--json]
 openclaw plugins init <id> [--name <name>] [--type tool|provider|feature] [--directory <path>]
 openclaw plugins build [--root <path>] [--entry <path>] [--check]
 openclaw plugins validate [--root <path>] [--entry <path>] [--json]
+openclaw plugins lint [--root <path>] [--json]
 openclaw plugins pack [--root <path>] [--out <file.tgz>] [--json]
 openclaw plugins marketplace entries [--offline] [--feed-profile <name>] [--json]
 openclaw plugins marketplace list <source> [--json]
 openclaw plugins marketplace refresh [--feed-profile <name>] [--expected-sha256 <sha256>] [--json]
 ```
+
+An accepted interrupt cancels the pending catalog reads for read-only
+`plugins search` and suppresses late search results or errors.
 
 For slow install, inspect, uninstall, or registry-refresh investigation, run the
 command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings
@@ -140,6 +158,7 @@ points at the page that now holds the content.
 
 ## Related
 
+- [Runtime compatibility lint](/plugins/runtime-compatibility)
 - [Building plugins](/plugins/building-plugins)
 - [CLI reference](/cli)
 - [ClawHub](/clawhub)

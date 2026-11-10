@@ -5,13 +5,19 @@ import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { sha256Base64Url } from "./crypto-digest.js";
 import {
+  dropInheritedTranscriptEvents,
+  projectUsageScanFields,
+} from "./session-cost-usage-inherited.js";
+import {
   computeUsageTokenTotals,
   parseUsageCostTranscriptRecord,
   needsUsageCostEstimate,
   applyUsageCostEstimate,
+  usageCostEstimateUsesPricing,
 } from "./session-cost-usage-pricing.js";
 import {
   USAGE_COST_ROLLUP_VERSION,
+  USAGE_COST_UNPRICED_FINGERPRINT,
   type UsageCostJsonlCheckpoint,
   type UsageCostSqliteCheckpoint,
   type UsageCostRollupEntry,
@@ -45,11 +51,15 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
   const rollup = previous?.rollup ?? createSessionUsageRollupData();
   let countedRecords = 0;
   let parsedRecords = 0;
+  // Catalog prices are inputs only for turns without a recorded cost.
+  let priced =
+    previous !== undefined && previous.pricingFingerprint !== USAGE_COST_UNPRICED_FINGERPRINT;
   return {
     async addEntries(entries: Iterable<ParsedTranscriptEntry>): Promise<void> {
       let batch: ParsedTranscriptEntry[] = [];
       const flush = async () => {
         const estimated = batch.filter(needsUsageCostEstimate);
+        priced ||= estimated.some(usageCostEstimateUsesPricing);
         const costs = await params.resolveCosts(
           estimated.map(({ provider, model }) => ({ provider, model })),
         );
@@ -59,13 +69,10 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
         for (const entry of batch) {
           let usageTotals: CostUsageTotals | undefined;
           if (entry.usage) {
-            usageTotals = emptyTotals();
-            const tokens = computeUsageTokenTotals(entry.usage);
-            usageTotals.input += tokens.input;
-            usageTotals.output += tokens.output;
-            usageTotals.cacheRead += tokens.cacheRead;
-            usageTotals.cacheWrite += tokens.cacheWrite;
-            usageTotals.totalTokens += tokens.totalTokens;
+            usageTotals = {
+              ...emptyTotals(),
+              ...computeUsageTokenTotals(entry.usage),
+            };
             const cost = entry.costBreakdown;
             if (cost?.total !== undefined) {
               usageTotals.totalCost += cost.total;
@@ -111,7 +118,7 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
     finish(checkpoint: UsageCostJsonlCheckpoint | UsageCostSqliteCheckpoint): UsageCostRollupEntry {
       return {
         version: USAGE_COST_ROLLUP_VERSION,
-        pricingFingerprint: params.pricingFingerprint,
+        pricingFingerprint: priced ? params.pricingFingerprint : USAGE_COST_UNPRICED_FINGERPRINT,
         checkpoint,
         scannedAt: Date.now(),
         parsedRecords: (previous?.parsedRecords ?? 0) + parsedRecords,
@@ -129,13 +136,26 @@ export async function scanMemoryUsageCostRollup(params: {
   pricingFingerprint: string;
   resolveCosts: UsageCostRollupScanInput["resolveCosts"];
 }): Promise<UsageCostRollupEntry> {
-  const records = params.events.map(({ eventJson }): unknown => JSON.parse(eventJson));
+  let anchorHash = sha256Base64Url("");
+  const records = params.events.map(({ eventJson }, index) => {
+    const event: unknown = JSON.parse(eventJson);
+    if (index === params.events.length - 1) {
+      anchorHash = hashUsageCostCheckpointEvent(event);
+    }
+    const record: Record<string, unknown> & { usageEntry: ParsedTranscriptEntry | null } = {
+      usageEntry: null,
+    };
+    if (isRecord(event)) {
+      record.usageEntry = parseUsageCostTranscriptRecord(event);
+      projectUsageScanFields(event, record);
+    }
+    return record;
+  });
   const scan = createUsageRollupScan({ ...params, appendOnly: false });
   await scan.addEntries(
-    selectVisibleTranscriptEvents(records).flatMap((record) => {
-      const entry = isRecord(record) ? parseUsageCostTranscriptRecord(record) : null;
-      return entry ? [entry] : [];
-    }),
+    dropInheritedTranscriptEvents(records, selectVisibleTranscriptEvents(records)).flatMap(
+      (record) => (record.usageEntry ? [record.usageEntry] : []),
+    ),
   );
   const visibleLeafId = scanSessionTranscriptTree(records).leafId;
   return scan.finish({
@@ -144,8 +164,7 @@ export async function scanMemoryUsageCostRollup(params: {
     eventCount: params.file.eventCount ?? 0,
     size: params.file.size,
     mtimeMs: params.file.mtimeMs,
-    anchorHash:
-      records.length > 0 ? hashUsageCostCheckpointEvent(records.at(-1)) : sha256Base64Url(""),
+    anchorHash,
     ...(visibleLeafId ? { visibleLeafId } : {}),
   });
 }

@@ -1,12 +1,9 @@
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import {
-  generateToken,
   normalizeExecApprovalsInternal,
-  resolveExecApprovalsDisplayPath,
-  resolveExecApprovalsSocketPath,
+  stripExecApprovalsSocketCredentials,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
-import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
 import {
   applyExecApprovalsUpdate,
   type ExecApprovalsUpdate,
@@ -39,15 +36,11 @@ function mutate<T>(
   },
 ): T {
   const options = context.stateOptions();
-  assertNoPendingLegacyExecApprovals({ env: options.env });
   return context.write(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       const captured = execApprovalsPublication.capture(db, () => {
-        const current = snapshotFromExecApprovalsDatabase(
-          db,
-          resolveExecApprovalsDisplayPath(options.env),
-        );
+        const current = snapshotFromExecApprovalsDatabase(db, options.env);
         const edit = operation(current, db);
         let snapshot = current;
         if (edit.next !== null) {
@@ -55,7 +48,7 @@ function mutate<T>(
           if (edit.remove || !current.exists || current.raw !== raw) {
             if (edit.remove) {
               deleteExecApprovalsConfigRow(db);
-              snapshot = snapshotFromExecApprovalsRow({ path: current.path });
+              snapshot = snapshotFromExecApprovalsRow({ path: current.path, env: options.env });
             } else {
               const persisted = writeExecApprovalsConfigRow({ db, file: edit.next, raw: edit.raw });
               snapshot = snapshotFromExecApprovalsRow({
@@ -69,9 +62,10 @@ function mutate<T>(
         return { changed, snapshot, result: edit.result(snapshot) };
       });
       const { changed, snapshot, result } = captured.result;
+      const postimage = captured.receipt.facts.get("current");
       const facts = {
         kind: "exec-policy-publication",
-        file: snapshot.file,
+        file: postimage?.kind === "postimage" ? postimage.value.file : snapshot.file,
         execFacts: execApprovalsPublication.bound(captured.receipt),
       };
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
@@ -114,32 +108,10 @@ export const execPolicyMutationOperations = {
       };
     }),
   "execApprovals.ensureSnapshot": (_input: undefined, context: WorkerWriteOperationContext) => {
-    const options = context.stateOptions();
-    assertNoPendingLegacyExecApprovals({ env: options.env });
-    const snapshot = snapshotFromExecApprovalsDatabase(
-      context.open().db,
-      resolveExecApprovalsDisplayPath(options.env),
-    );
-    const socketPath = resolveExecApprovalsSocketPath(options.env);
-    const ensureSocket = (file: ExecApprovalsFile): ExecApprovalsFile => {
-      const next = normalizeExecApprovalsInternal(file);
-      return {
-        ...next,
-        socket: {
-          path: next.socket?.path?.trim() || socketPath,
-          token: next.socket?.token?.trim() || generateToken(),
-        },
-      };
-    };
-    if (
-      snapshot.file.socket?.path?.trim() &&
-      snapshot.file.socket.token?.trim() &&
-      snapshot.raw === serializeExecApprovals(ensureSocket(snapshot.file))
-    ) {
-      return snapshot;
-    }
     return mutate(context, "exec-approvals.ensure", (current, db) => {
-      const next = ensureSocket(current.file);
+      const next = stripExecApprovalsSocketCredentials(
+        normalizeExecApprovalsInternal(current.file),
+      );
       assertExecApprovalsMutationAllowed({ db, current: current.file, next });
       return { next, result: (result) => result };
     });

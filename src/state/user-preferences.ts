@@ -2,18 +2,24 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
-  executeOpenClawStateWorker,
-  runOpenClawStateWorkerOperation,
-} from "./openclaw-state-worker-store.js";
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "./openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 import {
+  afterUserPreferenceOperationSettled,
   beginUserPreferenceMutation,
   captureUserPreferenceRead,
+  waitForUserPreferenceReadPermits,
 } from "./user-preferences-publication.js";
-import { updatesGitCoauthorPreference } from "./user-preferences.store.js";
+import {
+  updatesGitCoauthorPreference,
+  updatesPersonalSessionPins,
+} from "./user-preferences.store.js";
 import type {
   CanonicalUserPreferences,
   UserPreferenceCoauthorMutation,
@@ -32,7 +38,7 @@ export async function getUserPreferenceValues(
     return { values: new Map(), isCurrent: () => true };
   }
   const ids = [...new Set(profileIds)];
-  const context = captureOpenClawStateWorkerContext(options);
+  const context = captureOpenClawStateReadWorkerContext(options);
   const isCurrent = await captureUserPreferenceRead(context.admission);
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
@@ -42,15 +48,18 @@ export async function getUserPreferenceValues(
   return { values: reply?.values ?? new Map(), isCurrent };
 }
 
-export function getCanonicalUserPreferences(
+export async function getCanonicalUserPreferences(
   profileId: string,
   keys?: readonly string[],
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<CanonicalUserPreferences | undefined> {
-  return executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
-    type: "userPreferences.read",
-    input: { profileId, keys },
-  });
+  const context = captureOpenClawStateReadWorkerContext(options);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "userPreferences.read", profileId, keys },
+    { context, current: true },
+  );
+  return reply?.preferences;
 }
 
 export async function setCanonicalUserPreferences(
@@ -67,8 +76,12 @@ export async function setCanonicalUserPreferences(
   }
   const context = captureOpenClawStateWorkerContext(options);
   const finishMutation = beginUserPreferenceMutation(context.admission);
+  let retained: RetainedWorkerTransactionAdmission | undefined;
   let publicationSettled: Promise<void> | undefined;
   try {
+    if (updatesPersonalSessionPins(prepared.value)) {
+      await waitForUserPreferenceReadPermits(context.admission);
+    }
     return await runOpenClawStateWorkerOperation(
       context,
       (scope) =>
@@ -79,6 +92,7 @@ export async function setCanonicalUserPreferences(
       {
         assertCurrent: options.assertCurrent,
         createAdmission: (operation) => {
+          retained = operation;
           let pending:
             | {
                 facts: UserPreferenceCoauthorMutation;
@@ -129,8 +143,9 @@ export async function setCanonicalUserPreferences(
             let receiptValid = false;
             try {
               const receipt = admission.committed;
-              if (receipt) {
-                if (!pending || !isDeepStrictEqual(receipt.facts, pending.facts)) {
+              // Ordinary writes may publish an engine receipt without coauthor authority facts.
+              if (receipt && pending) {
+                if (!isDeepStrictEqual(receipt.facts, pending.facts)) {
                   throw new Error("Profile preference receipt changed its prepared mutation");
                 }
                 committed = true;
@@ -152,7 +167,11 @@ export async function setCanonicalUserPreferences(
     try {
       await publicationSettled;
     } finally {
-      finishMutation();
+      if (retained && updatesPersonalSessionPins(prepared.value)) {
+        afterUserPreferenceOperationSettled(retained, finishMutation);
+      } else {
+        finishMutation();
+      }
     }
   }
 }

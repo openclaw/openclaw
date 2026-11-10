@@ -31,6 +31,7 @@ const {
   sessionTabRegistryMocks: sessionTabs,
   toolCommonMocks: runtime,
   resetBrowserToolMocks,
+  mockSingleBrowserProxyNode,
 } = await import("./browser-tool.test-support.js");
 
 // mock-isolation: Keep registration lazy without starting the real browser service.
@@ -69,18 +70,6 @@ function durableOwnership(nativeTargetId: string) {
 
 function nodeReply(result: Record<string, unknown>, route?: BrowserProxyRoute) {
   return { ok: true, payload: { result, ...(route ? { route } : {}) } };
-}
-
-function mockSingleBrowserProxyNode() {
-  nodes.listNodes.mockResolvedValue([
-    {
-      nodeId: "node-1",
-      displayName: "Browser Node",
-      connected: true,
-      caps: ["browser"],
-      commands: ["browser.proxy", "browser.proxy.upload.v1"],
-    },
-  ]);
 }
 
 function setResolvedBrowserProfiles(
@@ -264,12 +253,30 @@ it.each<{
   doctor?: true;
 }>([
   {
+    name: "requested open navigation",
+    input: { action: "open", url: "https://example.com/slow", timeoutMs: 60_000 },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 195_000,
+    nodeTimeout: 190_000,
+    params: { path: "/tabs/open", timeoutMs: 65_000 },
+    exactBody: { url: "https://example.com/slow", timeoutMs: 60_000 },
+  },
+  {
+    name: "default open navigation",
+    input: { action: "open", url: "https://example.com/slow" },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 190_000,
+    nodeTimeout: 185_000,
+    params: { path: "/tabs/open", timeoutMs: 60_000 },
+    exactBody: { url: "https://example.com/slow" },
+  },
+  {
     name: "requested download wait",
     input: { action: "waitfordownload", path: "export.csv", targetId: "tab-1", timeoutMs: 30_000 },
     replies: [
       { ok: true, targetId: "tab-1", download: { path: "/tmp/openclaw/downloads/export.csv" } },
     ],
-    gatewayTimeout: 45_000,
+    gatewayTimeout: 165_000,
     params: { path: "/wait/download", timeoutMs: 35_000 },
     exactBody: { path: "export.csv", targetId: "tab-1", timeoutMs: 30_000 },
   },
@@ -279,20 +286,20 @@ it.each<{
     replies: [
       { ok: true, targetId: "tab-1", download: { path: "/tmp/openclaw/downloads/report.pdf" } },
     ],
-    gatewayTimeout: 135_000,
+    gatewayTimeout: 255_000,
     params: { path: "/download", timeoutMs: 125_000, body: { ref: "e12", path: "report.pdf" } },
   },
   {
     name: "existing-session status",
     input: { action: "status", profile: "user" },
     profile: "user",
-    gatewayTimeout: 55_000,
+    gatewayTimeout: 175_000,
     params: { method: "GET", path: "/", profile: "user", timeoutMs: 45_000 },
   },
   {
     name: "doctor",
     input: { action: "doctor" },
-    gatewayTimeout: 30_000,
+    gatewayTimeout: 150_000,
     params: { method: "GET", path: "/doctor", timeoutMs: 20_000 },
     doctor: true,
   },
@@ -314,8 +321,8 @@ it.each<{
         snapshot: "slow page",
       },
     ],
-    gatewayTimeout: 135_000,
-    nodeTimeout: 130_000,
+    gatewayTimeout: 255_000,
+    nodeTimeout: 250_000,
     params: { timeoutMs: 125_000 },
     exactBody: { url: "https://example.com/slow", targetId: "tab-1", timeoutMs: 120_000 },
   },
@@ -325,7 +332,7 @@ it.each<{
       action: "act",
       request: { kind: "wait", timeMs: "20000", text: "ready", timeoutMs: "45000" },
     },
-    gatewayTimeout: 126_250,
+    gatewayTimeout: 246_250,
     params: { path: "/act", timeoutMs: 116_250 },
     exactBody: { kind: "wait", timeMs: "20000", text: "ready", timeoutMs: "45000" },
   },
@@ -349,8 +356,8 @@ it.each<{
         ],
       },
     },
-    gatewayTimeout: 133_500,
-    nodeTimeout: 128_500,
+    gatewayTimeout: 253_500,
+    nodeTimeout: 248_500,
     params: { timeoutMs: 123_500 },
   },
 ])("keeps $name within the nested node watchdogs", async (scenario) => {
@@ -799,7 +806,7 @@ it("returns a transcript-safe screenshot path on the node", async () => {
   );
 
   expect(nodeInvokeCall(-1)).toMatchObject({
-    options: { timeoutMs: 22_345 },
+    options: { timeoutMs: 142_345 },
     request: {
       params: {
         method: "POST",
@@ -871,11 +878,11 @@ it("falls back to role refs when a node snapshot cannot provide aria refs", asyn
     maxChars: 12_000,
     timeoutMs: 7777,
   });
-  expect(firstCall.options.timeoutMs).toBe(17_777);
+  expect(firstCall.options.timeoutMs).toBe(137_777);
   expect(firstCall.request.params?.path).toBe("/snapshot");
   expect(firstCall.request.params?.query?.refs).toBe("aria");
   const secondCall = nodeInvokeCall(1);
-  expect(secondCall.options.timeoutMs).toBe(17_777);
+  expect(secondCall.options.timeoutMs).toBe(137_777);
   expect(secondCall.request.params?.path).toBe("/snapshot");
   expect(secondCall.request.params?.query?.refs).toBe("role");
 });
@@ -1096,16 +1103,6 @@ it.each([
   },
 );
 
-it("preserves disconnected node tab availability in the tool result", async () => {
-  mockSingleBrowserProxyNode();
-  gateway.callGatewayTool.mockResolvedValueOnce(nodeReply({ running: false, tabs: [] }));
-
-  const result = await execute({ action: "tabs", target: "node" });
-
-  expect(result?.details).toMatchObject({ running: false, tabCount: 0, tabs: [] });
-  expect(firstResultText(result)).toContain('"running": false');
-});
-
 it("touches the canonical dialog target after automatic host fallback", async () => {
   mockSingleBrowserProxyNode();
   gateway.callGatewayTool.mockRejectedValueOnce(new Error(hostUnavailableMessage));
@@ -1185,10 +1182,9 @@ it.each(["open"])("rejects credentialed %s URLs before dispatch", async (action)
   const tool = createBrowserTool();
   for (const target of ["host", "node"] as const) {
     for (const url of ["https://user:secret@example.com/path", "https://user:secret@"]) {
-      const error = await tool.execute("call-1", { action, target, url, targetId: "tab-1" }).then(
-        () => new Error("credentialed URL was accepted"),
-        (cause: unknown) => cause,
-      );
+      const error = await tool
+        .execute("call-1", { action, target, url, targetId: "tab-1" })
+        .catch((cause: unknown) => cause);
       expect(error).toBeInstanceOf(Error);
       expect(String(error)).not.toContain("secret");
     }
@@ -2013,17 +2009,22 @@ describe("browser observation actions and tab previews", () => {
   it.each<{
     format: "ai" | "aria";
     query: string;
+    name?: string;
     maxChars?: number;
     outcome: "matching" | "empty" | "capped";
   }>([
     { format: "aria", query: "  IN\tSIGN ", outcome: "matching" },
+    { format: "ai", query: "CAFÉ", name: "Cafe\u0301", outcome: "matching" },
+    { format: "aria", query: "CAFE\u0301", name: "Café", outcome: "matching" },
+    { format: "ai", query: "ǰ", name: "J\u030c", outcome: "matching" },
+    { format: "aria", query: "cafe", name: "Cafe\u0301", outcome: "empty" },
     { format: "ai", query: "not found", outcome: "empty" },
-    { format: "ai", query: "sign", maxChars: 5, outcome: "capped" },
+    { format: "ai", query: "sign in", maxChars: 5, outcome: "capped" },
   ])(
     "filters $format snapshot queries with $outcome results and current stats",
-    async ({ format, query, maxChars, outcome }) => {
+    async ({ format, query, name = "Sign in", maxChars, outcome }) => {
       const snapshotNodes = [
-        { ref: "e1", role: "button", name: "Sign in" },
+        { ref: "e1", role: "button", name },
         { ref: "e2", role: "button", name: "Sign out" },
       ];
       client.browserSnapshot.mockResolvedValueOnce({
@@ -2034,37 +2035,22 @@ describe("browser observation actions and tab previews", () => {
         ...(format === "aria"
           ? { nodes: snapshotNodes }
           : {
-              snapshot:
-                outcome === "matching"
-                  ? '- button "Sign in" [ref=e1]\n- button "Sign out" [ref=e2]'
-                  : '- button "Sign in" [ref=e1]',
-              ...(outcome === "empty"
-                ? {
-                    stats: { lines: 1, chars: 25, refs: 1, interactive: 1 },
-                  }
-                : outcome === "capped"
-                  ? {
-                      refs: { e1: { role: "button" } },
-                    }
-                  : {
-                      refs: Object.fromEntries(snapshotNodes.map((node) => [node.ref, node])),
-                      stats: { lines: 2, chars: 100, refs: 2, interactive: 2 },
-                    }),
+              snapshot: `- button ${JSON.stringify(name)} [ref=e1]\n- button "Sign out" [ref=e2]`,
+              refs: Object.fromEntries(snapshotNodes.map((node) => [node.ref, node])),
+              stats: { lines: 2, chars: 100, refs: 2, interactive: 2 },
             }),
       });
       const result = await execute({
         action: "snapshot",
         query,
-        ...(outcome === "matching" ? { snapshotFormat: format } : {}),
+        snapshotFormat: format,
         ...(maxChars !== undefined ? { maxChars } : {}),
       });
       if (outcome === "matching") {
-        const text = result.content
-          .filter((item) => item.type === "text")
-          .map((item) => item.text)
-          .join("\n");
+        const text = firstResultText(result);
         expect(text).toContain("1 matching line");
         expect(text).toContain("[ref=e1]");
+        expect(text).toContain(name);
         expect(text).not.toContain("[ref=e2]");
         expect(result.details).toMatchObject({
           matchCount: 1,

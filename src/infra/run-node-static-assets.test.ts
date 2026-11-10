@@ -16,21 +16,11 @@ import {
 
 describe("run-node static asset freshness", () => {
   for (const [title, missingPath, hoisted = false] of [
-    [
-      "reports missing static runtime postbuild asset outputs when runtime stamps match HEAD",
-      DIST_DIFFS_VIEWER_RUNTIME,
-    ],
-    [
-      "reports missing static runtime overlay asset outputs when runtime stamps match HEAD",
-      DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
-    ],
-    [
-      "reports missing hoisted dependency static asset outputs when runtime stamps match HEAD",
-      DIST_DIFFS_VIEWER_RUNTIME,
-      true,
-    ],
+    ["postbuild asset", DIST_DIFFS_VIEWER_RUNTIME],
+    ["overlay asset", DIST_RUNTIME_DIFFS_VIEWER_RUNTIME],
+    ["hoisted dependency asset", DIST_DIFFS_VIEWER_RUNTIME, true],
   ] as const) {
-    it(title, async ({ tmp }) => {
+    it(`reports missing ${title} despite matching HEAD stamps`, async ({ tmp }) => {
       const dependencyAsset = "node_modules/@fixture/engine/private/viewer-runtime.js";
       await setupStampedProject(tmp, {
         files: {
@@ -65,8 +55,7 @@ describe("run-node static asset freshness", () => {
         reason: "clean",
       });
       await fs.rm(resolvePath(tmp, missingPath));
-      const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
-      expect(requirement).toEqual({
+      expect(resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp))).toEqual({
         shouldSync: true,
         reason: "missing_runtime_postbuild_output",
       });

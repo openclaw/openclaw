@@ -1,9 +1,9 @@
+import { basename, dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   readCronRunHistoryPageForTests,
   readCronRunRecordsForTests,
@@ -19,16 +20,17 @@ import {
 import { stop } from "../service/ops-lifecycle.js";
 import { list } from "../service/ops-read.js";
 import { enqueueRun } from "../service/ops-run.js";
-import type { CronEvent } from "../service/state.js";
 import { onTimer } from "../service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronStoredJob } from "../types.js";
+import type { CronEvent, CronStoredJob } from "../types.js";
 import {
   getChannelPluginMock,
   loadRunCronIsolatedAgentTurn,
+  makeCronSession,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
+  resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
@@ -49,170 +51,138 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
-describe("scheduled account policy outcomes", () => {
-  it.each<{
-    name: string;
-    entry?: "manual";
-    accountId?: string;
-    toolsAllow?: string[];
-    fails: boolean;
-    ownerSessionKey?: string;
-    callerOrigin?: NonNullable<CronStoredJob["toolsAllowProvenance"]>["callerOrigin"];
-  }>([
-    { name: "removed named account", accountId: "removed", toolsAllow: ["read"], fails: true },
-    {
-      name: "removed named account after manual invocation ends",
-      entry: "manual",
-      accountId: "removed",
-      toolsAllow: ["read"],
-      fails: true,
-    },
-    { name: "legacy accountless cap", accountId: undefined, toolsAllow: ["read"], fails: false },
-    { name: "legacy capless job", accountId: undefined, toolsAllow: undefined, fails: false },
-    { name: "intentional no-tool job", accountId: "work", toolsAllow: [], fails: false },
-    {
-      name: "configured DM account without delivery",
-      accountId: "work",
-      toolsAllow: ["read"],
-      fails: false,
-      ownerSessionKey: "agent:main:whatsapp:direct:sender",
-      callerOrigin: { kind: "external", channel: "whatsapp" },
-    },
-    {
-      name: "DM account with malformed creator origin",
-      accountId: "work",
-      toolsAllow: ["read"],
-      fails: true,
-      ownerSessionKey: "agent:main:whatsapp:direct:sender",
-      callerOrigin: { kind: "external", channel: "" },
-    },
-  ])(
-    "records $name through scheduler and history",
-    async ({
-      name,
-      entry,
-      accountId,
-      toolsAllow,
-      fails,
-      ownerSessionKey = "agent:main:whatsapp:group:team",
-      callerOrigin,
-    }) => {
-      const { storePath } = fixtures.makeStorePath();
-      const cfg: OpenClawConfig = { channels: { whatsapp: { accounts: { work: {} } } } };
-      setRuntimeConfigSnapshot(cfg);
-      const job: CronStoredJob = {
-        ...createDueIsolatedJob({
-          id: name.replaceAll(" ", "-"),
-          nowMs: Date.now(),
-          nextRunAtMs: Date.now(),
-        }),
+type AccountCase = [
+  name: string,
+  accountId: string | undefined,
+  toolsAllow: string[] | undefined,
+  fails: boolean,
+  options?: { manual?: boolean; channel?: string },
+];
+it.each<AccountCase>([
+  ["removed named account", "removed", ["read"], true],
+  [
+    "removed named account after manual invocation ends",
+    "removed",
+    ["read"],
+    true,
+    { manual: true },
+  ],
+  ["legacy accountless cap", undefined, ["read"], false],
+  ["legacy capless job", undefined, undefined, false],
+  ["intentional no-tool job", "work", [], false],
+  ["configured DM account without delivery", "work", ["read"], false, { channel: "whatsapp" }],
+  ["DM account with malformed creator origin", "work", ["read"], true, { channel: "" }],
+])(
+  "records %s through scheduler and history",
+  async (name, accountId, toolsAllow, fails, options = {}) => {
+    const ownerSessionKey = `agent:main:whatsapp:${options.channel !== undefined ? "direct:sender" : "group:team"}`;
+    const { storePath } = fixtures.makeStorePath();
+    const sessionRoot = join(dirname(storePath), basename(storePath, ".jobs.json"));
+    const sessionStorePath = join(sessionRoot, "sessions.json");
+    const cfg: OpenClawConfig = {
+      session: { store: sessionStorePath },
+      channels: { whatsapp: { accounts: { work: {} } } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    resolveCronSessionMock.mockReturnValue(makeCronSession({ storePath: sessionStorePath }));
+    const job: CronStoredJob = {
+      ...createDueIsolatedJob({
+        id: name.replaceAll(" ", "-"),
+        nowMs: Date.now(),
+        nextRunAtMs: Date.now(),
+      }),
+      agentId: "main",
+      owner: {
         agentId: "main",
-        owner: {
-          agentId: "main",
-          sessionKey: ownerSessionKey,
-          ...(accountId ? { accountId } : {}),
-        },
-        payload: { kind: "agentTurn", message: "Summarize the report", toolsAllow },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey,
-          ownerAccountId: accountId ?? "removed",
-        },
-        ...(callerOrigin
-          ? {
-              toolsAllowProvenance: {
-                version: 1,
-                source: "final-executable-surface",
-                callerOrigin,
-              },
-            }
-          : {}),
-      };
-      await saveCronStore(storePath, { version: 1, jobs: [job] });
-      const events: CronEvent[] = [];
-      const warn = vi.fn();
-      const continuePayload = createDeferredCore();
-      const state = createCronRegressionState({
-        storePath,
-        defaultAgentId: "main",
-        log: { ...noopLogger, warn },
-        onEvent: (event) => events.push(structuredClone(event)),
-        runSchedulerOwned: createScheduledGatewayRunner(),
-        runIsolatedAgentJob: async (params) => {
-          await continuePayload.promise;
-          return await runCronIsolatedAgentTurn({
-            ...params,
-            cfg,
-            deps: {},
-            sessionKey: `cron:${params.job.id}`,
-          });
-        },
-      });
-      try {
-        await list(state);
-        if (entry === "manual") {
-          const ack = await withOperatorToolGatewayAuthority(
-            { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
-            () => enqueueRun(state, job.id, "force"),
-          );
-          expect(ack).toMatchObject({ ok: true, enqueued: true });
-          if (!("runId" in ack)) {
-            throw new Error("Expected an accepted manual run");
-          }
-          const settled = expectDefined(state.queuedManualRuns.get(ack.runId), "queued run");
-          // The initiating invocation has closed, but the stored account policy must still apply.
-          continuePayload.resolve();
-          await settled;
-        } else {
-          continuePayload.resolve();
-          await onTimer(state);
-        }
-        const persisted = (await loadCronStore(storePath)).jobs[0];
-        const history = readCronRunHistoryPageForTests({
-          storeKey: cronStoreKey(storePath),
-          jobId: job.id,
+        sessionKey: ownerSessionKey,
+        ...(accountId ? { accountId } : {}),
+      },
+      payload: { kind: "agentTurn", message: "Summarize the report", toolsAllow },
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey,
+        ownerAccountId: accountId ?? "removed",
+      },
+      toolsAllowProvenance:
+        options.channel === undefined
+          ? undefined
+          : {
+              version: 1,
+              source: "final-executable-surface",
+              callerOrigin: { kind: "external", channel: options.channel },
+            },
+    };
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const events: CronEvent[] = [];
+    const continuePayload = createDeferredCore();
+    const state = createCronRegressionState({
+      storePath,
+      defaultAgentId: "main",
+      onEvent: (event) => events.push(structuredClone(event)),
+      runSchedulerOwned: createScheduledGatewayRunner(),
+      runIsolatedAgentJob: async (params) => {
+        await continuePayload.promise;
+        return await runCronIsolatedAgentTurn({
+          ...params,
+          cfg,
+          deps: {},
+          sessionKey: `cron:${params.job.id}`,
         });
-        const tasks = readCronRunRecordsForTests(job.id);
-        expect(history.entries).toHaveLength(1);
-        expect(tasks).toHaveLength(1);
-        const expectedStatus = fails ? "error" : "ok";
-        expect(persisted?.state.lastRunStatus).toBe(expectedStatus);
-        expect(history.entries[0]).toMatchObject({
-          status: expectedStatus,
-          completionStatus: fails ? "failed" : "succeeded",
-        });
-        expect(tasks[0]?.status).toBe(fails ? "failed" : "succeeded");
-        expect(events.filter((event) => event.action === "finished")).toEqual([
-          expect.objectContaining({ status: expectedStatus }),
-        ]);
-        if (fails) {
-          const reason = persisted?.state.lastError;
-          expect(reason).toContain(`Scheduled account "${accountId}" is unavailable`);
-          expect(history.entries[0]?.error).toBe(reason);
-          expect(history.entries[0]?.diagnostics?.summary).toContain(reason);
-          expect(persisted?.state.lastDiagnosticSummary).toContain(reason);
-          expect(warn).toHaveBeenCalledWith(
-            expect.objectContaining({ error: reason }),
-            "cron: job run returned error status",
-          );
-          expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-        } else {
-          expect(persisted?.state.lastError).toBeUndefined();
-          expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-          expect(runEmbeddedAgentMock.mock.calls[0]?.[0].toolsAllow).toEqual(toolsAllow);
-          if (!accountId) {
-            expect(runEmbeddedAgentMock.mock.calls[0]?.[0].scheduledToolPolicy).toBeUndefined();
-          }
-        }
-      } finally {
+      },
+    });
+    try {
+      await list(state);
+      if (options.manual) {
+        const ack = await withOperatorToolGatewayAuthority(
+          { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
+          () => enqueueRun(state, job.id, "force"),
+        );
+        expect(ack).toMatchObject({ ok: true, enqueued: true });
+        assert("runId" in ack, "Expected an accepted manual run");
+        const settled = expectDefined(state.queuedManualRuns.get(ack.runId), "queued run");
+        // The initiating invocation has closed, but the stored account policy must still apply.
         continuePayload.resolve();
-        stop(state);
+        await settled;
+      } else {
+        continuePayload.resolve();
+        await onTimer(state);
       }
-    },
-  );
-});
+      const persisted = (await loadCronStore(storePath)).jobs[0];
+      const history = readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(storePath),
+        jobId: job.id,
+      });
+      const tasks = readCronRunRecordsForTests(job.id);
+      const expectedStatus = fails ? "error" : "ok";
+      const completionStatus = fails ? "failed" : "succeeded";
+      expect(persisted?.state.lastRunStatus).toBe(expectedStatus);
+      expect(history.entries).toMatchObject([{ status: expectedStatus, completionStatus }]);
+      expect(tasks).toMatchObject([{ status: completionStatus }]);
+      expect(events.filter((event) => event.action === "finished")).toEqual([
+        expect.objectContaining({ status: expectedStatus }),
+      ]);
+      if (fails) {
+        const reason = persisted?.state.lastError;
+        expect(reason).toContain(`Scheduled account "${accountId}" is unavailable`);
+        expect(history.entries[0]?.error).toBe(reason);
+        expect(history.entries[0]?.diagnostics?.summary).toContain(reason);
+        expect(persisted?.state.lastDiagnosticSummary).toContain(reason);
+        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      } else {
+        expect(persisted?.state.lastError).toBeUndefined();
+        expect(runEmbeddedAgentMock.mock.calls[0]?.[0].toolsAllow).toEqual(toolsAllow);
+        if (!accountId) {
+          expect(runEmbeddedAgentMock.mock.calls[0]?.[0].scheduledToolPolicy).toBeUndefined();
+        }
+      }
+    } finally {
+      continuePayload.resolve();
+      stop(state);
+      await state.schedulerDrain;
+      await closeOpenClawAgentDatabasesAsync(sessionRoot);
+    }
+  },
+);

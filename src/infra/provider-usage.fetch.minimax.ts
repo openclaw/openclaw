@@ -1,7 +1,7 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../utils.js";
-import { readTrimmedStringAlias } from "../utils/string-readers.js";
+import { readParsedField, readTrimmedStringAlias } from "../utils/string-readers.js";
 import {
   buildUsageErrorSnapshot,
   fetchUsageJson,
@@ -13,10 +13,6 @@ import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.
 type MinimaxBaseResp = {
   status_code?: number;
   status_msg?: string;
-};
-
-type FetchMinimaxUsageOptions = {
-  baseUrl?: string;
 };
 
 const DEFAULT_MINIMAX_USAGE_ORIGIN = "https://api.minimaxi.com";
@@ -148,13 +144,7 @@ function pickNumber(
   keys: readonly string[],
   parse = parseFiniteNumber,
 ): number | undefined {
-  for (const key of keys) {
-    const parsed = parse(record[key]);
-    if (parsed !== undefined) {
-      return parsed;
-    }
-  }
-  return undefined;
+  return readParsedField(record, keys, parse);
 }
 
 function parseEpoch(value: unknown): number | undefined {
@@ -197,9 +187,7 @@ function scoreUsageRecord(record: Record<string, unknown>): number {
   return score;
 }
 
-function pickUsageRecord(
-  root: Record<string, unknown>,
-): { record: Record<string, unknown>; usedPercent: number } | undefined {
+function pickUsageRecord(root: Record<string, unknown>) {
   const MAX_SCAN_DEPTH = 4;
   const MAX_SCAN_NODES = 60;
   const queue: Array<{ value: Record<string, unknown> | unknown[]; depth: number }> = [
@@ -312,10 +300,7 @@ function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> 
   );
 }
 
-function deriveMinimaxModelWindows(record: Record<string, unknown>): {
-  recognized: boolean;
-  windows: UsageWindow[];
-} {
+function deriveMinimaxModelWindows(record: Record<string, unknown>) {
   const windows: UsageWindow[] = [];
   let recognized = false;
   for (const window of [INTERVAL_WINDOW, WEEKLY_WINDOW]) {
@@ -368,7 +353,9 @@ export async function fetchMinimaxUsage(
   apiKey: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
-  options?: FetchMinimaxUsageOptions,
+  options?: {
+    baseUrl?: string;
+  },
 ): Promise<ProviderUsageSnapshot> {
   const parsed = await fetchUsageJson({
     provider: "minimax",

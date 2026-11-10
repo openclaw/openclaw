@@ -1,14 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  parseDateStringTimestampMs,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
+import { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
-  withOpenClawStateLease,
-  type OpenClawStateLeaseContext,
+  withOpenClawStateLeaseAsync,
+  type OpenClawStateAsyncLeaseContext,
 } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import type {
@@ -54,6 +59,15 @@ export type * from "./store-types.js";
 export { safeTranscriptPathSegment, transcriptSessionExportKey, transcriptSessionSelector };
 
 type TranscriptSessionMatchEntry = StoreTypes.TranscriptsSessionEntry & { inputRevision: string };
+
+// Retain only the latest bounded page across the short-lived RPC store instances.
+let transcriptListCache:
+  | {
+      key: string;
+      writeToken: string;
+      page: TranscriptReadRequests["transcripts.readEntries"]["output"];
+    }
+  | undefined;
 
 /** Canonical meeting-capture transcript store. Files are explicit exports only. */
 export class TranscriptsStore {
@@ -133,7 +147,7 @@ export class TranscriptsStore {
     exportedHashes: Readonly<Record<string, string>>,
     removedExports: ReadonlySet<string>,
     operation: TranscriptStoreOperation,
-    lease?: OpenClawStateLeaseContext,
+    lease?: OpenClawStateAsyncLeaseContext,
   ): Promise<void> {
     const input = {
       session: { sessionId: session.sessionId, startedAt: session.startedAt },
@@ -151,16 +165,13 @@ export class TranscriptsStore {
     session: TranscriptSessionDescriptor,
     sessionDir: string,
     operation: TranscriptStoreOperation,
-    lease?: OpenClawStateLeaseContext,
+    lease?: OpenClawStateAsyncLeaseContext,
   ): Promise<void> {
     let entries;
     try {
       entries = await fs.readdir(sessionDir, { withFileTypes: true });
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return;
-      }
-      throw error;
+      return ignoreMissingPath(error);
     }
     const row = await operation.read("transcripts.exportOwnership", {
       params: { session: { sessionId: session.sessionId, startedAt: session.startedAt } },
@@ -218,14 +229,10 @@ export class TranscriptsStore {
     return this.readWorker("transcripts.latest", { params: undefined });
   }
 
-  async readNotes(
-    session: TranscriptSessionDescriptor,
-    purpose: read.TranscriptReadPurpose = "page",
-  ) {
+  async readNotes(session: TranscriptSessionDescriptor) {
     return this.readWorker("transcripts.notes", {
       params: {
         session: { sessionId: session.sessionId, startedAt: session.startedAt },
-        purpose,
       },
     });
   }
@@ -304,23 +311,58 @@ export class TranscriptsStore {
   listReadEntries(
     options: read.TranscriptReadOptions,
   ): Promise<read.TranscriptReadPage<StoreTypes.TranscriptReadEntry>>;
-  async listReadEntries(options: read.TranscriptReadOptions & { projection?: "public" }) {
-    return this.readWorker("transcripts.readEntries", { params: options });
+  async listReadEntries(request: read.TranscriptReadOptions & { projection?: "public" }) {
+    const options = {
+      ...request,
+      startedAfter:
+        timestampMsToIsoString(parseDateStringTimestampMs(request.startedAfter)) ??
+        request.startedAfter,
+      startedBefore:
+        timestampMsToIsoString(parseDateStringTimestampMs(request.startedBefore)) ??
+        request.startedBefore,
+    };
+    const operation = createTranscriptStoreOperation(this.databaseOptions);
+    operation.assertCurrent();
+    const writeToken = readSqliteDatabaseWriteTokenForPath(operation.databaseOptions.path);
+    const key = JSON.stringify([
+      operation.databaseOptions.path,
+      operation.databaseOptions.readOnly,
+      options,
+    ]);
+    if (
+      writeToken &&
+      transcriptListCache?.writeToken === writeToken &&
+      transcriptListCache.key === key
+    ) {
+      return structuredClone(transcriptListCache.page);
+    }
+    const page = await operation.read("transcripts.readEntries", { params: options });
+    if (writeToken) {
+      // A write during the read invalidates this pre-read token on the next lookup.
+      transcriptListCache = { key, writeToken, page: structuredClone(page) };
+    }
+    return page;
   }
 
   async writeSession(
     inputSession: TranscriptSessionDescriptor,
-    condition?: { expectedInputRevision?: string; assertCurrent?: () => void },
-  ): Promise<void> {
+    condition?: {
+      expectedInputRevision?: string;
+      expectedSessionRevision?: string;
+      assertCurrent?: () => void;
+    },
+  ): Promise<{ inserted: boolean; inputRevision: string; sessionRevision: string }> {
     const operation = createTranscriptStoreOperation(
       this.databaseOptions,
       condition?.assertCurrent,
     );
     const expectedInputRevision = condition?.expectedInputRevision;
+    const expectedSessionRevision = condition?.expectedSessionRevision;
     const session = { ...inputSession };
     const selector = transcriptSessionSelector(session);
     const sessionValues = {
       selector,
+      started_at_ms: parseDateStringTimestampMs(session.startedAt) ?? null,
       export_key: transcriptSessionExportKey(session),
       session_slug: safeTranscriptPathSegment(session.sessionId),
       provider_id: session.source.providerId,
@@ -371,12 +413,29 @@ export class TranscriptsStore {
       sessionValues,
       now: Date.now(),
       expectedInputRevision,
+      expectedSessionRevision,
     });
     if (!result.ok) {
       throw result.reason === "conflict"
         ? new TranscriptSessionConflictError()
         : new TranscriptsSummaryChangedError();
     }
+    return {
+      inserted: result.inserted,
+      inputRevision: result.inputRevision,
+      sessionRevision: result.sessionRevision,
+    };
+  }
+
+  async deleteEmptySessionCandidate(
+    session: TranscriptSessionDescriptor,
+    condition: { expectedInputRevision: string; assertCurrent: () => void },
+  ): Promise<void> {
+    const operation = createTranscriptStoreOperation(this.databaseOptions, condition.assertCurrent);
+    await operation.write("transcripts.deleteEmptySessionCandidate", {
+      session: { sessionId: session.sessionId, startedAt: session.startedAt },
+      expectedInputRevision: condition.expectedInputRevision,
+    });
   }
 
   async readSession(sessionSelector: string): Promise<TranscriptSessionDescriptor | undefined> {
@@ -447,12 +506,10 @@ export class TranscriptsStore {
 
   async readUtterancesForSession(
     session: TranscriptSessionDescriptor,
-    options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
     return this.readWorker("transcripts.utterances", {
       params: {
         session: { sessionId: session.sessionId, startedAt: session.startedAt },
-        maxUtterances: options.maxUtterances,
       },
     });
   }
@@ -524,20 +581,30 @@ export class TranscriptsStore {
       throw new Error(`transcripts session not found: ${selector}`);
     }
     operation.assertCurrent();
-    return await withOpenClawStateLease(
+    if (operation.databaseOptions.readOnly) {
+      throw new Error("State lease acquisition requires writable storage");
+    }
+    return await withOpenClawStateLeaseAsync(
       {
         scope: "meeting-transcript.export",
         key: transcriptSessionExportKey(session),
-        database: { scope: "shared", options: operation.databaseOptions },
         leaseMs: 60_000,
         waitMs: 10_000,
         leaseLabel: "meeting transcript export lease",
         operationLabel: "meeting-transcripts.export.lease",
       },
+      operation.context,
       async (lease) => {
         const assertOwner = () => {
           operation.assertCurrent();
-          lease.assertOwned();
+          lease.assertCurrent();
+        };
+        const authority = {
+          assertCurrent: assertOwner,
+          async prepareEffect() {
+            await lease.assertOwned();
+            assertOwner();
+          },
         };
         const sessionDir = this.sessionDir(session);
         const includeTranscript = kind === "all" || kind === "transcript";
@@ -568,7 +635,7 @@ export class TranscriptsStore {
           },
           lease,
         );
-        assertOwner();
+        await authority.prepareEffect();
         const ensured = await ensureAbsoluteDirectory(sessionDir, {
           mode: 0o700,
           scopeLabel: "transcript export directory",
@@ -583,7 +650,7 @@ export class TranscriptsStore {
           sessionDir,
           "metadata.json",
           `${JSON.stringify(session, null, 2)}\n`,
-          assertOwner,
+          authority,
         );
         if (includeTranscript) {
           assertOwner();
@@ -591,7 +658,7 @@ export class TranscriptsStore {
             sessionDir,
             session,
             operation,
-            assertOwner,
+            authority,
             signal: lease.signal,
           });
         }
@@ -608,14 +675,14 @@ export class TranscriptsStore {
           for (const [fileName, content] of Object.entries(summaries)) {
             assertOwner();
             if (content === undefined) {
-              await removeTranscriptArtifact(sessionDir, fileName, assertOwner);
+              await removeTranscriptArtifact(sessionDir, fileName, authority);
               removedExports.add(fileName);
             } else {
               exportedHashes[fileName] = await writeTranscriptArtifact(
                 sessionDir,
                 fileName,
                 content,
-                assertOwner,
+                authority,
               );
             }
           }
@@ -625,7 +692,6 @@ export class TranscriptsStore {
           sessionDir,
           metadataPath: path.join(sessionDir, "metadata.json"),
           transcriptPath: path.join(sessionDir, "transcript.jsonl"),
-          summaryJsonPath: path.join(sessionDir, "summary.json"),
           summaryPath: path.join(sessionDir, "summary.md"),
           hasSummary: storedSummary.summary !== undefined || storedSummary.markdown !== undefined,
         };

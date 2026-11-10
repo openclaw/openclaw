@@ -1,6 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover exec approval behavior.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
@@ -380,10 +381,7 @@ describe("refreshPendingApprovalQueue", () => {
   });
 
   it("keeps approvals received while a refresh is in flight", async () => {
-    let resolveExecList: (value: unknown[]) => void = () => {};
-    const execApprovalList = new Promise<unknown[]>((resolve) => {
-      resolveExecList = resolve;
-    });
+    const { promise: execApprovalList, resolve: resolveExecList } = createDeferred<unknown[]>();
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "exec.approval.list") {
         return execApprovalList;
@@ -410,10 +408,7 @@ describe("refreshPendingApprovalQueue", () => {
   });
 
   it("does not requeue approvals resolved while a refresh is in flight", async () => {
-    let resolveExecList: (value: unknown[]) => void = () => {};
-    const execApprovalList = new Promise<unknown[]>((resolve) => {
-      resolveExecList = resolve;
-    });
+    const { promise: execApprovalList, resolve: resolveExecList } = createDeferred<unknown[]>();
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "exec.approval.list") {
         return execApprovalList;
@@ -435,14 +430,8 @@ describe("refreshPendingApprovalQueue", () => {
   });
 
   it("does not requeue new approvals resolved before refresh completes", async () => {
-    let resolveExecList: (value: unknown[]) => void = () => {};
-    let resolvePluginList: (value: unknown[]) => void = () => {};
-    const execApprovalList = new Promise<unknown[]>((resolve) => {
-      resolveExecList = resolve;
-    });
-    const pluginApprovalList = new Promise<unknown[]>((resolve) => {
-      resolvePluginList = resolve;
-    });
+    const { promise: execApprovalList, resolve: resolveExecList } = createDeferred<unknown[]>();
+    const { promise: pluginApprovalList, resolve: resolvePluginList } = createDeferred<unknown[]>();
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "exec.approval.list") {
         return execApprovalList;

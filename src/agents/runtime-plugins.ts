@@ -13,9 +13,11 @@ import {
   captureRuntimeChannelSource,
 } from "../plugins/channel-registry-adoption.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import {
   acquirePluginRegistryForInspection,
+  loadOpenClawPluginsAsync,
   loadPluginRegistryHandle,
   type PluginLoadOptions,
 } from "../plugins/loader.js";
@@ -26,6 +28,7 @@ import {
 } from "../plugins/plugin-invocation-scope.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { inheritPreparedSyntheticAuthScope } from "../plugins/provider-synthetic-auth.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
   bindPluginRegistryGatewayOwner,
@@ -77,12 +80,10 @@ function resolveAgentRuntimePluginRegistryLoad(
 ): PluginLoadOptions {
   const loadOptions: PluginLoadOptions = {
     config: params.config,
+    metadataSnapshot: params.metadataSnapshot,
     activationSourceConfig: params.config && projectConfigOntoRuntimeSourceSnapshot(params.config),
     env: params.env,
-    workspaceDir:
-      typeof params.workspaceDir === "string" && params.workspaceDir.trim()
-        ? resolveUserPath(params.workspaceDir)
-        : undefined,
+    workspaceDir: params.workspaceDir?.trim() ? resolveUserPath(params.workspaceDir) : undefined,
     runtimeOptions: params.allowGatewaySubagentBinding
       ? { allowGatewaySubagentBinding: true }
       : undefined,
@@ -137,11 +138,13 @@ function resolveAgentRuntimePluginRegistryLoad(
     // SAFETY: Typed config inputs project only the planner's plugin-policy edits onto authored config.
     activationSourceConfig = projectedSource as OpenClawConfig;
   }
+  inheritPreparedSyntheticAuthScope(params.config, plan.config);
   return {
     ...loadOptions,
     config: plan.config,
     activationSourceConfig,
     workspaceDir,
+    metadataSnapshot,
     discovery: metadataSnapshot.discovery,
     installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
     manifestRegistry: metadataSnapshot.manifestRegistry,
@@ -149,6 +152,7 @@ function resolveAgentRuntimePluginRegistryLoad(
     onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
     channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
     borrowRegistry: params.borrowRegistry,
+    previousRegistry: params.purpose === "model-catalog" ? params.reusableRegistry : undefined,
   };
 }
 
@@ -264,7 +268,7 @@ export async function acquireAgentRuntimePluginRegistry(
       channelSource,
     );
     // Fence replacement before adopting donors, including the await back to the build owner.
-    releaseWork = retainRuntimePluginWork([registry]);
+    releaseWork = retainRuntimePluginWork([registry], "registry-construction");
     const primaryResources = getPluginRegistryInspectionResources(acquired.registry);
     if (!primaryResources) {
       throw new Error("Acquired prepared registry has no registration resource owner");
@@ -327,6 +331,27 @@ export function loadAgentRuntimePluginRegistryHandle(
     .registry;
 }
 
+/** Async hosts keep cached registry ownership while awaiting cold database admission. */
+export async function loadAgentRuntimePluginRegistryHandleAsync(
+  params: AgentRuntimePluginRegistryParams,
+  onPrimaryRegistry?: (registry: PluginRegistry) => void,
+): Promise<PluginRegistry> {
+  const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
+  const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
+  if (reusable) {
+    onPrimaryRegistry?.(reusable);
+    return bindAdmittingGateway(reusable);
+  }
+  const load = () => loadOpenClawPluginsAsync({ ...loadOptions, activate: false });
+  const channelSource = captureRuntimeChannelSource(getActivePluginRegistry());
+  const pluginRegistry = await (params.metadataSnapshot
+    ? withPluginMetadataSnapshotScope(params.metadataSnapshot, load)
+    : load());
+  onPrimaryRegistry?.(pluginRegistry);
+  return adoptAgentRuntimeRegistrations(pluginRegistry, params, loadOptions.config, channelSource)
+    .registry;
+}
+
 /** Binds a scoped plugin generation when a direct host has no Gateway owner. */
 export async function withAgentPluginRegistry<T>(params: {
   config: OpenClawConfig;
@@ -355,7 +380,9 @@ export async function withAgentPluginRegistry<T>(params: {
       : { metadataSnapshot: loadPluginMetadataSnapshot(params) }),
   });
   // The resolver inherits request or configured scope; an empty override drops hook-only plugins.
-  const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
+  // Gateway ingress runs land here too: load incrementally so a cold registry never holds the
+  // shared event loop for the whole plugin set.
+  const pluginRegistry = await loadAgentRuntimePluginRegistryHandleAsync({
     config: params.config,
     env: context.env,
     metadataSnapshot: context.metadataSnapshot,
@@ -363,6 +390,9 @@ export async function withAgentPluginRegistry<T>(params: {
     workspaceDir: params.workspaceDir,
   });
   setPluginRuntimeLoadContext(pluginRegistry, context);
+  // Tool policy dispatches through the global runner; without a process root it
+  // would not exist, and this run's before_tool_call hooks would never fire.
+  ensureGlobalHookRunner();
   const invocations = new PluginInvocationScope(
     pluginRegistry,
     collectRegistryInvocationInstances(pluginRegistry),

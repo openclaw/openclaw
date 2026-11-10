@@ -8,7 +8,6 @@ import {
   resolveGatewayProbeSnapshot,
   type GatewayProbeSnapshot,
 } from "./status.scan.shared.js";
-import type { getUpdateCheckResult } from "./status.update.js";
 
 function buildColdStartUpdateResult(): UpdateCheckResult {
   return {
@@ -60,8 +59,6 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   includeLocalStatusRpcFallback?: boolean;
   gatewaySnapshot?: GatewayProbeSnapshot;
   onGatewayProgress?: (phase: string) => void;
-  getTailnetHostname: (runner: typeof runExec) => Promise<string | null>;
-  getUpdateCheckResult: typeof getUpdateCheckResult;
   getAgentLocalStatuses: (cfg: OpenClawConfig) => Promise<TAgentStatus>;
 };
 
@@ -77,23 +74,27 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
   const tailscaleDnsPromise =
     tailscaleMode === "off"
       ? Promise.resolve<string | null>(null)
-      : params
-          .getTailnetHostname((cmd, args, options) =>
-            runExec(cmd, args, {
-              ...(typeof options === "object" ? options : {}),
-              timeoutMs: tailscaleTimeoutMs,
-            }),
+      : import("../infra/tailscale.js")
+          .then(({ getTailnetHostname }) =>
+            getTailnetHostname((cmd, args, options) =>
+              runExec(cmd, args, {
+                ...(typeof options === "object" ? options : {}),
+                timeoutMs: tailscaleTimeoutMs,
+              }),
+            ),
           )
           .catch(() => null);
   // Update checks can hit git/registry, so cold-start status uses a synthetic unknown result.
   const updatePromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartUpdateResult())
-    : params.getUpdateCheckResult({
-        timeoutMs: statusTimeoutMs,
-        fetchGit: params.fetchGitUpdate ?? true,
-        includeRegistry: params.includeRegistryUpdate ?? true,
-        updateConfigChannel: params.cfg.update?.channel ?? null,
-      });
+    : import("./status.update.js").then(({ getUpdateCheckResult }) =>
+        getUpdateCheckResult({
+          timeoutMs: statusTimeoutMs,
+          fetchGit: params.fetchGitUpdate ?? true,
+          includeRegistry: params.includeRegistryUpdate ?? true,
+          updateConfigChannel: params.cfg.update?.channel ?? null,
+        }),
+      );
   const agentStatusPromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartAgentLocalStatuses() as TAgentStatus)
     : params.getAgentLocalStatuses(params.cfg);

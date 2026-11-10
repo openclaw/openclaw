@@ -33,8 +33,9 @@ Prepare the complete history manifest and substantive version-matched release
 notes before freezing the product-complete commit and its target context as the
 **Code SHA/ref**. Package source preflight requires a matching release section;
 an empty placeholder is not preparation. If the notes are final, this commit
-can also be the **Release SHA**. The candidate C owns qualification Q=C; select
-independently trusted admission/publication tooling P, then run:
+can also be the **Release SHA**. The candidate C owns test qualification Q=C;
+select independently trusted P for admission, aggregate validation, and
+publication, then run:
 
 ```bash
 PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
@@ -49,11 +50,16 @@ pnpm ci:full-release \
   -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
 
+For `main`, `--admission-workflow-sha` is the reviewed ancestry anchor; the helper
+may advance it to a verified descendant before dispatch as `main` moves. Add
+`--pin-admission-workflow` only when the exact main SHA must remain unchanged.
+Protected `release-publish/*` admission refs are always pinned.
+
 This example selects normal final-release publication. Select `npmDistTag=beta`
 for a beta, or `route=prepared` when the intended consumer is the prepared release
 button. Core publication requires `all-publishable` plugins. Plugin-only normal
 publication can set `publishOpenclawNpm=false`, `pluginPublishScope=selected`,
-and explicit canonical package names in `plugins`.
+and explicit official package names in `plugins`.
 
 Every fresh run requires an explicit `validation_purpose`. `publish` verifies
 complete committed source metadata before projecting the requested publication
@@ -157,9 +163,20 @@ node scripts/full-release-validation-at-sha.mjs \
 An existing `--request-file` also enters read-only reconciliation; conflicting
 target, tooling, or input arguments are rejected. An explicitly selected
 `--resume-request <file>` may continue an admitted candidate request only before
-its qualification ref mutation or workflow POST. It retains the original tuple
-and never repeats an uncertain write. Recovery performs no ref
-creation/deletion, dispatch, rerun, cancellation, Git fetch, or request rewrite.
+its first qualification workflow POST. If ref creation succeeded but its readback
+failed, explicit resume verifies the existing ref still points to Q=C and that
+its exact workflow inventory is empty, then reuses it without another ref POST.
+After recovery inventory reads, it revalidates the authenticated admission
+and current signer authority, then reads the ref again immediately before
+recording attempted intent and dispatching. A missing or moved ref, an uncertain inventory, or any
+existing run refuses continuation. An attempted workflow POST remains
+observation-only and is never repeated. Read-only reconciliation verifies an
+uncertain prepared ref before suggesting resume and never rewrites the request.
+The candidate checklist and stable wrapper relay the canonical helper’s recovery
+advice; raw prepared/uncertain state alone never proves resume is safe. Run the
+helper’s explicit resume command when offered, then rerun the wrapper.
+Reconciliation performs no ref creation/deletion, dispatch, rerun, cancellation,
+Git fetch, or request rewrite.
 `dispatch=observed` reports the exact run URL and attempt, not successful
 validation. A newer attempt cannot replace the retained attempt.
 
@@ -241,9 +258,9 @@ authenticate its bytes against that original upload and digest, and re-upload
 the unchanged plan and admission for the current attempt. GitHub removes prior
 parent artifacts on a full rerun, so retain the cache and original job logs.
 If the cache is unavailable, an accessible plan artifact can supply the same
-authenticated bytes. Missing or invalid evidence fails closed; retries never
+authenticated bytes. Missing or invalid evidence blocks release approval; retries never
 rebuild the plan, recollect registry observations, or redispatch tests.
-Release Decision also repeats canonical reuse-chain validation before a reused
+Release Decision also repeats the shared reuse-chain validation before a reused
 run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
 selected run, root run, source manifest, trusted tooling identity, and child
 tuple must all still match.

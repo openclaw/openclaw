@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import type { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
+import { createSessionHistoryWorkerRequestStub } from "./session-transcript-worker-readers.test-support.js";
 import type {
   SessionHistoryWorkerDatabase,
   SessionTranscriptWorkerValues,
@@ -26,17 +27,13 @@ export function createSessionStoreSummaryReaderStub(
       !target.agentId && !target.shared && agentId !== (scope.defaultAgentId ?? "main")
         ? `${target.path.slice(0, -".sqlite".length)}.${agentId}.sqlite`
         : target.path;
-    const runRequest: workerReaders.SessionHistoryWorkerRequestRunner = async (
-      prepare,
-      _bytes,
-      receive,
-    ) => {
+    const runRequest = createSessionHistoryWorkerRequestStub(async (prepare) => {
       const request = prepare();
       if (request.kind !== "session-store-summary") {
         throw new Error(`Unexpected formatting fixture read: ${request.kind}`);
       }
-      return receive({ kind: "session-store-summary", summary: await readSummary(scope, request) });
-    };
+      return { kind: "session-store-summary", summary: await readSummary(scope, request) };
+    });
     return consume({
       reader: {
         ...workerReaders.createSessionHistoryWorkerReaders(runRequest),

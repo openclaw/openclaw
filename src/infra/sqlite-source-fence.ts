@@ -7,6 +7,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runWithSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
+import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import {
   SOURCE_FENCE_ACCEPTED,
   SOURCE_FENCE_READY,
@@ -15,6 +16,7 @@ import {
   type SqliteSourceFenceGrant,
   type SqliteSourceFenceIdentity,
 } from "./sqlite-source-fence-contract.js";
+import type { SynchronousSqliteCallback } from "./sqlite-transaction-types.js";
 import { assertTransactionUsable, runSqliteReservedTransactionSync } from "./sqlite-transaction.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { assertDatabasePathIdentity } from "./sqlite-worker-identity.js";
@@ -128,7 +130,7 @@ function withSqliteWorkerSourceReservations<T>(operation: () => T): T {
 export async function runSqliteSourceFence<T>(
   fence: SqliteSourceFence,
   inOperation: <Result>(operation: () => Result) => Result,
-  execute: () => T,
+  execute: SynchronousSqliteCallback<T>,
 ): Promise<T> {
   const grant = inOperation(readGrant);
   if (
@@ -201,6 +203,10 @@ export async function runSqliteSourceFence<T>(
                 for (const source of ordered) {
                   runWithSqliteBusyTimeout(source.database, 0, () => {
                     source.database.exec("BEGIN IMMEDIATE");
+                    const timing = currentSqliteOperationTiming();
+                    if (timing) {
+                      timing.transactions.count += 1;
+                    }
                     reservations.push(source);
                   });
                 }

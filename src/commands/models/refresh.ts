@@ -1,4 +1,4 @@
-import { ExpectedCliError } from "../../cli/failure-output.js";
+import { ExpectedCliError } from "../../cli/expected-cli-error.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { refreshRemoteModelCatalog } from "../../model-catalog/remote-refresh.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -12,8 +12,7 @@ export async function modelsRefreshCommand(
     params: {},
     target: "remote model catalog",
     onForeignOwner: "refuse",
-    runLocal: async ({ config, env, signal, assertCurrent }) => {
-      assertCurrent();
+    runLocal: async ({ config, env, signal }) => {
       return await refreshRemoteModelCatalog({
         config,
         force: true,

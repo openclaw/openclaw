@@ -59,18 +59,27 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  Providers whose rows require current source authorization declare
+  `requiresFreshList: true`. Each list, search, and page request must reauthorize
+  its rows at the source. The Gateway bypasses cached pages for these providers;
+  clients withdraw previous rows while refresh is pending or failed. Expanded
+  windows are rebuilt from fresh pages, and a failed expansion offers Retry from
+  the current authorized head. This declaration adds no operator setting.
+
   The optional `allowPartialResults` flag is true only when a connected caller
   explicitly opts in while receiving host progress on a list without host selection
   or cursors. When true, a provider may return retained host snapshots or mark a
   still-loading host `pending: true`, then publish its completed snapshot through
-  `onHost` and `waitUntil`. Pending hosts preserve existing client rows and cursors;
+  `onHost` and `waitUntil`. Unless `requiresFreshList` is true, pending hosts preserve
+  existing client rows and cursors;
   omitted hosts are removed. Clear `pending` on a completed host.
   Each `onHost` publication must be authoritative for that host: the Gateway
   includes the latest publication for each retained host in the aggregate response
   even when another provider or visibility projection delays delivery. The final
   host set is authoritative: an omitted host is withdrawn, not restored from an
   earlier publication. Preserve the last known
-  rows while refreshing; do not publish an empty host to represent pending work.
+  rows while refreshing unless `requiresFreshList` is true; fresh providers return
+  empty pending hosts until authorization succeeds.
   When the flag is absent or false, return the complete compatibility snapshot.
   Targeted host lookups and pagination retain that complete-response contract.
 
@@ -206,7 +215,7 @@ export default definePluginEntry({
 
   `routeSegment` must not use the first segment of a built-in Control UI route
   or alias, and it must be unique across active session catalogs. Invalid,
-  unsupported, reserved, or multiply owned descriptors fail closed; catalog
+  unsupported, reserved, or multiply owned descriptors are rejected; catalog
   sessions remain available through the generic
   `/chat/<agent>?catalog=...&host=...&thread=...` URL. The shared session URL
   contract owns the built-in reservation decision: its share-path builder
@@ -216,7 +225,7 @@ export default definePluginEntry({
   those obligations cannot drift.
 
   CLI-backed catalogs that expose the same local-plus-paired-node shape can use
-  `createSessionCatalogFamily(...)`. The family composer owns canonical cursor
+  `createSessionCatalogFamily(...)`. The family composer owns shared cursor
   validation, node payload validation, host projection, adopted-session
   projection, per-host publication, read routing, single-flight continuation
   per resolved agent and source, and terminal plan routing. Different agents

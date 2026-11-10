@@ -28,7 +28,7 @@ openclaw-plugin-settings-groups {
   align-items: center;
   gap: 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 0 12px;
 }
 .plugin-editor__search .settings-input {
@@ -42,12 +42,12 @@ openclaw-plugin-settings-groups {
   margin-top: 28px;
 }
 .plugin-editor__section h2 {
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
   margin: 0 0 12px;
 }
 .plugin-editor__group {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   overflow: clip;
   background: var(--card);
 }
@@ -77,7 +77,7 @@ openclaw-plugin-settings-groups {
 }
 .plugin-editor__copy p {
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.5;
   margin: 6px 0 0;
   overflow-wrap: anywhere;
@@ -87,8 +87,7 @@ openclaw-plugin-settings-groups {
   grid-row: 1;
   min-width: 0;
 }
-.plugin-editor__control > .settings-row,
-.plugin-editor__control > .lit-content > .settings-row {
+.plugin-editor__control > .settings-row {
   padding: 0;
   min-height: 0;
   background: transparent;
@@ -105,28 +104,20 @@ openclaw-plugin-settings-groups {
   margin-left: auto;
 }
 .plugin-editor__control input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   margin: 8px 0 0 auto;
-  accent-color: var(--accent);
 }
 .plugin-editor__menu {
-  /* The dropdown host uses display: contents; this wrapper owns its position. */
   position: absolute;
   left: 12px;
   top: 20px;
   opacity: 0;
 }
-.plugin-editor__menu button[slot="trigger"] {
-  width: 30px;
-  height: 30px;
-}
-.plugin-editor__menu button[slot="trigger"] svg {
+.plugin-editor__menu .oc-menu-trigger svg {
   transform: rotate(90deg);
 }
 .plugin-editor__row:hover .plugin-editor__menu,
 .plugin-editor__row:focus-within .plugin-editor__menu,
-.plugin-editor__menu:has(wa-dropdown[open]) {
+.plugin-editor__menu:has([aria-expanded="true"]) {
   opacity: 1;
 }
 
@@ -225,8 +216,8 @@ openclaw-plugin-settings-groups {
 .plugin-editor__nav a {
   color: var(--muted);
   padding: 8px 10px;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: var(--radius-sm);
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-decoration: none;
 }
 .plugin-editor__nav a:hover,

@@ -155,10 +155,8 @@ function createEndpointFetch(
 }
 
 /** Resolve the process-wide Discord API override using the same env convention as sibling channels. */
-export function getDiscordEndpointRuntime(
-  env: NodeJS.ProcessEnv = process.env,
-): DiscordEndpointRuntime | undefined {
-  const apiUrl = env[DISCORD_API_URL_ENV]?.trim();
+export function getDiscordEndpointRuntime(): DiscordEndpointRuntime | undefined {
+  const apiUrl = process.env[DISCORD_API_URL_ENV]?.trim();
   if (!apiUrl) {
     return undefined;
   }

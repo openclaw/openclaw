@@ -3,6 +3,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import * as sqlite from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 
@@ -22,7 +23,11 @@ it.each([1, 250])("reads a %s-id placement projection with one SQLite statement"
     const { db } = seedPlacements();
     const ids = ["first", ...Array.from({ length: size - 1 }, (_, i) => `absent-${i}`)];
     readWorkerSessionPlacementProjectionInDatabase(db, ids, []);
-    const sql = trackSqliteStatementExecutions(db, ["projection"], () => "projection");
+    const sql = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(db),
+      ["projection"],
+      () => "projection",
+    );
     const exec = vi.spyOn(db, "exec");
     try {
       const { projection } = readWorkerSessionPlacementProjectionInDatabase(db, ids, []);

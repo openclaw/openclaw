@@ -2,7 +2,7 @@
   align-content: center;
   color: var(--muted);
   display: grid;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   gap: 10px;
   justify-items: center;
   margin: 0;
@@ -10,6 +10,11 @@
   padding: 14px;
   text-align: center;
 }
+.workboard-widget__pagination {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
 .workboard-widget-card,
 .workboard-widget-mini {
   display: grid;
@@ -30,7 +35,7 @@
 .workboard-widget-card__heading > strong,
 .workboard-widget-mini__card > strong {
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -41,7 +46,7 @@
   border-radius: 999px;
   color: var(--muted);
   flex: 0 0 auto;
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
   padding: 2px 6px;
 }
 
@@ -70,13 +75,13 @@
 .workboard-widget-card__meta dt,
 .workboard-widget-card__move > span {
   color: var(--muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
   text-transform: uppercase;
 }
 
 .workboard-widget-card__meta dd {
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   margin: 3px 0 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -99,7 +104,7 @@
 
 .workboard-widget-mini > header a {
   color: var(--accent);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .workboard-widget-mini__counts {
@@ -111,14 +116,14 @@
 .workboard-widget-mini__counts span {
   color: var(--muted);
   display: grid;
-  font-size: 8px;
+  font-size: calc(8px * var(--control-ui-text-scale));
   gap: 2px;
   padding: 5px;
 }
 
 .workboard-widget-mini__counts b {
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .workboard-widget-mini__cards {
@@ -158,12 +163,12 @@
 
 .workboard-widget-board__header span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .workboard-widget-board__header a {
   color: var(--accent);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   margin-left: auto;
   white-space: nowrap;
 }

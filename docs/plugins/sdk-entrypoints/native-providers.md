@@ -57,7 +57,7 @@ registered provider's lifetime; execution-specific frame generations remain
 owned by the driver. Use `prepare`, `isAvailable`, and `openExecution` for
 runtime readiness and resource ownership.
 
-The same entry point exports the canonical TypeBox schemas, static types, and
+The same entry point exports the shared TypeBox schemas, static types, and
 compiled validators for the two command payloads and the snapshot result. A
 node host accepts one provider for the command pair; registering another
 provider conflicts with the existing command registration instead of creating

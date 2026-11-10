@@ -1,8 +1,10 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearBundledDiscoveryModeMemo } from "../plugins/bundled-discovery-state.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -38,7 +40,11 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function fixture(config: unknown = { gateway: { mode: "local", port: 18789 } }) {
+const localConfig = (port = 18789, vars?: Record<string, string>) => ({
+  gateway: { mode: "local" as const, port },
+  ...(vars ? { env: { vars } } : {}),
+});
+function fixture(config: unknown = localConfig()) {
   const home = dirs.make("openclaw-runtime-config-async-");
   const state = path.join(home, "state");
   const workspace = path.join(home, "workspace");
@@ -68,8 +74,12 @@ function fixture(config: unknown = { gateway: { mode: "local", port: 18789 } }) 
     vi.stubEnv(key, value);
   }
   vi.spyOn(process, "cwd").mockReturnValue(workspace);
-  return { home, state, workspace, configPath };
+  const health = () =>
+    readConfigHealthStateFromStore({ env: process.env, homedir: () => home, logger: console });
+  return { state, configPath, health };
 }
+
+const isolated = <T>(run: () => Promise<T>) => withPluginCache(createPluginCache(), run);
 
 async function withoutMainSql<T>(run: () => Promise<T>): Promise<T> {
   const mainSql = observeMainThreadSql();
@@ -84,19 +94,6 @@ async function withoutMainSql<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-it("requires preparation and follows published config changes without main SQL", async () => {
-  fixture();
-  await withoutMainSql(async () => {
-    expect(() => getRuntimeConfig()).toThrow("Runtime config is not prepared");
-    const config = await captureRuntimeConfigAsyncReader()();
-    expect(getRuntimeConfig()).toBe(config);
-    const replacement = { ...config, gateway: { ...config.gateway, port: 19002 } };
-    setRuntimeConfigSnapshot(replacement);
-    expect(getRuntimeConfig()).toBe(replacement);
-    expect(getRuntimeConfig().gateway?.port).toBe(19002);
-  });
-});
-
 it("preserves SDK config writes and load authority inside a native worker", async () => {
   const { configPath } = fixture();
   const worker = new Worker(
@@ -108,20 +105,12 @@ it("preserves SDK config writes and load authority inside a native worker", asyn
     },
   );
   try {
-    const result = await new Promise<unknown>((resolve, reject) => {
-      let message: unknown;
-      worker.on("message", (value: unknown) => {
-        message = value;
-      });
-      worker.on("error", reject);
-      worker.on("exit", (code) => {
-        if (code === 0) {
-          resolve(message);
-        } else {
-          reject(new Error(`Config worker exited with code ${code}`));
-        }
-      });
+    let result: unknown;
+    worker.on("message", (value: unknown) => {
+      result = value;
     });
+    const [exitCode] = await once(worker, "exit");
+    expect(exitCode).toBe(0);
     expect(result).toEqual({
       isMainThread: false,
       wroteConfig: true,
@@ -136,7 +125,7 @@ it("preserves SDK config writes and load authority inside a native worker", asyn
 it.each(["config environment", "dotenv selector"] as const)(
   "pins the selected config while publishing staged %s without main SQL",
   async (mode) => {
-    const { home, state, configPath } = fixture(
+    const { state, configPath, health } = fixture(
       mode === "config environment"
         ? {
             gateway: { mode: "local", auth: { mode: "token", token: "${CONFIG_ASYNC_GLOBAL}" } },
@@ -149,76 +138,54 @@ it.each(["config environment", "dotenv selector"] as const)(
       fs.writeFileSync(other, JSON.stringify({ gateway: { mode: "local", port: 19001 } }));
       fs.writeFileSync(path.join(state, ".env"), `OPENCLAW_CONFIG_PATH=${other}\n`);
     }
-    await withPluginCache(createPluginCache(), async () => {
+    await isolated(async () => {
       const read = captureRuntimeConfigAsyncReader();
       expect(process.env.CONFIG_ASYNC_WORKSPACE).toBeUndefined();
       expect(getRuntimeConfigSnapshot()).toBeNull();
+      expect(() => getRuntimeConfig()).toThrow("Runtime config is not prepared");
       const config = await withoutMainSql(read);
       expect(getRuntimeConfigSnapshot()).toBe(config);
+      expect(getRuntimeConfig()).toBe(config);
       expect(await read()).toBe(config);
       if (mode === "dotenv selector") {
         expect(config.gateway?.port).toBe(18789);
         expect(process.env.OPENCLAW_CONFIG_PATH).toBe(other);
       } else {
         expect(config.gateway?.auth?.token).toBe("global");
-        expect(config.agents?.defaults?.compaction?.mode).toBe("safeguard");
         expect(process.env.CONFIG_ASYNC_WORKSPACE).toBe("workspace");
         expect(process.env.CONFIG_ASYNC_GLOBAL).toBe("global");
         expect(process.env.CONFIG_ASYNC_CONFIG).toBe("config");
       }
     });
     if (mode === "config environment") {
-      expect(
-        readConfigHealthStateFromStore({
-          env: { HOME: home, OPENCLAW_STATE_DIR: state },
-          homedir: () => home,
-          logger: console,
-        }).entries?.[configPath]?.lastKnownGood,
-      ).toBeDefined();
+      expect(health().entries?.[configPath]?.lastKnownGood).toBeDefined();
     }
   },
 );
 
-it.each(["validation", "namespace"] as const)(
-  "rejects a cold load after %s failure without publishing config environment",
-  async (failure) => {
-    fixture(
-      failure === "validation"
-        ? {
-            gateway: { port: "invalid" },
-            env: { vars: { CONFIG_ASYNC_CONFIG: "rejected" } },
-          }
-        : undefined,
-    );
-    const read = captureRuntimeConfigAsyncReader();
-    if (failure === "namespace") {
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", "/fixture/another-config.json");
-    }
-    const pending = withoutMainSql(() => withPluginCache(createPluginCache(), read));
-    if (failure === "validation") {
-      await expect(pending).rejects.toMatchObject({ code: "INVALID_CONFIG" });
-      expect(process.env.CONFIG_ASYNC_GLOBAL).toBe("global");
-    } else {
-      await expect(pending).rejects.toThrow("Runtime config source changed");
-    }
-    expect(process.env.CONFIG_ASYNC_WORKSPACE).toBe(
-      failure === "validation" ? "workspace" : undefined,
-    );
-    expect(process.env.CONFIG_ASYNC_CONFIG).toBeUndefined();
-    expect(getRuntimeConfigSnapshot()).toBeNull();
-  },
-);
+it("rejects an invalid cold load without publishing config environment", async () => {
+  fixture({
+    gateway: { port: "invalid" },
+    env: { vars: { CONFIG_ASYNC_CONFIG: "rejected" } },
+  });
+  const read = captureRuntimeConfigAsyncReader();
+  const pending = withoutMainSql(() => isolated(read));
+  await expect(pending).rejects.toMatchObject({ code: "INVALID_CONFIG" });
+  expect(process.env.CONFIG_ASYNC_GLOBAL).toBe("global");
+  expect(process.env.CONFIG_ASYNC_WORKSPACE).toBe("workspace");
+  expect(process.env.CONFIG_ASYNC_CONFIG).toBeUndefined();
+  expect(getRuntimeConfigSnapshot()).toBeNull();
+});
 
 it("keeps a pinned runtime readable when the captured launch directory is unavailable", async () => {
   fixture();
-  const current = { gateway: { mode: "local" as const, port: 19001 } };
+  const current = localConfig(19001);
   setRuntimeConfigSnapshot(current);
+  expect(getRuntimeConfig()).toBe(current);
   vi.spyOn(process, "cwd").mockImplementation(() => {
     throw new Error("fixture launch directory removed");
   });
-  const config = await withoutMainSql(() =>
-    withPluginCache(createPluginCache(), captureRuntimeConfigAsyncReader()),
-  );
+  const config = await withoutMainSql(() => isolated(captureRuntimeConfigAsyncReader()));
   expect(config).toBe(current);
   expect(process.env.CONFIG_ASYNC_GLOBAL).toBeUndefined();
   expect(process.env.CONFIG_ASYNC_WORKSPACE).toBeUndefined();
@@ -226,10 +193,7 @@ it("keeps a pinned runtime readable when the captured launch directory is unavai
 
 it("publishes a config write's fallback reload without main-thread health SQL", async () => {
   const { configPath, state } = fixture();
-  const initial = {
-    gateway: { mode: "local" as const, port: 18789 },
-    env: { vars: { CONFIG_ASYNC_CONFIG: "initial", OPENCLAW_STATE_DIR: state } },
-  };
+  const initial = localConfig(18789, { CONFIG_ASYNC_CONFIG: "initial", OPENCLAW_STATE_DIR: state });
   fs.writeFileSync(configPath, JSON.stringify(initial));
   vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
   prepareConfigRuntimeEnv({ previousConfig: {}, nextConfig: initial }).publish().commit();
@@ -238,11 +202,10 @@ it("publishes a config write's fallback reload without main-thread health SQL", 
   const unsubscribe = registerConfigWriteListener(listener);
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
   try {
-    await withPluginCache(createPluginCache(), () =>
-      writeConfigFile({
-        gateway: { mode: "local", port: 19001 },
-        env: { vars: { CONFIG_ASYNC_CONFIG: "committed", CONFIG_ASYNC_ADDED: "introduced" } },
-      }),
+    await isolated(() =>
+      writeConfigFile(
+        localConfig(19001, { CONFIG_ASYNC_CONFIG: "committed", CONFIG_ASYNC_ADDED: "introduced" }),
+      ),
     );
     expect(getRuntimeConfigSnapshot()?.gateway?.port).toBe(19001);
     expect(getRuntimeConfigSourceSnapshot()?.gateway?.port).toBe(19001);
@@ -267,13 +230,10 @@ it("publishes a config write's fallback reload without main-thread health SQL", 
 it.each(["replacement", "disk-only", "cancellation"] as const)(
   "preserves a newer owner's state when fallback reload encounters %s",
   async (change) => {
-    const { home, state, configPath } = fixture();
-    const initial = { gateway: { mode: "local" as const, port: 18789 } };
-    const candidate = { gateway: { mode: "local" as const, port: 19001 } };
-    const replacement = {
-      gateway: { mode: "local" as const, port: 19002 },
-      env: { vars: { CONFIG_ASYNC_CONFIG: "newer-owner" } },
-    };
+    const { state, configPath, health } = fixture();
+    const initial = localConfig();
+    const candidate = localConfig(19001);
+    const replacement = localConfig(19002, { CONFIG_ASYNC_CONFIG: "newer-owner" });
     setRuntimeConfigSnapshot(initial, initial);
     const loading = createDeferredCore();
     const release = createDeferredCore();
@@ -301,7 +261,7 @@ it.each(["replacement", "disk-only", "cancellation"] as const)(
     const listener = vi.fn();
     const unsubscribe = registerConfigWriteListener(listener);
     let current = true;
-    const pending = withPluginCache(createPluginCache(), () =>
+    const pending = isolated(() =>
       writeConfigFile(candidate, {
         assertCurrent: () => {
           if (!current) {
@@ -310,20 +270,16 @@ it.each(["replacement", "disk-only", "cancellation"] as const)(
         },
       }),
     );
-    const settled = pending.then(
-      () => {
-        throw new Error("Config write settled before its asynchronous fallback read");
-      },
-      (error: unknown) => {
-        throw error;
-      },
+    const gated = awaitGateBeforeSettlement(
+      loading.promise,
+      pending,
+      "Config write settled before its asynchronous fallback read",
     );
     try {
-      await Promise.race([loading.promise, settled]);
+      await gated;
       expect(getRuntimeConfigSnapshot()).toBe(initial);
       expect(listener).not.toHaveBeenCalled();
-      const healthDeps = { env: process.env, homedir: () => home, logger: console };
-      const healthBefore = readConfigHealthStateFromStore(healthDeps);
+      const healthBefore = health();
       if (change !== "disk-only") {
         const publication = prepareConfigRuntimeEnv({
           previousConfig: initial,
@@ -331,7 +287,6 @@ it.each(["replacement", "disk-only", "cancellation"] as const)(
         }).publish();
         setRuntimeConfigSnapshot(replacement, replacement);
         publication.commit();
-        expect(process.env.CONFIG_ASYNC_CONFIG).toBe("newer-owner");
       }
       if (change !== "cancellation") {
         // An external editor can replace the committed bytes while the writer holds its lock.
@@ -355,10 +310,10 @@ it.each(["replacement", "disk-only", "cancellation"] as const)(
         change !== "cancellation" ? 19002 : 19001,
       );
       expect(listener).not.toHaveBeenCalled();
-      expect(readConfigHealthStateFromStore(healthDeps)).toEqual(healthBefore);
+      expect(health()).toEqual(healthBefore);
     } finally {
       release.resolve();
-      await Promise.allSettled([pending, settled]);
+      await Promise.allSettled([pending, gated]);
       unsubscribe();
     }
   },

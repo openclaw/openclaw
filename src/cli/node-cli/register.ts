@@ -1,14 +1,16 @@
 import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { loadDeviceIdentityIfPresentAsync } from "../../infra/device-identity-async.js";
+import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { formatInvalidPortOption } from "../error-format.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { formatHelpExamples } from "../help-format.js";
 import { addNodeCommandOptions, createNodeWorkerCommand } from "./command-options.js";
 import { resolveNodeGatewayOptions, resolveNodePairGatewayOptions } from "./gateway-options.js";
-import { runNodeIdentityShow } from "./identity.js";
 
 function addNodeGatewayOptions(command: Command): Command {
   return command
@@ -45,6 +47,30 @@ export function registerNodeCli(program: Command) {
     { hidden: true },
   );
 
+  addNodeCommandOptions(
+    node.command("join").description("Enroll this node with an OpenClaw ID invitation"),
+  )
+    .argument("<link>", "openclaw-node:// invitation link")
+    .option("--service", "Install and run the node host as an OS service")
+    .option("--discovery-url <url>", "Discovery API origin (separate from the invitation link)")
+    .option("--display-name <name>", "Override node display name")
+    .action(async (link: string, opts, command: Command) => {
+      try {
+        // Enrollment owns approval, saved-target persistence, and foreground/service startup.
+        const { runNodeJoin } = await import("../../node-host/openclaw-id-join.js");
+        await runNodeJoin(link, {
+          service: opts.service,
+          discoveryUrl: opts.discoveryUrl,
+          displayName: opts.displayName,
+          commands: opts.commands ?? inheritOptionFromParent<string[]>(command, "commands"),
+          allCommands: opts.allCommands ?? inheritOptionFromParent<boolean>(command, "allCommands"),
+        });
+      } catch (error) {
+        defaultRuntime.error(error instanceof Error ? error.message : String(error));
+        defaultRuntime.exit(1);
+      }
+    });
+
   addNodeGatewayOptions(
     addNodeCommandOptions(
       node.command("run").description("Run the headless node host (foreground)"),
@@ -62,6 +88,9 @@ export function registerNodeCli(program: Command) {
   )
     .option("--session-host", "Host worker sessions for this foreground process")
     .addOption(new Option("--ephemeral").hideHelp())
+    .addOption(
+      new Option("--resume-device <id>", "Resume only this saved paired device").hideHelp(),
+    )
     .addOption(new Option("--desktop-sharing").hideHelp())
     .addOption(new Option("--no-desktop-sharing").hideHelp())
     .option(
@@ -88,8 +117,16 @@ export function registerNodeCli(program: Command) {
         defaultRuntime.exit(1);
         return;
       }
-      const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess, gatewayCandidates } =
-        gatewayOptions;
+      const {
+        host,
+        port,
+        contextPath,
+        tls,
+        tlsFingerprint,
+        cloudflareAccess,
+        gatewayCandidates,
+        gatewayTarget,
+      } = gatewayOptions;
       if (port === null) {
         defaultRuntime.error(formatInvalidPortOption("--port"));
         defaultRuntime.exit(1);
@@ -109,6 +146,7 @@ export function registerNodeCli(program: Command) {
         gatewayContextPath: contextPath,
         gatewayCloudflareAccess: cloudflareAccess,
         gatewayCandidates,
+        gatewayTarget,
         gatewayBootstrapToken: pair?.bootstrapToken,
         gatewayBootstrapExpiresAtMs: pair?.expiresAtMs,
         preferGatewayBootstrapToken: opts.pair !== undefined,
@@ -119,6 +157,7 @@ export function registerNodeCli(program: Command) {
         installedAppsSharing: opts.shareInstalledApps,
         desktopSharingEnabled: opts.desktopSharing,
         gatewayAuthFromEnv: opts.authFromEnv,
+        resumeDeviceId: opts.resumeDevice,
         parentStdin: opts.parentStdin,
         commands: opts.commands ?? inheritOptionFromParent<string[]>(command, "commands"),
         allCommands: opts.allCommands ?? inheritOptionFromParent<boolean>(command, "allCommands"),
@@ -137,8 +176,32 @@ export function registerNodeCli(program: Command) {
   node
     .command("identity")
     .description("Print the node host device identity (device id + public key)")
+    .option("--identity <key>", "Identity key: primary, node, or shareExtension", "primary")
     .option("--json", "Output JSON", false)
-    .action(runNodeIdentityShow);
+    .action(async (opts: { json?: boolean; identity?: string }) => {
+      // SSH pairing probes must never mint an identity on a host that has not run the node host.
+      const identityKey = opts.identity ?? "primary";
+      if (!["primary", "node", "shareExtension"].includes(identityKey)) {
+        const message = "identity must be primary, node, or shareExtension";
+        throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+      }
+      const identity = await loadDeviceIdentityIfPresentAsync({ identityKey });
+      if (!identity) {
+        const message =
+          "no node device identity found (start the node host once with `openclaw node run` or `openclaw node install`)";
+        throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+      }
+      const payload = {
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      };
+      if (opts.json) {
+        writeRuntimeJson(defaultRuntime, payload, 0);
+        return;
+      }
+      defaultRuntime.log(`deviceId:  ${payload.deviceId}`);
+      defaultRuntime.log(`publicKey: ${payload.publicKey}`);
+    });
 
   addNodeGatewayOptions(
     addNodeCommandOptions(
@@ -149,8 +212,14 @@ export function registerNodeCli(program: Command) {
   )
     .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
     .option("--no-share-installed-apps", "Disable installed application sharing")
-    .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
+    .option("--runtime <runtime>", "Service runtime (node|bun|standalone). Default: node")
     .option("--runtime-path <path>", "Pin an absolute Node/Bun executable path")
+    .addOption(
+      new Option("--expected-runtime-pin <json>", "Require the observed runtime intent").hideHelp(),
+    )
+    .addOption(
+      new Option("--restore-service-cli <json>", "Restore a retained service CLI").hideHelp(),
+    )
     .option(
       "--auth-from-env",
       "Persist environment Gateway credentials instead of the paired device token",

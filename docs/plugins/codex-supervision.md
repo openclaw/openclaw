@@ -109,7 +109,7 @@ tokens in its auth store. Supervision honors explicit `appServer` connection set
 instead of replacing them with its local user-home default.
 
 New ChatGPT sign-ins offered by automatic setup use an isolated OpenClaw agent
-home. To switch a reused native login to a separate login, open **Model Setup**
+home. To switch a reused native login to a separate login, open **Models**
 and sign in with ChatGPT or enter an OpenAI API key. Completing sign-in selects
 `plugins.entries.codex.config.appServer.homeScope: "agent"` automatically.
 The separate login does not share native Codex threads or configuration.
@@ -190,8 +190,9 @@ Open the **Codex** group in the normal sessions sidebar. It lists the same sessi
 grouped by host. **Load more sessions** appends the next page from each host that
 has older rows, and those appended rows survive the sidebar's periodic refresh.
 Each host appears as soon as its resident catalog is ready. The visible page
-reconciles after node-connectivity changes, when it regains focus, and at most
-every 30 seconds. A changed result gets a faster follow-up pass. Sessions created
+reconciles when the tab becomes visible again or reconnects, and every two minutes
+while visible. Hidden tabs pause discovery; explicit refreshes and catalog actions
+do not wait for the periodic refresh. Sessions created
 in Codex Desktop, the CLI, or another native client appear after the host's
 background directory reconciliation. Native events update threads driven by that
 Gateway without waiting for the periodic scan. Searches and pagination use the
@@ -443,11 +444,15 @@ source, or fork an original imported message while that source remains
 available, then create new OpenClaw turns. OpenClaw does not backfill old rows.
 
 OpenClaw message forks use the shipping Codex App Server's developer-message
-API. OpenClaw keeps the complete current generic instructions in native thread
-configuration and appends one developer message that replaces earlier
-OpenClaw-supplied generic policy, including removed sections or an explicit
-empty policy. Independent native managed, guardian, security, collaboration,
-and project instructions retain their authority. This is textual supersession.
+API. OpenClaw keeps its complete current policy in native thread configuration,
+delimited by `<thread_policy>`, and appends one developer message that
+replaces earlier OpenClaw policy blocks with the same delimiters and legacy
+unframed OpenClaw generic policy. Omitted rules are withdrawn, and an empty block
+withdraws that policy. Independent instructions outside the policy are preserved. Separately supplied parent-request
+instructions and independent native managed, guardian, security,
+collaboration and project instructions retain their authority. The notice does
+not supersede the whole enclosing developer message or cancel user requests.
+This is textual supersession.
 It does not delete earlier history or change native permission enforcement.
 
 The refresh is session configuration recorded before the next native user turn.
@@ -666,8 +671,8 @@ For every supervision config field, see
 ## Troubleshooting
 
 **No sessions appear:** verify that `@openclaw/codex` is installed, both the
-plugin and `supervision.enabled` are true, the current plugin allowlist permits
-`codex`, and the sessions are not archived. Gateway activation changes hot-apply;
+plugin and native conversation discovery are enabled, the current plugin allowlist
+permits `codex`, and the sessions are not archived. Gateway activation changes hot-apply;
 refresh the catalog after they finish. Restart a node if its local activation
 change has not refreshed its advertised capabilities.
 
@@ -675,6 +680,9 @@ change has not refreshed its advertised capabilities.
 ineligible state, its host is offline, or another action is pending. For a
 paired-node row, also verify `operator.admin` and that all three continuation
 commands are advertised and permitted. Terminal access alone is insufficient.
+For a Gateway-local row, Continue also requires `supervision.enabled: true`;
+with it off the transcript stays readable and Chat links to the Codex plugin
+settings.
 Send from a Gateway-local stored or idle session viewer to create a separate
 branch. Continuing a source that already has a supervised Chat opens that Chat.
 

@@ -21,28 +21,16 @@ import { removeRuntimeExternalProfileReferences } from "./runtime-external-profi
 import type { AuthProfileStore } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
+export type WithPreparedExternalAuthProfiles = <T>(
+  params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv },
+  run: () => Promise<T>,
+) => Promise<T>;
 export type ExternalCliOverlayOptions = {
   allowKeychainPrompt?: boolean;
   config?: OpenClawConfig;
   externalCliProviderIds?: Iterable<string>;
   externalCliProfileIds?: Iterable<string>;
 };
-
-let resolveExternalAuthProfilesForRuntime: ProviderExternalAuthProfileResolver | undefined;
-
-/** Test-only resolver injection for provider external auth profiles. */
-const testing = {
-  resetResolveExternalAuthProfilesForTest(): void {
-    resolveExternalAuthProfilesForRuntime = undefined;
-  },
-  setResolveExternalAuthProfilesForTest(resolver: ProviderExternalAuthProfileResolver): void {
-    resolveExternalAuthProfilesForRuntime = resolver;
-  },
-};
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.externalAuthTestApi")] =
-    testing;
-}
 
 function resolveExplicitProfileIds(values: Iterable<string> | undefined): Set<string> | undefined {
   if (values === undefined) {
@@ -136,9 +124,10 @@ export function syncPersistedExternalCliAuthProfiles(
   return next ?? store;
 }
 
-// Only external-profile-dependent operations are bound; module state stays above.
+// Only external-profile-dependent operations are bound.
 export function createExternalAuthRuntime(
   resolveExternalAuthProfilesWithPlugins: ProviderExternalAuthProfileResolver,
+  withPreparedExternalAuthProfiles: WithPreparedExternalAuthProfiles,
 ) {
   function resolveExternalAuthProfiles(params: {
     store: AuthProfileStore;
@@ -147,9 +136,7 @@ export function createExternalAuthRuntime(
     externalCli?: ExternalCliOverlayOptions;
   }): ExternalAuthProfileMap {
     const env = params.env ?? process.env;
-    const resolveProfiles =
-      resolveExternalAuthProfilesForRuntime ?? resolveExternalAuthProfilesWithPlugins;
-    const profiles = resolveProfiles({
+    const profiles = resolveExternalAuthProfilesWithPlugins({
       env,
       config: params.externalCli?.config,
       context: {
@@ -221,5 +208,6 @@ export function createExternalAuthRuntime(
   return {
     listRuntimeExternalAuthProfiles,
     overlayExternalAuthProfiles,
+    withPreparedExternalAuthProfiles,
   };
 }

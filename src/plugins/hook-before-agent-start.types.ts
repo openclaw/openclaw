@@ -1,3 +1,5 @@
+import type { ImageContent } from "../llm/types.js";
+
 export type PluginHookBeforeModelResolveAttachment = {
   kind: "image" | "video" | "audio" | "document" | "other";
   mimeType?: string;
@@ -25,7 +27,12 @@ export type PluginHookBeforePromptBuildEvent = {
   currentUserMessage?: string;
   /** Stable native admission identity across rebuilds; differs between admitted requests. */
   currentUserMessageId?: string;
-  /** Session messages prepared for this run. */
+  /**
+   * Model-context history: fresh array/envelopes per dispatch, shared frozen transcript payloads.
+   * Treat nested content as read-only; strict-mode writes to frozen leaves throw TypeError.
+   * Return result fields to contribute context. Array/envelope edits stay local to this dispatch,
+   * whose handlers share them in priority order; they never update core history.
+   */
   messages: unknown[];
 };
 
@@ -48,4 +55,24 @@ export type PluginHookBeforePromptBuildResult = {
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
    */
   appendSystemContext?: string;
+};
+
+/** Event payload for the before_agent_run gate hook. */
+export type PluginHookBeforeAgentRunEvent = {
+  /** The user's message that triggered this run. */
+  prompt: string;
+  /** Prepared current-turn images, including prompt-local references. Absent on older hosts. */
+  images?: ImageContent[];
+  /** Loaded session history before the current prompt is submitted. */
+  messages: unknown[];
+  /** Active system prompt prepared for this run. */
+  systemPrompt?: string;
+  /** Account identity when available. */
+  accountId?: string;
+  /** Channel the message came from. */
+  channelId?: string;
+  /** Sender identity when available. */
+  senderId?: string;
+  /** Trusted sender identity bit when available. */
+  senderIsOwner?: boolean;
 };

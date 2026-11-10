@@ -10,6 +10,10 @@ import {
   applyTestPluginDefaults,
   createPluginActivationSource,
   normalizePluginsConfig,
+  resolveEligibleContextEngineDeclaredOwners,
+  resolveEligibleContextEngineOwnerIds,
+  withContextEngineOwner,
+  type ContextEngineOwnerMetadata,
   type NormalizedPluginsConfig,
   type PluginActivationConfigSource,
 } from "./config-state.js";
@@ -22,9 +26,11 @@ import { getPluginCache } from "./plugin-cache.js";
 import { resolvePluginDiscoveryContext } from "./plugin-control-plane-context.js";
 import { resolvePluginRuntimeArtifactPreference } from "./plugin-runtime-artifact-selection.js";
 import { normalizePluginIdScope } from "./plugin-scope.js";
+import { inheritPreparedSyntheticAuthScope } from "./provider-synthetic-auth.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { getActivePluginRegistry, getPluginRegistryForContext } from "./runtime.js";
+import type { PluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import { activationConfigFingerprint } from "./runtime/load-context.js";
 
 const runtimeBindingCacheIds = new WeakMap<object, number>();
@@ -75,6 +81,7 @@ function buildActivationMetadataHash(params: {
         allow: params.activationSource.plugins.allow,
         deny: params.activationSource.plugins.deny,
         memorySlot: params.activationSource.plugins.slots.memory,
+        contextEngineSlot: params.activationSource.plugins.slots.contextEngine,
         entries: pluginEntryInputs,
         channelEnablement: sourceChannelEnablement,
         autoEnabledReasons: autoEnableReasonEntries,
@@ -189,7 +196,8 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   // the process-owned generation; full snapshots cover narrower loads, while
   // scoped snapshots must match exactly to protect activation boundaries.
   const currentMetadataSnapshot =
-    options.installRecords === undefined &&
+    options.metadataSnapshot ??
+    (options.installRecords === undefined &&
     trustNormalized.loadPaths === normalized.loadPaths &&
     !shouldResolveRawConfigEnvVars &&
     (options.env === undefined || options.env === process.env)
@@ -206,15 +214,13 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
               pluginIds: onlyPluginIds,
             })
           : undefined))
-      : undefined;
+      : undefined);
   // Manifest projections select plugins; the prepared inventory still owns their install ledger.
-  const preparedInstallRecords = currentMetadataSnapshot
-    ? extractPluginInstallRecordsFromInstalledPluginIndex(currentMetadataSnapshot.index)
-    : undefined;
   const installRecords = {
     ...(options.installRecords ??
-      preparedInstallRecords ??
-      loadInstalledPluginIndexInstallRecordsSync({ env })),
+      (currentMetadataSnapshot
+        ? extractPluginInstallRecordsFromInstalledPluginIndex(currentMetadataSnapshot.index)
+        : loadInstalledPluginIndexInstallRecordsSync({ env }))),
     ...runtimeConfig.plugins?.installs,
   };
   const discoveryContext = resolvePluginDiscoveryContext({
@@ -255,6 +261,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     ]),
   );
   const cacheIdentity = {
+    metadataSnapshot: resolveRuntimeBindingCacheId(currentMetadataSnapshot),
     roots,
     devSourceRoot,
     plugins: {
@@ -340,6 +347,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
         JSON.stringify(
           registry?.plugins.map((plugin) => [
             plugin.id,
+            plugin.contextEngineIds,
             plugin.origin,
             plugin.rootDir,
             plugin.source,
@@ -365,6 +373,10 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const capture = () => {
     if (!captured) {
       const cfg = captureRuntimeConfig(runtimeConfig);
+      // Raw substitution changes auth inputs; only policy/capture views inherit closed facts.
+      if (!shouldResolveRawConfigEnvVars) {
+        inheritPreparedSyntheticAuthScope(rawConfig, cfg);
+      }
       if (registrationGeneration !== undefined && cfg !== runtimeConfig) {
         // api.config reentry belongs to the load already registering this generation.
         runtimeBindingCacheIds.set(cfg, registrationGeneration);
@@ -404,6 +416,46 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     },
     get activationSource() {
       return capture().activationSource;
+    },
+    /** Admits the selected engine's unique eligible owner before any plugin module imports. */
+    selectContextEngineOwner(
+      manifestPlugins: readonly ContextEngineOwnerMetadata[],
+    ): PluginRuntimeLoadContextState["selectedContextEngine"] {
+      const records =
+        currentMetadataSnapshot?.registryIndex.plugins.map((plugin) => ({
+          id: plugin.pluginId,
+          contextEngineIds: plugin.contextEngineIds,
+        })) ?? manifestPlugins;
+      const current = capture();
+      const engineId = current.normalized.slots.contextEngine;
+      const eligibleOwners = resolveEligibleContextEngineOwnerIds(
+        current.normalized,
+        engineId,
+        records,
+      );
+      if (eligibleOwners.length > 1) {
+        const declaredOwners = resolveEligibleContextEngineDeclaredOwners(
+          current.normalized,
+          engineId,
+          records,
+        ).pluginIds;
+        const ownerKind = declaredOwners.length === eligibleOwners.length ? "declared" : "approved";
+        throw new Error(
+          `Context engine "${engineId}" has ambiguous ${ownerKind} owners: ${eligibleOwners.toSorted().join(", ")}. Select an engine with a unique plugin owner.`,
+        );
+      }
+      current.normalized = withContextEngineOwner(current.normalized, records);
+      current.activationSource = {
+        ...current.activationSource,
+        plugins: withContextEngineOwner(current.activationSource.plugins, records),
+      };
+      const selectedOwner = eligibleOwners[0];
+      // Preserve an unresolved declaration without hiding ordinary missing-engine diagnostics.
+      return engineId &&
+        (current.normalized.contextEngineOwnerId ||
+          records.some((plugin) => plugin.contextEngineIds?.includes(engineId)))
+        ? Object.freeze({ engineId, owner: selectedOwner ? `plugin:${selectedOwner}` : null })
+        : undefined;
     },
     autoEnabledReasons: options.autoEnabledReasons ?? {},
     onlyPluginIds,

@@ -290,7 +290,7 @@ private struct ChatBubbleShape: InsettableShape {
 }
 
 @MainActor
-struct ChatMessageBubble: View {
+struct ChatMessageBubble: View, @MainActor Equatable {
     @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
     @Environment(\.openClawAssistantRunContent) private var isRunContent
     @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
@@ -326,6 +326,45 @@ struct ChatMessageBubble: View {
         String,
         OpenClawChatMediaKind,
         OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
+
+    var canUseIOSRenderGate: Bool {
+        guard self.message.role.lowercased() == "assistant" else { return false }
+        return !self.message.content.contains { content in
+            content.isInlineAttachment || (content.type ?? "").lowercased() == "canvas"
+        }
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // The iOS gate excludes media/widgets, so resolver closures cannot affect its subtree.
+        // Comparing closure identity would defeat the gate because ChatView rebuilds them each pass.
+        // The favicon loader is covered by sourceContextRevision, which rotates on context changes.
+        guard self.styleValue(lhs.style) == self.styleValue(rhs.style) else { return false }
+        return lhs.message == rhs.message &&
+            lhs.liveToolCalls == rhs.liveToolCalls &&
+            lhs.metadata == rhs.metadata &&
+            lhs.sourcePreviews == rhs.sourcePreviews &&
+            lhs.sourceContextRevision == rhs.sourceContextRevision &&
+            lhs.sourceFaviconsEnabled == rhs.sourceFaviconsEnabled &&
+            lhs.markdownVariant.rawValue == rhs.markdownVariant.rawValue &&
+            lhs.userAccent == rhs.userAccent &&
+            lhs.displayOptions.rawValue == rhs.displayOptions.rawValue &&
+            lhs.assistantName == rhs.assistantName &&
+            lhs.assistantAvatarText == rhs.assistantAvatarText &&
+            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
+            lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
+            lhs.isClean == rhs.isClean &&
+            lhs.contextWindowTokens == rhs.contextWindowTokens &&
+            lhs.userMessageExpanded == rhs.userMessageExpanded &&
+            lhs.inlineWidgetResolverReady == rhs.inlineWidgetResolverReady &&
+            lhs.mediaArtifactResolverReady == rhs.mediaArtifactResolverReady
+    }
+
+    private static func styleValue(_ style: OpenClawChatView.Style) -> UInt8 {
+        switch style {
+        case .standard: 0
+        case .onboarding: 1
+        }
+    }
 
     var body: some View {
         if self.isUser {
@@ -596,28 +635,7 @@ extension ChatMessageBubble {
 
     private var toolActivityItems: [ChatToolActivityItem] {
         guard self.displayOptions.contains(.toolActivity) else { return [] }
-        // Results normally reach us merged into the calling assistant message
-        // (ChatTranscriptRow.mergeToolResults); this branch is the orphan
-        // fallback for results whose call is not in the preceding message.
-        if self.message.isToolResult {
-            return [ChatToolActivityItem(
-                id: self.message.content.first?.id ?? "result-0",
-                name: self.message.toolName,
-                arguments: nil,
-                details: self.message.details,
-                resultText: self.primaryText,
-                state: ChatToolActivity
-                    .resultIsError(self.message.isError, text: self.primaryText) ? .failed : .finished,
-                liveDiffStat: nil,
-                activity: self.message.activity?.first,
-                activityPrepared: self.message.activity != nil)]
-        }
-        guard self.message.role.lowercased() == "assistant" else { return [] }
-        return ChatToolActivity.items(
-            calls: self.message.content.filter(\.isToolCall),
-            results: self.message.content.filter(\.isToolResult),
-            activity: self.message.activity,
-            liveTools: self.liveToolCalls)
+        return ChatToolActivity.items(message: self.message, liveTools: self.liveToolCalls)
     }
 
     private var linkPreviewURL: URL? {
@@ -770,13 +788,15 @@ private struct AttachmentRow: View {
                     resolverReady: self.resolverReady,
                     load: { try await self.loadMedia($0, .image, nil) })
             case .audio:
+                // A busy Gateway inspector can omit playback metadata. Let its
+                // playback route inspect on demand rather than assume native support.
                 ChatMediaAudioAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     durationSeconds: self.att.durationSeconds,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
-                    load: { try await self.loadMedia($0, .audio, self.att.playback) })
+                    load: { try await self.loadMedia($0, .audio, self.att.playback ?? .transcode) })
             case .video:
                 ChatMediaVideoAttachment(
                     artifactId: artifactId,
@@ -785,7 +805,7 @@ private struct AttachmentRow: View {
                     height: self.att.height,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
-                    load: { try await self.loadMedia($0, .video, self.att.playback) })
+                    load: { try await self.loadMedia($0, .video, self.att.playback ?? .transcode) })
             }
         } else {
             self.fallbackRow
@@ -853,6 +873,7 @@ struct ChatTypingIndicatorBubble: View {
     let isClean: Bool
     let runIdentity: String
     let outputTokens: Int?
+    var status: String?
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -867,7 +888,8 @@ struct ChatTypingIndicatorBubble: View {
             HStack(spacing: 9) {
                 ChatWorkingIndicatorContent(
                     runIdentity: self.runIdentity,
-                    outputTokens: self.outputTokens)
+                    outputTokens: self.outputTokens,
+                    status: self.status)
                     .id(self.runIdentity)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
@@ -879,7 +901,7 @@ struct ChatTypingIndicatorBubble: View {
         .focusable(false)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            Text("Writing")
+            Text(verbatim: self.status ?? String(localized: "Writing"))
                 .font(OpenClawChatTypography.caption))
     }
 }
@@ -889,10 +911,13 @@ private struct ChatWorkingIndicatorContent: View {
     let seed: String
     let outputTokens: Int?
 
-    init(runIdentity: String, outputTokens: Int?) {
+    let status: String?
+
+    init(runIdentity: String, outputTokens: Int?, status: String? = nil) {
         _startedAt = State(initialValue: Date())
         self.seed = runIdentity
         self.outputTokens = outputTokens
+        self.status = status
     }
 
     var body: some View {
@@ -901,7 +926,8 @@ private struct ChatWorkingIndicatorContent: View {
             ChatWorkingStatusText(
                 startedAt: self.startedAt,
                 seed: self.seed,
-                outputTokens: self.outputTokens)
+                outputTokens: self.outputTokens,
+                status: self.status)
         }
     }
 }
@@ -934,16 +960,24 @@ struct ChatSpeechStatusChip: View {
     }
 }
 
-/// Status footer for a user bubble backed by the durable offline outbox.
+/// Status footer for a user bubble awaiting durable delivery or confirmation.
 @MainActor
 struct ChatOutboxStatusLabel: View {
     let state: OpenClawChatOutboxMessageState
+    var queueMode: OpenClawChatQueueMode?
 
     var body: some View {
         let presentation = self.presentation
         HStack(spacing: 4) {
             Image(systemName: presentation.iconName)
                 .font(.system(size: 10, weight: .semibold))
+            if let modeTitle {
+                Text(modeTitle)
+                    .font(OpenClawChatTypography.caption)
+                Text("·")
+                    .font(OpenClawChatTypography.caption)
+                    .accessibilityHidden(true)
+            }
             Text(presentation.title)
                 .font(OpenClawChatTypography.caption)
         }
@@ -952,6 +986,15 @@ struct ChatOutboxStatusLabel: View {
         .accessibilityLabel(
             Text(presentation.accessibilityText)
                 .font(OpenClawChatTypography.caption))
+        .accessibilityValue(Text(self.modeTitle ?? LocalizedStringResource("")))
+    }
+
+    private var modeTitle: LocalizedStringResource? {
+        switch self.queueMode {
+        case .steer: "Steer"
+        case .followup: "Queue next"
+        case nil: nil
+        }
     }
 
     private var presentation: (
@@ -961,7 +1004,7 @@ struct ChatOutboxStatusLabel: View {
     {
         switch self.state {
         case .queued:
-            ("Queued", "clock", "Queued, sends when reconnected")
+            ("Queued", "clock", "Queued, waiting to send")
         case .sending:
             ("Sending…", "arrow.up.circle", "Sending")
         case .confirming:
@@ -983,7 +1026,8 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.isClean == rhs.isClean &&
             lhs.runIdentity == rhs.runIdentity &&
-            lhs.outputTokens == rhs.outputTokens
+            lhs.outputTokens == rhs.outputTokens &&
+            lhs.status == rhs.status
     }
 }
 
