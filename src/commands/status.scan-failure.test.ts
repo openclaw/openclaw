@@ -130,9 +130,9 @@ describe("status --deep gateway health failures", () => {
     };
   }
 
-  function runStatusDeep(installed: boolean) {
+  function runStatusDeep() {
     mocks.gateway.mockResolvedValue({
-      installed,
+      installed: false,
       loadState: { status: "not-loaded" },
       running: false,
       command: null,
@@ -141,33 +141,19 @@ describe("status --deep gateway health failures", () => {
     return statusCommand({ deep: true }, { log: vi.fn(), error: vi.fn(), exit: vi.fn() });
   }
 
-  it("recommends gateway start for an installed local gateway", async () => {
-    mocks.scan.mockResolvedValue(createUnreachableScan());
-    await expect(runStatusDeep(true)).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      message: "Gateway is unreachable",
-      humanOutput:
-        "Gateway is unreachable\nRun `openclaw gateway start` to start a managed gateway.",
-    });
-  });
-
-  it("recommends gateway install when no local service is installed", async () => {
-    mocks.scan.mockResolvedValue(createUnreachableScan("local"));
-    await expect(runStatusDeep(false)).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      message: "Gateway is unreachable",
-      humanOutput:
-        "Gateway is unreachable\nRun `openclaw gateway install` to set up a managed gateway.",
-    });
-  });
-
-  it("keeps the remote recovery hint target-neutral", async () => {
-    mocks.scan.mockResolvedValue(createUnreachableScan("remote"));
-    await expect(runStatusDeep(false)).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      message: "Gateway is unreachable",
-      humanOutput:
-        "Gateway is unreachable\nCheck that the configured remote gateway is running and reachable.",
-    });
-  });
+  it.each([
+    ["local", "local"],
+    ["remote", "remote"],
+  ] as const)(
+    "reports the gateway health reason with a diagnostic recovery step (%s)",
+    async (_label, gatewayMode) => {
+      mocks.scan.mockResolvedValue(createUnreachableScan(gatewayMode));
+      await expect(runStatusDeep()).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message: "Gateway is unreachable",
+        humanOutput:
+          "Gateway is unreachable\nRun `openclaw gateway status --deep` for gateway diagnostics.",
+      });
+    },
+  );
 });

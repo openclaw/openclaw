@@ -1,5 +1,5 @@
 # Net test-line growth from PR "fix(cli): show the gateway health reason in status --deep"
 # (new regressions asserting status --deep surfaces the gateway health reason as an
-# ExpectedCliError instead of the generic "The CLI command failed." line, with the
-# recovery hint conditional on gateway mode and local-service installation state).
-75
+# ExpectedCliError instead of the generic "The CLI command failed." line, with a
+# diagnostic recovery step that never recommends a refused lifecycle command).
+61
