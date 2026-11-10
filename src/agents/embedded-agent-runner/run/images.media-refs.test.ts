@@ -282,6 +282,39 @@ describe("fact-carried image references", () => {
     }
   });
 
+  it("keeps a Gateway remote-cache staged copy on the Gateway reader", async () => {
+    // stageSandboxMedia also marks Gateway-owned copies as staged; those live under the
+    // media directory and must keep the Gateway reader even when a sandbox is present.
+    const stateRoot = tempDirs.make("openclaw-gateway-cache-");
+    const cachedPath = path.join(stateRoot, "media", "remote-cache", "cached.png");
+    await fs.mkdir(path.dirname(cachedPath), { recursive: true });
+    await fs.writeFile(cachedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
+    const release = registerAgentWorkspaceAccess(stateRoot, {
+      bridge: createHostSandboxFsBridge(stateRoot),
+      prepareTurnAttachments: async () => undefined,
+    });
+    try {
+      const result = await loadImages({
+        prompt: "",
+        media: [
+          {
+            path: cachedPath,
+            url: "media://inbound/cached.png",
+            staged: true,
+            contentType: "image/png",
+          },
+        ],
+        workspaceDir: stateRoot,
+        workspaceOnly: true,
+        sandbox: sandboxAt(stateRoot),
+      });
+      expect(result.images[0]).toMatchObject(image());
+    } finally {
+      release();
+    }
+  });
+
   it.each([false, true])(
     "rejects encoded traversal claim-check facts (sandbox=%s)",
     async (sandboxed) => {

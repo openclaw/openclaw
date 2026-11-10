@@ -8,6 +8,7 @@ import type {
   ModelInputContent,
   ProviderContext,
 } from "../../../../packages/ai/src/provider-types.js";
+import { isPathInside } from "../../../infra/path-guards.js";
 import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
 import {
   applyRunHydrationSuppression,
@@ -177,9 +178,13 @@ async function loadMediaFromRef(
 ): Promise<WebMediaResult | null> {
   options.signal?.throwIfAborted();
   // Admitted managed originals belong to Gateway; staged and discovered paths stay sandboxed.
+  // Staged copies have two producers: the sandbox staging step (a path the sandbox
+  // bridge owns) and Gateway's own remote cache under the media directory. Only the
+  // sandbox-owned copy keeps the sandbox reader; the cached one stays on Gateway.
+  const stagedInMediaDir = ref.staged === true && isPathInside(getMediaDir(), ref.resolved);
   const gatewayAttachment =
     attachment &&
-    ref.staged !== true &&
+    (ref.staged !== true || stagedInMediaDir) &&
     Boolean(
       ref.type === "media-uri" ||
       getAgentWorkspaceAccess(
