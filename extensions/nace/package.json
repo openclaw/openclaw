@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/nace",
-  "version": "2026.11.1",
+  "version": "2026.11.2",
   "description": "OpenClaw Nace native Decision provider.",
   "repository": {
     "type": "git",
@@ -18,13 +18,13 @@
       "clawhubSpec": "clawhub:@openclaw/nace",
       "npmSpec": "@openclaw/nace",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.11.1"
+      "minHostVersion": ">=2026.11.2"
     },
     "compat": {
-      "pluginApi": ">=2026.11.1"
+      "pluginApi": ">=2026.11.2"
     },
     "build": {
-      "openclawVersion": "2026.11.1",
+      "openclawVersion": "2026.11.2",
       "bundledDist": false
     },
     "release": {

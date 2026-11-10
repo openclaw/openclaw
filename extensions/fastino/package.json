@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/fastino-provider",
-  "version": "2026.11.1",
+  "version": "2026.11.2",
   "description": "OpenClaw Fastino GLiDE Decision provider plugin.",
   "repository": {
     "type": "git",
@@ -18,13 +18,13 @@
       "clawhubSpec": "clawhub:@openclaw/fastino-provider",
       "npmSpec": "@openclaw/fastino-provider",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.10.6"
+      "minHostVersion": ">=2026.11.2"
     },
     "compat": {
-      "pluginApi": ">=2026.11.1"
+      "pluginApi": ">=2026.11.2"
     },
     "build": {
-      "openclawVersion": "2026.11.1",
+      "openclawVersion": "2026.11.2",
       "bundledDist": false
     },
     "release": {
