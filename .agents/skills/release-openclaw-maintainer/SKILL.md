@@ -70,7 +70,9 @@ Prefer the [shared hotfix ledger](references/hotfix-ledger-management.md) for
 backport discovery, selection, and outcomes, including Tideclaw-owned releases.
 Reuse candidates, add discoveries from main/sibling releases, and update each
 release's assessments. If access is unavailable, keep local evidence and sync
-later. This is recommended bookkeeping, not another release gate.
+later. At closeout, perform the [final integrity check](references/hotfix-ledger-management.md#final-closeout-integrity-check)
+against all hotfixes landed before publication. This is recommended bookkeeping,
+not another release gate.
 
 ## Shared release boundaries
 

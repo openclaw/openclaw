@@ -82,6 +82,30 @@ publication or handoff.
    evidence. Completion requires the stored head to match the remote head and no
    unexplained stale assessment or unsynchronized decision.
 
+## Final closeout integrity check
+
+At closeout on every release track, reconcile the hotfix ledger against what
+actually landed before publication. Review the release-branch history from the
+recorded baseline through the exact published Release SHA, using the existing
+selection and repair evidence to identify hotfixes, including late backports and
+release-first product, CI, and release-tooling fixes. Start from the branch, not
+just existing ledger rows: a current checkpoint can still omit a hotfix entirely.
+Do not include later branch commits as shipped in this release.
+
+When the ledger is accessible, ensure every landed hotfix has a shared identity
+and a complete, accurate assessment for this release: source lineage (or an
+explicit release-only identity), actual destination commits, included disposition,
+adaptations, dependencies/exclusions, and validation evidence. Account for
+reverts, superseding fixes, and partial backports rather than marking every
+historical application as shipped. Reconcile missing or incorrect records using
+the existing write/checkpoint flow; do not clear stale flags without reassessment.
+
+This is an agent judgment pass, not a new scripted validator or publication gate.
+Record the checked baseline/Release SHA, corrections, and unresolved gaps in the
+existing closeout evidence. If access or write capability is unavailable, retain
+pending corrections there under [Fallback and privacy](#fallback-and-privacy)
+and report the check as incomplete, not a clean ledger.
+
 ## Manager opportunity intake
 
 When the release manager receives a backport opportunity, persist it before
