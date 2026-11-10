@@ -635,7 +635,7 @@ export function createSessionsListTool(opts?: {
           ...(visibilityMetadata ? { visibility: visibilityMetadata } : {}),
         });
         const fits = (count: number) =>
-          Buffer.byteLength(JSON.stringify(resultFor(count), null, 2), "utf8") <=
+          Buffer.byteLength(JSON.stringify(resultFor(count)), "utf8") <=
           SESSIONS_LIST_MAX_RESULT_BYTES;
         // A large optional preview must not make an otherwise usable inventory fail.
         // Keep identity/metadata intact and report the enrichment downgrade explicitly.

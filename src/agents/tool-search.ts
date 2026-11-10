@@ -183,7 +183,7 @@ function formatToolSearchBatchResponse(
   let truncated = bounded.some((result) => result.truncated);
   const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
   let payload = render();
-  let { text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent);
+  let { text } = renderToolSearchControlText(JSON.stringify(payload), networkContent);
   while (text.length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
     let removable: ToolSearchBatchGroup | undefined;
     for (const group of bounded) {
@@ -208,7 +208,7 @@ function formatToolSearchBatchResponse(
     removable.truncated = true;
     truncated = true;
     payload = render();
-    ({ text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent));
+    ({ text } = renderToolSearchControlText(JSON.stringify(payload), networkContent));
   }
   const result = textResult(text, payload);
   return networkContent ? attachInternalToolResultContentSource(result, "network") : result;
@@ -406,12 +406,10 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           }
           // Invocation results need identity, not another copy of the discovery metadata.
           // Keep the full target result in details; forward its already-projected images as content.
-          // Compact: indenting would escape and re-indent target text the model already reads,
-          // spending the shared output cap on whitespace.
           const controlResult = formatToolSearchControlResult(
             { tool: { id, name, source }, result: modelResult },
             runtime,
-            { parentToolCallId: toolCallId, images, compact: true },
+            { parentToolCallId: toolCallId, images },
           );
           const failureKind = resolveToolResultFailureKind(callResult.result);
           // Keep the model-visible `{ tool, result }` envelope stable while the

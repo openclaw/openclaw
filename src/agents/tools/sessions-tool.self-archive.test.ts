@@ -381,7 +381,7 @@ describe("sessions tool ownership", () => {
       });
       if (!controls) {
         expect(assigned).toMatchObject({
-          content: [{ type: "text", text: expect.stringContaining('"label": "Colin"') }],
+          content: [{ type: "text", text: expect.stringContaining('"label":"Colin"') }],
         });
         return;
       }

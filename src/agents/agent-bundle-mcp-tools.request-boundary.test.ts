@@ -195,7 +195,7 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
         ]);
       } else {
         expect(result.content).toEqual([
-          { type: "text", text: JSON.stringify(publicResults[operation], null, 2) },
+          { type: "text", text: JSON.stringify(publicResults[operation]) },
         ]);
       }
       expect(consumeMcpCodeModeGuestResult(result)).toEqual(publicResults[operation]);

@@ -90,7 +90,7 @@ function instructionsHintForEntry(entry: ToolSearchCatalogEntry): string | undef
   if (instructions.length > MAX_TOOL_SEARCH_DESCRIBE_TEXT_CHARS) {
     return UNRETRIEVABLE_INSTRUCTIONS_HINT;
   }
-  return JSON.stringify(describeToolSearchCatalogEntry(entry), null, 2).length <=
+  return JSON.stringify(describeToolSearchCatalogEntry(entry)).length <=
     MAX_TOOL_SEARCH_DESCRIBE_TEXT_CHARS
     ? INCOMPLETE_INSTRUCTIONS_HINT
     : UNRETRIEVABLE_INSTRUCTIONS_HINT;

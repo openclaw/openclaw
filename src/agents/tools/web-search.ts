@@ -148,7 +148,7 @@ export function createWebSearchTool(options?: {
       if (normalized.kind !== "raw") {
         return jsonResult(normalized);
       }
-      const rawText = JSON.stringify(normalized, null, 2);
+      const rawText = JSON.stringify(normalized);
       const bounded = truncateSanitizedExternalContent(rawText, 20_000);
       const modelText = bounded.truncated
         ? `${truncateSanitizedExternalContent(rawText, 19_988).text}\n[truncated]`
