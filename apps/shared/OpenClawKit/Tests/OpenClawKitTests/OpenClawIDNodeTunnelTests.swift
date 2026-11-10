@@ -134,7 +134,7 @@ struct OpenClawIDNodeTunnelTests {
                         #"{"credential":"synthetic"}}}"#))
         let writes = await stream.writes
         #expect(writes.count == 2)
-        #expect(String(decoding: writes[0], as: UTF8.self).contains("/__openclaw__/worker"))
+        #expect(try #require(String(bytes: writes[0], encoding: .utf8)).contains("/__openclaw__/worker"))
         await tunnel.shutdown()
     }
 
@@ -156,7 +156,8 @@ struct OpenClawIDNodeTunnelTests {
         try await socket.send(.string(#"{"method":"successor"}"#))
         let writes = await stream.writes
         #expect(writes.count == 4) // HEAD, node connect, first, successor; no retired request.
-        #expect(!writes.contains { String(decoding: $0, as: UTF8.self).contains("retired") })
+        let writtenText = try writes.map { try #require(String(bytes: $0, encoding: .utf8)) }
+        #expect(!writtenText.contains { $0.contains("retired") })
         await tunnel.shutdown()
     }
 

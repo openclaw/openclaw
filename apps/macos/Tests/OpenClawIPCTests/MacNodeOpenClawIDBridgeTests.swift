@@ -151,7 +151,7 @@ struct MacNodeOpenClawIDBridgeTests {
             status: 200,
             headers: [["Content-Length", "500"], ["Connection", "X-Hop"], ["X-Hop", "removed"]],
             method: "GET")
-        #expect(String(decoding: head.bytes, as: UTF8.self) ==
+        #expect(try #require(String(bytes: head.bytes, encoding: .utf8)) ==
             "HTTP/1.1 200 Tunnel Response\r\nConnection: close\r\nContent-Length: 500\r\n\r\n")
     }
 
@@ -170,7 +170,7 @@ struct MacNodeOpenClawIDBridgeTests {
                 status: status, headers: [["Content-Length", "500"]], method: method)
             #expect(response.noBody)
             #expect(response.length == 500)
-            #expect(!String(decoding: response.bytes, as: UTF8.self).contains("Transfer-Encoding"))
+            #expect(try #require(String(bytes: response.bytes, encoding: .utf8)).contains("Transfer-Encoding") == false)
         }
         let empty = try MacNodeOpenClawIDBridgeHTTP.responseHead(
             status: 204, headers: [["Content-Length", "500"]], method: "GET")
@@ -199,9 +199,8 @@ struct MacNodeOpenClawIDBridgeTests {
                 .write(
                     Data("GET /__openclaw__/worker-bundle/v1/bundles/test HTTP/1.1\r\nHost: localhost\r\n\(range)\r\n"
                         .utf8))
-            let response = try await String(
-                decoding: reader.through(Data([13, 10, 13, 10]), limit: 1024),
-                as: UTF8.self)
+            let responseBytes = try await reader.through(Data([13, 10, 13, 10]), limit: 1024)
+            let response = try #require(String(bytes: responseBytes, encoding: .utf8))
             #expect(response.contains("Content-Length: \(body.count)\r\n"))
             #expect(!response.lowercased().contains("transfer-encoding:"))
             #expect(response.contains("Accept-Ranges: bytes\r\n"))
@@ -241,7 +240,7 @@ struct MacNodeOpenClawIDBridgeTests {
             try await io
                 .write(Data("GET /__openclaw__/worker HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\r\n".utf8))
             let response = try await MacNodeOpenClawIDBridgeReader(io: io).through(Data([13, 10, 13, 10]), limit: 1024)
-            #expect(String(decoding: response, as: UTF8.self).hasPrefix("HTTP/1.1 400 "))
+            #expect(try #require(String(bytes: response, encoding: .utf8)).hasPrefix("HTTP/1.1 400 "))
             #expect(await stream.snapshot().0.isEmpty)
         } catch {
             await bridge.shutdown()
@@ -391,7 +390,7 @@ struct MacNodeOpenClawIDBridgeTests {
                     "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
                     "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").utf8))
             let response = try await reader.through(Data([13, 10, 13, 10]), limit: 1024)
-            #expect(String(decoding: response, as: UTF8.self).hasPrefix("HTTP/1.1 101 "))
+            #expect(try #require(String(bytes: response, encoding: .utf8)).hasPrefix("HTTP/1.1 101 "))
             let connect = Data(("{\"type\":\"req\",\"method\":\"connect\",\"params\":{\"role\":\"worker\"," +
                     "\"admission\":{\"credential\":\"synthetic\"}}}").utf8)
             try #require(connect.count < 126)

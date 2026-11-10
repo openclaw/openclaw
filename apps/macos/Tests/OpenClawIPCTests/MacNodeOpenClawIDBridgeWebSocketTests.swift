@@ -57,7 +57,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
 
     @Test func `rfc upgrade vector and invalid handshakes`() throws {
         let request = try MacNodeOpenClawIDBridgeRequest.parse(self.upgrade)
-        let response = try String(decoding: Codec.upgrade(request), as: UTF8.self)
+        let response = try #require(String(bytes: Codec.upgrade(request), encoding: .utf8))
         #expect(response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"))
         for (old, replacement) in [
             ("GET ", "POST "), ("/__openclaw__/worker", "/"),
@@ -65,7 +65,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
             ("keep-alive, Upgrade", "keep-alive"),
             ("Sec-WebSocket-Version: 13\r\n", "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Version: 13\r\n"),
         ] {
-            let modified = String(decoding: self.upgrade, as: UTF8.self).replacingOccurrences(
+            let modified = try #require(String(bytes: self.upgrade, encoding: .utf8)).replacingOccurrences(
                 of: old,
                 with: replacement)
             #expect(throws: (any Error).self) {
@@ -159,7 +159,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
             #expect(pendingError == EAGAIN || pendingError == EWOULDBLOCK)
             release.continuation.finish()
             let response = try await reader.through(Data([13, 10, 13, 10]), limit: 1024)
-            #expect(String(decoding: response, as: UTF8.self).hasPrefix("HTTP/1.1 101 "))
+            #expect(try #require(String(bytes: response, encoding: .utf8)).hasPrefix("HTTP/1.1 101 "))
             try await io.write(self.masked(opcode: 1, final: false, bytes: Data("hel".utf8)) +
                 self.masked(opcode: 9, bytes: Data("p".utf8)) + self.masked(opcode: 0, bytes: Data("lo".utf8)))
             #expect(try await reader.exactly(10) == Data([0x8A, 1, 112, 0x81, 5]) + Data("hello".utf8))
@@ -272,7 +272,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
             let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
             try await io.write(self.upgrade)
             let response = try await MacNodeOpenClawIDBridgeReader(io: io).through(Data([13, 10, 13, 10]), limit: 1024)
-            #expect(String(decoding: response, as: UTF8.self).hasPrefix("HTTP/1.1 502 "))
+            #expect(try #require(String(bytes: response, encoding: .utf8)).hasPrefix("HTTP/1.1 502 "))
         } catch {
             await bridge.shutdown()
             await tunnel.shutdown()
