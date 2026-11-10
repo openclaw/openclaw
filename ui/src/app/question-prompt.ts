@@ -289,7 +289,9 @@ export function handleQuestionPromptEvent(
       invalidateQuestionList(state.client);
     }
     const previous = state.prompts.get(record.id);
-    if (previous && previous.status !== "pending") {
+    // A reconnect can land before the Gateway restores a question it carried across the
+    // restart; its restore announcement revives the prompt this client presumed dropped.
+    if (previous && previous.status !== "pending" && previous.resolvedBy !== "gateway-restart") {
       return true;
     }
     storeQuestionRecord(state, record.id, record, previous);

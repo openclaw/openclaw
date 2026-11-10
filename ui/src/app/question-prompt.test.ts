@@ -593,7 +593,7 @@ describe("refreshPendingQuestions", () => {
     });
   });
 
-  it("shows a live pending question the Gateway no longer knows as dropped by a restart", async () => {
+  it("revives a presumed-dropped question when the restarted Gateway restores it", async () => {
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "question.list") {
         return { questions: [] };
@@ -613,6 +613,10 @@ describe("refreshPendingQuestions", () => {
       submitting: false,
       error: null,
     });
+    // Restart resume restores the carried question after this client reconnected.
+    expect(requestQuestion(state)).toBe(true);
+    expectPrompt(state, { status: "pending" });
+    expect(state.prompts.get("question-1")).not.toHaveProperty("resolvedBy");
   });
 
   it("stops retrying an unmatched resolution after its gateway tombstone ages out", async () => {

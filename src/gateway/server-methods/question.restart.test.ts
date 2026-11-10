@@ -25,6 +25,7 @@ async function restartGateway() {
   support.replaceQuestionManager(new QuestionManager(createTestGatewayScheduler()));
   const context = createContext([], () => cfg);
   context.questionManager = support.manager;
+  context.broadcast = support.broadcast;
   await resumeMarkedSessions({ context, signal: new AbortController().signal, log: { warn() {} } });
 }
 
@@ -62,6 +63,12 @@ it("keeps an ordinary question answerable across restarts and continues the sess
     expect((await support.callQuestionRpc("question.list", {}))[1]).toMatchObject({
       questions: [{ id, status: "pending" }],
     });
+    // Clients that reconnected before restore learn the question is answerable again.
+    expect(support.broadcast).toHaveBeenLastCalledWith(
+      "question.requested",
+      expect.objectContaining({ id, status: "pending" }),
+      expect.objectContaining({ questionRecipient: expect.any(Function) }),
+    );
     // The generic restart resume turn is skipped while the question waits.
     expect(enqueue).not.toHaveBeenCalled();
     const answer = { id, answers: { answers: { destination: ["Paris"] } } };

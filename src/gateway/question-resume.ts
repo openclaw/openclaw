@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
 import type { ResumableQuestion } from "./question-manager.js";
+import { questionBroadcastOptions } from "./question-session-access.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
@@ -42,7 +43,11 @@ export function markerQuestions(
   );
 }
 
-/** Restores a restart marker's questions; true when any now waits to continue the session. */
+/**
+ * Restores a restart marker's questions; true when any now waits to continue the session.
+ * Clients that reconnected before this ran saw the question as missing, so it is announced
+ * again to the recipients the original request would reach.
+ */
 export function restoreMarkerQuestions(
   context: GatewayRequestContext,
   session: AskingSession,
@@ -58,6 +63,21 @@ export function restoreMarkerQuestions(
       continue;
     }
     restored = true;
+    const cfg = context.getRuntimeConfig();
+    let publishing = true;
+    const recipients = questionBroadcastOptions({
+      observation: manager.observe(record.id, record),
+      expectedRecord: record,
+      cfg,
+      isPublishing: () => publishing,
+    });
+    context.broadcast("question.requested", record, {
+      ...(cfg.gateway?.roles
+        ? { sessionKeys: [session.sessionKey], agentId: session.agentId }
+        : {}),
+      ...recipients,
+    });
+    publishing = false;
   }
   return restored;
 }
