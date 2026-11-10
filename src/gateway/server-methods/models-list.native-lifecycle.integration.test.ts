@@ -7,6 +7,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
@@ -27,12 +28,15 @@ const modelRow = (provider: string, id: string) => expect.objectContaining({ pro
 const coordinatorRoots = createSuiteTempRootTracker({ prefix: "native-catalog-coordinator-" });
 beforeAll(() => coordinatorRoots.setup());
 beforeEach(async () => {
+  // Test RPC demand independently of the advisory default-model startup warmup.
+  vi.spyOn(preparedModelCatalog, "prewarmDefaultNativeModelCatalog").mockResolvedValue(undefined);
   // Auth refresh writes config; its handoff lease must not use the operator's coordinator.
   vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
     await coordinatorRoots.make("coordinator"),
   );
 });
 afterAll(async () => {
+  vi.mocked(preparedModelCatalog.prewarmDefaultNativeModelCatalog).mockRestore();
   vi.mocked(tmpDirOwner.resolvePreferredOpenClawTmpDir).mockRestore();
   await coordinatorRoots.cleanup();
 });
