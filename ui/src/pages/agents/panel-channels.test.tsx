@@ -22,6 +22,32 @@ function snapshot(): ChannelsStatusSnapshot {
   };
 }
 
+function mountChannels(
+  channels: ReturnType<typeof createChannelCapability>,
+  onRefresh: () => void,
+) {
+  return mountSolid(() => {
+    const source = projectChannels(channels);
+    return (
+      <AgentChannels
+        context={{
+          workspace: "default",
+          model: "—",
+          runtime: "pi",
+          identityName: "Main",
+          identityAvatar: "—",
+          skillsLabel: "all skills",
+          isDefault: true,
+        }}
+        configForm={null}
+        readState={source.read}
+        onRefresh={onRefresh}
+        onSelectPanel={() => undefined}
+      />
+    );
+  });
+}
+
 it("retains cached channels through retry and retires feedback with the connection", async () => {
   const failed = createDeferred<ChannelsStatusSnapshot>();
   const recovered = createDeferred<ChannelsStatusSnapshot>();
@@ -40,27 +66,8 @@ it("retains cached channels through retry and retires feedback with the connecti
   const channels = createChannelCapability(fixture.gateway);
   await channels.refresh();
   let pending: Promise<void> | undefined;
-  const mounted = mountSolid(() => {
-    const source = projectChannels(channels);
-    return (
-      <AgentChannels
-        context={{
-          workspace: "default",
-          model: "—",
-          runtime: "pi",
-          identityName: "Main",
-          identityAvatar: "—",
-          skillsLabel: "all skills",
-          isDefault: true,
-        }}
-        configForm={null}
-        readState={source.read}
-        onRefresh={() => {
-          pending = channels.refresh();
-        }}
-        onSelectPanel={() => undefined}
-      />
-    );
+  const mounted = mountChannels(channels, () => {
+    pending = channels.refresh();
   });
   const refresh = () =>
     Array.from(mounted.container.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -130,6 +137,75 @@ it("retains cached channels through retry and retires feedback with the connecti
   } finally {
     for (const read of reads) {
       read.resolve(snapshot());
+    }
+    mounted.unmount();
+    channels.dispose();
+  }
+});
+
+it("shows empty channels only after an accepted snapshot, not an unloaded or failed read", async () => {
+  const reads = Array.from({ length: 4 }, () => createDeferred<ChannelsStatusSnapshot>());
+  const responses = reads.map((read) => read.promise);
+  const fixture = createApplicationGateway();
+  fixture.publish({
+    ...fixture.gateway.snapshot,
+    client: createTestGatewayClient(() => responses.shift()),
+    phase: "connected",
+    hello: gatewayHelloForMethods(["channels.status"], ["operator.read"]),
+  });
+  const channels = createChannelCapability(fixture.gateway);
+  let pending: Promise<void> | undefined;
+  const mounted = mountChannels(channels, () => {
+    pending = channels.refresh();
+  });
+  const refresh = () => mounted.getByRole("button", { name: "Refresh" });
+  const empty = {
+    ...snapshot(),
+    channelOrder: [],
+    channelLabels: {},
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+  };
+  const expectPresentation = (hasEmpty: boolean, info: string | null) => {
+    expect.soft(mounted.queryByText("No channels yet.") !== null).toBe(hasEmpty);
+    expect.soft(mounted.container.querySelector(".callout.info")?.textContent ?? null).toBe(info);
+    expect(mounted.getByRole("heading", { name: "Agent context" })).toBeDefined();
+  };
+  try {
+    expectPresentation(false, "Load channels to see live status.");
+    refresh().click();
+    await waitForSolid(() => expect(refresh().getAttribute("aria-busy")).toBe("true"));
+    expectPresentation(false, "Loading…");
+    for (const [index, message] of [
+      "Synthetic channel status unavailable",
+      "Synthetic channel status denied",
+    ].entries()) {
+      reads[index]!.reject(new Error(message));
+      await pending;
+      await waitForSolid(() => expect(mounted.getByRole("alert").textContent).toBe(message));
+      expectPresentation(false, null);
+      refresh().click();
+      await waitForSolid(() => expect(refresh().getAttribute("aria-busy")).toBe("true"));
+      expectPresentation(false, null);
+    }
+    reads[2]!.resolve(empty);
+    await pending;
+    await waitForSolid(() => expect(mounted.queryByRole("alert")).toBeNull());
+    expectPresentation(true, null);
+    const emptyNode = mounted.getByText("No channels yet.");
+    refresh().click();
+    await waitForSolid(() => expect(refresh().getAttribute("aria-busy")).toBe("true"));
+    expectPresentation(true, null);
+    reads[3]!.reject(new Error("Synthetic channel status unavailable"));
+    await pending;
+    await waitForSolid(() =>
+      expect(mounted.getByRole("alert").textContent).toBe("Synthetic channel status unavailable"),
+    );
+    expectPresentation(true, null);
+    expect(mounted.getByText("No channels yet.")).toBe(emptyNode);
+  } finally {
+    for (const read of reads) {
+      read.resolve(empty);
     }
     mounted.unmount();
     channels.dispose();
