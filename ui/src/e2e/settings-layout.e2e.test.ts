@@ -390,9 +390,9 @@ suite.define(() => {
         await settingsPage.waitFor({ state: "attached" });
         expect(
           await settingsPage.evaluate((element) =>
-            Math.round(Number.parseFloat(getComputedStyle(element).paddingLeft)),
+            Math.round(element.firstElementChild!.getBoundingClientRect().left),
           ),
-          `${route} mobile page-owned inset`,
+          `${route} mobile content column`,
         ).toBe(12);
       }
 
