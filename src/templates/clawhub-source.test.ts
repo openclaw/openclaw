@@ -272,6 +272,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await tempDirs.cleanup();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -691,6 +692,7 @@ describe("verified ClawHub Template source", () => {
     const [first, second] = await Promise.all([install(), install()]);
     expect(first.value).toBe(path.join(stateDir, "templates", "sources", digest));
     expect(second.value).toBe(first.value);
+    expect((await install()).value).toBe(first.value);
   });
 
   it("refuses to reuse a corrupted source at an existing digest path", async () => {
@@ -703,6 +705,46 @@ describe("verified ClawHub Template source", () => {
     await expect(fs.readFile(path.join(first.value, "package.json"), "utf8")).resolves.toBe(
       "corrupted\n",
     );
+  });
+
+  it.each([
+    ["win32", "directory", "reuse"],
+    ["win32", "corrupted", "clawhub_cached_source_mismatch"],
+    ["linux", "directory", "EPERM"],
+    ["win32", "missing", "EPERM"],
+    ["win32", "junction", "EPERM"],
+  ] as const)("handles %s rename EPERM with a %s destination", async (platform, cached, result) => {
+    const { stateDir } = await prepareResolverFixture();
+    const destination = path.join(stateDir, "templates", "sources", digest);
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    if (cached === "junction") {
+      await fs.symlink(fixtureRoot, destination, "junction");
+    } else if (cached !== "missing") {
+      await fs.cp(fixtureRoot, destination, { recursive: true });
+      if (cached === "corrupted") {
+        await fs.writeFile(path.join(destination, "package.json"), "corrupted\n");
+      }
+    }
+    const error = Object.assign(new Error("rename denied"), { code: "EPERM" });
+    vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    vi.spyOn(fs, "rename").mockRejectedValueOnce(error);
+
+    const attempt = installSource(stateDir);
+    if (result === "reuse") {
+      await expect(attempt).resolves.toMatchObject({ value: destination });
+    } else if (result === "EPERM") {
+      await expect(attempt).rejects.toBe(error);
+    } else {
+      await expectCode(attempt, result);
+    }
+    if (cached === "missing") {
+      await expectMissing(destination);
+    } else {
+      await expect(fs.readFile(path.join(destination, "package.json"), "utf8")).resolves.toBe(
+        cached === "corrupted" ? "corrupted\n" : packageJson(),
+      );
+      expect((await fs.lstat(destination)).isSymbolicLink()).toBe(cached === "junction");
+    }
   });
 
   it("binds artifact identity, resolver digest, and downloaded bytes before extraction", async () => {
