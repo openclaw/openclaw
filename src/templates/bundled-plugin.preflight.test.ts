@@ -31,8 +31,8 @@ vi.mock("../process/exec.js", async (original) => {
   };
 });
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(async () => {
-  await closeOpenClawStateDatabaseForTest();
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   io.run.mockReset();
 });
@@ -177,15 +177,18 @@ it.each([false, true])(
         expect(result.warning).toContain(
           "[WARN] dependency-rule: Dependency evidence (index.js:1)",
         );
-        if (sourceWarning)
+        if (sourceWarning) {
           expect(result.warning).toContain("[WARN] source-rule: Source evidence (index.js:1)");
+        }
       }
       expect(installedDependencies).toBe(1);
       expect(success).not.toHaveBeenCalled();
       expect(await fs.readdir(env.OPENCLAW_STATE_DIR)).not.toContain("extensions");
       expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe(configText);
       const validated = await validateTemplateProject(root);
-      if (!validated.ok) throw new Error(JSON.stringify(validated.diagnostics));
+      if (!validated.ok) {
+        throw new Error(JSON.stringify(validated.diagnostics));
+      }
       const plan = await buildTemplateAddPlan({
         ...validated.template,
         bundledSources: validated.template.snapshot.bundledSources,
