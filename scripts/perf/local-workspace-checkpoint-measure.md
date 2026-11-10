@@ -77,12 +77,15 @@ phase includes worker dispatch; `withStagedWorkerWorkspaceManifest` contains
 Git and container processes. Native Linux runs also report the measured-window
 `cpu.stat` usage delta for the rig's cgroup and descendants, including Node
 workers, native helpers, Git, Podman, and the guest. Use an exclusively owned
-cgroup; the report records its namespace membership and CPU limit. Allocation
-excludes workers and children and requires a runtime exposing V8's
+cgroup; the report records its namespace membership and CPU limit. Main-isolate
+allocation excludes workers and children and requires a runtime exposing V8's
 `total_allocated_bytes` counter, such as Node 26.12.1.
 
 Run a separate `--instrument allocation` pass per source for sampled allocation
-and a CPU profile saved beside the report as `<report>.cpuprofile`. Do not compare
+and a CPU profile saved beside the report as `<report>.cpuprofile`. Native allocation
+passes also sample worker heap counters outside the CPU/latency window and report
+matched-thread allocation deltas, worker starts/exits, and unavailable or unmatched
+samples. Exited workers are not silently counted as zero allocation. Do not compare
 instrumented timings against the plain timing arms. Report aggregate process and
 main-thread CPU separately, and retain raw samples so phase overlap and outliers
 remain inspectable.

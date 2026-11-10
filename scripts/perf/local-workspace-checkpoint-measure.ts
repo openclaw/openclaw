@@ -443,7 +443,7 @@ const observeWorker = (worker: Worker) => {
     workers.delete(worker);
   });
 };
-if (values.instrument === "retention" || serialTurns) {
+if (values.instrument === "retention" || values.instrument === "allocation" || serialTurns) {
   if (values.instrument === "retention") {
     assert(globalThis.gc, "Retention samples require --expose-gc");
   }
@@ -464,6 +464,39 @@ const sampleWorkerAllocation = async () => {
   } finally {
     clearInterval(keepAlive);
   }
+};
+const summarizeWorkerAllocation = (
+  before: Awaited<ReturnType<typeof sampleWorkerAllocation>>,
+  after: Awaited<ReturnType<typeof sampleWorkerAllocation>>,
+  started: number,
+  exited: number,
+) => {
+  const matched = after.flatMap((sample) => {
+    const previous = before.find((entry) => entry.threadId === sample.threadId);
+    if (previous?.bytes == null || sample.bytes == null) {
+      return [];
+    }
+    assert(sample.bytes >= previous.bytes, "Worker allocation counter must be monotonic");
+    return [{ threadId: sample.threadId, allocatedBytes: sample.bytes - previous.bytes }];
+  });
+  return {
+    before,
+    after,
+    started,
+    exited,
+    matched,
+    matchedAllocatedBytes: matched.reduce((sum, sample) => sum + sample.allocatedBytes, 0),
+    unavailableBefore: before.filter((sample) => sample.bytes == null).length,
+    unavailableAfter: after.filter((sample) => sample.bytes == null).length,
+    unmatchedBefore: before.filter(
+      (sample) => !after.some((entry) => entry.threadId === sample.threadId),
+    ).length,
+    unmatchedAfter: after.filter(
+      (sample) => !before.some((entry) => entry.threadId === sample.threadId),
+    ).length,
+    accounting:
+      "Samples are outside CPU/latency timing. Delta covers only workers sampled at both boundaries; new-worker values are lifetime totals. Exited or unavailable workers are unmeasured.",
+  };
 };
 const collectRetainedMemory = async () => {
   assert(globalThis.gc, "Retention samples require --expose-gc");
@@ -1625,23 +1658,12 @@ measurement: try {
         gitOperations,
         workerAllocation:
           workerAllocationBefore && workerAllocationAfter
-            ? {
-                before: workerAllocationBefore,
-                after: workerAllocationAfter,
-                started: workerStarts - workerStartsBefore,
-                exited: workerExits - workerExitsBefore,
-                matchedAllocatedBytes: workerAllocationAfter.reduce((sum, after) => {
-                  const before = workerAllocationBefore.find(
-                    (entry) => entry.threadId === after.threadId,
-                  );
-                  return (
-                    sum +
-                    (before?.bytes != null && after.bytes != null ? after.bytes - before.bytes : 0)
-                  );
-                }, 0),
-                accounting:
-                  "Delta covers only workers sampled at both boundaries; new-worker values are lifetime totals. Exited or unavailable workers are unmeasured.",
-              }
+            ? summarizeWorkerAllocation(
+                workerAllocationBefore,
+                workerAllocationAfter,
+                workerStarts - workerStartsBefore,
+                workerExits - workerExitsBefore,
+              )
             : undefined,
         eventLoopP99Ms: loop.percentile(99) / 1e6,
         eventLoopMaxMs: loop.max / 1e6,
@@ -2115,6 +2137,10 @@ measurement: try {
     }
   });
   observer.observe({ entryTypes: ["gc"] });
+  const nativeWorkerAllocationBefore =
+    nativeTurns && values.instrument === "allocation" ? await sampleWorkerAllocation() : undefined;
+  const nativeWorkerStartsBefore = workerStarts,
+    nativeWorkerExitsBefore = workerExits;
   const readCgroupCpuUs = () => {
     const usage = /^usage_usec (\d+)$/m.exec(fs.readFileSync("/sys/fs/cgroup/cpu.stat", "utf8"));
     assert(usage, "cgroup v2 CPU accounting must expose usage_usec");
@@ -2198,8 +2224,8 @@ measurement: try {
   }
   const cleanupSettlementStarted = performance.now();
   if (nativeTurns) {
-    // The same lease settles bounded cleanup after acceptance. Include its CPU
-    // in every arm without adding the tail to individual command latency.
+    // Settle the instrumented native removals and deferred kernel cleanup after acceptance.
+    // Include their CPU without adding the tail to individual command latency.
     await settleCheckpointCleanup();
   }
   const cleanupSettlementMs = performance.now() - cleanupSettlementStarted;
@@ -2223,6 +2249,18 @@ measurement: try {
         }),
       )
     : undefined;
+  const nativeWorkerAllocationAfter = nativeWorkerAllocationBefore
+    ? await sampleWorkerAllocation()
+    : undefined;
+  const nativeWorkerAllocation =
+    nativeWorkerAllocationBefore && nativeWorkerAllocationAfter
+      ? summarizeWorkerAllocation(
+          nativeWorkerAllocationBefore,
+          nativeWorkerAllocationAfter,
+          workerStarts - nativeWorkerStartsBefore,
+          workerExits - nativeWorkerExitsBefore,
+        )
+      : undefined;
   await waitForDiagnosticEventsDrained();
   stopLeaseDiagnostics();
   stopRpcDiagnostics();
@@ -2324,6 +2362,7 @@ measurement: try {
     allocatedBytesPerRequest: allocatedBytes / requests,
     allocationAccounting:
       "main-isolate V8 total allocated bytes, including background work; excludes workers",
+    workerAllocation: nativeWorkerAllocation,
     reusedFixture: reuseFixture,
     revision: values.revision ?? "candidate",
     instrument: values.instrument,
