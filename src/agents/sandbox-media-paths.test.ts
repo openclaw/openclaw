@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readOutboundMediaFile } from "../media/bounded-read-file.js";
+import { resolveStagedInputMediaPaths } from "../media/staged-inputs.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -83,6 +84,30 @@ describe("createSandboxBridgeReadFile", () => {
       resolved: "/tmp/sandbox-root/media/inbound/photo.png",
       rewrittenFrom: "media://inbound/photo.png",
     });
+  });
+
+  it("fails as before when two staged facts share one media:// ref", async () => {
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => containerPath(filePath));
+    // Both staged copies exist, so only the ambiguity rule can reject the ref.
+    const stat = vi.fn<SandboxFsBridge["stat"]>(async ({ filePath }) =>
+      filePath.includes("openclaw-staged-") ? { type: "file", size: 1, mtimeMs: 1 } : null,
+    );
+    await expect(
+      resolveSandboxedBridgeMediaPath({
+        sandbox: {
+          ...sandbox({ resolvePath, stat }),
+          stagedMediaPaths: resolveStagedInputMediaPaths(
+            ["a", "b"].map((id) => ({
+              path: `media/inbound/openclaw-staged-${id.repeat(8)}-0000-4000-8000-000000000000/input-a.png`,
+              url: "media://inbound/a.png",
+              staged: true,
+            })),
+          ),
+        },
+        mediaPath: "media://inbound/a.png",
+        inboundFallbackDir: "media/inbound",
+      }),
+    ).rejects.toThrow("Sandbox media reference is not staged: media://inbound/a.png");
   });
 });
 

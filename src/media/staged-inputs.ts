@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { compileFunction } from "node:vm";
 import { root as fsRoot, sanitizeUntrustedFileName, type Root } from "../infra/fs-safe.js";
+import { parseInboundMediaUri } from "./inbound-media-uri.js";
 import type { MediaFact } from "./media-facts.js";
 
 /** Existing per-file allowance for staging task inputs. */
@@ -105,7 +106,19 @@ export function stagedInputFileName(name: string): string {
   return sanitizeUntrustedFileName(`input-${name}`, "input-attachment");
 }
 
-/** Maps producer-stamped upload handles to exact private paths for the current turn. */
+/** The staged fact's canonical `media://inbound/<id>` URL, if it names one. */
+function stagedInputMediaUri(fact: MediaFact): string | undefined {
+  try {
+    return fact.url ? parseInboundMediaUri(fact.url)?.normalizedSource : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Maps producer-stamped upload handles and the managed media:// URIs of staged inputs to
+ * exact private paths for the current turn.
+ */
 export function resolveStagedInputMediaPaths(
   media: readonly MediaFact[] | undefined,
 ): ReadonlyMap<string, string> {
@@ -121,11 +134,15 @@ export function resolveStagedInputMediaPaths(
       continue;
     }
     const fileName = fact.path.slice(prefix.length);
-    if (!/^file_[^/\\]+$/u.test(fileName)) {
-      continue;
+    const aliases: string[] = [];
+    if (/^file_[^/\\]+$/u.test(fileName)) {
+      const extension = path.posix.extname(fileName);
+      aliases.push(fileName, ...(extension ? [fileName.slice(0, -extension.length)] : []));
     }
-    const extension = path.posix.extname(fileName);
-    const aliases = extension ? [fileName, fileName.slice(0, -extension.length)] : [fileName];
+    const mediaUri = stagedInputMediaUri(fact);
+    if (mediaUri) {
+      aliases.push(mediaUri);
+    }
     for (const alias of aliases) {
       if (ambiguous.has(alias)) {
         continue;
