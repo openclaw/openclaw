@@ -22,7 +22,9 @@ import kotlin.math.roundToInt
 private const val DEFAULT_PHOTOS_LIMIT = 1
 private const val DEFAULT_PHOTOS_MAX_WIDTH = 1600
 private const val DEFAULT_PHOTOS_QUALITY = 0.85
-private const val MAX_TOTAL_BASE64_CHARS = 340 * 1024
+
+// Twenty photos stay below 6 MiB of base64, leaving room for the RPC envelope
+// within the native 16 MiB and Gateway 25 MiB WebSocket limits.
 private const val MAX_PER_PHOTO_BASE64_CHARS = 300 * 1024
 
 internal data class PhotosLatestRequest(
@@ -57,18 +59,12 @@ private class SystemPhotosDataSource(
     val rows = queryLatestRows(resolver, request.limit)
     if (rows.isEmpty()) return emptyList()
 
-    var remainingBudget = MAX_TOTAL_BASE64_CHARS
     val out = mutableListOf<EncodedPhotoPayload>()
     for (row in rows) {
-      if (remainingBudget <= 0) break
       val bitmap = decodeScaledBitmap(resolver, row.uri, request.maxWidth) ?: continue
       try {
-        // Enforce both per-photo and total payload budgets before returning
-        // base64 data through the gateway invoke response.
         val encoded = encodeJpegUnderBudget(bitmap, request.quality)
         if (encoded == null) continue
-        if (encoded.base64.length > remainingBudget) break
-        remainingBudget -= encoded.base64.length
         out += encoded.copy(createdAt = row.createdAtMs?.let { Instant.ofEpochMilli(it).toString() })
       } finally {
         bitmap.recycle()

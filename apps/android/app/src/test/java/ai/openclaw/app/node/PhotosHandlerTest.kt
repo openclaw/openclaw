@@ -102,6 +102,28 @@ class PhotosHandlerTest : NodeHandlerRobolectricTest() {
   }
 
   @Test
+  fun handlePhotosLatest_returnsEveryRequestedPhotoWhenTheBatchIsLarge() {
+    val rows = (1L..3L).map { id -> TestPhotoRow(id, dateTakenMs = id * 1_000, dateAddedSeconds = id, width = 800, height = 600, noisy = true) }
+    val handler = systemPhotosHandler(*rows.toTypedArray())
+
+    val result = handler.handlePhotosLatest("""{"limit":3}""")
+
+    val photos =
+      Json
+        .parseToJsonElement(result.payloadJson ?: error("missing payload"))
+        .jsonObject
+        .getValue("photos")
+        .jsonArray
+        .map { it.jsonObject }
+    assertEquals(3, photos.size)
+    // Each noisy photo encodes to over half of the former 340 KiB batch budget.
+    photos.forEach { photo ->
+      val base64 = photo.getValue("base64").jsonPrimitive.content
+      assertTrue(base64.length > 170 * 1024)
+    }
+  }
+
+  @Test
   fun handlePhotosLatest_usesAddedTimeWhenCaptureMetadataIsMissing() {
     val handler =
       systemPhotosHandler(
@@ -296,6 +318,7 @@ private data class TestPhotoRow(
   val width: Int = 640,
   val height: Int = 32,
   val orientation: Int? = null,
+  val noisy: Boolean = false,
 )
 
 private class TestPhotoStore(
@@ -325,6 +348,12 @@ private class TestPhotoStore(
       val image = File.createTempFile("photos-handler-${row.id}-", ".jpg", context.cacheDir)
       val bitmap =
         Bitmap.createBitmap(row.width, row.height, Bitmap.Config.ARGB_8888).apply {
+          if (row.noisy) {
+            // Random pixels keep JPEG from compressing the photo below the per-photo budget.
+            val random = kotlin.random.Random(row.id)
+            setPixels(IntArray(width * height) { random.nextInt() or 0xFF000000.toInt() }, 0, width, 0, 0, width, height)
+            return@apply
+          }
           eraseColor(Color.RED)
           Canvas(this).apply {
             val paint = Paint()
