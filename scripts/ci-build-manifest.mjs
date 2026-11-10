@@ -147,6 +147,14 @@ const createPluginContractTestShards =
       ];
 const createMatrix = (include) => ({
   include: include.map((row) => {
+    // Project before serialization so direct and late-planned matrices agree.
+    const capacity =
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+        ? resolveBoatNodeTestCapacity(row.runner, row.check_name)
+        : undefined;
+    if (capacity) {
+      return { ...row, runner: capacity.runner, runner_label: capacity.runner };
+    }
     const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
     return label ? { ...row, runner_label: label } : row;
   }),
@@ -2004,21 +2012,6 @@ const manifest = {
       : [],
   ),
 };
-
-// Project matrix runners before counting physical hosted rows. Logical groups stay unchanged.
-if (process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat") {
-  for (const value of Object.values(manifest)) {
-    if (value && typeof value === "object" && Array.isArray(value.include)) {
-      for (const row of value.include) {
-        const capacity = resolveBoatNodeTestCapacity(row.runner, row.check_name);
-        if (capacity) {
-          row.runner = capacity.runner;
-          row.runner_label = capacity.runner;
-        }
-      }
-    }
-  }
-}
 
 // Routing belongs to this workflow, not the frozen target's test planners.
 // Only automatic hybrid first attempts can add optional hosted rows.

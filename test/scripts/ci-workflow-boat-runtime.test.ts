@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -215,3 +216,80 @@ it.each(["boat", "hybrid"] as const)(
     ).toEqual(backend === "boat" ? ["2"] : ["3", "4", "5"]);
   },
 );
+
+it("preserves physical Blacksmith labels in check-shard", () => {
+  const result = runCiManifestFixture({
+    bundledPlanner: true,
+    eventName: "push",
+    changedPaths: ["tsconfig.json"],
+    runnerProfile: "blacksmith",
+    historicalCompatibility: false,
+  });
+  expect(result.status, result.output).toBe(0);
+  const rows = JSON.parse(expectDefined(result.outputs.check_matrix, "check matrix")).include;
+  for (const [task, runner] of [
+    ["npm-lock", "blacksmith-2vcpu-ubuntu-2404"],
+    ["test-types", "blacksmith-4vcpu-ubuntu-2404"],
+  ] as const) {
+    const row = expectDefined(
+      rows.find((candidate: { task: string }) => candidate.task === task),
+      task,
+    );
+    expect(
+      evaluateWorkflowExpression(readCiWorkflow().jobs["check-shard"]["runs-on"], {
+        eventName: "push",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "blacksmith",
+        preflightOutputs: result.outputs,
+        matrix: row,
+      }),
+    ).toBe(runner);
+  }
+});
+
+it("routes materialized late check-plan rows onto Boat", () => {
+  const result = runCiManifestFixture({
+    bundledPlanner: true,
+    checkFamilyScope: true,
+    changedPlannerSource: `
+      import { writeFileSync } from "node:fs";
+      writeFileSync(new URL("./ci-extension-lint-plan.mts", import.meta.url),
+        ${JSON.stringify(`export { resolveCiExtensionLintSelection } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-extension-lint-plan.mts")).href)};\n`)});
+      writeFileSync(new URL("../run-oxlint-shards.mts", import.meta.url),
+        ${JSON.stringify(`export { createExtensionOxlintShards, createOxlintExtensionRootScope, selectExtensionOxlintStripe } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/run-oxlint-shards.mts")).href)};\n`)});
+      export const createChangedNodeTestShards = () => [];
+    `,
+    eventName: "pull_request",
+    changedPaths: ["tsconfig.json"],
+    runnerProfile: "hybrid",
+    historicalCompatibility: false,
+    scopeEnv: {
+      OPENCLAW_CI_RUNNER_BACKEND: "boat",
+      OPENCLAW_CI_NODE_RUNNER_BACKEND: "boat",
+      OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND: "boat",
+    },
+  });
+  expect(result.status, result.output).toBe(0);
+  expect(result.outputs.run_check_plan).toBe("true");
+  const rows = JSON.parse(
+    expectDefined(result.checkPlanOutputs.check_matrix, "late matrix"),
+  ).include;
+  const types = expectDefined(
+    rows.find((row: { task: string }) => row.task === "test-types"),
+    "types",
+  );
+  expect(types.runner).toBe("boat-large");
+  expect(types.runner_label).toBe("boat-large");
+  expect(
+    evaluateWorkflowExpression(readCiWorkflow().jobs["check-shard"]["runs-on"], {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      headRepository: "openclaw/openclaw",
+      runAttempt: 1,
+      runnerBackend: "boat",
+      preflightOutputs: { ...result.outputs, placement_runner_backend: "hybrid" },
+      matrix: types,
+    }),
+  ).toBe("boat-large");
+});
