@@ -1,4 +1,3 @@
-479
-# test lines for picker visibility (PR 194280): +186 own growth plus inherited main
-# debt (293 at last CI measurement). The ratchet requires allocation == total -
-# base ceiling at run time, so this tracks main's un-pruned test-line growth.
+186
+# test lines for picker visibility (PR 194280): own test growth only; CI's
+# prepared ci-ratchet-base folds inherited main debt into its baseline.
