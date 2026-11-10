@@ -10,7 +10,6 @@ import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
-  PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
   PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
   PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
   setupAgentRunnerExecutionTestState,
@@ -132,8 +131,13 @@ describe("executeAgentTurn: provider failures", () => {
     );
     expect(payload).toMatchObject({
       isError: true,
-      text: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
+      text: "⚠️ Couldn't sign in to openai. Sign in again with /login openai or under Models in the Control UI. For now, switch to a working model with /model.",
     });
+    // Chat channels also get tappable sign-in buttons, not just the command.
+    const buttons = payload.presentation?.blocks.flatMap((block) =>
+      block.type === "buttons" ? block.buttons : [],
+    );
+    expect(buttons?.length).toBeGreaterThan(0);
     expect(payload.text).not.toBe(SILENT_REPLY_TOKEN);
     expect(payload.text).not.toContain(rawError);
   });

@@ -482,7 +482,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/temp-path` | Shared temp-download path helpers and private secure temp workspaces. `buildRandomTempFilePath` retains relative `tmpDir` paths and trims an optional `uuid`; blank values generate a UUID, while nonblank values must be safe filename components. `sanitizeTempFileName` adds a suffix to reserved Windows device names, preserving their extension. |
     | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
     | `plugin-sdk/markdown-table-runtime` | Private-local after July 2026; Markdown table mode and conversion helpers |
-    | `plugin-sdk/model-session-runtime` | Model/session override helpers such as `applyModelOverrideToSessionEntry` and `resolveAgentMaxConcurrent` |
+    | `plugin-sdk/model-session-runtime` | Model/session override helpers such as `applyModelOverrideToSessionEntry` and `resolveAgentMaxConcurrent`. Picker adapters pass `authReadinessMenu` to `applySessionModelSelection` to opt in to the shared auth-readiness policy: a selection whose provider has no working sign-in resolves `{ status: "rejected", reason: "auth", authBlock }` before persistence, and the adapter renders `authBlock` with its own sign-in actions. Default selections are never gated. |
     | `plugin-sdk/talk-config-runtime` | Private-local after July 2026; Talk provider config resolution helpers |
     | `plugin-sdk/json-store` | Small JSON state read/write helpers |
     | `plugin-sdk/json-unsafe-integers` | Private-local after July 2026; JSON parsing helpers that preserve unsafe integer literals as strings |

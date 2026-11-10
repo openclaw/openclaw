@@ -26,6 +26,33 @@ export function resolveControlUiLinkLocation(
   };
 }
 
+/**
+ * Model Providers settings URL safe to advertise in chat; requires an
+ * explicit public origin. Optionally deep-links to one provider and the
+ * originating agent (`?provider=&agent=`), matching the Control UI's own
+ * cold-link navigation: without the agent the settings page would edit
+ * whichever agent its independent selection already points at.
+ */
+export function resolveControlUiModelProvidersUrl(
+  cfg: ControlUiLinkConfig,
+  providerId?: string,
+  agentId?: string,
+): string | undefined {
+  const location = resolveControlUiLinkLocation(cfg);
+  if (!location) {
+    return undefined;
+  }
+  const search = new URLSearchParams();
+  if (providerId) {
+    search.set("provider", providerId);
+  }
+  if (agentId) {
+    search.set("agent", agentId);
+  }
+  const query = search.size > 0 ? `?${search.toString()}` : "";
+  return `${location.origin}${location.basePath}/settings/model-providers${query}`;
+}
+
 export function resolveControlUiSessionLinkBase(cfg: ControlUiLinkConfig): string | undefined {
   // Session tool descriptions advertise links only when the operator exposes
   // a public Gateway origin and the Control UI can serve those session routes.

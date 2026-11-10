@@ -81,6 +81,30 @@ export function isKnownModelSelectionProvider(params: {
   );
 }
 
+/**
+ * A required worker-inference device profile moves provider access to the node:
+ * the required placement checks the node's model and credentials before the turn
+ * runs, so Gateway credentials do not decide selection. Explicit Gateway account
+ * pins, optional profiles, and Gateway inference keep Gateway checks.
+ */
+export function isProviderAuthOwnedByRequiredWorker(params: {
+  cfg: OpenClawConfig;
+  authProfileOverride?: string;
+}): boolean {
+  if (params.authProfileOverride?.trim()) {
+    return false;
+  }
+  const requiredProfile = params.cfg.cloudWorkers?.requiredProfile;
+  const workerProfile = requiredProfile
+    ? params.cfg.cloudWorkers?.profiles?.[requiredProfile]
+    : undefined;
+  return Boolean(
+    workerProfile &&
+    workerInferenceMetadata({ providerId: workerProfile.provider, profileSnapshot: workerProfile })
+      .inference,
+  );
+}
+
 /** Prepare runtime and capabilities for the selected route before any session mutation. */
 export async function prepareModelSelectionRuntime(params: {
   cfg: OpenClawConfig;
@@ -171,22 +195,12 @@ export async function prepareModelSelectionRuntime(params: {
   if (
     runtime.kind === "set" &&
     runtime.runtime === "openclaw" &&
-    !sessionEntry?.authProfileOverride
+    isProviderAuthOwnedByRequiredWorker({
+      cfg: params.cfg,
+      authProfileOverride: sessionEntry?.authProfileOverride,
+    })
   ) {
-    const requiredProfile = params.cfg.cloudWorkers?.requiredProfile;
-    const workerProfile = requiredProfile
-      ? params.cfg.cloudWorkers?.profiles?.[requiredProfile]
-      : undefined;
-    // Mandatory worker-local turns validate provider access on the node.
-    if (
-      workerProfile &&
-      workerInferenceMetadata({
-        providerId: workerProfile.provider,
-        profileSnapshot: workerProfile,
-      }).inference
-    ) {
-      needsRuntimeChoice = false;
-    }
+    needsRuntimeChoice = false;
   }
   if (needsRuntimeChoice) {
     const { preparePublishedModelRuntimeChoice } =

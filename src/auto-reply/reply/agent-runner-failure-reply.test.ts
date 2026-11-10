@@ -4,6 +4,7 @@ import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js
 import { ContextPreparationTimeoutError } from "../../agents/failover/local-preparation-error.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import { ProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
@@ -72,6 +73,46 @@ it("uses typed runtime guidance without exposing the private diagnostic", () => 
     text: "⚠️ Codex execution node disconnected. Start a fresh attempt.",
     isGenericRunnerFailure: false,
   });
+});
+
+it("tells the user to sign in when the selected provider has no credential", () => {
+  const message = 'No API key found for provider "meta". Configure an API key (paste-api-key).';
+  const expectedText =
+    "⚠️ meta isn't signed in yet. Sign in with /login meta or under Models in the Control UI. For now, switch to a working model with /model.";
+  const direct = new ProviderAuthError("missing-provider-auth", "meta", message);
+  const directReply = externalReply(direct);
+  expect(directReply.text).toBe(expectedText);
+  expect(directReply.isGenericRunnerFailure).toBe(false);
+  // Chat clients get tappable sign-in buttons, not just a typed command.
+  const buttonCommands = (directReply.presentation?.blocks ?? []).flatMap((block) =>
+    block.type === "buttons"
+      ? block.buttons.map((button) => {
+          const action = button.action;
+          return action?.type === "command" ? action.command : "";
+        })
+      : [],
+  );
+  expect(buttonCommands.length).toBeGreaterThan(0);
+  expect(buttonCommands[0]).toMatch(/^\/login meta/u);
+
+  const wrapped = new FailoverError(message, {
+    reason: "auth",
+    provider: "meta",
+    model: "muse-spark-1.3",
+    cause: direct,
+  });
+  expect(externalReply(wrapped).text).toBe(expectedText);
+  expect(externalReply(wrapped).isGenericRunnerFailure).toBe(false);
+
+  // Failover attempts keep only strings; provider+reason facts must still reach guidance.
+  const flattened = new FailoverError(message, {
+    reason: "auth",
+    provider: "meta",
+    model: "muse-spark-1.3",
+    attempts: [{ provider: "meta", model: "muse-spark-1.3", reason: "auth", error: message }],
+  });
+  expect(externalReply(flattened).text).toContain("/login meta");
+  expect(externalReply(flattened).isGenericRunnerFailure).toBe(false);
 });
 
 it("does not trust provider codes as runtime coordination provenance", () => {
