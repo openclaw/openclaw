@@ -249,7 +249,7 @@ suite.define(() => {
         await expect.poll(() => name.inputValue()).toBe("Original name");
         if (surface !== "menu") {
           expect(
-            await name.evaluate((element) => ({
+            await name.evaluate((element: HTMLInputElement) => ({
               focused: element === document.activeElement,
               selection: [element.selectionStart, element.selectionEnd],
               insideLink: Boolean(element.closest("a")),
