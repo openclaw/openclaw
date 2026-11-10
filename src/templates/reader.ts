@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
+import { inspectTemplateBundledPlugin } from "./bundled-plugin-metadata.js";
 import { inspectTemplateBundledSkill } from "./bundled-skill-metadata.js";
 import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
 import { templateDependencyInventory } from "./dependency-inventory.js";
@@ -460,7 +461,11 @@ export async function readTemplateManifestFile(path: string): Promise<TemplateRe
       const identity =
         dependency.kind === "skill"
           ? inspectTemplateBundledSkill(resolvedSource.packageRoot, dependency.path, snapshot)
-          : undefined;
+          : await inspectTemplateBundledPlugin(
+              resolvedSource.packageRoot,
+              dependency.path,
+              snapshot,
+            );
       bundledSources.push({
         kind: dependency.kind,
         path: dependency.path,

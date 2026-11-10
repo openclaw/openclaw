@@ -1,0 +1,2 @@
+194
+# Native artifact-to-Add plugin proof, consent/policy, unchanged reuse, conflict preservation and cleanup; plus source-discriminated Gateway review fixture.
