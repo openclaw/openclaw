@@ -147,7 +147,12 @@ try {
       entries: { main: { workspace: instance.state.workspaceDir } },
     },
     models: { providers: { [provider.providerId]: provider.config } },
-    plugins: { enabled: false },
+    // The plugin scenario starts with the subsystem on and Advisor off, so the patch
+    // performs the same activation as the Labs switch.
+    plugins:
+      values.change === "plugin"
+        ? { enabled: true, allow: ["advisor"], entries: { advisor: { enabled: false } } }
+        : { enabled: false },
     skills: { load: { watch: false } },
     tools: { allow: ["automations"], codeMode: { enabled: false }, toolSearch: false },
     cron: { enabled: true },
@@ -200,6 +205,15 @@ try {
     jobs.map((job) => client!.request<CronJob>("cron.get", { id: job.id })),
   );
   console.log("Two preparation gates held");
+  const advisorState = async () =>
+    (
+      await client!.request<{ plugins: Array<{ id: string; runtime?: { state?: string } }> }>(
+        "plugins.list",
+        {},
+      )
+    ).plugins.find((plugin) => plugin.id === "advisor")?.runtime?.state;
+  const advisorBefore = values.change === "plugin" ? await advisorState() : undefined;
+  assert.notEqual(advisorBefore, "active", "Advisor must start inactive");
   const config = await client.request<{ hash: string }>("config.get", {});
   const patchStarted = performance.now();
   const patch = await client.request(
@@ -211,6 +225,10 @@ try {
     { timeoutMs: 90_000 },
   );
   const patchMs = performance.now() - patchStarted;
+  if (values.change === "plugin") {
+    await wait(async () => (await advisorState()) === "active", "Advisor activation");
+  }
+  const advisorAfter = values.change === "plugin" ? await advisorState() : undefined;
   hold = false;
   for (const response of held.splice(0)) {
     response.end("patched");
@@ -238,6 +256,8 @@ try {
     before,
     patch,
     patchMs,
+    advisorBefore,
+    advisorAfter,
     outcomes,
     after,
     requests,
