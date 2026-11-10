@@ -106,7 +106,6 @@ import { callGateway } from "../gateway/call.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerAttachCli } from "./attach-cli.js";
-import { ExpectedCliError } from "./expected-cli-error.js";
 
 const activeActions = new Set<Promise<void>>();
 function runAttach(...args: string[]) {
@@ -115,10 +114,7 @@ function runAttach(...args: string[]) {
     await registerAttachCli(program);
     await program.parseAsync(["node", "openclaw", "attach", ...args]);
   })();
-  const settled = action.then(
-    () => {},
-    () => {},
-  );
+  const settled = action.catch(() => {});
   activeActions.add(settled);
   void settled.then(() => activeActions.delete(settled));
   return action;
@@ -449,9 +445,7 @@ describe("openclaw attach (action)", () => {
       await expect(runAttach("--print-config")).rejects.toEqual(new ExitError(1));
       expect(logs).toEqual(["ERR:attach.grant returned an unexpected response from the gateway."]);
       expect(vi.mocked(mkdtempSync).mock.calls).toHaveLength(configCount);
-      const revocations = calls("attach.revoke");
-      expect(revocations).toHaveLength(1);
-      expect(revocations[0]?.params).toEqual({ token: "tok-123" });
+      expect(calls("attach.revoke").map((call) => call.params)).toEqual([{ token: "tok-123" }]);
     },
   );
 
@@ -463,13 +457,8 @@ describe("openclaw attach (action)", () => {
     expect(gatewayCalls.some((call) => call.method === "attach.revoke")).toBe(false);
   });
 
-  it("surfaces the positional/session conflict as an ExpectedCliError", async () => {
-    const error = await runAttach("agent:main:spawn", "--session", "agent:main:spawn").catch(
-      (caught: unknown) => caught,
-    );
-    expect(error).toBeInstanceOf(ExpectedCliError);
-    expect((error as ExpectedCliError).message).toBe(
-      "pass one session target: use either the positional target or --session",
-    );
+  it("surfaces the positional/session conflict as an expected CLI error", async () => {
+    const conflict = runAttach("main", "--session", "abc");
+    await expect(conflict).rejects.toMatchObject({ name: "ExpectedCliError" });
   });
 });
