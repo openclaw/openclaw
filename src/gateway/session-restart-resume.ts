@@ -575,7 +575,12 @@ async function resumeRestartStore(
             interrupted = Boolean(orphanedRun && !marker);
             return {
               result: marker ? { entry, marker, parked, skip } : undefined,
-              replacements: [{ sessionKey, entry }],
+              replacements:
+                orphanedRun ||
+                selected.mainRestartRecovery ||
+                entry.resumeAfterRestart !== selected.resumeAfterRestart
+                  ? [{ sessionKey, entry }]
+                  : undefined,
             };
           },
         });
@@ -674,9 +679,7 @@ async function resumeRestartStore(
             await accepted;
             summary.record(agentId, sessionKey, "resumed");
           } catch (error) {
-            if (signal.aborted) {
-              throw error;
-            }
+            signal.throwIfAborted();
             summary.record(agentId, sessionKey, "admission-failed");
             await recordRestartResumeFailure({
               target: { ...target, agentId, sessionKey },
@@ -714,9 +717,7 @@ async function resumeRestartStore(
           },
         );
       } catch (error) {
-        if (signal.aborted) {
-          throw error;
-        }
+        signal.throwIfAborted();
         completed = false;
         log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
       } finally {
