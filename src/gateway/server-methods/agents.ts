@@ -340,7 +340,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
               }),
               error: applicationError,
             }
-          : await completeAgentOnboarding(options, result.agentId, result.name)
+          : await completeAgentOnboarding(options, result.agentId)
         : undefined;
       let onboardingOperatorAuthority:
         | Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>

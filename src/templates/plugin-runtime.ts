@@ -20,6 +20,11 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js
 
 export type TemplatePluginRuntimeOptions = OpenClawStateDatabaseOptions & {
   reloadPlugins?: PluginInstallBatchReload;
+  config?: OpenClawConfig;
+  getCurrentConfig?: () => OpenClawConfig;
+  /** Keep the same required owners current before the enclosing installer's later effects. */
+  onPluginRuntimeReady?: (assertCurrent: () => Promise<void>) => void;
+  prepareEffect?: () => Promise<void>;
   assertForwardCurrent?: () => void;
   /** The enclosing requirement phase owns nested package installs and compensation. */
   runtimeBatch?: PluginInstallRuntimeBatch;
@@ -93,11 +98,14 @@ export async function assertTemplatePluginInstallOwnersCurrent(
 
 export async function runTemplatePluginBatch<T>(
   options: TemplatePluginRuntimeOptions,
-  pluginCount: number,
+  pluginIds: readonly string[],
   run: (batch: PluginInstallRuntimeBatch | undefined) => Promise<T>,
   runtimeFailure: (failure: unknown, operation: Result<T, unknown>) => Error,
 ): Promise<T> {
-  if (pluginCount > MAX_PLUGIN_RELOAD_TARGETS && (options.reloadPlugins || options.runtimeBatch)) {
+  if (
+    pluginIds.length > MAX_PLUGIN_RELOAD_TARGETS &&
+    (options.reloadPlugins || options.runtimeBatch)
+  ) {
     throw new Error(
       `A live Template requirement batch supports at most ${MAX_PLUGIN_RELOAD_TARGETS} plugin packages. Split the requirement batch before installing.`,
     );
@@ -113,6 +121,7 @@ export async function runTemplatePluginBatch<T>(
     );
   });
   let completed: Result<T, unknown> | undefined;
+  let owners: ReadonlyMap<string, string> | undefined;
   const operation = await withPluginLifecycleLeaseAsync(options, async (lease) => {
     let result: Result<T, unknown>;
     try {
@@ -122,8 +131,11 @@ export async function runTemplatePluginBatch<T>(
     }
     completed = result;
     // The callback has already completed its compensation. Capture final retained owners
-    // before releasing the lease; the Gateway validates those facts again after the gap.
+    // before releasing the lease; this package owner validates them again after activation.
     options.assertForwardCurrent?.();
+    if (result.ok) {
+      owners = await snapshotTemplatePluginInstallOwners(pluginIds, lease);
+    }
     await batch.prepare(lease);
     return result;
   }).catch((error: unknown) => {
@@ -138,6 +150,22 @@ export async function runTemplatePluginBatch<T>(
     const runtime = options.runtime ?? defaultRuntime;
     options.assertForwardCurrent?.();
     const application = await batch.finish((message) => runtime.log(message));
+    const expectedOwners = owners;
+    if (expectedOwners) {
+      await options.prepareEffect?.();
+      const assertRequirementsCurrent = async () => {
+        await withPluginLifecycleLeaseAsync(options, async (lease) => {
+          await assertTemplatePluginInstallOwnersCurrent(expectedOwners, lease);
+          options.assertForwardCurrent?.();
+          const config = options.getCurrentConfig?.() ?? options.config;
+          if (config) {
+            assertTemplatePluginRequirementsEnabled(pluginIds, config);
+          }
+        });
+      };
+      await assertRequirementsCurrent();
+      options.onPluginRuntimeReady?.(assertRequirementsCurrent);
+    }
     if (application) {
       runtime.log(`Plugin requirements applied in Gateway generation ${application.generation}.`);
     }

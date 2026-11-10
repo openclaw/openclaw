@@ -284,6 +284,8 @@ export type GetReplyOptions = {
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
+  /** Trusted installer conversation only; instruction loading still uses the workspace. */
+  deferWorkspaceBootstrap?: true;
   /**
    * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
    * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that

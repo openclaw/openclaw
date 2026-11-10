@@ -597,7 +597,17 @@ export async function withResolvedClawHubSource<T>(
   if (params.coordinate.version !== undefined) {
     requireExactVersion(params.coordinate.version);
   }
-  const detail = await fetchClawHubPackageDetail({ ...params, name: packageName });
+  // Exact releases can fetch independent metadata together; latest needs the catalog version first.
+  const [detail, exactArtifact] = await Promise.all([
+    fetchClawHubPackageDetail({ ...params, name: packageName }),
+    params.coordinate.version === undefined
+      ? Promise.resolve(undefined)
+      : fetchClawHubPackageArtifact({
+          ...params,
+          name: packageName,
+          version: params.coordinate.version,
+        }),
+  ]);
   const pkg = requirePublicTemplatePackage(detail, packageName);
   const version = params.coordinate.version ?? pkg.latestVersion;
   if (!version) {
@@ -607,7 +617,8 @@ export async function withResolvedClawHubSource<T>(
     );
   }
   requireExactVersion(version);
-  const artifact = await fetchClawHubPackageArtifact({ ...params, name: packageName, version });
+  const artifact =
+    exactArtifact ?? (await fetchClawHubPackageArtifact({ ...params, name: packageName, version }));
   const resolvedArtifact = readExactTemplateArtifact(artifact, { packageName, version });
   const expectedSha256 = resolvedArtifact.sha256;
   const trust = await checkClawHubPackageTrust({

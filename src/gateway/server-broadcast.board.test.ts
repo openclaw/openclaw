@@ -665,6 +665,7 @@ describe("operator event scope guards", () => {
     ["talk.voice.change", ["talk", "write", "admin"], true, "talk"],
     ["update.run.changed", ["admin"], false, "admin"],
     ["plugins.install.progress", ["admin"], true, "admin"],
+    ["templates.add.progress", ["admin"], true, "admin"],
     ["device.pair.setup.completed", ["pairing", "admin"]],
   ])("delivers %s only to authorized recipients", (event, allowed, targeted, nodeScope) => {
     const payload = { marker: event };

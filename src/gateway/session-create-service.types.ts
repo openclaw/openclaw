@@ -208,6 +208,8 @@ export type CreateGatewaySessionParams = {
   initialAssistantMessage?: { message: SessionTranscriptAssistantMessage; idempotencyKey?: string };
   /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */
   atomicInitialization?: true;
+  /** Trusted ordinary creation owner retains this pending row for later exact-incarnation completion. */
+  deferInitialization?: true;
   /** Public callers need admin before reconfiguring an adopted keyed session. */
   allowExistingModelSelection?: boolean;
   /** Admitted operator scopes; omitted only by trusted in-process callers. */

@@ -655,6 +655,27 @@ describe("verified ClawHub Template source", () => {
     });
   });
 
+  it("overlaps package and exact-artifact reads while keeping trust before download", async () => {
+    await prepareResolverFixture();
+    const detailRead = Promise.withResolvers<unknown>();
+    const artifactRead = Promise.withResolvers<unknown>();
+    mocks.detail.mockImplementationOnce(() => detailRead.promise);
+    mocks.artifact.mockImplementationOnce(() => artifactRead.promise);
+    const attempt = probeSource();
+    try {
+      expect(mocks.detail).toHaveBeenCalledTimes(1);
+      expect(mocks.artifact).toHaveBeenCalledTimes(1);
+      expect(mocks.trust).not.toHaveBeenCalled();
+      expect(mocks.download).not.toHaveBeenCalled();
+    } finally {
+      detailRead.resolve({ package: officialPackage(), owner: { handle: "openclaw" } });
+      artifactRead.resolve(artifact());
+      await attempt;
+    }
+    expect(mocks.trust).toHaveBeenCalledTimes(1);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps preview ephemeral and persists only after an approved apply asks for it", async () => {
     const { stateDir } = await prepareResolverFixture();
     const preview = await resolveSource({

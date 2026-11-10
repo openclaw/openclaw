@@ -1,21 +1,22 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
   TemplatePluginAcknowledgement,
   TemplateSkillAcknowledgement,
 } from "../../packages/gateway-protocol/src/schema/templates.js";
 import { withCurrentConfigPolicyReader } from "../config/io.runtime.js";
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAgentConfigEntry } from "../gateway/server-methods/agents-config-mutations.js";
 import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
-import {
-  PluginInstallRuntimeBatch,
-  type PluginInstallBatchReload,
-} from "../plugins/install-runtime-batch.js";
+import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
-  type applyTemplateAddPlanStateless,
-  stageTemplateAddHostRequirementsStateless,
+  applyTemplateAddPlanStateless,
+  workspaceIdentity,
   type StatelessTemplateAddOptions,
 } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
@@ -25,6 +26,7 @@ import { digestTemplateValue } from "./digest.js";
 import {
   buildGatewayTemplateAddPlan,
   projectGatewayTemplateAddPlan,
+  selectTemplateAgentWorkspace,
   type GatewayTemplateAddPlanningContext,
 } from "./gateway-add-plan.js";
 import { projectTemplateConfiguredAccess } from "./gateway-disclosure.js";
@@ -32,13 +34,13 @@ import { plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { bindTemplatePluginInstallConsent } from "./gateway-plugin-consent.js";
 import { bindTemplateSkillWarningConsent } from "./gateway-skill-consent.js";
 import { assertTemplatesLabsEnabled } from "./labs-gate.js";
-import { packageFromAction } from "./package-plan-action.js";
-import {
-  assertTemplatePluginInstallOwnersCurrent,
-  assertTemplatePluginRequirementsEnabled,
-  snapshotTemplatePluginInstallOwners,
-} from "./plugin-runtime.js";
+import { assertTemplatePluginRequirementsEnabled } from "./plugin-runtime.js";
 import type { TemplateAddPlan } from "./types.js";
+
+type PreparedAgentChat = (() => Promise<void>) & {
+  assertCurrent?: () => Promise<void>;
+  complete?: () => Promise<void>;
+};
 
 export class TemplateGatewayPlanChangedError extends Error {
   constructor() {
@@ -57,14 +59,11 @@ export class TemplateGatewayPlanBlockedError extends Error {
 export type GatewayTemplateAddApplyResult = {
   agentId: string;
   status: "complete" | "partial";
+  agentRetained?: true;
+  initializationPending?: true;
+  sessionKey?: string;
   readiness: { ready: boolean; requirements: Array<{ kind: string; owner: string }> };
   error?: { code: string; message: string };
-};
-
-type StagedAddHandoff = {
-  stage: Awaited<ReturnType<typeof stageTemplateAddHostRequirementsStateless>>;
-  runtimeBatch?: PluginInstallRuntimeBatch;
-  readiness: GatewayTemplateAddApplyResult["readiness"];
 };
 
 export async function applyTemplateAddForGateway(
@@ -82,11 +81,18 @@ export async function applyTemplateAddForGateway(
     stateDir?: string;
     reloadPlugins?: PluginInstallBatchReload;
     configWriteOptions?: StatelessTemplateAddOptions["configWriteOptions"];
-    waitForAgentRuntime?: () => Promise<void>;
-    cronGateway?: Pick<
-      TemplateCronGateway,
-      "add" | "list" | "waitUntilAgentAvailable" | "writeScratch" | "enable"
-    > &
+    waitForAgentRuntime?: () => Promise<"applied" | "applied-restart-required">;
+    prepareAgentChat?: (
+      agentId: string,
+      config: OpenClawConfig,
+      pending?: { initializationPending: true },
+    ) => Promise<PreparedAgentChat>;
+    admissionConfigWriteOptions?: StatelessTemplateAddOptions["configWriteOptions"];
+    waitForAdmissionRuntime?: () => Promise<"applied" | "applied-restart-required">;
+    onAgentAdmitted?: (agent: { agentId: string; sessionKey: string }) => Promise<void>;
+    onAgentReady?: StatelessTemplateAddOptions["onAgentReady"];
+    onSetupEvent?: StatelessTemplateAddOptions["onSetupEvent"];
+    cronGateway?: Pick<TemplateCronGateway, "add" | "list" | "writeScratch" | "enable"> &
       Partial<Pick<TemplateCronGateway, "get" | "remove">>;
     rollbackNewAgent?: (
       agentId: string,
@@ -98,7 +104,129 @@ export async function applyTemplateAddForGateway(
   input.assertCurrent();
   const stateContext = captureOpenClawStateWorkerContext({ env: input.policyConfig.env });
   let settledResult: GatewayTemplateAddApplyResult | undefined;
+  let readySessionKey: string | undefined;
+  let admitted:
+    | {
+        agentId: string;
+        workspace: string;
+        config: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
+        chat: PreparedAgentChat;
+        workspaceIdentity: string;
+      }
+    | undefined;
+  let initialized = false;
+  const withoutAdmission = (config: OpenClawConfig): OpenClawConfig => {
+    if (!admitted) {
+      return config;
+    }
+    if (!isDeepStrictEqual(config.agents?.entries?.[admitted.agentId], admitted.config)) {
+      throw new Error("The admitted agent changed before Template verification");
+    }
+    const entries = { ...config.agents?.entries };
+    delete entries[admitted.agentId];
+    return { ...config, agents: { ...config.agents, entries } };
+  };
+  const planningContext = async () => {
+    const context = await input.getPlanningContext();
+    return {
+      ...context,
+      config: withoutAdmission(context.config),
+      ...(admitted ? { admittedWorkspace: admitted.workspace } : {}),
+    };
+  };
   try {
+    // A reviewed UI target is an ordinary creation request, not trust in Template bytes.
+    // Local durable identity and an empty guarded chat precede all remote source reads.
+    if (input.agentId && input.prepareAgentChat && input.waitForAgentRuntime) {
+      // Policy discovery has no persistent effects and does not depend on the
+      // deletion lease. Join it before creation, retaining failures through lease cleanup.
+      const admissionContext = input.getPlanningContext().then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      try {
+        await withOpenClawStateLeaseAsync(
+          {
+            scope: "core:agent-deletion",
+            key: normalizeAgentId(input.agentId),
+            leaseMs: 60_000,
+            waitMs: 5_000,
+            heartbeat: "worker",
+            signal: input.signal,
+            leaseLabel: "Template ordinary admission",
+            operationLabel: "template.add.admission",
+          },
+          stateContext,
+          async (lease) => {
+            const assertCurrent = () => {
+              input.assertCurrent();
+              lease.assertCurrent();
+            };
+
+            const preparedContext = await admissionContext;
+            if (!preparedContext.ok) {
+              throw preparedContext.error;
+            }
+            const { config } = preparedContext.value;
+            assertCurrent();
+
+            assertTemplatesLabsEnabled(config);
+            const agentId = normalizeAgentId(input.agentId!);
+            const workspace = await selectTemplateAgentWorkspace(config, agentId);
+
+            let chat: PreparedAgentChat | undefined;
+            let identity = "";
+            const created = await createAgentConfigEntry(
+              {
+                entry: { id: agentId, name: agentId },
+                workspace,
+                deferInitialization: true,
+                beforePersistentApply: assertCurrent,
+                prepareConfigCommit: async (prospective) => {
+                  assertCurrent();
+                  chat = await input.prepareAgentChat!(agentId, prospective, {
+                    initializationPending: true,
+                  });
+                  identity = await workspaceIdentity(workspace);
+                  return { commit: () => {}, rollback: chat };
+                },
+                onCommitted: (result) => {
+                  if (result.status !== "created" || !chat) {
+                    throw new Error("Ordinary admission did not create its target");
+                  }
+                  admitted = {
+                    agentId,
+                    workspace,
+                    chat,
+                    workspaceIdentity: identity,
+                    config: structuredClone(result.config.agents!.entries![agentId]!),
+                  };
+                  readySessionKey = resolveAgentMainSessionKey({ cfg: result.config, agentId });
+                },
+              },
+              input.admissionConfigWriteOptions ?? input.configWriteOptions,
+            );
+            if (created.status !== "created") {
+              throw new Error(
+                created.status === "error" ? created.message : "The requested agent already exists",
+              );
+            }
+
+            const applied = await (input.waitForAdmissionRuntime ?? input.waitForAgentRuntime!)();
+            if (applied !== "applied") {
+              throw new Error(
+                "Ordinary admission requires Gateway recovery; its agent and chat were kept",
+              );
+            }
+            assertCurrent();
+            await input.onAgentAdmitted?.({ agentId, sessionKey: readySessionKey! });
+          },
+        );
+      } finally {
+        await admissionContext;
+      }
+    }
+
     const resolved = await withResolvedClawHubSource({
       coordinate: input.source,
       mode: "apply",
@@ -126,7 +254,7 @@ export async function applyTemplateAddForGateway(
               allocationLease.assertCurrent();
             };
             assertAllocationCurrent();
-            const initialContext = await input.getPlanningContext();
+            const initialContext = await planningContext();
             assertAllocationCurrent();
             const initialPlan = await buildGatewayTemplateAddPlan(source, {
               ...initialContext,
@@ -183,7 +311,11 @@ export async function applyTemplateAddForGateway(
                   settledResult = {
                     agentId: result.agent.finalId,
                     status: result.status,
-                    readiness,
+                    ...(result.agentRetained ? { agentRetained: true } : {}),
+                    ...(admitted && !initialized ? { initializationPending: true } : {}),
+                    ...(readySessionKey ? { sessionKey: readySessionKey } : {}),
+                    readiness:
+                      result.status === "partial" ? { ...readiness, ready: false } : readiness,
                     ...(result.error
                       ? {
                           error: {
@@ -197,29 +329,6 @@ export async function applyTemplateAddForGateway(
                   };
                   return settledResult;
                 };
-                const failBatch = async (
-                  { stage, readiness }: StagedAddHandoff,
-                  error: unknown,
-                  code: string,
-                ) => {
-                  const precedingStageError =
-                    stage.kind === "partial" ? stage.result.error : undefined;
-                  const failureMessage = error instanceof Error ? error.message : String(error);
-                  const result =
-                    stage.kind === "ready"
-                      ? await stage.failBeforeContinue(error, code)
-                      : {
-                          ...stage.result,
-                          error: {
-                            code,
-                            message: [precedingStageError?.message, failureMessage]
-                              .filter(Boolean)
-                              .join("\n"),
-                          },
-                        };
-                  return settleResult(result, readiness, precedingStageError?.code);
-                };
-                let abortableStage: StagedAddHandoff | undefined;
                 const prepared = await withPluginLifecycleLeaseAsync(
                   {
                     env: input.policyConfig.env,
@@ -237,8 +346,8 @@ export async function applyTemplateAddForGateway(
                         };
                         assertCurrent();
                         const currentContext = {
-                          ...(await input.getPlanningContext()),
-                          config: getCurrentTemplatesConfig(),
+                          ...(await planningContext()),
+                          config: withoutAdmission(getCurrentTemplatesConfig()),
                         };
                         assertCurrent();
                         const currentPlan = await buildGatewayTemplateAddPlan(source, {
@@ -294,8 +403,8 @@ export async function applyTemplateAddForGateway(
                         const persisted = await persistSource();
                         assertCurrent();
                         const persistedContext = {
-                          ...(await input.getPlanningContext()),
-                          config: getCurrentTemplatesConfig(),
+                          ...(await planningContext()),
+                          config: withoutAdmission(getCurrentTemplatesConfig()),
                         };
                         assertCurrent();
                         const persistedPlan = await buildGatewayTemplateAddPlan(persisted, {
@@ -335,7 +444,8 @@ export async function applyTemplateAddForGateway(
                           let accessMatchesReview: boolean;
                           try {
                             const actualAccess = projectTemplateConfiguredAccess({
-                              config,
+                              config:
+                                phase === "after-agent-commit" ? config : withoutAdmission(config),
                               agentId: persistedPlan.agent.finalId,
                               desiredAgent: persistedPlan.agent.config,
                               operation: phase === "after-agent-commit" ? "update" : "add",
@@ -360,79 +470,121 @@ export async function applyTemplateAddForGateway(
                             );
                           }
                         };
-                        const reloadPlugins = input.reloadPlugins;
-                        const pluginIds = persistedPlan.actions
-                          .filter(
-                            (action) =>
-                              action.kind === "package" && action.details?.kind === "plugin",
-                          )
-                          .map((action) => {
-                            const pluginId = packageFromAction(action).installId;
-                            if (!pluginId) {
-                              throw new Error("Template plugin requirement has no install owner");
-                            }
-                            return pluginId;
-                          });
-                        const runtimeBatch =
-                          reloadPlugins && pluginIds.length > 0
-                            ? new PluginInstallRuntimeBatch(
-                                { env: input.policyConfig.env },
-                                (targets) =>
-                                  withPluginLifecycleLeaseAsync(
-                                    {
-                                      env: input.policyConfig.env,
-                                      signal: input.signal,
-                                      assertCurrent,
-                                    },
-                                    (reloadLease) =>
-                                      withCurrentConfigPolicyReader(
-                                        { ...input.policyConfig, lease: reloadLease },
-                                        async (getReloadConfig) => {
-                                          const assertRuntimePolicyCurrent = () => {
-                                            assertCurrent();
-                                            const currentConfig = getReloadConfig();
-                                            assertTemplatesLabsEnabled(currentConfig);
-                                            assertTemplatePluginRequirementsEnabled(
-                                              pluginIds,
-                                              currentConfig,
-                                            );
-                                            assertReviewedConfig(currentConfig);
-                                            assertCurrent();
-                                          };
-                                          assertRuntimePolicyCurrent();
-                                          await prepareEffect();
-                                          assertRuntimePolicyCurrent();
-                                          return await reloadPlugins(targets, {
-                                            commitGuard: assertRuntimePolicyCurrent,
-                                          });
-                                        },
-                                      ),
-                                  ),
-                              )
+                        // Release planning's plugin lease before the shared installer's
+                        // requirement batch activates its runtime.
+                        let currentConfig = getCurrentTemplatesConfig();
+                        const refreshPolicy = async () => {
+                          await prepareEffect();
+                          if (admitted && !initialized) {
+                            await admitted.chat.assertCurrent?.();
+                          }
+                          await withPluginLifecycleLeaseAsync(
+                            { env: input.policyConfig.env, signal: input.signal, assertCurrent },
+                            (policyLease) =>
+                              withCurrentConfigPolicyReader(
+                                { ...input.policyConfig, lease: policyLease },
+                                async (getPolicyConfig) => {
+                                  currentConfig = getPolicyConfig();
+                                  assertCurrent();
+                                  assertTemplatesLabsEnabled(currentConfig);
+                                },
+                              ),
+                          );
+                        };
+                        const reloadPlugins: PluginInstallBatchReload | undefined =
+                          input.reloadPlugins
+                            ? (targets, options) =>
+                                withPluginLifecycleLeaseAsync(
+                                  {
+                                    env: input.policyConfig.env,
+                                    signal: input.signal,
+                                    assertCurrent,
+                                  },
+                                  (reloadLease) =>
+                                    withCurrentConfigPolicyReader(
+                                      { ...input.policyConfig, lease: reloadLease },
+                                      async (getReloadConfig) => {
+                                        const assertReloadCurrent = () => {
+                                          assertCurrent();
+                                          options?.commitGuard?.();
+                                          const config = getReloadConfig();
+                                          assertTemplatesLabsEnabled(config);
+                                          assertReviewedConfig(config, "after-agent-commit");
+                                          assertTemplatePluginRequirementsEnabled(
+                                            targets.map((target) => target.pluginId),
+                                            config,
+                                          );
+                                        };
+                                        assertReloadCurrent();
+                                        return await input.reloadPlugins!(targets, {
+                                          commitGuard: assertReloadCurrent,
+                                        });
+                                      },
+                                    ),
+                                )
                             : undefined;
-                        const applyOptions = {
-                          stateMode: "worker" as const,
+                        const applyOptions: StatelessTemplateAddOptions = {
+                          stateMode: "worker",
                           assertCurrent,
-                          prepareEffect,
+                          prepareEffect: refreshPolicy,
                           leaseSet: { context: stateContext, leases: [allocationLease, lease] },
-                          getCurrentConfig: getCurrentTemplatesConfig,
+                          getCurrentConfig: () => currentConfig,
                           assertReviewedConfig,
-                          config: persistedContext.config,
+                          config: currentConfig,
+                          ...(admitted
+                            ? {
+                                admittedAgent: {
+                                  config: admitted.config,
+                                  workspaceIdentity: admitted.workspaceIdentity,
+                                  assertCurrent: async () => {
+                                    input.assertCurrent();
+                                    await admitted!.chat.assertCurrent?.();
+                                  },
+                                },
+                              }
+                            : {}),
+                          ...(input.prepareAgentChat && input.waitForAgentRuntime
+                            ? {
+                                prepareAgentSession: async (config: OpenClawConfig) => {
+                                  const rollback = await input.prepareAgentChat!(
+                                    persistedPlan.agent.finalId,
+                                    config,
+                                  );
+                                  readySessionKey = resolveAgentMainSessionKey({
+                                    cfg: config,
+                                    agentId: persistedPlan.agent.finalId,
+                                  });
+                                  return rollback;
+                                },
+                              }
+                            : {}),
+                          ...(input.waitForAgentRuntime
+                            ? { waitForAgentRuntime: input.waitForAgentRuntime }
+                            : {}),
+                          ...(input.onSetupEvent ? { onSetupEvent: input.onSetupEvent } : {}),
+                          ...(input.prepareAgentChat && input.waitForAgentRuntime
+                            ? {
+                                onAgentReady: async (agent) => {
+                                  readySessionKey = agent.sessionKey;
+                                  if (admitted) {
+                                    await admitted.chat.complete?.();
+                                    initialized = true;
+                                  }
+                                  await input.onAgentReady?.(agent);
+                                },
+                              }
+                            : {}),
                           ...(input.configWriteOptions
                             ? { configWriteOptions: input.configWriteOptions }
                             : {}),
                           consentPlanIntegrity: persistedPlan.planIntegrity,
                           ...(pluginConsent ? { pluginConsent } : {}),
                           ...(skillConsent ? { skillConsent } : {}),
-                          ...(runtimeBatch ? { runtimeBatch } : {}),
-                          ...(!runtimeBatch && reloadPlugins ? { reloadPlugins } : {}),
+                          ...(reloadPlugins ? { reloadPlugins } : {}),
                           ...(input.cronGateway ? { cronGateway: input.cronGateway } : {}),
                           ...(input.rollbackNewAgent
                             ? {
-                                rollbackNewAgent: (
-                                  plan: TemplateAddPlan,
-                                  cronJobs: PersistedTemplateCronRef[],
-                                ) =>
+                                rollbackNewAgent: (plan, cronJobs) =>
                                   input.rollbackNewAgent!(
                                     plan.agent.finalId,
                                     plan.agent.config,
@@ -441,131 +593,21 @@ export async function applyTemplateAddForGateway(
                               }
                             : {}),
                         };
-                        const readiness = persistedProjection.readiness ?? {
-                          ready: false,
-                          requirements: [],
-                        };
-                        assertCurrent();
-                        const stage = await stageTemplateAddHostRequirementsStateless(
-                          persistedPlan,
-                          applyOptions,
-                        );
-                        abortableStage = { stage, runtimeBatch, readiness };
-                        await runtimeBatch?.prepare(pluginLease);
-                        const installOwners =
-                          stage.kind === "ready"
-                            ? await snapshotTemplatePluginInstallOwners(pluginIds, pluginLease)
-                            : undefined;
                         return {
-                          kind: "staged" as const,
-                          stage,
-                          runtimeBatch,
+                          plan: persistedPlan,
                           applyOptions,
-                          readiness,
-                          installOwners,
+                          readiness: persistedProjection.readiness ?? {
+                            ready: false,
+                            requirements: [],
+                          },
                         };
                       },
                     ),
-                ).catch(async (error: unknown) => {
-                  if (!abortableStage) {
-                    throw error;
-                  }
-                  abortableStage.runtimeBatch?.close();
-                  return {
-                    kind: "aborted" as const,
-                    result: await failBatch(abortableStage, error, "package_runtime_failed"),
-                  };
-                });
-                if (prepared.kind === "aborted") {
-                  return prepared.result;
-                }
-                const { stage, runtimeBatch, applyOptions, readiness, installOwners } = prepared;
-                try {
-                  await runtimeBatch?.finish((message) => defaultRuntime.log(message));
-                } catch (error) {
-                  return await failBatch(prepared, error, "package_runtime_failed");
-                }
-                if (stage.kind === "partial") {
-                  return settleResult(stage.result, readiness);
-                }
-                const withCurrentAddPolicy = async <T>(
-                  run: (options: StatelessTemplateAddOptions) => Promise<T>,
-                ): Promise<T> =>
-                  withPluginLifecycleLeaseAsync(
-                    {
-                      env: input.policyConfig.env,
-                      signal: input.signal,
-                      assertCurrent,
-                    },
-                    (pluginLease) =>
-                      withCurrentConfigPolicyReader(
-                        { ...input.policyConfig, lease: pluginLease },
-                        async (getCurrentConfig) => {
-                          if (!installOwners) {
-                            throw new Error("Template plugin owner snapshot is unavailable");
-                          }
-                          await assertTemplatePluginInstallOwnersCurrent(
-                            installOwners,
-                            pluginLease,
-                          );
-                          const requiredPluginIds = [...installOwners.keys()];
-                          const getCurrentTemplatesConfig = () => {
-                            const config = getCurrentConfig();
-                            assertTemplatesLabsEnabled(config);
-                            assertTemplatePluginRequirementsEnabled(requiredPluginIds, config);
-                            return config;
-                          };
-                          getCurrentTemplatesConfig();
-                          return await run({
-                            ...applyOptions,
-                            runtimeBatch: undefined,
-                            getCurrentConfig: getCurrentTemplatesConfig,
-                          });
-                        },
-                      ),
-                  );
-                let continuationStarted = false;
-                const agentStage = await withCurrentAddPolicy(async (options) => {
-                  continuationStarted = true;
-                  return await stage.stageAgent(options);
-                }).catch(async (error: unknown) => {
-                  if (continuationStarted) {
-                    throw error;
-                  }
-                  return {
-                    kind: "partial" as const,
-                    result: await stage.failBeforeContinue(error, "policy_recheck_failed"),
-                  };
-                });
-                if (agentStage.kind === "partial") {
-                  return settleResult(agentStage.result, readiness);
-                }
-                // The reload owner needs the plugin lease to admit the new agent's
-                // database and publish its runtime roster before cron can use it.
-                try {
-                  await input.waitForAgentRuntime?.();
-                  assertCurrent();
-                } catch (error) {
-                  return settleResult(
-                    await agentStage.fail(error, "agent_runtime_failed"),
-                    readiness,
-                  );
-                }
-                let finishStarted = false;
-                try {
-                  return await withCurrentAddPolicy(async (options) => {
-                    finishStarted = true;
-                    return settleResult(await agentStage.finish(options), readiness);
-                  });
-                } catch (error) {
-                  if (finishStarted) {
-                    throw error;
-                  }
-                  return settleResult(
-                    await agentStage.fail(error, "policy_recheck_failed"),
-                    readiness,
-                  );
-                }
+                );
+                return settleResult(
+                  await applyTemplateAddPlanStateless(prepared.plan, prepared.applyOptions),
+                  prepared.readiness,
+                );
               },
             );
           },
@@ -576,6 +618,25 @@ export async function applyTemplateAddForGateway(
     if (settledResult) {
       defaultRuntime.log("Template source cleanup failed after Add; cached files may remain.");
       return settledResult;
+    }
+    if (admitted) {
+      return {
+        agentId: admitted.agentId,
+        status: "partial",
+        agentRetained: true,
+        ...(!initialized ? { initializationPending: true } : {}),
+        ...(readySessionKey ? { sessionKey: readySessionKey } : {}),
+        readiness: { ready: false, requirements: [] },
+        error: {
+          code:
+            error instanceof TemplateAddMutationError
+              ? error.code
+              : "template_initialization_failed",
+          message:
+            (error instanceof Error ? error.message : String(error)) +
+            " The ordinary agent and conversation were kept; do not add another copy.",
+        },
+      };
     }
     throw error;
   }

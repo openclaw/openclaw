@@ -5,7 +5,6 @@ import {
   errorShape,
   validateTemplatesAddApplyParams,
   validateTemplatesAddPlanParams,
-  validateCronAddParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
 import { listConfiguredMcpServers } from "../../config/mcp-config.js";
@@ -14,17 +13,13 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../../config/runtime-write-application.js";
-import {
-  CronJobConfigRevisionConflictError,
-  resolveCronJobConfigRevision,
-} from "../../cron/config-revision.js";
-import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
-import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
+import { TemplateAddMutationError } from "../../templates/add-mutation-error.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source.js";
+import { createTemplateCronGateway } from "../../templates/cron-gateway.js";
 import {
   templateCronGatewayJobMatchesRef,
   type PersistedTemplateCronRef,
@@ -44,6 +39,8 @@ import {
 import type { TemplateAddPlan } from "../../templates/types.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { deleteAgentConfigEntry } from "./agents-config-mutations.js";
+import { completeAgentOnboarding, startAgentOnboardingConversation } from "./agents-onboarding.js";
+import { publishTemplateInstallEvent } from "./templates-add-conversation.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -61,15 +58,17 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         env: process.env,
       });
       assertTemplatesLabsEnabled(config);
-      const listedMcp = await listConfiguredMcpServers();
-      if (!listedMcp.ok) {
-        throw new Error(listedMcp.error);
-      }
       const plan = await planTemplateAddForGateway({
         source: params.source,
         ...(params.agentId ? { agentId: params.agentId } : {}),
         config,
-        sourceMcpServers: listedMcp.mcpServers,
+        sourceMcpServers: async () => {
+          const listedMcp = await listConfiguredMcpServers();
+          if (!listedMcp.ok) {
+            throw new Error(listedMcp.error);
+          }
+          return listedMcp.mcpServers;
+        },
       });
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
       respond(true, plan);
@@ -88,15 +87,16 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
     }
   },
-  "templates.add.apply": async ({
-    params,
-    respond,
-    context,
-    client,
-    signal,
-    sessionMutationCommitGuard,
-    hasCurrentClientAuthority,
-  }) => {
+  "templates.add.apply": async (options) => {
+    const {
+      params,
+      respond,
+      context,
+      client,
+      signal,
+      sessionMutationCommitGuard,
+      hasCurrentClientAuthority,
+    } = options;
     if (
       !assertValidParams(params, validateTemplatesAddApplyParams, "templates.add.apply", respond)
     ) {
@@ -128,10 +128,10 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       assertCurrent();
       const applyRuntime = context.applyPluginLifecycleChange;
       const reloadPlugins: PluginInstallBatchReload | undefined = applyRuntime
-        ? async (plugins, options) => {
+        ? async (plugins, reloadOptions) => {
             const assertForwardCurrent = () => {
               assertCurrent();
-              options?.commitGuard?.();
+              reloadOptions?.commitGuard?.();
             };
             assertForwardCurrent();
             const { application } = await reloadManagedPlugin({
@@ -147,6 +147,9 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           }
         : undefined;
       const application = createRuntimeConfigWriteApplication(
+        captureGatewayRootWorkAdmissionContinuationScope()?.run,
+      );
+      const admissionApplication = createRuntimeConfigWriteApplication(
         captureGatewayRootWorkAdmissionContinuationScope()?.run,
       );
       const result = await applyTemplateAddForGateway({
@@ -168,14 +171,16 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           });
           assertCurrent();
           assertTemplatesLabsEnabled(config);
-          const listedMcp = await listConfiguredMcpServers();
-          assertCurrent();
-          if (!listedMcp.ok) {
-            throw new Error(listedMcp.error);
-          }
           return {
             config,
-            sourceMcpServers: listedMcp.mcpServers,
+            sourceMcpServers: async () => {
+              const listedMcp = await listConfiguredMcpServers();
+              assertCurrent();
+              if (!listedMcp.ok) {
+                throw new Error(listedMcp.error);
+              }
+              return listedMcp.mcpServers;
+            },
           };
         },
         policyConfig: { configPath, env: configEnv },
@@ -183,91 +188,95 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         ...(signal ? { signal } : {}),
         ...(reloadPlugins ? { reloadPlugins } : {}),
         configWriteOptions: attachRuntimeConfigWriteApplication({}, application),
+        admissionConfigWriteOptions: attachRuntimeConfigWriteApplication({}, admissionApplication),
+        waitForAdmissionRuntime: async () => {
+          const outcome = admissionApplication.claimed
+            ? await admissionApplication.result
+            : "unclaimed";
+          if (outcome !== "applied" && outcome !== "applied-restart-required") {
+            throw new Error(
+              "Ordinary agent admission was saved but runtime application was not confirmed (" +
+                outcome +
+                "); inspect config.get before retrying.",
+            );
+          }
+          return outcome;
+        },
+        onAgentAdmitted: async ({ agentId, sessionKey }) => {
+          assertCurrent();
+          if (options.client?.connId) {
+            context.broadcastToConnIds(
+              "templates.add.progress",
+              {
+                requestId: options.req.id,
+                stage: "agent-admitted",
+                agentId,
+                sessionKey,
+              },
+              new Set([options.client.connId]),
+            );
+          }
+        },
         waitForAgentRuntime: async () => {
           const outcome = application.claimed ? await application.result : "unclaimed";
-          assertCurrent();
-          if (outcome !== "applied") {
+          // Report publication before the caller rechecks authority: an already exposed
+          // ordinary agent must be retained even when installation authority expires.
+          if (outcome !== "applied" && outcome !== "applied-restart-required") {
             throw new Error(
               `Template agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); inspect config.get before retrying.`,
             );
           }
+          return outcome;
         },
-        cronGateway: {
-          add: async (input, options) => {
-            const assertForwardCurrent = () => {
-              assertCurrent();
-              options?.commitGuard?.();
-            };
-            assertCurrent();
-            const normalized = normalizeCronJobCreate(input);
-            if (!normalized || !validateCronAddParams(normalized)) {
-              throw new Error("Template schedule declaration is invalid.");
-            }
-            await assertValidCronCreateDelivery(context.getRuntimeConfig(), normalized);
-            assertForwardCurrent();
-            return await context.cron.add(normalized, {
-              commitGuard: assertForwardCurrent,
-              matchesExisting: (job) => {
-                if (job.declarationKey === normalized.declarationKey) {
-                  throw new Error("Template schedule declaration appeared after the list check.");
-                }
-                return false;
-              },
-            });
-          },
-          list: async (agentId) => ({
-            jobs: (await context.cron.list({ includeDisabled: true })).filter(
-              (job) => job.agentId === agentId,
-            ),
-          }),
-          get: async (jobId) => {
-            assertCurrent();
-            const job = await context.cron.readJob(jobId);
-            return job ? { ...job, configRevision: resolveCronJobConfigRevision(job) } : undefined;
-          },
-          writeScratch: async (jobId, content, commitGuard) => {
-            const scratchResult = await context.cron.writeScratch(jobId, {
-              content,
-              expectedRevision: 0,
-              commitGuard: () => {
-                assertCurrent();
-                commitGuard();
-              },
-            });
-            if (!scratchResult.ok) {
-              throw new Error("Template automation scratch changed before import.");
-            }
-          },
-          enable: async (jobId, expectedConfigRevision, commitGuard) => {
-            await context.cron.updateWithPrecondition(
-              jobId,
-              { enabled: true },
-              (job) => {
-                const actual = resolveCronJobConfigRevision(job);
-                if (actual !== expectedConfigRevision) {
-                  throw new CronJobConfigRevisionConflictError(expectedConfigRevision, actual);
-                }
-              },
+        onAgentReady: async ({ agentId, sessionKey }) => {
+          assertCurrent();
+          if (options.client?.connId) {
+            context.broadcastToConnIds(
+              "templates.add.progress",
               {
-                commitGuard: () => {
-                  assertCurrent();
-                  commitGuard();
-                },
+                requestId: options.req.id,
+                stage: "agent-ready",
+                agentId,
+                sessionKey,
               },
+              new Set([options.client.connId]),
             );
-          },
-          remove: async (jobId, options) => {
-            const assertForwardCurrent = () => {
-              assertCurrent();
-              options.commitGuard?.();
-            };
-            assertForwardCurrent();
-            return await context.cron.remove(jobId, {
-              commitGuard: assertForwardCurrent,
-              expectedConfigRevision: options.expectedConfigRevision,
-            });
-          },
+          }
+          await startAgentOnboardingConversation(options, agentId, sessionKey, "template");
         },
+        onSetupEvent: async (event) => {
+          assertCurrent();
+          await publishTemplateInstallEvent(options.context, event, assertCurrent);
+          assertCurrent();
+        },
+        prepareAgentChat: async (agentId, config, pending) => {
+          assertCurrent();
+          const onboarding = await completeAgentOnboarding(options, agentId, {
+            config,
+            ...pending,
+          });
+          if (onboarding.preparationUncertain) {
+            throw new TemplateAddMutationError(
+              "agent_session_outcome_uncertain",
+              onboarding.status === "error"
+                ? onboarding.error
+                : "Ordinary session preparation outcome is uncertain",
+            );
+          }
+          if (onboarding.status !== "completed" || !onboarding.rollback) {
+            throw new Error(
+              onboarding.status === "error"
+                ? onboarding.error
+                : "The agent's conversation could not be saved.",
+            );
+          }
+          return onboarding.rollback;
+        },
+        cronGateway: createTemplateCronGateway(
+          context.cron,
+          context.getRuntimeConfig,
+          assertCurrent,
+        ),
         rollbackNewAgent: async (
           agentId: string,
           expectedAgentConfig: TemplateAddPlan["agent"]["config"],

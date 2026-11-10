@@ -104,6 +104,17 @@ const PluginsToolSchema = Type.Object(
     version: Type.Optional(
       Type.String({ description: "ClawHub package version; omit for official catalog installs." }),
     ),
+    expectedPluginId: Type.Optional(
+      Type.String({
+        description: "Exact plugin identity required by a saved Template setup requirement.",
+      }),
+    ),
+    expectedIntegrity: Type.Optional(
+      Type.String({
+        description:
+          "Pinned ClawHub SHA-256 artifact integrity; never replaces current capability consent.",
+      }),
+    ),
     reviewToken: Type.Optional(
       Type.String({ description: "Capability review acknowledged by the operator." }),
     ),
@@ -194,12 +205,19 @@ export function createPluginsTool(options?: {
             );
           }
           const version = readToolStringParam(params, "version");
+          const expectedPluginId = readToolStringParam(params, "expectedPluginId");
+          const expectedIntegrity = readToolStringParam(params, "expectedIntegrity");
           method = "plugins.install";
           request = {
             source,
             ...(source === "official"
               ? { pluginId: required("pluginId") }
-              : { packageName: required("packageName"), ...(version ? { version } : {}) }),
+              : {
+                  packageName: required("packageName"),
+                  ...(version ? { version } : {}),
+                  ...(expectedPluginId ? { expectedPluginId } : {}),
+                  ...(expectedIntegrity ? { expectedIntegrity } : {}),
+                }),
             ...(params.acknowledgeInstallPolicyWarning === true
               ? { acknowledgeInstallPolicyWarning: true }
               : {}),

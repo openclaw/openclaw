@@ -320,6 +320,13 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   const beforeFileMutation = createWorkspaceFileMutationGuard(params.guard);
   const { bootstrapExists } = params;
 
+  // An explicitly seeded author bootstrap is pending input, not stale default
+  // onboarding. Its removal (or an explicit completion marker) consumes it;
+  // installed profiles and skills must not complete it before the first turn.
+  if (bootstrapExists && params.generatedHashes?.has(DEFAULT_BOOTSTRAP_FILENAME)) {
+    return { repaired: false, bootstrapExists, state: params.state };
+  }
+
   if (
     bootstrapExists
       ? !(await workspaceProfileLooksConfigured({
@@ -366,6 +373,12 @@ async function collectGeneratedBootstrapHashes(
   previousHashes?: ReadonlyMap<string, string>,
 ): Promise<Map<string, string>> {
   const hashes = new Map<string, string>();
+  // Only the explicit seed owner introduces this row. Preparation retains its
+  // custody while the input exists, including author edits, and drops it on consumption.
+  const seededBootstrapHash = previousHashes?.get(DEFAULT_BOOTSTRAP_FILENAME);
+  if (seededBootstrapHash && (await pathExists(path.join(dir, DEFAULT_BOOTSTRAP_FILENAME)))) {
+    hashes.set(DEFAULT_BOOTSTRAP_FILENAME, seededBootstrapHash);
+  }
   for (const fileName of GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES) {
     try {
       const content = await fs.readFile(path.join(dir, fileName), "utf-8");

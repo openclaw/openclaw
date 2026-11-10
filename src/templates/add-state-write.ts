@@ -1,5 +1,8 @@
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace-bootstrap-policy.js";
+import { readCanonicalWorkspaceStateSnapshot } from "../agents/workspace-state-read.js";
 import {
   mergeWorkspaceSetupState,
+  replaceWorkspaceAttestation,
   rollbackWorkspaceBootstrapSeed,
   type WorkspaceSetupState,
 } from "../agents/workspace-state-store.js";
@@ -38,16 +41,27 @@ export async function readTemplatePackageRefsForAdd(
 export async function mergeWorkspaceBootstrapSetupStateForAdd(
   workspaceDir: string,
   bootstrapSeededAt: string,
+  bootstrapSha256: string,
   nowMs: number,
   options: TemplateAddStateOptions = {},
 ): Promise<WorkspaceSetupState> {
   if (options.stateMode !== "worker") {
     options.assertCurrent?.();
+    const attestedAtMs = Date.now();
+    const snapshot = await readCanonicalWorkspaceStateSnapshot(workspaceDir, options);
+    const generatedHashes = new Map(snapshot.attestation?.generatedHashes);
+    generatedHashes.set(DEFAULT_BOOTSTRAP_FILENAME, bootstrapSha256);
+    await replaceWorkspaceAttestation({
+      ...options,
+      workspaceDir,
+      attestedAtMs,
+      generatedHashes,
+    });
     return mergeWorkspaceSetupState(workspaceDir, { bootstrapSeededAt }, nowMs, options);
   }
   return execute(options, {
     type: "templates.add.mergeBootstrapSetupState",
-    input: { workspaceDir, bootstrapSeededAt, nowMs },
+    input: { workspaceDir, bootstrapSeededAt, bootstrapSha256, nowMs },
   });
 }
 

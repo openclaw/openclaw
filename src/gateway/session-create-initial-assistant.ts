@@ -13,6 +13,7 @@ type FreshSessionConstraints = {
     | "initialAssistantMessage"
     | "fork"
     | "atomicInitialization"
+    | "deferInitialization"
     | "deviceFolder"
     | "catalogTarget"
   >;
@@ -35,13 +36,17 @@ export function validateFreshSessionConstraints(input: FreshSessionConstraints) 
     (existingEntry !== undefined ||
       params.fork === true ||
       params.atomicInitialization === true ||
+      params.deferInitialization === true ||
       params.initialEntry?.initializationPending === true)
   ) {
     return invalidSessionRequest(
       "initial assistant transcript requires a new session without fork or deferred initialization",
     );
   }
-  if ((params.initialEntry || params.initialCatalogContinuation) && existingEntry !== undefined) {
+  if (
+    (params.initialEntry || params.initialCatalogContinuation || params.deferInitialization) &&
+    existingEntry !== undefined
+  ) {
     return invalidSessionRequest("trusted initial session state requires a new session");
   }
   if (

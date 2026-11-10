@@ -33,6 +33,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 afterEach(() => vi.unstubAllEnvs());
 const bootstrapSeededAt = "2026-10-28T03:00:00.000Z";
 const nowMs = Date.parse(bootstrapSeededAt);
+const bootstrapSha256 = "a".repeat(64);
 
 type Fixture = {
   workspaceDir: string;
@@ -91,14 +92,18 @@ async function withAddLeases(run: (fixture: Fixture) => Promise<void>) {
 it("persists bootstrap setup through the real worker under both live Add leases", async () => {
   await withAddLeases(async (fixture) => {
     await expect(
-      mergeWorkspaceBootstrapSetupStateForAdd(fixture.workspaceDir, bootstrapSeededAt, nowMs, {
-        stateMode: "worker",
-        leaseSet: fixture,
-      }),
+      mergeWorkspaceBootstrapSetupStateForAdd(
+        fixture.workspaceDir,
+        bootstrapSeededAt,
+        bootstrapSha256,
+        nowMs,
+        { stateMode: "worker", leaseSet: fixture },
+      ),
     ).resolves.toEqual({ version: 1, bootstrapSeededAt });
     expect(await fixture.read()).toMatchObject({
       setupExists: true,
       setup: { version: 1, bootstrapSeededAt },
+      attestation: { generatedHashes: new Map([["BOOTSTRAP.md", bootstrapSha256]]) },
     });
   });
 });
@@ -111,6 +116,7 @@ it.each(["owned", "different", "completed"] as const)(
       await mergeWorkspaceBootstrapSetupStateForAdd(
         fixture.workspaceDir,
         bootstrapSeededAt,
+        bootstrapSha256,
         nowMs,
         options,
       );
@@ -167,6 +173,7 @@ it.each(["missing", "mismatched", "duplicate", "stale"] as const)(
             input: {
               workspaceDir: fixture.workspaceDir,
               bootstrapSeededAt,
+              bootstrapSha256,
               nowMs,
               ...(leases ? { leases } : {}),
             },
@@ -178,7 +185,9 @@ it.each(["missing", "mismatched", "duplicate", "stale"] as const)(
       } else {
         await expect(mutation).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
       }
-      expect(await fixture.read()).toMatchObject({ setupExists: false });
+      const snapshot = await fixture.read();
+      expect(snapshot).toMatchObject({ setupExists: false });
+      expect(snapshot.attestation).toBeUndefined();
     });
   },
 );
@@ -191,6 +200,7 @@ it.each(["seed", "rollback"] as const)(
         await mergeWorkspaceBootstrapSetupStateForAdd(
           fixture.workspaceDir,
           bootstrapSeededAt,
+          bootstrapSha256,
           nowMs,
           {
             stateMode: "worker",
@@ -209,7 +219,13 @@ it.each(["seed", "rollback"] as const)(
               mode === "seed"
                 ? {
                     type: "templates.add.mergeBootstrapSetupState",
-                    input: { workspaceDir: fixture.workspaceDir, bootstrapSeededAt, nowMs, leases },
+                    input: {
+                      workspaceDir: fixture.workspaceDir,
+                      bootstrapSeededAt,
+                      bootstrapSha256,
+                      nowMs,
+                      leases,
+                    },
                   }
                 : {
                     type: "templates.add.rollbackBootstrapSeed",
@@ -229,6 +245,9 @@ it.each(["seed", "rollback"] as const)(
         ),
       ).rejects.toThrow(revoked.message);
       expect(current).toBe(false);
+      if (mode === "seed") {
+        expect((await fixture.read()).attestation).toBeUndefined();
+      }
       expect(await fixture.read()).toMatchObject(
         mode === "seed" ? { setupExists: false } : { setup: { version: 1, bootstrapSeededAt } },
       );

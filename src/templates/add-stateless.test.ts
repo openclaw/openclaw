@@ -1,21 +1,21 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
-import * as mcpMutation from "../agents/mcp-config-mutation.js";
-import * as mcpConfig from "../config/mcp-config.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import {
+  readSessionEntryRow,
+  writeSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronWithinActiveHours } from "../cron/active-hours.js";
-import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
-import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { CronService } from "../cron/service.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
@@ -35,23 +35,20 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   applyTemplateAddPlanStateless,
+  stageTemplateAddHostRequirementsStateless,
   type StatelessTemplateAddOptions,
 } from "./add-stateless.js";
+import * as bootstrapInstall from "./bootstrap.js";
+import { createTemplateCronGateway } from "./cron-gateway.js";
 import * as cronInstall from "./cron.js";
-import type { TemplateCronGateway } from "./cron.js";
 import { buildGatewayTemplateAddPlan } from "./gateway-add-plan.js";
 import { projectTemplateAddScheduledJobs } from "./gateway-disclosure.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
-import {
-  TEMPLATE_MCP_REF_SCHEMA_VERSION,
-  type PersistedTemplateMcpServerRef,
-} from "./mcp-records.js";
 import * as mcpInstall from "./mcp.js";
 import * as packageInstall from "./packages.js";
-import type { PersistedTemplatePackageRef } from "./provenance.js";
 import { readTemplateManifestFile } from "./reader.js";
 import { parseTemplateOpenClawProfile } from "./schema.js";
-import type { TemplateReadResult } from "./types.js";
+import type { TemplateManifest, TemplateReadResult } from "./types.js";
 import * as workspaceFiles from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -60,41 +57,12 @@ afterEach(() => vi.unstubAllEnvs());
 afterEach(() => vi.restoreAllMocks());
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
-function createTemplateCronAdapter(cron: CronService) {
-  return {
-    add: async (input, options) => {
-      const normalized = normalizeCronJobCreate(input);
-      if (!normalized) {
-        throw new Error("invalid cron input");
-      }
-      return await cron.add(normalized, { commitGuard: options?.commitGuard });
-    },
-    list: async () => ({ jobs: await cron.list({ includeDisabled: true }) }),
-    get: async (id) => {
-      const job = await cron.readJob(id);
-      return job && { ...job, configRevision: resolveCronJobConfigRevision(job) };
-    },
-    writeScratch: async (id, content, commitGuard) => {
-      const result = await cron.writeScratch(id, { content, expectedRevision: 0, commitGuard });
-      if (!result.ok) {
-        throw new Error("scratch changed before import");
-      }
-    },
-    enable: async (id, expectedConfigRevision, commitGuard) => {
-      await cron.updateWithPrecondition(
-        id,
-        { enabled: true },
-        (job) => {
-          if (resolveCronJobConfigRevision(job) !== expectedConfigRevision) {
-            throw new Error("automation changed before enable");
-          }
-        },
-        { commitGuard },
-      );
-    },
-    remove: async (id, options) => await cron.remove(id, options),
-  } satisfies TemplateCronGateway;
-}
+const createTemplateCronAdapter = (cron: CronService) =>
+  createTemplateCronGateway(
+    cron,
+    () => ({ agents: { entries: { main: {} } } }),
+    () => {},
+  );
 
 describe("stateless Template Add", () => {
   let stateDir: string;
@@ -161,8 +129,21 @@ describe("stateless Template Add", () => {
     ).toThrow(`agent ${agentId} is deleted`);
 
     const plan = await buildPlan();
-    const result = await apply(plan);
+    const prepareAgentSession = vi.fn(async () => {
+      expect(isAgentDeletionBlocked(agentId)).toBe(false);
+      runOpenClawAgentWriteTransaction(
+        (database) =>
+          writeSessionEntry(database, `agent:${agentId}:main`, {
+            sessionId: "prepared-chat-after-readd",
+            updatedAt: Date.now(),
+          }),
+        { agentId, env: process.env },
+      );
+      return async () => {};
+    });
+    const result = await apply(plan, { prepareAgentSession, getCurrentConfig: () => config });
 
+    expect(prepareAgentSession).toHaveBeenCalledOnce();
     expect(result.status).toBe("complete");
     expect(readAgentDeletionJournal(agentId, {}, "runtime")).toBeUndefined();
     expect(isAgentDeletionBlocked(agentId)).toBe(false);
@@ -195,13 +176,136 @@ describe("stateless Template Add", () => {
     expect(readAgentDeletionJournal(agentId, {}, "runtime")?.cleanupCompleted).toBe(false);
   });
 
+  it("makes the instructed agent and its canonical chat ready before deferrable setup", async () => {
+    const plan = await buildPlan();
+    plan.actions.push({
+      kind: "package",
+      action: "install",
+      blocked: false,
+      id: "notes",
+      target: "notes",
+      details: { kind: "plugin" },
+    });
+    const order: string[] = [];
+    vi.spyOn(bootstrapInstall, "seedTemplatePackageBootstrap").mockImplementation(async () => {
+      order.push("bootstrap");
+      return undefined;
+    });
+    const greetingStarted = createDeferred();
+    const greetingFinished = createDeferred();
+    const routines = vi
+      .spyOn(cronInstall, "installTemplateCronJobsStateless")
+      .mockResolvedValue([]);
+    const packages = vi
+      .spyOn(packageInstall, "installTemplatePackages")
+      .mockImplementation(async () => {
+        order.push("packages");
+        expect(order).toContain("agent-ready");
+        return [];
+      });
+    const mcp = vi
+      .spyOn(mcpInstall, "installTemplateMcpServersStateless")
+      .mockImplementation(async () => {
+        order.push("mcp");
+      });
+    const installation = apply(plan, {
+      getCurrentConfig: () => config,
+      prepareAgentSession: async () => {
+        expect(readFileSync(path.join(plan.agent.workspace, "SOUL.md"), "utf8")).toBe(
+          "Workspace agent instructions.\n",
+        );
+        order.push("session");
+        return async () => {
+          throw new Error("exposed chat must not be deleted");
+        };
+      },
+      waitForAgentRuntime: async () => {
+        expect(config.agents.entries).toHaveProperty(plan.agent.finalId);
+        order.push("runtime");
+        return "applied";
+      },
+      onAgentReady: async (agent) => {
+        expect(agent).toEqual({
+          agentId: "workspace-agent",
+          sessionKey: "agent:workspace-agent:main",
+        });
+        order.push("agent-ready");
+        greetingStarted.resolve();
+        await greetingFinished.promise;
+        order.push("greeting-visible");
+      },
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        greetingStarted.promise,
+        installation,
+        "Template Add finished before the normal greeting started",
+      );
+      expect(packages).not.toHaveBeenCalled();
+      expect(mcp).not.toHaveBeenCalled();
+      expect(routines).not.toHaveBeenCalled();
+    } finally {
+      greetingFinished.resolve();
+    }
+    const result = await installation;
+    expect(result.status).toBe("complete");
+    expect(order).toEqual([
+      "session",
+      "runtime",
+      "agent-ready",
+      "greeting-visible",
+      "packages",
+      "mcp",
+      "bootstrap",
+    ]);
+    expect(routines).toHaveBeenCalledOnce();
+  });
+
+  it("retains an adopted agent and its chat when later setup fails", async () => {
+    const plan = await buildPlan();
+    const host = await stageTemplateAddHostRequirementsStateless(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      commitConfig,
+    });
+    assert(host.kind === "ready");
+    const agent = await host.stageAgent();
+    assert(agent.kind === "ready");
+    // The Gateway publishes its runtime roster before transferring rollback custody.
+    agent.retain();
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        writeSessionEntry(database, "agent:workspace-agent:main", {
+          sessionId: "chat-after-runtime-publication",
+          updatedAt: Date.now(),
+        }),
+      { agentId: plan.agent.finalId, env: process.env },
+    );
+    const result = await agent.fail(new Error("setup policy changed"), "policy_recheck_failed");
+    expect(result).toMatchObject({
+      status: "partial",
+      configCommitted: true,
+      workspaceCreated: true,
+      error: { code: "policy_recheck_failed" },
+    });
+    expect(config.agents.entries).toHaveProperty(plan.agent.finalId);
+    expect(existsSync(plan.agent.workspace)).toBe(true);
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (database) => readSessionEntryRow(database, "agent:workspace-agent:main")?.entry.sessionId,
+        { agentId: plan.agent.finalId, env: process.env },
+      ),
+    ).toBe("chat-after-runtime-publication");
+  });
+
   it("adds numbered ordinary agents without an install record", async () => {
-    const add = async () => apply(await buildPlan());
+    const onSetupEvent = vi.fn();
+    const add = async () => apply(await buildPlan(), { onSetupEvent });
 
     const first = await add();
     const second = await add();
 
     expect(first.status).toBe("complete");
+    expect(onSetupEvent).not.toHaveBeenCalled();
     expect(first).not.toHaveProperty("installRecord");
     expect(second).toMatchObject({
       status: "complete",
@@ -286,106 +390,34 @@ describe("stateless Template Add", () => {
     expect(existsSync(path.join(plan.agent.workspace, "USER.md"))).toBe(true);
   });
 
-  const configured = { command: "npx", args: ["example-mcp"] };
-  const configSnapshot = {
-    path: "/fixture/openclaw.json",
-    config: {},
-    authoredConfig: {},
-    runtimeConfig: {},
-    sourceConfigBeforeMigrations: {},
-    mcpServers: {},
-  };
-  const mcpRef = (
-    name: string,
-    origin: PersistedTemplateMcpServerRef["origin"],
-  ): PersistedTemplateMcpServerRef => ({
-    schemaVersion: TEMPLATE_MCP_REF_SCHEMA_VERSION,
-    agentId: "new-agent",
-    name,
-    configDigest: mcpInstall.digestTemplateMcpServer(configured),
-    relationship: origin === "template-introduced" ? "managed" : "referenced",
-    origin,
-    independentOwner: true,
-    status: "complete",
-    createdAtMs: 1,
-    updatedAtMs: 1,
+  it("does not touch shared requirements when agent publication fails", async () => {
+    const plan = await buildPlan();
+    plan.actions.push({
+      kind: "package",
+      id: "notes",
+      action: "install",
+      target: "notes",
+      details: { kind: "plugin" },
+      blocked: false,
+    });
+    const packages = vi.spyOn(packageInstall, "installTemplatePackages");
+    const mcp = vi.spyOn(mcpInstall, "installTemplateMcpServersStateless");
+    const result = await apply(plan, {
+      commitConfig: async () => {
+        throw new Error("publish failed");
+      },
+      getCurrentConfig: () => ({ agents: { entries: {} } }),
+    });
+    expect(result).toMatchObject({
+      status: "partial",
+      error: { code: "add_failed", message: "publish failed" },
+      packages: [],
+      mcpServers: [],
+    });
+    expect(packages).not.toHaveBeenCalled();
+    expect(mcp).not.toHaveBeenCalled();
+    expect(existsSync(plan.agent.workspace)).toBe(false);
   });
-
-  it.each([false, true])(
-    "cleans unchanged shared requirements after publish failure (MCP changed=%s)",
-    async (changed) => {
-      const plan = await buildPlan();
-      plan.actions.push(
-        {
-          kind: "package",
-          id: "@owner/new-plugin",
-          action: "install",
-          target: "plugins",
-          details: { kind: "plugin" },
-          blocked: false,
-        },
-        {
-          kind: "mcpServer",
-          id: "new-server",
-          action: "configure",
-          target: "mcp.servers.new-server",
-          blocked: false,
-        },
-      );
-      const packageRef = (origin: PersistedTemplatePackageRef["origin"]) =>
-        ({ kind: "plugin", origin, status: "complete" }) as PersistedTemplatePackageRef;
-      const introducedPackage = packageRef("template-introduced");
-      const reusedPackage = packageRef("pre-existing");
-      const introducedMcp = mcpRef("new-server", "template-introduced");
-      const reusedMcp = mcpRef("existing-server", "pre-existing");
-      vi.spyOn(packageInstall, "rollbackStatelessTemplatePackages").mockImplementation(
-        async (refs) => {
-          refs[0]!.status = "rolled_back";
-          return [];
-        },
-      );
-      const unsetMcpServer = vi.spyOn(mcpMutation, "unsetConfiguredMcpServer");
-      unsetMcpServer.mockResolvedValue({ ...configSnapshot, ok: true, removed: true });
-      vi.spyOn(mcpConfig, "listConfiguredMcpServers").mockResolvedValue({
-        ...configSnapshot,
-        ok: true,
-        mcpServers: { "new-server": changed ? { command: "different-command" } : configured },
-      });
-      vi.spyOn(packageInstall, "installTemplatePackages").mockResolvedValueOnce([
-        introducedPackage,
-        reusedPackage,
-      ]);
-      vi.spyOn(mcpInstall, "installTemplateMcpServersStateless").mockImplementationOnce(
-        async (_plan, { refs }) => {
-          refs.push(introducedMcp, reusedMcp);
-        },
-      );
-
-      const result = await apply(plan, {
-        commitConfig: async () => {
-          throw new Error("publish failed");
-        },
-        getCurrentConfig: () => ({ agents: { entries: {} } }),
-      });
-
-      expect(result.error).toMatchObject({
-        code: "add_failed",
-        message: changed
-          ? "publish failed Shared plugins or MCP servers already added were kept; remove them separately if unused."
-          : "publish failed",
-      });
-      expect(result.packages.map((ref) => ref.status)).toEqual(["rolled_back", "complete"]);
-      expect(result.mcpServers).toEqual(changed ? [introducedMcp, reusedMcp] : [reusedMcp]);
-      if (changed) {
-        expect(unsetMcpServer).not.toHaveBeenCalled();
-      } else {
-        expect(unsetMcpServer).toHaveBeenCalledWith(
-          expect.objectContaining({ name: "new-server", expectedServer: configured }),
-        );
-      }
-      expect(existsSync(plan.agent.workspace)).toBe(false);
-    },
-  );
 });
 
 const checklist = "# Checklist\nCheck active incidents.\n";
@@ -393,7 +425,10 @@ const baseConfig = (): OpenClawConfig => ({
   agents: { entries: { main: {} } },
   plugins: { enabled: false },
 });
-async function portableSource(fixture: OpenClawTestState) {
+async function portableSource(
+  fixture: OpenClawTestState,
+  manifest: Partial<TemplateManifest> = {},
+) {
   const packageRoot = fixture.statePath("package");
   await mkdir(packageRoot, { recursive: true });
   await writeFile(
@@ -402,6 +437,7 @@ async function portableSource(fixture: OpenClawTestState) {
       schemaVersion: 1,
       agent: { id: "portable", name: "Portable" },
       workspace: { bootstrapFiles: { "HEARTBEAT.md": { source: "HEARTBEAT.md" } } },
+      ...manifest,
     })}\n---\n`,
   );
   await writeFile(
@@ -413,6 +449,116 @@ async function portableSource(fixture: OpenClawTestState) {
   return source;
 }
 
+it.each([false, true])(
+  "preserves exactly declared routines with MCP environment ready=%s",
+  async (ready) => {
+    vi.stubEnv("TEMPLATE_ROUTINE_TEST_TOKEN", ready ? "synthetic-token" : undefined);
+    await withOpenClawTestState({ label: "template-routine-readiness" }, async (fixture) => {
+      const source = await portableSource(fixture, {
+        mcpServers: {
+          calendar: {
+            command: "fixture-mcp",
+            env: { TOKEN: "${TEMPLATE_ROUTINE_TEST_TOKEN}" },
+          },
+        },
+        cronJobs: [
+          {
+            id: "daily",
+            schedule: { cron: "0 9 * * *", timezone: "UTC" },
+            session: "isolated",
+            message: "Prepare the daily brief.",
+          },
+        ],
+      });
+      let config = baseConfig();
+      setRuntimeConfigSnapshot(config);
+      const plan = await buildTemplateAddPlan({
+        manifest: source.manifest,
+        source: source.source,
+        openClawProfile: { schemaVersion: 1, agent: { heartbeat: { every: "5m" } } },
+        context: { config, workspace: fixture.statePath("added-workspace") },
+      });
+      const run = vi.fn(async () => ({ status: "ok" as const }));
+      const cron = new CronService({
+        storePath: fixture.statePath("cron", "jobs.json"),
+        scheduler: createTestGatewayScheduler(),
+        cronEnabled: true,
+        defaultAgentId: "main",
+        log: createNoopLogger(),
+        enqueueSystemEvent: vi.fn(),
+        runSessionEvent: run,
+        runIsolatedAgentJob: run,
+      });
+      await cron.start();
+      const notices: unknown[] = [];
+      try {
+        const result = await applyTemplateAddPlanStateless(plan, {
+          config,
+          consentPlanIntegrity: plan.planIntegrity,
+          getCurrentConfig: () => config,
+          commitConfig: async (transform) => {
+            config = transform(config);
+            setRuntimeConfigSnapshot(config);
+          },
+          cronGateway: createTemplateCronAdapter(cron),
+          onSetupEvent: async (event) => {
+            notices.push(event);
+            // Each result is published before the next scheduler write, not at the end.
+            expect(await cron.list({ includeDisabled: true })).toHaveLength(notices.length);
+          },
+        });
+        expect(result.status, result.error?.message).toBe("complete");
+        expect(notices).toHaveLength(3);
+        expect(notices).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: "automation-created",
+              agentId: plan.agent.finalId,
+              name: "daily",
+              enabled: ready,
+              schedulerJobId: expect.any(String),
+            }),
+          ]),
+        );
+        expect(
+          notices.every((event) => (event as { kind: string }).kind === "automation-created"),
+        ).toBe(true);
+        const jobs = await cron.list({ includeDisabled: true });
+        expect(jobs).toHaveLength(3);
+        expect(jobs.every((job) => job.enabled === ready)).toBe(true);
+        expect(jobs.find((job) => job.name === "daily")).toMatchObject({
+          schedule: { kind: "cron", expr: "0 9 * * *" },
+          payload: { kind: "agentTurn", message: "Prepare the daily brief." },
+        });
+        expect(jobs.find((job) => job.name === "Summary")).toMatchObject({
+          schedule: { kind: "every", everyMs: 900_000 },
+          payload: { kind: "agentTurn", message: "Prepare a summary." },
+        });
+        const monitor = jobs.find((job) => job.name !== "daily" && job.name !== "Summary")!;
+        expect((await cron.readScratch(monitor.id)).scratch?.content).toBe(checklist);
+        expect(
+          result.cronJobs.every((ref) =>
+            cronInstall.templateCronGatewayJobMatchesRef(
+              plan.agent.finalId,
+              ref,
+              jobs.find((job) => job.id === ref.schedulerJobId),
+            ),
+          ),
+        ).toBe(true);
+        if (!ready) {
+          for (const job of jobs) {
+            expect(await cron.run(job.id, "due")).toMatchObject({ ran: false });
+          }
+          expect(run).not.toHaveBeenCalled();
+        }
+      } finally {
+        cron.stop();
+        await cron.waitForIdle();
+      }
+    });
+  },
+);
+
 it.each([
   { every: "5m", changed: "none" },
   { every: "0m", changed: "none" },
@@ -421,6 +567,7 @@ it.each([
   { every: "5m", changed: "scratch" },
   { every: "5m", changed: "rollback-definition" },
   { every: "5m", changed: "rollback-scratch" },
+  { every: "5m", changed: "rollback-notice" },
   { every: "5m", changed: "missing-scratch-adapter" },
 ])(
   "adds portable heartbeat $every with consent and scratch guarded ($changed)",
@@ -479,6 +626,11 @@ it.each([
             config = transform(config);
             setRuntimeConfigSnapshot(config);
           },
+          onSetupEvent: async (event) => {
+            if (changed === "rollback-notice" && event.kind === "automation-failed") {
+              throw new Error("Fixture notice publication failed");
+            }
+          },
           cronGateway: {
             ...gateway,
             add: async (input, options) => {
@@ -522,6 +674,17 @@ it.each([
           },
         });
         const jobs = await cron.list({ includeDisabled: true });
+        if (changed === "rollback-notice") {
+          expect(result).toMatchObject({
+            status: "partial",
+            error: { code: "cron_scratch_import_incomplete" },
+          });
+          expect(result.cronJobs).toHaveLength(1);
+          expect(result.cronJobs[0]?.schedulerJobId).toBe(jobs[0]?.id);
+          expect(jobs).toHaveLength(1);
+          expect(config.agents?.entries).toHaveProperty("portable");
+          return;
+        }
         if (changed === "source" || changed === "missing-scratch-adapter") {
           expect(result).toMatchObject({ status: "partial", configCommitted: false });
           expect(result.error?.message).toContain(

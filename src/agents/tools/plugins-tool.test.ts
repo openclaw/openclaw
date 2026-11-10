@@ -81,9 +81,22 @@ it.each([
     params: { pluginId: "local-tool", enabled: true },
   },
   {
-    args: { action: "install", source: "clawhub", packageName: "local-tool", version: "1.0.0" },
+    args: {
+      action: "install",
+      source: "clawhub",
+      packageName: "local-tool",
+      version: "1.0.0",
+      expectedPluginId: "local-tool",
+      expectedIntegrity: "sha256:" + "a".repeat(64),
+    },
     method: "plugins.install",
-    params: { source: "clawhub", packageName: "local-tool", version: "1.0.0" },
+    params: {
+      source: "clawhub",
+      packageName: "local-tool",
+      version: "1.0.0",
+      expectedPluginId: "local-tool",
+      expectedIntegrity: "sha256:" + "a".repeat(64),
+    },
   },
 ])(
   "routes $args.action through the authorized management owner",

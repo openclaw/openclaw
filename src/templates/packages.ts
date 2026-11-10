@@ -11,6 +11,7 @@ import {
   resolveInstalledClawHubPlugin,
 } from "../plugins/plugin-install-preflight.js";
 import { defaultRuntime } from "../runtime.js";
+import type { TemplatePluginInstallNotice } from "../shared/template-install-notice.js";
 import { installSkillFromClawHub, preflightSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import {
   acquireClawPackageLifecycleLease,
@@ -58,15 +59,21 @@ export async function installTemplatePackages(
   plan: TemplateAddPlan,
   options: InstallTemplatePackagesOptions = {},
 ): Promise<PersistedTemplatePackageRef[]> {
-  const pluginCount = plan.actions.filter(
-    (action) => action.kind === "package" && action.details?.kind === "plugin",
-  ).length;
-  if (!pluginCount) {
+  const pluginIds = plan.actions
+    .filter((action) => action.kind === "package" && action.details?.kind === "plugin")
+    .map((action) => {
+      const pkg = packageFromAction(action);
+      if (!pkg.installId) {
+        throw new Error("Template plugin requirement has no install owner");
+      }
+      return pkg.installId;
+    });
+  if (pluginIds.length === 0) {
     return await installTemplatePackagesUnlocked(plan, options);
   }
   return await runTemplatePluginBatch(
     options,
-    pluginCount,
+    pluginIds,
     (runtimeBatch) => installTemplatePackagesUnlocked(plan, { ...options, runtimeBatch }),
     (failure, operation) => {
       const original =
@@ -184,13 +191,25 @@ async function installTemplatePackagesUnlocked(
     if (!params.deferRuntime && !params.applyRuntime) {
       runtime.log("Restart the gateway to load plugins.");
     }
+    return result.plugin;
   };
   const installedPackages: PersistedTemplatePackageRef[] = [];
 
   for (const action of plan.actions.filter((candidate) => candidate.kind === "package")) {
     let packageLease: ClawPackageLifecycleLease | null = null;
+    let pluginNotice: TemplatePluginInstallNotice | undefined;
+    let pluginCompleted = false;
     try {
       const pkg = packageFromAction(action);
+      if (pkg.kind === "plugin" && pkg.ownerAction === "install") {
+        pluginNotice = {
+          type: "template_plugin_install",
+          pluginId: pkg.installId!,
+          packageName: pkg.ref,
+          displayName: pkg.ref,
+          status: "error",
+        };
+      }
       const leaseArtifact =
         pkg.kind === "skill"
           ? { kind: pkg.kind, source: pkg.source, ref: pkg.ref, workspace: plan.agent.workspace }
@@ -393,7 +412,7 @@ async function installTemplatePackagesUnlocked(
       installedPackages.push(packageRef);
 
       assertForwardCurrent();
-      await installPlugin({
+      const installedPlugin = await installPlugin({
         request: {
           source: "clawhub",
           packageName: pkg.ref,
@@ -478,6 +497,18 @@ async function installTemplatePackagesUnlocked(
         statelessPluginInstallStamps.set(packageRef, stamp);
       }
       installedPackages[installedPackages.length - 1] = packageRef;
+      pluginCompleted = true;
+      await options.onSetupOutcome?.({
+        kind: "plugin-install",
+        plugin: {
+          type: "template_plugin_install",
+          pluginId: probe.pluginId,
+          packageName: pkg.ref,
+          displayName: installedPlugin.name || pkg.ref,
+          status: "installed",
+        },
+      });
+      assertCurrent();
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;
@@ -505,6 +536,14 @@ async function installTemplatePackagesUnlocked(
         packageLease = null;
       } catch {
         // The rollback path will report a busy lease instead of mutating without ownership.
+      }
+      if (pluginNotice && !pluginCompleted) {
+        try {
+          options.assertCurrent?.();
+          await options.onSetupOutcome?.({ kind: "plugin-install", plugin: pluginNotice });
+        } catch {
+          // Preserve the install failure and retained receipts if notice delivery also fails.
+        }
       }
       const message = coerceErrorMessage(error);
       throw new TemplatePackageInstallError(

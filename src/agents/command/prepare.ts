@@ -397,7 +397,7 @@ export async function prepareAgentCommandExecution(
     });
     await ensureAgentWorkspace({
       dir: agentWorkspaceDir,
-      ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+      ensureBootstrapFiles: !agentCfg?.skipBootstrap && !opts.deferWorkspaceBootstrap,
       skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       provisioning: workspaceProvisioning,
       guard: { assertHost: assertAcpPreparationCurrent },

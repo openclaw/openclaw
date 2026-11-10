@@ -254,6 +254,9 @@ async function createGatewaySessionInScope(
   }
   const explicitTarget = await readRequestedSessionCreateTarget(params, agentId, explicitTargetKey);
   const initialTargetEntry = explicitTarget?.entry;
+  if (params.deferInitialization && initialTargetEntry) {
+    return invalidSessionRequest("deferred initialization requires a new ordinary session");
+  }
   if (
     explicitTargetKey &&
     isAgentHarnessSessionKey(explicitTargetKey) &&
@@ -857,7 +860,8 @@ async function createGatewaySessionInScope(
             ? { cliSessionBindings: structuredClone(params.initialEntry.cliSessionBindings) }
             : {}),
           ...(params.initialEntry?.initializationPending === true ||
-          params.atomicInitialization === true
+          params.atomicInitialization === true ||
+          params.deferInitialization === true
             ? { initializationPending: true }
             : {}),
           ...(params.initialEntry?.modelSelectionLocked === true

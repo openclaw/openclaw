@@ -206,6 +206,12 @@ Environment values remain unresolved references; never package credentials.
 Shared plugins and MCP servers must match existing declarations exactly or Add
 reports the conflict without replacing them. Plugin and skill trust warnings
 require explicit consent. Automations are assigned to the new agent.
+If a declared plugin still needs setup, a referenced environment variable is
+missing, or an OAuth MCP server is not authorized, Add creates the declared
+automations paused. Their schedules, prompts, and imported scratch stay intact.
+Connect the requirement through its ordinary plugin or MCP controls, then enable
+the jobs through the agent's automation controls; Add does not create substitute
+routines or automatically enable paused jobs later.
 
 Older packages may declare `agent.heartbeat` in the OpenClaw profile or include
 `HEARTBEAT.md`. Add converts those inputs into ordinary interval automations
@@ -277,8 +283,20 @@ approval never approves its skill or plugin dependencies: their existing trust
 acknowledgments and `--accept-capabilities` checks still apply independently.
 
 Each Add chooses an unused agent ID. The CLI reports that ID so you can open
-or configure the agent afterward. The Control UI opens the new agent's chat
-and starts with "What can you do?" after a successful Add.
+or configure the agent afterward. The Control UI opens the new agent's pending
+chat immediately. Sending becomes available when its instruction files, canonical
+conversation, and active runtime are ready, while remaining setup continues. The
+first assistant response is a normal personality/SOUL greeting, not a saved canned
+greeting or a message sent on your behalf. Later setup failure retains the exposed
+agent and conversation; completion does not replace an existing draft.
+
+The installer shows a card for each newly installed plugin and an automation-created
+notice as each routine is added. Paused routines stay paused until their setup
+prerequisites are ready. Actual installation failures appear in the plugin card or
+a concise automation-failed notice; continue setup in the same agent. Successful
+skill and MCP setup, absent optional files, and empty categories stay silent. There
+is no final setup receipt or second model recap. Declared package bootstrap still
+follows shared setup; MCP configuration alone does not prove a working connection.
 
 `--dry-run --json` remains available for automation or local-source inspection.
 `--agent-id` and `--workspace` override the default destination with an
@@ -292,11 +310,18 @@ Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
 values are `none`, `last-channel`, or `owner`.
 
-Add reuses matching shared dependencies, installs missing requirements,
-creates the agent and its workspace, and assigns its automations. An existing
-agent or workspace is never overwritten. If Add fails, inspect the specific
-error and retry after resolving it; newly created resources are cleaned up
-where safe, while resources that existed before Add are left alone.
+The CLI Add path requires exclusive offline state ownership; it refuses to run
+while a Gateway owns that state. Use the Control UI to Add through a running
+Gateway. Offline Add uses the same session, local agent runtime, and scheduler
+owners without starting scheduled execution. `--json` suppresses conversational
+terminal output but keeps the ordinary conversation and per-result install notices.
+
+Add reuses matching shared dependencies, installs missing requirements, and
+assigns the declared automations. An existing agent or workspace is never
+overwritten. If Add fails before exposing the agent, newly created resources are
+cleaned up where safe; preexisting resources remain untouched. If the result says
+the agent was retained, continue in that agent and inspect the specific error
+instead of adding another copy.
 
 ## Remove the agent
 

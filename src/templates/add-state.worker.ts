@@ -1,3 +1,9 @@
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace-bootstrap-policy.js";
+import { captureWorkspaceStateReceipt } from "../agents/workspace-state-publication.js";
+import {
+  readWorkspaceStateSnapshotForDirectoryInDatabase,
+  replaceWorkspaceAttestationInDatabase,
+} from "../agents/workspace-state-store.kernel.js";
 import {
   mergeWorkspaceSetupStateInDatabase,
   rollbackWorkspaceBootstrapSeedInDatabase,
@@ -13,18 +19,30 @@ export function executeTemplateAddStateCommand(
   { write, writeAdmitted }: WorkerWriteOperationContext,
 ) {
   const apply = (database: OpenClawStateDatabase) =>
-    command.type === "templates.add.rollbackBootstrapSeed"
-      ? rollbackWorkspaceBootstrapSeedInDatabase(
+    captureWorkspaceStateReceipt(database.db, () => {
+      if (command.type === "templates.add.rollbackBootstrapSeed") {
+        return rollbackWorkspaceBootstrapSeedInDatabase(
           database,
           command.input.workspaceDir,
           command.input.bootstrapSeededAt,
-        )
-      : mergeWorkspaceSetupStateInDatabase(
-          database,
-          command.input.workspaceDir,
-          { bootstrapSeededAt: command.input.bootstrapSeededAt },
-          command.input.nowMs,
         );
+      }
+      const { workspaceDir, bootstrapSha256 } = command.input;
+      const snapshot = readWorkspaceStateSnapshotForDirectoryInDatabase({ workspaceDir, database });
+      const generatedHashes = new Map(snapshot.attestation?.generatedHashes);
+      generatedHashes.set(DEFAULT_BOOTSTRAP_FILENAME, bootstrapSha256);
+      replaceWorkspaceAttestationInDatabase(database, {
+        workspaceDir,
+        attestedAtMs: Date.now(),
+        generatedHashes,
+      });
+      return mergeWorkspaceSetupStateInDatabase(
+        database,
+        command.input.workspaceDir,
+        { bootstrapSeededAt: command.input.bootstrapSeededAt },
+        command.input.nowMs,
+      );
+    });
   const { leases } = command.input;
   if (leases) {
     return write((database) => {

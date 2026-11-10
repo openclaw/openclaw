@@ -29,9 +29,14 @@ const mocks = vi.hoisted(() => ({
   applyTemplateAddPlanStateless: vi.fn(),
   withOpenClawStateLease: vi.fn(),
   leaseAssertOwned: vi.fn(),
+  localAssertCurrent: vi.fn(),
+  localSignal: new AbortController().signal,
+  createLocalTemplateConversationAdapters: vi.fn(),
   preflightTemplatePackage: vi.fn(),
-  callGatewayFromCli: vi.fn(),
-  sleep: vi.fn(),
+  waitForAgentRuntime: vi.fn(),
+  prepareAgentSession: vi.fn(),
+  onAgentReady: vi.fn(),
+  onSetupEvent: vi.fn(),
 }));
 
 vi.mock("../runtime.js", async (importOriginal) => ({
@@ -74,16 +79,21 @@ vi.mock("../templates/add-stateless.js", async (importOriginal) => ({
 
 // mock-isolation: CLI unit tests bypass live Gateway ownership probes; the owner guard has its own test.
 vi.mock("./local-state-owner.js", () => ({
-  runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<void> }) =>
-    await runLocal(),
+  runWithLocalStateOwner: async ({
+    runLocal,
+  }: {
+    runLocal: (scope: { assertCurrent: () => void; signal: AbortSignal }) => Promise<void>;
+  }) => await runLocal({ assertCurrent: mocks.localAssertCurrent, signal: mocks.localSignal }),
 }));
-vi.mock("./gateway-rpc.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
-  callGatewayFromCliWithTransport: mocks.callGatewayFromCli,
+// mock-isolation: command wiring uses no live cron store; scheduler behavior is covered by Template Add integration tests.
+vi.mock("../cron/local-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cron/local-service.js")>()),
+  withLocalCronService: async (_getConfig: unknown, run: (cron: unknown) => Promise<unknown>) =>
+    run({}),
 }));
-vi.mock("../utils/sleep.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../utils/sleep.js")>()),
-  sleep: mocks.sleep,
+// mock-isolation: this command test verifies adapter wiring; normal session/model owners are covered separately.
+vi.mock("./templates-agent-conversation.js", () => ({
+  createLocalTemplateConversationAdapters: mocks.createLocalTemplateConversationAdapters,
 }));
 
 const { registerTemplatesCli } = await import("./templates-cli.js");
@@ -117,28 +127,6 @@ function output() {
 }
 const logLines = () => mocks.runtime.log.mock.calls.map(([line]) => String(line));
 
-function gatewayConfig(agent = "worker", revision = "revision-new", applied = revision) {
-  return {
-    config: { agents: { entries: { [agent]: {} } } },
-    configRevisionHash: revision,
-    appliedConfigHash: applied,
-  };
-}
-
-async function addWithAgentReadiness(beforeWait?: () => void) {
-  const path = await writeManifest({ ...cliTestHelpers.minimalManifest, agent: { id: "worker" } });
-  const apply = mocks.applyTemplateAddPlanStateless.getMockImplementation();
-  if (!apply) {
-    throw new Error("Missing Add fixture implementation");
-  }
-  mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (plan, options) => {
-    beforeWait?.();
-    await options.cronGateway.waitUntilAgentAvailable(plan.agent.finalId);
-    return apply(plan, options);
-  });
-  return await add(["--json"], path);
-}
-
 describe("templates cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -148,8 +136,14 @@ describe("templates cli", () => {
       ok: true,
       mcpServers: {},
     });
-    mocks.callGatewayFromCli.mockReset();
-    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    mocks.waitForAgentRuntime.mockReset().mockResolvedValue("applied");
+    mocks.localAssertCurrent.mockReset();
+    mocks.createLocalTemplateConversationAdapters.mockReset().mockReturnValue({
+      prepareAgentSession: mocks.prepareAgentSession,
+      waitForAgentRuntime: mocks.waitForAgentRuntime,
+      onAgentReady: mocks.onAgentReady,
+      onSetupEvent: mocks.onSetupEvent,
+    });
     mocks.preflightTemplatePackage.mockReset().mockResolvedValue({
       ok: false,
       code: "package_install_unavailable",
@@ -196,6 +190,10 @@ describe("templates cli", () => {
     });
     expect(existsSync(workspace)).toBe(false);
     expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+    expect(mocks.withOpenClawStateLease).not.toHaveBeenCalled();
+    expect(mocks.createLocalTemplateConversationAdapters).not.toHaveBeenCalled();
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.listConfiguredMcpServers).toHaveBeenCalledWith({ observe: false });
     mocks.runtime.writeJson.mockClear();
     let extractedRoot = "";
     mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (plan) => {
@@ -449,38 +447,45 @@ describe("templates cli", () => {
     }
     const [, options] = mocks.applyTemplateAddPlanStateless.mock.calls[0]!;
     options.assertCurrent();
-    expect(mocks.leaseAssertOwned).toHaveBeenCalledOnce();
+    expect(mocks.leaseAssertOwned).toHaveBeenCalled();
   });
 
-  it.for([false, true])("accepts an applied revision after cached response: %s", async (cached) => {
-    if (cached) {
-      mocks.callGatewayFromCli
-        .mockResolvedValueOnce(gatewayConfig("other", "revision-old"))
-        .mockResolvedValueOnce(gatewayConfig("worker", "revision-new", "revision-old"));
-    }
-    mocks.callGatewayFromCli.mockResolvedValue(gatewayConfig());
-    expect(await addWithAgentReadiness()).toMatchObject({ status: "complete" });
-    expect(mocks.sleep).toHaveBeenCalledTimes(cached ? 2 : 0);
-    if (cached) {
-      expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(3);
-    }
-  });
-
-  it("reports the last Gateway error after the reload deadline", async () => {
-    mocks.callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
-    await addWithAgentReadiness(() => {
-      let reads = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => (reads++ < 2 ? 0 : 15_000));
-    });
-    expect(output()).toMatchObject({
-      status: "failed",
-      error: {
-        code: "add_failed",
-        message:
-          "Gateway did not apply the Template agent configuration in time: gateway unavailable",
-      },
-    });
-  });
+  it.for(["local", "registry"])(
+    "wires %s Add into the same offline shared installer",
+    async (source) => {
+      await add(["--json"], source === "registry" ? (await registryFixture()).name : undefined);
+      const [, options] = mocks.applyTemplateAddPlanStateless.mock.calls[0]!;
+      expect(mocks.createLocalTemplateConversationAdapters).toHaveBeenCalledExactlyOnceWith({
+        agentId: "demo-agent",
+        assertCurrent: options.assertCurrent,
+        signal: mocks.localSignal,
+        runtime: expect.objectContaining({ log: expect.any(Function) }),
+      });
+      options.assertCurrent();
+      expect(mocks.localAssertCurrent).toHaveBeenCalled();
+      expect(mocks.leaseAssertOwned).toHaveBeenCalled();
+      mocks.localAssertCurrent.mockImplementation(() => {
+        throw new Error("offline custody lost");
+      });
+      expect(() => options.assertCurrent()).toThrow("offline custody lost");
+      expect(options.prepareAgentSession).toBe(mocks.prepareAgentSession);
+      expect(options.waitForAgentRuntime).toBe(mocks.waitForAgentRuntime);
+      expect(options.onAgentReady).toBe(mocks.onAgentReady);
+      expect(options.onSetupEvent).toBe(mocks.onSetupEvent);
+      expect(options.cronGateway).toEqual(
+        expect.objectContaining({
+          add: expect.any(Function),
+          enable: expect.any(Function),
+          writeScratch: expect.any(Function),
+        }),
+      );
+      const [conversationOptions] = mocks.createLocalTemplateConversationAdapters.mock.calls[0]!;
+      conversationOptions.runtime.log("conversation output");
+      options.runtime.log("conversation output");
+      expect(logLines()).not.toContain("conversation output");
+      expect(output()).toMatchObject({ status: "complete" });
+    },
+  );
 });
 
 // Wire fixtures keep the real registry client, trust gate, downloader, extractor,

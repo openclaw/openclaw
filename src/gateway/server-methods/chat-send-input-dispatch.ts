@@ -622,6 +622,7 @@ export async function handleChatSendWithStorage(
       client,
       context,
       toolsAllow: options?.toolsAllow,
+      deferWorkspaceBootstrap: options?.deferWorkspaceBootstrap,
       prepareAssistantTranscriptMessage: options?.prepareAssistantTranscriptMessage,
       skillLibrary: {
         sessionKey,

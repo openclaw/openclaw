@@ -10,6 +10,7 @@ type ProvisioningInput = Parameters<
 export async function prepareReplyWorkspace(params: {
   dir: string;
   ensureBootstrapFiles: boolean;
+  deferWorkspaceBootstrap?: true;
   skipOptionalBootstrapFiles?: string[];
   useFastTestBootstrap: boolean;
   provisioningInput: ProvisioningInput;
@@ -19,7 +20,7 @@ export async function prepareReplyWorkspace(params: {
   const { abortSignal, operatorAuthority } = params;
   const options = {
     dir: params.dir,
-    ensureBootstrapFiles: params.ensureBootstrapFiles,
+    ensureBootstrapFiles: params.ensureBootstrapFiles && !params.deferWorkspaceBootstrap,
     skipOptionalBootstrapFiles: params.skipOptionalBootstrapFiles,
   };
   const assertCurrent = () => {

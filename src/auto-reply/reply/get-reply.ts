@@ -346,6 +346,7 @@ async function resolveReplyFromConfig(
         prepareReplyWorkspace({
           dir: workspaceDirRaw,
           ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          deferWorkspaceBootstrap: optsWithSkillFilter?.deferWorkspaceBootstrap,
           skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
           useFastTestBootstrap,
           provisioningInput: acpWorkspaceProvisioningInput,

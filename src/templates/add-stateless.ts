@@ -1,5 +1,6 @@
 import { lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { claimCompletedAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
@@ -8,6 +9,7 @@ import { readConfigFileSnapshotForWrite, transformConfigFileWithRetry } from "..
 import type { ConfigWriteOptions } from "../config/io.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { copyRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -15,11 +17,15 @@ import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type {
+  TemplateInstallEvent,
+  TemplateInstallOutcome,
+} from "../shared/template-install-notice.js";
 import { readAgentDeletionJournalAsync } from "../state/agent-deletion-journal.js";
 import { resolveUserPath } from "../utils.js";
 import { addTemplateAgentToConfig } from "./add-agent-config.js";
 import { TemplateAddMutationError } from "./add-mutation-error.js";
-import { planWithPackageActions, sameCommittedAgent } from "./add-plan-helpers.js";
+import { sameCommittedAgent } from "./add-plan-helpers.js";
 import { rollbackWorkspaceBootstrapSeedForAdd } from "./add-state-write.js";
 import { TEMPLATE_ADD_RESULT_SCHEMA_VERSION } from "./add.js";
 import { seedTemplatePackageBootstrap } from "./bootstrap.js";
@@ -55,6 +61,12 @@ type ConfigCommit = (
 ) => Promise<void>;
 
 export type StatelessTemplateAddOptions = TemplateMutationStateOptions & {
+  /** Exact in-flight ordinary admission, not permission to merge an existing agent. */
+  admittedAgent?: {
+    config: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
+    workspaceIdentity: string;
+    assertCurrent: () => Promise<void>;
+  };
   assertForwardCurrent?: () => void;
   assertReviewedConfig?: (config: OpenClawConfig, phase?: "after-agent-commit") => void;
   getCurrentConfig?: () => OpenClawConfig;
@@ -65,12 +77,17 @@ export type StatelessTemplateAddOptions = TemplateMutationStateOptions & {
   skillConsent?: TemplateSkillInstallConsent;
   reloadPlugins?: PluginInstallBatchReload;
   runtimeBatch?: TemplatePluginRuntimeOptions["runtimeBatch"];
-  cronGateway?: Pick<
-    TemplateCronGateway,
-    "add" | "list" | "waitUntilAgentAvailable" | "writeScratch" | "enable"
-  > &
+  cronGateway?: Pick<TemplateCronGateway, "add" | "list" | "writeScratch" | "enable"> &
     Partial<Pick<TemplateCronGateway, "get" | "remove">>;
   commitConfig?: ConfigCommit;
+  /** Save ordinary session state before publishing its new agent; returns exact owned cleanup. */
+  prepareAgentSession?: (config: OpenClawConfig) => Promise<() => Promise<void>>;
+  /** Confirm active runtime publication before transferring rollback custody. */
+  waitForAgentRuntime?: () => Promise<"applied" | "applied-restart-required">;
+  /** Instructions, canonical chat, and active runtime are ready; setup continues here. */
+  onAgentReady?: (agent: { agentId: string; sessionKey: string }) => Promise<void>;
+  /** Publish each actual installation outcome without a model recap. */
+  onSetupEvent?: (event: TemplateInstallEvent) => Promise<void>;
   configWriteOptions?: ConfigWriteOptions;
   rollbackNewAgent?: (plan: TemplateAddPlan, cronJobs: PersistedTemplateCronRef[]) => Promise<void>;
 };
@@ -82,6 +99,7 @@ export type StatelessTemplateAddResult = {
   mutationAllowed: true;
   planIntegrity: string;
   status: "complete" | "partial";
+  agentRetained?: true;
   template: TemplateAddPlan["template"];
   agent: TemplateAddPlan["agent"];
   workspaceCreated: boolean;
@@ -108,6 +126,8 @@ type StatelessTemplateAddAgentStage =
   | { kind: "partial"; result: StatelessTemplateAddResult }
   | {
       kind: "ready";
+      /** Transfer rollback custody once the Gateway has exposed this ordinary agent. */
+      retain: () => void;
       finish: (options?: StatelessTemplateAddOptions) => Promise<StatelessTemplateAddResult>;
       fail: (
         error: unknown,
@@ -128,7 +148,7 @@ function assertWorkspacePathUnchanged(workspace: string): void {
   }
 }
 
-async function workspaceIdentity(workspace: string): Promise<string> {
+export async function workspaceIdentity(workspace: string): Promise<string> {
   const entries: string[] = [];
   const inspect = async (relative: string): Promise<void> => {
     const target = resolve(workspace, relative);
@@ -182,7 +202,7 @@ export async function applyTemplateAddPlanStateless(
   return staged.kind === "partial" ? staged.result : await staged.continue();
 }
 
-/** Stage host plugins before the Gateway activates its runtime batch. */
+/** Prepare one in-flight Add; effects begin with the ordinary agent, not integrations. */
 export async function stageTemplateAddHostRequirementsStateless(
   plan: TemplateAddPlan,
   initialOptions: StatelessTemplateAddOptions = {},
@@ -202,6 +222,8 @@ export async function stageTemplateAddHostRequirementsStateless(
   let workspaceExposed = false;
   let workspaceBeforeExposure: string | undefined;
   let configCommitted = false;
+  let retained = initialOptions.admittedAgent !== undefined;
+  let rollbackAgentSession: (() => Promise<void>) | undefined;
   let configCommitAttempted = false;
   let workspaceFiles: PersistedTemplateWorkspaceFile[] = [];
   let bootstrapSeededAt: string | undefined;
@@ -219,6 +241,7 @@ export async function stageTemplateAddHostRequirementsStateless(
     mutationAllowed: true,
     planIntegrity: plan.planIntegrity,
     status,
+    ...(retained ? { agentRetained: true as const } : {}),
     template: plan.template,
     agent: plan.agent,
     workspaceCreated,
@@ -237,8 +260,29 @@ export async function stageTemplateAddHostRequirementsStateless(
     }
     options.assertCurrent?.();
   };
+  let assertPluginRequirementsCurrent: (() => Promise<void>) | undefined;
   const stageOptions = (phase?: "after-agent-commit") => ({
     ...options,
+    prepareEffect: async () => {
+      await options.prepareEffect?.();
+      await assertPluginRequirementsCurrent?.();
+      assertForwardCurrent(phase);
+    },
+    onSetupOutcome: async (outcome: TemplateInstallOutcome) => {
+      assertForwardCurrent(phase);
+      await options.onSetupEvent?.({
+        ...outcome,
+        agentId: plan.agent.finalId,
+        sessionKey: resolveAgentMainSessionKey({
+          cfg: options.getCurrentConfig?.() ?? options.config,
+          agentId: plan.agent.finalId,
+        }),
+      });
+      assertForwardCurrent(phase);
+    },
+    onPluginRuntimeReady: (assertCurrent: () => Promise<void>) => {
+      assertPluginRequirementsCurrent = assertCurrent;
+    },
     assertForwardCurrent: () => assertForwardCurrent(phase),
   });
   const rollback = async (): Promise<string[]> => {
@@ -299,6 +343,15 @@ export async function stageTemplateAddHostRequirementsStateless(
         errors.push(`agent cleanup failed: ${coerceErrorMessage(error)}`);
       }
     }
+    if (!configCommitted && rollbackAgentSession) {
+      try {
+        await rollbackAgentSession();
+        rollbackAgentSession = undefined;
+      } catch (error) {
+        errors.push(`session cleanup failed; workspace retained: ` + coerceErrorMessage(error));
+        return errors;
+      }
+    }
     if (workspaceCreated && !configCommitted) {
       try {
         options.assertCurrent?.();
@@ -325,6 +378,14 @@ export async function stageTemplateAddHostRequirementsStateless(
     return errors;
   };
   const fail = async (error: unknown, code: string): Promise<StatelessTemplateAddResult> => {
+    // Exposure is a one-way custody transfer, not a reason to delete a usable agent.
+    // Keep its workspace, chat, requirements and actual routine outcomes on later failure.
+    if (retained) {
+      return result("partial", {
+        code,
+        message: `${coerceErrorMessage(error)} The agent was already made available and was kept. Continue setup in this agent; do not add another copy.`,
+      });
+    }
     const cleanupErrors = await rollback();
     if (!workspaceExposed && !configCommitted) {
       cleanupErrors.push(
@@ -350,18 +411,6 @@ export async function stageTemplateAddHostRequirementsStateless(
         retainedMessage,
     });
   };
-  try {
-    assertForwardCurrent();
-    const hostPlan = planWithPackageActions(plan, (action) => action.details?.kind === "plugin");
-    if (hostPlan.actions.some((action) => action.kind === "package")) {
-      packages = await installTemplatePackages(hostPlan, stageOptions());
-    }
-  } catch (error) {
-    if (error instanceof TemplatePackageInstallError) {
-      packages = error.installedPackages;
-    }
-    return { kind: "partial", result: await fail(error, "package_install_failed") };
-  }
   const stageAgent = async (agentOptions = options): Promise<StatelessTemplateAddAgentStage> => {
     if (continued) {
       throw new Error("Template Add was already continued");
@@ -377,7 +426,12 @@ export async function stageTemplateAddHostRequirementsStateless(
         }
         throw error;
       });
-      if (existing) {
+      if (options.admittedAgent) {
+        await options.admittedAgent.assertCurrent();
+        if ((await workspaceIdentity(workspace)) !== options.admittedAgent.workspaceIdentity) {
+          throw new Error("The admitted workspace changed before Template initialization");
+        }
+      } else if (existing) {
         throw new TemplateAddMutationError(
           "workspace_collision",
           `Workspace ${JSON.stringify(workspace)} was created after planning.`,
@@ -389,25 +443,11 @@ export async function stageTemplateAddHostRequirementsStateless(
       await options.prepareEffect?.();
       assertForwardCurrent();
       assertWorkspacePathUnchanged(workspace);
-      await mkdir(workspace);
-      workspaceCreated = true;
-      const bootstrapNow = Date.now();
-      const bootstrap = await seedTemplatePackageBootstrap(plan, {
-        ...stageOptions(),
-        nowMs: bootstrapNow,
-      });
-      if (bootstrap === "seeded") {
-        bootstrapSeededAt = new Date(bootstrapNow).toISOString();
+      if (!options.admittedAgent) {
+        await mkdir(workspace);
+        workspaceCreated = true;
       }
       workspaceFiles = await createTemplateWorkspaceFiles(plan, stageOptions());
-      const workspacePlan = planWithPackageActions(
-        plan,
-        (action) => action.details?.kind !== "plugin",
-      );
-      if (workspacePlan.actions.some((action) => action.kind === "package")) {
-        packages = [...packages, ...(await installTemplatePackages(workspacePlan, stageOptions()))];
-      }
-      await installTemplateMcpServersStateless(plan, { ...stageOptions(), refs: mcpServers });
       workspaceBeforeExposure = await workspaceIdentity(workspace);
       const deletion = await readAgentDeletionJournalAsync(plan.agent.finalId);
       if (deletion && !deletion.cleanupCompleted) {
@@ -416,11 +456,41 @@ export async function stageTemplateAddHostRequirementsStateless(
           `Agent ${JSON.stringify(plan.agent.finalId)} deletion cleanup is still pending.`,
         );
       }
+      if (deletion?.cleanupCompleted && !options.admittedAgent) {
+        await options.prepareEffect?.();
+        assertForwardCurrent();
+        if (!(await claimCompletedAgentDeletion(plan.agent.finalId, deletion.operationId))) {
+          throw new TemplateAddMutationError(
+            "agent_deletion_changed",
+            `Agent ${JSON.stringify(plan.agent.finalId)} deletion changed during Add.`,
+          );
+        }
+      }
+      if (options.prepareAgentSession && !options.admittedAgent) {
+        const config = options.getCurrentConfig?.() ?? options.config;
+        if (!config) {
+          throw new Error("Current config is unavailable for ordinary session preparation");
+        }
+        rollbackAgentSession = await options.prepareAgentSession(
+          addTemplateAgentToConfig(config, plan, workspace),
+        );
+        assertForwardCurrent();
+      }
       configCommitAttempted = true;
-      await commitConfig((config, runtimeConfig) => {
+      await commitConfig((sourceConfig, runtimeConfig) => {
+        let config = sourceConfig;
         options.assertCurrent?.();
         options.assertForwardCurrent?.();
         options.assertReviewedConfig?.(applyConfigOverrides(runtimeConfig ?? config));
+        if (options.admittedAgent) {
+          const admitted = options.admittedAgent;
+          if (!isDeepStrictEqual(config.agents?.entries?.[plan.agent.finalId], admitted.config)) {
+            throw new Error("The admitted agent changed before Template initialization");
+          }
+          const entries = { ...config.agents?.entries };
+          delete entries[plan.agent.finalId];
+          config = { ...config, agents: { ...config.agents, entries } };
+        }
         if (
           listAgentEntries(config).some(
             (entry) => normalizeAgentId(entry.id) === normalizeAgentId(plan.agent.finalId),
@@ -435,16 +505,6 @@ export async function stageTemplateAddHostRequirementsStateless(
       }, options);
       configCommitted = true;
       workspaceExposed = true;
-      if (deletion?.cleanupCompleted) {
-        await options.prepareEffect?.();
-        assertForwardCurrent("after-agent-commit");
-        if (!(await claimCompletedAgentDeletion(plan.agent.finalId, deletion.operationId))) {
-          throw new TemplateAddMutationError(
-            "agent_deletion_changed",
-            `Agent ${JSON.stringify(plan.agent.finalId)} deletion changed during Add.`,
-          );
-        }
-      }
       let finished = false;
       const finishOnce = (nextOptions: StatelessTemplateAddOptions) => {
         if (finished) {
@@ -455,16 +515,68 @@ export async function stageTemplateAddHostRequirementsStateless(
       };
       return {
         kind: "ready",
+        retain: () => {
+          retained = true;
+          rollbackAgentSession = undefined;
+        },
         finish: async (nextOptions = options) => {
           finishOnce(nextOptions);
           try {
+            if (options.waitForAgentRuntime) {
+              const outcome = await options.waitForAgentRuntime();
+              retained = true;
+              rollbackAgentSession = undefined;
+              if (outcome === "applied-restart-required") {
+                throw new TemplateAddMutationError(
+                  "agent_runtime_recovery_required",
+                  "The Gateway published the agent but requires a recovery restart. Wait for Gateway recovery before continuing setup.",
+                );
+              }
+            }
+            await options.prepareEffect?.();
             assertForwardCurrent("after-agent-commit");
+            if (options.onAgentReady) {
+              if (
+                (!options.prepareAgentSession && !options.admittedAgent) ||
+                !options.waitForAgentRuntime
+              ) {
+                throw new Error(
+                  "Agent-ready publication requires prepared chat and active runtime",
+                );
+              }
+              await options.onAgentReady({
+                agentId: plan.agent.finalId,
+                sessionKey: resolveAgentMainSessionKey({
+                  cfg: options.getCurrentConfig?.() ?? options.config,
+                  agentId: plan.agent.finalId,
+                }),
+              });
+              assertForwardCurrent("after-agent-commit");
+            }
+            if (plan.actions.some((action) => action.kind === "package")) {
+              packages = await installTemplatePackages(plan, stageOptions("after-agent-commit"));
+            }
+            await installTemplateMcpServersStateless(plan, {
+              ...stageOptions("after-agent-commit"),
+              refs: mcpServers,
+            });
             cronJobs = await installTemplateCronJobsStateless(plan, {
               ...stageOptions("after-agent-commit"),
               gateway: options.cronGateway,
             });
+            const bootstrapNow = Date.now();
+            const bootstrap = await seedTemplatePackageBootstrap(plan, {
+              ...stageOptions("after-agent-commit"),
+              nowMs: bootstrapNow,
+            });
+            if (bootstrap === "seeded") {
+              bootstrapSeededAt = new Date(bootstrapNow).toISOString();
+            }
             return result("complete");
           } catch (error) {
+            if (error instanceof TemplatePackageInstallError) {
+              packages = error.installedPackages;
+            }
             if (error instanceof TemplateCronInstallError) {
               cronJobs = error.cronJobs;
               if (error.code === "cron_scratch_import_incomplete") {
@@ -487,6 +599,15 @@ export async function stageTemplateAddHostRequirementsStateless(
         },
       };
     } catch (error) {
+      if (
+        error instanceof TemplateAddMutationError &&
+        error.code === "agent_session_outcome_uncertain"
+      ) {
+        return {
+          kind: "partial",
+          result: result("partial", { code: error.code, message: error.message }),
+        };
+      }
       if (configCommitAttempted && !configCommitted) {
         try {
           const current = options.commitConfig
