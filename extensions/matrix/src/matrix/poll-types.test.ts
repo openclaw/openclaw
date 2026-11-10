@@ -80,8 +80,10 @@ it("buildPollStartContent: preserves the requested multiselect cap instead of wi
     maxSelections: 2,
   });
 
-  expect(content["m.poll.start"]?.max_selections).toBe(2);
-  expect(content["m.poll.start"]?.kind).toBe("m.poll.undisclosed");
+  const poll = content["org.matrix.msc3381.poll.start"];
+  expect(content["m.poll.start"]).toBeUndefined();
+  expect([poll?.max_selections, poll?.kind]).toEqual([2, "org.matrix.msc3381.poll.undisclosed"]);
+  expect(parsePollStart(content)).toMatchObject({ kind: "m.poll.undisclosed", maxSelections: 2 });
   expect(content["m.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
   expect(content["org.matrix.msc1767.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
 });
