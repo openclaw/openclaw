@@ -25,18 +25,16 @@ export type RerankRequest = { readonly query: string; readonly documents: readon
 
 /** Where each scored document lands in the Decision answers. */
 type Slot =
-  | { readonly kind: "boolean"; readonly question: string; readonly request: number }
+  | { readonly kind: "boolean"; readonly question: string }
   | {
       readonly kind: "choice";
       readonly question: string;
       readonly label: string;
-      readonly request: number;
     }
   | {
       readonly kind: "sort";
       readonly question: string;
       readonly id: string;
-      readonly request: number;
     };
 
 export type RerankPlan = {
@@ -94,7 +92,7 @@ export function planRerankDecision(batch: DecisionBatchV2): RerankPlan | undefin
         return undefined;
       }
       const request = requestFor(query);
-      add(request, render(document), { kind: "boolean", question, request });
+      add(request, render(document), { kind: "boolean", question });
       continue;
     }
     if (spec.type === "choice") {
@@ -109,7 +107,6 @@ export function planRerankDecision(batch: DecisionBatchV2): RerankPlan | undefin
           kind: "choice",
           question,
           label,
-          request,
         });
       }
       continue;
@@ -124,7 +121,7 @@ export function planRerankDecision(batch: DecisionBatchV2): RerankPlan | undefin
       }
       const request = requestFor(sortQuery);
       for (const item of batch.state.items) {
-        add(request, render(item.content), { kind: "sort", question, id: item.id, request });
+        add(request, render(item.content), { kind: "sort", question, id: item.id });
       }
       continue;
     }
