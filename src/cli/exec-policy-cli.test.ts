@@ -506,6 +506,8 @@ describe("exec-policy CLI", () => {
     expect(output).toContain("scope\\u{200B}name");
     expect(output).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     expect(output).toContain("\\nforged");
+    // Layout breaks inside policy cells are real lines, not escaped ones.
+    expect(output).not.toMatch(/\\n(?:security|ask|askFallback)=/u);
     expect(output).not.toContain("/tmp/openclaw.json\nforged");
     expect(output).not.toContain("\u001B[2J");
     expect(output).not.toContain("\u0007");
