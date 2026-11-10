@@ -545,16 +545,65 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const inheritedEnv = options.env ?? process.env;
   const jobEnv = mergePlanEnv({}, parseJsonEnv(inheritedEnv, "OPENCLAW_NODE_TEST_ENV_JSON"));
   const baseEnv = mergePlanEnv(inheritedEnv, jobEnv);
+  const vitestExtraArgsFor = (entry: ShardPlan) =>
+    [
+      inheritedEnv,
+      mergePlanEnv(jobEnv, entry.kind === "group" ? entry.plan.env : undefined),
+    ].flatMap((env) => {
+      const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
+      return isStringArray(value) ? value : [];
+    });
+  const preparedBuildEnv: NodeJS.ProcessEnv = {};
   if (
-    baseEnv.OPENCLAW_E2E_USE_PREBUILT_DIST === "1" &&
     fileURLToPath(import.meta.url) === join(process.cwd(), "scripts/ci-run-node-test-shard.mts")
   ) {
-    const { preparePrebuiltAiPackage } = await import("./lib/vitest-build-prerequisites.mts");
+    const { prepareE2eVitestRuntime, preparePrebuiltAiPackage } =
+      await import("./lib/vitest-build-prerequisites.mts");
+    const { buildVitestRunPlans } = await import("./test-projects.test-support.mts");
+    // The outer shard owns the shared compiler. An E2E child's private fence
+    // cannot stop sibling readers from capturing inputs during its runtime build.
     for (const entry of plans) {
-      const selection = entry.kind === "target" ? { includePatterns: [entry.target] } : entry.plan;
-      const code = await preparePrebuiltAiPackage([selection], prepareChildEnv(entry, baseEnv));
-      if (code !== 0) {
-        return code;
+      const env = prepareChildEnv(entry, baseEnv);
+      const args = entry.kind === "target" ? [entry.target] : entry.plan.configs;
+      const extraArgs = vitestExtraArgsFor(entry);
+      const selected = buildVitestRunPlans(
+        extraArgs.length ? [...args, "--", ...extraArgs] : args,
+        process.cwd(),
+        undefined,
+        { env },
+      );
+      const e2e = selected.filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
+      if (e2e.length === 0) {
+        continue;
+      }
+      const { parseCLI } = await import("vitest/node");
+      const { parseVitestExecutionArgs } = await import("./lib/vitest-cli.mts");
+      if (
+        e2e.some((plan) => {
+          return parseVitestExecutionArgs(
+            [...(plan.watchMode ? [] : ["run"]), ...plan.forwardedArgs],
+            parseCLI,
+          );
+        })
+      ) {
+        Object.assign(
+          preparedBuildEnv,
+          await prepareE2eVitestRuntime({ ...env, ...preparedBuildEnv }),
+        );
+      }
+    }
+    Object.assign(baseEnv, preparedBuildEnv);
+    if (baseEnv.OPENCLAW_E2E_USE_PREBUILT_DIST === "1") {
+      for (const entry of plans) {
+        const selection =
+          entry.kind === "target" ? { includePatterns: [entry.target] } : entry.plan;
+        const code = await preparePrebuiltAiPackage([selection], {
+          ...prepareChildEnv(entry, baseEnv),
+          ...preparedBuildEnv,
+        });
+        if (code !== 0) {
+          return code;
+        }
       }
     }
   }
@@ -762,13 +811,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
         }
         // A standalone plan already projects the job environment. Resolve its
         // scoped override once, then append it to the inherited global flags.
-        const vitestExtraArgs = [
-          inheritedEnv,
-          mergePlanEnv(jobEnv, entry.kind === "group" ? entry.plan.env : undefined),
-        ].flatMap((env) => {
-          const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
-          return isStringArray(value) ? value : [];
-        });
+        const vitestExtraArgs = vitestExtraArgsFor(entry);
         const selections = preparedRuntimeSelections.get(entry) ??
           runtimeOwner?.resolveCiTestRuntimeSelections(
             {
@@ -855,7 +898,9 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
               delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
             }
           }
-          Object.assign(childEnv, selection.env);
+          // Successful shared preparation outranks a group's stale prebuilt flag;
+          // no E2E descendant may reopen the writer after compiler admission.
+          Object.assign(childEnv, selection.env, preparedBuildEnv);
           delete childEnv.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT;
           delete childEnv.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID;
           if (uiReceipt && runtime === "bun") {
