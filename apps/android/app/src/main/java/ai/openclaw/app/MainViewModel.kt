@@ -74,6 +74,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -513,7 +514,19 @@ class MainViewModel internal constructor(
     val processIntent = resumeNodeServiceForConnection()
     val sequence = gatewayConfigOperationSeq.incrementAndGet()
     val runtime = ensureRuntime()
-    runtime.beginOpenClawIdEnrollment(link, discoveryOrigin) { sequence == gatewayConfigOperationSeq.get() && processIntent() }
+    runtime.beginOpenClawIdEnrollment(
+      link,
+      discoveryOrigin,
+      callerIsCurrent = { viewModelScope.isActive && sequence == gatewayConfigOperationSeq.get() && processIntent() },
+    ) { endpoint, isCurrent ->
+      withContext(Dispatchers.Main) {
+        // Approval can arrive after the composer or microphone acquired new work.
+        if (!isCurrent() || !canBeginQuickGatewayConnection(runtime)) return@withContext
+        launchGatewayConnectionOperation(quickSwitch = true, callerIsCurrent = isCurrent) { owner, operation ->
+          owner.connectSwitchingGateway(endpoint, isCurrent = operation)
+        }
+      }
+    }
   }
 
   internal fun cancelOpenClawIdEnrollment() {
@@ -1364,14 +1377,20 @@ class MainViewModel internal constructor(
 
   private fun launchGatewayConnectionOperation(
     quickSwitch: Boolean = false,
+    callerIsCurrent: () -> Boolean = { true },
     onAdmitted: () -> Unit = {},
     action: suspend (NodeRuntime, NodeRuntime.GatewayConnectionOperation) -> Unit,
   ) {
     val createIntent = {
-      val processIntent = resumeNodeServiceForConnection()
-      val sequence = gatewayConfigOperationSeq.incrementAndGet()
-      val isCurrent = { sequence == gatewayConfigOperationSeq.get() && processIntent() }
-      isCurrent
+      // Quick admission holds service control here: a canceled enrollment must not resume Stop.
+      if (!callerIsCurrent()) {
+        { false }
+      } else {
+        val processIntent = resumeNodeServiceForConnection()
+        val sequence = gatewayConfigOperationSeq.incrementAndGet()
+        val isCurrent = { sequence == gatewayConfigOperationSeq.get() && processIntent() }
+        isCurrent
+      }
     }
     // Preserve resume-before-startup for existing callers; a rejected quick switch has no service intent.
     val existingCallerIntent = if (quickSwitch) null else createIntent()

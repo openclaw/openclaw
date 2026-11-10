@@ -927,17 +927,22 @@ class NodeRuntime internal constructor(
     link: String,
     discoveryOrigin: String,
     callerIsCurrent: () -> Boolean,
+    onAdmitted: suspend (GatewayEndpoint, () -> Boolean) -> Unit,
   ) {
     val options = connectionManager.buildNodeConnectOptions()
     val intent = gatewayLifecycleIntent()
     val current = { intent() && callerIsCurrent() }
     openClawIdController.begin(link, discoveryOrigin, options.client.displayName ?: "Android", options.client.platform, options.commands, options.caps, current) { target ->
+      val enrollmentContext = currentCoroutineContext()
+      val handoffIsCurrent = { enrollmentContext.isActive && current() }
+      val endpoint = openClawIdEndpoint(target)
       synchronized(gatewayLifecycleIntentLock) {
-        if (!current()) throw CancellationException("Node enrollment retired")
-        val endpoint = openClawIdEndpoint(target)
-        registerGateway(endpoint)
-        connect(endpoint)
+        if (!handoffIsCurrent()) throw CancellationException("Node enrollment retired")
+        // Admission is durable even when the UI declines to switch away from current work.
+        registerGateway(endpoint, activate = false)
       }
+      // The UI's quick-switch owner takes service control before runtime admission.
+      onAdmitted(endpoint, handoffIsCurrent)
     }
   }
 
@@ -5226,13 +5231,16 @@ class NodeRuntime internal constructor(
     prefs.gatewayRegistry.markConnected(endpoint.stableId, System.currentTimeMillis())
   }
 
-  private fun registerGateway(endpoint: GatewayEndpoint) {
+  private fun registerGateway(
+    endpoint: GatewayEndpoint,
+    activate: Boolean = true,
+  ) {
     val existing =
       prefs.gatewayRegistry.entries.value
         .firstOrNull { it.stableId == endpoint.stableId }
     val entry = gatewayRegistryEntry(endpoint, existing)
     prefs.gatewayRegistry.upsert(entry)
-    prefs.gatewayRegistry.setActive(endpoint.stableId)
+    if (activate) prefs.gatewayRegistry.setActive(endpoint.stableId)
   }
 
   private suspend fun drainGatewayConnectionsForConnect(

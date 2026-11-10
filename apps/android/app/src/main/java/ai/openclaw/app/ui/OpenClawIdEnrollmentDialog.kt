@@ -93,7 +93,7 @@ internal fun OpenClawIdEnrollmentDialog(
         when {
           state.admitted -> {
             Text(nativeString("Node enrollment complete."), style = ClawTheme.type.section)
-            Text(nativeString("Node access was admitted. Chat remains disconnected."))
+            Text(nativeString("Node access was admitted and saved. If you are still using another gateway, select this one when you are ready. This node connection does not enable chat."))
             ClawPrimaryButton(text = nativeString("Done"), onClick = onComplete, modifier = Modifier.fillMaxWidth())
           }
 
