@@ -495,6 +495,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-tables.ts":
     case "ui/src/components/markdown-text-replacements.ts":
     case "ui/src/components/markdown-text.ts":
+    case "ui/src/components/markdown-windows-paths.ts":
     case "ui/src/lib/markdown-content.ts":
     case "ui/src/i18n/locales/en-chat-media.ts":
     case "ui/src/i18n/locales/en-code-blocks.ts":

@@ -203,11 +203,11 @@ export async function scanActualWorkspaceManifest(
     // Only repair candidates authenticated against a saved root may retain this former input.
     includeLegacyPnpmStore?: boolean;
     unchangedProbe?: boolean;
-    // Return only an accepted baseline node whose exact file identity still matches.
+    // The caller proves content reuse through file identity or immutable template custody.
     reuseFile?: (
       entryPath: string,
       identity: string,
-      stats: Pick<BigIntStats, "dev" | "ino" | "size" | "ctimeNs">,
+      stats: Pick<BigIntStats, "dev" | "ino" | "size" | "ctimeNs" | "mode">,
     ) => Extract<WorkerWorkspaceManifestEntry, { type: "file" }> | undefined;
   },
 ): Promise<void> {
@@ -526,11 +526,13 @@ export async function scanActualWorkspaceManifest(
 
 export async function readActualWorkspaceManifestImpl(
   params: ActualWorkspaceManifestOptions,
+  reuseFile?: Parameters<typeof scanActualWorkspaceManifest>[0]["reuseFile"],
 ): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string; rawManifest: string }> {
   const entries: WorkerWorkspaceManifestEntry[] = [];
   const directories: string[] = [];
   await scanActualWorkspaceManifest({
     ...params,
+    reuseFile,
     onEntry(entry) {
       if (entry.type === "directory") {
         directories.push(entry.path);
