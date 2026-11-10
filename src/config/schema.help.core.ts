@@ -391,6 +391,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.entries.*.newSessionPermissionMode":
     "Permission mode saved on new attended, profiled operator sessions when no explicit mode is supplied. Does not change existing, forked, delegated, or autonomous sessions. Full still requires operator.admin.",
+  "agents.entries.*.picker":
+    "Optional visibility metadata for this agent in user-facing agent pickers and switchers.",
+  "agents.entries.*.picker.hidden":
+    "Hides this agent from chat-facing agent pickers and switchers in the Control UI and TUI. The agent stays a valid sessions_spawn target and remains listed by openclaw agents list; Settings, Cron, and other administrative surfaces still offer it.",
   "agents.entries.*.fastModeDefault":
     'Optional per-agent default for fast mode ("auto", "ultrafast", true, or false). Applies when no per-message or session fast-mode override is set.',
   "agents.defaults.fastModeDefault":
