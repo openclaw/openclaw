@@ -60,6 +60,9 @@ function runBasePreparation(repo: string, base: string, eventName: string) {
     '#!/bin/sh\nif [ "$1" = tee ]; then cat >/dev/null; fi\n',
   );
   fs.chmodSync(path.join(bin, "sudo"), 0o755);
+  fs.writeFileSync(path.join(bin, "readlink"), '#!/bin/sh\nprintf "%s\\n" "$2"\n', {
+    mode: 0o755,
+  });
   const actionPath = path.join(repo, ".github/actions/prepare-testbox-shell");
   const action = parse(fs.readFileSync(path.join(actionPath, "action.yml"), "utf8"));
   const actionStep: Step = action.runs.steps[0];
@@ -136,41 +139,77 @@ it.each([
   );
 });
 
-it("reuses hydrated pnpm paths across an empty SSH environment", () => {
-  const root = createTempDir("openclaw-testbox-pnpm-");
-  const bin = path.join(root, "prepared tools");
-  const exposed = path.join(root, "bin");
-  for (const directory of [bin, exposed]) fs.mkdirSync(directory);
-  const writeTool = (name: string, text: string) =>
-    fs.writeFileSync(path.join(bin, name), text, { mode: 0o755 });
-  writeTool("node", '#!/bin/sh\nprintf "%s\\n" "$TESTBOX_NODE"\n');
-  writeTool("git", '#!/bin/sh\nprintf "%s\\n" fixture-base\n');
-  writeTool("sudo", '#!/bin/sh\nexec "$@"\n');
-  writeTool("corepack", '#!/bin/bash\nprintf "%s\\0" "${COREPACK_HOME-}" "${PNPM_CONFIG_STORE_DIR-}" "${PNPM_CONFIG_CACHE_DIR-}" "$@"\n');
-  const prepared = Object.fromEntries(
-    ["COREPACK_HOME", "PNPM_CONFIG_STORE_DIR", "PNPM_CONFIG_CACHE_DIR"]
-      .map((key) => [key, path.join(root, `${key} space ' quote`)]),
-  );
-  const action = parse(fs.readFileSync(".github/actions/prepare-testbox-shell/action.yml", "utf8"));
-  const result = spawnSync("/bin/bash", ["-euo", "pipefail", "-c",
-    action.runs.steps[0].run.replaceAll("/usr/local/bin", exposed)], {
-    encoding: "utf8",
-    env: { ...process.env, ...prepared, PATH: `${bin}:${process.env.PATH}`,
-      TESTBOX_NODE: path.join(bin, "node"), RUNNER_TEMP: root,
-      GITHUB_EVENT_NAME: "workflow_dispatch", TESTBOX_BASE_REF: "HEAD" },
-  });
-  expect(result.status, result.stderr).toBe(0);
-  for (const program of ["pnpm", "corepack"]) {
-    const overrides: Record<string, string>[] = [{}, { PNPM_CONFIG_STORE_DIR: "/explicit/store" }];
-    for (const override of overrides) {
-      const args = [...(program === "corepack" ? ["pnpm"] : []), "install", "--offline", "two words"];
-      const command = spawnSync(path.join(exposed, program), args, {
-        encoding: "utf8", env: { PATH: "/usr/bin:/bin", HOME: root, ...override },
-      });
-      expect(command.status, command.stderr).toBe(0);
-      expect(command.stdout.split("\0").slice(0, -1)).toEqual([
-        ...Object.values({ ...prepared, ...override }), "pnpm", "install", "--offline", "two words",
-      ]);
+it.each([false, true])(
+  "reuses hydrated pnpm paths with coincident tool paths: %s",
+  (coincident) => {
+    const root = createTempDir("openclaw-testbox-pnpm-");
+    const exposed = path.join(root, "bin");
+    const bin = coincident ? exposed : path.join(root, "prepared tools");
+    for (const directory of new Set([bin, exposed])) fs.mkdirSync(directory);
+    const writeTool = (name: string, text: string) =>
+      fs.writeFileSync(path.join(bin, name), text, { mode: 0o755 });
+    writeTool("node", '#!/bin/sh\nprintf "%s\\n" "$TESTBOX_NODE"\n');
+    for (const name of ["npm", "npx"]) writeTool(name, "#!/bin/sh\nexit 0\n");
+    writeTool("git", '#!/bin/sh\nprintf "%s\\n" fixture-base\n');
+    writeTool("sudo", '#!/bin/sh\nexec "$@"\n');
+    fs.writeFileSync(
+      path.join(root, "corepack.cjs"),
+      '#!/bin/bash\nprintf "%s\\0" "${COREPACK_HOME-}" "${PNPM_CONFIG_STORE_DIR-}" "${PNPM_CONFIG_CACHE_DIR-}" "$@"\n',
+      { mode: 0o755 },
+    );
+    fs.symlinkSync(path.join(root, "corepack.cjs"), path.join(bin, "corepack"));
+    const prepared = Object.fromEntries(
+      ["COREPACK_HOME", "PNPM_CONFIG_STORE_DIR", "PNPM_CONFIG_CACHE_DIR"].map((key) => [
+        key,
+        path.join(root, `${key} space ' quote`),
+      ]),
+    );
+    const action = parse(
+      fs.readFileSync(".github/actions/prepare-testbox-shell/action.yml", "utf8"),
+    );
+    const result = spawnSync(
+      "/bin/bash",
+      ["-euo", "pipefail", "-c", action.runs.steps[0].run.replaceAll("/usr/local/bin", exposed)],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...prepared,
+          PATH: `${bin}:${process.env.PATH}`,
+          TESTBOX_NODE: path.join(bin, "node"),
+          RUNNER_TEMP: root,
+          GITHUB_EVENT_NAME: "workflow_dispatch",
+          TESTBOX_BASE_REF: "HEAD",
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    for (const program of ["pnpm", "corepack"]) {
+      const overrides: Record<string, string>[] = [
+        {},
+        { PNPM_CONFIG_STORE_DIR: "/explicit/store" },
+      ];
+      for (const override of overrides) {
+        const args = [
+          ...(program === "corepack" ? ["pnpm"] : []),
+          "install",
+          "--offline",
+          "two words",
+        ];
+        const command = spawnSync(path.join(exposed, program), args, {
+          encoding: "utf8",
+          timeout: 5_000,
+          env: { PATH: "/usr/bin:/bin", HOME: root, ...override },
+        });
+        expect(command.status, command.stderr).toBe(0);
+        expect(command.stdout.split("\0").slice(0, -1)).toEqual([
+          ...Object.values({ ...prepared, ...override }),
+          "pnpm",
+          "install",
+          "--offline",
+          "two words",
+        ]);
+      }
     }
-  }
-});
+  },
+);
