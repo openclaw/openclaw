@@ -305,9 +305,12 @@ const dependencySchema = z.unknown().transform((value, ctx) => {
       ? bundledDependencySchema
       : dependencyReferenceSchema;
   const parsed = schema.safeParse(value);
-  if (parsed.success) return parsed.data;
-  for (const issue of parsed.error.issues)
+  if (parsed.success) {
+    return parsed.data;
+  }
+  for (const issue of parsed.error.issues) {
     ctx.addIssue({ code: "custom", path: issue.path, message: issue.message });
+  }
   return z.NEVER;
 });
 
@@ -522,20 +525,22 @@ const manifestSchema = z
       manifest[kind].forEach((dependency, index) => {
         if ("path" in dependency) {
           const key = portableTemplatePathKey(dependency.path);
-          if (conflictsWithTemplatePath(bundledPaths, key))
+          if (conflictsWithTemplatePath(bundledPaths, key)) {
             ctx.addIssue({
               code: "custom",
               path: [kind, index, "path"],
               message: "Bundled dependency directories must not overlap.",
             });
+          }
           bundledPaths.add(key);
         } else {
-          if (refs.has(dependency.ref))
+          if (refs.has(dependency.ref)) {
             ctx.addIssue({
               code: "custom",
               path: [kind, index, "ref"],
               message: `Dependency ${JSON.stringify(dependency.ref)} is declared more than once in ${kind}.`,
             });
+          }
           refs.add(dependency.ref);
         }
       });

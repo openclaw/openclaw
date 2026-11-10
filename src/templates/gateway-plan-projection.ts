@@ -72,8 +72,9 @@ function assertSkillActionTarget(
       action.id !== `skill:bundled:${artifact.path}` ||
       action.target !== `bundled:${artifact.path}` ||
       action.digest !== artifact.digest
-    )
+    ) {
       throw new Error("Template bundled skill action does not match its artifact.");
+    }
     return;
   }
   if (
@@ -353,9 +354,11 @@ export function projectTemplateAddPlan(
         reason: change.reason,
       })),
       pluginReviews,
-      skillReviews: collectTemplateSkillWarningReviews(plan).map((review) =>
-        Object.assign(review, { reviewToken: digestTemplateValue(review) }),
-      ),
+      skillReviews: collectTemplateSkillWarningReviews(plan).map((review) => {
+        const sourcedReview =
+          "path" in review ? review : Object.assign(review, { source: "clawhub" as const });
+        return Object.assign(sourcedReview, { reviewToken: digestTemplateValue(sourcedReview) });
+      }),
       blockers: [
         ...plan.blockers.map((diagnostic) => ({
           code: diagnostic.code,

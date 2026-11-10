@@ -229,6 +229,7 @@ export const TemplatePluginAcknowledgementSchema = closedObject({
 export const TemplateSkillReviewSchema = Type.Union([
   closedObject({
     actionId: NonEmptyString,
+    source: Type.Literal("clawhub"),
     ref: NonEmptyString,
     version: NonEmptyString,
     integrity: NonEmptyString,
@@ -249,6 +250,7 @@ export const TemplateSkillReviewSchema = Type.Union([
 export const TemplateSkillAcknowledgementSchema = Type.Union([
   closedObject({
     actionId: NonEmptyString,
+    source: Type.Literal("clawhub"),
     ref: NonEmptyString,
     reviewToken: NonEmptyString,
     acknowledgeRiskWarning: Type.Literal(true),

@@ -6,7 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
-import { inspectTemplateBundledSkill } from "./bundled-skill.js";
+import { inspectTemplateBundledSkill } from "./bundled-skill-metadata.js";
 import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
 import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes } from "./digest.js";

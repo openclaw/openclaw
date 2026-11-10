@@ -157,6 +157,7 @@ export async function applyTemplateAdd(
                     }
                   : {
                       actionId: review.actionId,
+                      source: "clawhub",
                       ref: review.ref,
                       reviewToken: review.reviewToken,
                       acknowledgeRiskWarning: true,
