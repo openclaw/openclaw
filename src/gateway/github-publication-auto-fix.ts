@@ -448,16 +448,6 @@ export async function readSessionPrAutoFixObservation(params: {
             dispositions,
             quietFindings,
           });
-        const fresh = pullRequestState(
-          await reader.readJson(reader.endpoint),
-          pullRequest,
-          binding,
-          reader.inspection?.result.author.accountId,
-        );
-        if (fresh.headCommit !== head || fresh.state !== state.state) {
-          throw unavailable();
-        }
-        assertRequest();
         const acceptedPublication =
           currentPublication?.status === "published" ? currentPublication : undefined;
         const verifiedPublication =
@@ -477,23 +467,49 @@ export async function readSessionPrAutoFixObservation(params: {
           exactHeadChecks &&
           decisions.some((d) => d.status === "addressed")
         ) {
-          const files = await reader.readJson(
-            "repos/" + pullRequest.repository + "/commits/" + head + "?per_page=100",
+          if (typeof attempt?.head !== "string" || !/^[a-f0-9]{40}$/.test(attempt.head)) {
+            throw unavailable();
+          }
+          // Native publication may add an empty bookkeeping commit after the source
+          // repair. Compare the entire attempt, not just that final commit.
+          const comparison = await reader.readJson(
+            "repos/" +
+              pullRequest.repository +
+              "/compare/" +
+              attempt.head +
+              "..." +
+              head +
+              "?per_page=1&page=1",
             {
-              jq: ".files | map(.filename)",
+              jq: "{status, base: .base_commit.sha, mergeBase: .merge_base_commit.sha, files: [.files[].filename]}",
             },
           );
           if (
-            !Array.isArray(files) ||
-            !files.every((file): file is string => typeof file === "string")
+            !isRecord(comparison) ||
+            comparison.status !== "ahead" ||
+            comparison.base !== attempt.head ||
+            comparison.mergeBase !== attempt.head ||
+            !Array.isArray(comparison.files) ||
+            !comparison.files.every((file): file is string => typeof file === "string")
           ) {
             throw unavailable();
           }
-          // Exactly a full page cannot establish a complete changed-file inventory.
-          if (files.length < 100) {
-            changedFiles = files;
+          // GitHub returns the comparison files only on page one, capped at 300;
+          // a saturated response cannot prove that the inventory is complete.
+          if (comparison.files.length < 300) {
+            changedFiles = comparison.files;
           }
         }
+        const fresh = pullRequestState(
+          await reader.readJson(reader.endpoint),
+          pullRequest,
+          binding,
+          reader.inspection?.result.author.accountId,
+        );
+        if (fresh.headCommit !== head || fresh.state !== state.state) {
+          throw unavailable();
+        }
+        assertRequest();
         const confirmed: Record<string, unknown>[] = [];
         if (complete) {
           for (const item of attemptedFindings) {

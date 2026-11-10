@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { onTestFinished, vi } from "vitest";
 import * as publicationIdentity from "../agents/github-tool-identity.js";
 import * as publicationTransport from "../gateway/github-publication-git-transport.js";
@@ -138,12 +139,32 @@ export function createNativeGitHubReadFixture(branch: string) {
                         }),
                       }
                     : {};
+                  const commit = expectDefined(graph.commits.nodes[0], "head commit").commit;
+                  const checks = commit.statusCheckRollup;
                   return {
                     data: {
                       ...nodes,
                       repository: {
                         pullRequest: {
                           ...graph,
+                          commits: {
+                            nodes: [
+                              {
+                                commit: {
+                                  ...commit,
+                                  statusCheckRollup:
+                                    isRecord(checks) &&
+                                    isRecord(checks.contexts) &&
+                                    Array.isArray(checks.contexts.nodes)
+                                      ? {
+                                          ...checks,
+                                          contexts: page("contexts", checks.contexts.nodes),
+                                        }
+                                      : checks,
+                                },
+                              },
+                            ],
+                          },
                           comments: page("comments", graph.comments.nodes),
                           reviews: page("reviews", graph.reviews.nodes),
                           reviewThreads: page("reviewThreads", graph.reviewThreads.nodes),

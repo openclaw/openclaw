@@ -335,7 +335,7 @@ it.each([
   },
   {
     mode: "nonthread-addressed",
-    behavior: "accepts exact nonthread addressed evidence only with its accepted publication",
+    behavior: "accepts committed nonthread repairs across an empty native publication commit",
   },
 ])("$behavior", async ({ mode }) => {
   await using fixture = await createFixture("autoFix");
@@ -360,16 +360,16 @@ it.each([
   expectDefined(fixture.graph.commits.nodes[0], "head commit").commit.oid = sourceHead;
   expectDefined(fixture.graph.commits.nodes[0], "head commit").commit.statusCheckRollup = {
     state: "SUCCESS",
-    contexts: fixture.connection([
-      {
+    contexts: fixture.connection(
+      Array.from({ length: mode === "reopened-thread" ? 101 : 1 }, (_, index) => ({
         __typename: "CheckRun",
-        id: "verified-check",
-        name: "unit",
+        id: "verified-check-" + index,
+        name: "unit-" + index,
         status: "COMPLETED",
         conclusion: "SUCCESS",
         completedAt: "2026-11-10T10:00:00Z",
-      },
-    ]),
+      })),
+    ),
   };
   const loaded = expectDefined(accessor.loadSessionEntryReadOnly(fixture.sessionRef), "session");
   const worktree = expectDefined(loaded.worktree, "worktree");
@@ -463,7 +463,21 @@ it.each([
       });
     }
     if (endpoint?.includes("/commits/")) {
-      return json(["README.md"]);
+      const sha = endpoint.split("/").at(-1)!.split("?")[0]!;
+      return json(
+        (await git("diff-tree", "--no-commit-id", "--name-only", "-r", sha))
+          .split("\n")
+          .filter(Boolean),
+      );
+    }
+    if (endpoint?.includes("/compare/")) {
+      const [base, head] = endpoint.split("/compare/")[1]!.split("?")[0]!.split("...");
+      return json({
+        status: "ahead",
+        base: await git("rev-parse", base!),
+        mergeBase: await git("merge-base", base!, head!),
+        files: (await git("diff", "--name-only", base!, head!)).split("\n").filter(Boolean),
+      });
     }
     return read(argv, options);
   });
@@ -508,6 +522,10 @@ it.each([
         path.join(fixture.workspaceDir, "README.md"),
         "repair unchecked failure\n",
       );
+      if (mode === "nonthread-addressed") {
+        await git("add", "README.md");
+        await git("commit", "-m", "Repair unchecked failure");
+      }
       // Native SQLite lease owners use wall time; do not compare their expiries
       // against this scheduler's synthetic five-minute jumps.
       publication = asRecord(
@@ -625,6 +643,94 @@ it.each([
     url: fixture.pr.html_url,
     headCommit: fixture.pr.head.sha,
   });
+  if (mode === "nonthread-addressed" || mode === "reopened-thread") {
+    const validRead = expectDefined(fixture.nativeRead.getMockImplementation(), "native read");
+    const faults =
+      mode === "nonthread-addressed"
+        ? ["empty", "saturated", "base", "ancestry", "malformed"]
+        : ["head", "count", "duplicate", "cursor", "edited", "transport"];
+    for (const fault of faults) {
+      let injected = false;
+      fixture.nativeRead.mockImplementation(async (argv, options) => {
+        const result = await validRead(argv, options);
+        if (mode === "nonthread-addressed" && argv.some((arg) => arg.includes("/compare/"))) {
+          injected = true;
+          const comparison = asRecord(JSON.parse(result.stdout.toString()));
+          return json({
+            ...comparison,
+            ...(fault === "empty"
+              ? { files: [] }
+              : fault === "saturated"
+                ? {
+                    files: [
+                      "README.md",
+                      ...Array.from({ length: 299 }, (_, index) => "file-" + index),
+                    ],
+                  }
+                : fault === "base"
+                  ? { base: "c".repeat(40) }
+                  : fault === "ancestry"
+                    ? { mergeBase: "c".repeat(40), status: "diverged" }
+                    : { files: null }),
+          });
+        }
+        const input = typeof options?.input === "function" ? options.input() : options?.input;
+        if (argv.includes("graphql") && input) {
+          const request = asRecord(JSON.parse(input.toString()));
+          if (
+            String(request.query).includes("nodes(ids:") &&
+            asRecord(request.variables).cursor === "100"
+          ) {
+            injected = true;
+            if (fault === "transport") {
+              return { ...result, code: 1 };
+            }
+            const response = asRecord(JSON.parse(result.stdout.toString()));
+            const data = asRecord(response.data);
+            const pr = asRecord(asRecord(data.repository).pullRequest);
+            const commits = asRecord(pr.commits).nodes;
+            if (!Array.isArray(commits)) {
+              throw new Error("Missing fixture commits");
+            }
+            const commit = asRecord(asRecord(commits[0]).commit);
+            const contexts = asRecord(asRecord(commit.statusCheckRollup).contexts);
+            if (fault === "head") {
+              pr.headRefOid = "c".repeat(40);
+            }
+            if (fault === "count") {
+              contexts.totalCount = 102;
+            }
+            if (fault === "duplicate") {
+              if (!Array.isArray(contexts.nodes)) {
+                throw new Error("Missing fixture checks");
+              }
+              asRecord(contexts.nodes[0]).id = "verified-check-0";
+            }
+            if (fault === "cursor") {
+              contexts.pageInfo = { hasNextPage: true, endCursor: "100" };
+            }
+            if (fault === "edited") {
+              if (!Array.isArray(data.nodes)) {
+                throw new Error("Missing fixture feedback");
+              }
+              asRecord(data.nodes[0]).updatedAt = "2026-11-10T23:00:00Z";
+            }
+            return json(response);
+          }
+        }
+        return result;
+      });
+      await fixture.tick();
+      expect(injected, fault).toBe(true);
+      expect(
+        asRecord(fixture.execution.getJob(fixture.selected.id)?.state.triggerState).dispositions ??
+          [],
+        fault,
+      ).toEqual([]);
+      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    }
+    fixture.nativeRead.mockImplementation(validRead);
+  }
   expect(await fixture.tick()).toBeUndefined();
   const state = asRecord(fixture.execution.getJob(fixture.selected.id)?.state.triggerState);
   expect(state.dispositions).toEqual([

@@ -122,11 +122,8 @@ describe("CI automation popup scope", () => {
     h = new Fixture();
     await h.paint("first");
   });
-  it.each([
-    "Exact feedback receipt capacity exceeded; model work is paused for manual review, not resolved",
-    "Feedback remains unresolved; successful no-op stays quiet but observing",
-    "The previous payload outcome is unavailable; model work is paused for manual review, not resolved",
-  ])("renders the recipe blocker from saved inventory: %s", async (blocked) => {
+  it("renders and clears the recipe blocker without disabling auto-fix", async () => {
+    const blocked = "Feedback remains unresolved; successful no-op stays quiet but observing";
     const fix = job("first");
     fix.state.triggerState = { blocked };
     h.jobs = [fix];

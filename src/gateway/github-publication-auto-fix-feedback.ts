@@ -381,94 +381,158 @@ export async function readPrAutoFixFeedback(params: {
   let exactHeadChecks = false;
   if (complete) {
     const targetFields = "number repository { nameWithOwner }";
-    const response = await reader.readJson("graphql", {
-      query:
-        "query($owner: String!, $repo: String!, $number: Int!, $ids: [ID!]!) { nodes(ids: $ids) { " +
-        "... on IssueComment { " +
-        commentFields +
-        " pullRequest { " +
-        targetFields +
-        " } } " +
-        "... on PullRequestReview { " +
-        commentFields +
-        " state pullRequest { " +
-        targetFields +
-        " } } " +
-        "... on PullRequestReviewComment { " +
-        commentFields +
-        " pullRequest { " +
-        targetFields +
-        " } } " +
-        "... on PullRequestReviewThread { id isResolved } } repository(owner: $owner, name: $repo) { pullRequest(number: $number) { headRefOid commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { pageInfo { hasNextPage endCursor } totalCount nodes { ... on CheckRun { __typename id name status conclusion completedAt checkSuite { app { slug } repository { nameWithOwner } } } ... on StatusContext { __typename id context state createdAt } } } } } } } } } }",
-      variables: { owner, repo, number, ids },
-      jq: ".data.nodes |= map(if .body then . + {bodyTruncated: ((.body | length) > 2048)} | .body = .body[0:2048] else . end)",
-    });
-    if (
-      !isRecord(response) ||
-      response.errors ||
-      !isRecord(response.data) ||
-      !Array.isArray(response.data.nodes) ||
-      !response.data.nodes.every((node) => node === null || isRecord(node)) ||
-      !isRecord(response.data.repository) ||
-      !isRecord(response.data.repository.pullRequest)
-    ) {
-      throw unavailable();
-    }
-    freshNodes = response.data.nodes.filter(isRecord);
-    const pr = response.data.repository.pullRequest;
-    if (pr.headRefOid !== head) {
-      throw unavailable();
-    }
-    const commit =
-      isRecord(pr.commits) && Array.isArray(pr.commits.nodes) && isRecord(pr.commits.nodes[0])
-        ? pr.commits.nodes[0].commit
-        : undefined;
-    const checks = isRecord(commit) && commit.oid === head ? commit.statusCheckRollup : undefined;
-    exactHeadChecks =
-      isRecord(checks) &&
-      checks.state === "SUCCESS" &&
-      isRecord(checks.contexts) &&
-      Number(checks.contexts.totalCount) > 0 &&
-      isRecord(checks.contexts.pageInfo) &&
-      checks.contexts.pageInfo.hasNextPage === false;
-    const contexts =
-      isRecord(checks) && isRecord(checks.contexts) ? connection(checks.contexts) : undefined;
-    if (isRecord(checks) && !contexts) {
-      throw unavailable();
-    }
-    // A partial current check page cannot clear old failures or prove success.
-    if (!contexts?.next) {
-      scan.failures = 0;
-      scan.checkDigest = fingerprint([]);
-      scan.apps = [];
-      for (const check of contexts?.nodes ?? []) {
+    let cursor: string | null = null;
+    let totalCount: number | undefined;
+    let rollupState: unknown;
+    const contexts: Record<string, unknown>[] = [];
+    const checkIds = new Set<string>();
+    const cursors = new Set<string>();
+    const deadline = Date.now() + 10_000;
+    for (let pages = 0; ; pages++) {
+      // Fresh proof belongs to this observation. Never resume it from the
+      // inventory cursor or clear failures from a partial check traversal.
+      if (pages >= 32 || Date.now() >= deadline) {
+        throw unavailable();
+      }
+      const response = await reader.readJson("graphql", {
+        query:
+          "query($owner: String!, $repo: String!, $number: Int!, $ids: [ID!]!, $cursor: String) { nodes(ids: $ids) { " +
+          "... on IssueComment { " +
+          commentFields +
+          " pullRequest { " +
+          targetFields +
+          " } } " +
+          "... on PullRequestReview { " +
+          commentFields +
+          " state pullRequest { " +
+          targetFields +
+          " } } " +
+          "... on PullRequestReviewComment { " +
+          commentFields +
+          " pullRequest { " +
+          targetFields +
+          " } } " +
+          "... on PullRequestReviewThread { id isResolved } } repository(owner: $owner, name: $repo) { pullRequest(number: $number) { headRefOid commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } totalCount nodes { ... on CheckRun { __typename id name status conclusion completedAt checkSuite { app { slug } repository { nameWithOwner } } } ... on StatusContext { __typename id context state createdAt } } } } } } } } } }",
+        variables: { owner, repo, number, ids, cursor },
+        jq: ".data.nodes |= map(if .body then . + {bodyTruncated: ((.body | length) > 2048)} | .body = .body[0:2048] else . end)",
+      });
+      if (
+        !isRecord(response) ||
+        response.errors ||
+        !isRecord(response.data) ||
+        !Array.isArray(response.data.nodes) ||
+        !response.data.nodes.every((node) => node === null || isRecord(node)) ||
+        !isRecord(response.data.repository) ||
+        !isRecord(response.data.repository.pullRequest)
+      ) {
+        throw unavailable();
+      }
+      const nodes = response.data.nodes.filter(isRecord);
+      if (pages > 0 && fingerprint(nodes) !== fingerprint(freshNodes)) {
+        throw unavailable();
+      }
+      freshNodes = nodes;
+      const pr = response.data.repository.pullRequest;
+      const commit =
+        isRecord(pr.commits) &&
+        Array.isArray(pr.commits.nodes) &&
+        pr.commits.nodes.length === 1 &&
+        isRecord(pr.commits.nodes[0])
+          ? pr.commits.nodes[0].commit
+          : undefined;
+      if (pr.headRefOid !== head || !isRecord(commit) || commit.oid !== head) {
+        throw unavailable();
+      }
+      const checks = commit.statusCheckRollup;
+      if (checks === null && pages === 0) {
+        break;
+      }
+      if (!isRecord(checks) || !isRecord(checks.contexts)) {
+        throw unavailable();
+      }
+      const count = checks.contexts.totalCount;
+      if (
+        typeof count !== "number" ||
+        !Number.isSafeInteger(count) ||
+        count < 0 ||
+        (pages > 0 && (count !== totalCount || checks.state !== rollupState))
+      ) {
+        throw unavailable();
+      }
+      totalCount = count;
+      rollupState = checks.state;
+      const page = connection(checks.contexts);
+      if (page.nodes.length > 100) {
+        throw unavailable();
+      }
+      for (const check of page.nodes) {
         if (
-          isRecord(check.checkSuite) &&
-          isRecord(check.checkSuite.app) &&
-          isRecord(check.checkSuite.repository) &&
-          check.checkSuite.repository.nameWithOwner === pullRequest.repository &&
-          typeof check.checkSuite.app.slug === "string"
+          typeof check.id !== "string" ||
+          checkIds.has(check.id) ||
+          !["CheckRun", "StatusContext"].includes(String(check.__typename))
         ) {
-          scan.apps.push(check.checkSuite.app.slug + "[bot]");
+          throw unavailable();
         }
-        const failed =
-          check.__typename === "CheckRun"
-            ? check.status === "COMPLETED" &&
-              [
-                "FAILURE",
-                "TIMED_OUT",
-                "CANCELLED",
-                "ACTION_REQUIRED",
-                "STARTUP_FAILURE",
-                "STALE",
-              ].includes(String(check.conclusion))
-            : ["ERROR", "FAILURE"].includes(String(check.state));
-        if (failed) {
-          scan.failures++;
-          scan.checkDigest = fingerprint([scan.checkDigest, check]);
-        }
+        checkIds.add(check.id);
+        contexts.push(check);
+      }
+      if (contexts.length > count || (!page.next && contexts.length !== count)) {
+        throw unavailable();
+      }
+      if (!page.next) {
+        break;
+      }
+      if (
+        !page.nodes.length ||
+        contexts.length >= count ||
+        !page.next.trim() ||
+        cursors.has(page.next)
+      ) {
+        throw unavailable();
+      }
+      cursors.add(page.next);
+      cursor = page.next;
+    }
+    exactHeadChecks =
+      rollupState === "SUCCESS" &&
+      contexts.length > 0 &&
+      contexts.every((check) =>
+        check.__typename === "CheckRun"
+          ? check.status === "COMPLETED" &&
+            ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(String(check.conclusion))
+          : check.state === "SUCCESS",
+      );
+    scan.failures = 0;
+    scan.checkDigest = fingerprint([]);
+    scan.apps = [];
+    for (const check of contexts) {
+      if (
+        isRecord(check.checkSuite) &&
+        isRecord(check.checkSuite.app) &&
+        isRecord(check.checkSuite.repository) &&
+        check.checkSuite.repository.nameWithOwner === pullRequest.repository &&
+        typeof check.checkSuite.app.slug === "string"
+      ) {
+        scan.apps.push(check.checkSuite.app.slug + "[bot]");
+      }
+      const failed =
+        check.__typename === "CheckRun"
+          ? check.status === "COMPLETED" &&
+            [
+              "FAILURE",
+              "TIMED_OUT",
+              "CANCELLED",
+              "ACTION_REQUIRED",
+              "STARTUP_FAILURE",
+              "STALE",
+            ].includes(String(check.conclusion))
+          : ["ERROR", "FAILURE"].includes(String(check.state));
+      if (failed) {
+        scan.failures++;
+        scan.checkDigest = fingerprint([scan.checkDigest, check]);
       }
     }
+
     const candidates = [...scan.findings];
     if (retryable) {
       for (const item of attemptedFindings) {
