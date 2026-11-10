@@ -127,6 +127,8 @@ async function requestWsUpgradeResponse(params: {
       host: "127.0.0.1",
       port: params.port,
       path: params.path,
+      // Keep the suite-owned listener local without changing the process proxy policy.
+      createConnection: () => connect({ host: "127.0.0.1", port: params.port }),
       headers: {
         ...params.headers,
         connection: "Upgrade",
