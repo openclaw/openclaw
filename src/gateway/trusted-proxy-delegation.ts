@@ -1,4 +1,4 @@
-import { readFileSync, unwatchFile, watchFile } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { isAbsolute } from "node:path";
 import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
@@ -12,7 +12,7 @@ import { getHeader } from "./http-header-value.js";
 
 export const GATEWAY_DELEGATION_DENIED = "trusted_proxy_delegation_denied";
 
-type CredentialOwner = { value?: string; generation: number; refresh: () => void };
+type CredentialOwner = { value?: string; generation: number; stop: () => void };
 const credentials = new Map<string, CredentialOwner>();
 
 function credentialOwner(path: string): CredentialOwner {
@@ -20,34 +20,42 @@ function credentialOwner(path: string): CredentialOwner {
   if (existing) {
     return existing;
   }
-  const owner: CredentialOwner = {
-    generation: 0,
-    refresh: () => {
-      owner.generation += 1;
-      owner.value = undefined;
-      try {
-        const value = readFileSync(path, "utf8").replace(/\r?\n$/u, "");
-        if (/^[0-9a-f]{64}$/u.test(value)) {
-          owner.value = value;
-        }
-      } catch {
-        // An unreadable or removed revision credential revokes its existing grants.
+  let revision: string | undefined;
+  const owner: CredentialOwner = { generation: 0, stop: () => clearInterval(poll) };
+  const refresh = () => {
+    let nextRevision: string | undefined;
+    let value: string | undefined;
+    try {
+      const stat = statSync(path, { bigint: true });
+      nextRevision = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+      const content = readFileSync(path, "utf8").replace(/\r?\n$/u, "");
+      if (/^[0-9a-f]{64}$/u.test(content)) {
+        value = content;
       }
-    },
+    } catch {
+      // An unreadable or removed revision credential revokes its existing grants.
+    }
+    if (revision !== nextRevision || owner.value !== value) {
+      owner.generation += 1;
+      owner.value = value;
+      revision = nextRevision;
+    }
   };
-  owner.refresh();
-  // Projected Kubernetes secrets replace symlinks; watchFile follows those swaps.
-  // Request authorization only consumes this owner's memory, never the filesystem.
-  watchFile(path, { interval: 1000, persistent: false }, owner.refresh);
+  // Snapshot before admission: watchFile's asynchronous initial stat can miss a
+  // replacement immediately after the first grant. Polling follows projected
+  // secret symlinks without putting filesystem reads on request paths.
+  refresh();
+  const poll = setInterval(refresh, 1000);
+  poll.unref();
   credentials.set(path, owner);
   return owner;
 }
 
 export function disposeGatewayDelegationCredentials(): void {
-  for (const [path, owner] of credentials) {
+  for (const owner of credentials.values()) {
     owner.generation += 1;
     owner.value = undefined;
-    unwatchFile(path, owner.refresh);
+    owner.stop();
   }
   credentials.clear();
 }
