@@ -66,44 +66,59 @@ export function showMoveKeysDialog(params: {
       const [refused, setRefused] = createSignal<string | null>(null);
       const [error, setError] = createSignal<OpenClawIdUiError | null>(null);
       const fail = (cause: unknown) => setError(openClawIdUiError(cause, "setup"));
-
-      const check = async () => {
+      // Plain, not a signal: dismissal must see an operation the moment it starts. While one
+      // runs the dialog stays open, so a commit's outcome is always shown, never dropped.
+      let inFlight = false;
+      const run = async (operation: () => Promise<void>) => {
+        inFlight = true;
         setBusy(true);
-        setRefused(null);
-        setError(null);
         try {
-          const result = await prepareRebind({
-            client: params.client,
-            signedIn: params.signedIn,
-            kitText: kit(),
-          });
-          if (result.ok) {
-            setKit("");
-            setPlan(result.plan);
-          } else {
-            setRefused(rebindRefusalMessage(result, params.hostname));
-          }
-        } catch (cause) {
-          fail(cause);
+          await operation();
         } finally {
+          inFlight = false;
           setBusy(false);
         }
       };
 
-      const move = async (current: RebindPlan) => {
-        setBusy(true);
-        setError(null);
-        try {
-          await commitRebind(params.client, current);
+      const check = (kitText: string) =>
+        run(async () => {
+          setRefused(null);
+          setError(null);
+          try {
+            const result = await prepareRebind({
+              client: params.client,
+              signedIn: params.signedIn,
+              kitText,
+            });
+            if (result.ok) {
+              setKit("");
+              setPlan(result.plan);
+            } else {
+              setRefused(rebindRefusalMessage(result, params.hostname));
+            }
+          } catch (cause) {
+            fail(cause);
+          }
+        });
+
+      const move = (current: RebindPlan) =>
+        run(async () => {
+          setError(null);
+          try {
+            await commitRebind(params.client, current);
+          } catch (cause) {
+            fail(cause);
+            return;
+          }
           showToast({ severity: "success", message: t("openclawId.moveKeysDone") });
           modal.finish(true);
-        } catch (cause) {
-          fail(cause);
-          setBusy(false);
-        }
-      };
+        });
 
-      const close = () => {
+      const close = (event?: Event) => {
+        if (inFlight) {
+          event?.preventDefault();
+          return;
+        }
         if (plan()) {
           void cancelRebind(params.client).catch(() => undefined);
         }
@@ -152,7 +167,7 @@ export function showMoveKeysDialog(params: {
                   id="openclaw-id-move-keys-form"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    void check();
+                    void check(kit());
                   }}
                 >
                   <label class="field">
