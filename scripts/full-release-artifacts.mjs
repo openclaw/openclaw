@@ -453,6 +453,8 @@ async function reusePublicationArtifacts(env) {
 // dispatches replacements, and deliberately lets unavailable artifacts fail closed.
 // Payload SHA-256 values hash the complete Actions ZIP; npm entries additionally
 // report the verified package digest, and Docker reports its manifest digest.
+// authenticatedPayloads must come from a caller-authenticated successful recovery.
+// Reuse checks each reconstructed record; the caller checks the complete inventory.
 export async function verifyRetainedPublicationArtifacts(root, env, options = {}) {
   requireValue(
     root?.workflowName === "Full Release Validation" &&
@@ -489,25 +491,46 @@ export async function verifyRetainedPublicationArtifacts(root, env, options = {}
         raw.package?.sha256 === expectedPackage.sha256),
     "Retained npm package differs from the expected package.",
   );
+  const authenticatedPayloads = options.authenticatedPayloads;
+  requireValue(
+    authenticatedPayloads === undefined ||
+      (options.verifyPayloads === true && Array.isArray(authenticatedPayloads)),
+    "Authenticated payload reuse requires payload verification and an inventory array.",
+  );
   const payloads = [];
+  const recordPayload = (payload) => {
+    if (authenticatedPayloads !== undefined) {
+      const matches = authenticatedPayloads.filter((entry) => entry.kind === payload.kind);
+      requireValue(
+        matches.length === 1 && isDeepStrictEqual(matches[0], payload),
+        `Retained ${payload.kind} payload differs from the authenticated recovery inventory.`,
+      );
+    }
+    payloads.push(payload);
+  };
   const retainPayload = async (kind, expected, packageIdentity, digestOnly = false) => {
     if (!options.verifyPayloads) {
       return undefined;
     }
     const params = { expected, token: env.GH_TOKEN ?? process.env.GH_TOKEN };
     let archiveBytes;
-    let archiveSha256;
-    if (digestOnly) {
-      const verified = await verifyExactActionsArtifactDigest({
-        ...params,
-        archiveTimeoutMs: options.dockerArchiveTimeoutMs,
-      });
-      archiveSha256 = verified.digest.slice("sha256:".length);
-    } else {
-      archiveBytes = (await downloadExactActionsArtifactArchive(params)).archiveBytes;
-      archiveSha256 = createHash("sha256").update(archiveBytes).digest("hex");
+    // Live metadata and producer checks precede this call. An exact authenticated
+    // record lets us retain the full ZIP digest without downloading its body again.
+    // Returning no bytes also avoids repeating already-authenticated npm semantics.
+    let archiveSha256 = expected.artifactDigest.slice("sha256:".length);
+    if (authenticatedPayloads === undefined) {
+      if (digestOnly) {
+        const verified = await verifyExactActionsArtifactDigest({
+          ...params,
+          archiveTimeoutMs: options.dockerArchiveTimeoutMs,
+        });
+        archiveSha256 = verified.digest.slice("sha256:".length);
+      } else {
+        archiveBytes = (await downloadExactActionsArtifactArchive(params)).archiveBytes;
+        archiveSha256 = createHash("sha256").update(archiveBytes).digest("hex");
+      }
     }
-    payloads.push({
+    recordPayload({
       kind,
       artifact: {
         id: String(expected.artifactId),
@@ -731,7 +754,7 @@ export async function verifyRetainedPublicationArtifacts(root, env, options = {}
   );
   if (options.verifyPayloads) {
     const metadata = prepared.metadata;
-    payloads.push({
+    recordPayload({
       kind: "docker-manifest",
       artifact: {
         id: String(metadata.id),

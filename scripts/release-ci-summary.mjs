@@ -341,8 +341,7 @@ function tryDownloadExecutionPlan(runId, repository = DEFAULT_REPO) {
   });
 }
 
-function readExecutionPlanEvidence(runId, repository, immutableReads) {
-  const name = `full-release-execution-plan-${runId}`;
+function readRunArtifacts(runId, repository) {
   const artifacts = [];
   let total;
   for (let page = 1; page <= 10; page += 1) {
@@ -357,7 +356,7 @@ function readExecutionPlanEvidence(runId, repository, immutableReads) {
       response.artifacts.length > 100 ||
       (total !== undefined && total !== response.total_count)
     ) {
-      throw new Error("publication execution plan artifact enumeration is invalid");
+      throw new Error("release artifact enumeration is invalid");
     }
     total = response.total_count;
     artifacts.push(...response.artifacts);
@@ -365,12 +364,18 @@ function readExecutionPlanEvidence(runId, repository, immutableReads) {
       break;
     }
     if (artifacts.length > total || response.artifacts.length < 100) {
-      throw new Error("publication execution plan artifact enumeration is incomplete");
+      throw new Error("release artifact enumeration is incomplete");
     }
   }
   if (artifacts.length !== total || new Set(artifacts.map((entry) => entry.id)).size !== total) {
-    throw new Error("publication execution plan artifact enumeration is incomplete or duplicated");
+    throw new Error("release artifact enumeration is incomplete or duplicated");
   }
+  return artifacts;
+}
+
+function readExecutionPlanEvidence(runId, repository, immutableReads) {
+  const name = `full-release-execution-plan-${runId}`;
+  const artifacts = readRunArtifacts(runId, repository);
   const matches = artifacts.filter((artifact) => artifact.name === name);
   if (matches.length !== 1) {
     throw new Error(
@@ -2119,8 +2124,8 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutableReads } = {}) {
   const normalizedRepository = normalizeRepository(repository);
   return {
-    validateChildReuse(selection, request) {
-      return validateReusableReleaseChild(selection, request, { immutableReads });
+    validateChildReuse(selection, request, { deadlineMs } = {}) {
+      return validateReusableReleaseChild(selection, request, { immutableReads, deadlineMs });
     },
     getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
       if (
@@ -2204,6 +2209,9 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
     },
     revalidateQualificationAdmissionAuthority(options) {
       return revalidateQualificationAdmissionAuthority(options);
+    },
+    getRunArtifacts(runId) {
+      return readRunArtifacts(runId, normalizedRepository);
     },
     getArtifact(artifactId) {
       if (!/^[1-9][0-9]{0,19}$/u.test(String(artifactId))) {
