@@ -20,6 +20,7 @@ import {
   type ProviderAuthResult,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-setup";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LLAMA_DEFAULT_BASE_URL, LLAMA_PROVIDER_ID, LLAMA_PROVIDER_LABEL } from "./defaults.js";
 
 type LlamaListing = {
@@ -77,7 +78,7 @@ async function listLlamaModels(params: {
     models: [],
   });
   const loadedIds = rows.flatMap((row) => {
-    const status = (row.status as { value?: unknown } | undefined)?.value;
+    const status = asOptionalRecord(row.status)?.value;
     return typeof row.id === "string" && (status === "loaded" || status === "sleeping")
       ? [row.id]
       : [];
