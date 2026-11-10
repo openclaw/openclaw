@@ -143,9 +143,14 @@ export function checkpointLocalWorkspace(
     (beginCapture) =>
       withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
         beginCapture();
+        let snapshotCapture = false;
         if (
           !options.knownMutation &&
-          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"]))
+          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"], (entries, elapsedMs) => {
+            // A probe stops at its first edit. The accepted inventory also covers
+            // large trees whose changed file happens to sort first.
+            snapshotCapture = entries >= 20_000 || elapsedMs >= 500;
+          }))
         ) {
           await removeLocalWorkspaceCheckpointCapture(store.get()!.projection_path, {
             signal: store.signal,
@@ -164,7 +169,7 @@ export function checkpointLocalWorkspace(
                 quiescence &&
                 (() => timeWorktreePreparationPhase("runtimeResume", quiescence.resume)),
             }),
-          { reason: "checkpoint" },
+          { reason: "checkpoint", snapshotCapture },
         );
       }),
     options,
@@ -399,6 +404,7 @@ async function probeUnchangedLocalWorkspace(
   owner: LocalWorkspaceOwner,
   store: LocalWorkspaceStore,
   targets: readonly ("canonical" | "projection")[],
+  observeProbe?: (entries: number, elapsedMs: number) => void,
 ) {
   let row = store.get();
   if (
@@ -416,6 +422,7 @@ async function probeUnchangedLocalWorkspace(
   projectionOperations(owner, store, row).current();
   for (const target of targets) {
     const selected = row;
+    const started = performance.now();
     const snapshot = await timeWorktreePreparationPhase(
       target === "canonical" ? "synchronizeCanonical" : "synchronizeProjection",
       async () => {
@@ -432,6 +439,10 @@ async function probeUnchangedLocalWorkspace(
           return undefined;
         }
       },
+    );
+    observeProbe?.(
+      snapshot?.kind === "rescan" ? (snapshot.entryCount ?? 0) : 0,
+      performance.now() - started,
     );
     store.assertCurrent();
     if (snapshot?.kind !== "scan" || snapshot.resultingRoot !== snapshot.previousRoot) {

@@ -1,7 +1,9 @@
 import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { addAbortListener } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
@@ -22,6 +24,7 @@ import { writeWorkspaceFiles } from "./workspace-sync-scripts.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   vi.unstubAllEnvs();
 });
 
@@ -41,6 +44,15 @@ it.each([false, true])(
       }
       return stats;
     });
+    const lstatSync = fsSync.lstatSync.bind(fsSync);
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+      const stats = lstatSync(...args);
+      if (stats && args[0] === nested) {
+        Reflect.set(stats, "ino", 2n);
+      }
+      return stats;
+    });
+    syncBuiltinESMExports();
     const entries = vi.fn();
     await expect(
       scanActualWorkspaceManifest({

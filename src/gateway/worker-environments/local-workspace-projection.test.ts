@@ -32,7 +32,7 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { proveResumedBaseRefresh } from "./local-workspace-base-refresh.test-support.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
-import { proveUnchangedSandboxCommandCheckpoints } from "./local-workspace-checkpoint.test-support.js";
+import { registerSandboxCheckpointTests } from "./local-workspace-checkpoint.test-support.js";
 import {
   prepareLegacyArchiveRetention,
   proveAcceptedDirectoryRetention,
@@ -188,21 +188,7 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
-it("keeps unchanged commands running while checkpointing edits and deletions", () =>
-  proveUnchangedSandboxCommandCheckpoints(owner));
-
-it.each([false, true])(
-  "resumes captured commands without losing later guest writes (interrupted acceptance: %s)",
-  (interrupted) => proveUnchangedSandboxCommandCheckpoints(owner, true, interrupted),
-);
-
-it.each([false, true])(
-  "captures before scanning while preserving post-resume writes (interrupted acceptance: %s)",
-  (interrupted) => proveUnchangedSandboxCommandCheckpoints(owner, true, interrupted, true),
-);
-
-it("re-pauses omitted nested subvolumes under the checkpoint lease before saving their live bytes", () =>
-  proveUnchangedSandboxCommandCheckpoints(owner, true, false, "nested"));
+registerSandboxCheckpointTests(() => owner);
 
 it.each(["canonical", "projection"] as const)(
   "quarantines rejected checkpoints while allowing new agent work: %s",
