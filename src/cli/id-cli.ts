@@ -71,7 +71,7 @@ async function readPeopleLink(opts: IdCliOpts): Promise<PeopleLink | undefined> 
     "openclawId.people",
     opts,
     {},
-    { scopes: ["operator.read"] },
+    { scopes: ["operator.admin"] },
   );
   // SAFETY: openclawId.people answers { link } with the owner link view (owner-link-view.ts).
   const result = raw as { link?: PeopleLink };
@@ -234,7 +234,29 @@ async function runRebind(opts: RebindOpts) {
   const raw = await authority(opts, { action: "rebind_commit", binding: signed.binding, code });
   // SAFETY: rebind_commit answers { ok, bindingSeq }.
   const committed = raw as { bindingSeq: number };
-  const published = await waitForPublication(opts, committed.bindingSeq);
+  let published: boolean;
+  try {
+    published = await waitForPublication(opts, committed.bindingSeq);
+  } catch (error) {
+    const reason = sanitizeTerminalText(error instanceof Error ? error.message : String(error));
+    write(
+      opts,
+      {
+        moved: true,
+        bindingSeq: committed.bindingSeq,
+        published: null,
+        publicationError: reason,
+        nextStep: "openclaw id status",
+      },
+      [
+        "Moved to new keys (committed).",
+        `Publication check failed: ${reason}`,
+        "Run openclaw id status to check publication. Do not repeat rebind: it rotates keys again.",
+      ].join("\n"),
+    );
+    process.exitCode = 2;
+    return;
+  }
   write(
     opts,
     { moved: true, bindingSeq: committed.bindingSeq, published },
