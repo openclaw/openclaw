@@ -275,8 +275,8 @@ jobs:
       'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
       fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
       startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
-      '')), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' ||
-      'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04'
+      '')), toJSON(contains(fromJSON('["github","boat"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'ubuntu-24.04' ||
+      'blacksmith-4vcpu-ubuntu-2404'))) || (contains(fromJSON('["github","boat"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && 'ubuntu-24.04'
       || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 240
     strategy:
