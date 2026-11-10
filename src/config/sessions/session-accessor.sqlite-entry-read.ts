@@ -38,6 +38,7 @@ import {
   attachSessionEntrySnapshots,
   type SessionEntryProjection,
 } from "./session-entry-snapshot-values.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 import {
   collectSessionEntryLookupKeys,
