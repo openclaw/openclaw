@@ -6,7 +6,6 @@ import {
   type CatalogProjectGrouping,
 } from "../lib/sessions/catalog-project-grouping.ts";
 import { projectSidebarSessionReference } from "./app-sidebar-agent-session-rows.ts";
-import type { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import type {
   CatalogBackingSessionDisplay,
   SidebarSessionCatalog,
@@ -16,6 +15,11 @@ import { sidebarCatalogLiveRows } from "./app-sidebar-session-snooze-visibility.
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarProjectionMemo } from "./sidebar-projection-cache.ts";
 import type { SidebarProjectionHost } from "./sidebar-projection-memo.ts";
+
+export type SidebarCatalogRuntime = {
+  memoizedSidebarCatalogRows: typeof memoizedSidebarCatalogRows;
+  revealSidebarCatalogSelection: typeof revealSidebarCatalogSelection;
+};
 
 export const CATALOG_SESSION_GROUP_LIMIT = 5;
 
@@ -149,7 +153,10 @@ export function catalogSessionGroups(
 
 /** The lazy placement owner reveals every boundary once per native navigation epoch. */
 export function revealSidebarCatalogSelection(
-  host: AppSidebarOwner,
+  host: SidebarProjectionHost &
+    Pick<SessionListHost, "toggleSection" | "setVisibleSessionLimit"> & {
+      readonly catalogProjectGrouping: CatalogProjectGrouping;
+    },
   catalogs: readonly SidebarSessionCatalog[],
 ) {
   const disclosure = host.sessionProjection.children;
