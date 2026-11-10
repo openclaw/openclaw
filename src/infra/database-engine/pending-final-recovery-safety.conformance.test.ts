@@ -1,29 +1,46 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
-import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import type { OutboundDeliveryResult } from "./deliver-types.js";
-import { installQueueTestPlugin, useOutboundFixture } from "./deliver.custody.test-support.js";
-import { settlePendingFinalDelivery } from "./delivery-completion.js";
-import { seedDeliverySession } from "./delivery-completion.shard-test-support.js";
-import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
+import type { OutboundDeliveryResult } from "../outbound/deliver-types.js";
+import {
+  installQueueTestPlugin,
+  useOutboundRuntime,
+} from "../outbound/deliver.custody.test-support.js";
+import { settlePendingFinalDelivery } from "../outbound/delivery-completion.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../outbound/delivery-queue-namespaces.js";
+import { recoverPendingDeliveries } from "../outbound/delivery-queue-recovery.js";
 import {
   enqueueDeliveryOnce,
   reserveDeliveryAttempt,
   markDeliveryPlatformSendAttemptStarted,
   markDeliveryPlatformOutcomeUnknown,
-} from "./delivery-queue-storage.js";
-import { createRecoveryLog, loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
+} from "../outbound/delivery-queue-storage.js";
+import { createRecoveryLog } from "../outbound/delivery-queue.test-helpers.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
+import { withEngineStoreAdmission } from "./admission-scope.js";
+import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
-const outbound = useOutboundFixture();
+const engine = mixedAgentConnection ? "postgres" : "sqlite";
+const outbound = useOutboundRuntime();
 const deliverOutboundPayloads = outbound.deliver;
 type Send = NonNullable<Parameters<typeof deliverOutboundPayloads>[0]["deps"]>["matrix"];
 
-describe("pending-final transport receipt safety", () => {
+describe(`${engine} pending-final transport receipt safety`, () => {
+  const pair = useMixedAgentPair(engine, engine);
   let tmpDir: string;
   beforeEach(() => {
-    tmpDir = outbound.tmpDir();
+    tmpDir = pair.root;
     installQueueTestPlugin();
   });
 
@@ -41,8 +58,11 @@ describe("pending-final transport receipt safety", () => {
         deliver,
       });
 
+  // Native fixture inspection is admitted; mutations and recovery stay worker-owned.
+  const sessionEntry = (scope: Parameters<typeof loadSessionEntry>[0]) =>
+    withEngineStoreAdmission(() => loadSessionEntry(scope));
   const receipt = (scope: Parameters<typeof loadSessionEntry>[0]) =>
-    loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries?.[0]?.receipt;
+    sessionEntry(scope)?.pendingFinalDelivery?.deliveries?.[0]?.receipt;
   function expectReceipt(
     scope: Parameters<typeof loadSessionEntry>[0],
     messageId?: string,
@@ -72,7 +92,11 @@ describe("pending-final transport receipt safety", () => {
   ) {
     await recover();
     expect(send).toHaveBeenCalledTimes(calls);
-    expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
+    expect(
+      withEngineStoreAdmission(() =>
+        loadDeliveryQueueEntries(OUTBOUND_DELIVERY_QUEUE_NAME, tmpDir),
+      ),
+    ).toEqual([]);
   }
 
   async function dispatch(mode: string, fixture: Fixture, send: Send, requiredRecovery = false) {
@@ -102,10 +126,24 @@ describe("pending-final transport receipt safety", () => {
   ) {
     const payloads = options.payloads ?? [{ text: "final output" }];
     const context = { channel: "matrix", to: "!original:example", threadId: "original-thread" };
-    const { scope, entry } = await seedDeliverySession(tmpDir, {
+    const agent = withEngineStoreAdmission(() => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      expect(isPostgresSqlConnection(database.db)).toBe(engine === "postgres");
+      expect(isPostgresSqlConnection(openOpenClawStateDatabase().db)).toBe(engine === "postgres");
+      return database;
+    });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:requester",
+      storePath: agent.path,
+    };
+    const entry = {
+      sessionId: "session",
+      updatedAt: 1,
       lifecycleRevision: "lifecycle-a",
       activeWriterRunId: "run-a",
-    });
+    };
+    await replaceSessionEntry(scope, entry);
     if (options.refreshSuccessor) {
       await patchSessionEntryCore(scope, () => ({
         activeWriterRunId: "run-b",
@@ -145,10 +183,10 @@ describe("pending-final transport receipt safety", () => {
   it("does not bind finishing A to refreshed same-session/route successor B", async () => {
     const { scope, marker } = await prepare({ refreshSuccessor: true });
     expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(false);
-    expect(loadSessionEntry(scope)).toMatchObject({
+    expect(sessionEntry(scope)).toMatchObject({
       activeWriterRunId: "run-b",
     });
-    expect(loadSessionEntry(scope)?.pendingFinalDelivery).toBeUndefined();
+    expect(sessionEntry(scope)?.pendingFinalDelivery).toBeUndefined();
   });
 
   it.each(["missing-identity", "wrong-target", "wrong-channel", "not-sent"] as const)(
@@ -169,11 +207,9 @@ describe("pending-final transport receipt safety", () => {
       await closeOpenClawAgentDatabasesAsync(tmpDir);
       await settle({ channel: "matrix", messageId: "valid-last" }, "second");
       expect(receipt(scope)).toBeUndefined();
-      expect(loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries?.[1]?.receipt).toMatchObject(
-        {
-          platformMessageId: "valid-last",
-        },
-      );
+      expect(sessionEntry(scope)?.pendingFinalDelivery?.deliveries?.[1]?.receipt).toMatchObject({
+        platformMessageId: "valid-last",
+      });
     },
   );
 
@@ -199,7 +235,7 @@ describe("pending-final transport receipt safety", () => {
         );
         await closeOpenClawAgentDatabasesAsync(tmpDir);
       }
-      const deliveries = loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries;
+      const deliveries = sessionEntry(scope)?.pendingFinalDelivery?.deliveries;
       expect(deliveries).toMatchObject([
         { id: completion.deliveryId, state: "delivered" },
         { id: "second", state: "delivered", receipt: { platformMessageId: "second-id" } },
