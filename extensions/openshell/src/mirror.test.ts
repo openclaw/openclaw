@@ -139,6 +139,7 @@ describe("replaceDirectoryContents", () => {
         "repo/.git/config": "sandbox",
         "fresh/.git": "gitdir: ../repo/.git\n",
         "src/hooks/use.ts": "ordinary source",
+        "src/ .git /note.txt": "ordinary spaced name",
       });
       if (mode === "replace") {
         await writeFiles(target, { "repo/.git/config": "host" });
@@ -153,7 +154,10 @@ describe("replaceDirectoryContents", () => {
         await expectPathMissing(path.join(target, "repo/.git"));
       }
       await expectPathMissing(path.join(target, "fresh/.git"));
-      await expectFiles(target, { "src/hooks/use.ts": "ordinary source" });
+      await expectFiles(target, {
+        "src/hooks/use.ts": "ordinary source",
+        "src/ .git /note.txt": "ordinary spaced name",
+      });
     },
   );
 

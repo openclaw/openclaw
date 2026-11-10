@@ -8,9 +8,10 @@ export const DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS = ["hooks", "git-hooks", ".g
 const NESTED_GIT_EXCLUDE_DIRS = [".git"] as const;
 const COPY_TREE_FS_CONCURRENCY = 16;
 
-function createExcludeMatcher(excludeDirs?: readonly string[]) {
+function createExcludeMatcher(excludeDirs?: readonly string[], literalNames = false) {
   const excluded = new Set((excludeDirs ?? []).map((d) => normalizeLowercaseStringOrEmpty(d)));
-  return (name: string) => excluded.has(normalizeLowercaseStringOrEmpty(name));
+  return (name: string) =>
+    excluded.has(literalNames ? name.toLowerCase() : normalizeLowercaseStringOrEmpty(name));
 }
 
 const runLimitedFs = pLimit(COPY_TREE_FS_CONCURRENCY);
@@ -66,7 +67,10 @@ async function reconcileMirrorDirectory(params: {
   excludeDirs?: readonly string[];
 }): Promise<boolean> {
   const { sourceDir } = params;
-  const isExcluded = createExcludeMatcher(params.excludeDirs);
+  const isExcluded = createExcludeMatcher(
+    params.excludeDirs,
+    params.excludeDirs === NESTED_GIT_EXCLUDE_DIRS,
+  );
   const nestedExcludeDirs = isExcluded(".git") ? NESTED_GIT_EXCLUDE_DIRS : undefined;
   await runLimitedFs(fs.mkdir, params.targetDir, { recursive: true });
   const sourceEntries = new Set(sourceDir ? await runLimitedFs(() => fs.readdir(sourceDir)) : []);

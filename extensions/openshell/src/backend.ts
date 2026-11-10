@@ -453,7 +453,7 @@ class OpenShellSandboxBackendImpl {
         DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS.some(
           (excluded) => excluded === normalizeLowercaseStringOrEmpty(parts[0]),
         ) ||
-        parts.slice(1).some((part) => normalizeLowercaseStringOrEmpty(part) === ".git")
+        parts.slice(1).some((part) => part.toLowerCase() === ".git")
       ) {
         return null;
       }

@@ -529,9 +529,10 @@ it
       expect(mirrorExecResult.stdout).toContain("mirror-from-local");
       await exec(
         mirrorBackend,
-        "mkdir -p nested-repo/.git fresh-repo/.git && printf sandbox > nested-repo/.git/config && printf sandbox > fresh-repo/.git/config",
+        "mkdir -p nested-repo/.git fresh-repo/.git spaced && printf sandbox > nested-repo/.git/config && printf sandbox > fresh-repo/.git/config && printf ordinary > 'spaced/ .git '",
       );
       await expectFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
+      await expectFile(mirrorWorkspaceDir, "spaced/ .git ", "ordinary");
       await expect(
         fs.lstat(path.join(mirrorWorkspaceDir, "nested-repo/.git/config")),
       ).rejects.toMatchObject({
