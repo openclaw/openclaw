@@ -132,7 +132,10 @@ export function SessionSources(
                                       : "configView.sessionSources.unavailable",
                                   )
                             }
-                            pending={!props.configLoaded || props.schemaLoading}
+                            pending={
+                              !props.configLoaded ||
+                              (typeof preference() !== "boolean" && !source().enabledSchema)
+                            }
                             checked={
                               typeof preference() === "boolean"
                                 ? preference() === true

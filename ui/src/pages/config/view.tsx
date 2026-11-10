@@ -219,7 +219,7 @@ export function Config(props: ConfigProps) {
     const showValidityWarning = props.valid === false && !viewState.validityDismissed;
     return {
       // Personal controls do not depend on permission to read Gateway-wide configuration.
-      displayReady: props.activeSection === "__appearance__",
+      displayReady: ["__appearance__", "__notifications__"].includes(props.activeSection ?? ""),
       showModeToggle,
       includeVirtualSections: props.includeVirtualSections ?? true,
       include: includedSections(),

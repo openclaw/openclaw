@@ -7,11 +7,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createNativeNotificationsCapability } from "../../app/native-notifications.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
 import {
   missingReadScopeErrorFixture,
   createTestGatewayClient,
@@ -115,6 +120,69 @@ describe("ConfigPage cold reads", () => {
       expect(request).not.toHaveBeenCalled();
     } finally {
       mounted.dispose();
+      runtimeConfig.dispose();
+    }
+  });
+
+  it("keeps personal native Notifications available without config reads across guest reconnects", async () => {
+    const request = vi.fn(async () => ({}));
+    const client = createTestGatewayClient(request);
+    const hello = gatewayHelloForMethods(
+      ["config.get", "config.schema"],
+      ["operator.sessions.read"],
+    );
+    Object.defineProperty(client, "auth", { value: hello.auth });
+    const source = createApplicationGateway(
+      createApplicationGatewaySnapshot({ client, phase: "reconnecting", hello: null }),
+    );
+    const { gateway } = source;
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawNotifications: { postMessage } } });
+    const nativeNotifications = expectDefined(
+      createNativeNotificationsCapability(),
+      "native owner",
+    );
+    window.dispatchEvent(
+      new CustomEvent("openclaw:native-notifications-status", {
+        detail: { permission: "notDetermined" },
+      }),
+    );
+    const context = completeConfigContext({
+      ...routeContext(),
+      gateway,
+      runtimeConfig,
+      nativeNotifications,
+    });
+    const mounted = mountConfigPage(context, { pageId: "notifications" });
+    try {
+      for (const connected of [false, true, false, true]) {
+        source.publish({
+          ...gateway.snapshot,
+          phase: connected ? "connected" : "reconnecting",
+          hello: connected ? hello : null,
+        });
+        await waitForSolid(() => {
+          const enable = [...mounted.page.querySelectorAll<HTMLButtonElement>("button")].find(
+            (button) => button.textContent?.trim() === "Enable notifications",
+          );
+          expect(enable).toBeDefined();
+          expect(enable?.disabled).toBe(false);
+        });
+        expect(runtimeConfig.state.configSnapshot).toBeNull();
+        expect(runtimeConfig.state.configSchema).toBeNull();
+      }
+      expectDefined(
+        [...mounted.page.querySelectorAll<HTMLButtonElement>("button")].find(
+          (button) => button.textContent?.trim() === "Enable notifications",
+        ),
+        "native permission action",
+      ).click();
+      expect(postMessage).toHaveBeenCalledWith({ type: "request-permission" });
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      mounted.dispose();
+      nativeNotifications.dispose();
       runtimeConfig.dispose();
     }
   });
@@ -256,7 +324,6 @@ describe("ConfigPage cold reads", () => {
 
   it.each([
     { pageId: "appearance", failedRead: "config" },
-    { pageId: "notifications", failedRead: "config" },
     { pageId: "infrastructure", failedRead: "config" },
     { pageId: "infrastructure", failedRead: "schema" },
   ] as const)(
