@@ -148,8 +148,10 @@ export function resolveBundleComponentPaths(
   defaults: string[],
 ): string[] {
   const declared = normalizeUniqueSingleOrTrimmedStringList(value);
-  const existingDefaults = defaults.filter((candidate) =>
-    pluginCacheExistsSync(path.join(rootDir, candidate)),
+  // Keep explicitly declared paths last, even when they also appear in the defaults.
+  const existingDefaults = defaults.filter(
+    (candidate) =>
+      !declared.includes(candidate) && pluginCacheExistsSync(path.join(rootDir, candidate)),
   );
   return mergeBundlePathLists(existingDefaults, declared);
 }
