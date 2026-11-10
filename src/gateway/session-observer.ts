@@ -4,6 +4,7 @@ import {
   AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   isDefinitiveRunLifecycle,
 } from "../agents/agent-run-terminal-outcome.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "../agents/prepared-model-runtime-admission-errors.js";
 import {
   flushSessionActivityAssistantNote,
   noteSessionActivityEvent,
@@ -406,6 +407,17 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       } catch (error) {
         await work.withCurrent(state.reader, state.sessionKey, state.agentId, (session) => {
           if (!acceptDigestPublication(session)) {
+            return;
+          }
+          if (
+            error instanceof PreparedModelRuntimeOwnerNotPublishedError &&
+            error.admissionBlocked
+          ) {
+            // Runtime replacement is not a provider failure; the next digest needs fresh admission.
+            state.preparedPromise = undefined;
+            if (final || state.finalPending || state.terminalHealth) {
+              retireTerminalState(state);
+            }
             return;
           }
           state.consecutiveFailures += 1;

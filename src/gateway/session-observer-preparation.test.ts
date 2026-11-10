@@ -1,14 +1,17 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "../agents/prepared-model-runtime-admission-errors.js";
 import "../agents/utility-completion.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import {
   advanceAndFlush as advance,
+  expectBroadcast,
   useObserverSuite,
 } from "./session-observer-suite.test-support.js";
 import {
   event,
   flushObserver,
+  modelMessage,
   preparedModel,
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
@@ -140,6 +143,35 @@ it("retries after a rejected preparation", async () => {
   expect(harness.completeModel).toHaveBeenCalledOnce();
   expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
 });
+
+it.each(["preparation", "completion"])(
+  "recovers the same run after runtime replacement blocks %s",
+  async (stage) => {
+    let available = false;
+    const refused = new PreparedModelRuntimeOwnerNotPublishedError("runtime is being replaced", {
+      admissionBlocked: true,
+    });
+    const prepareModel = vi.fn(async () => {
+      if (stage === "preparation" && !available) {
+        throw refused;
+      }
+      return { ...preparedModel(), authProfileId: available ? "current" : "retired" };
+    });
+    const completeModel = vi.fn<typeof defaultCompleteModel>(async ({ authProfileId }) => {
+      if (authProfileId === "retired") {
+        throw refused;
+      }
+      return modelMessage({ headline: "Recovered after replacement", health: "on-track" });
+    });
+    const harness = createHarness({ prepareModel, completeModel });
+    await startAndAddToolNotes(harness.observer);
+    await advance(24_000);
+    expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
+    available = true;
+    await advance(12_000);
+    expectBroadcast(harness, { runId: "run-1", headline: "Recovered after replacement" });
+  },
+);
 
 it.each([
   ["claude-cli", "claude-cli", 2],

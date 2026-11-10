@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "../agents/prepared-model-runtime-admission-errors.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import type { SessionObserverDeps } from "./session-observer-model.js";
 import {
@@ -177,6 +178,22 @@ it("synthesizes before dropping an in-flight terminal state", async () => {
     await harness.observer.disposeAsync();
     activeHarnesses.delete(harness);
   }
+});
+
+it("synthesizes the terminal digest without retrying blocked runtime admission", async () => {
+  vi.setSystemTime(30_000);
+  const prepareModel = vi.fn(async () => {
+    throw new PreparedModelRuntimeOwnerNotPublishedError("runtime is being replaced", {
+      admissionBlocked: true,
+    });
+  });
+  const { harness, storedDigest } = createPersistedHarness({ prepareModel });
+  await handleLifecycle(harness, { phase: "end", startedAt: 0, endedAt: 30_000 });
+  await flushObserver();
+  expectBroadcast(harness, { headline: storedDigest.headline, health: "done" });
+  expectPersisted(harness, { headline: storedDigest.headline, health: "done" });
+  expect(prepareModel).toHaveBeenCalledOnce();
+  expect(harness.completeModel).not.toHaveBeenCalled();
 });
 
 it("does not finalize a retryable attempt error before same-run fallback succeeds", async ({
