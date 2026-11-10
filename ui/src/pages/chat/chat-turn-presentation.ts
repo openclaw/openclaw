@@ -153,30 +153,72 @@ function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
   return boundary.kind === "message" && chatItemStartsUserTurn(boundary) ? [boundary.message] : [];
 }
 
-/**
- * Elapsed time from the prompt that started a run to the last persisted write of
- * its output. A message timestamp marks creation, not completion of the model
- * request, so output without recorded write times stays untimed.
- */
-function recordedRunDurationMs(turn: TurnRenderItem[], runId: string): number | null {
-  const prompt = turnUserMessages(turn).find((message) => userTurnRunId(message) === runId);
-  const startedAt = asRecord(prompt)?.timestamp;
-  if (typeof startedAt !== "number") {
-    return null;
+type RunTimingOptions = {
+  sessionKey: string;
+  session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
+};
+
+/** One timing projection for replies and work, independent of whether a turn used tools. */
+export function resolveTurnRunDurations(
+  items: readonly TurnRenderItem[],
+  opts: RunTimingOptions,
+): ReadonlyMap<string, number> {
+  const durations = new Map<string, number>();
+  const session = opts.session;
+  if (session && session.key !== opts.sessionKey) {
+    return durations;
   }
-  let endedAt = Number.NEGATIVE_INFINITY;
-  for (const item of turn) {
-    if (item.kind !== "group" || item.role.toLowerCase() === "user" || item.runId !== runId) {
+  const starts = new Map<string, number>();
+  const ends = new Map<string, number>();
+  for (const item of items) {
+    if (item.kind === "group" && hasForwardedSource(item)) {
       continue;
     }
-    for (const { message } of item.messages) {
+    const messages =
+      item.kind === "group"
+        ? item.messages.map(({ message }) => message)
+        : item.kind === "message"
+          ? [item.message]
+          : [];
+    for (const message of messages) {
+      const promptRunId = userTurnRunId(message);
+      const timestamp = asRecord(message)?.timestamp;
+      if (promptRunId) {
+        if (typeof timestamp === "number" && Number.isFinite(timestamp) && timestamp >= 0) {
+          starts.set(promptRunId, starts.get(promptRunId) ?? timestamp);
+        }
+        continue;
+      }
+      const runId = item.kind === "group" && item.role !== "user" ? item.runId : undefined;
       const recordedAt = asRecord(asRecord(message)?.["__openclaw"])?.recordTimestampMs;
-      if (typeof recordedAt === "number" && recordedAt > endedAt) {
-        endedAt = recordedAt;
+      if (runId && typeof recordedAt === "number" && Number.isFinite(recordedAt)) {
+        ends.set(runId, Math.max(ends.get(runId) ?? Number.NEGATIVE_INFINITY, recordedAt));
       }
     }
   }
-  return endedAt >= startedAt ? endedAt - startedAt : null;
+  // Historical timing is prompt-to-last-persisted-write, not message creation
+  // or lifecycle runtime. Missing either same-run endpoint leaves it unavailable.
+  for (const [runId, startedAt] of starts) {
+    const endedAt = ends.get(runId);
+    if (endedAt !== undefined && endedAt >= startedAt) {
+      durations.set(runId, endedAt - startedAt);
+    }
+  }
+  // The lifecycle owner takes precedence, including clearing an active or invalid
+  // current run instead of falling back to a partial transcript interval.
+  if (session?.lastRunId) {
+    durations.delete(session.lastRunId);
+    const runtimeMs = session.runtimeMs;
+    if (
+      TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
+      typeof runtimeMs === "number" &&
+      Number.isFinite(runtimeMs) &&
+      runtimeMs >= 0
+    ) {
+      durations.set(session.lastRunId, runtimeMs);
+    }
+  }
+  return durations;
 }
 
 /**
@@ -192,6 +234,7 @@ export function collapseCompletedTurnWork(
     bubbleMode?: boolean;
     searchActive?: boolean;
     session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
+    runDurations?: ReadonlyMap<string, number>;
   },
 ): Array<TurnRenderItem | WorkGroupRenderItem> {
   const [scope, agentId, kind, sessionId, ...extraParts] = normalizeLowercaseStringOrEmpty(
@@ -210,6 +253,7 @@ export function collapseCompletedTurnWork(
   if (!isDashboardSession || opts.searchActive || opts.bubbleMode) {
     return items;
   }
+  const runDurations = opts.runDurations ?? resolveTurnRunDurations(items, opts);
   const turns: TurnRenderItem[][] = [];
   let currentTurn: TurnRenderItem[] = [];
   for (const item of items) {
@@ -405,25 +449,8 @@ export function collapseCompletedTurnWork(
         )
         ? ownerReply.runId
         : undefined;
-    // The session row owns elapsed time while it still describes this run. Once
-    // newer runs advance it, the transcript keeps this run's timing. Work spanning
-    // several runs keeps an untimed disclosure.
-    const session = opts.session;
-    const runtimeMs = session?.runtimeMs;
-    const lifecycleOwnsRun =
-      session?.key === opts.sessionKey &&
-      ownerReply?.runId !== undefined &&
-      session.lastRunId === ownerReply.runId;
-    const durationMs = lifecycleOwnsRun
-      ? TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
-        typeof runtimeMs === "number" &&
-        Number.isFinite(runtimeMs) &&
-        runtimeMs >= 0
-        ? runtimeMs
-        : null
-      : replyRunId
-        ? recordedRunDurationMs(turn, replyRunId)
-        : null;
+    // Mixed-run work has no single elapsed duration.
+    const durationMs = replyRunId ? (runDurations.get(replyRunId) ?? null) : null;
     result.push(...turn.slice(0, segmentStart));
     result.push({
       kind: "work-group",

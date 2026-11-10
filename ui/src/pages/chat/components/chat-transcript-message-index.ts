@@ -28,6 +28,7 @@ import {
   coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
+  resolveTurnRunDurations,
 } from "../chat-turn-presentation.ts";
 import { readLiveTerminalRevision } from "../terminal-message-identity.ts";
 import { prepareChatStreamRender } from "./chat-message-markdown-view.tsx";
@@ -51,6 +52,7 @@ type ChatRenderItem = SystemEventRenderItem;
 
 type TranscriptChain = Readonly<{
   searchActive: boolean;
+  runDurations: ReadonlyMap<string, number>;
   workGroups: readonly Extract<ChatRenderItem, { kind: "work-group" }>[];
   collapsedItems: readonly ChatRenderItem[];
   transcriptItems: readonly ChatRenderItem[];
@@ -188,9 +190,11 @@ export function projectTranscriptChain(
   if (cached?.key.every((value, index) => Object.is(value, key[index]))) {
     return cached.value;
   }
+  const streamRuns = coalesceStreamRuns(chatItems);
+  const runDurations = resolveTurnRunDurations(streamRuns, options);
   const frames = coalesceAgentRunFrames(
     coalesceActivityRuns(
-      collapseCompletedTurnWork(coalesceStreamRuns(chatItems), options),
+      collapseCompletedTurnWork(streamRuns, { ...options, runDurations }),
       options,
     ),
     options,
@@ -244,6 +248,7 @@ export function projectTranscriptChain(
         : undefined;
   }
   const value: TranscriptChain = {
+    runDurations,
     collapsedItems,
     transcriptItems,
     workGroups: transcriptItems.flatMap((candidate) =>

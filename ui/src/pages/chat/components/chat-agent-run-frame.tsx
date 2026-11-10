@@ -305,7 +305,7 @@ function RunFrame(props: FrameProps) {
           (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
         );
     // The recap retains this run's terminal timing after the session moves on.
-    // Run duration appears only on the Worked summary; turns without one show no timing.
+    // Work retains its timing independently of the reply's metadata tooltip.
     if (work?.kind !== "work-group") {
       return undefined;
     }

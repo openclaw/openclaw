@@ -28,9 +28,12 @@ import {
 import { ChatTimestamp, MessageMeta } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
-it("adds and removes usage details on a retained plain timestamp", () => {
+it("adds and removes usage and duration on a retained plain timestamp", () => {
   const [meta, setMeta] = createSignal<Parameters<typeof MessageMeta>[0]["meta"]>(null);
-  const view = mountSolid(() => <MessageMeta timestamp={1000} meta={meta()} />);
+  const [duration, setDuration] = createSignal<number | undefined>(undefined);
+  const view = mountSolid(() => (
+    <MessageMeta timestamp={1000} meta={meta()} durationMs={duration()} />
+  ));
   const tooltip = view.container.querySelector("openclaw-tooltip");
   expect(view.container.querySelector(".msg-meta__details")).toBeNull();
   setMeta({
@@ -48,6 +51,15 @@ it("adds and removes usage details on a retained plain timestamp", () => {
   flush();
   expect(view.container.querySelector(".msg-meta__details")).toBeNull();
   expect(view.container.querySelector("openclaw-tooltip")).toBe(tooltip);
+  setDuration(13_000);
+  flush();
+  expect(view.container.querySelector(".msg-meta__duration")?.textContent).toBe("Duration: 13s");
+  for (const unavailable of [undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    setDuration(unavailable);
+    flush();
+    expect(view.container.querySelector(".msg-meta__details")).toBeNull();
+    expect(view.container.querySelector("openclaw-tooltip")).toBe(tooltip);
+  }
 });
 
 it("shares mobile layout only for earlier-message actions and preserves updates", () => {
