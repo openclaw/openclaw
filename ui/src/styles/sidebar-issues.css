@@ -89,7 +89,7 @@
 .sidebar-issues-panel__heading {
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(var(--control-ui-text-md) + 1px);
+  font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: 600;
   line-height: 1.2;
 }

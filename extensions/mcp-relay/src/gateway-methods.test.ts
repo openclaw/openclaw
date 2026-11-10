@@ -30,6 +30,7 @@ const TEAM: OpenClawConfig = {
     },
   },
 };
+const SINGLE_USER: OpenClawConfig = { gateway: { auth: { mode: "token" } } };
 
 function caller(scopes = ["operator.read", "operator.write"], profileId?: string): Caller {
   return {
@@ -52,6 +53,25 @@ function caller(scopes = ["operator.read", "operator.write"], profileId?: string
         }
       : {}),
   };
+}
+
+function appCaller(): Caller {
+  const client = caller(undefined, "person-alice");
+  client.internal = {
+    authenticatedOperator: true,
+    operatorRoleActor: { kind: "operator", profileId: "person-alice" },
+    remoteIngressPrincipal: {
+      bindingId: "synthetic-app",
+      admission: "opaque-local-admission",
+      authenticatedUserProfile: { ...client.authenticatedUserProfile!, avatarRevision: "" },
+      preparedSessionProfile: { profileId: "person-alice", role: null, aliases: new Set() },
+      operatorRoleActor: { kind: "operator", profileId: "person-alice" },
+      scopes: ["operator.read", "operator.write"],
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    },
+  };
+  return client;
 }
 
 const fixtures: Awaited<ReturnType<typeof createTransportFixture>>[] = [];
@@ -120,46 +140,66 @@ function denied(code: string) {
 }
 
 describe("MCP relay Gateway consent and grant ownership", () => {
-  it("binds approval to the authenticated caller and stores it before notifying the relay", async () => {
-    const h = await harness();
-    await h.ready();
-    const approving = h.request("authorize.approve", { requestId: REQUEST_ID });
-    const description = await h.socket.nextFrame();
-    expect(description).toMatchObject({
-      op: "authorize.describe",
-      params: { requestId: REQUEST_ID },
-    });
-    h.socket.acknowledge(description, {
-      kind: "oauth",
-      clientName: "Synthetic client",
-      redirectHost: "chatgpt.com",
-      expiresAt: 601_000,
-      profileId: "relay-selected-profile",
-    });
-    const approval = await h.socket.nextFrame();
-    expect(approval).toMatchObject({
-      op: "authorize.approve",
-      params: {
-        requestId: REQUEST_ID,
-        principal: "person",
-        principalLabel: "Synthetic person",
+  it.each(["Team", "delegated app"])(
+    "binds %s approval to the authenticated caller before notifying the relay",
+    async (source) => {
+      const delegated = source === "delegated app";
+      const h = await harness(delegated ? SINGLE_USER : TEAM);
+      if (delegated) {
+        expect(await h.request("grants", {}, appCaller())).toMatchObject([
+          true,
+          { caller: { canPair: true, principal: { kind: "person", profileId: "person-alice" } } },
+        ]);
+      }
+      await h.ready();
+      const approving = h.request(
+        "authorize.approve",
+        { requestId: REQUEST_ID },
+        delegated ? appCaller() : undefined,
+      );
+      const description = await h.socket.nextFrame();
+      expect(description).toMatchObject({
+        op: "authorize.describe",
+        params: { requestId: REQUEST_ID },
+      });
+      h.socket.acknowledge(description, {
+        kind: "oauth",
+        clientName: "Synthetic client",
+        redirectHost: "chatgpt.com",
+        expiresAt: 601_000,
+        profileId: "relay-selected-profile",
+      });
+      const approval = await h.socket.nextFrame();
+      expect(approval).toMatchObject({
+        op: "authorize.approve",
+        params: {
+          requestId: REQUEST_ID,
+          principal: "person",
+          principalLabel: "Synthetic person",
+          ceiling: ["operator.read", "operator.write"],
+        },
+      });
+      if (!isRecord(approval.params) || typeof approval.params.grantId !== "string") {
+        throw new Error("Missing grant");
+      }
+      expect(h.state.getGrant(approval.params.grantId)).toMatchObject({
+        principal: delegated
+          ? {
+              kind: "delegated-person",
+              profileId: "person-alice",
+              admission: "opaque-local-admission",
+            }
+          : { kind: "person", profileId: "person-alice" },
         ceiling: ["operator.read", "operator.write"],
-      },
-    });
-    if (!isRecord(approval.params) || typeof approval.params.grantId !== "string") {
-      throw new Error("Missing grant");
-    }
-    expect(h.state.getGrant(approval.params.grantId)).toMatchObject({
-      principal: { kind: "person", profileId: "person-alice" },
-      ceiling: ["operator.read", "operator.write"],
-    });
-    expect(JSON.stringify(h.socket.frames)).not.toContain("profileId");
-    h.socket.acknowledge(approval);
-    expect(await approving).toEqual([
-      true,
-      { continueUrl: `${RELAY}/oauth/continue?request=${REQUEST_ID}` },
-    ]);
-  });
+      });
+      expect(JSON.stringify(h.socket.frames)).not.toContain("profileId");
+      h.socket.acknowledge(approval);
+      expect(await approving).toEqual([
+        true,
+        { continueUrl: `${RELAY}/oauth/continue?request=${REQUEST_ID}` },
+      ]);
+    },
+  );
 
   it("rejects caller-selected identities and ceilings outside the admitted role", async () => {
     const h = await harness();
@@ -279,10 +319,31 @@ describe("MCP relay Gateway consent and grant ownership", () => {
     });
   });
 
+  it("refuses an ID member with unavailable membership rather than treating it as the owner", async () => {
+    const h = await harness(SINGLE_USER);
+    await h.addGrant("gr_owner", { kind: "owner" });
+    const member = caller(undefined, "person-alice");
+    member.internal = {
+      authenticatedOperator: true,
+      openclawIdPrincipal: {
+        kind: "member",
+        accountId: "synthetic-member",
+        role: "operator",
+        peerKey: `iroh:${"ab".repeat(32)}`,
+        authority: { clawId: "synthetic-claw", rootPub: "synthetic-root", listedSeq: 1 },
+      },
+    };
+    expect(await h.request("grants", {}, member)).toEqual(denied("unavailable"));
+    expect(await h.request("revoke", { grantId: "gr_owner" }, member)).toEqual(
+      denied("unavailable"),
+    );
+    expect(h.state.getGrant("gr_owner")).toBeDefined();
+  });
+
   it.each(["person", "delegated-person"] as const)(
     "lists and revokes the caller's %s grants while admins can manage other people",
     async (kind) => {
-      const h = await harness();
+      const h = await harness(SINGLE_USER);
       await h.addGrant(
         "gr_alice",
         kind === "person"
@@ -291,7 +352,8 @@ describe("MCP relay Gateway consent and grant ownership", () => {
       );
       await h.addGrant("gr_bob", { kind: "person", profileId: "person-bob" });
       await h.addGrant("gr_owner", { kind: "owner" });
-      const listed = await h.request("grants", {});
+      const member = appCaller();
+      const listed = await h.request("grants", {}, member);
       expect(JSON.stringify(listed)).not.toContain("opaque-local-admission");
       expect(listed).toMatchObject([
         true,
@@ -302,9 +364,11 @@ describe("MCP relay Gateway consent and grant ownership", () => {
           caller: { canAdmin: false },
         },
       ]);
-      expect(await h.request("revoke", { grantId: "gr_bob" })).toEqual(denied("not_found"));
-      expect(h.state.getGrant("gr_bob")).toBeDefined();
-      expect(await h.request("revoke", { grantId: "gr_alice" })).toEqual([
+      for (const grantId of ["gr_bob", "gr_owner"]) {
+        expect(await h.request("revoke", { grantId }, member)).toEqual(denied("not_found"));
+        expect(h.state.getGrant(grantId)).toBeDefined();
+      }
+      expect(await h.request("revoke", { grantId: "gr_alice" }, member)).toEqual([
         true,
         { revoked: true, relayNotified: false },
       ]);
