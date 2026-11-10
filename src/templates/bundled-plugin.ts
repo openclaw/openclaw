@@ -165,8 +165,13 @@ export async function preflightBundledTemplatePlugin(params: {
     const target =
       installed?.installPath ??
       resolvePluginInstallDir(probe.pluginId, resolveDefaultPluginExtensionsDir(env));
-    const exists = await lstat(target).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") {
+    const exists = await lstat(target).catch((error: unknown) => {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
         return undefined;
       }
       throw error;
