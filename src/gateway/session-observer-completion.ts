@@ -141,6 +141,7 @@ export function createSessionObserverCompletion(params: {
           if (!params.isCurrent(state) || controller.signal.aborted) {
             throw new Error("session observer state is no longer active");
           }
+          let parsed: ReturnType<typeof normalizeSessionObserverModelOutput> = null;
           const result = await params.completeModel({
             ...prepared,
             purpose: "session-observer",
@@ -151,8 +152,18 @@ export function createSessionObserverCompletion(params: {
             abortSignal: controller.signal,
             answerTokenBudget: 300,
             streamParams: { temperature: 0.2 },
+            classifyResult: ({ result: candidateResult }) => {
+              parsed = normalizeSessionObserverModelOutput(candidateResult.text);
+              return parsed
+                ? undefined
+                : {
+                    message: "session observer returned invalid JSON",
+                    code: "invalid_response",
+                    preserveResultOnExhaustion: true,
+                  };
+            },
           });
-          const parsed = normalizeSessionObserverModelOutput(result.text);
+          parsed ??= normalizeSessionObserverModelOutput(result.text);
           if (parsed) {
             return parsed;
           }
