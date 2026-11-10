@@ -326,7 +326,10 @@ final class NodeAppModel {
         }
     }
 
-    var nodeStatusText: String = "Offline"
+    var nodeStatusText: String {
+        self.gatewayConnected ? "Connected" : "Offline"
+    }
+
     var operatorStatusText: String = "Offline"
     private(set) var isAppleReviewDemoModeEnabled: Bool = false
     private(set) var isScreenshotFixtureModeEnabled: Bool = false
@@ -5084,7 +5087,6 @@ extension NodeAppModel {
         }
 
         self.gatewayStatusText = "Connected"
-        self.nodeStatusText = "Connected"
     }
 
     private func configureLocalGatewayFixtureSession(_ fixture: LocalChatFixture) {
