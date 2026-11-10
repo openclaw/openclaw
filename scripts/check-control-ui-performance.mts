@@ -60,7 +60,9 @@ const controlUiPerformanceBudgets = {
   newBootCssRequests: 3,
   // Receipt narrowing: 1,298,156 → 1,298,697 B (+541 B), coordinator-accepted.
   // Use the measured head with no added headroom.
-  chatBootJsGzipBytes: 1_298_697,
+  // Picker-hidden agents (#194575): CI Node 24 measured 1,299,189 B (+400 B vs a
+  // base already 92 B over the prior cap), plus 64 B build variance.
+  chatBootJsGzipBytes: 1_299_253,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
   // Picker-hidden agents (#194575): CI Node 24 measures 803,504 B (+288 B) plus 64 B;
   // Node 26 reports +331 B more for the same tree, CI measurement is authoritative.
