@@ -1,0 +1,70 @@
+diff --git a/dist/acorn.js b/dist/acorn.js
+index f2e9c2288173973efc6d39a11b5f8cf0e25f8b22..2c25c2641ae815ce7e93902b8957875dc2b39e23 100644
+--- a/dist/acorn.js
++++ b/dist/acorn.js
+@@ -2549,7 +2549,7 @@
+ 
+   pp$6.updateContext = function(prevType) {
+     var update, type = this.type;
+-    if (type.keyword && prevType === types$1.dot)
++    if (type.keyword && (prevType === types$1.dot || prevType === types$1.questionDot))
+       { this.exprAllowed = false; }
+     else if (update = type.updateContext)
+       { update.call(this, prevType); }
+@@ -2636,7 +2636,7 @@
+ 
+   types$1.name.updateContext = function(prevType) {
+     var allowed = false;
+-    if (this.options.ecmaVersion >= 6 && prevType !== types$1.dot) {
++    if (this.options.ecmaVersion >= 6 && prevType !== types$1.dot && prevType !== types$1.questionDot) {
+       if (this.value === "of" && !this.exprAllowed ||
+           this.value === "yield" && this.inGeneratorContext())
+         { allowed = true; }
+@@ -3764,9 +3764,10 @@
+       // To fix https://github.com/acornjs/acorn/issues/575
+       // `class` and `function` keywords push new context into this.context.
+       // But there is no chance to pop the context if the keyword is consumed as an identifier such as a property name.
+-      // If the previous token is a dot, this does not apply because the context-managing code already ignored the keyword
++      // After a dot or optional dot, the context-managing code already ignored the keyword.
+       if ((node.name === "class" || node.name === "function") &&
+-        (this.lastTokEnd !== this.lastTokStart + 1 || this.input.charCodeAt(this.lastTokStart) !== 46)) {
++        this.input.slice(this.lastTokStart, this.lastTokEnd) !== "." &&
++        this.input.slice(this.lastTokStart, this.lastTokEnd) !== "?.") {
+         this.context.pop();
+       }
+       this.type = types$1.name;
+diff --git a/dist/acorn.mjs b/dist/acorn.mjs
+index aee191eb880c1eb7733665be63b48038dd61f726..4a0a1c3b47b57483abd64005cd43e1755c1b2dea 100644
+--- a/dist/acorn.mjs
++++ b/dist/acorn.mjs
+@@ -2543,7 +2543,7 @@ pp$6.inGeneratorContext = function() {
+ 
+ pp$6.updateContext = function(prevType) {
+   var update, type = this.type;
+-  if (type.keyword && prevType === types$1.dot)
++  if (type.keyword && (prevType === types$1.dot || prevType === types$1.questionDot))
+     { this.exprAllowed = false; }
+   else if (update = type.updateContext)
+     { update.call(this, prevType); }
+@@ -2630,7 +2630,7 @@ types$1.star.updateContext = function(prevType) {
+ 
+ types$1.name.updateContext = function(prevType) {
+   var allowed = false;
+-  if (this.options.ecmaVersion >= 6 && prevType !== types$1.dot) {
++  if (this.options.ecmaVersion >= 6 && prevType !== types$1.dot && prevType !== types$1.questionDot) {
+     if (this.value === "of" && !this.exprAllowed ||
+         this.value === "yield" && this.inGeneratorContext())
+       { allowed = true; }
+@@ -3758,9 +3758,10 @@ pp$5.parseIdentNode = function() {
+     // To fix https://github.com/acornjs/acorn/issues/575
+     // `class` and `function` keywords push new context into this.context.
+     // But there is no chance to pop the context if the keyword is consumed as an identifier such as a property name.
+-    // If the previous token is a dot, this does not apply because the context-managing code already ignored the keyword
++    // After a dot or optional dot, the context-managing code already ignored the keyword.
+     if ((node.name === "class" || node.name === "function") &&
+-      (this.lastTokEnd !== this.lastTokStart + 1 || this.input.charCodeAt(this.lastTokStart) !== 46)) {
++      this.input.slice(this.lastTokStart, this.lastTokEnd) !== "." &&
++      this.input.slice(this.lastTokStart, this.lastTokEnd) !== "?.") {
+       this.context.pop();
+     }
+     this.type = types$1.name;

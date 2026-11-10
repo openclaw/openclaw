@@ -2407,6 +2407,7 @@
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
+    "acorn",
     "chrome-devtools-mcp",
     "playwright-core"
   ],

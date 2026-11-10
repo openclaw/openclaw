@@ -218,6 +218,7 @@ patchedDependencies:
   '@shinyoshiaki/binary-data@0.6.1': 231e04c1ca6a2f66dda30dfe23c1178d2df9fbc2161d9eac7689e3a751a85a9b
   '@solidjs/signals@2.0.0-rc.18': 421b418083c0218bb54ceb3e12bd0eb74a84e86474ca26cc1f1114abbe58de48
   '@solidjs/web@2.0.0-rc.18': 6d6b2e52e607edf3c9cfcc1a26f331d013537d051f43bbb4f3e7877ed08fa5cf
+  acorn@8.19.0: 2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a
   apache-arrow@21.2.0: c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.12.0: 1512760e206b35bf417387b18d4c1a5d0f68e2ffeef994cb733c9e02ba4eba92
@@ -316,7 +317,7 @@ importers:
         version: 8.23.1
       acorn:
         specifier: 8.19.0
-        version: 8.19.0
+        version: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
       chalk:
         specifier: 6.0.1
         version: 6.0.1
@@ -867,7 +868,7 @@ importers:
         version: 2.4.0
       acorn:
         specifier: 8.19.0
-        version: 8.19.0
+        version: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
       chrome-devtools-mcp:
         specifier: 1.12.0
         version: 1.12.0(patch_hash=1512760e206b35bf417387b18d4c1a5d0f68e2ffeef994cb733c9e02ba4eba92)
@@ -1015,7 +1016,7 @@ importers:
         version: 0.27.1
       acorn:
         specifier: 8.19.0
-        version: 8.19.0
+        version: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
       semver:
         specifier: 7.8.5
         version: 7.8.5
@@ -13003,7 +13004,7 @@ snapshots:
       '@types/estree-jsx': 1.0.5
       '@types/hast': 3.0.5
       '@types/mdx': 2.0.14
-      acorn: 8.19.0
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
       collapse-white-space: 2.1.0
       devlop: 1.1.0
       estree-util-is-identifier-name: 3.0.0
@@ -13012,7 +13013,7 @@ snapshots:
       hast-util-to-jsx-runtime: 2.3.6(supports-color@10.2.2)
       markdown-extensions: 2.0.0
       recma-build-jsx: 1.0.0
-      recma-jsx: 1.0.1(acorn@8.19.0)
+      recma-jsx: 1.0.1(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a))
       recma-stringify: 1.0.0
       rehype-recma: 1.0.0(supports-color@10.2.2)
       remark-mdx: 3.1.1(supports-color@10.2.2)
@@ -15222,11 +15223,11 @@ snapshots:
       mime-types: 3.0.2
       negotiator: 1.1.0
 
-  acorn-jsx@5.3.2(acorn@8.19.0):
+  acorn-jsx@5.3.2(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)):
     dependencies:
-      acorn: 8.19.0
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
 
-  acorn@8.19.0: {}
+  acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a): {}
 
   acpx@0.21.1:
     dependencies:
@@ -15854,7 +15855,7 @@ snapshots:
   esast-util-from-js@2.0.1:
     dependencies:
       '@types/estree-jsx': 1.0.5
-      acorn: 8.19.0
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
       esast-util-from-estree: 2.0.0
       vfile-message: 4.0.3
 
@@ -15958,8 +15959,8 @@ snapshots:
 
   espree@11.2.0:
     dependencies:
-      acorn: 8.19.0
-      acorn-jsx: 5.3.2(acorn@8.19.0)
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
+      acorn-jsx: 5.3.2(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a))
       eslint-visitor-keys: 5.0.1
 
   esquery@1.7.0:
@@ -17452,8 +17453,8 @@ snapshots:
 
   micromark-extension-mdxjs@3.0.0:
     dependencies:
-      acorn: 8.19.0
-      acorn-jsx: 5.3.2(acorn@8.19.0)
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
+      acorn-jsx: 5.3.2(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a))
       micromark-extension-mdx-expression: 3.0.1
       micromark-extension-mdx-jsx: 3.0.2
       micromark-extension-mdx-md: 2.0.0
@@ -18119,7 +18120,7 @@ snapshots:
 
   playwright-core@1.64.1(patch_hash=eedf680682a6840d82c6ad530a60875857aa8c0372785acf8e8e5df9c2e3ac16):
     dependencies:
-      acorn: 8.19.0
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
 
   playwright@1.64.1:
     dependencies:
@@ -18275,10 +18276,10 @@ snapshots:
       estree-util-build-jsx: 3.0.1
       vfile: 6.0.3
 
-  recma-jsx@1.0.1(acorn@8.19.0):
+  recma-jsx@1.0.1(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)):
     dependencies:
-      acorn: 8.19.0
-      acorn-jsx: 5.3.2(acorn@8.19.0)
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
+      acorn-jsx: 5.3.2(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a))
       estree-util-to-js: 2.0.0
       recma-parse: 1.0.0
       recma-stringify: 1.0.0
