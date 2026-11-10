@@ -35,7 +35,9 @@ function mockFormatter(files = ["README.md", "docs/guide.mdx"], run = () => comm
   const calls: Array<{ command: string; args: readonly string[]; options: unknown }> = [];
   vi.mocked(spawnSync).mockImplementation((command, args, options) => {
     if (command === "git") {
-      return args?.[0] === "ls-files" ? commandResult(files.join("\n")) : commandResult("", "", 1);
+      return args?.[0] === "ls-files"
+        ? commandResult(files.join(args.includes("-z") ? "\0" : "\n"))
+        : commandResult("", "", 1);
     }
     calls.push({ command, args: args ?? [], options });
     return run();
@@ -88,14 +90,36 @@ describe("format-docs", () => {
     );
   });
 
-  it("uses repository paths in write mode and temporary paths in check mode", () => {
-    const calls = mockFormatter();
+  it("includes root docs and Git-quoted paths in write and check modes", async () => {
+    const files = [
+      "README.md",
+      "docs/root.md",
+      "docs/root.mdx",
+      "docs/guide/指南.md",
+      ...(process.platform === "win32"
+        ? []
+        : ['docs/guide/quote"name.md', "docs/guide/line\nbreak.md"]),
+    ];
+    const calls = mockFormatter(files);
+    const formatter = vi.mocked(spawnSync).getMockImplementation()!;
+    const { spawnSync: realSpawn } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    for (const args of [
+      ["init", "-q"],
+      ["config", "core.quotePath", "true"],
+      ["add", "--", ...files],
+    ]) {
+      expect(realSpawn("git", args, { cwd: root }).status).toBe(0);
+    }
+    vi.mocked(spawnSync).mockImplementation((command, args, options) =>
+      command === "git" ? realSpawn(command, args, options) : formatter(command, args, options),
+    );
 
-    expect(formatDocs({ root })).toEqual({ changed: [], fileCount: 2 });
-    expect(formatDocs({ root, check: true })).toEqual({ changed: [], fileCount: 2 });
+    expect(formatDocs({ root })).toEqual({ changed: [], fileCount: files.length });
+    expect(formatDocs({ root, check: true })).toEqual({ changed: [], fileCount: files.length });
 
-    expect(calls[0]?.args.slice(-2)).toEqual(["README.md", "docs/guide.mdx"]);
-    const temporaryFiles = calls[1]?.args.slice(-2);
+    expect(calls[0]?.args.slice(-files.length).toSorted()).toEqual(files.toSorted());
+    const temporaryFiles = calls[1]?.args.slice(-files.length);
     expect(temporaryFiles?.every((file) => path.isAbsolute(file))).toBe(true);
     expect(temporaryFiles?.every((file) => file.startsWith(root))).toBe(false);
   });
