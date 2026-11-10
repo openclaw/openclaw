@@ -593,7 +593,7 @@ describe("refreshPendingQuestions", () => {
     });
   });
 
-  it("terminalizes a missing pending question with an unknown outcome after not-found", async () => {
+  it("shows a live pending question the Gateway no longer knows as dropped by a restart", async () => {
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "question.list") {
         return { questions: [] };
@@ -603,10 +603,11 @@ describe("refreshPendingQuestions", () => {
     const { state, client } = createConnectedState(request);
 
     refreshPendingQuestionsWithRetry(state, client);
-    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("unavailable"));
+    await waitForFast(() => expect(state.prompts.get("question-1")?.status).toBe("expired"));
 
     expectPrompt(state, {
-      status: "unavailable",
+      status: "expired",
+      resolvedBy: "gateway-restart",
       answeredElsewhere: false,
       locallyExpired: false,
       submitting: false,

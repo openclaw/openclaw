@@ -1,4 +1,5 @@
 // Continues a session whose question outlived the Gateway restart that ended its tool call.
+import type { QuestionRecord } from "../../packages/gateway-protocol/src/index.js";
 import { formatRestartedQuestionResult } from "../agents/tools/ask-user-tool-normalization.js";
 import {
   captureSessionEventTargetForHost,
@@ -8,8 +9,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import type { RestoredQuestion } from "./question-manager.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
@@ -17,16 +16,14 @@ const log = createSubsystemLogger("gateway/questions");
 
 /**
  * Admits one turn in the asking session, in the same sequence restart resume uses and
- * under the session's recorded principal. A failure leaves a visible notice and keeps
- * the row for the next start, unless the conversation was reset since the question.
+ * under the session's recorded principal. A failure leaves a visible transcript notice.
  */
 export async function resumeRestoredQuestion(
   context: GatewayRequestContext,
-  { stored, onAdopted }: RestoredQuestion,
+  target: { agentId: string; sessionKey: string; sessionId: string },
+  record: QuestionRecord,
 ): Promise<void> {
-  const { record, sessionId } = stored;
-  const sessionKey = record.sessionKey ?? "";
-  const agentId = record.agentId ?? parseAgentSessionKey(sessionKey)?.agentId ?? "";
+  const { agentId, sessionKey, sessionId } = target;
   const contextKey = `question:${record.id}`;
   const text = formatRestartedQuestionResult(record);
   let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>>;
@@ -39,10 +36,10 @@ export async function resumeRestoredQuestion(
         sessionId,
         preserveRecordedSource: true,
       });
-      const target = await captureSessionEventTargetForHost(agentId, sessionKey, {
+      const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
         operatorAuthority: authority?.authority,
       });
-      if (target.sessionId !== sessionId) {
+      if (captured.sessionId !== sessionId) {
         throw new Error("the conversation was reset");
       }
       const receipt = withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
@@ -51,8 +48,7 @@ export async function resumeRestoredQuestion(
           sessionKey,
           source: "tool_handoff",
           contextKey,
-          expectedTarget: target,
-          onAdopted,
+          expectedTarget: captured,
         }),
       );
       const retained = authority;
@@ -67,10 +63,6 @@ export async function resumeRestoredQuestion(
     authority?.release();
     const reason = formatErrorMessage(error);
     log.warn(`question ${record.id} could not continue its session: ${reason}`);
-    const reset = await captureSessionEventTargetForHost(agentId, sessionKey).then(
-      (target) => target.sessionId !== sessionId,
-      () => false,
-    );
     const { appendAssistantMessageToSessionTranscript } =
       await import("../config/sessions/transcript.js");
     const notice = await appendAssistantMessageToSessionTranscript({
@@ -83,8 +75,6 @@ export async function resumeRestoredQuestion(
     }).catch((noticeError: unknown) => ({ ok: false, reason: formatErrorMessage(noticeError) }));
     if (!notice.ok) {
       log.warn(`question ${record.id} notice failed: ${notice.reason}`);
-    } else if (reset) {
-      await onAdopted();
     }
   }
 }

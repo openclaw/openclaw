@@ -324,7 +324,11 @@ export function questionExpiredLabelKey(prompt: QuestionPrompt) {
 function markRecoveryUnavailable(state: QuestionPromptState, prompt: QuestionPrompt): void {
   // QUESTION_NOT_FOUND means the gateway tombstone aged out. It proves the prompt is
   // no longer actionable, but not whether it was answered, cancelled, or expired.
-  prompt.status = "unavailable";
+  // A still-live pending prompt with no record at all was dropped by a Gateway restart
+  // (rarely, it was answered elsewhere during a disconnect longer than the tombstone).
+  const dropped = prompt.status === "pending" && !prompt.locallyExpired;
+  prompt.status = dropped ? "expired" : "unavailable";
+  prompt.resolvedBy = dropped ? "gateway-restart" : undefined;
   clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
   prompt.answers = undefined;
   prompt.answeredElsewhere = false;

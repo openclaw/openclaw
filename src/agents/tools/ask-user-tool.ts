@@ -25,7 +25,7 @@ import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-desc
 import {
   AskUserToolSchema,
   DEFAULT_ASK_USER_TIMEOUT_SECONDS,
-  formatAskUserAnsweredText,
+  formatAskUserAnswerLines,
   formatAskUserNoAnswerNote,
   QUESTION_RPC_GRACE_MS,
   type NormalizedAskUserParams,
@@ -339,10 +339,9 @@ export function cancelAskUserPromptDelivery(
 }
 
 function answeredResult(questions: readonly QuestionRequestQuestion[], answers: QuestionAnswers) {
-  return textResult(formatAskUserAnsweredText(questions, answers), {
-    status: "answered" as const,
-    answers,
-  });
+  const payload = { status: "answered" as const, answers };
+  const lines = formatAskUserAnswerLines(questions, answers);
+  return textResult(`${lines}\n\n${JSON.stringify(payload, null, 2)}`, payload);
 }
 
 function noAnswerResult(status: Exclude<QuestionWaitAnswerResult["status"], "answered">) {

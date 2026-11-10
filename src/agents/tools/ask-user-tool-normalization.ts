@@ -18,8 +18,9 @@ const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
 
 export type NormalizedAskUserParams = ReturnType<typeof normalizeAskUserParams>;
 
-function formatAnswerLines(
-  questions: readonly Pick<QuestionRequestQuestion, "questionId" | "header">[],
+/** Answer lines shared by the waiting tool result and the post-restart continuation. */
+export function formatAskUserAnswerLines(
+  questions: readonly QuestionRequestQuestion[],
   answers: QuestionAnswers,
 ): string {
   return questions
@@ -28,15 +29,6 @@ function formatAnswerLines(
       return `${question.header}: ${values.length > 0 ? values.join(", ") : "(no answer)"}`;
     })
     .join("\n");
-}
-
-/** Answered ask_user result text, as the waiting tool returns it to the model. */
-export function formatAskUserAnsweredText(
-  questions: readonly QuestionRequestQuestion[],
-  answers: QuestionAnswers,
-): string {
-  const payload = { status: "answered" as const, answers };
-  return `${formatAnswerLines(questions, answers)}\n\n${JSON.stringify(payload, null, 2)}`;
 }
 
 export function formatAskUserNoAnswerNote(status: "cancelled" | "expired" | "pending"): string {
@@ -49,7 +41,7 @@ export function formatAskUserNoAnswerNote(status: "cancelled" | "expired" | "pen
 export function formatRestartedQuestionResult(record: QuestionRecord): string {
   const heading = "ask_user answer (question asked before the Gateway restarted):\n";
   return record.status === "answered"
-    ? heading + formatAnswerLines(record.questions, record.answers ?? { answers: {} })
+    ? heading + formatAskUserAnswerLines(record.questions, record.answers ?? { answers: {} })
     : heading + formatAskUserNoAnswerNote(record.status === "cancelled" ? "cancelled" : "expired");
 }
 

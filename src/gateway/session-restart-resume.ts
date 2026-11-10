@@ -46,6 +46,8 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { withAgentInputRecovery } from "../state/agent-database-preparation-context.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
+import type { ResumableQuestion } from "./question-manager.js";
+import { resumeRestoredQuestion } from "./question-resume.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { recordRestartResumeFailure } from "./session-restart-resume-failure.js";
@@ -68,12 +70,18 @@ type SessionIdentity = {
   sessionId?: string;
   hadBackgroundExec?: true;
   needsResume: boolean;
+  questions?: ResumableQuestion[];
 };
 
-/** Snapshot only live owners after admission closes, before shutdown aborts them. */
+/**
+ * Snapshot only live owners after admission closes, before shutdown aborts them. Pending
+ * resumable questions ride on the same marker; a crash before this write loses them,
+ * like the rest of the marker.
+ */
 export async function persistRunningSessionsForRestart(params: {
   cfg: OpenClawConfig;
   signal?: AbortSignal;
+  questions?: ResumableQuestion[];
 }): Promise<void> {
   const summary = createRestartResumeSummary("shutdown");
   const publish = () => summary.publish();
@@ -87,7 +95,7 @@ export async function persistRunningSessionsForRestart(params: {
 }
 
 async function persistRunningSessions(
-  params: { cfg: OpenClawConfig; signal?: AbortSignal },
+  params: { cfg: OpenClawConfig; signal?: AbortSignal; questions?: ResumableQuestion[] },
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Promise<void> {
   const assertCurrent = () => params.signal?.throwIfAborted();
@@ -100,6 +108,7 @@ async function persistRunningSessions(
     sessionId?: string;
     hadBackgroundExec?: true;
     needsResume?: boolean;
+    question?: ResumableQuestion;
   }) => {
     const root = resolveRootSubagentRequester(input.sessionKey, input.agentId);
     const agentId =
@@ -118,22 +127,27 @@ async function persistRunningSessions(
       return;
     }
     const key = JSON.stringify([agentId, root.sessionKey]);
-    const existing = sessions.get(key);
-    if (!existing) {
+    let session = sessions.get(key);
+    if (!session) {
       summary.record(agentId, root.sessionKey, "persistence-incomplete");
-      sessions.set(key, {
+      session = {
         agentId,
         storePath,
         sessionKey: root.sessionKey,
         sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
         hadBackgroundExec: input.hadBackgroundExec,
         needsResume: input.needsResume !== false,
-      });
+      };
+      sessions.set(key, session);
     } else {
-      existing.needsResume ||= input.needsResume !== false;
+      session.needsResume ||= input.needsResume !== false;
       if (input.hadBackgroundExec) {
-        existing.hadBackgroundExec = true;
+        session.hadBackgroundExec = true;
       }
+    }
+    // Child sessions do not resume independently, so their questions are not carried.
+    if (input.question && root.sessionKey === input.sessionKey) {
+      (session.questions ??= []).push(input.question);
     }
   };
   for (const operation of activeSessionOperations()) {
@@ -181,6 +195,13 @@ async function persistRunningSessions(
     const sessionKey = process.sessionKey ?? process.scopeKey;
     if (sessionKey) {
       add({ sessionKey, agentId: process.agentId, hadBackgroundExec: true });
+    }
+  }
+  // Last, so a live run's session id wins; a question alone marks only its own session.
+  for (const question of params.questions ?? []) {
+    const { sessionKey, agentId } = question.record;
+    if (sessionKey) {
+      add({ sessionKey, agentId, sessionId: question.sessionId, needsResume: false, question });
     }
   }
   const selectors = new Map<string, SessionIdentity[]>();
@@ -234,7 +255,10 @@ async function persistRunningSessions(
               storePath: first.storePath,
               sessionId: entry.sessionId,
             });
-            if (!session.needsResume && queued.queuedInputIds.length === 0) {
+            const questions = session.questions
+              ?.filter((question) => question.sessionId === entry.sessionId)
+              .map((question) => question.record);
+            if (!session.needsResume && queued.queuedInputIds.length === 0 && !questions?.length) {
               summary.record(session.agentId, sessionKey, "reply-completed");
               continue;
             }
@@ -245,6 +269,7 @@ async function persistRunningSessions(
                 resumeAfterRestart: {
                   queuedInputIds: queued.queuedInputIds,
                   ...(session.hadBackgroundExec ? { hadBackgroundExec: true } : {}),
+                  ...(questions?.length ? { questions } : {}),
                 },
               },
             });
@@ -600,18 +625,27 @@ async function resumeRestartStore(
           );
           continue;
         }
-        if (context.questionManager?.hasPendingResumable(agentId, sessionKey)) {
-          // The restored question's answer or expiry continues this session.
-          summary.record(agentId, sessionKey, "awaiting-question");
-          await continueSessionQueuedInputs(
+        const session = { agentId, sessionKey, sessionId: entry.sessionId };
+        // Each accepted sender retains its own admission even when the owner cannot resume.
+        const continueQueuedInputs = () =>
+          continueSessionQueuedInputs(
             context,
-            { ...target, agentId, sessionKey, sessionId: entry.sessionId },
+            { ...target, ...session },
             {
               signal,
               queuedInputIds: marker.queuedInputIds,
               assertCurrent: () => signal.throwIfAborted(),
             },
           );
+        const restored = (marker.questions ?? []).filter((record) =>
+          context.questionManager?.restore({ record, sessionId: entry.sessionId }, (outcome) => {
+            void resumeRestoredQuestion(context, session, outcome);
+          }),
+        );
+        if (restored.length > 0) {
+          // The restored question's answer, skip, or expiry continues this session.
+          summary.record(agentId, sessionKey, "awaiting-question");
+          await continueQueuedInputs();
           continue;
         }
         try {
@@ -683,16 +717,7 @@ async function resumeRestartStore(
             log,
           });
         }
-        // Each accepted sender retains its own admission even when the owner cannot resume.
-        await continueSessionQueuedInputs(
-          context,
-          { ...target, agentId, sessionKey, sessionId: entry.sessionId },
-          {
-            signal,
-            queuedInputIds: marker.queuedInputIds,
-            assertCurrent: () => signal.throwIfAborted(),
-          },
-        );
+        await continueQueuedInputs();
       } catch (error) {
         if (signal.aborted) {
           throw error;

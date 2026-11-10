@@ -7,6 +7,7 @@ import type {
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
+  QuestionRecord,
   SessionEntryArchiveReason,
   SessionRow,
   SessionRunStatus,
@@ -683,7 +684,12 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Written only by committed graceful shutdown, consumed by the next startup. */
-  resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
+  resumeAfterRestart?: {
+    queuedInputIds: string[];
+    hadBackgroundExec?: true;
+    /** Pending ordinary questions of this session generation; never secret, form, or host-authorized. */
+    questions?: QuestionRecord[];
+  };
   /**
    * Latest authenticated source per person who sent input here, keyed by profile ID. Restored only
    * through current device, auth, profile and role revalidation; never an executable grant.

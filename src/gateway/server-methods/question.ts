@@ -498,22 +498,6 @@ export function createQuestionHandlers(
               return;
             }
             authorize.assertCurrent();
-            const restored = manager.resolveRestored(
-              request.id,
-              request.answers,
-              request.resolvedBy,
-            );
-            if (restored) {
-              save = restored.then(
-                (result) => respond(true, result, undefined),
-                (error: unknown) => {
-                  if (!managerError(error, respond)) {
-                    throw error;
-                  }
-                },
-              );
-              return;
-            }
             respond(
               true,
               manager.resolve(request.id, request.answers, request.resolvedBy, {

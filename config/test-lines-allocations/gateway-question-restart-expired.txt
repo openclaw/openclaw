@@ -1,2 +1,2 @@
-# Gateway question restart: expired-on-restart and resume-after-restart regressions with their shared fixture.
-111
+# Gateway question restart: session-marker resume, second-restart carry, and private-question regressions.
+106

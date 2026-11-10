@@ -367,14 +367,6 @@ export const statePostgresRuntime = {
       sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "durable_background_processes" (\n  "id" text COLLATE "C" NOT NULL,\n  "record_json" text COLLATE "C" NOT NULL,\n  PRIMARY KEY ("id")\n);\n',
     },
     {
-      id: "gateway_questions",
-      tables: ["gateway_questions"],
-      indexes: [],
-      dependencies: [],
-      activation: "first-use",
-      sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "gateway_questions" (\n  "id" text COLLATE "C" NOT NULL,\n  "record_json" text COLLATE "C" NOT NULL,\n  PRIMARY KEY ("id")\n);\n',
-    },
-    {
       id: "sandbox_persistent_execs",
       tables: ["sandbox_persistent_execs"],
       indexes: [
@@ -6459,50 +6451,6 @@ export const statePostgresRuntime = {
     },
     {
       table: "gateway_boot_lifecycle",
-      kind: "checks",
-      value: 0,
-    },
-    {
-      table: "gateway_questions",
-      kind: "table",
-      value: null,
-    },
-    {
-      table: "gateway_questions",
-      kind: "column",
-      value: {
-        name: "id",
-        type: "text",
-        nullable: false,
-        identity: false,
-        default: null,
-        position: 1,
-      },
-    },
-    {
-      table: "gateway_questions",
-      kind: "column",
-      value: {
-        name: "record_json",
-        type: "text",
-        nullable: false,
-        identity: false,
-        default: null,
-        position: 2,
-      },
-    },
-    {
-      table: "gateway_questions",
-      kind: "primaryKey",
-      value: ["id"],
-    },
-    {
-      table: "gateway_questions",
-      kind: "indexes",
-      value: 1,
-    },
-    {
-      table: "gateway_questions",
       kind: "checks",
       value: 0,
     },

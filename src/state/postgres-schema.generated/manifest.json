@@ -79,16 +79,6 @@
       "file": "fragment-durable_background_processes.postgres.sql"
     },
     {
-      "id": "gateway_questions",
-      "tables": [
-        "gateway_questions"
-      ],
-      "indexes": [],
-      "dependencies": [],
-      "activation": "first-use",
-      "file": "fragment-gateway_questions.postgres.sql"
-    },
-    {
       "id": "sandbox_persistent_execs",
       "tables": [
         "sandbox_persistent_execs"
