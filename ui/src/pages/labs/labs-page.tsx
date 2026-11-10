@@ -22,6 +22,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerLabsEnglish } from "../../i18n/locales/en-labs.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import {
   currentConfigObject,
   resolveEditableSnapshotConfig,
@@ -37,6 +38,7 @@ import { resolveLabFeatureState, type LabFeature } from "./labs-feature-state.ts
 import { labFeatureMergePatch, labFeatureResetPatch, LAB_FEATURES } from "./labs-registry.ts";
 
 registerEnglishCatalog(registerLabsEnglish);
+registerEnglishCatalog(registerRouteSubtitlesEnglish);
 
 export function LabsPage() {
   const context = useApplication();

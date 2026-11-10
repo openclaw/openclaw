@@ -514,6 +514,35 @@ export function createChangedCheckPlan(
     base: !options.staged ? baseEnv.CHECKOUT_BASE_SHA || options.base : undefined,
     cwd,
   };
+  const lanes = result.lanes;
+  const runAll =
+    lanes.all ||
+    (options.lintOnly &&
+      result.paths.some((file) =>
+        /^(?:\.oxlint|config\/(?:oxlint|tsconfig\/oxlint)|scripts\/(?:run-oxlint|oxlint)|scripts\/lib\/local-check-runtime\.)|(?:^|\/)tsconfig[^/]*\.json$/u.test(
+          file,
+        ),
+      ));
+  // Dedicated CI rows already own their commands; central discovery is discarded.
+  if (options.lintOnly && options.lintSelection && !options.lintSelection.central) {
+    return {
+      commands: createCiLintCommands(
+        options.lintSelection,
+        options.lintThreads ?? 1,
+        createChangedOxlintEnv(result.paths, baseEnv, changedOxlintContext),
+      ),
+      summary: result.docsOnly
+        ? "docs-only"
+        : lanes.releaseMetadata
+          ? "release metadata"
+          : runAll
+            ? "all"
+            : Object.entries(lanes)
+                .filter(([, enabled]) => enabled)
+                .map(([lane]) => lane)
+                .join(", "),
+    };
+  }
   if (
     result.paths.some((changedPath) => LINTABLE_EXTENSION_PATH_RE.test(changedPath)) &&
     cachedGeneratedExtensionAssetPaths?.cwd !== cwd
@@ -959,7 +988,6 @@ export function createChangedCheckPlan(
 
   addTestTempCreationReport();
 
-  const lanes = result.lanes;
   const typecheckResult = options.typecheckResult ?? result;
   // Release metadata is exempt only with its validating guard, selected by the
   // full diff. Filtering trivia must not grant that exemption to package changes.
@@ -969,14 +997,6 @@ export function createChangedCheckPlan(
     !typecheckResult.paths.every((file) => getChangedPathFacts(file).surface === "docs")
       ? lanes
       : typecheckResult.lanes;
-  const runAll =
-    lanes.all ||
-    (options.lintOnly &&
-      result.paths.some((file) =>
-        /^(?:\.oxlint|config\/(?:oxlint|tsconfig\/oxlint)|scripts\/(?:run-oxlint|oxlint)|scripts\/lib\/local-check-runtime\.)|(?:^|\/)tsconfig[^/]*\.json$/u.test(
-          file,
-        ),
-      ));
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
   // Typechecking alone accepts extension imports; the graph guard also covers

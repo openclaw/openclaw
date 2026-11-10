@@ -19,7 +19,7 @@
   background: var(--session-rail-background, var(--bg-elevated));
   color: var(--muted-strong);
   font-size: calc(14px * var(--control-ui-text-scale, 1));
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .session-panel-rail[data-presentation="desktop"] {
@@ -48,7 +48,7 @@
   padding: 0 8px;
   border-bottom-color: var(--border-strong);
   background: var(--mobile-panel-rail-background);
-  line-height: 20px;
+  line-height: calc(20px * var(--control-ui-text-scale));
 }
 
 .session-panel-rail .session-panel-rail__group,
