@@ -233,7 +233,10 @@ it("distinguishes PostgreSQL staging from SQLite temporary schemas", () => {
 it("owns only the SQLite publication stage's TEMP overflow table", () => {
   const { root, write } = fixture();
   const stage = "extensions/memory-core/src/memory/manager-publication-stage.ts";
-  write(stage, 'db.exec("CREATE TEMP TABLE overflow (json TEXT)"); db.exec("SELECT rowid FROM t");');
+  write(
+    stage,
+    'db.exec("CREATE TEMP TABLE overflow (json TEXT)"); db.exec("SELECT rowid FROM t");',
+  );
   write("src/sqlite.ts", 'db.exec("CREATE TEMP TABLE overflow (json TEXT)");');
   expect(inventory(root)).toMatchObject([
     {
