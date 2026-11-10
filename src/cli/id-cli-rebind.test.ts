@@ -43,7 +43,13 @@ describe("openclaw id rebind signing", () => {
       k_gw: prep.k_gw,
       binding_seq: 2,
     });
-    expect(await verifyOwnerStatement(signed.binding, { root_pub: prep.root_pub })).toMatchObject({
+    expect(
+      await verifyOwnerStatement(
+        signed.binding,
+        { root_pub: prep.root_pub },
+        { now: Math.floor(Date.now() / 1000) },
+      ),
+    ).toMatchObject({
       ok: true,
     });
   });
