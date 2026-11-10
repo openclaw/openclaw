@@ -77,10 +77,12 @@ export function isProviderUsable(card: ModelProviderCard): boolean {
 export function needsModelSetup(props: {
   connected: boolean;
   loading: boolean;
+  catalogDiscovering?: boolean;
   configuredModels: readonly { available?: boolean }[];
 }): boolean {
   return (
     (props.connected || !props.loading) &&
+    !props.catalogDiscovering &&
     !props.configuredModels.some((model) => model.available !== false)
   );
 }

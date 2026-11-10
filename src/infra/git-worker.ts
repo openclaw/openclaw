@@ -92,6 +92,7 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.equal": "workspace.manifest",
   "workspace.manifest.snapshot": "workspace.manifest",
   "workspace.manifest.document": "workspace.manifest",
+  "workspace.manifest.template": "workspace.manifest",
   "workspace.manifest.reference": "workspace.manifest",
   "workspace.manifest.parse": "workspace.manifest",
   "workspace.manifest.paths": "workspace.manifest",
@@ -106,6 +107,8 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.tree-input": "workspace.manifest",
   "workspace.manifest.remote-capture": "workspace.manifest",
   "workspace.reconcile.preflight": "workspace.manifest",
+  "workspace.reconcile.patch": "workspace.manifest",
+  "workspace.reconcile.diff": "workspace.manifest",
 } satisfies Record<keyof GitWorkerOperations, GitProcessOperation>;
 
 function runtime(): GitWorkerRuntime {

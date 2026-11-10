@@ -554,29 +554,17 @@ function runEarlyPluginSdkApiReview({
     npmDistTag,
     packageVersion,
   });
-  for (const tag of new Set(Object.values(bases))) {
-    run(
-      "git",
-      [
-        "fetch",
-        "--no-tags",
-        "--filter=blob:none",
-        "--depth=1",
-        "origin",
-        `+refs/tags/${tag}:refs/tags/${tag}`,
-      ],
-      { cwd: TOOLING_ROOT },
-    );
-  }
   const { reviewDir, evidencePath, reportPath, diffPath } = resolveEarlyPluginSdkApiReviewPaths({
     outputDir,
     targetRoot,
   });
   mkdirSync(reviewDir, { recursive: true });
+  const reviewRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-sdk-review-"));
   const args = [
-    "run",
-    "plugin-sdk:api:diff",
-    "--",
+    "--max-old-space-size=8192",
+    "--import",
+    join(TOOLING_ROOT, "scripts/tsx.mjs"),
+    join(TOOLING_ROOT, "scripts/plugin-sdk-api-diff.mts"),
     "--head",
     targetSha,
     "--evidence",
@@ -592,7 +580,44 @@ function runEarlyPluginSdkApiReview({
     args.push("--base", requireString(Object.values(bases)[0], "Plugin SDK API predecessor"));
   }
   console.log("Reviewing the Plugin SDK API while Full Release Validation runs...");
-  run("pnpm", args, { cwd: TOOLING_ROOT });
+  try {
+    run("git", ["init", "--initial-branch=review"], { cwd: reviewRoot });
+    run(
+      "git",
+      ["fetch", "--no-tags", "--depth=1", TOOLING_ROOT, `${toolingSha}:refs/heads/tooling`],
+      { cwd: reviewRoot },
+    );
+    run("git", ["symbolic-ref", "HEAD", "refs/heads/tooling"], { cwd: reviewRoot });
+    if (targetSha !== toolingSha) {
+      run(
+        "git",
+        ["fetch", "--no-tags", "--depth=1", targetRoot, `${targetSha}:refs/heads/target`],
+        { cwd: reviewRoot },
+      );
+    }
+    const origin = run("git", ["remote", "get-url", "origin"], {
+      capture: true,
+      cwd: TOOLING_ROOT,
+    }).trim();
+    run("git", ["remote", "add", "origin", origin], { cwd: reviewRoot });
+    for (const tag of new Set(Object.values(bases))) {
+      run(
+        "git",
+        [
+          "fetch",
+          "--no-tags",
+          "--filter=blob:none",
+          "--depth=1",
+          "origin",
+          `+refs/tags/${tag}:refs/tags/${tag}`,
+        ],
+        { cwd: reviewRoot },
+      );
+    }
+    run("node", args, { cwd: reviewRoot });
+  } finally {
+    rmSync(reviewRoot, { force: true, recursive: true });
+  }
   const evidence = readJson(evidencePath, "early Plugin SDK API evidence");
   const report = readFileSync(reportPath, "utf8").trim();
   try {
@@ -1416,13 +1441,8 @@ function dispatchFullReleaseUsingHelper(
     !Number.isSafeInteger(observed?.id) ||
     Number(observed?.id) < 1
   ) {
-    const resumable =
-      record.kind === "openclaw.full-release-dispatch/v2" &&
-      record.phase === "prepared" &&
-      isRecord(record.refs) &&
-      record.refs.workflow === "intended";
     throw new Error(
-      `No observed Full Release Validation run. Next: pnpm ci:full-release -- ${resumable ? "--resume-request" : "--reconcile-request"} ${shellQuote(requestFile)}. The canonical helper revalidates admission; never redispatch uncertain work.`,
+      `No observed Full Release Validation run. Follow the canonical helper's recovery advice above; only it verifies whether resume is safe. Otherwise, Next: pnpm ci:full-release -- --reconcile-request ${shellQuote(requestFile)}.`,
     );
   }
   return String(observed!.id);

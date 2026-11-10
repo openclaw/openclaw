@@ -443,6 +443,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/transcript-payload.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["clearSessionTranscriptActiveFacts"],
+        evidence:
+          "Cold navigation retention calls this only from session-cold-storage-worker.ts. Exact-row rewrites run in session-message-rewrite.worker.ts, media maintenance, or the native message/correction adapters whose callers require !isMainThread. createTranscriptPayloadUpdater is consumed only by updateSqliteTranscriptEventJsonInTransaction, called by Doctor transcript-label repair and transcript-directives migration. These invalidation callers have no plugin-SDK value export; other payload operations retain their mixed classification.",
+      },
+    ],
+  ],
+  [
     "src/agents/bash-durable-process-store.ts",
     [
       {
@@ -1882,7 +1893,7 @@ const reviewedOperations = new Map([
           "hasSessionStateWatchersInDatabase",
           "isSessionStateUpstreamCurrentInDatabase",
         ],
-        evidence: "session-state-events.worker.ts and session-upstream-links.worker.ts",
+        evidence: "session-state-events-record.worker.ts and session-upstream-links.worker.ts",
       },
       {
         tier: "W",
@@ -1898,13 +1909,13 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
         evidence:
-          "Watch commands and event recording execute only in session-state-events.worker.ts and subagent-registry.store.worker.ts",
+          "Watch/record workers and subagent-registry.store.worker.ts execute these queries",
       },
       {
         tier: "W",
         operations: ["recordSessionStateEventsInDatabase"],
         evidence:
-          "All producers await sessionState.record; the only direct production kernel callers are session-state-events.worker.ts and subagent-registry.store.worker.ts",
+          "sessionState.record dispatches to session-state-events-record.worker.ts; subagent-registry.store.worker.ts is the other direct caller",
       },
     ],
   ],

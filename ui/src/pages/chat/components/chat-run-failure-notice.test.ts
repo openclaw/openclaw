@@ -83,13 +83,15 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   const onRetry = vi.fn();
   drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
   expect(container.textContent).toContain("Couldn’t finish this reply");
+  const report = container.querySelector<HTMLAnchorElement>("a.report-issue-link");
+  expect(report?.textContent).toBe("Report a bug");
+  expect(new URL(report!.href).searchParams.get("title")).toBe("[Bug]: Control UI: ");
+  expect(report?.rel).toBe("noopener noreferrer");
   expect(container.textContent).not.toContain("⚠");
   expect(part("icon svg")).not.toBeNull();
   expect(query("details")).toBeNull();
   expect(container.textContent).not.toContain("Change model");
-  expect(part("summary")?.textContent).toBe(
-    "Automatic recovery has stopped. Check any completed work before trying again.",
-  );
+  expect(part("summary")).toBeNull();
   expect(part("log")?.textContent).toBe(
     "The AI service needs a short break. Please try again in a few minutes.",
   );
@@ -111,9 +113,7 @@ it("updates text and callbacks without closing the open details", async () => {
   const item = failure("First failure\nFirst details");
   drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
   const host = query("openclaw-chat-run-failure-notice");
-  expect(part("summary")?.textContent).toBe(
-    "First failure Automatic recovery has stopped. Check any completed work before trying again.",
-  );
+  expect(part("summary")?.textContent).toBe("First failure");
   expect(part("log")?.textContent).toBe("First failure\nFirst details");
   part("toggle")?.click();
   expect(part("toggle")?.getAttribute("aria-expanded")).toBe("true");
@@ -127,9 +127,7 @@ it("updates text and callbacks without closing the open details", async () => {
   );
   expect(query("openclaw-chat-run-failure-notice")).toBe(host);
   expect(part("toggle")?.getAttribute("aria-expanded")).toBe("true");
-  expect(part("summary")?.textContent).toBe(
-    "Automatic recovery has stopped. Check any completed work before trying again.",
-  );
+  expect(part("summary")).toBeNull();
   expect(part("log")?.textContent).toBe(detail);
   retry();
   expect(onRetry).not.toHaveBeenCalled();
