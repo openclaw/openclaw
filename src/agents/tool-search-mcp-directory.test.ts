@@ -73,11 +73,8 @@ describe("MCP directory in the tool_search description", () => {
       ].join("\n"),
     );
     const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
-    const listed = directory
-      .split("\n")
-      .find((line) => line.includes("Post a message"))!
-      .slice(2)
-      .split(": ")[0];
+    const row = directory.split("\n").find((line) => line.includes("Post a message"))!;
+    const listed = row.slice(2, row.indexOf(": "));
     await expect(runtime.describe(listed)).resolves.toMatchObject({
       source: "mcp",
       name: "world__slack_post_message",
