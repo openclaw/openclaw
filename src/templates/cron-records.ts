@@ -15,6 +15,8 @@ export type PersistedTemplateCronRef = {
   manifestId: string;
   declarationKey: string;
   schedulerJobId?: string;
+  /** Operation-local native creator fact; never learned from a later mutable job read. */
+  nativeOwnership?: { ownerProfileId: string | undefined };
   status: "pending" | "complete" | "failed" | "removed";
   job: TemplateCronJob | { automation: CronJobCreate };
   error?: string;

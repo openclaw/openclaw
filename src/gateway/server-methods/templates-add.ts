@@ -221,6 +221,10 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
                 context.cron.getDefaultAgentId(),
               );
               assertForwardCurrent();
+              const actor = creatorOptions.createdActor;
+              options?.captureOwnerProfileId?.(
+                actor?.type === "human" && actor.source === "profile" ? actor.id : undefined,
+              );
               return await context.cron.add(normalized, {
                 ...creatorOptions,
                 commitGuard: assertForwardCurrent,
