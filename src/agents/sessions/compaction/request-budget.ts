@@ -1,7 +1,4 @@
-import {
-  MAX_COMPACTION_SUMMARY_CHARS,
-  resolveCompactionSummaryMaxChars,
-} from "../../../../packages/agent-core/src/harness/compaction/compaction-summary-limits.js";
+import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
 import {
@@ -15,8 +12,6 @@ export type CompactionRequestBudget = Readonly<{
   reserveTokens: number;
   fixedTokens: number;
   pendingTokens: number;
-  /** Configured summary cap used to reserve tokens for the finalized artifact. */
-  maxSummaryChars?: number;
   /** Known queue reservation, replaced by the SDK's projected queue at submission. */
   pendingQueuedContextTokens?: number;
   /** Overlap credit applies only to the user body, never newly added context. */
@@ -64,7 +59,6 @@ export function takePromptCompactionRequestBudget(
 export function createCompactionRequestBudget(params: {
   contextWindow: number;
   reserveTokens: number;
-  maxSummaryChars?: number;
   systemPrompt?: string;
   tools?: readonly { name: string; description: string; parameters: unknown }[];
   fixedTokenPressure?: FixedRequestTokenPressure;
@@ -100,11 +94,6 @@ export function createCompactionRequestBudget(params: {
   return {
     contextWindow: params.contextWindow,
     reserveTokens: params.reserveTokens,
-    // Omitted when unset so budgets without a configured cap keep their exact
-    // shape for existing consumers; readers fall back to the default cap.
-    ...(params.maxSummaryChars === undefined
-      ? {}
-      : { maxSummaryChars: resolveCompactionSummaryMaxChars(params.maxSummaryChars) }),
     fixedTokens,
     pendingUserIdempotencyKey: params.pendingUserIdempotencyKey,
     pendingTokens: pendingUserTokens + additionalContextTokens,
@@ -113,6 +102,15 @@ export function createCompactionRequestBudget(params: {
       ? { pendingUserTokens: Math.max(0, pendingUserTokens - additiveTokens) }
       : {}),
   };
+}
+
+/** Legacy standalone compaction relies on its fixed ceiling; opt-in growth needs a window budget. */
+export function createStandaloneCompactionRequestBudget(
+  params: Parameters<typeof createCompactionRequestBudget>[0] & { maxSummaryChars?: number },
+): CompactionRequestBudget | undefined {
+  return (params.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS) > MAX_COMPACTION_SUMMARY_CHARS
+    ? createCompactionRequestBudget(params)
+    : undefined;
 }
 
 /** Reconcile only queued context; prepared user, image, and transient costs stay owned upstream. */
@@ -189,6 +187,7 @@ export function assertCompactionRequestCanFit(
 export function resolveCompactionRetentionBudget(
   budget: CompactionRequestBudget,
   messages: AgentMessage[],
+  maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
 ) {
   const preferredTokens =
     budget.contextWindow - budget.reserveTokens - budget.fixedTokens - budget.pendingTokens;
@@ -199,13 +198,18 @@ export function resolveCompactionRetentionBudget(
   const summaryTokens = estimateCompactionHistoryTokens([
     {
       role: "compactionSummary",
-      summary: "x".repeat(budget.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS),
+      summary: "x".repeat(maxSummaryChars),
       tokensBefore: 0,
       timestamp: 0,
     },
   ]);
   return {
-    maxTokens,
+    // The legacy fallback can prefer useful reduction over fitting in one pass.
+    // A raised artifact ceiling must not use that fallback to exceed the window.
+    maxTokens:
+      maxSummaryChars > MAX_COMPACTION_SUMMARY_CHARS
+        ? Math.min(maxTokens, budget.contextWindow - budget.fixedTokens - budget.pendingTokens)
+        : maxTokens,
     reserveTokens: summaryTokens,
   };
 }

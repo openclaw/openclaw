@@ -334,7 +334,6 @@ export async function runEmbeddedAttemptPromptPhase(
       skipPromptSubmission,
     });
     const reserveTokens = settingsManager.getCompactionReserveTokens();
-    const maxSummaryChars = settingsManager.getCompactionMaxSummaryChars();
     const terminal = projectAgentRunAttemptTerminal(input.state.terminal);
     let state: PromptPreflightState = {
       contextBudgetStatus: promptState.contextBudgetStatus,
@@ -384,7 +383,6 @@ export async function runEmbeddedAttemptPromptPhase(
       const foregroundBudget = {
         contextWindow: promptContext.contextTokenBudget,
         reserveTokens,
-        maxSummaryChars,
       };
       const pendingContextMessages = promptContext.runtimeContextMessageForCurrentTurn
         ? [promptContext.runtimeContextMessageForCurrentTurn]
@@ -517,7 +515,6 @@ export async function runEmbeddedAttemptPromptPhase(
               createCompactionRequestBudget({
                 contextWindow: promptContext.contextTokenBudget,
                 reserveTokens,
-                maxSummaryChars,
                 fixedTokenPressure: pressure,
               }),
             );

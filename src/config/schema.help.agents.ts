@@ -151,7 +151,11 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.keepRecentTokens":
     "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
   "agents.defaults.compaction.maxSummaryChars":
-    "Maximum characters kept for a persisted compaction summary (default: 16000, range 1000-200000). Raise this for long-context models so safeguard summaries truncate less often; the foreground prompt's token-budget check still bounds the final artifact.",
+    "Maximum characters in a persisted client-side compaction summary (default: 16000; range: 1000–200000). Larger summaries retain more generated context but increase replay cost on later requests. The active model token budget can require a smaller summary. Does not control provider-native compaction.",
+  "agents.entries.*.compaction":
+    "Per-agent client-side compaction overrides. Omitted settings inherit agents.defaults.compaction.",
+  "agents.entries.*.compaction.maxSummaryChars":
+    "Per-agent persisted client-side summary character ceiling (1000–200000), overriding agents.defaults.compaction.maxSummaryChars. The active model token budget may require a smaller summary.",
   "agents.defaults.compaction.identifierPolicy":
     'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), while "off" disables this prefix.',
   "agents.defaults.compaction.recentTurnsPreserve":

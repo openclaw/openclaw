@@ -19,9 +19,8 @@ import {
 import {
   capCompactionSummary,
   fitCompactionSummary,
-  MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
-} from "./compaction-summary-limits.js";
+} from "./compaction-summary-budget.js";
 import { resolveCompactionThreshold } from "./compaction-threshold.js";
 import { runSummarizationCompletion } from "./summarization-completion.js";
 import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
@@ -38,6 +37,13 @@ import {
   mergeSummaryFileOperations,
   removeGeneratedCompactionSection,
 } from "./utils.js";
+
+export {
+  capCompactionSummary,
+  fitCompactionSummary,
+  MAX_COMPACTION_SUMMARY_CHARS,
+  SUMMARY_TRUNCATED_MARKER,
+} from "./compaction-summary-budget.js";
 
 export {
   estimateTokens,
@@ -59,13 +65,6 @@ export interface CompactionResult<T = unknown> {
   details?: T;
 }
 
-// The summary cap is configurable (default 16K); see compaction-summary-limits.
-export {
-  capCompactionSummary,
-  fitCompactionSummary,
-  MAX_COMPACTION_SUMMARY_CHARS,
-  SUMMARY_TRUNCATED_MARKER,
-};
 const TURN_CONTEXT_PREFIX = "\n\n---\n\n**Turn Context (split turn):**\n\n";
 const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
 const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
@@ -99,21 +98,20 @@ export function formatRequiredAskContext(rawAsk: string): string {
 }
 
 export interface CompactionSettings {
+  /** Persisted summary character ceiling; omission preserves the 16,000-character default. */
+  maxSummaryChars?: number;
   /** Enable automatic compaction decisions. */
   enabled: boolean;
   /** Tokens reserved for summary prompt and output. */
   reserveTokens: number;
   /** Approximate recent-context tokens to keep after compaction. */
   keepRecentTokens: number;
-  /** Max characters for a single persisted compaction summary (default 16,000). */
-  maxSummaryChars?: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
   enabled: true,
   reserveTokens: 16384,
   keepRecentTokens: 20000,
-  maxSummaryChars: MAX_COMPACTION_SUMMARY_CHARS,
 };
 
 export function calculateContextTokens(usage: Usage): number {
@@ -700,37 +698,37 @@ function finalizeCompaction(
   const fitted = fitCompactionSummary(
     preparation.summaryTokenBudget,
     (maxChars) => {
-    const requiredChars = fileOperations.length + requiredPrefix.length;
-    if (maxChars <= requiredChars + SUMMARY_TRUNCATED_MARKER.length) {
-      return undefined;
-    }
-    const preservedHistoryChars = Math.min(
-      historySummary.length,
-      Math.floor(
-        (preparation.summaryTokenBudget === undefined ? maxChars : maxChars - requiredChars) / 2,
-      ),
-    );
-    const latestContextBudget =
-      maxChars - requiredChars - SUMMARY_TRUNCATED_MARKER.length - preservedHistoryChars;
-    // Fitting must keep generated split-turn context beside required metadata,
-    // including its heading and loss marker when that context is shortened.
-    if (
-      preparation.summaryTokenBudget !== undefined &&
-      latestContext &&
-      latestContextBudget < TURN_CONTEXT_PREFIX.length + SUMMARY_TRUNCATED_MARKER.length + 1
-    ) {
-      return undefined;
-    }
-    const suffix = `${latestContextBudget > 0 ? capCompactionSummary(latestContext, latestContextBudget) : ""}${fileOperations}`;
-    return {
-      summary: `${requiredPrefix}${capCompactionSummary(
-        `${historySummary}${suffix}`,
-        maxChars - requiredPrefix.length,
-        suffix,
-      )}`,
-    };
+      const requiredChars = fileOperations.length + requiredPrefix.length;
+      if (maxChars <= requiredChars + SUMMARY_TRUNCATED_MARKER.length) {
+        return undefined;
+      }
+      const preservedHistoryChars = Math.min(
+        historySummary.length,
+        Math.floor(
+          (preparation.summaryTokenBudget === undefined ? maxChars : maxChars - requiredChars) / 2,
+        ),
+      );
+      const latestContextBudget =
+        maxChars - requiredChars - SUMMARY_TRUNCATED_MARKER.length - preservedHistoryChars;
+      // Fitting must keep generated split-turn context beside required metadata,
+      // including its heading and loss marker when that context is shortened.
+      if (
+        preparation.summaryTokenBudget !== undefined &&
+        latestContext &&
+        latestContextBudget < TURN_CONTEXT_PREFIX.length + SUMMARY_TRUNCATED_MARKER.length + 1
+      ) {
+        return undefined;
+      }
+      const suffix = `${latestContextBudget > 0 ? capCompactionSummary(latestContext, latestContextBudget) : ""}${fileOperations}`;
+      return {
+        summary: `${requiredPrefix}${capCompactionSummary(
+          `${historySummary}${suffix}`,
+          maxChars - requiredPrefix.length,
+          suffix,
+        )}`,
+      };
     },
-    preparation.settings.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS,
+    preparation.settings.maxSummaryChars,
   );
   if (!fitted.ok) {
     return fitted;

@@ -87,14 +87,11 @@ Checkpoint replay prechecks distinguish predicted pressure from a provider-confi
       compaction: {
         enabled: true,
         keepRecentTokens: 20000,
-        maxSummaryChars: 16000,
       },
     },
   },
 }
 ```
-
-`maxSummaryChars` caps the persisted compaction summary (summary body plus preserved-turn, split-turn, tool-failure, file-operation, and workspace sections). The preserved-turn and split-turn sections each scale to half of the configured cap. The foreground token-budget check against the active model window still bounds the final artifact, so a larger value cannot overflow the window.
 
 OpenClaw enforces a built-in reserve for embedded runs and caps it at one quarter of the active model context window. The default reserve remains 20,000 tokens for windows of 80,000 tokens or larger. Smaller windows retain at least three quarters of their capacity for prompts and conversation, while the reserve leaves room for compaction summaries and housekeeping such as the memory flush.
 

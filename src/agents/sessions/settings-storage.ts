@@ -3,10 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ThinkingBudgets, Transport } from "../../llm/types.js";
 
 interface CompactionSettings {
+  maxSummaryChars?: number; // default: 16000
   enabled?: boolean; // default: true
   reserveTokens?: number; // default: 16384
   keepRecentTokens?: number; // default: 20000
-  maxSummaryChars?: number; // default: 16000
 }
 
 interface BranchSummarySettings {

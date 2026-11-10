@@ -10,8 +10,6 @@ import {
 import {
   calculateContextTokens,
   compactWithoutSummary,
-  DEFAULT_COMPACTION_SETTINGS,
-  fitCompactionSummary,
   MAX_COMPACTION_SUMMARY_CHARS,
   estimateContextTokens,
   estimateTokens,
@@ -20,12 +18,6 @@ import {
   prepareCompaction,
   shouldCompact,
 } from "./compaction.js";
-import {
-  DEFAULT_COMPACTION_SUMMARY_CHARS,
-  MAX_COMPACTION_SUMMARY_CHARS_CAP,
-  MIN_COMPACTION_SUMMARY_CHARS,
-  resolveCompactionSummaryMaxChars,
-} from "./compaction-summary-limits.js";
 import {
   createCompactionModel,
   createContextUsage as createUsage,
@@ -664,84 +656,5 @@ describe("compactWithoutSummary", () => {
     expect(sourceAsk.length).toBeGreaterThan(1_100);
     expect(summary).toContain(JSON.stringify(sourceAsk));
     expect(result.ok && result.value.firstKeptEntryId).toBe("kept-entry");
-  });
-
-  it("keeps a longer carried summary when maxSummaryChars is raised", () => {
-    const previousSummary = "p".repeat(40_000);
-    const result = compactWithoutSummary({
-      firstKeptEntryId: "kept-entry",
-      messagesToSummarize: [user("history")],
-      turnPrefixMessages: [],
-      isSplitTurn: false,
-      previousSummary,
-      tokensBefore: 100,
-      fileOps: createFileOps(),
-      settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100, maxSummaryChars: 48_000 },
-    });
-
-    expect(result.ok).toBe(true);
-    const summary = result.ok ? result.value.summary : "";
-    expect(summary.length).toBeLessThanOrEqual(48_000);
-    expect(summary.length).toBeGreaterThan(MAX_COMPACTION_SUMMARY_CHARS);
-  });
-
-  it("uses the default cap when maxSummaryChars is unset", () => {
-    expect(DEFAULT_COMPACTION_SETTINGS.maxSummaryChars).toBe(DEFAULT_COMPACTION_SUMMARY_CHARS);
-    const previousSummary = "p".repeat(40_000);
-    const result = compactWithoutSummary({
-      firstKeptEntryId: "kept-entry",
-      messagesToSummarize: [user("history")],
-      turnPrefixMessages: [],
-      isSplitTurn: false,
-      previousSummary,
-      tokensBefore: 100,
-      fileOps: createFileOps(),
-      settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
-    });
-
-    expect(result.ok).toBe(true);
-    const summary = result.ok ? result.value.summary : "";
-    expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
-  });
-});
-
-describe("resolveCompactionSummaryMaxChars", () => {
-  it("returns the default for unset, invalid, and non-positive values", () => {
-    expect(resolveCompactionSummaryMaxChars(undefined)).toBe(16_000);
-    expect(resolveCompactionSummaryMaxChars(Number.NaN)).toBe(16_000);
-    expect(resolveCompactionSummaryMaxChars(0)).toBe(16_000);
-    expect(resolveCompactionSummaryMaxChars(-5)).toBe(16_000);
-    expect(resolveCompactionSummaryMaxChars("48_000")).toBe(16_000);
-  });
-
-  it("floors and clamps configured values to the supported range", () => {
-    expect(resolveCompactionSummaryMaxChars(48_000)).toBe(48_000);
-    expect(resolveCompactionSummaryMaxChars(48_000.9)).toBe(48_000);
-    expect(resolveCompactionSummaryMaxChars(10)).toBe(MIN_COMPACTION_SUMMARY_CHARS);
-    expect(resolveCompactionSummaryMaxChars(1_000_000)).toBe(MAX_COMPACTION_SUMMARY_CHARS_CAP);
-  });
-});
-
-describe("fitCompactionSummary", () => {
-  it("keeps the full body at the custom cap and still binary-searches below it for the token budget", () => {
-    const body = "a".repeat(40_000);
-    const render = (maxChars: number) => ({ summary: body.slice(0, maxChars) });
-
-    const full = fitCompactionSummary(undefined, render, 48_000);
-    expect(full.ok).toBe(true);
-    expect(full.ok && full.value.summary.length).toBe(40_000);
-
-    const bounded = fitCompactionSummary(1_000, render, 64_000);
-    expect(bounded.ok).toBe(true);
-    expect(bounded.ok && bounded.value.summary.length).toBeLessThanOrEqual(64_000);
-    expect(bounded.ok && bounded.value.summary.length).toBeGreaterThan(0);
-  });
-
-  it("defaults to 16,000 chars when no cap is passed", () => {
-    const body = "a".repeat(40_000);
-    const render = (maxChars: number) => ({ summary: body.slice(0, maxChars) });
-    const fitted = fitCompactionSummary(undefined, render);
-    expect(fitted.ok).toBe(true);
-    expect(fitted.ok && fitted.value.summary.length).toBe(16_000);
   });
 });

@@ -5,6 +5,7 @@ import type { AgentCompactionMode } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
 import { resolveEffectiveCompactionReserveTokens } from "./agent-compaction-constants.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { SettingsManager } from "./sessions/settings-manager.js";
 
@@ -14,19 +15,22 @@ export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 export function applyAgentCompactionSettingsFromConfig(params: {
   settingsManager: SettingsManager;
   cfg?: OpenClawConfig;
+  agentId?: string;
   /** When known, the resolved context window budget for the current model. */
   contextTokenBudget?: number;
 }): void {
   const currentReserveTokens = params.settingsManager.getCompactionReserveTokens();
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
-  const currentMaxSummaryChars = params.settingsManager.getCompactionMaxSummaryChars();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
   // Omission preserves embedded/project settings. OpenClaw config reloads create a new
   // prepared manager; same-manager resource reloads reuse cfg and reapply explicit values.
   const configuredEnabled = compactionCfg?.enabled;
 
+  const maxSummaryChars =
+    (params.cfg && params.agentId
+      ? resolveAgentConfig(params.cfg, params.agentId)?.compaction?.maxSummaryChars
+      : undefined) ?? compactionCfg?.maxSummaryChars;
   const configuredKeepRecentTokens = compactionCfg?.keepRecentTokens;
-  const configuredMaxSummaryChars = compactionCfg?.maxSummaryChars;
   const contextTokenBudget = floorPositiveFiniteNumber(params.contextTokenBudget);
   const requestedReserveTokens = Math.max(
     currentReserveTokens,
@@ -41,21 +45,17 @@ export function applyAgentCompactionSettingsFromConfig(params: {
           reserveTokens: requestedReserveTokens,
         });
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
-  const targetMaxSummaryChars = configuredMaxSummaryChars ?? currentMaxSummaryChars;
 
-  const overrides: {
-    reserveTokens?: number;
-    keepRecentTokens?: number;
-    maxSummaryChars?: number;
-  } = {};
+  const overrides: { reserveTokens?: number; keepRecentTokens?: number; maxSummaryChars?: number } =
+    {};
+  if (maxSummaryChars !== undefined) {
+    overrides.maxSummaryChars = maxSummaryChars;
+  }
   if (targetReserveTokens !== currentReserveTokens) {
     overrides.reserveTokens = targetReserveTokens;
   }
   if (targetKeepRecentTokens !== currentKeepRecentTokens) {
     overrides.keepRecentTokens = targetKeepRecentTokens;
-  }
-  if (targetMaxSummaryChars !== currentMaxSummaryChars) {
-    overrides.maxSummaryChars = targetMaxSummaryChars;
   }
 
   const shouldApplyEnabled =

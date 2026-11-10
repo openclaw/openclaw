@@ -215,24 +215,6 @@ history but keeps fixed instructions and tools.
 
 Configure compaction under `agents.defaults.compaction` in your `openclaw.json`. The most common knobs are listed below; for the full reference, see [Session management deep dive](/reference/session-management-compaction).
 
-### Compaction summary size
-
-A persisted compaction summary (the generated body plus the "Recent turns preserved verbatim" and split-turn sections, tool failures, file operations, and post-compaction workspace sections) is capped at 16,000 characters by default. On long-context models this cap often truncates summaries that would otherwise fit in the window. Set `agents.defaults.compaction.maxSummaryChars` to raise or lower it (1,000–200,000):
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "compaction": {
-        "maxSummaryChars": 64000
-      }
-    }
-  }
-}
-```
-
-The preserved-turns and split-turn sections scale with the configured cap (half of it each), and the foreground prompt's token-budget check against the active model window stays in place, so a larger value cannot overflow the window: the finalizer still shrinks the artifact until it fits beside the prompt and retained history.
-
 ### Using a different model
 
 The built-in OpenClaw runtime starts compaction with the active session model. Set `agents.defaults.compaction.model` to select a different summarization model. The override accepts a `provider/model-id` string or a bare alias configured under `agents.defaults.models`:
@@ -280,6 +262,31 @@ the context needed to continue. Provider refusals do not switch models.
 Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain when no earlier summary can be reused. A summary deadline or an HTTP 408 or 504 instead uses the automatic timeout fallback (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
+
+### Summary size
+
+Client-side compaction keeps at most 16,000 characters in its persisted summary
+by default, including preserved recent turns and other summary sections. Set
+`agents.defaults.compaction.maxSummaryChars` to change that ceiling, or
+`agents.entries.<id>.compaction.maxSummaryChars` to override it for one agent:
+
+```json5
+{
+  agents: {
+    defaults: { compaction: { maxSummaryChars: 48000 } },
+    entries: {
+      research: { compaction: { maxSummaryChars: 64000 } },
+    },
+  },
+}
+```
+
+Both settings accept integers from 1,000 to 200,000. An omitted per-agent setting
+inherits the default. This is a ceiling, not a target: the summary still has to
+fit the active model's token budget beside instructions, tools, and retained
+history. Larger summaries increase context usage and replay cost on subsequent
+requests. They do not increase the summarizer's input or output allowance, recover
+facts already lost from earlier summaries, or change provider-native compaction.
 
 ### Identifier preservation
 

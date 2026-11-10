@@ -4,10 +4,6 @@
  * Holds attempt-local settings after global, plugin, and project preparation.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  MAX_COMPACTION_SUMMARY_CHARS,
-  resolveCompactionSummaryMaxChars,
-} from "../../../packages/agent-core/src/harness/compaction/compaction-summary-limits.js";
 import { createInvalidConfigError } from "../../config/io.invalid-config.js";
 import { mergeDeep } from "../../infra/deep-merge.js";
 import type {
@@ -144,22 +140,19 @@ export class SettingsManager {
     return this.settings.compaction?.keepRecentTokens ?? 20000;
   }
 
-  getCompactionMaxSummaryChars(): number {
-    const raw = this.settings.compaction?.maxSummaryChars;
-    return raw === undefined ? MAX_COMPACTION_SUMMARY_CHARS : resolveCompactionSummaryMaxChars(raw);
-  }
-
   getCompactionSettings(): {
     enabled: boolean;
     reserveTokens: number;
     keepRecentTokens: number;
-    maxSummaryChars: number;
+    maxSummaryChars?: number;
   } {
     return {
       enabled: this.getCompactionEnabled(),
       reserveTokens: this.getCompactionReserveTokens(),
       keepRecentTokens: this.getCompactionKeepRecentTokens(),
-      maxSummaryChars: this.getCompactionMaxSummaryChars(),
+      ...(this.settings.compaction?.maxSummaryChars !== undefined
+        ? { maxSummaryChars: this.settings.compaction.maxSummaryChars }
+        : {}),
     };
   }
 

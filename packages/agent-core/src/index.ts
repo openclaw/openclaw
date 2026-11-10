@@ -27,13 +27,6 @@ export {
   prepareBranchEntries,
 } from "./harness/compaction/branch-summarization.js";
 export {
-  DEFAULT_COMPACTION_SUMMARY_CHARS,
-  MAX_COMPACTION_SUMMARY_CHARS,
-  MAX_COMPACTION_SUMMARY_CHARS_CAP,
-  MIN_COMPACTION_SUMMARY_CHARS,
-  resolveCompactionSummaryMaxChars,
-} from "./harness/compaction/compaction-summary-limits.js";
-export {
   calculateContextTokens,
   compact,
   DEFAULT_COMPACTION_SETTINGS,
