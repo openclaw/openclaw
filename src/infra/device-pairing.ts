@@ -25,6 +25,7 @@ import {
 import { loadDevicePairingStateForMutation } from "./device-pairing-state.kernel.js";
 import {
   listDevicePairingStoreRecordsReadOnly,
+  loadExpiredPendingDevicePairingStoreRecordReadOnly,
   loadPairedDevicePairingStoreRecordReadOnly,
   loadPendingDevicePairingStoreRecordReadOnly,
 } from "./device-pairing-store-readonly.js";
@@ -95,6 +96,11 @@ export function getPairedDevice(deviceId: string, baseDir?: string): Promise<Pai
 
 export function getPendingDevicePairing(requestId: string, baseDir?: string) {
   return loadPendingDevicePairingStoreRecordReadOnly(requestId, baseDir);
+}
+
+/** Expired requests remain readable until the next pending write prunes them. */
+export function getExpiredDevicePairingRequest(requestId: string, baseDir?: string) {
+  return loadExpiredPendingDevicePairingStoreRecordReadOnly(requestId, baseDir);
 }
 
 export async function requestDevicePairing(
