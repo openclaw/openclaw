@@ -434,6 +434,11 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
         ownerKey({
           ...inventoryInput,
           readOnly: configuredOwner.input.readOnly,
+          // Inventory may come from a more capable owner; execution keeps the narrower input.
+          allowGatewaySubagentBinding:
+            input.readOnly && !input.allowGatewaySubagentBinding
+              ? configuredOwner.input.allowGatewaySubagentBinding
+              : inventoryInput.allowGatewaySubagentBinding,
           loadRuntimePlugins: false,
           runtimePluginPurpose: undefined,
           runtimePluginSelections: undefined,
