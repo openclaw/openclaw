@@ -309,6 +309,7 @@ IFS= read -r release < "$PROVISION_COPY_RELEASE"
 `);
     let current = true;
     let settled = false;
+    let brokerExit: Promise<void> | undefined;
     let copies = 0;
     const controller = new AbortController();
     const failure = new Error("copy authority retired");
@@ -356,18 +357,21 @@ IFS= read -r release < "$PROVISION_COPY_RELEASE"
       if (kind === "abort") {
         controller.abort(failure);
       } else if (kind === "helper-exit") {
-        const exited = new Promise<void>((resolve) => {
+        brokerExit = new Promise<void>((resolve) => {
           child.once("exit", () => resolve());
         });
         child.kill("SIGTERM");
-        await withinTest(exited, context.signal);
       }
       await nextEventLoopTurn();
       expect(settled).toBe(false);
     } finally {
-      fsSync.writeSync(releaseFd, "release\n");
-      fsSync.closeSync(releaseFd);
-      await rejection;
+      try {
+        fsSync.writeSync(releaseFd, "release\n");
+        await brokerExit;
+        await rejection;
+      } finally {
+        fsSync.closeSync(releaseFd);
+      }
     }
     expect(copies).toBe(1);
     expect(controller.signal.aborted).toBe(kind === "abort");
