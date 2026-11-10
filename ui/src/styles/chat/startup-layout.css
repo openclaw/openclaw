@@ -601,7 +601,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--warn) 10%, transparent);
     color: var(--warn);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     white-space: nowrap;
   }
 
@@ -635,7 +635,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     background: color-mix(in srgb, var(--warn) 12%, var(--popover));
     color: var(--warn);
     transform: translateX(-50%);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     white-space: nowrap;
   }
 
@@ -661,7 +661,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     color: var(--muted);
     font: inherit;
     font-weight: 400;
-    line-height: 16px;
+    line-height: var(--control-ui-text-lg);
     cursor: var(--cursor-action);
   }
 
@@ -739,9 +739,9 @@ div.chat-thread:where(.chat-thread--annotations) {
   overflow: hidden;
   border-radius: var(--radius-full);
   background: var(--secondary);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 600;
-  line-height: 14px;
+  line-height: var(--control-ui-text-md);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -858,7 +858,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 /* A breadcrumb segment, not a badge: flat and inline, sharing the title's type
@@ -879,7 +879,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--icon-interactive);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   cursor: var(--cursor-action);
 }
 
@@ -923,7 +923,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip,
   .sidebar-region__header .chat-pane__header .chat-pane__session-title,
   .sidebar-region__header .chat-pane__header .chat-pane__parent-session {
-    line-height: 18px;
+    line-height: calc(18px * var(--control-ui-text-scale));
   }
 
   .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip > svg {
@@ -942,7 +942,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   }
 
   .sidebar-region__header .chat-pane__header .chat-pane__session-title {
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
     font-weight: 500;
   }
 

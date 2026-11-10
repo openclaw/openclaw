@@ -47,7 +47,8 @@
   border-radius: 999px;
   background: var(--activity-surface);
   color: var(--text);
-  font: 500 13px/18px var(--font-body);
+  font: 500 calc(13px * var(--control-ui-text-scale))/calc(18px * var(--control-ui-text-scale))
+    var(--font-body);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   cursor: var(--cursor-action);
@@ -82,7 +83,7 @@
 .chat-activity-pills .activity-pill__count {
   flex: none;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   padding-left: 2px;
 }
 .chat-activity-pills .activity-pill__leading {
@@ -195,7 +196,7 @@
   display: flex;
   gap: 6px;
   margin-left: 2px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   flex: none;
 }
 .chat-activity-pills .activity-pill__diff:empty {

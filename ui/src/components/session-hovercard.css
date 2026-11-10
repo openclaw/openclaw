@@ -192,7 +192,7 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__pr-list > .session-hovercard__more {
   padding-inline-start: calc(var(--session-hovercard-context-icon-size) + var(--space-2));
-  line-height: 22px;
+  line-height: calc(22px * var(--control-ui-text-scale));
 }
 
 .session-hovercard__created-age {
@@ -203,7 +203,7 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
   white-space: nowrap;
 }
 
@@ -224,7 +224,7 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 550;
-  line-height: 16px;
+  line-height: var(--control-ui-text-lg);
 }
 
 .session-hovercard__pr-list > .session-hovercard__section-title {

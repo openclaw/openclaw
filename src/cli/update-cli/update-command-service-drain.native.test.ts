@@ -305,7 +305,7 @@ beforeEach(() => {
         ...(input.commit === true ? { commit: true } : {}),
       });
       if (!result.ok) {
-        throw new Error(result.error);
+        throw new Error(result.error.message);
       }
       if (result.value.status === "committed" && f.loseCommittedReply) {
         throw new Error("Synthetic transport lost the committed reply");
