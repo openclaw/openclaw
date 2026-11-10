@@ -3,14 +3,14 @@ import XCTest
 
 @MainActor
 final class SystemsNavigationUITests: XCTestCase {
-    func testDefaultPinsExposeSystemsAndNavigateToItsDashboardRoute() throws {
+    func testPinnedSystemsNavigatesToItsDashboardRoute() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "iPhone sidebar evidence")
-        let app = launchApp(pinnedPages: "")
+        let app = launchApp(pinnedPages: "overview,usage,cron,systems")
         defer { app.terminate() }
 
         let systems = app.buttons["RootTabs.Sidebar.Destination.systems"]
         XCTAssertTrue(systems.waitForExistence(timeout: 10), app.debugDescription)
-        capture(app, named: "systems-default-pin")
+        capture(app, named: "systems-pinned")
 
         systems.tap()
         let readiness = app.descendants(matching: .any)["RootTabs.Ready"].firstMatch
@@ -58,6 +58,7 @@ final class SystemsNavigationUITests: XCTestCase {
             "--openclaw-initial-tab", "chat",
             "--openclaw-initial-destination", "chat",
             "-AppleLanguages", "(en)",
+            "-sidebar.pinnedPages", "overview,usage,cron,systems",
         ]
         app.launch()
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 15))

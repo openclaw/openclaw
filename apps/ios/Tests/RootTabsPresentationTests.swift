@@ -886,7 +886,7 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `pinned pages storage round trips and preserves pin order`() {
-        #expect(RootTabs.defaultPinnedSidebarPages == [.overview, .systems, .usage, .cron])
+        #expect(RootTabs.defaultPinnedSidebarPages == [.overview, .usage, .cron])
         #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
         #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
         #expect(RootTabs.pinnedSidebarPagesStorage([]) == "none")
