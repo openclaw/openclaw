@@ -3,6 +3,7 @@ import path from "node:path";
 import { inspect } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import * as securityEvents from "../plugins/security-events.js";
@@ -49,23 +50,17 @@ it.each([false, true])(
     const plugin = path.join(root, "plugins", "checked");
     await fs.mkdir(plugin, { recursive: true });
     await fs.mkdir(env.OPENCLAW_STATE_DIR);
-    await fs.writeFile(
-      path.join(plugin, "package.json"),
-      JSON.stringify({
-        name: "checked",
-        version: "1.0.0",
-        type: "module",
-        dependencies: { "fixture-dependency": "1.0.0" },
-        openclaw: { extensions: ["./index.js"] },
-      }),
-    );
-    await fs.writeFile(
-      path.join(plugin, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "checked",
-        configSchema: { type: "object", properties: {} },
-      }),
-    );
+    writeJsonFile(path.join(plugin, "package.json"), {
+      name: "checked",
+      version: "1.0.0",
+      type: "module",
+      dependencies: { "fixture-dependency": "1.0.0" },
+      openclaw: { extensions: ["./index.js"] },
+    });
+    writeJsonFile(path.join(plugin, "openclaw.plugin.json"), {
+      id: "checked",
+      configSchema: { type: "object", properties: {} },
+    });
     await fs.writeFile(
       path.join(plugin, "index.js"),
       "export default { id: 'checked', register() {} };\n",
@@ -82,14 +77,11 @@ it.each([false, true])(
     };
     const configText = JSON.stringify(config);
     await fs.writeFile(env.OPENCLAW_CONFIG_PATH, configText);
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({
-        name: "reviewed-template",
-        version: "1.0.0",
-        openclaw: { template: "CLAW.md" },
-      }),
-    );
+    writeJsonFile(path.join(root, "package.json"), {
+      name: "reviewed-template",
+      version: "1.0.0",
+      openclaw: { template: "CLAW.md" },
+    });
     await fs.writeFile(
       path.join(root, "CLAW.md"),
       `---\n${JSON.stringify({ schemaVersion: 1, agent: { id: "reviewed" }, plugins: [{ path: "plugins/checked" }] })}\n---\nReview checked evidence.\n`,

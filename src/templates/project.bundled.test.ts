@@ -2,6 +2,7 @@ import { link, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { preflightTemplatePackage } from "./package-preflight.js";
 import { buildTemplateProject, extractBuiltTemplateArtifact } from "./project-build.js";
@@ -12,14 +13,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 async function project(skills: unknown[] = [{ path: "bundles/checked" }]) {
   const root = tempDirs.make("openclaw-template-bundled-");
   await mkdir(join(root, "bundles", "checked"), { recursive: true });
-  await writeFile(
-    join(root, "package.json"),
-    JSON.stringify({
-      name: "checked-template",
-      version: "1.0.0",
-      openclaw: { template: "CLAW.md" },
-    }),
-  );
+  writeJsonFile(join(root, "package.json"), {
+    name: "checked-template",
+    version: "1.0.0",
+    openclaw: { template: "CLAW.md" },
+  });
   await writeFile(
     join(root, "CLAW.md"),
     `---\n${JSON.stringify({ schemaVersion: 1, agent: { id: "checked" }, skills })}\n---\nFollow the checked instructions.\n`,
@@ -42,26 +40,21 @@ describe("bundled Template project sources", () => {
         join(root, "CLAW.md"),
         `---\n${JSON.stringify({ schemaVersion: 1, agent: { id: "checked" }, plugins: [{ path: "plugins/dual" }] })}\n---\nInspect native plugin metadata.\n`,
       );
-      await writeFile(
-        join(plugin, "package.json"),
-        JSON.stringify({
-          name: "native-dual",
-          version: "1.0.0",
-          openclaw: { extensions: ["./index.js"] },
-        }),
-      );
-      await writeFile(
-        join(plugin, "openclaw.plugin.json"),
-        JSON.stringify({ id: "native-dual", name: "Native dual plugin", configSchema: {} }),
-      );
+      writeJsonFile(join(plugin, "package.json"), {
+        name: "native-dual",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.js"] },
+      });
+      writeJsonFile(join(plugin, "openclaw.plugin.json"), {
+        id: "native-dual",
+        name: "Native dual plugin",
+        configSchema: {},
+      });
       await writeFile(
         join(plugin, "index.js"),
         "throw new Error('Metadata inspection must not execute plugin code');\n",
       );
-      await writeFile(
-        join(plugin, ".codex-plugin", "plugin.json"),
-        JSON.stringify({ name: companionName }),
-      );
+      writeJsonFile(join(plugin, ".codex-plugin", "plugin.json"), { name: companionName });
       const result = await validateTemplateProject(root);
       assert(result.ok, JSON.stringify(result.diagnostics));
       expect(result.template.snapshot?.bundledSources).toMatchObject([
