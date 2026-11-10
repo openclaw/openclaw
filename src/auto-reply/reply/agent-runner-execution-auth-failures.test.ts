@@ -216,7 +216,7 @@ describe("executeAgentTurn: authentication failures", () => {
       "⚠️ This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key.";
     state.isInternalMessageChannelMock.mockReturnValue(false);
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new FailoverError(expiredKeyCopy, {
+      new FailoverError("This API key has expired.", {
         reason: "auth",
         provider: "opencode",
         model: "fixture-model",
