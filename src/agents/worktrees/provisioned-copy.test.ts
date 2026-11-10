@@ -160,6 +160,8 @@ it.skipIf(process.platform !== "linux")(
         fsSync.symlinkSync(outside, path.join(source, "selected"), "dir");
         fsSync.renameSync(path.join(source, "admitted", "0"), path.join(source, "original"));
         fsSync.symlinkSync(path.join(outside, "file"), path.join(source, "admitted", "0"));
+        fsSync.renameSync(path.join(destination, "selected"), path.join(destination, "admitted"));
+        fsSync.symlinkSync(outside, path.join(destination, "selected"), "dir");
       }
       return spawn(...args);
     });
@@ -170,6 +172,9 @@ it.skipIf(process.platform !== "linux")(
     expect(authority.mock.calls.length).toBeLessThanOrEqual(4);
     expect(swapped).toBe(true);
     expect(result).toEqual(names.toSorted());
+    expect(await fs.readdir(outside)).toEqual(["file"]);
+    await fs.unlink(path.join(destination, "selected"));
+    await fs.rename(path.join(destination, "admitted"), path.join(destination, "selected"));
     expect(await fs.readdir(destination)).toEqual(["selected"]);
     for (const name of names) {
       expect(await fs.readFile(path.join(destination, name), "utf8")).toBe(name);
@@ -245,12 +250,15 @@ it.skipIf(process.platform !== "linux")(
   },
 );
 
-it.skipIf(process.platform !== "linux")(
-  "refuses another batch after authority revocation without an abort signal",
-  async () => {
+it.skipIf(process.platform !== "linux").for(["flat", "directories"])(
+  "refuses another batch after authority revocation across %s without an abort signal",
+  async (layout) => {
     const { source, destination } = fixture();
-    const names = Array.from({ length: 256 }, (_, index) => `${index}`);
+    const names = Array.from({ length: 256 }, (_, index) =>
+      layout === "flat" ? `${index}` : `group-${Math.floor(index / 32)}/${index}`,
+    );
     for (const name of names) {
+      await fs.mkdir(path.dirname(path.join(source, name)), { recursive: true });
       await fs.writeFile(path.join(source, name), name);
     }
     let current = true;
@@ -273,7 +281,12 @@ it.skipIf(process.platform !== "linux")(
       }),
     ).rejects.toBe(failure);
     expect(copies).toHaveBeenCalledTimes(1);
-    expect((await fs.readdir(destination)).toSorted()).toEqual(names.slice(0, 128).toSorted());
+    for (const name of names.slice(0, 128)) {
+      expect(await fs.readFile(path.join(destination, name), "utf8")).toBe(name);
+    }
+    await expect(fs.stat(path.join(destination, names[128]!))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   },
 );
 
