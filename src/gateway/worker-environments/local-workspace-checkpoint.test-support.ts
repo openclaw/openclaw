@@ -5,6 +5,7 @@ import {
   awaitGateBeforeSettlement,
   createDeferred,
   nextEventLoopTurn,
+  withinTest,
 } from "../../../test/helpers/promise.js";
 import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
@@ -25,7 +26,7 @@ async function proveUnchangedSandboxCommandCheckpoints(
   resumeAfterCapture = false,
   failAcceptance = false,
   atomicCapture: boolean | "nested" | "small" = false,
-  deferCleanup = false,
+  deferredCleanup?: { signal: AbortSignal; failRemoval?: boolean },
 ) {
   const { bindLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
   const { createSandboxTestContext } = await import("../../agents/sandbox/test-fixtures.js");
@@ -49,6 +50,14 @@ async function proveUnchangedSandboxCommandCheckpoints(
   });
   const removing = createDeferred();
   const releaseRemoval = createDeferred();
+  const nextProbe = createDeferred();
+  let removalStarted = false;
+  let refuseRemoval = deferredCleanup?.failRemoval ?? false;
+  let captures = 0;
+  const retiredCaptures = async () =>
+    (await fs.readdir(path.dirname(projection.workspaceDir))).filter((name) =>
+      /^checkpoint-retired-[a-f0-9-]{36}$/u.test(name),
+    );
   const containerName = "unchanged-command-fixture";
   const backend: SandboxBackendHandle = {
     id: "docker",
@@ -87,16 +96,26 @@ async function proveUnchangedSandboxCommandCheckpoints(
     vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementation(async (source, destination) => {
       expect(atomicCapture, "Fast small workspaces must avoid snapshot creation").not.toBe("small");
       expect(paused).toBe(true);
+      if (deferredCleanup) {
+        expect(await retiredCaptures(), "A previous retired capture still owns disk space").toEqual(
+          [],
+        );
+      }
+      captures++;
       await fs.cp(source, destination, { recursive: true });
     });
     vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementation(
       async (destination, options) => {
         expect(paused).toBe(false);
-        if (deferCleanup) {
+        if (deferredCleanup) {
+          removalStarted = true;
           removing.resolve();
           await releaseRemoval.promise;
-          // Cleanup retains its lease after the accepted command releases its caller.
+          // Artifact custody survives release of the command's session owner.
           options.commitGuard();
+          if (refuseRemoval) {
+            throw Object.assign(new Error("Retired capture removal refused"), { code: "EACCES" });
+          }
         }
         await fs.rm(destination, { recursive: true, force: true });
       },
@@ -180,6 +199,9 @@ async function proveUnchangedSandboxCommandCheckpoints(
             }
           }
           const result = await store.manifest(row, action);
+          if (deferredCleanup && removalStarted && action.kind === "probe") {
+            nextProbe.resolve();
+          }
           // Native-copy ordering uses a tiny fixture with a large owner inventory fact.
           return atomicCapture &&
             atomicCapture !== "small" &&
@@ -218,13 +240,6 @@ async function proveUnchangedSandboxCommandCheckpoints(
         timedOut: false,
         token: spec.finalizeToken,
       });
-      let finalizedAccepted = false;
-      void finalized.then(
-        () => {
-          finalizedAccepted = true;
-        },
-        () => {},
-      );
       if (resumeAfterCapture && command === 3) {
         try {
           await awaitGateBeforeSettlement(
@@ -247,28 +262,63 @@ async function proveUnchangedSandboxCommandCheckpoints(
           continue;
         }
       }
-      if (deferCleanup && command === 3) {
+      if (deferredCleanup && command === 3) {
         await removing.promise;
-        await nextEventLoopTurn();
-        expect(finalizedAccepted, "Saved command still waits for capture cleanup").toBe(true);
-        await finalized;
+        await withinTest(finalized, deferredCleanup.signal);
         await expectText(owner.worktree.path, "source.txt", "modified\n");
+        await withOpenClawStateLeaseAsync(
+          {
+            scope: "workspace.local-reconciliation",
+            key: owner.worktree.id,
+            leaseMs: 60_000,
+            waitMs: 0,
+          },
+          captureWorktreeRunEndContext(owner.env ?? process.env),
+          async () => {},
+        );
+        // The next command's preparation and execution can overlap artifact cleanup.
+        await projection.provision(() =>
+          writeText(projection.workspaceDir, "source.txt", "next command edit\n"),
+        );
         projection[Symbol.dispose]();
         expect(disposed).toBe(true);
-        await expect(
-          withOpenClawStateLeaseAsync(
-            {
-              scope: "workspace.local-reconciliation",
-              key: owner.worktree.id,
-              leaseMs: 60_000,
-              waitMs: 0,
-            },
-            captureWorktreeRunEndContext(owner.env ?? process.env),
-            async () => {},
-          ),
-        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_HELD" });
+        const { checkpointLocalWorkspace } = await import("./local-workspace-projection.js");
+        const next = checkpointLocalWorkspace(owner);
+        let nextSettled = false;
+        void next.then(
+          () => {
+            nextSettled = true;
+          },
+          () => {
+            nextSettled = true;
+          },
+        );
+        await withinTest(nextProbe.promise, deferredCleanup.signal);
+        await nextEventLoopTurn();
+        expect(nextSettled).toBe(false);
+        expect(captures).toBe(1);
+        expect(paused).toBe(false);
+        expect(await retiredCaptures()).toHaveLength(1);
         releaseRemoval.resolve();
-        await withStore({ ...owner, worktreeId: owner.worktree.id }, async () => {});
+        if (deferredCleanup.failRemoval) {
+          await expect(next).rejects.toMatchObject({ code: "EACCES" });
+          expect(captures).toBe(1);
+          expect(await retiredCaptures()).toHaveLength(1);
+          await expectText(owner.worktree.path, "source.txt", "modified\n");
+          // A failed job has left the in-flight registry: the next admission must
+          // discover its artifact just as it does after process restart.
+          refuseRemoval = false;
+          const unrelated = path.join(
+            path.dirname(projection.workspaceDir),
+            "checkpoint-retired-not-a-uuid",
+          );
+          await fs.mkdir(unrelated);
+          await checkpointLocalWorkspace(owner);
+          expect((await fs.stat(unrelated)).isDirectory()).toBe(true);
+        } else {
+          await withinTest(next, deferredCleanup.signal);
+        }
+        await expectText(owner.worktree.path, "source.txt", "next command edit\n");
         await expectMissing(path.dirname(projection.workspaceDir), "checkpoint-capture");
         return;
       }
@@ -318,8 +368,11 @@ export function registerSandboxCheckpointTests(owner: () => LocalWorkspaceOwner)
   it("re-pauses omitted nested subvolumes under the checkpoint lease before saving their live bytes", () =>
     proveUnchangedSandboxCommandCheckpoints(owner(), true, false, "nested"));
 
-  it("acknowledges saved commands before capture cleanup while retaining its lease after caller disposal", () =>
-    proveUnchangedSandboxCommandCheckpoints(owner(), true, false, true, true));
+  it.for([false, true])(
+    "overlaps retired capture cleanup with the next command while bounding capture admission (cleanup failure: %s)",
+    (failRemoval, { signal }) =>
+      proveUnchangedSandboxCommandCheckpoints(owner(), true, false, true, { signal, failRemoval }),
+  );
 
   it("keeps fast small workspaces on paused capture even when btrfs snapshots are available", () =>
     proveUnchangedSandboxCommandCheckpoints(owner(), false, false, "small"));

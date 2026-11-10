@@ -21,8 +21,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
@@ -38,7 +36,6 @@ import type { LocalWorkspaceCustody, LocalWorkspaceOwner } from "./local-workspa
 type PendingWorkspaceOperation<T> = { result: Promise<T>; signal?: AbortSignal };
 const pendingCheckpoints = new Map<string, PendingWorkspaceOperation<void>>();
 const pendingPreparations = new Map<string, PendingWorkspaceOperation<string>>();
-const log = createSubsystemLogger("agents/worktrees");
 
 /** Queued preparations share observation, while each caller retains its own run authority. */
 export function withLocalWorkspacePreparation(
@@ -143,16 +140,8 @@ export function checkpointLocalWorkspace(
     pendingCheckpoints,
     owner,
     [owner.agentId, owner.sessionKey, owner.sessionId, owner.lifecycleRevision],
-    (beginCapture) => {
-      const completed = createDeferredCore();
-      let accepted = false;
-      const afterAcceptance = () => {
-        accepted = true;
-        completed.resolve();
-      };
-      // Keep cleanup in the lease and run-end lifetime after returning saved bytes
-      // to the command. A following checkpoint waits for this one bounded artifact.
-      void withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
+    (beginCapture) =>
+      withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
         beginCapture();
         let snapshotCapture = false;
         if (
@@ -180,17 +169,9 @@ export function checkpointLocalWorkspace(
                 quiescence &&
                 (() => timeWorktreePreparationPhase("runtimeResume", quiescence.resume)),
             }),
-          { reason: "checkpoint", afterAcceptance, snapshotCapture },
+          { reason: "checkpoint", snapshotCapture },
         );
-      }).then(completed.resolve, (error: unknown) => {
-        if (accepted) {
-          log.warn(`Local workspace checkpoint capture cleanup failed: ${String(error)}`);
-        } else {
-          completed.reject(error);
-        }
-      });
-      return completed.promise;
-    },
+      }),
     options,
   );
 }

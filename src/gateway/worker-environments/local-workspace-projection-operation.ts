@@ -6,6 +6,7 @@ import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation
 import {
   prepareLocalWorkspaceCheckpointCapture,
   removeLocalWorkspaceCheckpointCapture,
+  retireLocalWorkspaceCheckpointCapture,
   type LocalWorkspaceSyncOptions,
 } from "./local-workspace-checkpoint.js";
 import { projectionOperations } from "./local-workspace-state.js";
@@ -25,7 +26,6 @@ export async function runLocalWorkspaceProjection<T>(
   options: {
     provision?: boolean;
     reason?: LocalWorkspacePauseReason;
-    afterAcceptance?: () => void;
     snapshotCapture?: boolean;
   } = {},
 ) {
@@ -51,7 +51,11 @@ export async function runLocalWorkspaceProjection<T>(
   }
   const { quiesceLocalWorkspace, parseLocalWorkspacePausedRuntimes } =
     await import("../../agents/sandbox/local-workspace-quiescence.js");
-  const filesystemOptions = { signal: store.signal, commitGuard: () => void operations.current() };
+  const filesystemOptions = {
+    env: owner.env,
+    signal: store.signal,
+    commitGuard: () => void operations.current(),
+  };
   let quiescence: Awaited<ReturnType<typeof quiesceLocalWorkspace>> | undefined;
   const pause = async () => {
     quiescence =
@@ -119,16 +123,12 @@ export async function runLocalWorkspaceProjection<T>(
         await timeWorktreePreparationPhase("runtimeResume", quiescence.resume);
       }
     }
-    if (accepted) {
-      options.afterAcceptance?.();
-    }
     if (previous && options.reason === "checkpoint") {
-      // Command acceptance may release its session owner. This discardable artifact
-      // remains under the same reconciliation lease until removal finishes.
-      await removeLocalWorkspaceCheckpointCapture(previous.projection_path, {
-        signal: store.signal,
-        commitGuard: () => void store.get(),
-      });
+      if (accepted) {
+        await retireLocalWorkspaceCheckpointCapture(previous.projection_path, filesystemOptions);
+      } else {
+        await removeLocalWorkspaceCheckpointCapture(previous.projection_path, filesystemOptions);
+      }
     }
   }
 }

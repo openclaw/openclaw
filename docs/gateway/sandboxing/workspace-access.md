@@ -332,11 +332,10 @@ result. A snapshot that omits nested subvolumes is discarded and captured again
 under pause, preserving their contents. Command completion still waits for
 canonical acceptance, so a read after a completed command sees its saved changes.
 Later background writes remain in the private checkout for the next checkpoint.
-After acceptance and runtime resume, snapshot cleanup continues under the same
-workspace lease without delaying the completed command. Only one capture can
-exist per workspace; the next preparation waits if cleanup is still running.
-Linux hosts with an available and permitted `btrfs subvolume delete` retire the
-snapshot without unlinking each file. Other hosts retain recursive cleanup.
+After acceptance and runtime resume, the workspace lease transfers the snapshot
+to a unique retired path for asynchronous cleanup. The next command can run while
+cleanup continues. Before another snapshot, capture admission waits for cleanup
+and retries any interrupted removal, keeping the cleanup backlog bounded.
 Snapshot creation may wait for dirty data to flush, so the short paused operation
 does not guarantee a fixed maximum pause duration.
 Concurrent preparations of the same workspace and session

@@ -34,18 +34,41 @@ engine CLI overhead. Command latency includes guest execution and finalization;
 the subsequent correctness read is excluded.
 
 The native driver acquires the existing reconciliation lease after warmup and
-after the measured burst. This settles cleanup retained by that owner after
-canonical acceptance. `cleanupSettlementMs` reports the final tail separately;
+after the measured burst, then awaits outstanding native removal operations
+observed by its phase instrumentation. This settles cleanup after canonical
+acceptance. `cleanupSettlementMs` reports the final tail separately;
 total CPU and allocation include it, while individual command latency does not.
 Apply the same driver to every source revision so deferred cleanup cannot make
 the candidate's total work disappear from the comparison.
-On btrfs, this also waits for `btrfs subvolume sync` after the burst. Native
+On btrfs, this also performs `syncfs` and waits for `btrfs subvolume sync` after
+the burst. The explicit flush avoids waiting for the periodic transaction
+commit timer. Native
 subvolume deletion delegates extent retirement to kernel threads, which can sit
 outside the rig's CPU cgroup. `hostCpuMs` therefore reports `/proc/stat` deltas
 for the whole Linux VM, including that work and unrelated daemon activity. Use
 the identical-code controls to assess noise; do not describe cgroup CPU alone
 as complete kernel-cleanup accounting. The final settlement may include the
 sync command's polling interval and is separate from command latency.
+
+To measure unprivileged filesystem operations, run Node as the workspace owner
+with no effective capabilities. A task-private rootful Podman API socket can
+control the real guest independently; record that engine placement rather than
+calling it rootless-engine proof. Do not mount an operator or production socket.
+The kernel settlement observer needs privilege for its B-tree query. In another
+terminal inside the disposable rig, start the narrowly scoped observer as root:
+
+```sh
+python3 scripts/perf/local-workspace-checkpoint-settlement.py \
+  --root /owned-btrfs --socket /owned-proof/settlement.sock
+```
+
+The root directory must belong to the measured user. The observer creates a
+mode-0600 socket for that owner and accepts only a constant settlement request;
+it cannot receive a path or command. Add
+`--settlement-socket /owned-proof/settlement.sock` to every measurement arm.
+Reports record Node's UID and effective capabilities. Snapshot creation and
+removal still run as that unprivileged user; only the private engine and final
+measurement observer are privileged. Stop the observer after the comparison.
 
 Reports include raw pause and command samples, median/p95/max, main-process CPU,
 main-isolate allocation, source hashes, host load, and owner phases. The manifest

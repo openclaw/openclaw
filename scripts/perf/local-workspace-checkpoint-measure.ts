@@ -128,6 +128,7 @@ import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
+import { createConnection } from "node:net";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
@@ -174,6 +175,7 @@ const { values } = parseArgs({
     "read-interval-ms": { type: "string", default: "2000" },
     "guest-image": { type: "string", default: "node:24-bookworm" },
     "native-turns": { type: "boolean", default: false },
+    "settlement-socket": { type: "string" },
     "all-mutating": { type: "boolean", default: false },
     requests: { type: "string", default: "2048" },
     burst: { type: "string", default: "64" },
@@ -336,6 +338,7 @@ const fileReads = values.mode === "file-read";
 const turnLoop = values.mode === "turn-loop";
 const nativeTurns = values["native-turns"];
 assert(!nativeTurns || (turnLoop && values["sandbox-backend"] === "podman"));
+assert(!values["settlement-socket"] || nativeTurns);
 assert(!values["all-mutating"] || turnLoop);
 assert(!turnLoop || Number(values.burst) === 1);
 const gatewayMode = values.mode === "gateway" || fileReads;
@@ -569,6 +572,7 @@ const finalizations: Array<{
   pauses: number;
 }> = [];
 const pauseDurationsMs: number[] = [];
+const nativeRemovals = new Set<Promise<unknown>>();
 const checkpointPhases: Array<{
   name: string;
   durationMs: number;
@@ -606,9 +610,14 @@ Object.assign(globalThis, {
     const pausedAtStart = pauseBegan !== undefined;
     const cpu = process.cpuUsage();
     const allocated = getHeapStatistics().total_allocated_bytes;
+    const completion = operation();
+    if (name === "nativeWorktreeFilesystem:remove") {
+      nativeRemovals.add(completion);
+    }
     try {
-      return await operation();
+      return await completion;
     } finally {
+      nativeRemovals.delete(completion);
       const used = process.cpuUsage(cpu);
       checkpointPhases.push({
         name,
@@ -989,9 +998,27 @@ const { withLocalWorkspaceStore } =
   await import("../../src/gateway/worker-environments/local-workspace-store.js");
 const settleCheckpointCleanup = async () => {
   await withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async () => {});
+  await Promise.all(nativeRemovals);
   if (fs.statfsSync(output).type === 0x9123683e) {
     // Native subvolume deletion defers extent retirement to kernel threads.
-    execFileSync("btrfs", ["subvolume", "sync", output], { stdio: "ignore" });
+    const settlementSocket = values["settlement-socket"];
+    if (settlementSocket) {
+      await new Promise<void>((resolve, reject) => {
+        const socket = createConnection(settlementSocket);
+        let reply = "";
+        socket.setEncoding("utf8");
+        socket.setTimeout(120_000, () => socket.destroy(new Error("Kernel settlement timed out")));
+        socket.once("connect", () => socket.end("settle\n"));
+        socket.on("data", (data: string) => {
+          reply += data;
+        });
+        socket.once("error", reject);
+        socket.once("end", () => (reply === "settled\n" ? resolve() : reject(new Error(reply))));
+      });
+    } else {
+      execFileSync("sync", ["-f", output], { stdio: "ignore" });
+      execFileSync("btrfs", ["subvolume", "sync", output], { stdio: "ignore" });
+    }
   }
 };
 const { prepareLocalSandboxWorkspace } =
@@ -2243,6 +2270,14 @@ measurement: try {
           pauseDurationsMs: [...pauseDurationsMs],
           checkpointPhases: [...checkpointPhases],
           cleanupSettlementMs,
+          uid: process.getuid?.(),
+          effectiveCapabilities:
+            process.platform === "linux"
+              ? /^CapEff:\s*(\S+)/m.exec(fs.readFileSync("/proc/self/status", "utf8"))?.[1]
+              : undefined,
+          settlementObserver: values["settlement-socket"]
+            ? "private privileged socket"
+            : "local process",
           hostCpuMs,
           hostCpuAccounting:
             "Whole Linux VM CPU, including kernel cleanup and unrelated daemon work; cgroup CPU excludes some kernel threads",
