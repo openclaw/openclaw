@@ -76,8 +76,9 @@ suite.define(() => {
         .toBe(0);
       expect(await conditionalRow.count()).toBe(1);
 
+      await page.keyboard.press("Escape");
       await conditionalRow.click();
-      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await page.getByRole("tab", { name: "Run history", exact: true }).click();
       const activity = page.locator('[data-test-id="cron-condition-activity"]');
       await activity.waitFor();
       await expect.poll(() => activity.textContent()).toContain("42");

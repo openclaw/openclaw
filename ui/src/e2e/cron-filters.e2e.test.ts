@@ -311,8 +311,9 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await page.getByRole("tab", { name: "Run history", exact: true }).click();
 
+      await page.locator('[aria-controls="cron-runs-filters"]').click();
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
       const statusTrigger = statusFilter.locator(".cron-filter-dropdown__trigger");
@@ -335,6 +336,7 @@ suite.define(() => {
       );
 
       const statusRequestCount = (await gateway.getRequests("cron.runs")).length;
+      await page.keyboard.press("Escape");
       await deliveryTrigger.click();
       await deliveryFilter.locator('[data-value="option:delivered"]').click();
       await button(page, "Delivery Delivered").waitFor();
@@ -379,8 +381,9 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}cron`);
       await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("de");
-      await page.getByRole("tab", { name: "Aktivitätsverlauf", exact: true }).click();
+      await page.getByRole("tab", { name: "Run history", exact: true }).click();
 
+      await page.locator('[aria-controls="cron-runs-filters"]').click();
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
       const statusTrigger = statusFilter.locator(".cron-filter-dropdown__trigger");
@@ -433,11 +436,12 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await page.getByRole("tab", { name: "Run history", exact: true }).click();
       await expectRunCount(page, "Initial history", 1);
 
       await gateway.deferNext("cron.runs");
-      const search = page.locator(".cron-run-filter-search input");
+      await page.getByRole("button", { name: "Search runs", exact: true }).click();
+      const search = page.getByRole("searchbox", { name: "Search runs", exact: true });
       await search.fill("stale");
       await expectRunRequest(gateway, 0, (params) => params.query === "stale");
 
@@ -484,7 +488,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}cron`);
       await jobTitle(page, selectedJob.name).waitFor({ timeout: 10_000 });
 
-      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await page.getByRole("tab", { name: "Run history", exact: true }).click();
       await expectRunCount(page, "Overview history", 1);
       const previousHistoryRequestCount = (await gateway.getRequests("cron.runs")).length;
       await gateway.deferNext("cron.runs");
@@ -569,14 +573,32 @@ suite.define(() => {
     });
   });
 
-  it("supports skip navigation and keyboard tab activation", async () => {
+  it("supports skip navigation, keyboard tabs, and URL back and forward", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
-      await installCronGateway(page, {
+      const job = cronJob("tab-navigation", "Tab navigation task", {
+        kind: "every",
+        everyMs: 60_000,
+      });
+      const gateway = await installCronGateway(page, {
+        "cron.list": cronListResponse([job]),
         "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
       });
 
-      await page.goto(`${suite.server.baseUrl}cron`);
+      const session = "agent:main:tab-navigation";
+      await page.goto(
+        `${suite.server.baseUrl}cron?session=${encodeURIComponent(session)}&agent=main&tab=enabled`,
+      );
       await page.locator('[data-test-id="cron-tab-all"]').waitFor();
+      await expect
+        .poll(() =>
+          page.getByRole("tab", { name: "Active", exact: true }).getAttribute("aria-selected"),
+        )
+        .toBe("true");
+      expect(
+        requestParams(
+          await waitForCronListRequest(gateway, (params) => params.enabled === "enabled"),
+        ),
+      ).toMatchObject({ enabled: "enabled" });
 
       await page.keyboard.press("Tab");
       await expect
@@ -588,17 +610,43 @@ suite.define(() => {
         .toBe("control-ui-main");
 
       const tasksTab = page.getByRole("tab", { name: "All", exact: true });
-      const activityTab = page.getByRole("tab", { name: "Activity history", exact: true });
+      const pausedTab = page.getByRole("tab", { name: "Paused", exact: true });
+      const history = page.getByRole("tab", { name: "Run history", exact: true });
       await tasksTab.focus();
-      await pressKeys(page, "ArrowRight", "ArrowRight", "ArrowRight");
+      await pressKeys(page, "ArrowRight", "ArrowRight");
       await expect
-        .poll(() => activityTab.evaluate((element) => element === document.activeElement))
+        .poll(() => pausedTab.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await page.keyboard.press("Enter");
-      await expect.poll(() => activityTab.getAttribute("aria-selected")).toBe("true");
+      await expect.poll(() => pausedTab.getAttribute("aria-selected")).toBe("true");
+      expect(new URL(page.url()).searchParams.get("tab")).toBe("disabled");
+      await page.keyboard.press("ArrowRight");
       await expect
-        .poll(() => page.getByRole("tabpanel", { name: "Activity history" }).isVisible())
+        .poll(() => history.evaluate((element) => element === document.activeElement))
         .toBe(true);
+      await history.press("Enter");
+      await expect
+        .poll(() => page.getByRole("tabpanel", { name: "Run history" }).isVisible())
+        .toBe(true);
+      expect(new URL(page.url()).searchParams.get("tab")).toBe("activity");
+      expect(new URL(page.url()).searchParams.get("session")).toBe(session);
+      await page.goBack();
+      await expect.poll(() => pausedTab.getAttribute("aria-selected")).toBe("true");
+      await page.goForward();
+      await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
+      await page.reload();
+      await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
+      await tasksTab.click();
+      await expect.poll(() => tasksTab.getAttribute("aria-selected")).toBe("true");
+      expect(new URL(page.url()).searchParams.get("tab")).toBe("all");
+      expect(new URL(page.url()).searchParams.get("session")).toBe(session);
+      expect(new URL(page.url()).searchParams.get("agent")).toBe("main");
+      await jobTitle(page, job.name).click();
+      const detail = page.locator('.cron-page[data-panel-mode="job"]');
+      await detail.waitFor();
+      await page.goBack();
+      await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
+      await detail.waitFor({ state: "detached" });
     });
   });
 });

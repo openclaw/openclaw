@@ -35,10 +35,10 @@ export function CronView(props: CronProps) {
       order = rows;
       prepareFocus(["back"]);
     },
-    ref(id) {
+    ref(id, eligible) {
       let element!: HTMLElement;
       onSettled(() => {
-        if (!pending || id !== focus.target) {
+        if (eligible?.() === false || !pending || id !== focus.target) {
           return;
         }
         const request = pending;

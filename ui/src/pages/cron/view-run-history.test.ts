@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CronRunLogEntry } from "../../api/types.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createCronViewJob,
   createCronViewRun as createRun,
@@ -48,8 +49,9 @@ describe("cron view run history", () => {
     });
   });
 
-  it("formats run token counts and durations in the rendered entry", async () => {
+  it("preserves phone run token counts and durations in the rendered entry", async () => {
     const container = await renderView({
+      phoneLayout: true,
       runs: [
         { jobId: "total", durationMs: 90_000, usage: { total_tokens: 1_234_567 } },
         { jobId: "split", durationMs: 500, usage: { input_tokens: 50_000, output_tokens: 999 } },
@@ -73,12 +75,38 @@ describe("cron view run history", () => {
   });
 
   it("renders run summaries as sanitized markdown", async () => {
+    const job = createCronViewJob("job-1");
     const container = await renderView({
-      runs: [createRun({ summary: "**bold** <script>alert(1)</script>" })],
+      jobs: [job],
+      runs: [
+        createRun({ ts: 3, summary: "**bold** <script>alert(1)</script>" }),
+        createRun({
+          ts: 2,
+          status: "error",
+          error: "Execution failed",
+          summary: "Hidden failure summary",
+        }),
+        createRun({ ts: 1, summary: "No summary." }),
+      ],
     });
+    expect(container.querySelector(".cron-run-entry__summary")?.textContent).toContain("bold");
+    expect(
+      container.querySelector(".cron-run-entry__secondary openclaw-agent-row-chip"),
+    ).not.toBeNull();
+    expect(container.querySelector(".cron-run-entry__summary strong")).toBeNull();
+    expect(container.querySelectorAll(".cron-run-entry__summary")).toHaveLength(1);
+    expect(container.querySelector(".cron-run-entry__error")?.textContent).toBe("Execution failed");
+    expect(container.textContent).not.toContain("Hidden failure summary");
+    expect(container.textContent).not.toContain("No summary.");
+    getElement(container, ".cron-run-entry__title", HTMLButtonElement).click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".cron-run-entry__body")).not.toBeNull(),
+    );
     const body = getElement(container, ".cron-run-entry__body", HTMLDivElement);
     expect(body.querySelector("strong")?.textContent).toBe("bold");
     expect(body.querySelector("script")).toBeNull();
+    const scoped = await renderView({ jobs: [job], runs: [createRun()], showAgent: false });
+    expect(scoped.querySelector(".cron-run-entry__secondary openclaw-agent-row-chip")).toBeNull();
   });
 
   it("shows empty guidance only for settled history and offers recovery after failure", async () => {
@@ -105,11 +133,15 @@ describe("cron view run history", () => {
     const retained = await renderView({
       runsState: "failed",
       error: "History unavailable",
-      runs: [createRun({ status: undefined, summary: "Previously accepted run" })],
+      runs: [
+        createRun({
+          status: undefined,
+          summary: "Previously accepted run",
+          jobName: "Retained automation",
+        }),
+      ],
     });
-    expect(retained.querySelector(".cron-run-entry")?.textContent).toContain(
-      "Previously accepted run",
-    );
+    expect(retained.querySelector(".cron-run-entry")?.textContent).toContain("Retained automation");
     expect(retained.textContent).toContain("History unavailable");
     const empty = await renderView();
     expect(empty.querySelector(".cron-empty-state")?.textContent).toContain("No activity yet.");
@@ -129,6 +161,10 @@ describe("cron view run history", () => {
         }),
       ],
     });
+    getElement(container, ".cron-run-entry__title", HTMLButtonElement).click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".cron-run-entry__facts")).not.toBeNull(),
+    );
     const facts = getElement(container, ".cron-run-entry__facts", HTMLDivElement);
     expect(facts.textContent).toContain("Delivery suppression: silent <img");
     expect(facts.textContent).toContain("Bearer [redacted]");

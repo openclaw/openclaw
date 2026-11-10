@@ -80,30 +80,46 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       selectedId={pageHeader().selectedAgentId}
     />
   );
-  // The phone list seats the scope beside its create action; detail views keep it here.
+  const scopeAction = () =>
+    pageHeader().filtered ? (
+      <a
+        class="btn"
+        href={pathForRoute("cron", props.page.context().basePath)}
+        onClick={(event: MouseEvent) => {
+          if (shouldHandleNavigationClick(event)) {
+            event.preventDefault();
+            props.page.context().navigate("cron", { search: "" });
+          }
+        }}
+      >
+        {t("cron.list.showAll")}
+      </a>
+    ) : (
+      scopeControl()
+    );
   const phoneList = () => phoneLayout() && !viewProps().editingJob && !viewProps().createOpen;
   return (
     <>
       <HubPageHeader
         active="cron"
-        subtitle={pageHeader().filtered ? t("cron.list.sessionFilter") : undefined}
+        class={phoneLayout() ? undefined : "cron-header"}
+        subtitle={
+          pageHeader().filtered
+            ? t("cron.list.sessionFilter")
+            : phoneLayout()
+              ? undefined
+              : t("cron.list.subtitle")
+        }
         docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
         actions={
-          pageHeader().filtered ? (
-            <a
-              class="btn"
-              href={pathForRoute("cron", props.page.context().basePath)}
-              onClick={(event: MouseEvent) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  props.page.context().navigate("cron", { search: "" });
-                }
-              }}
-            >
-              {t("cron.list.showAll")}
-            </a>
-          ) : phoneList() ? undefined : (
-            scopeControl()
+          phoneLayout() ? (
+            pageHeader().filtered ? (
+              scopeAction()
+            ) : phoneList() ? undefined : (
+              scopeControl()
+            )
+          ) : (
+            <div class="cron-header__actions">{scopeAction()}</div>
           )
         }
       />
@@ -114,6 +130,8 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
           canManageJob={canPresentJob}
           canCreate={canPresentCreate()}
           phoneLayout={phoneList()}
+          showAgent={!pageHeader().filtered && !pageHeader().selectedAgentId}
+          onSelectListTab={phoneLayout() ? undefined : props.page.selectListTab}
           toolbarScope={phoneList() && !pageHeader().filtered ? scopeControl() : undefined}
           busy={props.page.saving() || viewProps().busy}
           toggleSavingJobId={props.page.toggleSavingJobId()}

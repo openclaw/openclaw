@@ -2818,7 +2818,7 @@ try {
                 }
                 const cell: InteractionResult = { id };
                 try {
-                  // Transcript probing starts with the Activity list already available.
+                  // Transcript probing starts with run history already available.
                   if (
                     id === "cron-transcript" &&
                     !(await page.locator(".cron-activity .cron-run-entry").isVisible())
@@ -2829,13 +2829,17 @@ try {
                       .waitFor();
                   }
                   const trigger =
-                    id === "agents-files"
-                      ? "#agents-tab-files"
-                      : id === "cron-history"
-                        ? '[data-test-id="cron-list-tab-activity"]'
-                        : id === "activity-lightbox"
-                          ? activityMediaTrigger
-                          : ".cron-activity .cron-run-entry button";
+                    id === "cron-transcript"
+                      ? page
+                          .locator(".cron-activity .cron-run-entry")
+                          .getByRole("button", { name: "View transcript", exact: true })
+                      : page.locator(
+                          id === "agents-files"
+                            ? "#agents-tab-files"
+                            : id === "cron-history"
+                              ? '[data-test-id="cron-list-tab-activity"]'
+                              : activityMediaTrigger,
+                        );
                   const ready =
                     id === "agents-files"
                       ? "#agent-panel .agent-file-tabs [role=tab]"
@@ -2933,7 +2937,7 @@ try {
                   if (id in creationInteractions) {
                     creationOutcome = await runCreationAction(page, id, route, creationBefore);
                   } else {
-                    await page.locator(trigger).first().click();
+                    await trigger.first().click();
                     await page.locator(ready).first().waitFor({ state: "visible" });
                   }
                   if (id === "cron-transcript") {

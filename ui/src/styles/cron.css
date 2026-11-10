@@ -202,6 +202,7 @@
 /* ── Jobs table (escape hatch inside the tasks group) ── */
 
 .cron-table {
+  position: relative;
   --cron-table-columns: minmax(220px, 1.8fr) minmax(160px, 1.05fr) minmax(110px, 0.7fr)
     minmax(130px, 0.8fr) 116px;
 }
@@ -786,6 +787,7 @@
 }
 
 .cron-runs {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -1050,7 +1052,7 @@
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 560px) {
   /* Keep every table fact, but label and arrange it as a compact card. */
   .cron-table__head {
     display: none;
@@ -1257,4 +1259,201 @@
 
 .cron-filter-dropdown__details > .oc-menu {
   width: min(300px, calc(100vw - 48px));
+}
+
+/* Desktop and tablet use the same 1120px column as Usage's SettingsPage wide.
+   Cap the outer page as well so shell/embed overrides cannot spread the list. */
+.cron-page--desktop {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+}
+
+/* Desktop and tablet use a flat list; phone keeps the original toolbar and cards. */
+.cron-header__actions,
+.cron-page--desktop .cron-toolbar__navigation {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cron-page--desktop .cron-toolbar__primary {
+  flex-wrap: wrap;
+  row-gap: var(--space-3);
+  margin-block: 0;
+}
+
+.cron-page--desktop .cron-toolbar__navigation {
+  flex: 0 0 auto;
+}
+
+.cron-page--desktop .cron-toolbar__filters {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.cron-search-field {
+  width: 220px;
+  min-width: 0;
+}
+
+.cron-page--desktop .cron-toolbar__actions {
+  margin-inline-start: auto;
+  flex: 0 1 auto;
+}
+
+.cron-page--desktop .cron-table__row {
+  grid-template-columns: auto minmax(0, 1fr) minmax(100px, 160px) auto;
+  min-height: var(--list-row-min-height);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+}
+
+.cron-page--desktop .cron-table__row--read-only {
+  grid-template-columns: minmax(0, 1fr) minmax(100px, 160px);
+}
+
+.cron-table__toggle {
+  /* Keep the shared switch's track, thumb, focus and disabled treatment. */
+  --accent: var(--muted);
+  --accent-foreground: var(--bg);
+
+  display: flex;
+  align-items: center;
+}
+
+.cron-page--desktop .cron-table__state {
+  margin-top: 0;
+}
+
+.cron-page--desktop .cron-table__name-meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.cron-page--desktop .cron-table__name-meta openclaw-agent-row-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.cron-page--desktop .cron-table__meta-separator {
+  flex: none;
+}
+
+.cron-page--desktop .cron-table__cell {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.cron-page--desktop .cron-table__next {
+  text-align: end;
+}
+
+.cron-table__failure {
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+}
+
+.cron-table__last-success {
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+}
+
+.cron-jobs-loading-more {
+  /* Use the page's existing bottom padding: settling a terminal page must not
+     shorten the scroll extent or move its retained last row. */
+  position: absolute;
+  top: 100%;
+  inset-inline: 0;
+  display: flex;
+  justify-content: center;
+  padding: var(--space-2);
+  color: var(--muted);
+}
+
+.cron-page--desktop .cron-activity {
+  padding: 0;
+}
+
+.cron-page--desktop .cron-run-entry--compact {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) minmax(100px, 160px) 62px;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--list-row-min-height);
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+}
+
+.cron-page--desktop .cron-run-entry--compact:hover,
+.cron-page--desktop .cron-run-entry--compact:focus-within {
+  background: var(--surface-hover);
+}
+
+.cron-page--desktop .cron-run-entry--compact .cron-run-entry__title {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-page--desktop .cron-run-status {
+  justify-self: center;
+}
+
+.cron-page--desktop .cron-run-entry__secondary {
+  line-height: 1.4;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 2px;
+  font-size: var(--control-ui-text-sm);
+}
+
+.cron-page--desktop .cron-run-entry__secondary openclaw-agent-row-chip {
+  min-width: 0;
+  max-width: 45%;
+}
+
+.cron-page--desktop .cron-run-entry__error,
+.cron-page--desktop .cron-run-entry__summary {
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: var(--control-ui-text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-page--desktop .cron-run-entry__error {
+  color: var(--danger);
+}
+
+.cron-page--desktop .cron-run-entry__time {
+  min-width: 0;
+  text-align: end;
+  font-size: var(--control-ui-text-sm);
+}
+
+.cron-page--desktop .cron-run-entry__actions {
+  display: flex;
+  align-items: center;
+}
+
+.cron-run-details {
+  --oc-overlay-max-width: min(640px, calc(100vw - 48px));
+  --oc-overlay-max-height: min(640px, calc(100dvh - 48px));
+
+  width: min(640px, calc(100vw - 48px));
+  overflow: auto;
 }

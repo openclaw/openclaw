@@ -76,7 +76,7 @@ suite.define(() => {
 
         for (const scope of ["all", "job"] as const) {
           if (scope === "job") {
-            await page.locator('[data-test-id="cron-tab-all"]').click();
+            await page.getByRole("tab", { name: "All", exact: true }).click();
             await page
               .locator(`[data-test-id="cron-row-${job.id}"] .cron-table__name-text`)
               .click();
@@ -96,23 +96,31 @@ suite.define(() => {
           await expect.poll(() => runs.count()).toBe(2);
           const suppressed = runs.nth(0);
           const failedDelivery = runs.nth(1);
+          const contents: string[] = [];
           for (const run of [suppressed, failedDelivery]) {
-            const title = await run.locator(".cron-run-entry__title").textContent();
-            expect(title).toContain("Completed");
-            expect(await run.locator(".cron-run-entry__facts").textContent()).toContain(
+            if (scope === "all") {
+              await run.locator(".cron-run-entry__title").click();
+            }
+            const details =
+              scope === "all" ? run.locator(".cron-run-details .cron-run-entry") : run;
+            await details.locator(".cron-run-entry__facts").waitFor();
+            expect(await details.locator(".cron-run-entry__title").textContent()).toContain(
+              "Completed",
+            );
+            expect(await details.locator(".cron-run-entry__facts").textContent()).toContain(
               "Not delivered",
             );
-            expect(await run.locator(".cron-run-entry__body").textContent()).toContain(
+            expect(await details.locator(".cron-run-entry__body").textContent()).toContain(
               "Polling completed.",
             );
+            contents.push((await details.textContent()) ?? "");
+            if (scope === "all") {
+              await page.keyboard.press("Escape");
+            }
           }
-          expect(await failedDelivery.textContent()).toContain(
-            "Synthetic delivery target unavailable.",
-          );
-          expect(await failedDelivery.textContent()).not.toContain("Delivery suppression:");
-          expect(await suppressed.textContent()).not.toContain(
-            "Synthetic delivery target unavailable.",
-          );
+          expect(contents[1]).toContain("Synthetic delivery target unavailable.");
+          expect(contents[1]).not.toContain("Delivery suppression:");
+          expect(contents[0]).not.toContain("Synthetic delivery target unavailable.");
           const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR;
           const artifactDir = artifactRoot
             ? createControlUiE2eArtifactDir("cron-run-suppression", artifactRoot)
@@ -125,7 +133,7 @@ suite.define(() => {
           }
           // Keep both consumers observable in the original failing run.
           expect
-            .soft(await suppressed.textContent(), `${scope} recorded suppression`)
+            .soft(contents[0], `${scope} recorded suppression`)
             .toContain("Delivery suppression: silent");
         }
         expect(pageErrors).toEqual([]);

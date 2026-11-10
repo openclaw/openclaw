@@ -76,7 +76,7 @@ const enCron = {
       newSubtitle: "Describe what OpenClaw should do, then pick when it runs.",
       back: "All automations",
       settingsTab: "Settings",
-      historyTitle: "Activity history",
+      historyTitle: "Run history",
       generalSection: "General",
       scheduleSection: "Schedule",
       deliverySection: "Delivery",
@@ -85,8 +85,9 @@ const enCron = {
       autoDisabled: "Auto-disabled",
     },
     actions: {
-      runNow: "Start now",
+      runNow: "Run now",
       runNowJob: "Start now: {name}",
+      runNowAutomation: "Run now: {name}",
       runIfDue: "Start if due",
       pauseJob: "Pause: {name}",
       resumeJob: "Resume: {name}",
@@ -148,11 +149,11 @@ const enCron = {
       neverFired: "Never",
       emptyConditionTitle: "No payload runs yet",
       emptyConditionHint:
-        "The condition has been checked {count} times without matching. Activity history starts when the payload executes.",
+        "The condition has been checked {count} times without matching. Run history starts when the payload executes.",
       emptyConditionHintOne:
-        "The condition has been checked once without matching. Activity history starts when the payload executes.",
+        "The condition has been checked once without matching. Run history starts when the payload executes.",
       emptyConditionUnchecked:
-        "The condition has not been checked yet. Activity history starts when the payload executes.",
+        "The condition has not been checked yet. Run history starts when the payload executes.",
       loadMore: "Load more activity",
       loading: "Loading runs…",
       runStatusOk: "Completed",
@@ -350,6 +351,7 @@ const enCron = {
       waitingWarning: "Warning: admission deferred {count} times",
     },
     runEntry: {
+      details: "Run details",
       tokens: "{count} Tokens",
       inputOutputTokens: "{input} in / {output} out",
       noSummary: "No summary.",
@@ -363,7 +365,7 @@ const enCron = {
       transcriptMissingMetadata:
         "Couldn’t open this conversation. Its session information is missing.",
       transcriptUnavailable:
-        "Couldn’t identify this conversation. Refresh the activity history and try again.",
+        "Couldn’t identify this conversation. Refresh the run history and try again.",
       next: "Next {rel}",
     },
     events: {
@@ -489,6 +491,11 @@ const enCron = {
       refresh: "Refresh",
       refreshing: "Refreshing...",
       paused: "Paused",
+      lastRunFailed: "Last run failed",
+      lastRun: "Last run {at}",
+      historySubtitle: "Every run of your automations.",
+      subtitle: "Schedule recurring tasks for your agents.",
+      runHistory: "Run history",
       autoDisabledRunFailures: "Auto-disabled · {count} run failures",
       autoDisabledScheduleErrors: "Auto-disabled · {count} schedule errors",
       tasksTab: "Automations",

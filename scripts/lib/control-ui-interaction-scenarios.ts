@@ -1590,8 +1590,12 @@ async function prepareCron(page: Page) {
   await page.locator(".cron-table__row").first().waitFor();
   const more = page.getByRole("button", { name: "Load more", exact: true });
   for (let count = 100; count <= 500; count += 50) {
-    // Measured rows can move the footer between pointer down and pointer up.
-    await more.press("Enter");
+    // Saved comparison bundles may still expose explicit pagination.
+    if (await more.count()) {
+      await more.press("Enter");
+    } else {
+      await page.locator(".cron-table__row").last().scrollIntoViewIfNeeded();
+    }
     await page.waitForFunction((expected) => {
       const row = document.querySelector(".cron-table__row");
       const size = row?.getAttribute("aria-setsize");
@@ -1599,6 +1603,16 @@ async function prepareCron(page: Page) {
         (size ? Number(size) : document.querySelectorAll(".cron-table__row").length) === expected
       );
     }, count);
+  }
+}
+
+async function prepareCronSearch(page: Page) {
+  await prepareCron(page);
+  const search = page.getByRole("searchbox", { name: "Search automations" });
+  if (!(await search.count())) {
+    await page.getByRole("button", { name: "Search automations", exact: true }).click();
+    // Keep the inherited engine input probes' empty, unfocused starting state.
+    await search.press("Tab");
   }
 }
 
@@ -2987,7 +3001,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     route: pathForRoute("cron"),
     expected: "Typing updates the filter while one held request retains all 500 jobs.",
     prepare: async (page, gateway) => {
-      await prepareCron(page);
+      await prepareCronSearch(page);
       await page.getByRole("searchbox", { name: "Search automations" }).click();
       await gateway.deferNext("cron.list");
     },
@@ -3037,7 +3051,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     id: input === "paste" ? "cron-search" : "cron-search-typing",
     route: pathForRoute("cron"),
     expected: `${input === "paste" ? "Pasting" : "Typing"} a filter replaces 500 loaded jobs with Warm automation 0499.`,
-    prepare: prepareCron,
+    prepare: prepareCronSearch,
     run: async (page, gateway) => {
       const requestsBefore = (await gateway.getRequests("cron.list")).length;
       const after = (await gateway.getRequests("cron.list", { query: cronQuery })).length;

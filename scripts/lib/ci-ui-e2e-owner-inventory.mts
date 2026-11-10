@@ -1005,6 +1005,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/select-picker.ts", "ui/src/lib/cron/types.ts"],
     ["ui/src/styles/select-picker.css"],
   ),
+  pageWatch("ui/src/e2e/cron-layout.e2e.test.ts", ["cron"]),
   pageWatch("ui/src/e2e/cron-remove.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch("ui/src/e2e/cron-run-completion.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch("ui/src/e2e/cron-run-feedback.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),

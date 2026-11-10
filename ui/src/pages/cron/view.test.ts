@@ -56,17 +56,37 @@ describe("cron view list pane", () => {
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
   });
 
-  it("keeps the phone scope and create action available", async () => {
-    const scope = document.createElement("span");
-    scope.dataset.testId = "phone-scope";
+  it("keeps the phone controls and card metadata in their original layout", async () => {
     const onOpenCreate = vi.fn();
     const phone = await renderView({
       phoneLayout: true,
-      toolbarScope: scope,
+      showAgent: false,
       canCreate: true,
       onOpenCreate,
+      jobs: [
+        createJob("phone", { state: { lastRunStatus: "ok", lastRunAtMs: Date.now() - 60_000 } }),
+      ],
     });
-    expect(phone.querySelector(testId("phone-scope"))).not.toBeNull();
+    expect(phone.querySelector('input[type="search"]')).not.toBeNull();
+    expect(phone.querySelector(".cron-search-toggle")).toBeNull();
+    expect([...phone.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)).toEqual([
+      "All",
+      "Active",
+      "Paused",
+      "Activity history",
+    ]);
+    const phoneRow = getElement(phone, ".cron-table__row", HTMLElement);
+    expect(phoneRow.firstElementChild?.classList.contains("cron-table__name")).toBe(true);
+    expect(phoneRow.querySelector(".cron-table__state")).not.toBeNull();
+    expect(phoneRow.querySelector("openclaw-agent-row-chip")).not.toBeNull();
+    expect(
+      phoneRow.querySelector(".cron-table__meta .cron-table__last .cron-last-glyph--ok"),
+    ).not.toBeNull();
+    expect(phoneRow.querySelector(".cron-table__actions .settings-toggle")).not.toBeNull();
+    expect(phoneRow.querySelector(".cron-row-run")?.getAttribute("aria-label")).toBe(
+      "Start now: Daily ping",
+    );
+    expect(phoneRow.querySelector(".cron-table__last-success")).toBeNull();
     expect(phone.querySelectorAll(testId("cron-new-task"))).toHaveLength(1);
     getElement(phone, testId("cron-new-task"), HTMLElement).click();
     expect(onOpenCreate).toHaveBeenCalledOnce();
@@ -92,8 +112,13 @@ describe("cron view list pane", () => {
   it("renders table rows with independent native buttons for opening tasks", async () => {
     const onSelectJob = vi.fn();
     const job = createJob("job-1", {
+      schedule: { kind: "every", everyMs: 86_700_000 },
       trigger: { script: "json({ fire: true })" },
-      state: { nextRunAtMs: Date.now() + 60_000 },
+      state: {
+        nextRunAtMs: Date.now() + 60_000,
+        lastRunStatus: "ok",
+        lastRunAtMs: Date.now() - 60_000,
+      },
     });
     const paused = createJob("job-2", { name: "Paused task", enabled: false });
     const failed = createJob("job-3", {
@@ -105,16 +130,30 @@ describe("cron view list pane", () => {
     expect(rows).toHaveLength(3);
     expect(rows[0]?.getAttribute("role")).toBe("listitem");
     expect(attribute(rows[0]!, ".cron-table__state--error", "aria-label")).toBe("Error");
-    expect(rows[0]?.querySelector(".cron-last-glyph--error")).not.toBeNull();
-    expect(attribute(rows[0]!, ".cron-table__last-run", "aria-label")).toBe("Error");
-    expect(rows[1]?.textContent).toContain("Cron 0 9 * * *");
+    expect(rows[1]?.querySelector(".cron-table__state")).toBeNull();
+    expect(rows[0]?.querySelector(".cron-table__name")?.textContent).toContain("Last run failed");
+    expect(rows[0]?.querySelector(".cron-table__last")).toBeNull();
+    expect(rows[1]?.textContent).toContain("Every 1 day 5 minutes");
     expect(rows[1]?.querySelector(".cron-last-glyph--ok")).toBeNull();
-    expect(rows[1]?.textContent).toContain("n/a");
+    const lastSuccess = getElement(rows[1]!, ".cron-table__last-success", HTMLElement);
+    expect(lastSuccess.textContent).toMatch(/^Last run .*ago$/);
+    expect(lastSuccess.previousElementSibling?.textContent?.trim()).toBe("·");
+    expect(lastSuccess.previousElementSibling?.previousElementSibling?.tagName.toLowerCase()).toBe(
+      "openclaw-agent-row-chip",
+    );
+    expect(rows[0]?.querySelector(".cron-table__last-success")).toBeNull();
+    expect(rows[2]?.querySelector(".cron-table__last-success")).toBeNull();
+    expect(rows[1]?.querySelector(".cron-table__next")?.textContent).toContain("Next ");
     expect(attribute(rows[1]!, ".cron-trigger-icon", "aria-label")).toBe("Trigger configured");
     expect(rows[2]?.classList.contains("cron-table__row--paused")).toBe(true);
     expect(rows[2]?.textContent).toContain("Paused");
     getElement(rows[2] as Element, ".cron-table__name", HTMLButtonElement).click();
     expect(onSelectJob).toHaveBeenCalledWith(paused);
+    const scoped = await renderView({ jobs: [job], showAgent: false });
+    expect(scoped.querySelector("openclaw-agent-row-chip")).toBeNull();
+    expect(text(scoped, ".cron-table__name-meta")).toMatch(
+      /Every 1 day 5 minutes\s+·\s+Last run .*ago$/,
+    );
   });
 
   it("names runs when loading more activity instead of automations", async () => {
@@ -125,8 +164,10 @@ describe("cron view list pane", () => {
       runsHasMore: true,
       runsLoadingMore: true,
     });
-    const loading = getButtonByText(container, "Loading runs…");
-    expect(loading.disabled).toBe(true);
+    const loading = getElement(container, testId("cron-runs-loading-more"), HTMLElement);
+    expect(loading.getAttribute("role")).toBe("status");
+    expect(loading.getAttribute("aria-label")).toBe("Loading runs…");
+    expect(container.querySelector(".cron-load-more")).toBeNull();
     expect(container.textContent).not.toContain("Loading automations…");
   });
 
@@ -143,7 +184,7 @@ describe("cron view list pane", () => {
       [{ loading: true }, "No automations yet"],
       [{ jobsQuery: "zzz" }, "No automations match the current filters."],
       [{ loading: true, jobs: [createJob("refresh-me")], jobsTotal: 1 }, "Daily ping"],
-      [{ error: "Activity history unavailable." }, "No automations yet"],
+      [{ error: "Run history unavailable." }, "No automations yet"],
     ];
     for (const [props, message] of states) {
       const container = await renderView(props);

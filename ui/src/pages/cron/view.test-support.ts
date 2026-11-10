@@ -107,10 +107,10 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     onToggle: () => undefined,
     onRun: () => undefined,
     onRemove: async () => undefined,
-    onLoadMoreJobs: () => undefined,
+    onLoadMoreJobs: async () => undefined,
     onJobsFiltersChange: () => undefined,
     onJobsFiltersReset: () => undefined,
-    onLoadMoreRuns: () => undefined,
+    onLoadMoreRuns: async () => "skipped",
     onRunsFiltersChange: () => undefined,
     ...overrides,
   };

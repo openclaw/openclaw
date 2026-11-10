@@ -18,14 +18,16 @@ export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
     gateway: CronViewProps["gateway"] | null;
     canCreate?: boolean;
     canManageJob?: (job: CronJob) => boolean;
-    /** Phone list layout: the toolbar opens with the agent scope and create action. */
+    /** Phone retains the original toolbar and job cards. */
     phoneLayout?: boolean;
     toolbarScope?: JSX.Element;
+    showAgent?: boolean;
+    onSelectListTab?: (tab: "all" | "enabled" | "disabled" | "activity") => void;
     toggleSavingJobId?: string | null;
     focus?: {
       readonly target: string | undefined;
       remember: (id: string, order: string[]) => void;
-      ref: (id: string) => (element: HTMLElement) => void;
+      ref: (id: string, eligible?: () => boolean) => (element: HTMLElement) => void;
     };
   };
 
