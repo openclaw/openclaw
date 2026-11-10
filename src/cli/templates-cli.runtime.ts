@@ -9,6 +9,7 @@ import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isGatewayProtocolResponseError } from "../gateway/client.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import {
