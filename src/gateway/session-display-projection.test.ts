@@ -164,5 +164,11 @@ describe("projectSessionDisplayMessage", () => {
       "report deploy.",
     );
     expect(projectSessionDisplayMessage(message, { maxChars: 800 })?.text).toBe(content);
+    const codeContent = "**Call [`__init__`](https://example.com) using `**/*.ts`**";
+    const codeMessage = assistant(codeContent);
+    expect(projectSessionDisplayMessage(codeMessage, { flattenMarkdown: true })?.text).toBe(
+      "Call __init__ using **/*.ts",
+    );
+    expect(projectSessionDisplayMessage(codeMessage)?.text).toBe(codeContent);
   });
 });

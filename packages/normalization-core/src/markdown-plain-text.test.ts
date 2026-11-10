@@ -10,6 +10,22 @@ describe("flattenMarkdownToPlainText", () => {
       String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,
       String.raw`Read the deployment guide, \!important, \\diagram`,
     ],
+    [
+      "literal inline code within formatted prose",
+      "**Use [`__init__`](https://example.com), `[x](url)`, `**/*.ts`, and `~~draft~~`** now",
+      "Use __init__, [x](url), **/*.ts, and ~~draft~~ now",
+    ],
+    [
+      "backticks in link destinations and titles",
+      '[docs](https://example.com/`x`) [guide](url "a `title`") [bad](url/`a(b`) [bad](url/`a b`) [one](url`1) [two](url`2)',
+      "docs guide [bad](url/a(b) [bad](url/a b) one two",
+    ],
+    [
+      "literal NUL beside inline code",
+      "\u0000\u0000 `__init__\u00000\u0000` \u00000\u0000",
+      "\u0000\u0000 __init__\u00000\u0000 \u00000\u0000",
+    ],
+    ["literal glob inside inline code", "Pattern `**/*.ts`", "Pattern **/*.ts"],
     ["images", "Status ![green check](https://example.com/check.png)", "Status green check"],
     [
       "nested link label brackets",
