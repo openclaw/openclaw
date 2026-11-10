@@ -57,16 +57,30 @@ See the [merge recovery contract](/reference/scripts/merge-recovery).
 Materialized anchors use `openclaw-pr-anchor-v3.<creator-pid>.<suffix>` directories.
 The creator owns retirement across its exec chain through the directory identity
 held on FD 9; an inherited path or a descendant does not grant deletion authority.
-Before an operation child starts, authenticated creator cleanup may retire the
-anchor. After dispatch, the supervisor retires it only after the process group
-has exited and the notification pipe has closed. A creator crash, uncertain drain,
-or changed creation evidence never automatically releases dependency holds. A
-closed output reader, as in `scripts/pr --help | head`, is an ordinary exit: the
-creator still retires its anchor and releases its holds, then exits 141. A selected
-revision older than the lifetime owner cannot release the hold its parent took.
-There is no startup stale-anchor sweep: PID death, age, and path disappearance on
-their own never authorize release or prove that inherited consumers finished. The
-only operator exception is [Release finished dependency holds](#release-finished-dependency-holds).
+New materializations also inherit FD 7, holding a shared `flock` on a private
+lifetime file outside the anchor. Shell children inherit it; the bootstrap Node
+preload preserves it through Node and Bun subprocess APIs, which otherwise close
+extra descriptors. This descriptor grants liveness protection, not creator
+retirement authority. Python 3's standard-library `fcntl` supplies the kernel lock.
+Collection requires a non-blocking exclusive lock and keeps it through anchor
+removal. Killing the creator cannot release a surviving child's shared lock.
+Normal completion also leaves retirement to the next invocation, after the
+creator's final descriptor closes. A closed output reader still exits 141.
+Programs must preserve the lifetime descriptor while using the anchored tools;
+the preload refuses a missing or conflicting descriptor instead of launching an
+unprotected Node consumer.
+
+Pre-lease anchors use the disposable-scratch policy: the anchor must be older
+than 24 hours, its creator incarnation must be gone, and no process may reference
+the anchor or its entries through cwd, open descriptors, or mappings. Linux uses
+`/proc`; macOS uses `ps` and `lsof`. Failed observation retains the resources.
+PID reuse is checked against anchor creation time; ambiguous timestamps retain
+the anchor. This deliberately accepts an old, dormant legacy child that keeps
+only a pathname in memory: scratch older than 24 hours can disappear and must be
+reinstalled on miss. This age-based tradeoff never substitutes for a new hold's
+flock evidence. Missing or changed new lifetime files retain their holds.
+Explicit [release of finished dependency holds](#release-finished-dependency-holds)
+remains available and also respects new shared locks.
 A retained PR operation lock requires its separate `lock-recover` procedure after
 verifying that no child tools remain.
 
@@ -117,24 +131,32 @@ The current wrapper can prepare dependencies for older retained workflows withou
 changing their binding or executing newer workflow code in their place.
 
 Each acquisition records an anchor hold in SQLite and marks the installation
-unsettled. The hold remains committed throughout creator-authorized anchor
-retirement. After confirmed anchor removal, the owner revalidates ledger,
+unsettled. Additive tables in the same ledger record operation lifetimes and
+pending installation or eviction transitions; the ledger version is unchanged.
+The hold remains committed throughout anchor retirement. After confirmed anchor removal, the owner revalidates ledger,
 installation, and hold identities before releasing that anchor's holds in SQLite.
 The installation becomes settled only when no holds remain. Failed settlement
 retains the recorded holds even if the anchor is already absent.
 
-Each materialization keeps the current entry and the four most recently used
-other settled installations with no holds. Reuse order comes from the ledger's
+Each ordinary invocation collects before acquiring dependencies, including when
+an installed checkout can supply them. Discovery and explicit recovery commands
+retain their independent bootstrap behavior. Collection keeps the four most recently used
+settled installations with no holds. Reuse order comes from the ledger's
 sequence, not filesystem modification times. Held or unsettled installations
-remain protected. Collection rechecks recorded directory identities and detaches
-eligible entries before deleting their contents; it never infers eligibility
-from dead PIDs, missing anchors, or age.
+remain protected until their lifetime evidence permits settlement. Collection
+retires at most four anchor, stage, or entry directories per invocation; subsequent
+invocations drain a larger backlog. This bounds deletion count, not the time to
+inspect or remove one directory. It rechecks physical identities and never follows
+aliases. The metadata critical section also has an inherited kernel lock, so a
+killed owner cannot strand its mutex or abandon a still-running deletion helper.
 
-The installing wrapper removes its own staging directory on ordinary failure.
-Abrupt interruption, incomplete publication, or uncertain ownership can leave
-staging directories, unregistered entries, or detached entries retained; no
-24-hour sweep adopts or removes them. Preserve these resources until their
-consumers and recovery obligations are resolved.
+Stage intent commits before directory creation. Publication keeps that intent
+until the installation and hold commit; eviction records detach intent in the
+same transaction that removes reuse eligibility. The next collector can finish
+either side of an interrupted rename. Existing unregistered hash entries, stages,
+and detached entries are disposable orphans: collection requires their newest
+recursive mtime to be older than 24 hours and no cwd, descriptor, or mapping
+reference. Recent orphans and live pending installations stay intact.
 
 The canonical and explicit tooling roots are never fetched, fast-forwarded, or
 reinstalled by this path. Explicit-root identity checks remain unchanged, and

@@ -1,0 +1,180 @@
+import { spawnSync } from "node:child_process";
+import { closeSync, openSync, realpathSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const describePosix = process.platform === "win32" ? describe.skip : describe;
+const preload = resolve("scripts/pr-lib/dependency-lifetime-inherit.cjs");
+const bun = process.env.OPENCLAW_BUN_PATH || (process.versions.bun ? process.execPath : undefined);
+const runtimes = [
+  { runtime: "node", executable: requireNodeTool("node") },
+  ...(bun ? [{ runtime: "bun", executable: bun }] : []),
+];
+
+function fixture(node: string) {
+  const root = realpathSync(tempDirs.make("pr-lifetime-inheritance-"));
+  const lifetime = join(root, "lifetime");
+  writeFileSync(lifetime, "", { mode: 0o600 });
+  return { root, lifetime, node };
+}
+
+describePosix("PR dependency lifetime inheritance", () => {
+  it.each(runtimes)(
+    "preserves the lifetime through $runtime launches, custom environments and fork IPC",
+    ({ executable }) => {
+      const f = fixture(executable);
+      const reader = join(f.root, "reader.cjs");
+      writeFileSync(
+        reader,
+        `const fs = require("node:fs");
+const held = fs.fstatSync(7), named = fs.statSync(process.env.OPENCLAW_PR_LIFETIME_FILE);
+const result = { held: held.dev === named.dev && held.ino === named.ino, value: process.env.VALUE };
+if (process.send) process.send(result); else console.log(JSON.stringify(result));
+`,
+      );
+      const fd = openSync(f.lifetime, "r+");
+      try {
+        const result = spawnSync(
+          f.node,
+          [
+            "--input-type=module",
+            "-e",
+            `import assert from "node:assert/strict";
+import * as cp from "node:child_process";
+import { once } from "node:events";
+import { promisify } from "node:util";
+const reader = process.argv[1], node = process.execPath;
+const options = { env: { VALUE: "kept" }, encoding: "utf8" };
+const command = JSON.stringify(node) + " " + JSON.stringify(reader);
+assert.throws(() => cp.spawn(node, [reader], { stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "ignore", "ignore", "pipe"] }), /FD7 conflicts/);
+const results = [];
+results.push(JSON.parse(cp.spawnSync(node, [reader], options).stdout));
+results.push(JSON.parse(cp.execFileSync(node, [reader], options)));
+results.push(JSON.parse(cp.execSync(command, options)));
+for (const name of ["exec", "execFile"]) {
+  const args = name === "exec" ? [command, options] : [node, [reader], options];
+  results.push(JSON.parse((await promisify(cp[name])(...args)).stdout));
+}
+const spawned = cp.spawn(node, [reader], options);
+let output = "";
+spawned.stdout.on("data", chunk => output += chunk);
+await once(spawned, "close");
+results.push(JSON.parse(output));
+const forked = cp.fork(reader, undefined, { ...options, execArgv: [], silent: true });
+const message = once(forked, "message"), closed = once(forked, "close");
+results.push((await message)[0]);
+await closed;
+console.log(JSON.stringify(results));`,
+            reader,
+          ],
+          {
+            env: {
+              ...process.env,
+              OPENCLAW_PR_LIFETIME_FILE: f.lifetime,
+              NODE_OPTIONS: `--require ${JSON.stringify(preload)}`,
+            },
+            stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "ignore", "ignore", fd],
+            encoding: "utf8",
+            timeout: 15_000,
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual(
+          Array.from({ length: 7 }, () => ({ held: true, value: "kept" })),
+        );
+      } finally {
+        closeSync(fd);
+      }
+    },
+  );
+
+  it.each(runtimes)(
+    "keeps the shared flock while a lazy-reading $runtime child survives its SIGKILLed parent",
+    ({ executable }) => {
+      const f = fixture(executable);
+      const packagePath = join(f.root, "package.txt");
+      writeFileSync(packagePath, "still readable");
+      const parent = join(f.root, "parent.cjs");
+      writeFileSync(
+        parent,
+        `const { spawn } = require("node:child_process");
+spawn(process.execPath, ["-e", ${JSON.stringify(`
+const { readSync, readFileSync } = require("node:fs");
+console.log("ready " + process.pid);
+const command = Buffer.alloc(1);
+while (readSync(3, command, 0, 1, null)) {
+  if (command[0] === 113) break;
+  console.log(readFileSync(process.env.PACKAGE, "utf8"));
+}
+`)}], {
+  detached: true,
+  env: { PACKAGE: process.env.PACKAGE },
+  stdio: ["ignore", 1, 2, Number(process.env.CONTROL_FD)]
+});
+setInterval(() => {}, 1000);
+`,
+      );
+      const run = (inherit: boolean) =>
+        spawnSync(
+          "python3",
+          [
+            "-c",
+            `import fcntl, json, os, signal, subprocess, sys
+node, preload, lifetime, parent, package = sys.argv[1:]
+fd = os.open(lifetime, os.O_RDWR)
+os.dup2(fd, 7)
+if fd != 7: os.close(fd)
+fcntl.flock(7, fcntl.LOCK_SH)
+read_fd, write_fd = os.pipe()
+env = dict(os.environ, OPENCLAW_PR_LIFETIME_FILE=lifetime,
+    NODE_OPTIONS=("--require " + json.dumps(preload)) if preload else "", PACKAGE=package, CONTROL_FD=str(read_fd))
+child = subprocess.Popen([node, parent], env=env, pass_fds=(7, read_fd), stdout=subprocess.PIPE, text=True)
+os.close(7)
+os.close(read_fd)
+reader = None
+try:
+    ready = child.stdout.readline().strip()
+    assert ready.startswith("ready "), ready
+    reader = int(ready.split()[1])
+    child.kill()
+    child.wait()
+    with open(lifetime, "r+") as exclusive:
+        try:
+            fcntl.flock(exclusive, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            raise AssertionError("Live child lost the lifetime flock")
+        except BlockingIOError:
+            pass
+        os.write(write_fd, b"r")
+        assert child.stdout.readline().strip() == "still readable"
+        os.write(write_fd, b"q")
+        fcntl.flock(exclusive, fcntl.LOCK_EX)
+    print("protected-until-last-holder-exited")
+finally:
+    os.close(write_fd)
+    if child.poll() is None:
+        child.kill()
+    child.wait()
+    if reader:
+        try: os.kill(reader, signal.SIGKILL)
+        except ProcessLookupError: pass
+`,
+            f.node,
+            inherit ? preload : "",
+            f.lifetime,
+            parent,
+            packagePath,
+          ],
+          { encoding: "utf8", timeout: 15_000 },
+        );
+      const before = run(false);
+      expect(before.status).toBe(1);
+      expect(before.stderr).toContain("Live child lost the lifetime flock");
+      const result = run(true);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("protected-until-last-holder-exited");
+    },
+  );
+});

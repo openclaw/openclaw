@@ -2098,6 +2098,17 @@ if (process.env.PR_TEST_INSTALL_GATE) {
     return donorEntry;
   }
 
+  function collectFinishedDependencies(fixture: ReturnType<typeof makeFrozenDependencyFixture>) {
+    const collected = runCommand(
+      requireNodeTool("node"),
+      [join(process.cwd(), "scripts/pr-lib/cache-lifetime.mjs"), "collect"],
+      fixture.env,
+      fixture.canonical,
+    );
+    expect(collected.status, collected.stderr).toBe(0);
+    expect(collected.stderr).not.toContain("Warning:");
+  }
+
   itPosix(
     "keeps a live package reader after its creator exits, then releases its finished hold",
     async ({ signal }) => {
@@ -2293,16 +2304,20 @@ closeSync(fd);
     },
   );
 
-  itPosix("settles dependency holds when a closed reader signals the creator", () => {
-    const fixture = makeFrozenDependencyFixture();
-    const wrapper = join(fixture.linked, "scripts/pr");
-    const shell = `"$0" unknown-command 2>&1 | true; echo "\${PIPESTATUS[0]}"`;
-    const result = runCommand("/bin/bash", ["-c", shell, wrapper], fixture.env, fixture.linked);
-    expect(result.stdout.trim()).toBe("141");
-    const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
-    const state = readPrCacheState(join(cache, prCacheEntries(cache)[0]!));
-    expect(state).toMatchObject({ anchors: [], settled: true });
-  });
+  itPosix(
+    "settles dependency holds on the next invocation after a closed reader signals the creator",
+    () => {
+      const fixture = makeFrozenDependencyFixture();
+      const wrapper = join(fixture.linked, "scripts/pr");
+      const shell = `"$0" unknown-command 2>&1 | true; echo "\${PIPESTATUS[0]}"`;
+      const result = runCommand("/bin/bash", ["-c", shell, wrapper], fixture.env, fixture.linked);
+      expect(result.stdout.trim()).toBe("141");
+      collectFinishedDependencies(fixture);
+      const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+      const state = readPrCacheState(join(cache, prCacheEntries(cache)[0]!));
+      expect(state).toMatchObject({ anchors: [], settled: true });
+    },
+  );
 
   itPosix(
     "materializes and reuses an older anchor without changing the installed tooling root",
@@ -2700,6 +2715,9 @@ EOF_HELD_PROJECTION
         expect(creator.errors()).toContain("running wrapper code materialized from");
       }
       const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+      // Flock retirement waits for the final process descriptor, including the
+      // creator, to close. The following invocation owns that collection.
+      collectFinishedDependencies(fixture);
       expect(prCacheEntries(cache)).toHaveLength(1);
       expect(readdirSync(cache).toSorted()).toEqual(
         ["lifetime.sqlite", ...prCacheEntries(cache)].toSorted(),
@@ -2718,6 +2736,7 @@ EOF_HELD_PROJECTION
         : 0;
       const consumer = fixture.run({ OPENCLAW_PR_TOOLING_ROOT: fixture.tooling });
       expect(consumer.status, consumer.stdout + consumer.stderr).toBe(2);
+      collectFinishedDependencies(fixture);
       expect(consumer.stderr).toContain("running wrapper code materialized from");
       expect(jsonLines(fixture.calls)).toHaveLength(2);
       expect(prCacheEntries(cache)).toHaveLength(1);

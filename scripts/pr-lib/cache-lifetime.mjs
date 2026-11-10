@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -18,6 +19,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 // Older frozen collectors recognize neither namespace. Their PID-only policy
@@ -103,6 +105,86 @@ const ledgerSchema = `
             PRIMARY KEY (entry_key, anchor_path, anchor_dev, anchor_ino)
           ) STRICT;
         `;
+
+// Additive, same-version bookkeeping: frozen v3 readers still own their holds.
+const lifetimeSchema = `
+  CREATE TABLE IF NOT EXISTS operation_lifetimes (
+    anchor_path TEXT NOT NULL, anchor_dev TEXT NOT NULL, anchor_ino TEXT NOT NULL,
+    anchor_uid TEXT NOT NULL, anchor_mode TEXT NOT NULL,
+    lease_path TEXT NOT NULL, dev TEXT NOT NULL, ino TEXT NOT NULL,
+    uid TEXT NOT NULL, mode TEXT NOT NULL, retired INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (anchor_path, anchor_dev, anchor_ino)
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS dependency_transitions (
+    path TEXT PRIMARY KEY, entry_key TEXT NOT NULL, kind TEXT NOT NULL,
+    anchor_path TEXT, anchor_dev TEXT, anchor_ino TEXT,
+    dev TEXT, ino TEXT, uid TEXT, mode TEXT
+  ) STRICT;
+`;
+
+// Creator retirement can remove this module's source tree before settlement.
+const lifetimeProcessSource = readFileSync(
+  new URL("./cache-lifetime-process.py", import.meta.url),
+  "utf8",
+);
+
+function processLifetime(command, payload, mutexFd) {
+  const stdio = ["pipe", "pipe", "pipe"];
+  if (mutexFd !== undefined) {
+    while (stdio.length < 6) stdio.push("ignore");
+    stdio.push(mutexFd);
+  }
+  const result = spawnSync(
+    "python3",
+    ["-I", "-B", "-c", lifetimeProcessSource, ...(Array.isArray(command) ? command : [command])],
+    {
+      input: JSON.stringify(payload),
+      encoding: "utf8",
+      stdio,
+      timeout: 60_000,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      `PR dependency lifetime inspection failed: ${result.stderr || result.error || result.status}`,
+    );
+  }
+  return JSON.parse(result.stdout || "null");
+}
+
+function recordLifetime(context, anchor) {
+  const path = process.env.OPENCLAW_PR_LIFETIME_FILE;
+  if (!path) return;
+  if (dirname(path) !== context.cache || !/^lifetime-[0-9]+-[a-f0-9-]+$/.test(basename(path))) {
+    throw new Error("PR lifetime file is outside the cache");
+  }
+  const file = physicalFile(path);
+  if (!same(file, fstatSync(7, { bigint: true })))
+    throw new Error("PR lifetime descriptor changed");
+  const existing = context.db
+    .prepare(
+      "SELECT * FROM operation_lifetimes WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
+    )
+    .get(anchor.path, String(anchor.dev), String(anchor.ino));
+  if (existing) {
+    if (existing.lease_path !== path || !rowMatches(existing, "", file) || existing.retired) {
+      throw new Error("PR operation lifetime changed");
+    }
+    return;
+  }
+  context.db
+    .prepare("INSERT INTO operation_lifetimes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)")
+    .run(anchor.path, ...identityValues(anchor), path, ...identityValues(file));
+}
+
+function createDependencyLifetime() {
+  const cache = dependencyCacheRoot();
+  return withDependencyCacheLock(cache, () => {
+    const path = join(cache, `lifetime-${process.ppid}-${randomUUID()}`);
+    closeSync(openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600));
+    return path;
+  });
+}
 
 function physicalFile(path) {
   const stat = lstatSync(path, { bigint: true });
@@ -204,6 +286,7 @@ function openLedger(cache, cacheIdentity, create, readOnly, recovery = false) {
     // It validates the complete preimage inside its synchronous transaction.
     if (!recovery) {
       assertLedgerOwner(context);
+      if (!readOnly) db.exec(lifetimeSchema);
     }
     assertLedgerFiles(cache, cacheIdentity, path, file, fd);
     return context;
@@ -271,13 +354,14 @@ function assertHold(row, anchor) {
   }
 }
 
-function acquire(context, entry, anchor, fresh = false) {
+function acquire(context, entry, anchor, fresh = false, stage) {
   const identity = entryIdentity(context.cache, entry);
   assertAnchor(anchor);
   if (!fresh) {
     installation(context, entry);
   }
   transaction(context, () => {
+    recordLifetime(context, anchor);
     if (fresh) {
       context.db
         .prepare("INSERT INTO installations VALUES (?, ?, ?, ?, ?, 0, 0)")
@@ -308,6 +392,7 @@ function acquire(context, entry, anchor, fresh = false) {
         "UPDATE installations SET settled = 0, last_used = (SELECT sequence FROM owner WHERE id = 1) WHERE key = ?",
       )
       .run(basename(entry));
+    if (stage) context.db.prepare("DELETE FROM dependency_transitions WHERE path = ?").run(stage);
   });
 }
 
@@ -366,6 +451,9 @@ function assertRecoverySchema(db) {
   const expected = new DatabaseSync(":memory:");
   try {
     expected.exec(ledgerSchema);
+    if (db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'operation_lifetimes'").get()) {
+      expected.exec(lifetimeSchema);
+    }
     const integrity = db.prepare("PRAGMA quick_check").all();
     if (
       !isDeepStrictEqual(schema(db), schema(expected)) ||
@@ -558,6 +646,41 @@ function withCacheOwner(cache, operation, initialize, readOnly = false, recovery
         if (error.code !== "EEXIST") {
           throw error;
         }
+        let owners;
+        try {
+          owners = readdirSync(path);
+        } catch (missing) {
+          if (missing.code === "ENOENT") continue;
+          throw missing;
+        }
+        const ownerName = owners.find((name) => /^owner-[0-9]+-[a-f0-9-]+$/.test(name));
+        if (ownerName && owners.length === 2 && owners.includes("lifetime")) {
+          const pid = Number(ownerName.split("-")[1]);
+          let gone = false;
+          try {
+            process.kill(pid, 0);
+          } catch (failure) {
+            gone = failure.code === "ESRCH";
+          }
+          if (gone) {
+            // The metadata helper inherits this separate lock too: a killed JS
+            // owner cannot release the mutex while its deletion child still runs.
+            const leasePath = join(path, "lifetime");
+            const checked = processLifetime("retire", {
+              candidates: [
+                {
+                  id: path,
+                  path,
+                  identity: identityRecord(directory(path)),
+                  lease: { path: leasePath, ...identityRecord(physicalFile(leasePath)) },
+                  targets: [],
+                },
+              ],
+              limit: 1,
+            });
+            if (checked.results[0].state === "retired") continue;
+          }
+        }
       }
     }
     Atomics.wait(pause, 0, 0, Math.max(0, Math.min(10, deadline - performance.now())));
@@ -567,14 +690,27 @@ function withCacheOwner(cache, operation, initialize, readOnly = false, recovery
   const owner = join(path, `owner-${process.pid}-${randomUUID()}`);
   mkdirSync(owner, { mode: 0o700 });
   const ownerIdentity = directory(owner);
+  const mutexPath = join(path, "lifetime");
+  const mutexFd = openSync(
+    mutexPath,
+    constants.O_CREAT | constants.O_EXCL | constants.O_RDWR,
+    0o600,
+  );
   const lock = { cache, path, identity, owner };
   let context;
   try {
+    processLifetime(["shared", "6"], null, mutexFd);
     if (created && readdirSync(cache).some((name) => name !== ".metadata-lock")) {
       throw new Error("New PR dependency namespace changed before initialization");
     }
     context = openLedger(cache, cacheIdentity, created, readOnly, recovery);
-    Object.assign(context, { lockPath: path, lockIdentity: identity, owner, ownerIdentity });
+    Object.assign(context, {
+      lockPath: path,
+      lockIdentity: identity,
+      owner,
+      ownerIdentity,
+      mutexFd,
+    });
     ledgers.set(lock, context);
     return operation(lock);
   } finally {
@@ -586,7 +722,16 @@ function withCacheOwner(cache, operation, initialize, readOnly = false, recovery
     } finally {
       // A changed-owner release failure wins even when the operation failed:
       // uncertain ownership must stay visible and retain the lock.
-      releaseDependencyCacheLock(path, identity, owner, ownerIdentity);
+      try {
+        if (!same(directory(path), identity) || !same(directory(owner), ownerIdentity))
+          throw new Error("PR cache metadata lock changed; retain it");
+        if (!same(physicalFile(mutexPath), fstatSync(mutexFd, { bigint: true })))
+          throw new Error("PR metadata lifetime changed");
+        rmSync(mutexPath);
+        releaseDependencyCacheLock(path, identity, owner, ownerIdentity);
+      } finally {
+        closeSync(mutexFd);
+      }
     }
   }
 }
@@ -623,6 +768,30 @@ export function holdDependencyCache(lock, entry, anchor) {
   return true;
 }
 
+export function stageDependencyCache(lock, entry, anchor) {
+  const context = ledger(lock);
+  assertAnchor(anchor);
+  if (dirname(entry) !== context.cache || !/^[a-f0-9]{64}$/.test(basename(entry))) {
+    throw new Error("PR dependency installation is outside the lifetime namespace");
+  }
+  const stage = join(context.cache, `install-${process.pid}-${randomUUID().replaceAll("-", "")}`);
+  // Commit intent before mkdir: neither a killed installer nor a failed publish
+  // can create an unexplained directory. The operation lease protects both names.
+  transaction(context, () => {
+    recordLifetime(context, anchor);
+    context.db
+      .prepare(
+        "INSERT INTO dependency_transitions VALUES (?, ?, 'install', ?, ?, ?, NULL, NULL, NULL, NULL)",
+      )
+      .run(stage, basename(entry), anchor.path, String(anchor.dev), String(anchor.ino));
+  });
+  mkdirSync(stage, { mode: 0o700 });
+  context.db
+    .prepare("UPDATE dependency_transitions SET dev = ?, ino = ?, uid = ?, mode = ? WHERE path = ?")
+    .run(...identityValues(directory(stage)), stage);
+  return stage;
+}
+
 export function publishDependencyCache(lock, stage, entry, anchor) {
   const context = ledger(lock);
   if (holdDependencyCache(lock, entry, anchor)) {
@@ -632,10 +801,10 @@ export function publishDependencyCache(lock, stage, entry, anchor) {
     throw new Error("Frozen dependency stage is outside its owned namespace");
   }
   directory(stage);
-  // The filesystem transition is outside SQL. A crash/failed commit leaves an
-  // unregistered physical entry, which is retain-only rather than reusable.
+  // Current producers recorded the stage first; old frozen producers retain
+  // the explicit >24h orphan policy if they die between rename and commit.
   renameSync(stage, entry);
-  acquire(context, entry, anchor, true);
+  acquire(context, entry, anchor, true, stage);
 }
 
 function assertDependencyTargets(targets, destination) {
@@ -781,6 +950,162 @@ export function privateDependencyDonor(root, destination) {
 
 export function collectUnusedDependencyCaches(lock, current = "") {
   const context = ledger(lock);
+  let budget = 4;
+  const lifetimes = context.db.prepare("SELECT * FROM operation_lifetimes").all();
+  const anchors = new Map();
+  const anchorKey = (row) => JSON.stringify([row.anchor_path, row.anchor_dev, row.anchor_ino]);
+  for (const row of context.db
+    .prepare(
+      "SELECT DISTINCT anchor_path, anchor_dev, anchor_ino, anchor_uid, anchor_mode FROM holds",
+    )
+    .all()) {
+    anchors.set(anchorKey(row), row);
+  }
+  for (const row of lifetimes) {
+    if (!row.retired) anchors.set(anchorKey(row), row);
+  }
+  const candidates = [...anchors.values()]
+    .map((row) => {
+      const identity = Object.fromEntries(identityKeys.map((key) => [key, row[`anchor_${key}`]]));
+      const entries = anchorRows(context.db, { path: row.anchor_path, ...identity }).map((hold) =>
+        join(context.cache, hold.entry_key),
+      );
+      const stat = lstatSync(row.anchor_path, { throwIfNoEntry: false });
+      return {
+        id: anchorKey(row),
+        path: row.anchor_path,
+        identity,
+        ...(row.lease_path
+          ? { lease: { path: row.lease_path, ...identityRecord(row) } }
+          : {
+              legacy: {
+                pid: Number(
+                  basename(row.anchor_path).match(/^openclaw-pr-anchor-v3\.([0-9]+)\./)?.[1],
+                ),
+                // A missing legacy anchor has no recorded birthday. The ledger's last
+                // write is a conservative upper bound on the hold's creation time.
+                createdMs: stat?.birthtimeMs || Number(context.file.mtimeMs),
+                modifiedMs: stat?.mtimeMs || Number(context.file.mtimeMs),
+              },
+            }),
+        targets: [row.anchor_path, ...entries],
+      };
+    })
+    .filter(
+      (candidate) => candidate.lease || Date.now() - candidate.legacy.modifiedMs > 86_400_000,
+    );
+  if (candidates.length) {
+    const { results } = processLifetime("retire", { candidates, limit: budget }, context.mutexFd);
+    for (const result of results.filter((item) => item.state === "retired")) {
+      const row = anchors.get(result.id);
+      const anchor = {
+        path: row.anchor_path,
+        ...Object.fromEntries(identityKeys.map((key) => [key, BigInt(row[`anchor_${key}`])])),
+      };
+      settleRetirement(context, anchor, retirementSnapshot(context, anchor));
+      budget--;
+    }
+  }
+  const retired = [];
+  for (const row of context.db
+    .prepare(
+      "SELECT t.*, l.retired FROM dependency_transitions t LEFT JOIN operation_lifetimes l ON l.anchor_path = t.anchor_path AND l.anchor_dev = t.anchor_dev AND l.anchor_ino = t.anchor_ino ORDER BY t.path",
+    )
+    .all()) {
+    if (budget <= 0) break;
+    if (row.kind === "install" && !row.retired) continue;
+    const entry = join(context.cache, row.entry_key);
+    if (
+      dirname(row.path) !== context.cache ||
+      !/^[a-f0-9]{64}$/.test(row.entry_key) ||
+      !/^(?:install-[0-9]+-[A-Za-z0-9]+|retired-[a-f0-9-]+)$/.test(basename(row.path))
+    ) {
+      throw new Error("PR dependency transition is outside the lifetime namespace");
+    }
+    const source = lstatSync(row.path, { throwIfNoEntry: false }) ? row.path : entry;
+    const registered = context.db
+      .prepare("SELECT 1 FROM installations WHERE key = ?")
+      .get(row.entry_key);
+    if (source === entry && registered) {
+      context.db.prepare("DELETE FROM dependency_transitions WHERE path = ?").run(row.path);
+      continue;
+    }
+    if (!lstatSync(source, { throwIfNoEntry: false })) {
+      context.db.prepare("DELETE FROM dependency_transitions WHERE path = ?").run(row.path);
+      continue;
+    }
+    const identity = directory(source);
+    if (row.dev !== null && !rowMatches(row, "", identity))
+      throw new Error("PR dependency transition identity changed");
+    if (row.kind === "install") {
+      // Do not remove an entry another pending publisher owns.
+      if (
+        source === entry &&
+        context.db
+          .prepare(
+            "SELECT 1 FROM dependency_transitions WHERE entry_key = ? AND path != ? AND kind = 'install'",
+          )
+          .get(row.entry_key, row.path)
+      )
+        continue;
+      rmSync(source, { recursive: true });
+      context.db.prepare("DELETE FROM dependency_transitions WHERE path = ?").run(row.path);
+    } else {
+      if (source !== row.path) renameSync(source, row.path);
+      retired.push(row.path);
+    }
+    budget--;
+  }
+  for (const row of lifetimes) {
+    if (
+      context.db
+        .prepare(
+          "SELECT 1 FROM holds WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ? UNION ALL SELECT 1 FROM dependency_transitions WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
+        )
+        .get(
+          row.anchor_path,
+          row.anchor_dev,
+          row.anchor_ino,
+          row.anchor_path,
+          row.anchor_dev,
+          row.anchor_ino,
+        )
+    )
+      continue;
+    if (
+      !context.db
+        .prepare(
+          "SELECT 1 FROM operation_lifetimes WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ? AND retired = 1",
+        )
+        .get(row.anchor_path, row.anchor_dev, row.anchor_ino)
+    )
+      continue;
+    const checked = processLifetime(
+      "retire",
+      {
+        candidates: [
+          {
+            id: row.lease_path,
+            path: row.anchor_path,
+            identity: Object.fromEntries(identityKeys.map((key) => [key, row[`anchor_${key}`]])),
+            lease: { path: row.lease_path, ...identityRecord(row) },
+            targets: [],
+          },
+        ],
+        limit: 1,
+      },
+      context.mutexFd,
+    );
+    if (checked.results[0].state !== "retired") continue;
+    if (!rowMatches(row, "", physicalFile(row.lease_path)))
+      throw new Error("PR lifetime file changed before retirement");
+    context.db
+      .prepare(
+        "DELETE FROM operation_lifetimes WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
+      )
+      .run(row.anchor_path, row.anchor_dev, row.anchor_ino);
+    rmSync(row.lease_path);
+  }
   const rows = context.db
     .prepare(`
     SELECT * FROM installations i WHERE settled = 1
@@ -789,18 +1114,17 @@ export function collectUnusedDependencyCaches(lock, current = "") {
   `)
     .all()
     .filter((row) => join(context.cache, row.key) !== current);
-  const candidates = rows
+  const unused = rows
     .map((row) => {
       const entry = join(context.cache, row.key);
       const { identity } = installation(context, entry);
       return { row, entry, identity };
     })
-    .slice(4);
-  const retired = [];
-  for (const { row, entry, identity } of candidates) {
+    .slice(4, 4 + budget);
+  for (const { row, entry, identity } of unused) {
     const detached = join(context.cache, `retired-${randomUUID()}`);
-    // Remove eligibility atomically before filesystem detach. A failed rename
-    // leaves an unknown physical entry; it never becomes reusable by inference.
+    // Record detach intent in the same commit that removes reuse eligibility.
+    // A kill on either side of rename leaves a recoverable, owned transition.
     transaction(context, () => {
       const present = context.db.prepare("SELECT * FROM installations WHERE key = ?").get(row.key);
       const held = context.db
@@ -816,6 +1140,11 @@ export function collectUnusedDependencyCaches(lock, current = "") {
         throw new Error("PR dependency collection eligibility changed");
       }
       context.db.prepare("DELETE FROM installations WHERE key = ?").run(row.key);
+      context.db
+        .prepare(
+          "INSERT INTO dependency_transitions VALUES (?, ?, 'retire', NULL, NULL, NULL, ?, ?, ?, ?)",
+        )
+        .run(detached, row.key, ...identityValues(identity));
     });
     if (!same(entryIdentity(context.cache, entry), identity)) {
       throw new Error("PR dependency installation changed before eviction");
@@ -826,6 +1155,45 @@ export function collectUnusedDependencyCaches(lock, current = "") {
     }
     ledger(lock);
     retired.push(detached);
+    budget--;
+  }
+  if (budget > 0) {
+    const owned = new Set(
+      context.db
+        .prepare(
+          "SELECT key FROM installations UNION SELECT entry_key AS key FROM dependency_transitions UNION SELECT substr(path, length(?) + 2) AS key FROM dependency_transitions",
+        )
+        .all(context.cache)
+        .map(({ key }) => key),
+    );
+    const orphans = [];
+    for (const name of readdirSync(context.cache)) {
+      if (
+        owned.has(name) ||
+        !/^(?:[a-f0-9]{64}|install-[0-9]+-[A-Za-z0-9]+|retired-[a-f0-9-]+)$/.test(name)
+      )
+        continue;
+      const path = join(context.cache, name);
+      const stat = lstatSync(path, { bigint: true });
+      if (
+        !stat.isDirectory() ||
+        stat.uid !== BigInt(process.getuid()) ||
+        (stat.mode & 0o7777n) !== 0o700n
+      )
+        continue;
+      if (Date.now() - Number(stat.mtimeMs) <= 86_400_000) continue;
+      orphans.push({
+        id: name,
+        path,
+        identity: identityRecord(stat),
+        orphan: true,
+        targets: [path],
+      });
+    }
+    // Disposable legacy scratch: >24h plus no cwd/fd/maps reference is the
+    // approved contract, even for a dormant child with only a pathname in memory.
+    if (orphans.length)
+      processLifetime("retire", { candidates: orphans, limit: budget }, context.mutexFd);
   }
   return retired;
 }
@@ -892,6 +1260,11 @@ function settleRetirement(context, anchor, snapshot) {
         .run(row.entry_key, row.entry_key);
       (result.changes ? settled : retained).push(row.entry_key);
     }
+    context.db
+      .prepare(
+        "UPDATE operation_lifetimes SET retired = 1 WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
+      )
+      .run(anchor.path, String(anchor.dev), String(anchor.ino));
     return { state: "released", settled, retained };
   });
 }
@@ -975,7 +1348,14 @@ export function releaseFinishedAnchor(reviewed) {
       if (anchorRows(context.db, anchor).length === 0) {
         return undefined;
       }
-      return retirementSnapshot(context, anchor, reviewed);
+      return {
+        ...retirementSnapshot(context, anchor, reviewed),
+        lifetime: context.db
+          .prepare(
+            "SELECT * FROM operation_lifetimes WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
+          )
+          .get(anchor.path, String(anchor.dev), String(anchor.ino)),
+      };
     },
     false,
   );
@@ -983,7 +1363,23 @@ export function releaseFinishedAnchor(reviewed) {
   if (!snapshot) {
     return empty;
   }
-  if (lstatSync(anchor.path, { throwIfNoEntry: false })) {
+  if (snapshot.lifetime) {
+    const row = snapshot.lifetime;
+    const checked = processLifetime("retire", {
+      candidates: [
+        {
+          id: anchor.path,
+          path: anchor.path,
+          identity: identityRecord(anchor),
+          lease: { path: row.lease_path, ...identityRecord(row) },
+          targets: [],
+        },
+      ],
+      limit: 1,
+    });
+    if (checked.results[0].state !== "retired")
+      throw new Error("PR dependency lifetime remains held; retain anchor");
+  } else if (lstatSync(anchor.path, { throwIfNoEntry: false })) {
     if (!same(directory(anchor.path), anchor)) {
       throw new Error("PR anchor identity changed; retain it");
     }
@@ -1010,10 +1406,23 @@ export function retireAnchorDependencies(anchor, retire) {
     cache,
     (lock) => {
       assertAnchor(anchor);
-      return retirementSnapshot(ledger(lock), anchor);
+      const context = ledger(lock);
+      // A drained group/notification pipe is not the new lifetime's authority:
+      // an escaped descendant may still hold FD7. The creator also holds it,
+      // so let the next invocation acquire EX after the final descriptor closes.
+      if (
+        context.db
+          .prepare(
+            "SELECT 1 FROM operation_lifetimes WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
+          )
+          .get(anchor.path, String(anchor.dev), String(anchor.ino))
+      )
+        return undefined;
+      return retirementSnapshot(context, anchor);
     },
     false,
   );
+  if (!snapshot) return;
   // Holds stay committed throughout the creator's full-drain retirement.
   // PID death, missing paths, or failed reentry are never release authority.
   assertAnchor(anchor);
@@ -1022,4 +1431,25 @@ export function retireAnchorDependencies(anchor, retire) {
     throw new Error("PR anchor retirement not confirmed");
   }
   withCacheOwner(cache, (lock) => settleRetirement(ledger(lock), anchor, snapshot), false);
+}
+
+export function sweepDependencyCaches() {
+  const cache = dependencyCacheRoot();
+  if (!lstatSync(cache, { throwIfNoEntry: false })) return;
+  const retired = withDependencyCacheLock(cache, (lock) => collectUnusedDependencyCaches(lock));
+  for (const path of retired) rmSync(path, { recursive: true, force: true });
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.argv[2] === "create-lifetime") {
+    process.stdout.write(createDependencyLifetime());
+  } else if (process.argv[2] === "collect") {
+    try {
+      sweepDependencyCaches();
+    } catch (error) {
+      console.error(`Warning: retaining PR dependency cache entries: ${error.message}`);
+    }
+  } else {
+    throw new Error("Expected create-lifetime or collect");
+  }
 }
