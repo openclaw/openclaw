@@ -11,6 +11,7 @@ import type { OperationalRunInstanceRef } from "../../operational-run-instance.j
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import {
   matchesSubagentChildSessionOwner,
+  resolveRecordedRequester,
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
@@ -264,7 +265,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     row: SubagentRunRecord,
     source: SubagentCompletionCustody["authority"],
     requesterRunInstance?: OperationalRunInstanceRef,
-    requesterCompletionRunId = requesterRunInstance?.runId,
+    requesterCompletion: SubagentCompletionCustody["requesterCompletion"] = requesterRunInstance
+      ? { runId: requesterRunInstance.runId }
+      : undefined,
   ) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
@@ -284,7 +287,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       authority: source,
       entry,
       requesterRunInstance,
-      requesterCompletionRunId,
+      requesterCompletion,
       stop: () => source.signal.removeEventListener("abort", revoked),
     };
     const revoked = () => this.releaseCompletionAuthority(custody.entry);
@@ -300,7 +303,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
     if (custody && instance && isSameSubagentRunOwner(this.get(entry.runId), entry)) {
       custody.requesterRunInstance = instance;
-      custody.requesterCompletionRunId = instance.runId;
+      custody.requesterCompletion = { runId: instance.runId };
     }
   }
 
@@ -311,10 +314,21 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   /** Completion follows task adoption without changing the original execution receipt. */
-  getRequesterCompletionRunId(entry: SubagentRunRecord): string | undefined {
+  getRequesterCompletion(entry: SubagentRunRecord) {
     return isSameSubagentRunOwner(this.get(entry.runId), entry)
-      ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterCompletionRunId
+      ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterCompletion
       : undefined;
+  }
+
+  /** Retain the accepted terminal postimage before a later turn replaces the session row. */
+  recordRequesterCompletion(sessionKey: string, agentId: string, runId: string): void {
+    for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
+      const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(child));
+      const requesterAgentId = resolveRecordedRequester(child);
+      if (custody?.requesterCompletion?.runId === runId && requesterAgentId === agentId) {
+        custody.requesterCompletion = { runId, ended: true };
+      }
+    }
   }
 
   releaseCompletionAuthority(observed: SubagentRunRecord): void {
@@ -435,8 +449,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
           continue;
         }
         const childCustody = this.completionAuthorities.get(getSubagentRunRuntimeKey(child));
-        if (childCustody?.requesterCompletionRunId === previous.runId) {
-          childCustody.requesterCompletionRunId = next.runId;
+        if (childCustody?.requesterCompletion?.runId === previous.runId) {
+          childCustody.requesterCompletion = { runId: next.runId };
         }
       }
     }

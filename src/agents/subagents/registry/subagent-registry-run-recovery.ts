@@ -604,7 +604,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
                 requesterRunInstance?.runId === next.requesterTurnRunId
                   ? requesterRunInstance
                   : undefined,
-                sameRequesterTask ? subagentRuns.getRequesterCompletionRunId(next) : undefined,
+                sameRequesterTask ? subagentRuns.getRequesterCompletion(next) : undefined,
               );
               custodyTransferred = true;
             }
