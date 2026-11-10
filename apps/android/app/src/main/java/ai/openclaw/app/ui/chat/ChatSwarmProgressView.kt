@@ -80,12 +80,22 @@ private fun ChatSwarmGroupCard(group: ChatSwarmGroup) {
         )
         Text(
           text =
-            nativeString(
-              "\$running Running · \$done Done · \$failed Failed",
-              group.running,
-              group.done,
-              group.failed,
-            ),
+            if (group.paused > 0) {
+              nativeString(
+                "\$running Running · \$paused Paused · \$done Done · \$failed Failed",
+                group.running,
+                group.paused,
+                group.done,
+                group.failed,
+              )
+            } else {
+              nativeString(
+                "\$running Running · \$done Done · \$failed Failed",
+                group.running,
+                group.done,
+                group.failed,
+              )
+            },
           color = ClawTheme.colors.textMuted,
           style = ClawTheme.type.caption,
           maxLines = 1,
@@ -146,6 +156,13 @@ private fun ChatSwarmDotView(dot: ChatSwarmDot) {
       val color = ClawTheme.colors.textMuted
       Canvas(modifier = Modifier.size(9.dp).semantics { contentDescription = description }) {
         drawCircle(color = color, style = Stroke(width = 1.dp.toPx()))
+      }
+    }
+
+    ChatSwarmDotStatus.Paused -> {
+      val color = ClawTheme.colors.primary
+      Canvas(modifier = Modifier.size(9.dp).semantics { contentDescription = description }) {
+        drawCircle(color = color, radius = (size.minDimension - 1.5.dp.toPx()) / 2, style = Stroke(width = 1.5.dp.toPx()))
       }
     }
 

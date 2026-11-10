@@ -12,6 +12,7 @@ private const val MAX_RENDERED_SWARM_DOTS_PER_PHASE = 256
 enum class ChatSwarmDotStatus {
   Running,
   Queued,
+  Paused,
   Failed,
   Done,
 }
@@ -33,6 +34,7 @@ data class ChatSwarmGroup(
   val groupId: String,
   val label: String,
   val running: Int,
+  val paused: Int,
   val done: Int,
   val failed: Int,
   val narrator: String?,
@@ -244,20 +246,25 @@ internal fun buildChatSwarmGroups(
         groupId = groupId,
         label = groupId.substringAfterLast(':'),
         running = dots.count { it.status == ChatSwarmDotStatus.Running },
+        paused = dots.count { it.status == ChatSwarmDotStatus.Paused },
         done = dots.count { it.status == ChatSwarmDotStatus.Done },
         failed = dots.count { it.status == ChatSwarmDotStatus.Failed },
         narrator = entries.firstNotNullOfOrNull(Entry::log),
         phases = projectedPhases,
       )
     }.filter { group ->
-      group.phases.any { phase -> phase.dots.any { it.status == ChatSwarmDotStatus.Queued || it.status == ChatSwarmDotStatus.Running } }
+      // A paused child still owes its task, so its group stays listed.
+      group.phases.any { phase -> phase.dots.any { it.status != ChatSwarmDotStatus.Done && it.status != ChatSwarmDotStatus.Failed } }
     }.sortedBy(ChatSwarmGroup::groupId)
 }
 
+// A child paused on sessions_yield keeps its terminal status; its own running descendants
+// read as running (ui/src/pages/chat/chat-subagent-wait.ts isPausedChild).
 private fun swarmDotStatus(row: ChatSessionEntry): ChatSwarmDotStatus? =
   when {
     row.status == "queued" -> ChatSwarmDotStatus.Queued
     row.status == "running" || row.hasActiveRun == true -> ChatSwarmDotStatus.Running
+    row.subagentRunState == "paused" -> if (row.hasActiveSubagentRun == true) ChatSwarmDotStatus.Running else ChatSwarmDotStatus.Paused
     row.status == "done" -> ChatSwarmDotStatus.Done
     row.status == "failed" || row.status == "killed" || row.status == "timeout" -> ChatSwarmDotStatus.Failed
     row.subagentRunState == "active" || row.hasActiveSubagentRun == true -> ChatSwarmDotStatus.Queued

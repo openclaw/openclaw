@@ -259,6 +259,16 @@ struct ChatSessionSidebarRowTests {
         }
     }
 
+    @Test func `a child paused on sessions_yield reads Paused instead of Finished`() throws {
+        var row = try self.session(#"{"key":"child","status":"done","subagentRunState":"paused"}"#)
+        let facts = self.facts(row, isChild: true)
+        #expect(facts.glyph == .symbol("pause.circle"))
+        #expect(facts.idleLabel == "Paused")
+        #expect(!facts.running)
+        row.hasActiveSubagentRun = true
+        #expect(self.facts(row, isChild: true).running)
+    }
+
     @Test func `own queued subagent liveness does not invent unloaded descendant work`() throws {
         let row = try self.session(#"""
         {"key":"agent:main:subagent:queued","status":"queued",

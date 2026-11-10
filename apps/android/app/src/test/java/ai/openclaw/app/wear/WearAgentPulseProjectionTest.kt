@@ -31,6 +31,7 @@ class WearAgentPulseProjectionTest {
               groupId = "private-group",
               label = "private-label",
               running = 1,
+              paused = 0,
               done = 2,
               failed = 3,
               narrator = "private-narrator",
@@ -64,6 +65,50 @@ class WearAgentPulseProjectionTest {
       result,
     )
     assertFalse(result.toString().contains("private-"))
+  }
+
+  @Test
+  fun keepsPausedChildrenOutOfTheWatchProtocol() {
+    val pausedOnly =
+      ChatSwarmGroup(
+        groupId = "paused-group",
+        label = "paused",
+        running = 0,
+        paused = 1,
+        done = 1,
+        failed = 0,
+        narrator = null,
+        phases =
+          listOf(
+            ChatSwarmPhase(
+              key = "",
+              title = null,
+              dots = listOf(dot("paused", ChatSwarmDotStatus.Paused), dot("done", ChatSwarmDotStatus.Done)),
+              hidden = 0,
+            ),
+          ),
+      )
+
+    fun pulse(groups: List<ChatSwarmGroup>) =
+      projectWearAgentPulse(
+        gatewayConnected = true,
+        swarmAvailable = true,
+        swarmGroups = groups,
+        pendingApprovalCount = 0,
+        approvalsAvailable = true,
+        approvalsRefreshing = false,
+      )["swarm"].toString()
+
+    assertEquals("""{"state":"idle","scope":"selected-session"}""", pulse(listOf(pausedOnly)))
+    val mixed =
+      pausedOnly.copy(
+        running = 1,
+        phases = listOf(pausedOnly.phases.single().copy(dots = pausedOnly.phases.single().dots + dot("running", ChatSwarmDotStatus.Running))),
+      )
+    assertEquals(
+      """{"state":"active","scope":"selected-session","groups":1,"running":1,"done":2,"failed":0,"phases":[{"queued":0,"running":1,"done":2,"failed":0,"hidden":0}],"morePhases":false}""",
+      pulse(listOf(mixed)),
+    )
   }
 
   @Test
