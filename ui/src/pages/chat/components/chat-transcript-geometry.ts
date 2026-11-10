@@ -195,7 +195,7 @@ export function measureTranscriptRow(
       return size;
     }
   }
-  // Parked rows have no layout box. Retain their geometry until preparation or
+  // Parked rows have no visible extent. Retain their geometry until preparation or
   // presentation resumes, also while a whole pane is hidden or awaiting layout.
   const index = virtualizer.indexFromElement(element);
   return (

@@ -162,8 +162,13 @@ function TranscriptRows(props: {
                       { "chat-virtual-row--first": virtualRow().index === 0 },
                     ]}
                     style={{
-                      "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
-                      display: active() ? undefined : preparing() ? "flow-root" : "none",
+                      "min-height":
+                        active() || preparing()
+                          ? `${props.snapshot.layout.rowMinimum(index())}px`
+                          : "0",
+                      // Keep a zero-height box while parked so forecasting does
+                      // not repeatedly detach and rebuild the row's layout tree.
+                      height: active() || preparing() ? undefined : "0",
                       position: active() ? undefined : "absolute",
                       top: active()
                         ? undefined
