@@ -106,7 +106,9 @@ it("preserves installed Template and plugin extension facts through the read-onl
     const pending = readTemplatePackageRefsForAdd({
       env,
       assertCurrent() {
-        if (!admitted) throw new Error("Add admission ended");
+        if (!admitted) {
+          throw new Error("Add admission ended");
+        }
       },
     });
     admitted = false;
