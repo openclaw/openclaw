@@ -468,8 +468,13 @@ export function formatWikiLink(params: {
     ? `<${linkTarget.replace(/[<>]/g, "\\$&")}>`
     : linkTarget;
   // Titles are metadata: Markdown, entities, and HTML must not change their displayed text.
-  const label = params.title.replace(/[\\[\]`*_~<&]/g, "\\$&");
+  const label = escapeWikiMarkdownText(params.title);
   return `[${label}](${destination})`;
+}
+
+export function escapeWikiMarkdownText(title: string): string {
+  // Metadata must retain inline punctuation and trailing ATX hashes in the visible title.
+  return title.replace(/[!-/:-@[-`{-~]/g, "\\$&");
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {

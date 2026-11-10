@@ -133,7 +133,7 @@ it.each([
   expect(scanWikiSummary(markdown)).toMatchObject(expected);
 });
 
-it.each(["Plain", "[x]", "[x", "]", "a\\", "`C:\\x[y]`", "*raw* _text_ &amp; <tag>"])(
+it.each(["Plain", "[x]", "[x", "]", "a\\", "`C:\\x[y]`", "*raw* _text_ &amp; <tag> #"])(
   "renders native link titles literally: %s",
   (title) => {
     const relativePath = "sources/meeting notes.md";

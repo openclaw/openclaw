@@ -18,6 +18,7 @@ import {
   HUMAN_END_MARKER,
   parseWikiMarkdown,
   renderWikiMarkdown,
+  escapeWikiMarkdownText,
   slugifyWikiPageStem,
   slugifyWikiSegment,
   normalizeWikiClaims,
@@ -163,7 +164,7 @@ function buildSynthesisBody(params: {
 }): string {
   const base = params.originalBody?.trim().length
     ? params.originalBody
-    : `# ${params.title}\n\n## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
+    : `# ${escapeWikiMarkdownText(params.title)}\n\n## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
   const withGenerated = replaceManagedMarkdownBlock({
     original: base,
     heading: "## Summary",

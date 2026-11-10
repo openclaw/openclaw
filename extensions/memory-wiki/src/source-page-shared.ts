@@ -8,6 +8,7 @@ import {
   decodeWikiPageUtf8,
   preserveHumanNotesBlock,
   renderMarkdownFence,
+  escapeWikiMarkdownText,
   renderWikiMarkdown,
 } from "./markdown.js";
 import {
@@ -31,7 +32,7 @@ export function renderImportedSourcePage(params: {
   return renderWikiMarkdown({
     frontmatter: params.frontmatter,
     body: [
-      `# ${params.frontmatter.title}`,
+      `# ${escapeWikiMarkdownText(params.frontmatter.title)}`,
       "",
       `## ${params.sourceHeading}`,
       ...params.sourceDetails,
