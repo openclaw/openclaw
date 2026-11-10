@@ -1,0 +1,2 @@
+# Native Gateway-close regression plus missing-receipt coverage for failed service stdin shutdown delivery.
+89
