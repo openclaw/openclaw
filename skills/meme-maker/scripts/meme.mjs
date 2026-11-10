@@ -218,15 +218,13 @@ function textSvg(text, box, width, height, index) {
   const centerX = x + w / 2;
   const centerY = y + h / 2;
   const maxChars = Math.max(8, Math.floor(w / Math.max(12, width * 0.032)));
-  let lines = wrapText(text, maxChars).slice(0, 5);
-  const fontSize = Math.max(
-    18,
-    Math.min(
-      h / (lines.length * 1.15),
-      (w / Math.max(...lines.map((line) => line.length), 1)) * 1.65,
-      width * 0.07,
-    ),
+  let lines = wrapText(text, maxChars);
+  const fontSize = Math.min(
+    h / (lines.length * 1.15),
+    (w / Math.max(...lines.map((line) => line.length), 1)) * 1.65,
+    width * 0.07,
   );
+  const strokeWidth = Math.min(Math.max(3, Math.round(width / 250)), fontSize / 10);
   const lineHeight = fontSize * 1.08;
   const totalHeight = lineHeight * lines.length;
   const rotate = box.rotate ? ` rotate(${box.rotate} ${centerX} 0)` : "";
@@ -237,7 +235,7 @@ function textSvg(text, box, width, height, index) {
       return `<tspan x="${centerX.toFixed(1)}" dy="${dy.toFixed(1)}">${line}</tspan>`;
     })
     .join("");
-  return `<text class="meme-text" data-box="${index}" transform="translate(0 ${centerY.toFixed(1)})${rotate}" font-size="${fontSize.toFixed(1)}">${tspans}</text>`;
+  return `<text class="meme-text" data-box="${index}" transform="translate(0 ${centerY.toFixed(1)})${rotate}" font-size="${fontSize.toFixed(1)}" stroke-width="${strokeWidth.toFixed(1)}">${tspans}</text>`;
 }
 
 function defaultBoxes(count) {
@@ -277,7 +275,6 @@ async function renderLocal(template, texts, flags) {
       font-weight: 900;
       fill: #fff;
       stroke: #000;
-      stroke-width: ${Math.max(3, Math.round(width / 250))};
       paint-order: stroke;
       text-anchor: middle;
       dominant-baseline: middle;

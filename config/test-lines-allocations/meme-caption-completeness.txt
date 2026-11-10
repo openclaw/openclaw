@@ -1,0 +1,2 @@
+18
+# Real CLI regression: retain long captions and fit the rendered text box.
