@@ -14,11 +14,13 @@ import {
   type SignedStatement,
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { requestOpenClawIdLinkCode } from "./account.ts";
+import { guardOpenClawIdAccount, requestOpenClawIdLinkCode } from "./account.ts";
 import type { OpenClawIdSignedIn } from "./types.ts";
 
 /** A signed move, shown for confirmation before it is committed. */
 export type RebindPlan = {
+  /** The account that supplied the code must still own this browser ceremony at commit. */
+  assertCurrent: () => void;
   hostname: string;
   code: string;
   binding: SignedStatement<"ServerBinding">;
@@ -44,6 +46,8 @@ export async function prepareRebind(params: {
   kitText: string;
 }): Promise<{ ok: true; plan: RebindPlan } | RebindRefusal> {
   const { client } = params;
+  const assertCurrent = guardOpenClawIdAccount(params.signedIn);
+  assertCurrent();
   // Text that is not a recovery code is refused before anything is staged.
   const secret = await decodeKit(params.kitText).catch(() => null);
   if (!secret) {
@@ -55,26 +59,29 @@ export async function prepareRebind(params: {
     action: "rebind_prepare",
     code,
   });
+  assertCurrent();
   const signed = await signRebind(prep, params.kitText);
+  assertCurrent();
   if (!signed.ok) {
     return signed;
   }
-  return {
-    ok: true,
-    plan: {
-      hostname: prep.hostname,
-      code,
-      binding: signed.binding,
-      root: await display(prep.root_pub),
-      bindingSeq: { from: prep.current.binding_seq, to: signed.binding.body.binding_seq },
-      endpoint: { from: await display(prep.current.k_srv), to: await display(prep.k_srv) },
-      gateway: { from: await display(prep.current.k_gw), to: await display(prep.k_gw) },
-    },
+  const plan: RebindPlan = {
+    assertCurrent,
+    hostname: prep.hostname,
+    code,
+    binding: signed.binding,
+    root: await display(prep.root_pub),
+    bindingSeq: { from: prep.current.binding_seq, to: signed.binding.body.binding_seq },
+    endpoint: { from: await display(prep.current.k_srv), to: await display(prep.k_srv) },
+    gateway: { from: await display(prep.current.k_gw), to: await display(prep.k_gw) },
   };
+  assertCurrent();
+  return { ok: true, plan };
 }
 
 /** Stores the signed binding; remote access restarts on the new keys and publishes them. */
 export async function commitRebind(client: GatewayBrowserClient, plan: RebindPlan) {
+  plan.assertCurrent();
   return await client.request<{ ok: true; bindingSeq: number }>("openclawId.authority", {
     action: "rebind_commit",
     binding: plan.binding,
@@ -92,7 +99,9 @@ export async function publishWithLinkCode(
   client: GatewayBrowserClient,
   signedIn: OpenClawIdSignedIn,
 ) {
+  const assertCurrent = guardOpenClawIdAccount(signedIn);
   const code = await requestOpenClawIdLinkCode(client, signedIn);
+  assertCurrent();
   return await client.request<{ publication: { state: string; code?: string } | null }>(
     "openclawId.authority",
     { action: "publish", enrollmentCode: code },

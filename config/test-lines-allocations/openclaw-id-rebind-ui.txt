@@ -1,2 +1,2 @@
-434
-# OpenClaw ID Move to new keys in the Control UI: browser signing and refusals, the account-menu key warnings and actions, and the mocked end-to-end dialog flow with screenshots, and dismissal during a running commit.
+545
+# Browser re-bind signing/confirmation and dialog settlement, real account replacement/sign-out custody, late-code publication refusal and existing screenshot e2e coverage.

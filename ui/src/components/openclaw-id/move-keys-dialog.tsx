@@ -6,6 +6,10 @@ import { createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
+import {
+  guardOpenClawIdAccount,
+  subscribeOpenClawIdAccount,
+} from "../../lib/openclaw-id/account.ts";
 import { openClawIdFeatureSignal } from "../../lib/openclaw-id/feature-lifetime.ts";
 import {
   cancelRebind,
@@ -17,6 +21,7 @@ import {
 import type { OpenClawIdSignedIn } from "../../lib/openclaw-id/types.ts";
 import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { showToast } from "../../lib/toast.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
@@ -36,6 +41,8 @@ export function rebindRefusalMessage(refusal: RebindRefusal, hostname: string): 
     case "published_unavailable":
     case "binding_seq_too_low":
       return t("openclawId.moveKeysUnavailable");
+    default:
+      return refusal satisfies never;
   }
 }
 
@@ -57,8 +64,12 @@ export function showMoveKeysDialog(params: {
   signedIn: OpenClawIdSignedIn;
   hostname: string;
 }): Promise<boolean> {
-  const lifetime = { signal: openClawIdFeatureSignal(), value: false };
-  return withPromiseModalHost<boolean>(lifetime, (modal) => {
+  const assertAccount = guardOpenClawIdAccount(params.signedIn);
+  const feature = openClawIdFeatureSignal();
+  if (feature.aborted) {
+    return Promise.resolve(false);
+  }
+  return withPromiseModalHost<boolean>(undefined, (modal) => {
     modal.render(() => {
       const [kit, setKit] = createSignal("");
       const [plan, setPlan] = createSignal<RebindPlan | null>(null);
@@ -69,18 +80,48 @@ export function showMoveKeysDialog(params: {
       // Plain, not a signal: dismissal must see an operation the moment it starts. While one
       // runs the dialog stays open, so a commit's outcome is always shown, never dropped.
       let inFlight = false;
+      let committing = false;
+      let retired = false;
       // Byte secrets are zeroed where they are made: signRebind zeroes the kit secret S and the
       // derived seed, and R stays a non-extractable CryptoKey that is dropped. The typed code and
       // the signed binding are JS strings, which cannot be overwritten: on close they are
       // released here and scrubbed from the field, so nothing keeps them reachable.
       let input: HTMLInputElement | undefined;
-      onSettled(() => () => {
+      const retire = () => {
+        retired = true;
+        setPlan(null);
+        setKit("");
         if (input) {
           input.value = "";
           input.defaultValue = "";
         }
-        setKit("");
-        setPlan(null);
+        // Once dispatched, a commit owns settlement even after Labs or account retirement.
+        if (!committing) {
+          modal.finish(false);
+        }
+      };
+      onSettled(() => {
+        const unsubscribe = subscribeOpenClawIdAccount(() => {
+          try {
+            assertAccount();
+          } catch {
+            retire();
+          }
+        });
+        const stopFeature = listen(feature, "abort", retire, { once: true });
+        if (feature.aborted) {
+          retire();
+        }
+        return () => {
+          unsubscribe();
+          stopFeature();
+          if (input) {
+            input.value = "";
+            input.defaultValue = "";
+          }
+          setKit("");
+          setPlan(null);
+        };
       });
       const run = async (operation: () => Promise<void>) => {
         inFlight = true;
@@ -103,6 +144,9 @@ export function showMoveKeysDialog(params: {
               signedIn: params.signedIn,
               kitText,
             });
+            if (retired || modal.settled) {
+              return;
+            }
             if (result.ok) {
               setKit("");
               setPlan(result.plan);
@@ -110,6 +154,9 @@ export function showMoveKeysDialog(params: {
               setRefused(rebindRefusalMessage(result, params.hostname));
             }
           } catch (cause) {
+            if (retired || modal.settled) {
+              return;
+            }
             fail(cause);
           }
         });
@@ -118,10 +165,22 @@ export function showMoveKeysDialog(params: {
         run(async () => {
           setError(null);
           try {
+            if (retired || feature.aborted) {
+              retire();
+              return;
+            }
+            committing = true;
             await commitRebind(params.client, current);
           } catch (cause) {
-            fail(cause);
+            if (retired) {
+              showToast({ severity: "error", message: openClawIdUiError(cause, "setup").message });
+              modal.finish(false);
+            } else {
+              fail(cause);
+            }
             return;
+          } finally {
+            committing = false;
           }
           setPlan(null);
           showToast({ severity: "success", message: t("openclawId.moveKeysDone") });
