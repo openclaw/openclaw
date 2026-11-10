@@ -147,6 +147,35 @@ it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
   },
 );
 
+it("repairs retained internal-wake titles without changing explicit names or session activity", async () => {
+  const marker = "[OpenClaw session event]";
+  await withSession(
+    async (params) => {
+      await sessionAccessor.patchSessionEntryCore(params, () => ({ displayName: marker }));
+      const before = expectDefined(sessionAccessor.loadSessionEntry(params));
+      const preview = await repairLegacySessionTitles({ cfg, env: process.env, apply: false });
+      expect(preview).toMatchObject({ found: 1, repaired: 0 });
+      expect(sessionAccessor.loadSessionEntry(params)).toEqual(before);
+      await repair();
+      const { displayName: _displayName, ...expected } = before;
+      expect(sessionAccessor.loadSessionEntry(params)).toEqual(expected);
+      await repair();
+      expect(sessionAccessor.loadSessionEntry(params)).toEqual(expected);
+      for (const mutation of [
+        { displayName: marker, label: "Personal main chat" },
+        { displayName: "My session event notes", label: undefined },
+      ]) {
+        await sessionAccessor.patchSessionEntryCore(params, () => mutation);
+        const named = sessionAccessor.loadSessionEntry(params);
+        await repair();
+        expect(sessionAccessor.loadSessionEntry(params)).toEqual(named);
+      }
+    },
+    [user(marker)],
+    "agent:main:main",
+  );
+});
+
 const relay = { ...user("Internal relay"), provenance: { kind: "inter_session" } };
 const later = user("A later task must not become the title");
 it.each([

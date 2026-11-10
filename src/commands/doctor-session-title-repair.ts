@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   patchSessionEntryCore,
@@ -62,7 +63,7 @@ function readLegacySessionTitle(
   }
 }
 
-/** Derive missing historical titles while Doctor owns session maintenance. */
+/** Repair historical titles while Doctor owns session maintenance. */
 export async function repairLegacySessionTitles(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -99,19 +100,25 @@ export async function repairLegacySessionTitles(params: {
       agentId: target.agentId,
       path: target.sqlitePath,
       run: () => {
-        const sessions: Array<{ sessionKey: string; sessionId: string }> = [];
+        const sessions: Array<{ sessionKey: string; sessionId: string; clearWakeTitle: boolean }> =
+          [];
         scanDoctorSessionEntriesTolerant(
           scope,
           ({ entry, sessionKey, recoveredFromProjections }) => {
+            // Older Doctor versions persisted these transcript markers as display names.
+            // Human labels and other naming fields still win; do not guess at similar text.
+            const clearWakeTitle = Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS).some(
+              (prompt) => entry.displayName === prompt,
+            );
             if (
               !recoveredFromProjections &&
               !entry.incognito &&
               !isIncognitoSessionKey(sessionKey) &&
               // Spawn owns child labels; its first user message is a runtime task envelope.
               !isSubagentSessionKey(sessionKey) &&
-              !hasExplicitSessionName(entry)
+              !hasExplicitSessionName(clearWakeTitle ? { ...entry, displayName: undefined } : entry)
             ) {
-              sessions.push({ sessionKey, sessionId: entry.sessionId });
+              sessions.push({ sessionKey, sessionId: entry.sessionId, clearWakeTitle });
             }
           },
         );
@@ -121,14 +128,14 @@ export async function repairLegacySessionTitles(params: {
     if (!scan.ok) {
       continue;
     }
-    for (const { sessionKey, sessionId } of scan.value) {
+    for (const { sessionKey, sessionId, clearWakeTitle } of scan.value) {
       if (params.apply) {
         assertRepairAuthority();
       }
       try {
         const session = { ...scope, sessionKey, sessionId };
         const title = readLegacySessionTitle(session);
-        if (!title) {
+        if (!title && !clearWakeTitle) {
           continue;
         }
         report.found++;
