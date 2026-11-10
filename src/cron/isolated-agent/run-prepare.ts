@@ -30,6 +30,7 @@ import {
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronExecutionActor } from "../human-owner.js";
 import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
+import { resolveCronJobToolPolicyContext } from "../job-tool-policy-context.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronWorkspaceLease } from "../run-workspace.js";
@@ -623,6 +624,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           authProfileId,
           authProfileIdSource: authSelection?.source,
         };
+        const scheduledToolContext = resolveCronJobToolPolicyContext(
+          input.job,
+          agentPayload?.toolsAllow,
+        );
         const runContinuationSession = usesExactRunSession
           ? createCronRunContinuationSession({
               cronSession,
@@ -637,7 +642,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
                 scheduledToolPolicy: input.job.scheduledToolPolicy,
                 owner: input.job.owner,
               }),
-              scheduledToolCallerOrigin: input.job.toolsAllowProvenance?.callerOrigin,
+              scheduledToolCallerOrigin:
+                scheduledToolContext?.mode === "account"
+                  ? scheduledToolContext.ownerOrigin
+                  : undefined,
               toolsAllowExecTarget: input.job.toolsAllowExecTarget,
               toolsAllowExecTargetRequirement: input.job.toolsAllowExecTargetRequirement,
               cliSessionBindingFacts,

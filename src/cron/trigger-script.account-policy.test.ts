@@ -69,7 +69,7 @@ it.each(["trigger", "payload"] as const)(
         plugins.setActivePluginRegistry(registry);
         const runtime = createCronScriptRuntime({ config, loadPluginRegistry: () => registry });
         const signal = new AbortController().signal;
-        const invoke = async (accountId: string, channel?: string) => {
+        const invoke = async (accountId: string, channel?: string, requesterAccountId?: string) => {
           const script = `await message({ action: "send", channel: "telegram", accountId: ${JSON.stringify(accountId)}, target: "123", message: "Scheduled report" }); return { fire: false };`;
           const jobId = `account-${entry}-${accountId}`;
           const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
@@ -90,7 +90,18 @@ it.each(["trigger", "payload"] as const)(
               ownerAccountId: accountId,
             },
           });
-          if (channel) {
+          if (requesterAccountId) {
+            job.toolsAllowProvenance = {
+              version: 1,
+              source: "authenticated-requester",
+              channelRequester: {
+                version: 1,
+                channel: channel ?? "telegram",
+                accountId: requesterAccountId,
+                senderId: "123",
+              },
+            };
+          } else if (channel) {
             job.toolsAllowProvenance = {
               version: 1,
               source: "final-executable-surface",
@@ -119,15 +130,19 @@ it.each(["trigger", "payload"] as const)(
         };
         const expected =
           entry === "trigger" ? { kind: "evaluated", fire: false } : { kind: "completed" };
-        for (const [accountId, channel, error, sends] of [
+        for (const [accountId, channel, error, sends, requesterAccountId] of [
           ["work", "telegram", undefined, 1],
           ["work", "slack", 'Scheduled account "work" is unavailable', 1],
           ["work", undefined, 'Scheduled account "work" is unavailable', 1],
           ["work", "telegram", undefined, 2],
           ["missing", "telegram", 'Scheduled account "missing" is unavailable', 2],
           ["disabled", "telegram", "disabled", 2],
+          ["work", "telegram", undefined, 3, "work"],
+          ["work", "telegram", 'Scheduled account "work" is unavailable', 3, "other"],
+          ["missing", "telegram", 'Scheduled account "missing" is unavailable', 3, "missing"],
+          ["disabled", "telegram", "disabled", 3, "disabled"],
         ] as const) {
-          const result = await invoke(accountId, channel);
+          const result = await invoke(accountId, channel, requesterAccountId);
           expect(result, JSON.stringify(result)).toMatchObject(
             error ? { kind: "error", error: expect.stringContaining(error) } : expected,
           );
