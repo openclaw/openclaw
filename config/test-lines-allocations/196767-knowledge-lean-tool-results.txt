@@ -4,4 +4,4 @@
 # character hash-prefix write fences (accepted, too short, wrong, stale revision),
 # and record reads keeping domain fields, attribution doubt and occurrence dates.
 # Exact net growth for PR #196767.
-628
+645

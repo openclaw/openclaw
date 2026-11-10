@@ -139,8 +139,15 @@ function boundRecord(result: RecordOutput, input: RecordInput, compact = false):
   const r = result.record,
     key = result.view === "raw" ? "raw" : "body";
   const original = r && typeof r[key] === "string" ? r[key] : undefined;
-  const fitBody = () => {
-    if (original === undefined || size() <= RECORD_RESPONSE_BYTES) {
+  const originalNext = result.content.nextOffset;
+  // Each attempt starts from the whole window; false when not one character fits.
+  const fit = () => {
+    if (original === undefined) {
+      return size() <= RECORD_RESPONSE_BYTES;
+    }
+    r![key] = original;
+    result.content.nextOffset = originalNext;
+    if (size() <= RECORD_RESPONSE_BYTES) {
       return true;
     }
     let low = 0,
@@ -160,14 +167,15 @@ function boundRecord(result: RecordOutput, input: RecordInput, compact = false):
     }
     r![key] = original.slice(0, low);
     result.content.nextOffset = next(result.content.offset, low, result.content.totalChars);
-    return low > 0 || !original.length;
+    return low > 0 && size() <= RECORD_RESPONSE_BYTES;
   };
-  if (!fitBody() && compact && metadata?.fields !== undefined) {
+  let fits = fit();
+  if (!fits && compact && metadata?.fields !== undefined) {
     delete metadata.fields;
     (result.omitted ??= []).push("metadata.fields");
-    r![key] = original!;
+    fits = fit();
   }
-  if (!fitBody()) {
+  if (!fits && original) {
     throw new Error(
       "Record details exceed response budget. Use view=raw, metadataView=none and no evidence/references for paged original text.",
     );

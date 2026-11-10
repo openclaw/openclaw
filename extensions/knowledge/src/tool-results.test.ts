@@ -533,3 +533,20 @@ it("record reads keep attribution doubt and never date a claim by when it was re
   expect(record.attributionConfidence).toStrictEqual({ level: "low", basis: "Two similar voices" });
   expect(record).not.toHaveProperty("date");
 });
+
+it("fields too large for any body text are omitted, and the read still ends", async () => {
+  const s = await seeded();
+  const saved = await s.tool("knowledge_save_page", {
+    requestId: randomUUID(),
+    title: "Wide Field",
+    type: "person",
+    body: "# Wide Field\n\nShort body.\n",
+    fields: { role: "r".repeat(25_000) },
+  });
+  const read = await s.tool("knowledge_record", { id: saved.id });
+  expect(read.record.body).toBe("# Wide Field\n\nShort body.\n");
+  expect(read).not.toHaveProperty("nextOffset");
+  expect(read.omitted).toContain("metadata.fields");
+  const summary = await s.ui("record_detail", { id: saved.id, view: "summary" });
+  expect(summary.omitted).toContain("metadata.fields");
+});
