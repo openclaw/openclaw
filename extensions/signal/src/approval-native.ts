@@ -2,6 +2,7 @@ import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsy
 import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { shouldSuppressLocalNativeExecApprovalPrompt } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalReactionPendingContentForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
+import { buildApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-runtime";
 import type {
   ChannelApprovalCapability,
   ChannelOutboundPayloadHint,
@@ -26,6 +27,25 @@ function isSignalApprovalTransportEnabled(params: {
   accountId?: string | null;
 }): boolean {
   return resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
+}
+
+/**
+ * Forwarded prompts keep their command text and approval controls. Outbound delivery renders
+ * the controls through Signal's checked renderer, which adds the reaction hint only for a bound
+ * approver route; delivery then registers that hinted message for reaction resolution.
+ */
+function buildSignalForwardedPendingPayload(
+  params: Parameters<typeof buildApprovalReactionPendingContentForRequest>[0],
+): ReplyPayload {
+  const { manualFallbackPayload, reactionPayload } =
+    buildApprovalReactionPendingContentForRequest(params);
+  const { presentation } = buildApprovalPendingReplyPayload({
+    approvalId: params.request.id,
+    approvalSlug: params.request.id.slice(0, 8),
+    text: manualFallbackPayload.text ?? "",
+    allowedDecisions: reactionPayload.allowedDecisions,
+  });
+  return { ...manualFallbackPayload, presentation };
 }
 
 const signalApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync({
@@ -55,11 +75,11 @@ const signalApproval = createApproverRestrictedNativeApprovalCapabilityFromForwa
   render: {
     exec: {
       buildPendingPayload: ({ request, nowMs }) =>
-        buildApprovalReactionPendingContentForRequest({ request, nowMs }).manualFallbackPayload,
+        buildSignalForwardedPendingPayload({ request, nowMs }),
     },
     plugin: {
       buildPendingPayload: ({ request, nowMs }) =>
-        buildApprovalReactionPendingContentForRequest({ request, nowMs }).manualFallbackPayload,
+        buildSignalForwardedPendingPayload({ request, nowMs }),
     },
   },
   createNativeRuntime: (routing) =>
