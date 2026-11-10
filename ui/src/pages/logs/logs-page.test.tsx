@@ -66,7 +66,7 @@ function mountPage(initial: TestContext) {
     dispose,
     lines,
     async refresh() {
-      query(".settings-section__actions button")!.click();
+      query(".page-header-actions button")!.click();
       await settle();
     },
   };
@@ -143,9 +143,7 @@ it("exports the retained buffer and warns only after old rows are evicted", asyn
   });
   const { page } = await setup(request);
   const expectExport = (expected: string[]) => {
-    page.container
-      .querySelectorAll<HTMLButtonElement>(".settings-section__actions button")[1]!
-      .click();
+    page.container.querySelectorAll<HTMLButtonElement>(".page-header-actions button")[1]!.click();
     expect(downloadTextFile).toHaveBeenLastCalledWith(
       expect.any(String),
       `${expected.join("\n")}\n`,
@@ -185,7 +183,7 @@ it("retains one initial request across metadata snapshots with empty logs", asyn
   const { request, replies } = pendingRequests();
   const { client, context, page } = await setup(request, false);
   context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
-  await waitForSolid(() => expect(page.disabled("Loading…")).toBe(true));
+  await waitForSolid(() => expect(page.disabled("Refresh")).toBe(true));
   context.gateway.publish({ ...context.gateway.snapshot });
   expect(request.mock.calls.map((call) => call[2].signal.aborted)).toEqual([false]);
   await deliver(replies[0]!, tail(100, [], "/tmp/initial.log"));
@@ -237,7 +235,9 @@ it.each(["same", "changed"])("resumes %s-boot logs and retries failures", async 
   const { context, page } = await setup(request, true, "original-boot");
   const stream = page.query(".log-stream")!;
   Object.defineProperty(stream, "scrollHeight", { value: 500 });
+  stream.dispatchEvent(new WheelEvent("wheel", { deltaY: -500 }));
   stream.scrollTop = 0;
+  stream.dispatchEvent(new Event("scroll"));
   // SAFETY: This focused snapshot fixture supplies only the hello boot field read by LogsPage.
   reconnect(context, {
     ...context.gateway.snapshot,
@@ -252,7 +252,7 @@ it.each(["same", "changed"])("resumes %s-boot logs and retries failures", async 
     pending.reject(new Error("replacement boot is not ready"));
     await settle();
     page.expectRows(["before"], true);
-    expect(page.text()).toContain("Showing stale data");
+    expect(page.text()).toContain("Showing last known data");
     expect(page.text()).toContain("replacement boot is not ready");
     await poll();
     expect(request.mock.calls[2]![1]).toMatchObject({ cursor: undefined });
@@ -327,15 +327,15 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
     await page.refresh();
     page.expectRows(["old"], true);
   }
-  expect(page.disabled("Loading…")).toBe(true);
+  expect(page.disabled("Refresh")).toBe(true);
   expectRetainedControls();
   pending.reject(new Error("logs unavailable"));
   await waitForSolid(() => expect(page.disabled("Refresh")).toBe(false));
   if (loaded) {
     page.expectRows(["old"], true);
-    expect(page.query(".logs-refresh-status")?.textContent).toContain("Showing stale data");
+    expect(page.query(".logs-refresh-status")?.textContent).toContain("Showing last known data");
   } else {
-    expect(page.text()).not.toContain("No log entries.");
+    expect(page.text()).not.toContain("No log entries yet.");
     context.gateway.publish({ ...context.gateway.snapshot });
     expect(request).toHaveBeenCalledOnce();
     expect(page.query(".logs-refresh-status button")).toBeNull();
@@ -349,7 +349,7 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
     page.expectRows(["recovered"], true);
     await poll();
     page.expectRows([], false);
-    expect(page.text()).toContain("You don't have permission to view logs.");
+    expect(page.text()).toContain("Couldn’t view logs. Ask an admin to grant read access.");
   }
 });
 
@@ -366,7 +366,15 @@ it("keeps text and level filters active as quiet polls append rows", async () =>
   filter.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   page.expectRows(["alpha info", "alpha error"]);
-  page.query(".log-chip.info input")!.click();
+  page.query('[aria-controls="logs-levels:content"]')!.click();
+  flush();
+  await vi.waitFor(() => {
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
+      (candidate) => candidate.textContent?.trim() === "info",
+    );
+    expect(item).toBeTruthy();
+    item!.click();
+  });
   flush();
   page.expectRows(["alpha error"]);
   await poll();
@@ -383,10 +391,9 @@ it("forces a scroll when auto-follow is re-enabled away from the bottom", async 
   flush();
   stream.scrollTop = 0;
   stream.dispatchEvent(new Event("scroll"));
-  const frames = captureFrames();
   toggle.click();
   flush();
-  expect(frames).toHaveLength(1);
-  frames[0]!(0);
-  expect(stream.scrollHeight - stream.clientHeight - stream.scrollTop).toBe(0);
+  await vi.waitFor(() =>
+    expect(stream.scrollHeight - stream.clientHeight - stream.scrollTop).toBe(0),
+  );
 });

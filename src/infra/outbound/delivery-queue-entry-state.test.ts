@@ -32,7 +32,6 @@ import {
   enqueuePreparedDeliveryOnce as publishPrepared,
   failDeliveryAfterPlatformSend as failAfterSend,
   findDeliveryIntentOwner,
-  findDeliveryIntentOwners,
   loadPendingDelivery,
   markDeliveryPlatformSendDispatched as markDispatched,
   reserveDeliveryAttempt,
@@ -335,7 +334,13 @@ describe("delivery queue entry state", () => {
       await ackDelivery(id, undefined, { expectedPlatformSendAttemptId: claimId }, context);
       const mainSql = observeMainThreadSql();
       try {
-        expect(await findDeliveryIntentOwners([id, "missing", id], undefined, context)).toEqual([
+        expect(
+          await Promise.all(
+            [id, "missing", id].map((intentId) =>
+              findDeliveryIntentOwner(intentId, undefined, context),
+            ),
+          ),
+        ).toEqual([
           expect.objectContaining({ status: "completed" }),
           null,
           expect.objectContaining({ status: "completed" }),

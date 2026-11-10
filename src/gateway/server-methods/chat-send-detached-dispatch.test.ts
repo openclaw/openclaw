@@ -10,6 +10,8 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import { createOwnedTestInstance, throwing } from "../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
@@ -19,7 +21,7 @@ import * as chatAdmission from "./chat-send-admission.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
-it("settles a detached dispatch failure when chat-run cleanup throws", async () => {
+it("settles detached dispatch after its parent plugin scope closes and cleanup throws", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await loadOrCreateProcessDeviceIdentityAsync();
     const sessionKey = "agent:main:detached-failure";
@@ -49,29 +51,29 @@ it("settles a detached dispatch failure when chat-run cleanup throws", async () 
       }),
     };
     const context = createGatewayRequestContext(makeContextParams());
-    const removeFaulted = createDeferred();
     const cleanupError = new Error("accepted chat-run cleanup failed");
-    vi.mocked(context.removeChatRun).mockImplementation(() => {
-      removeFaulted.resolve();
-      throw cleanupError;
-    });
+    vi.mocked(context.removeChatRun).mockImplementation(throwing(cleanupError));
     const originalAdmission = chatAdmission.admitChatSend;
     let admission: chatAdmission.AdmittedChatSend | undefined;
     // Admission is already awaited; leave detached dispatch completion unspied.
-    const observeAdmission = vi
-      .spyOn(chatAdmission, "admitChatSend")
-      .mockImplementation(async (params) => {
-        const result = await originalAdmission(params);
-        if (result.ok) {
-          admission = result.value;
-        }
-        return result;
-      });
-    const rejectDispatch = vi
-      .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
-      .mockRejectedValue(
-        new SubagentRegistryMutationRejectedError("Replacement subagent cohort changed"),
-      );
+    using observeAdmission = vi.spyOn(chatAdmission, "admitChatSend");
+    observeAdmission.mockImplementation(async (params) => {
+      const result = await originalAdmission(params);
+      admission = result.ok ? result.value : admission;
+      return result;
+    });
+    const plugin = createOwnedTestInstance("spawn-parent");
+    const registry = plugin.owner!.registry!;
+    const invocations = new PluginInvocationScope(registry, [plugin], { retained: true });
+    const names = plugin.wrap(["child_tool"]);
+    const parentReleased = createDeferred();
+    using rejectDispatch = vi.spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher");
+    rejectDispatch.mockImplementation(async () => {
+      await parentReleased.promise;
+      // Registry adoption enumerates plugin-owned names after workspace preparation.
+      expect([...new Set(names)]).toEqual(["child_tool"]);
+      throw new SubagentRegistryMutationRejectedError("Replacement subagent cohort changed");
+    });
     try {
       const params = {
         sessionKey,
@@ -80,59 +82,57 @@ it("settles a detached dispatch failure when chat-run cleanup throws", async () 
         idempotencyKey: runId,
       };
       const respond = vi.fn<RespondFn>();
-      await handleChatSend({
-        req: { type: "req", id: "detached-proof", method: "chat.send", params },
-        params,
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => true,
-      });
-      expect(respond).toHaveBeenCalledOnce();
-      const [ok, response] = expectDefined(respond.mock.calls[0], "chat.send did not respond");
-      expect([ok, response]).toEqual([true, expect.objectContaining({ runId, status: "started" })]);
-      await removeFaulted.promise;
+      await invocations.run(() =>
+        handleChatSend({
+          req: { type: "req", id: "detached-proof", method: "chat.send", params },
+          params,
+          client,
+          context,
+          respond,
+          isWebchatConnect: () => true,
+        }),
+      );
+      invocations.release();
+      parentReleased.resolve();
+      expect(respond.mock.calls.map(([ok]) => ok)).toEqual([true]);
+      expect(respond.mock.calls[0]?.[1]).toMatchObject({ runId, status: "started" });
+      await expectDefined(admission, "missing admission").gatewayWorkAdmission.released;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      const terminals = vi
-        .mocked(context.broadcast)
-        .mock.calls.filter(
-          ([event, payload]) =>
-            event === "chat" &&
-            isRecord(payload) &&
-            payload.runId === runId &&
-            payload.state === "error",
-        );
+      const events = vi.mocked(context.broadcast).mock.calls;
+      const terminals = events.filter(
+        ([event, payload]) =>
+          event === "chat" &&
+          isRecord(payload) &&
+          payload.runId === runId &&
+          payload.state === "error",
+      );
       expect(terminals).toHaveLength(1);
-      expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
-        ok: false,
-        payload: {
-          runId,
-          status: "error",
-          summary: expect.stringContaining("Replacement subagent cohort changed"),
-        },
+      const outcome = context.dedupe.get(`chat:${runId}`);
+      expect(outcome?.ok).toBe(false);
+      expect(outcome?.payload).toMatchObject({
+        runId,
+        status: "error",
+        summary: expect.stringContaining("Replacement subagent cohort changed"),
       });
-      await expectDefined(admission, "dispatch did not acquire admission").gatewayWorkAdmission
-        .released;
       expect(context.logGateway.warn).toHaveBeenCalledWith(
         expect.stringContaining("accepted chat-run cleanup failed"),
       );
       const transcript = await loadTranscriptEvents(scope);
       expect(
-        transcript.filter(
-          (event) =>
-            isRecord(event) &&
-            event.type === "message" &&
-            isRecord(event.message) &&
-            event.message.role === "user",
-        ),
+        transcript
+          .filter(isRecord)
+          .filter(
+            (event) =>
+              event.type === "message" && isRecord(event.message) && event.message.role === "user",
+          ),
       ).toHaveLength(1);
     } finally {
-      rejectDispatch.mockRestore();
+      invocations.release();
+      parentReleased.resolve();
       admission?.cleanupAdmittedRun();
       await admission?.gatewayWorkAdmission.released;
-      observeAdmission.mockRestore();
     }
   });
 });

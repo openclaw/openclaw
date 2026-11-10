@@ -22,7 +22,7 @@ import {
 } from "../../logging/diagnostic-stability.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
-import { registerSkillUsageTracking } from "../../skills/workshop/skill-usage.js";
+import { registerSkillUsageTracking } from "../../skills/runtime/skill-usage.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,

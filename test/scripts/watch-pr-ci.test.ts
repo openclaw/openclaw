@@ -39,7 +39,7 @@ function readCalls(file: string) {
 }
 function ghProgram(callsPath: string, body: string) {
   return `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 const callsPath = ${JSON.stringify(callsPath)};
 const calls = fs.readFileSync(callsPath, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
@@ -1092,9 +1092,9 @@ if (args[0] === "browse") {
         const error = status === 407 ? "407 Proxy Authentication Required" : "502 Bad Gateway";
         const result = await runWatcher(
           `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
-const marker = path.join(__dirname, "attached");
+import fs from "node:fs";
+import path from "node:path";
+const marker = path.join(import.meta.dirname, "attached");
 const phase = fs.existsSync(marker) ? "watch" : "attach";
 if (phase === ${JSON.stringify(phase)}) {
   console.error(${JSON.stringify(error)});

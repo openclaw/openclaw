@@ -10,6 +10,34 @@ title: "Managed worktrees"
 
 Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before ordinary removal. [Capacity eviction](#capacity-and-eviction) can purge unsaved data when a snapshot cannot be made.
 
+Projects cloned by OpenClaw always start new sessions in managed worktrees,
+including requests that omit `worktree` or set it to `false`. The shared clone is
+the maintenance-owned source for refreshes, Git objects, and templates. The
+project picker offers **New worktree** for these clones; explicitly registered
+folders and agent workspaces can still use **Current checkout**. Opening a
+repository URL also allocates a managed worktree.
+
+Keep disposable builds and temporary clones in the session's `.openclaw/tmp/`,
+which follows the [scratch cleanup policy](#snapshots-cleanup-and-restore). Save durable
+outputs outside that directory. Do not create task worktrees inside a shared
+project clone. Existing sessions retain their accepted working directories;
+start a new project session to leave a previously selected shared checkout.
+Unregistered nested Git worktrees are preserved because OpenClaw cannot prove
+their ownership or lossless removal from their path names alone.
+
+Branch pickers display the last recorded local refs while discovery refreshes in
+background. A refreshing indicator stays visible until the Gateway sends the
+updated options; slow Git keeps cached choices available. Discovery never fetches
+from a remote or scans checkout contents. Ref changes invalidate the suggestions,
+and session creation validates the selected base before changing a checkout.
+Failed or non-Git discovery becomes eligible for another user-requested read after
+five seconds of elapsed time, even if the system wall clock moves backward.
+
+When the selected source is a folder inside a Git repository, **Recents** keeps
+that folder rather than replacing it with the repository root or the managed
+checkout. Choosing the recent source again starts the next session in the same
+selected folder.
+
 When a new chat starts a managed worktree, OpenClaw can begin the first model
 turn while the checkout finishes. It first prepares the project instructions,
 workspace skills, and other prompt files from the selected Git commit in the
@@ -34,13 +62,19 @@ requested worktree name or existing session title can name the checkout.
 Otherwise, allocation chooses a short generated name while display-title
 generation runs in the background.
 
+Worktree registration waits at most 30 seconds for a shared repository Git
+operation, including object repair. After one second it logs the wait; if the
+operation remains busy, creation reports a retryable error naming the repository
+wait. A timed-out registration cannot create a checkout later. Git operations
+that have already started retain their normal execution and cleanup budgets.
+
 Pull-request statistics may refresh Git's cached file timestamps in a managed
 checkout; they do not stage content or change commits. Statistics for user-managed
 checkouts keep their index unchanged.
 
 ## Existing folders on devices
 
-**Existing folder on device** is separate from a managed worktree. A compatible
+An existing folder on a device is separate from a managed worktree. A compatible
 paired session host can run a session directly in an absolute folder on that
 specific device. OpenClaw does not clone, snapshot, transfer, reconcile, or remove
 that folder as a managed worktree. Choose **New workspace** or a repository source
@@ -61,10 +95,53 @@ with sandbox mode `all` or `non-main` in the background. Agents with sandbox mod
 `off` skip background dependency preparation; creator-role-required sandboxes
 still prepare dependencies on first use. A session arriving during preparation
 waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
-still prepare their dependencies on first use. Shutdown cancels preparation and
-waits for the disposable installer to be removed.
+still run dependency installation on first use. When the frozen lockfile and Git
+attributes are unchanged, OpenClaw clones a prepared template into a separate generation,
+imports only the new Git objects, and checks out the source delta before reinstalling
+into its retained dependencies.
+Repeat installation still runs repository lifecycle scripts when manifests and
+lockfiles are unchanged.
+Concurrent requests for that commit share the refresh. Lockfile or attribute changes
+build a fresh template. Refresh never changes the source generation, including while
+another session is cloning it. Each
+clone still receives only the selected source snapshot in its private Git object
+store. Shutdown cancels preparation and
+drains accepted installer cleanup. Validation leaves the last-good generation published;
+refreshes and replacement builds publish atomically after preparation succeeds. An
+interrupted build leaves that previous generation available for requests with matching
+inputs. Before publishing a template, OpenClaw fences
+the disposable installer against restart and verifies that it has stopped. Container
+removal runs serially in the background, so a slow Docker or Podman removal does
+not delay the prepared workspace. Failed removals remain registered, log a warning,
+and retry during housekeeping, including after a Gateway restart. This cleanup
+also runs when ordinary sandbox idle and age pruning are disabled.
 The private checkout storage must support filesystem acceleration, and
 `worktreeAcceleration: false` disables this preparation too.
+
+Sandbox preparation retains up to four recently used generations per repository
+and private template root, across runtime identities. Returning to a retained
+commit reuses its prepared dependencies instead of refreshing the shared template
+back and forth. Every build still passes disk admission. Live clone and installer
+readers can temporarily retain additional generations; cleanup never removes
+their files before those readers settle.
+
+The template registry keeps compressed content manifests in a process-local LRU
+bounded to 64 MiB, keyed by generation, selected commit and build-cache path policy.
+A matching preparation uses that manifest instead of hashing the cloned source again. Commit refreshes reuse
+unchanged file hashes from the previous generation using Git's source delta;
+metadata discovery still records empty directories and changed input markers.
+Missing manifests or changed checkout attributes use a full capture. Canonical
+workspace edits are reconciled separately, so cached template contents never
+replace authored changes. Retirement deletes the cached manifest. After a Gateway
+restart or cache eviction, the first preparation rebuilds it; the template registry
+does not persist manifests.
+
+Older runtime identities become eligible for cleanup after six unused hours.
+The most recently used identity keeps the ordinary idle retention window, subject
+to the four-generation limit. Hourly maintenance shares the existing deletion
+spacing and IO-pressure limits without holding the template publication lock while
+waiting. Completed projections have independent Git metadata and COW file references,
+so retiring their original template does not remove their files or dependencies.
 
 Dependency preparation uses the selected sandbox image, network restrictions,
 and guest working directory, without configured credentials, custom bind mounts,
@@ -79,9 +156,13 @@ cache falls back promptly instead of waiting through network retries.
 
 The reusable generation binds the source commit, frozen lockfile, immutable image
 (including its Node and pnpm versions), guest path, and sandbox policy. A changed
-generation prepares a new template; the existing seven-day template cleanup also
-retires interrupted builders. Installation failure or changed tracked source
-records a warning and keeps a source-only template for that generation. Missing
+generation uses a distinct builder identity, including incremental refreshes.
+Exact commit identity remains necessary because repository lifecycle scripts and
+local packages can consume source files outside the lockfile and manifests.
+Background housekeeping recovers interrupted builders independently of template expiration. Installation failure or changed tracked source
+records a warning with a bounded, redacted tail of the installer output and keeps
+a source-only template for that generation. Repeated preparations with the same
+inputs reuse that source-only template without rerunning the failed install. Missing
 lockfiles, unsupported filesystems, and unavailable images use source-only
 checkout. The agent can install normally in that private checkout. Dependency
 preparation does not update an already-used session when its lockfile changes.
@@ -98,7 +179,23 @@ the original PR selected for subsequent publication; the earlier publication
 receipt remains unchanged.
 Publication and base refresh reuse exact commits already stored locally instead
 of fetching them again. Partial clones still fetch missing contents when the
-operation needs those files.
+operation needs those files. Missing publication commits use the cached target
+and default base tips for fetch negotiation when available, avoiding unrelated
+session histories while retaining commit ancestry and trees. When a cached base
+and an existing promisor registration for the publication URL are available,
+acquisition uses temporary Git metadata and writes directly to the existing
+object store. This avoids scanning every session ref before negotiation; local
+refs and shallow boundaries stay unchanged. The first filtered fetch for a URL
+uses the original repository so Git can register it for later content hydration.
+Managed worktree default-branch refresh uses the same isolated object-store
+transport regardless of origin's configured fetch mappings. It fetches only the
+default branch and publishes its tracking ref; additional PR refspecs and custom
+destinations do not broaden that operation. The shared repository's ref-mutation
+queue is held only for ref publication, so other worktrees can register while
+transport runs. Origin's effective transport settings, other branches, and the
+source `FETCH_HEAD` remain unchanged. An unavailable cached base is fetched through
+the same isolated transport; ordinary explicit fetches still own broader ref
+refresh and repository repair.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
@@ -114,6 +211,11 @@ unchanged hashes while detecting same-size edits and files moved by directory
 renames. Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
 open does not rewrite their inventories.
+
+Archive preparation compares live sandbox files with that accepted tree in the
+filesystem worker. If Git already preserves every accepted file and directory,
+cleanup needs no separate workspace overlay. Ignored files and empty directories
+still retain their restore receipt, and owner protection gates removal.
 
 This storage format requires [shared-state schema 35](/reference/database-schemas/state-schema-history#state-schema-35).
 Let pending workspace operations settle before downgrading. Older builds refuse
@@ -159,11 +261,28 @@ The policy is: **squashed/merged first, then by age including unsaved data**. Cl
 
 Creation reserves a persisted slot before preparing files. Name and owner checks happen at that reservation; materialization, ignored-file provisioning, and setup then run independently of other creates. Publication atomically replaces the pending slot with a live record. Concurrent requests for the same owner wait and reuse its completed checkout. Capacity admission waits for an in-progress creation when its slot prevents admission; pending checkouts are never eviction candidates.
 
+Sandbox projection preparation uses its existing worktree's mutation lease, so a cold
+dependency build does not hold global creation capacity. Preparations of the same
+template still share one build. Disk reservations account for concurrent writes;
+a preparation waiting for disk capacity releases its worktree and projection leases
+before retrying.
+
 Full Git checkout materialization can continue beyond five minutes while Git
 reports progress. Five minutes without output stops the checkout with a retryable
 error; cancellation still stops it immediately. A single large file or a silent
 object lookup can still reach the idle timeout. Registration and other Git
 operations retain their existing execution deadlines.
+
+The `managed worktree preparation` log reports `errorClass` and `errorPhase`
+when preparation throws, including the innermost failed timed phase. Failures
+outside a timed phase use `unattributed`. The receipt omits error messages and
+command output.
+
+Lease acquisition appears separately as `allocationWait` for global slot admission,
+`mutationWait` for checkout custody, and `capacityWait` for disk reservations.
+These durations also appear in slow-chat diagnostics under `worktree.<kind>`.
+`reservation` measures the protected allocation work after acquisition. Phases
+can overlap, so their sum is not the total preparation duration.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
@@ -178,6 +297,15 @@ Live owner leases protect active runs. If creation would require evicting an act
 Eviction preserves source repositories and Git storage needed by other managed checkouts, including objects borrowed through `git clone --shared`. Creation and snapshot restoration also hold source custody, so freeing their slot cannot purge the object donor they need.
 
 Lowering the setting applies the eviction policy to existing checkouts. Disk-space checks still apply independently: raising the count does not bypass the measured allocation and snapshot reserves. See [`worktreeMaxCount`](/gateway/config-runtime#worktreemaxcount).
+
+Creation hydrates only the selected commit's missing contents. Its object census
+returns only missing IDs, keeping preparation responses small for large checkouts.
+The batch fetch uses that commit as its only negotiation tip, avoiding reads of
+unrelated session branch tips even though object negotiation is disabled.
+It does not scan every promisor pack to classify missing objects; that proof belongs to snapshot
+removal, where lost locally authored data must preserve the checkout. Successful
+default-base hydration is already shared by commit while the Git worker remains
+active. Hydration failures are not cached.
 
 ## Filesystem acceleration
 
@@ -197,11 +325,24 @@ APFS and Btrfs operations use isolated native helpers without changing the Gatew
 
 On Windows, point `worktreeRoot` at a directory on a ReFS volume, such as `D:\worktrees`. ReFS provides file block cloning rather than a writable directory snapshot: OpenClaw creates the directory tree and clones each file's data. Full clusters can share storage; partial file tails and filesystem metadata still consume space. The Gateway needs ordinary file access, not administrator access, to clone worktrees on an existing volume.
 
-OpenClaw maintains one reusable source-only template per repository and destination root. Concurrent creates share one cold build and retain the ready template while cloning independently. While that ready generation has readers, further creates acquire reader custody atomically without waiting for the template mutation lease. An idle template is validated under that lease before reuse. Concurrent callers in the same process share the pending preparation wait, then each acquires its own reader custody instead of queuing another mutation lease. Once all readers settle, the next reuse validates the idle template again. Template retirement stops new readers before touching files and waits for accepted readers to settle. A changed commit advances an unused source template through Git, writing only changed files. Checkout policy or `.gitattributes` changes rebuild it so transforms apply even to unchanged blobs. The template is unpublished while updating; its new commit and content identity become available together after Git finishes. While readers still hold a different generation, that request uses normal Git checkout. Cleanup retires templates unused for seven days once their readers have settled. Uncertain native operations retain template custody while their process owner is live or unknown. The next template acquisition or cleanup reclaims readers whose process owner is definitely dead, without requiring an OS reboot. Allocation and template mutation leases retain their existing expiry-based recovery. Git continues to own worktree registration, indexes, and branches; the filesystem backend supplies the shared file contents.
+OpenClaw maintains one reusable source template per repository, destination root, and checkout mode. Concurrent creates share one cold build and retain the ready template while cloning independently. While that ready generation has readers, further creates acquire reader custody atomically without waiting for the template mutation lease. An idle template is validated under that lease before reuse. Concurrent callers in the same process share the pending preparation wait, then each acquires its own reader custody instead of queuing another mutation lease. Once all readers settle, the next reuse validates the idle template again. Template retirement stops new readers before touching files and waits for accepted readers to settle. Replacing an unusable generation unpublishes it under a separate registry key; background housekeeping or `openclaw worktrees gc` removes its files and Git registration. New requests wait for the replacement build, but do not wait for deletion of the old tree. The old generation continues to occupy disk space until cleanup runs. A changed commit advances an unused source template through Git, writing only changed files. Checkout policy or `.gitattributes` changes rebuild it so transforms apply even to unchanged blobs. The template is unpublished while updating; its new commit and content identity become available together after Git finishes. While readers still hold a different generation, that request uses normal Git checkout. Cleanup retires templates unused for seven days once their readers have settled. Uncertain native operations retain template custody while their process owner is live or unknown. The next template acquisition or cleanup reclaims readers whose process owner is definitely dead, without requiring an OS reboot. Allocation and template mutation leases retain their existing expiry-based recovery. Git continues to own worktree registration, indexes, and branches; the filesystem backend supplies the shared file contents.
 
-Sandboxed source-only sessions also reuse templates. Template creation, validation, and index refresh use the same isolated Git configuration as ordinary source-only materialization, so repository filters never run on the host. Their cache identity includes that checkout policy, preventing reuse of a template prepared with host filters.
+Sandboxed source-only sessions also reuse templates. Template creation, validation, and index refresh use the same isolated Git configuration as ordinary source-only materialization, so repository filters never run on the host. Ordinary and source-only checkouts have separate template and prepared-checkout slots per repository and destination root. Alternating between them preserves both templates while their content identities still prevent reuse across checkout policies.
+
+The Gateway keeps one prepared checkout per active repository, destination root, and checkout mode. After a successful accelerated creation, the existing maintenance owner refills that slot asynchronously and serially, subject to normal disk admission. A matching ready slot is consumed once by moving its files and transferring its prepared index into the request's normal Git registration. The request validates only the independent slot it will consume; unused source-template validation stays with refill or a pool miss. It does not clone the template again. Empty, unfinished, modified, or stale slots use the normal checkout path; a changed commit, template generation, or checkout policy cannot reuse the old slot. Setup scripts and included files still run through normal per-request preparation. Hourly cleanup releases slots idle for an hour, and interrupted preparation uses the existing template recovery path. No additional configuration is needed.
 
 Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
+
+Preparation phases are inclusive. For sandbox dependency preparation, `checkout`,
+`setup`, and a concurrent caller's `mutationWait` are inside `templatePrepare`;
+`templateApply` measures each private clone separately. A warm caller waiting
+for a build therefore reports preparation time without running a second install.
+For managed source checkouts, `checkout` includes its child phases; do not add it
+to `templateApply`. Sub-phases separate registration metadata and inspection, commit preparation, clone admission estimates, destination preparation, marker replacement, index location/copy/refresh, prompt publication, template release, and warm-slot acquisition/application. The clone-byte estimate is a disk-admission allowance, not measured bytes written.
+
+The `workspaceWait` phase records waits for private sandbox workspace reconciliation custody and for an already-running preparation. It includes waits behind another caller's dependency-template build, even when the waiting caller ultimately reuses the prepared workspace without selecting a template itself.
+
+The `provision` phase includes ignored-file selection (`provisionInspect`), copy admission and worker preparation (`provisionCopyWait`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue. `provisionCopyWait` includes filesystem worker queueing, startup, and eligibility checks before the first authorized mutation; `provisionCopy` covers the remaining copy work and safety checks. Copying runs in a filesystem worker so other sessions remain responsive; the new worktree waits for copying to finish before becoming ready. `provisionCopy` is absent when no file reaches an authorized mutation. Safe copying requests copy-on-write cloning when supported and falls back to ordinary copying otherwise; destination files remain independent of their source. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
 
 Private Git index copies for template checkouts prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Safety snapshots use Git's read-only status and cached file metadata to identify changes. Clean checkouts reuse the committed tree without building a private snapshot index; changed checkouts hash only selected paths. Hidden index flags do not exclude edits from snapshots.
 
@@ -282,7 +423,11 @@ Each worktree lives at:
 
 The repository fingerprint is the first 16 hexadecimal characters of a SHA-256 hash over the resolved Git common directory and origin URL. A supplied name must match `[a-z0-9][a-z0-9-]{0,63}`. Without a name, OpenClaw generates a readable crustacean-themed name such as `brisk-lobster`. Inferred names already occupied by any registered worktree (including the caller's own removed checkout), local branch, or unmanaged path get a numeric suffix such as `brisk-lobster-2`; only a supplied name reuses or restores the caller's existing record.
 
-OpenClaw creates branch `openclaw/<name>` at the requested base ref. Without a base ref, repositories with an `origin` remote discover and fetch its default branch, reusing a successful preparation for up to 30 seconds across nearby creates. To use a freshly fetched commit immediately, fetch it and select its explicit base ref. If the fetch fails, it uses the last-fetched remote default and logs a warning with the Git failure reason. When `origin` is configured, OpenClaw never substitutes local `HEAD`; if no remote default is available, repair `origin` or choose an explicit base ref. When no `origin` remote is configured, OpenClaw instead uses the primary checkout's current `HEAD` commit, including a detached `HEAD`, without remote discovery, fetching, or local fast-forwarding. Remote options such as `remote.origin.prune` alone do not prevent this local-HEAD path. Concurrent creates share that local base decision, record `HEAD` as the base ref, and log `local HEAD (no origin remote)` with the chosen SHA and commit age. A local default branch is fast-forwarded when it is a strict ancestor of the selected remote commit and the clean primary checkout is on that branch. Dirty, diverged, sparse, locked, separately checked-out, and detached checkouts are preserved. An active Git rebase, am, or bisect in the primary checkout also defers local advancement. Linked-checkout operations defer advancement only when they reserve the default branch, including a rebase that names it in `--update-refs`; unrelated operations do not block it. Creation logs identify the worktree and session owner, chosen base SHA, commit age, and fetch outcome; commits older than seven days produce a warning. An explicitly requested base must resolve to a commit; OpenClaw never substitutes another base for it. Git first registers the branch without materializing files, preserving its normal upstream-tracking rules. OpenClaw then captures that branch's commit and uses it for the size estimate, source template, and checkout. Later changes to the source ref cannot switch the files being written or reuse a smaller commit's allowance.
+OpenClaw creates branch `openclaw/<name>` at the requested base ref. Without a base ref, repositories with an `origin` remote discover and fetch its default branch, reusing a successful preparation for up to 30 seconds across nearby creates. When `origin` still advertises the commit already tracked by the remote default ref, OpenClaw uses it without fetching. To use a freshly fetched commit immediately, fetch it and select its explicit base ref. If the fetch fails, it uses the last-fetched remote default and logs a warning with the Git failure reason. When `origin` is configured, OpenClaw never substitutes local `HEAD`; if no remote default is available, repair `origin` or choose an explicit base ref. When no `origin` remote is configured, OpenClaw instead uses the primary checkout's current `HEAD` commit, including a detached `HEAD`, without remote discovery, fetching, or local fast-forwarding. Remote options such as `remote.origin.prune` alone do not prevent this local-HEAD path. Concurrent creates share that local base decision, record `HEAD` as the base ref, and log `local HEAD (no origin remote)` with the chosen SHA and commit age. A local default branch is fast-forwarded when it is a strict ancestor of the selected remote commit and the clean primary checkout is on that branch. Dirty, diverged, sparse, locked, separately checked-out, and detached checkouts are preserved. An active Git rebase, am, or bisect in the primary checkout also defers local advancement. Linked-checkout operations defer advancement only when they reserve the default branch, including a rebase that names it in `--update-refs`; unrelated operations do not block it. Creation logs identify the worktree and session owner, chosen base SHA, commit age, and fetch outcome; commits older than seven days produce a warning. An explicitly requested base must resolve to a commit; OpenClaw never substitutes another base for it. Git first registers the branch without materializing files, preserving its normal upstream-tracking rules. OpenClaw then captures that branch's commit and uses it for the size estimate, source template, and checkout. Later changes to the source ref cannot switch the files being written or reuse a smaller commit's allowance.
+
+When refreshing a changed default branch, OpenClaw negotiates from its previous
+remote-tracking commit to avoid advertising unrelated session histories. A new
+default branch without a tracked commit uses ordinary Git negotiation.
 
 When a session starts from a GitHub URL and its explicit base is missing locally,
 OpenClaw refreshes the managed clone from its recorded remote before resolving
@@ -297,7 +442,7 @@ Concurrent creations from the same source checkout share remote-default preparat
 
 Git worktree registration, ordinary checkout removal, and source materialization during creation or snapshot restore each have a five-minute timeout. Fetching missing objects for the size estimate uses the same five-minute budget. Remote-default discovery has a 30-second budget and its fetch has a 60-second budget. Other managed-worktree Git commands keep their two-minute timeout, except automatic Git maintenance, which gets 30 minutes. Explicit interrupted-removal recovery joins deletion without a deadline. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
 
-Background Git maintenance, pack-index repair, and removal snapshots use only locally available objects. They never fetch missing objects from a partial clone's promisor remote; explicit fetching remains responsible for downloading those objects. If a required snapshot object is missing, ordinary removal preserves the checkout and reports the failure. Fetch or repair the missing objects in the source repository, then retry removal.
+Background Git maintenance and pack-index repair use only locally available objects. Removal snapshots inspect objects offline, then fetch missing promised blobs from the clone's configured promisor remote in one batch under the removal operation's authority and five-minute fetch budget. The snapshot validates those objects locally before recording the capture or removing the checkout. Missing non-promisor objects, failed fetches, or lost removal authority preserve the checkout; restore remote access or repair the repository before retrying cleanup.
 
 Local agent shells, including worker-local execution and Codex shells in app-server processes started by OpenClaw on the Gateway host, disable Git's automatic maintenance and legacy auto-GC. Execution adapters append these settings to the effective Git parameters, preserving unrelated author and transport settings. This also covers Git child processes such as promisor fetches and applies to the next run in existing worktrees after an update. The Gateway cleanup owner remains responsible for managed-repository maintenance; explicit maintenance commands remain available. Sandboxes, node transports, and externally started app-server peers keep their own policy.
 
@@ -324,9 +469,18 @@ For partial clones, OpenClaw inventories missing objects before estimating check
 
 Empty pack directories skip pack mutation admission; threshold-gated commit-graph and loose-object maintenance still runs. Packs arriving after that inventory are handled by the next maintenance pass.
 
-Pack consolidation keeps promisor and ordinary packs separate. Each group selects up to 1,024 of its smallest eligible packs, capped at 512 MiB of pack data and 32 MiB of index data per pass. Consolidation combines at least two packs only when the smaller inputs together reach the largest selected pack's size. Otherwise it leaves that largest pack untouched and considers the smaller batch. The index budget bounds object metadata even for highly compressed inputs. Git verifies each selected pack and index, then streams all their objects into a replacement without fetching missing partial-clone objects. Inputs retire only after Git publishes the verified replacement. Kept packs, cruft packs, and packs outside the batch remain untouched. This size-based policy lets bounded batches keep converging below 16 packs without repeatedly rewriting a large pack for tiny additions. Maintenance removes optional multi-pack-index lookup metadata, including stale indexes, so Git uses individual pack indexes without a repository-wide rebuild. Verification and rewriting each have a five-minute subprocess budget. Backlogs drain over successive passes; consolidation does not guarantee a fixed pack count for arbitrary repository growth or impose an operating-system RSS limit. Consolidation uses low-priority Git subprocesses, one thread per pack process, and idle I/O priority where `ionice` is available. It shares repository mutation ownership with fetch.
+Pack consolidation keeps promisor and ordinary packs separate. Each group selects up to 1,024 of its smallest eligible packs, capped at 16 GiB of pack data and 128 MiB of index data per pass. The index budget admits multiple large fetch indexes; a budget smaller than two ordinary indexes would leave their packs permanently fragmented. Consolidation combines at least two packs only when the smaller inputs together reach the largest selected pack's size. Otherwise it leaves that largest pack untouched and considers the smaller batch. The index budget bounds object metadata even for highly compressed inputs. Git verifies each selected pack and index, then streams all their objects into a replacement without fetching missing partial-clone objects. The single-threaded writer searches for deltas across separately fetched revisions with a 10-object window and an 8 MiB window-memory budget, so historical blob reads do not permanently retain every revision at full size. This budget bounds the delta-search window, not total process RSS; unrelated objects can cost more background CPU without shrinking. Inputs retire only after Git publishes the verified replacement. Kept packs, cruft packs, and packs outside the batch remain untouched. This size-based policy lets bounded batches keep converging below 16 packs without repeatedly rewriting a large pack for tiny additions. Maintenance removes optional multi-pack-index lookup metadata, including stale indexes, so Git uses individual pack indexes without a repository-wide rebuild. Verification and rewriting each have a 30-minute subprocess budget. Backlogs drain over successive passes; consolidation does not guarantee a fixed pack count for arbitrary repository growth or impose an operating-system RSS limit. Consolidation uses low-priority Git subprocesses, one thread per pack process, and idle I/O priority where `ionice` is available. On delegated Linux services, maintenance runs in the resource-limited `agent-exec` group. Foreground Git retains its Gateway placement. A separate project Git maintenance lease serializes background passes. Verification and rewriting do not hold the project checkout lease, so foreground preparation and fetch can proceed during pack writing. Only optional pack-index invalidation and retirement take the checkout lease without waiting; a busy checkout defers maintenance without consuming its hourly slot. Retirement joins the ref-mutation queue before acquiring the checkout lease and stops starting pack deletions after 250 ms, leaving valid duplicates for a later sweep. Losing maintenance ownership defers the pass instead of suspending the repository. Lease-wait logs include the holder's operation as well as its unique identity.
 
-On Linux, maintenance also removes up to 256 abandoned `tmp_pack_*` files per pass once they are older than 24 hours. An isolated native helper must obtain an exclusive Linux file lease, which detects open users across user IDs and blocks new opens through deletion. It rechecks each file's identity, size, and timestamps before unlinking it. A live user, unsupported filesystem lease, or changed file preserves that temporary file. Other platforms retain temporary packs. Installing an update requires no migration or immediate repack; the next ordinary maintenance pass applies these bounds.
+A fresh clone is not a replacement for a managed project's object store: remote
+history does not include its unpublished commits, local branches, snapshots, or
+worktree reflogs. Replacing the store requires preserving those objects and all
+linked-worktree administrative metadata, plus a quiet window for the directory
+swap. Prefer the existing online, promisor-aware compactor for fragmentation.
+Do not substitute native `maintenance run --task=incremental-repack` on partial
+clones: Git versions including 2.56 can combine promisor and ordinary packs
+without retaining the promisor marker, then expire the original promisor pack.
+
+On Linux, maintenance also removes up to 256 abandoned temporary pack files (`tmp_pack_*`, `tmp_idx_*`, and other `tmp_*_` files Git leaves when interrupted) per pass once they are older than 24 hours. An isolated native helper must obtain an exclusive Linux file lease, which detects open users across user IDs and blocks new opens through deletion. It rechecks each file's identity, size, and timestamps before unlinking it. A live user, unsupported filesystem lease, or changed file preserves that temporary file. Other platforms retain temporary packs. Installing an update requires no migration or immediate repack; the next ordinary maintenance pass applies these bounds.
 
 Transient fetch failures, including an incomplete object transfer, retry once after one second within the original fetch timeout. Cancellation and expired workspace authority stop recovery; a second failure surfaces the Git error. See [Retry policy](/concepts/retry#managed-git-operations).
 
@@ -370,7 +524,17 @@ Add `.worktreeinclude` at the source repository root to copy selected ignored, u
 fixtures/generated/**
 ```
 
+The manifest is read from the actual source checkout and does not need to be committed. Without it, provisioning copies no ignored files; there are no default include patterns. Broad patterns can select build outputs and caches, so include only files the new checkout needs.
+
 Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes and access/modification times at the filesystem’s supported precision. This keeps the timestamp ordering of prepared build inputs and outputs instead of making every copied file look newly written. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
+
+Ordinary removal snapshots omit provisioned files inside `node_modules` directories,
+including nested package dependencies. Reinstall those dependencies after restoring
+the worktree. Other provisioned files, including edited local configuration, remain
+recoverable. Tracked files and non-ignored untracked files keep their normal snapshot
+protection, including files inside `node_modules`. Existing snapshots still restore
+their recorded dependencies; explicit exact-state retirement retains its complete
+provisioned-file capture.
 
 ## Run repository setup
 
@@ -442,6 +606,17 @@ The resulting managed worktree is owned by the session, and every agent run in t
 
 Reply commands `/new` and `/reset`, and automatic idle resets, start a fresh conversation context while keeping the session's managed worktree, project, and working directory. Plain **New Chat** in the Control UI deliberately leaves the previous worktree through the normal cleanup flow.
 
+If an earlier local publication adopted a conversation into a managed worktree,
+create a linked ordinary conversation to continue in its original workspace.
+Call `sessions.create` with the old conversation's key as `parentSessionKey`, the
+absolute original workspace as `cwd`, `worktree: false`, and
+`emitCommandHooks: false`; leave `key` unset. Continue using the returned key.
+The new conversation starts fresh at that folder under the normal workspace-path
+permissions. The old conversation keeps its history, file links, managed checkout,
+and publication receipts. Recover any pending publication there using its original
+request identity. This also keeps each conversation's historical file references
+associated with the source that produced them.
+
 Archiving a session returns after its archive state and publication are committed, preserving the conversation and worktree binding. After sending the response, the Gateway wakes background maintenance to snapshot and remove the checkout. The response does not wait for Git or the worktree allocation lease. A failed metadata write leaves the checkout untouched. If cleanup cannot finish safely, the session stays archived and its files remain available for a later cleanup pass. Hourly garbage collection also picks up automatically archived sessions. Cleanup holds the session lifecycle mutation only while admitting its registry claim and publishing the removed checkout. Git runs outside that mutation. Unarchiving before cleanup starts keeps the existing checkout; during cleanup, unarchive reports that removal is in progress and asks you to retry after it settles. An incomplete deletion requires recovery of its preserved snapshot before unarchive.
 
 Slow archive requests log request-owned phase durations, including snapshot reads,
@@ -487,7 +662,7 @@ workers so they do not wait in the shared SQLite writer queue. Creation, activit
 and removal still await their durable writes; an unchanged registry update does
 not rewrite the row. Inspecting an empty registry does not create its database.
 
-Ordinary removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Host-provisioned ignored files do not enter the Git snapshot or repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Idle cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, ordinary removal stops unless `--force` explicitly permits snapshot loss. Cap eviction is best effort and can purge the checkout without a snapshot.
+Ordinary removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Host-provisioned ignored files do not enter the Git snapshot or repository object database. OpenClaw stores the ignored files it actually provisioned, except files inside `node_modules` directories, in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Idle cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, ordinary removal stops unless `--force` explicitly permits snapshot loss. Cap eviction is best effort and can purge the checkout without a snapshot.
 
 For an ordinary clean checkout, the snapshot reuses the original HEAD tree after checking working files with a private index that clears hidden status flags. It checks object availability in one batch before creating the same recovery commit and snapshot ref. Missing objects preserve the checkout with a repository-repair error, including in partial clones. Exact-state snapshots continue capturing their complete recorded state.
 
@@ -501,13 +676,23 @@ Idle cleanup preserves an outer worktree containing a nested Git repository or l
 
 OpenClaw applies these cleanup rules:
 
+- The hourly maintenance pass deletes disposable entries in each managed worktree's and project checkout's `.openclaw/tmp/` after **24 hours**, measured from the newest file's modification time (or the entry's modification time when it contains no files). The same pass expires `node-coverage-*` directories in the runtime temp root. There is no configuration option. Live or queued runs protect their checkout; unrelated runs do not protect shared runtime coverage. Idle sessions and recorded artifact references do **not** protect scratch. Save durable outputs outside these roots. Missing scratch artifacts display `file expired (scratch cleaned after 24 h)` when listed or opened.
+- Scratch cleanup never follows symlinks. Each pass enumerates at most 4,096 top-level names and inspects at most 256 candidates, with separate limits of 2 million filesystem entries for age scanning and removal, to depth 64. Deletion streams through the tree and pauses 100 milliseconds after every 128 removals. An incomplete scan retains the entry and reports a deferral. The next pass resumes the directory iterator; an entry exceeding the full scan or depth limit is deferred so later entries remain reachable. The cleanup receipt and health log include scratch entries and bytes removed, live-run skips, and deferred inspections; `openclaw worktrees gc --job <id>` shows the latest receipt.
 - At run end, it removes a worktree without Git force only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. It also checks the captured contents for edits hidden by index flags. Otherwise it retains the checkout and records why.
-- Background cleanup snapshots and removes unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. Session worktrees whose owner is archived or absent are eligible without waiting 7 days. Failed owner lookups defer idle cleanup. Run `openclaw worktrees gc` to request cleanup and see its progress.
+- Background cleanup snapshots and removes unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. A stable per-worktree delay of up to one additional hour spreads age-based expiry. Session worktrees whose owner is archived or absent are eligible without waiting 7 days. Failed owner lookups defer idle cleanup. Run `openclaw worktrees gc` to request cleanup and see its progress.
 - The same background owner enforces `worktreeMaxCount`, default `4096`, using the [capacity eviction policy](#capacity-and-eviction). Manual worktrees and unsaved data are eligible when enforcing the cap.
 - Snapshot records remain restorable for 30 days. Cleanup then deletes the snapshot ref and registry row.
 - Live owner leases protect active runs from eviction. Ordinary idle cleanup also preserves foreign or unrecognized Git worktree locks.
 
 Maintenance works in small batches with a time budget, yields between batches, and resumes from its previous position until the sweep finishes; the batch size is not an hourly removal limit. Filesystem scans, lossless checks, and nested-repository inspection run in the Git worker. The Gateway request starts or observes the same background job instead of waiting for the entire fleet to be inspected; `openclaw worktrees gc` reports that owner's progress. Health summaries include each eviction reason and any live-owner refusal.
+
+Gateway idle cleanup starts at most one removal attempt per minute, including
+across archive-triggered sweeps. On Linux, high recent IO pressure or slow btrfs
+commits pause admission for five minutes before checking again. Missing kernel
+counters retain the minute pacing. Waiting releases no snapshots and holds no
+checkout or session mutation custody; the existing live checks still run after
+the wait. Capacity eviction and explicit single-worktree removal retain their
+existing policies.
 
 Cleanup progress and JSON output report `eligibleCount` (removal candidates that passed initial policy and checkout checks), `deferredCount`, and `failedCount`. These are running totals for the current sweep, not a prediction of the next sweep: final authority checks can still defer an eligible removal. Deferred and failed totals count dispositions across all cleanup stages, even when the 64-entry issue detail list is full. Protected checkouts contribute to deferred totals. Retiring an orphan record while preserving its files is reported separately in `orphansRetired` and `retiredCheckoutPaths`; it does not count as a successful checkout deletion.
 
@@ -518,6 +703,10 @@ Each cleanup pass batches session-owner activity and worker-placement reads in d
 Cleanup remembers protected checkouts' deferral reasons and fingerprints instead of repeating unchanged inspections. Managed activity, registry lifecycle changes, and observed checkout or HEAD changes invalidate those decisions. Run `openclaw worktrees gc --retry-deferred` to force another inspection after repairing files or Git metadata. Remembered idle-cleanup protection never exempts a checkout from cap eviction. The nullable derived-state column is added on database admission without a schema-version change; older builds ignore these dispositions and resume their previous inspection behavior. Snapshot retention remains 30 days.
 
 A Git timeout records its removal stage, elapsed milliseconds, attempt count, and next retry time in the existing revision-bound cleanup disposition. Automatic retries wait two hours initially, then double up to 24 hours; passes inside that window skip checkout inventory work. This backoff survives Gateway restarts. An explicit `--retry-deferred` bypasses the wait, while owner activity or a new registry lifecycle invalidates the old disposition. Existing rows require no migration; builds that understand only the deferral reason retain their existing protection behavior. Slow-removal log lines include the checkout path, stage durations, tracked and non-ignored untracked counts when available, and the deferral decision. A timeout during deletion preserves the pending snapshot and prevents a new run from using the potentially partial checkout; use the recovery procedure below.
+
+When cleanup recaptures a workspace created by an older build, current Git eligibility excludes ignored `dist/` and `.cache/openclaw-bun/` output even if an older capture accepted those paths. This retires capture membership without deleting files; tracked or explicitly admitted inputs remain eligible.
+
+A rejected local workspace checkpoint or archive overlay is terminal for automatic application. Accepted checkpoints can accumulate more data than one archive overlay permits; that rejection also preserves the checkout and records the byte count, limit, and largest new paths. Idle cleanup preserves its result reservation, any saved Git ref, and guest files, and records a cleanup deferral instead of retrying removal on a timer. The cleanup summary (`openclaw worktrees gc --json` or `worktrees.gc`) names the reserved result and guest path. Reduce the change and checkpoint the corrected workspace, or recover the files manually, then run `openclaw worktrees gc --retry-deferred`. The existing result byte and path limits remain enforced; an explicit retry does not reapply the rejected result.
 
 Missing or corrupt Git objects also use this persisted backoff. One failed idle-cleanup attempt pauses further idle snapshots for the shared repository, including sibling checkouts in the same sweep. Pack consolidation independently verifies only the bounded batch it may retire; missing snapshot objects do not force a full repository integrity scan or block healthy packs. A damaged selected pack stops that batch without deleting its sources. Checkouts remain protected until the objects needed by their snapshots are available locally. Cleanup reports the repository needing repair and preserves the checkouts. Restore missing objects or repair the clone, then run `openclaw worktrees gc --retry-deferred` to retry immediately. The existing cleanup revision invalidates the remembered failure when its worktree's owner or lifecycle changes; no database migration is required. Explicit removal and capacity eviction retain their existing policies.
 
@@ -588,6 +777,10 @@ openclaw worktrees retire-snapshot <id> \
   --retained-ref refs/heads/<retained-branch> --retained-oid <source-commit> --json
 ```
 
+The retained source must be an ordinary branch outside `openclaw/*` or a
+remote-tracking ref. Managed branches expire with their worktrees and cannot
+serve as durable source custody after the snapshot's registry row is retired.
+
 Retirement applies only to ordinary snapshots, not exact-state recovery snapshots or
 their retained checkouts. It requires identical source trees and retained snapshot-parent history.
 It refuses a live or reappeared checkout, Git registration, changed identity,
@@ -656,7 +849,12 @@ result includes `recoveryPath` and `recoveryRetainedUntil`. This retains writes
 from processes that already held a working directory or open file descriptor;
 Git index/ref locks alone cannot make deleting those bytes safe. The recovery
 path is not an active workspace. Snapshot expiration deletes this retained
-checkout, so do not continue working there or treat it as permanent storage.
+checkout and retires its managed branch once no other checkout or recovery owner
+needs it, so do not continue working there or treat it as permanent storage.
+If branch deletion fails, cleanup records the failure and keeps the registry entry
+for retry. A checkout retired because its Git metadata is missing keeps its branch
+and registry recovery ownership while source files remain, even after the normal
+snapshot retention period.
 
 Exact-state retirement requires a full, non-sparse checkout with Git file refs
 and supported Git index extensions. It holds native Git index and ref locks while
@@ -777,6 +975,20 @@ openclaw worktrees gc --job <id>
 
 `--json` prints the receipt, including the job state and current cleanup summary. Polling observes the job without starting another pass. Enqueue requests made while a job is queued or running return that same job; only the latest job is retained, and restarting the Gateway discards its receipt. To force reinspection of unchanged deferred checkouts, start a new job with `--retry-deferred` after any current job finishes.
 
+Ordinary GC also removes orphaned local `openclaw/*` branches in repositories
+recorded by the worktree registry or pending creation. It preserves branches
+attached to any Git worktree, referenced by a live or retained registry record, or
+reserved by pending creation. Recovery refs without a matching registry record
+preserve all branch candidates in that repository. Other local branches and
+remote-tracking refs are outside this cleanup's scope.
+
+Cleanup holds the existing allocation lease and revalidates its live authority
+immediately before each native Git deletion. Successful deletion counts appear in
+the worktree log; failures appear in the GC receipt and are retried on a later pass.
+No new persisted cleanup flag is required: existing recovery records protect their
+branches until their recovery obligations expire. Repositories with no remaining
+registry or pending records are not discovered by this sweep.
+
 For partial clones, `openclaw worktrees gc --retry-deferred` also checks the
 objects needed by all Git-registered worktree indexes and current HEAD trees
 during repository maintenance.
@@ -807,6 +1019,9 @@ next mutation. Start a new job to use the updated settings.
 
 Without a running local Gateway, `openclaw worktrees gc` runs cleanup to completion under exclusive local state ownership and returns the completed summary. Offline mode cannot poll Gateway jobs with `--job`. The CLI includes partial results and recovery locations in its output and exits nonzero for partial cleanup.
 
+An empty or offline `--job` selector and an unreadable exact-state request report
+their specific input error and exit with code 1 before cleanup or removal.
+
 ## Gateway methods
 
 | Method                     | Purpose                                                                 |
@@ -816,11 +1031,11 @@ Without a running local Gateway, `openclaw worktrees gc` runs cleanup to complet
 | `worktrees.create`         | Create or reuse a named managed worktree.                               |
 | `worktrees.remove`         | Snapshot and remove a worktree. Forced removals report `snapshotError`. |
 | `worktrees.restore`        | Restore a removed worktree from its snapshot.                           |
-| `worktrees.gc`             | Queue background cleanup or read a job's progress.                      |
+| `worktrees.gc`             | Queue cleanup and read progress.                                        |
 | `worktrees.recoverRemoval` | Complete an interrupted removal from the exact pending snapshot.        |
 | `worktrees.retireSnapshot` | Retire one redundant snapshot with exact retained-source guards.        |
 
-`worktrees.list` requires `operator.read`. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
+`worktrees.list` requires `operator.write` because it returns every session's worktree paths, repository roots, and branches. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches. Unchanged inventories are reused after checking checkout, ref, configuration, and object-storage metadata, including repositories with large pack directories; changed metadata refreshes the inventory. Remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
 
 Owner-routed requests require `operator.admin` and the corresponding
 [capability](/gateway/protocol/versioning#local-state-owner-routing). Their wire
@@ -831,7 +1046,7 @@ fields and results are:
 | `worktrees.create`         | `repoRoot`; optional `name`, `baseRef`, `profiles`, `expectedRepoIdentity`                                                | Full worktree record, including any `gcProtection`. The CLI captures the physical repository identity before dispatch. |
 | `worktrees.remove`         | `id`; optional, mutually exclusive `force`, `ifLossless`, or `exactState`                                                 | `removed`, optional `snapshotRef`, `snapshotError`, `recoveryPath`, `recoveryRetainedUntil`, and lossless `cleanup`.   |
 | `worktrees.restore`        | `id`; optional `recoverExactState`                                                                                        | Full restored worktree record.                                                                                         |
-| `worktrees.gc`             | Optional `jobId` to poll; optional `retryDeferred: true` when queuing a new job                                           | Job receipt with the current cleanup summary; see below.                                                               |
+| `worktrees.gc`             | Optional `jobId` to poll; `retryDeferred: true` when queuing                                                              | Job receipt.                                                                                                           |
 | `worktrees.recoverRemoval` | `id`, `snapshot` (the expected pending snapshot OID)                                                                      | `removed: true`, optional `snapshotRef`.                                                                               |
 | `worktrees.retireSnapshot` | `id`, `expectedSnapshotRef`, `expectedSnapshotOid`, `expectedRemovedAt`, `retainedSourceRef`, `expectedRetainedSourceOid` | `retired: true`, `id`.                                                                                                 |
 
@@ -899,6 +1114,33 @@ create a new card to start from a different base. Reusing the same ref, or omitt
 it, does not refresh the checkout when a branch name advances.
 
 For a workspace-bound caller, `path` and the repository root must exactly match the target agent workspace. Workboard then runs directly in that directory and records a directory workspace instead of host-materializing a managed worktree. The target must use a writable, non-shared Docker sandbox for the same workspace, its live container hash must match the requested mounts and policy, and it must not expose elevated execution, host control, host-wide sessions, persisted host/node execution, or unclassified plugin and MCP tools. If the target policy or live container is broader, dispatch leaves the card unclaimed and reports the incompatible state.
+
+## Shared clone history
+
+Managed project preparation, clone reuse, and refresh warn when the base has
+shallow history and continue without automatic repair. The same condition is
+visible in `openclaw doctor`. Run `openclaw doctor --fix` during a maintenance
+window: fetching full history retains `blob:none` and existing objects, but can
+take minutes while holding the project checkout lifecycle lease. Ordinary
+preparation never starts that repair. Operator-registered repositories keep
+their own history policy.
+
+Doctor fetches the registry's recorded repository URL through the same isolated
+transport as managed refresh, ignoring checkout `origin`, URL rewrites, and
+credential helpers. It has no admitted Control UI/Gateway credential context and
+does not borrow tokens from configuration or the environment. Authentication
+failure leaves history shallow and reports that the operator must use an approved
+authenticated unshallow under the checkout lifecycle lease. Git cannot prompt;
+the explicit maintenance fetch has a 30-minute timeout. The shallow boundary is
+removed only after complete history arrives, with Git's shallow lock held for
+the maintenance operation. A shallow upstream leaves the original boundary intact.
+
+Linked worktrees share the base's shallow boundary. Do not run `git fetch` or
+`git pull` with `--depth`, `--shallow-since`, or `--shallow-exclude` in a managed
+base or its linked worktrees. Fetch the required ref without a depth limit;
+Git retains the configured blob filter. Git has no repository setting that
+prevents an explicit depth fetch, so an already-running agent can still make
+the shared clone shallow until an operator repairs it.
 
 ## Related
 

@@ -210,6 +210,7 @@ export async function assertUpdateCandidateExecutor(params: {
       "Starting the update requires its original update process.",
     );
   }
+  let unsupported = "unreported";
   const supported = await isUpdatedInstallGatewayExecutorSupported({
     root: params.root,
     env: resolveUpdatedInstallCommandEnv({
@@ -219,12 +220,15 @@ export async function assertUpdateCandidateExecutor(params: {
     executor,
     timeoutMs: params.timeoutMs,
     nodeRunner: params.nodeRunner,
+    onUnsupported: (condition) => {
+      unsupported = condition;
+    },
   });
   params.assertCurrent();
   if (!supported) {
     throw new UpdatePreMutationError(
       "target-native-unsupported",
-      "Target runtime cannot fence update-owned native commands; refusing before Gateway stop or package activation.",
+      `Target runtime cannot fence update-owned native commands (executor check: ${unsupported}); refusing before Gateway stop or package activation.`,
     );
   }
 }
@@ -263,6 +267,7 @@ export function createUpdateDatabaseFamilyAdmission(
     | "packageInstallTarget"
     | "opts"
     | "shouldRestart"
+    | "executionGuards"
   >,
 ) {
   type Context = { config: OpenClawConfig; env: NodeJS.ProcessEnv };
@@ -303,6 +308,7 @@ export function createUpdateDatabaseFamilyAdmission(
       for (const { env } of pending) {
         const result = await runUpdateCandidateAdmission({
           candidateRoot,
+          assertCurrent: execution.executionGuards.assertCurrent,
           nodeRunner: execution.packageUpdateNodeRunner,
           timeoutMs: execution.updateStepTimeoutMs,
           env,
@@ -333,6 +339,7 @@ export function createUpdateDatabaseFamilyAdmission(
             supervisor: { version: VERSION, host: os.hostname(), pid: process.pid },
           },
         });
+        execution.executionGuards.assertCurrent();
         if (
           result.verdict?.verdict !== "admit" ||
           !result.verdict.facts.checks.some(

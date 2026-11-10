@@ -35,6 +35,7 @@ export type AgentSchemaInspectionInput = {
   verifyCurrentSchemaShape?: boolean;
   inspectOwnership?: boolean;
   requireStartupMigrationReadiness?: boolean;
+  allowClosedWal?: boolean;
   deferRuntimeIntegrity?: boolean;
   startupIntegrityVerification?: { verifiedAt: number };
   inspectEmptyStore?: boolean;

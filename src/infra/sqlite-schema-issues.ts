@@ -36,8 +36,8 @@ export type SqliteSchemaCompatibility = {
   excludedIndexes?: readonly string[];
   /**
    * Canonical additive tables that may be absent until their owning feature
-   * performs its one-time lazy ensure. Present tables still require the exact
-   * canonical shape.
+   * performs its one-time lazy ensure. Present tables require the canonical
+   * shape or an explicitly declared column-definition variant.
    */
   allowedMissingTables?: readonly string[];
   /** Same-version non-unique indexes that a writable cold open lazily repairs. */
@@ -45,13 +45,14 @@ export type SqliteSchemaCompatibility = {
   /** Additive columns that may be absent until their owning feature lazily ensures them. */
   allowedMissingColumns?: readonly string[];
   /**
-   * Exact definitions produced by supported additive migrations when SQLite
-   * requires a temporary default that the clean schema does not retain.
+   * Exact owner-declared variants, including supported migration defaults and
+   * archival columns deliberately absent from fresh schemas. Keys bind both
+   * table and column; unlisted declarations remain refused.
    */
   allowedColumnDefinitions?: Readonly<Record<string, readonly string[]>>;
   /**
    * Allow unexpected columns declared as a name plus one bare nullable SQLite
-   * STRICT datatype. Allowed-missing tables remain exact when present.
+   * STRICT datatype. Allowed-missing tables require explicitly declared variants.
    */
   allowCompatibleAdditiveColumns?: boolean;
   /**

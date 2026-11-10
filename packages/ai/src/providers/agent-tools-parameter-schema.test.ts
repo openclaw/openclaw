@@ -24,6 +24,7 @@ import {
 } from "./openai-tool-schema-compat.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 import { toolSchemaDepthEntrypoint } from "./tool-schema-depth-runtime.test-support.js";
+import * as schemaDepth from "./tool-schema-depth.js";
 import { MAX_TOOL_SCHEMA_DEPTH, truncateToolSchemaDepth } from "./tool-schema-depth.js";
 import {
   publishRuntimeToolInputSchema,
@@ -67,6 +68,33 @@ const batch = {
   ...closed({ items: { type: "array", items: { anyOf: variants } } }),
   $defs: { input: detail },
 };
+
+it("reuses depth admission for cached schemas and admits changed identities and provider profiles", () => {
+  using depth = vi.spyOn(schemaDepth, "truncateToolSchemaDepth");
+  const source = required({ query: { type: "string" } });
+  const first = normalize(source);
+  const firstBytes = JSON.stringify(first);
+  depth.mockClear();
+  expect(normalize(source)).toEqual({
+    type: "object",
+    properties: { query: { type: "string" } },
+    required: ["query"],
+  });
+  expect(JSON.stringify(normalize(source))).toBe(firstBytes);
+  expect(depth).not.toHaveBeenCalled();
+
+  const replacement = required({ query: { type: "number" } });
+  expect(normalize(replacement)).toHaveProperty("properties.query.type", "number");
+  expect(depth).toHaveBeenCalledWith(replacement, undefined);
+  depth.mockClear();
+  normalize(source, { modelProvider: "google" });
+  expect(depth).toHaveBeenCalledWith(source, undefined);
+  depth.mockClear();
+  normalize(source);
+  normalize(replacement);
+  normalize(source, { modelProvider: "google" });
+  expect(depth).not.toHaveBeenCalled();
+});
 
 it.each(["$defs", "definitions"])("coerces tool calls without expanding %s", (table) => {
   const ref = (name: string) => ({ $ref: `#/${table}/${name}` });

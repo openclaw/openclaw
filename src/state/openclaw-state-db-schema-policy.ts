@@ -13,6 +13,7 @@ const schemaPolicies = resolveGlobalSingleton(
   () => ({
     scopes: new AsyncLocalStorage<ExistingSchemaScope>(),
     existingDatabases: new WeakMap<EngineConnection, string>(),
+    hasAdmittedExistingDatabase: false,
   }),
 );
 
@@ -124,6 +125,7 @@ export function recordExistingOpenClawStateSchemaDatabase(
     throw new Error("Existing shared-state schema admission requires its active path scope.");
   }
   schemaPolicies.existingDatabases.set(database, scope.canonicalPath);
+  schemaPolicies.hasAdmittedExistingDatabase = true;
 }
 
 /** The cache owns the handle inventory, including owners retained after failed cleanup. */
@@ -135,6 +137,10 @@ export function assertExistingOpenClawStateSchemaCacheAdmission(
   },
 ): void {
   const scopedPath = getExistingOpenClawStateSchemaPath();
+  // Once a restricted handle exists, keep checking even through failed cleanup and native reopen.
+  if (!schemaPolicies.hasAdmittedExistingDatabase) {
+    return;
+  }
   const scope = schemaPolicies.scopes.getStore();
   const requested = scope ? resolveDatabasePath({ path: pathname }) : undefined;
   let resolved =

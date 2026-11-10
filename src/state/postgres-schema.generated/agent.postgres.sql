@@ -304,6 +304,18 @@ CREATE TABLE "session_conversations" (
   CHECK (("role" IN ('primary', 'participant', 'related')))
 );
 
+CREATE TABLE "session_creation_operations" (
+  "operation_digest" text COLLATE "C" NOT NULL,
+  "request_fingerprint" text COLLATE "C" NOT NULL,
+  "session_key" text COLLATE "C" NOT NULL,
+  "session_id" text COLLATE "C" NOT NULL,
+  "lifecycle_revision" text COLLATE "C",
+  "role" text COLLATE "C",
+  "scopes_json" text COLLATE "C" NOT NULL,
+  "expires_at" bigint NOT NULL,
+  PRIMARY KEY ("operation_digest")
+);
+
 CREATE TABLE "session_entry_snapshots" (
   "session_key" text COLLATE "C" NOT NULL,
   "field" text COLLATE "C" NOT NULL,
@@ -459,6 +471,15 @@ CREATE TABLE "session_suggestions" (
   CHECK (("state" IN ('pending', 'accepted', 'dismissed'))),
   CHECK (("dispatch_resolution" IN ('send', 'queue', 'edit', 'dismiss'))),
   CHECK (("dispatch_token" IS NULL AND "dispatch_started_at" IS NULL AND "dispatch_resolution" IS NULL) OR ("dispatch_token" IS NOT NULL AND "dispatch_started_at" IS NOT NULL AND "dispatch_resolution" IS NOT NULL))
+);
+
+CREATE TABLE "session_transcript_active_event_facts" (
+  "session_id" text COLLATE "C" NOT NULL,
+  "seq" bigint NOT NULL,
+  "serialized_bytes" bigint NOT NULL,
+  "dependency_navigation_json" text COLLATE "C" NOT NULL,
+  PRIMARY KEY ("session_id", "seq"),
+  CHECK (("serialized_bytes" >= 1))
 );
 
 CREATE TABLE "session_transcript_active_events" (
@@ -663,7 +684,7 @@ CREATE TABLE "transcript_events" (
   "navigation_valid" bigint NOT NULL DEFAULT 1,
   PRIMARY KEY ("session_id", "seq"),
   CHECK ("event_utf8_bytes" IS NULL OR ("event_utf8_bytes" >= 0)),
-  CHECK (("event_json" IS NOT NULL AND "event_zstd" IS NULL) OR ("event_json" IS NULL AND "event_zstd" IS NOT NULL AND "event_utf8_bytes" IS NOT NULL AND ("event_utf8_bytes" BETWEEN 1 AND 4194304) AND (octet_length("event_zstd") BETWEEN 1 AND 4194304) AND "navigation_json" IS NOT NULL)),
+  CHECK (("event_json" IS NOT NULL AND "event_zstd" IS NULL) OR ("event_json" IS NULL AND "event_zstd" IS NOT NULL AND "event_utf8_bytes" IS NOT NULL AND ("event_utf8_bytes" BETWEEN 1 AND 4194304) AND (octet_length("event_zstd") BETWEEN 1 AND 4194304) AND "navigation_json" IS NOT NULL) OR ("event_json" IS NULL AND "event_zstd" IS NULL AND "event_utf8_bytes" IS NOT NULL AND ("event_utf8_bytes" BETWEEN 1 AND 4194304) AND "navigation_json" IS NOT NULL)),
   CHECK ("openclaw_transcript_navigation_check"("navigation_json"))
 );
 
@@ -690,6 +711,8 @@ CREATE INDEX "idx_agent_context_engine_turn_outbox_engine" ON "context_engine_tu
 
 CREATE INDEX "idx_agent_conversation_deliveries_reply" ON "conversation_deliveries" (("conversation_id") ASC, ("platform_message_id") ASC NULLS FIRST, ("prepared_message_id") ASC NULLS FIRST) WHERE ("status" IN ('queued', 'sent', 'replied'));
 
+CREATE INDEX "idx_agent_conversation_deliveries_source_session" ON "conversation_deliveries" (("source_session_key") ASC NULLS FIRST, ("operation_id") ASC);
+
 CREATE INDEX "idx_agent_conversation_deliveries_updated" ON "conversation_deliveries" (("updated_at") DESC, ("operation_id") ASC);
 
 CREATE UNIQUE INDEX "idx_agent_conversations_identity" ON "conversations" (("channel") ASC, ("account_id") ASC, ("kind") ASC, ("peer_id") ASC, (coalesce("parent_conversation_id", '')) ASC NULLS FIRST, (coalesce("thread_id", '')) ASC NULLS FIRST);
@@ -712,7 +735,11 @@ CREATE INDEX "idx_agent_session_conversations_conversation" ON "session_conversa
 
 CREATE UNIQUE INDEX "idx_agent_session_conversations_primary" ON "session_conversations" (("session_id") ASC) WHERE ("role" = 'primary');
 
+CREATE INDEX "idx_agent_session_creation_operations_expiry" ON "session_creation_operations" (("expires_at") ASC);
+
 CREATE INDEX "idx_agent_session_goal_operations_expiry" ON "session_goal_operations" (("expires_at") ASC);
+
+CREATE INDEX "idx_agent_session_input_completions_session_key" ON "session_input_completions" (("session_key") ASC);
 
 CREATE INDEX "idx_agent_session_members_identity" ON "session_members" (("identity_id") ASC, ("session_key") ASC);
 
@@ -817,6 +844,8 @@ ALTER TABLE "session_progress_cards" ADD FOREIGN KEY ("session_key") REFERENCES 
 ALTER TABLE "session_reactions" ADD FOREIGN KEY ("session_key") REFERENCES "session_nodes" ("session_key") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "session_suggestions" ADD FOREIGN KEY ("session_key") REFERENCES "session_nodes" ("session_key") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
+
+ALTER TABLE "session_transcript_active_event_facts" ADD FOREIGN KEY ("session_id", "seq") REFERENCES "session_transcript_active_events" ("session_id", "event_seq") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "session_transcript_active_events" ADD FOREIGN KEY ("session_id", "event_seq") REFERENCES "transcript_events" ("session_id", "seq") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 

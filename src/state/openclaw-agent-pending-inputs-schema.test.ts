@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -24,6 +24,7 @@ import {
 } from "./openclaw-agent-db.js";
 import {
   ensureSessionPendingInputsSchema,
+  ensureSessionInputCompletionsSchema,
   hasSessionPendingInputsSchema,
 } from "./openclaw-agent-pending-inputs-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -64,6 +65,26 @@ async function stage(
 const metadataSql = "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'";
 
 describe("pending input additive schema", () => {
+  it("installs the completion cascade index once through first-use schema facts", () => {
+    using database = openNodeSqliteDatabase(":memory:");
+    database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    database.exec("DROP INDEX IF EXISTS idx_agent_session_input_completions_session_key");
+    admitSqliteSchema(database);
+    ensureSessionInputCompletionsSchema(database);
+    expect(
+      database
+        .prepare("EXPLAIN QUERY PLAN DELETE FROM session_nodes WHERE session_key=?")
+        .all("missing"),
+    ).not.toContainEqual(expect.objectContaining({ detail: "SCAN session_input_completions" }));
+    const exec = vi.spyOn(database, "exec");
+    try {
+      ensureSessionInputCompletionsSchema(database);
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
   beforeEach(() => {
     setRuntimeConfigSnapshot({});
   });

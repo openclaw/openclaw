@@ -16,6 +16,7 @@ import {
   createCtx,
   createRecordInboundSession,
   createDispatch,
+  createDirectDeliveryDispatch,
   createReplyDispatchReceipt,
   expectDispatched,
 } from "./run-channel-turn.delivery.test-helpers.js";
@@ -83,13 +84,16 @@ describe("channel turn pipeline", () => {
     const onError = vi.fn();
 
     await expect(
-      runDelivery({
-        deliver: async () => ({ messageIds: ["om-visible"], visibleReplySent: true }),
-        onDelivered: () => {
-          throw observerError;
+      runDelivery(
+        {
+          deliver: async () => ({ messageIds: ["om-visible"], visibleReplySent: true }),
+          onDelivered: () => {
+            throw observerError;
+          },
+          onError,
         },
-        onError,
-      }),
+        createDirectDeliveryDispatch(),
+      ),
     ).rejects.toBe(observerError);
 
     fixture.expectMessagesSent(["reply", "om-visible"]);

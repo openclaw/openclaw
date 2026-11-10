@@ -9,7 +9,6 @@ openclaw-chat-outbox-recovery:empty {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
-  scrollbar-width: thin;
 }
 
 .chat-outbox-recovery-row {

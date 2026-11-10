@@ -63,6 +63,13 @@
   gap: var(--space-2);
 }
 
+/* Action buttons share the control height of the refresh icon and the filter fields beside them. */
+.transcripts-actions .btn,
+.transcripts-search .btn {
+  height: var(--settings-control-height);
+  padding-block: 0;
+}
+
 .transcripts-actions svg,
 .transcripts-search svg,
 .transcripts-back svg {
@@ -107,6 +114,11 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+}
+
+/* Only phones join these two lines; elsewhere they stay separate column items. */
+.meetings-row__people {
+  display: contents;
 }
 
 .meetings-row--silent .meetings-row__title {
@@ -342,5 +354,204 @@
 @media (max-width: 400px) {
   .transcripts-filters__advanced {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Search and a filter button replace the filter block; Filters renders these at the same query. */
+.transcripts-filters--phone {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+}
+
+.transcripts-filters__search {
+  --settings-control-height: 44px;
+  position: relative;
+}
+
+.transcripts-filters__search-icon {
+  position: absolute;
+  inset-inline-start: 10px;
+  inset-block-start: 50%;
+  display: flex;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.transcripts-filters__search-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.transcripts-filters__search input {
+  height: var(--settings-control-height);
+  padding-inline-start: 32px;
+}
+
+.transcripts-filters__trigger,
+.transcripts-page-menu__trigger {
+  --settings-control-height: 44px;
+  justify-content: center;
+  width: var(--settings-control-height);
+  min-width: 0;
+  height: var(--settings-control-height);
+  padding: 0;
+  border-radius: var(--field-radius);
+}
+
+.transcripts-filters__trigger svg,
+.transcripts-page-menu__trigger svg {
+  width: 15px;
+  height: 15px;
+}
+
+.transcripts-filter-popover__panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* The sheet owns the inset. */
+.oc-sheet .transcripts-filter-popover__panel {
+  width: auto;
+  padding: 0;
+}
+
+/* A full date plus its calendar needs more than half of the narrowest phones. */
+.transcripts-filter-popover .transcripts-filters__advanced {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  /* A date label can wrap in wide-glyph themes; the two inputs stay level. */
+  align-items: end;
+  margin-block-start: 0;
+}
+
+.transcripts-filter-popover .transcripts-filters__advanced > :nth-child(-n + 3) {
+  grid-column: 1 / -1;
+}
+
+/* The calendar reads like a select's chevron: same color, stroke, size and inset. */
+.transcripts-filter-popover input[type="date"] {
+  padding-inline-end: 10px;
+}
+
+.transcripts-filter-popover input[type="date"]::-webkit-calendar-picker-indicator {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  background: var(--text-tertiary);
+  opacity: 1;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 2v4'/%3E%3Cpath d='M16 2v4'/%3E%3Crect width='18' height='18' x='3' y='4' rx='2'/%3E%3Cpath d='M3 10h18'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+.transcripts-filter-popover .transcripts-caption {
+  margin: 0;
+}
+
+.transcripts-filter-popover__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* The menu sits beside the title instead of on a row of its own. */
+  .transcripts-workspace > .content-header.hub-page-header--untabbed {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title actions";
+    align-items: start;
+    column-gap: var(--space-3);
+  }
+
+  .transcripts-workspace > .content-header .hub-page-header__actions {
+    justify-self: end;
+  }
+
+  .transcripts-library {
+    padding-block-start: 0;
+  }
+
+  /* The row rail already separates meetings, so the text can sit closer to it. */
+  .meetings-day .transcripts-list {
+    padding-inline-start: 0;
+  }
+
+  .meetings-day .transcripts-list > li::before {
+    inset-inline-start: -4px;
+  }
+
+  .meetings-day .transcripts-list__entry {
+    padding-inline: var(--space-3) 0;
+    border-block-start: 0;
+  }
+
+  /* The badge keeps the first line by truncating the source and time beside it. */
+  .meetings-row__status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .meetings-row__when {
+    overflow: hidden;
+    min-width: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meetings-row__status .meetings-live {
+    flex: none;
+  }
+
+  /* People truncate first; the utterance count stays whole on the same line. */
+  .meetings-row__people {
+    display: flex;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .meetings-row__participants + .meetings-row__meta {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .meetings-row__participants + .meetings-row__meta::before {
+    margin-inline-end: var(--space-1);
+    content: "\00b7";
+  }
+
+  .transcripts-reader {
+    padding-inline: var(--space-4);
+  }
+
+  .transcripts-reader__header h1 {
+    font-size: 22px;
+  }
+
+  /* One row with or without Clear search; a long query scrolls inside its field. */
+  .transcripts-search {
+    flex-wrap: nowrap;
+  }
+
+  .transcripts-search .field {
+    flex: 1 1 0;
+  }
+
+  .transcripts-search .btn {
+    flex: none;
+  }
+
+  .transcripts-search input {
+    text-overflow: ellipsis;
+  }
+}
+
+/* The page header drops its own inset at this width, so the content follows it to the page margin. */
+@media (max-width: 640px) {
+  .transcripts-library,
+  .transcripts-reader {
+    padding-inline: 0;
   }
 }

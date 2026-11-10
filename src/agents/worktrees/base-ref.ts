@@ -1,3 +1,4 @@
+import { readFile } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -19,6 +20,8 @@ import {
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { startWorktreeWait } from "./allocation.js";
+import { fetchRemoteDefault } from "./base-fetch.js";
+import type { ResolvedWorktreeBase } from "./base-ref.types.js";
 import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
@@ -27,16 +30,6 @@ import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import type { CreateManagedWorktreeParams, WorktreeWaitBudget } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
-
-type ResolvedWorktreeBase = {
-  commit: string;
-  gitOperand: string;
-  recordRef: string;
-  noOrigin?: true;
-  fetchSucceeded?: boolean;
-  warning?: string;
-  preparationKey?: string;
-};
 
 type RemoteDefaultAttempt = {
   pending: Promise<ResolvedWorktreeBase & { branch?: string }>;
@@ -415,106 +408,6 @@ async function prepareDefaultBase(
   return { commit, gitOperand: commit, recordRef: "HEAD", noOrigin: true };
 }
 
-async function fetchRemoteDefault(
-  repoRoot: string,
-  options: NonNullable<Parameters<typeof runGit>[2]>,
-): Promise<ResolvedWorktreeBase & { branch: string }> {
-  const cached = await runGit(
-    repoRoot,
-    ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
-    options,
-  );
-  if (cached.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  const advertised = await runGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"], {
-    ...options,
-    timeoutMs: 30_000,
-  });
-  if (advertised.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git ls-remote origin HEAD", advertised);
-    options.signal.throwIfAborted();
-  }
-  const advertisedOk = advertised.termination === "exit" && advertised.code === 0;
-  const advertisedBranch = advertisedOk
-    ? /^ref: refs\/heads\/(.+)\tHEAD\r?$/mu.exec(advertised.stdout)?.[1]
-    : undefined;
-  const cachedBranch =
-    cached.termination === "exit" && cached.code === 0
-      ? /^refs\/remotes\/origin\/(.+)$/u.exec(cached.stdout.trim())?.[1]
-      : undefined;
-  let branch = advertisedBranch ?? cachedBranch;
-  const warnings: string[] = [];
-  if (!advertisedOk) {
-    warnings.push(commandError("git ls-remote origin HEAD", advertised).message);
-  } else if (!advertisedBranch) {
-    warnings.push("origin did not advertise a default branch; using its cached default.");
-  }
-  if (!branch || branch === "HEAD") {
-    throw new Error(
-      `Remote default branch is unavailable. Repair origin or choose an explicit worktree base ref. ${redactSensitiveText(warnings.join("\n"))}`,
-    );
-  }
-  let remoteRef = `refs/remotes/origin/${branch}`;
-  const fetched = await runGit(
-    repoRoot,
-    [
-      "fetch",
-      "--no-auto-maintenance",
-      "--no-recurse-submodules",
-      "--no-tags",
-      "origin",
-      `+refs/heads/${branch}:${remoteRef}`,
-    ],
-    { ...options, timeoutMs: 60_000 },
-  );
-  if (fetched.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git fetch origin default branch", fetched);
-    options.signal.throwIfAborted();
-  }
-  const fetchSucceeded = fetched.termination === "exit" && fetched.code === 0;
-  if (!fetchSucceeded) {
-    warnings.push(commandError("git fetch origin default branch", fetched).message);
-    branch = cachedBranch ?? branch;
-    remoteRef = `refs/remotes/origin/${branch}`;
-  }
-  const verified = await runGit(
-    repoRoot,
-    ["rev-parse", "--verify", `${remoteRef}^{commit}`],
-    options,
-  );
-  if (verified.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git rev-parse remote default", verified);
-    options.signal.throwIfAborted();
-  }
-  if (verified.termination !== "exit" || verified.code !== 0) {
-    throw new Error(
-      `Remote default ${remoteRef} is unavailable. Repair origin or choose an explicit worktree base ref. ${redactSensitiveText(warnings.join("\n"))}`,
-    );
-  }
-  const commit = requireGitCommandOutput("git rev-parse remote default", verified).trim();
-  if (fetchSucceeded && advertisedBranch && cachedBranch !== branch) {
-    await requireGit(repoRoot, ["symbolic-ref", "refs/remotes/origin/HEAD", remoteRef], options);
-  }
-  return {
-    branch,
-    commit,
-    gitOperand: remoteRef,
-    recordRef: `origin/${branch}`,
-    fetchSucceeded,
-    ...(warnings.length ? { warning: redactSensitiveText(warnings.join("\n")) } : {}),
-  };
-}
-
 class LocalDefaultBusyError extends Error {}
 
 async function assertWorktreeGitOperationsIdle(
@@ -535,8 +428,17 @@ async function assertWorktreeGitOperationsIdle(
     if (primary.some((name) => ["rebase-merge", "rebase-apply", "BISECT_LOG"].includes(name))) {
       throw busy();
     }
-    const read = async (directory: string, name: string) =>
-      await fs.readFile(path.join(directory, name), "utf8").catch(ignoreMissingPath);
+    // Expected-missing reservations otherwise pay fs/promises' rejection and async stack capture.
+    const read = (directory: string, name: string) =>
+      new Promise<string | undefined>((resolve, reject) => {
+        readFile(path.join(directory, name), "utf8", (error, contents) => {
+          if (error && error.code !== "ENOENT") {
+            reject(error);
+          } else {
+            resolve(error ? undefined : contents);
+          }
+        });
+      });
     // Rebase exec can reattach HEAD; reservations cannot be inferred from detached status.
     // Read only reservation files, with bounded I/O and no per-worktree directory listing.
     const checked = await runTasksWithConcurrency({

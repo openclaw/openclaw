@@ -6,9 +6,9 @@ const enLogin = {
   connection: {
     help: {
       title: "How to connect",
-      step1: "Start the gateway on your host machine:",
-      step2: "Get a tokenized dashboard URL:",
-      step3: "Paste the Gateway URL and secret above, or open that URL directly.",
+      step1: "Start the Gateway on this computer:",
+      step2: "Get a one-time dashboard link:",
+      step3: "Enter the Gateway URL and secret above, or open the link.",
       docsLink: "Read the docs →",
     },
   },
@@ -22,17 +22,48 @@ const enLogin = {
       native: "On an older Mac, open this dashboard in an up-to-date browser instead.",
       open: "Open in browser",
       opened: "Opened in your default browser.",
-      failed: "Could not open your browser. Copy this page’s address into an up-to-date browser.",
+      failed: "Couldn’t open your browser. Copy this page’s address into an up-to-date browser.",
     },
     heading: "Connect to OpenClaw",
-    lede: "Enter the Gateway URL and secret, or open the one-time link that openclaw dashboard prints on the Gateway host.",
+    lede: "Enter the Gateway URL and secret, or open the one-time link from openclaw dashboard on the computer running OpenClaw.",
     gatewayUrl: "Gateway URL",
     gatewaySettings: "Gateway settings",
     secret: "Gateway secret",
     setupCodeHint:
       "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
     secretPlaceholder: "Paste the token or type the password",
-    runOnHost: "Run on the Gateway host",
+    runOnHost: "Run on this computer",
+    browserPair: {
+      action: "Pair this browser",
+      open: "Pair with a code instead",
+      back: "Sign in with URL and secret",
+      intro:
+        "Pair your own browser for administrator access. This is not a guest invitation. Get a code here, then approve it on the Gateway host.",
+      runOnGatewayHost: "Run on the Gateway host",
+      reconnecting: "Connection interrupted. Retrying with the same code…",
+      cancelling: "Withdrawing the request on the Gateway…",
+      cancelled: "Pairing request withdrawn.",
+      cancelFailed:
+        "Could not confirm cancellation. The request may still be approved. Retry cancellation.",
+      retryCancel: "Retry cancellation",
+      alreadyApproved:
+        "This browser was already approved. Cancel did not revoke its access. Choose Continue to connect.",
+      continue: "Continue",
+      getCode: "Get a code",
+      starting: "Requesting a pairing code…",
+      waiting: "Waiting for approval. Keep this page open.",
+      identity: "Code {code} · Browser ID {id}",
+      failure: {
+        identityRequired:
+          "This Gateway requires a verified identity. Use its normal identity-aware sign-in instead of browser code pairing.",
+        declined: "This request was declined on the Gateway host.",
+        expired: "This code expired. Pair this browser again for a new one.",
+        busy: "Too many pairing requests right now. Wait a few minutes and try again.",
+        unavailable: "This Gateway could not start pairing. Reload the page and try again.",
+        noIdentity:
+          "This browser could not create its device key. Open this Gateway over HTTPS or localhost.",
+      },
+    },
     connection: {
       target: "Connecting to {host}",
       secretEntered: "secret entered",
@@ -43,45 +74,40 @@ const enLogin = {
     hideSecret: "Hide Gateway secret",
     toggleSecretVisibility: "Toggle Gateway secret visibility",
     failure: {
-      rawError: "Raw error",
+      rawError: "Show details",
       busy: {
         title: "Gateway busy, retrying…",
         summary:
-          "The Gateway is reachable, but the connection could not be opened. This page will retry automatically.",
+          "Couldn’t connect because the Gateway is busy. This page will retry automatically.",
         countdown: "Retrying in {seconds}s…",
         retrying: "Retrying now…",
       },
       profileUnavailable: {
-        title: "Couldn't verify your account",
-        summary: "OpenClaw couldn't check your account right now. Please try again shortly.",
+        title: "Couldn’t verify your account",
+        summary: "Couldn’t verify your account. Try again shortly.",
         stepRetry: "Retry shortly.",
-        stepAdmin:
-          "If this continues, ask the person who manages OpenClaw to check account access.",
+        stepAdmin: "If this continues, ask an admin to check your account access.",
       },
       verifiedUserRequired: {
         title: "Verified identity required",
-        summary:
-          "This Gateway has named roles enabled. Device and setup tokens cannot identify a person.",
-        stepIdentity:
-          "Reconnect through the trusted proxy or Tailscale so the Gateway can verify your identity.",
+        summary: "Couldn’t verify your identity. Device and setup tokens don’t identify a person.",
+        stepIdentity: "Sign in through the trusted proxy or Tailscale to verify your identity.",
         stepSharedSecret:
-          "For trusted local operator access, use the shared Gateway token or password.",
+          "For trusted local admin access, use the shared Gateway token or password.",
       },
       accessDenied: {
         title: "No access to this Gateway",
-        summary:
-          "You're signed in, but this Gateway hasn't granted your account access, or that access has ended.",
-        stepAdmin:
-          "Ask a Gateway administrator to assign your profile a role, or to grant or restore your access.",
+        summary: "Couldn’t connect because your account doesn’t have access to this Gateway.",
+        stepAdmin: "Ask an admin to grant or restore your access.",
         stepFindProfile:
-          "Administrators can find your profile with openclaw users list --json, then assign a role with users.setRole.",
-        stepReconnect: "This page reconnects on its own once access is granted.",
+          "Admins can find your profile with openclaw users list --json, then assign a role with users.setRole.",
+        stepReconnect:
+          "Sign in with a different account, or choose Connect after an admin grants access.",
       },
       authRequired: {
         title: "This Gateway expects its token",
         passwordTitle: "This Gateway expects its password",
-        summary:
-          "The Gateway at {host} is reachable, but it needs a matching token or password before this browser can connect.",
+        summary: "Couldn’t connect to {host}. Enter its token or password to continue.",
         stepPaste: "Paste the token from openclaw gateway auth-token --show into Gateway secret.",
         stepPassword: "Type the configured Gateway password into Gateway secret.",
         stepGenerate:
@@ -91,7 +117,7 @@ const enLogin = {
       authFailed: {
         title: "Gateway secret rejected",
         summary:
-          "{host} rejected the supplied Gateway secret. Check that it belongs to this Gateway and try again.",
+          "Couldn’t connect with this token or password. Check that it belongs to this Gateway and try again.",
         stepDashboard:
           "Run openclaw dashboard --no-open for a fresh URL, or openclaw gateway auth-token --show to recover the token.",
         stepReplace: "Replace the Gateway secret with the token for this Gateway URL.",
@@ -99,29 +125,28 @@ const enLogin = {
       bootstrapInvalid: {
         title: "Pairing link is no longer valid",
         summary:
-          "This one-time dashboard link may have expired or already been used. Request a fresh link instead of changing the Gateway secret.",
+          "Couldn’t use this one-time link. It may have expired or already been used. Get a new link instead of changing the Gateway secret.",
         stepOpen:
-          "Open the fresh link that the command opens or copies in this browser. Pairing links can be used only once and expire after ten minutes.",
+          "Open the new link in this browser. Pairing links work once and expire after ten minutes.",
         stepJson:
-          "If the browser or clipboard is unavailable, run openclaw dashboard --json on the Gateway host and open its browserUrl in this browser.",
+          "If the browser or clipboard is unavailable, run openclaw dashboard --json on the computer running OpenClaw and open its browserUrl in this browser.",
       },
       trustedProxy: {
         title: "Proxy authentication required",
-        summary:
-          "The Gateway is reachable, but it rejected the proxy identity or forwarding information.",
-        stepSignIn:
-          "Open the configured authenticated proxy or SSO dashboard URL and sign in there, rather than visiting the Gateway directly.",
+        summary: "Couldn’t verify your proxy sign-in. Sign in through the proxy to continue.",
+        stepSignIn: "Open the dashboard through the sign-in proxy, not the Gateway directly.",
         stepHeaders:
-          "Ask the Gateway administrator to check for missing identity headers and required-header forwarding on WebSocket upgrade requests, and confirm your account is permitted.",
+          "Ask an admin to check identity headers, required-header forwarding on WebSocket upgrade requests, and your account access.",
         stepNoToken: "A Gateway token cannot replace proxy authentication.",
       },
       rateLimited: {
         title: "Too many failed attempts",
-        summary: "The Gateway is temporarily limiting authentication attempts for this client.",
+        summary:
+          "Couldn’t sign in because there were too many failed attempts. Wait before trying again.",
         stepStop: "Stop retrying from this tab for a moment.",
-        stepWait:
-          "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
-        stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
+        stepWait: "Wait a few minutes, then reconnect with the correct token or password.",
+        stepCheckClients:
+          "On a shared computer, check whether other clients are retrying with the wrong token or password.",
       },
       pairing: {
         title: "Approve this browser",
@@ -129,45 +154,44 @@ const enLogin = {
         roleTitle: "Approve the new role",
         metadataTitle: "Re-approve this browser",
         summary:
-          "This browser passed Gateway auth at {host}, but the Gateway has not seen it before. A one-time approval on the Gateway host finishes pairing.",
+          "Couldn’t connect to {host} until this browser is approved. Approve it on the computer running OpenClaw.",
         upgradeSummary:
-          "This browser is already paired with {host}, but it asked for access it was not approved for. Approve the new request on the Gateway host.",
+          "Couldn’t connect to {host} with the requested access. Approve the new request on the computer running OpenClaw.",
         stepDashboard:
-          "Prefer a link? Run openclaw dashboard on the Gateway host and open the one-time URL it prints in this browser.",
-        stepLatest:
-          "That command prints the exact approve command for the newest pending request; run that one as well.",
-        stepReconnect: "Once approved, click Connect.",
-        waiting:
-          "Waiting for approval… this page connects on its own once the request is approved.",
+          "For a one-time link, run openclaw dashboard on the computer running OpenClaw and open the link in this browser.",
+        stepLatest: "Run the approve command it prints for the newest pending request.",
+        stepReconnect: "Once approved, choose Connect.",
+        waiting: "Waiting for approval… This page connects automatically once approved.",
         checkNow: "Check now",
         declinedTitle: "Access request declined",
         declinedSummary:
-          "The operator declined this browser's access request. Automatic retries have stopped. You can request approval again when you are ready.",
+          "Couldn’t connect because this browser’s access request was declined. Automatic retries have stopped. You can request approval again.",
         expiredTitle: "Access request expired",
         expiredSummary:
-          "This browser's access request timed out without approval. Request approval again to continue.",
+          "Couldn’t connect because this browser’s access request expired. Request approval again to continue.",
         requestAgain: "Request again",
       },
       insecure: {
         title: "Secure browser context required",
         summary:
-          "This page is running over plain HTTP, so the browser cannot create the device identity the Gateway expects.",
-        stepHttps: "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
+          "Couldn’t connect over HTTP because this browser needs a secure page to identify itself.",
+        stepHttps:
+          "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the computer running OpenClaw.",
         stepAvoidDisable:
-          "Do not use a remote plain-HTTP URL; a token or password cannot replace browser device identity.",
+          "Don’t use a remote HTTP URL. A token or password can’t replace browser device identity.",
       },
       origin: {
         title: "Browser origin not allowed",
         summary:
-          "The Gateway rejected this page origin before accepting the Control UI connection.",
+          "Couldn’t connect because this page’s address isn’t allowed. Ask an admin to allow it.",
         stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
         stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart or reload the Gateway after changing allowed origins.",
+        stepRestart: "Restart the Gateway after changing its allowed origins.",
       },
       protocol: {
         title: "Protocol mismatch",
         summary:
-          "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+          "Couldn’t connect because this page and the Gateway use different versions. Reopen the dashboard.",
         refresh: "Refresh page",
         stepDashboard:
           "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
@@ -179,12 +203,12 @@ const enLogin = {
       network: {
         title: "Gateway unreachable",
         summary:
-          "The browser could not reach {host}. Check the address and transport before retrying credentials.",
+          "Couldn’t reach {host}. Check the URL and connection before trying another token or password.",
         stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
         stepUrl:
           "Check the Gateway URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
         stepDashboard:
-          "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
+          "Run openclaw dashboard --no-open on the computer running OpenClaw for the current URL and sign-in details.",
       },
     },
   },

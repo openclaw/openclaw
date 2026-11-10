@@ -148,7 +148,7 @@ describe("gateway server chat lifecycle", () => {
         return await getReplyFromConfig(...args);
       });
 
-      const stoppedTerminal = terminalEvent(browser, stoppedRunId);
+      let stoppedTerminal: ReturnType<typeof terminalEvent> | undefined;
       try {
         await expectRpc(
           browser,
@@ -162,6 +162,7 @@ describe("gateway server chat lifecycle", () => {
         );
         await preparationEntered.promise;
 
+        stoppedTerminal = terminalEvent(browser, stoppedRunId);
         const stopping = rpcReq(browser, "sessions.abort", {
           key: "main",
           clearQueued: true,

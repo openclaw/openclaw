@@ -35,7 +35,7 @@ describe("session deletion generation ownership", () => {
     },
   );
 
-  it("uses the admitted bootstrap list to establish a fresh replacement", async () => {
+  it("uses the first admitted bootstrap list to establish a fresh replacement", async () => {
     const coordinator = createConnectionBootstrapCoordinator();
     const h = createSessionDeletionHarness(coordinator);
     const synchronize = () =>
@@ -49,7 +49,6 @@ describe("session deletion generation ownership", () => {
       stop();
       coordinator.reset();
     });
-    await h.refresh();
     h.publish(false);
     coordinator.setForegroundRoute(undefined);
     h.publish(true);
@@ -113,11 +112,11 @@ describe("session deletion generation ownership", () => {
       h.setRows([h.sibling]);
       let stale: Promise<SessionsListResult | null>;
       if (source === "bootstrap") {
-        h.request.mockImplementationOnce(async () => ({
-          subscribed: true,
-          list: await older.promise,
-        }));
+        h.setListResponse(older.promise);
         h.publish(true);
+        await vi.waitFor(() =>
+          expect(h.request).toHaveBeenCalledWith("sessions.list", expect.anything()),
+        );
         stale = vi
           .waitFor(() => expect(h.sessions.state.result).not.toBeNull())
           .then(() => h.sessions.state.result);

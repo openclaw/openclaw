@@ -106,6 +106,7 @@ export function stop(state: CronServiceState) {
   mutationSubscriptions.get(state)?.();
   mutationSubscriptions.delete(state);
   state.schedulerStarted = false;
+  state.liveSinceMs = undefined;
   state.schedulerDrain = Promise.allSettled([
     state.schedulerDrain,
     stopCronScheduler(state),
@@ -134,6 +135,8 @@ export function resumeScheduling(state: CronServiceState) {
   state.schedulingPaused = false;
   if (state.schedulerStarted) {
     refreshCronScheduler(state);
-    void drainCronRunQueue(state);
+    void drainCronRunQueue(state).catch((error: unknown) =>
+      state.deps.log.warn({ err: String(error) }, "cron: queue drain delayed"),
+    );
   }
 }

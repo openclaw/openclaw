@@ -3,6 +3,7 @@
 import { createSignal, flush, onSettled } from "solid-js";
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { loadSettings, patchSettings } from "../../../app/settings.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -19,6 +20,10 @@ import {
   createSessionWorkspaceProps,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
+import type {
+  TranscriptAttachmentEntry,
+  TranscriptAttachments,
+} from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
 type List = NonNullable<SessionWorkspaceProps["list"]>;
@@ -293,7 +298,7 @@ describe("session workspace path actions", () => {
     assert(copy);
     copy.focus();
     copy.click();
-    await vi.waitFor(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    await vi.waitFor(() => expect(copy.getAttribute("aria-label")).toBe("Copied"));
     loadSessionWorkspace(state, getSessionWorkspace(state), true);
     await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
     renderRows();
@@ -301,8 +306,8 @@ describe("session workspace path actions", () => {
       "README.md",
     );
     expect(document.activeElement).toBe(copy);
-    expect(container.querySelector('button[aria-label="Copied!"]')).toBe(copy);
-    expect(copy.parentElement?.querySelector('[role="status"]')?.textContent).toBe("Copied!");
+    expect(container.querySelector('button[aria-label="Copied"]')).toBe(copy);
+    expect(copy.parentElement?.querySelector('[role="status"]')?.textContent).toBe("Copied");
   });
 
   it("keeps Windows file labels readable and distinct", async () => {
@@ -346,7 +351,7 @@ describe("session workspace path actions", () => {
     expect(fileNames(mount)).toEqual([`ui${separator}index.ts`]);
   });
 
-  it("shows Copy failed when copying a session Files path", async () => {
+  it("shows Couldn’t copy. Try again. when copying a session Files path", async () => {
     const writeText = clipboard(
       vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError")),
     );
@@ -374,11 +379,13 @@ describe("session workspace path actions", () => {
     expect(copy).toBeInstanceOf(HTMLButtonElement);
 
     copy!.click();
-    await vi.waitFor(() => expect(copy!.getAttribute("aria-label")).toBe("Copy failed"));
+    await vi.waitFor(() =>
+      expect(copy!.getAttribute("aria-label")).toBe("Couldn’t copy. Try again."),
+    );
 
     expect(writeText).toHaveBeenCalledWith("src/edited.ts");
     const feedback = copy!.parentElement?.querySelector<HTMLElement>('[role="status"]');
-    expect(feedback).toMatchObject({ textContent: "Copy failed", hidden: false });
+    expect(feedback).toMatchObject({ textContent: "Couldn’t copy. Try again.", hidden: false });
     expect(rowClick).not.toHaveBeenCalled();
     expect(onOpenFile).not.toHaveBeenCalled();
 
@@ -469,12 +476,12 @@ describe("session workspace path actions", () => {
     assert(chip, "Expected the selected Files filter to remain available");
     chip.click();
     expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(0);
-    expect(mount.textContent?.match(/No matching files\./g)).toHaveLength(1);
+    expect(mount.textContent?.match(/No files match your search\./g)).toHaveLength(1);
     expect(chip.getAttribute("aria-pressed")).toBe("true");
 
     search(mount, "");
     expect(fileNames(mount)).toHaveLength(restored);
-    expect(mount.textContent).not.toContain("No matching files.");
+    expect(mount.textContent).not.toContain("No files match your search.");
     expect(chip.getAttribute("aria-pressed")).toBe("true");
 
     search(mount, "NO-SUCH-FILE");
@@ -486,7 +493,7 @@ describe("session workspace path actions", () => {
     ]) {
       Object.assign(workspace, state);
       update();
-      expect(mount.textContent).not.toContain("No matching files.");
+      expect(mount.textContent).not.toContain("No files match your search.");
     }
     await waitForSolid(() => expect(mount.textContent).toContain(workspace.error));
   });
@@ -538,10 +545,42 @@ function setupDesktopLayout() {
   });
 }
 
+it.each(["mobile", undefined] as const)(
+  "matches sigma forms in local Files groups (%s)",
+  async (presentation) => {
+    setupDesktopLayout();
+    const path = "ΕΛΕΓΧΟΣ/A  B.md";
+    const workspace = createWorkspace({
+      presentation,
+      list: {
+        files: [file(path)],
+        artifacts: [artifact("report", "ΕΛΕΓΧΟΣ")],
+      },
+      browserSearch: "Σ",
+      mobileNavigation: {
+        expandedGroups: { changed: true, read: true, artifacts: true, workspace: true },
+        scrollTop: 0,
+      },
+    });
+    const mounted = await mountWorkspace(workspace);
+    for (const query of ["Σ", "σ", "ς", "  Σ  "]) {
+      mounted.update({ ...workspace, browserSearch: query });
+      await waitForSolid(() => expect(button(mounted.container, path)).not.toBeNull());
+      expect(button(mounted.container, "ΕΛΕΓΧΟΣ")).not.toBeNull();
+    }
+    mounted.update({ ...workspace, browserSearch: "A  B.md" });
+    expect(button(mounted.container, path)).not.toBeNull();
+    mounted.update({ ...workspace, browserSearch: "A B.md" });
+    expect(button(mounted.container, path)).toBeNull();
+    mounted.unmount();
+  },
+);
+
 it("desktop browses lazy directories and restores activity after an incomplete search", async () => {
   setupDesktopLayout();
   const incompleteNotice = "Search is incomplete. Some files may not appear in these results.";
-  const directoryNotice = "Showing the first matching files. Refine the search to narrow results.";
+  const directoryNotice =
+    "Showing the first matching files. Refine your search to narrow the results.";
   const listFiles = vi.fn(
     async (_sessionKey: string, options?: { path?: string; search?: string }) => ({
       sessionKey: "agent:main:workspace",
@@ -646,12 +685,12 @@ it("desktop browses lazy directories and restores activity after an incomplete s
       await vi.waitFor(() => {
         expect(getSessionWorkspace(state).list?.browser?.search).toBe(query);
         expect(results()?.textContent).toContain(
-          incomplete ? incompleteNotice : "No matching files.",
+          incomplete ? incompleteNotice : "No files match your search.",
         );
       });
       expect(Boolean(mounted.queryByRole("button", { name: "Browse files" }))).toBe(incomplete);
       if (incomplete) {
-        expect(results()?.textContent).not.toContain("No matching files.");
+        expect(results()?.textContent).not.toContain("No files match your search.");
         mounted.getByRole("button", { name: "Browse files" }).click();
       } else {
         button(mounted.container, "Close file search")!.click();
@@ -779,7 +818,7 @@ it("mobile restores folder search and root groups without mixing global search r
     expect(mounted.container.textContent).toContain(
       "Search is incomplete. Some files may not appear in these results.",
     );
-    expect(mounted.container.textContent).not.toContain("No matching files.");
+    expect(mounted.container.textContent).not.toContain("No files match your search.");
     expect(Boolean(button(mounted.container, "docs/report.txt"))).toBe(query === "report");
     mounted.getByRole("button", { name: "Browse files" }).click();
     await ready();
@@ -794,6 +833,122 @@ it("mobile restores folder search and root groups without mixing global search r
   search(mounted.container, "absent");
   await vi.advanceTimersByTimeAsync(160);
   await ready();
-  expect(mounted.container.textContent).toContain("No matching files.");
+  expect(mounted.container.textContent).toContain("No files match your search.");
   expect(mounted.queryByRole("button", { name: "Browse files" })).toBeNull();
+});
+
+function transcriptAttachments(
+  entries: TranscriptAttachmentEntry[],
+  coverage: TranscriptAttachments["coverage"] = "complete",
+): TranscriptAttachments {
+  const source: TranscriptAttachments = {
+    pairingQrExpirations: [],
+    refresh: () => source,
+    entries,
+    coverage,
+    loading: false,
+    omittedMedia: false,
+  };
+  return source;
+}
+
+function transcriptImage(label: string | undefined, key = label ?? "untitled") {
+  return {
+    kind: "image",
+    key: `image:${key}`,
+    label: label ?? "Image",
+    mimeType: "image/png",
+    image: { url: "data:image/png;base64,AA==", alt: label },
+    options: {},
+    onOpenSidebar: vi.fn(),
+  } satisfies TranscriptAttachmentEntry;
+}
+
+it("desktop lists session files and transcript attachments together, sorted and tiled on request", async () => {
+  setupDesktopLayout();
+  const onSessionFilesDisplayChange = vi.fn();
+  const workspace = createWorkspace({
+    presentation: "desktop",
+    list: {
+      root: "/workspace",
+      files: [file("/tmp/zeta.txt")],
+      artifacts: [artifact("concept", "alpha.pdf")],
+    },
+    transcriptAttachments: transcriptAttachments(
+      [transcriptImage(undefined), transcriptImage("beta.png")],
+      "unknown",
+    ),
+    sessionFilesDisplay: { view: "list", sort: "default" },
+    onSessionFilesDisplayChange,
+  });
+  const mounted = await mountWorkspace(workspace);
+  try {
+    const sessionList = () =>
+      mounted.container.querySelector<HTMLElement>(".workspace-desktop__session-scroll")!;
+    const labels = () =>
+      Array.from(sessionList().querySelectorAll("[role=listitem] > button"), (row) =>
+        row.getAttribute("aria-label"),
+      );
+    expect(labels()).toEqual(["/tmp/zeta.txt", "alpha.pdf", "Image", "beta.png"]);
+    expect(sessionList().querySelector(".workspace-desktop__tile")).toBeNull();
+    expect(mounted.getByRole("status").textContent).toContain("coverage is not yet known");
+
+    mounted.update({ ...workspace, sessionFilesDisplay: { view: "grid", sort: "name" } });
+    expect(sessionList().classList.contains("workspace-desktop__session-scroll--grid")).toBe(true);
+    expect(labels()).toEqual(["alpha.pdf", "beta.png", "Image", "/tmp/zeta.txt"]);
+    const tiles = sessionList().querySelectorAll<HTMLButtonElement>(".workspace-desktop__tile");
+    expect(tiles).toHaveLength(4);
+    // Inline image bytes render immediately; the untitled image shows pixels, not a generic caption.
+    const untitled = tiles[2]!;
+    expect(untitled.querySelector("img.workspace-desktop__tile-media")).not.toBeNull();
+    expect(untitled.querySelector(".workspace-desktop__filename")).toBeNull();
+    expect(tiles[1]!.querySelector(".workspace-desktop__filename")?.textContent).toBe("beta.png");
+    expect(tiles[0]!.querySelector(".chat-attachment-file-icon")?.getAttribute("data-mode")).toBe(
+      "large-placeholder",
+    );
+    tiles[0]!.click();
+    expect(workspace.onOpenArtifact).toHaveBeenCalledWith("concept", "preview");
+
+    mounted.update({ ...workspace, sessionFilesDisplay: { view: "grid", sort: "type" } });
+    expect(labels()).toEqual(["beta.png", "Image", "alpha.pdf", "/tmp/zeta.txt"]);
+
+    mounted.getByRole("button", { name: "Session files view and order" }).click();
+    await waitForSolid(() => expect(mounted.getByRole("menu")).not.toBeNull());
+    const listOption = mounted.getByRole("menuitemradio", { name: "List" });
+    expect(mounted.getByRole("menuitemradio", { name: "Grid" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    listOption.click();
+    expect(onSessionFilesDisplayChange).toHaveBeenCalledWith({ view: "list" });
+    mounted.getByRole("button", { name: "Session files view and order" }).click();
+    await waitForSolid(() => expect(mounted.getByRole("menu")).not.toBeNull());
+    mounted.getByRole("menuitemradio", { name: "Date" }).click();
+    expect(onSessionFilesDisplayChange).toHaveBeenLastCalledWith({ sort: "date" });
+  } finally {
+    mounted.unmount();
+  }
+});
+
+it("remembers the session files display for every Files panel in this browser", () => {
+  const previous = loadSettings().sessionFilesDisplay;
+  onTestFinished(() => {
+    patchSettings({ sessionFilesDisplay: previous });
+  });
+  patchSettings({ sessionFilesDisplay: undefined });
+  const state = createSessionWorkspaceHost({ settings: loadSettings() });
+  const props = () =>
+    createSessionWorkspaceProps(state, { expanded: false, presentation: "desktop" });
+  expect(props().sessionFilesDisplay).toEqual({ view: "list", sort: "default" });
+  props().onSessionFilesDisplayChange?.({ view: "grid" });
+  expect(props().sessionFilesDisplay).toEqual({ view: "grid", sort: "default" });
+  props().onSessionFilesDisplayChange?.({ sort: "name" });
+  expect(loadSettings().sessionFilesDisplay).toEqual({ view: "grid", sort: "name" });
+  const other = createSessionWorkspaceHost({
+    sessionKey: "agent:main:other",
+    settings: loadSettings(),
+  });
+  expect(
+    createSessionWorkspaceProps(other, { expanded: false, presentation: "desktop" })
+      .sessionFilesDisplay,
+  ).toEqual({ view: "grid", sort: "name" });
 });

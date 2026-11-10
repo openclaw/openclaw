@@ -52,6 +52,30 @@ describe("session PR actions through the agent tool and registered Gateway metho
   });
 
   it.each(["local", "repository"] as const)(
+    "lets a guest manage its %s task PR from the unbound parent while preserving merge authority",
+    async (backend) => {
+      const parent = "agent:main:dashboard:publication-parent";
+      const f = await createPublicationActionFixture(backend, parent);
+      const invoke = (action: string, extra: Record<string, unknown> = {}, raw = false) =>
+        f.invoke("guest", { action, ...f.expected, ...extra }, parent, { raw });
+      await invoke("edit", { title: "Task PR title", expectedTitle: f.state.title });
+      expect(f.state.title).toBe("Task PR title");
+      expect((await invoke("ready", {}, true)).details).toMatchObject({ state: "open" });
+      expect((await invoke("request_review")).details).toMatchObject({
+        reviewRequest: { status: "posted" },
+      });
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready", "request_review"]);
+      expect(
+        loadSessionEntryReadOnly({ agentId: "main", sessionKey: parent })?.worktree,
+      ).toBeUndefined();
+      await expect(invoke("merge", { mergeMethod: "squash" })).rejects.toThrow(
+        /scope|permission/iu,
+      );
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready", "request_review"]);
+    },
+  );
+
+  it.each(["local", "repository"] as const)(
     "posts only the fixed re-review command for the guest's current %s PR",
     async (backend) => {
       const f = await fixture(backend);
@@ -94,7 +118,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
                 String.raw`^invalid sessions\.github\.action params:.*unexpected property '${Object.keys(extra)[0]}'`,
                 "u",
               )
-            : "request_review only posts the fixed ClawSweeper command on the current session PR.",
+            : /request_review only posts the fixed ClawSweeper command/u,
         );
       }
     }
@@ -362,7 +386,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
   });
 
   it.each(["local", "repository"] as const)(
-    "edits the existing %s PR after a later source publication fails",
+    "edits, inspects and readies the existing %s PR after a later source publication fails",
     async (backend) => {
       const f = await fixture(backend);
       const workflow = "name: Later work\non: push\njobs: {}\n";
@@ -383,7 +407,13 @@ describe("session PR actions through the agent tool and registered Gateway metho
       expect(
         await f.action("guest", "edit", { title: "Clarify the existing PR", expectedTitle }),
       ).toMatchObject({ title: "Clarify the existing PR", publication: f.publication });
-      expect(f.writes).toEqual([{ action: "edit", input: { title: "Clarify the existing PR" } }]);
+      expect((await f.invoke("admin", { action: "inspect" })).details).toMatchObject({
+        state: "draft",
+        publication: f.publication,
+      });
+      expect(await f.action("guest", "ready")).toMatchObject({ state: "open" });
+      expect(f.writes[0]).toEqual({ action: "edit", input: { title: "Clarify the existing PR" } });
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready"]);
     },
   );
 

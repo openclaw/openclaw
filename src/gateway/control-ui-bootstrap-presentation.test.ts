@@ -49,3 +49,15 @@ it.each([undefined, false, true])(
     ).toBe(chatBubbles === true);
   },
 );
+
+it.each([undefined, false, true])(
+  "projects OpenClaw ID only for explicit opt-in: %s",
+  (enabled) => {
+    const result = resolveControlUiBootstrapPresentation({ gateway: { openclawId: { enabled } } });
+    if (enabled) {
+      expect(result).toHaveProperty("openclawIdEnabled", true);
+    } else {
+      expect(result).not.toHaveProperty("openclawIdEnabled");
+    }
+  },
+);

@@ -100,7 +100,9 @@ export function createSubagentCoordinationHistoryProjection(
         }
         return message;
       }
-      if (record.display === false) {
+      // A delivery mirror records a reply the run sent to the human, such as a
+      // message(action=send) from a private coordination turn; it is the outcome.
+      if (record.display === false || isOpenClawDeliveryMirrorAssistantMessage(record)) {
         return message;
       }
       if (
@@ -377,6 +379,18 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
   return isOpenClawRuntimeContextCustomMessage(message);
 }
 
+function isDisplayHeartbeatAcknowledgement(
+  message: RoleContentMessage,
+  allowTruncated = false,
+): boolean {
+  // Model history ignores reasoning when classifying no-op heartbeats. Chat
+  // displays reasoning-only items, so empty answer text cannot hide those rows.
+  return (
+    (!hasAssistantNonTextContent(message) || Boolean(extractAssistantPhaseText(message))) &&
+    isHeartbeatOkResponse(message, undefined, allowTruncated)
+  );
+}
+
 function shouldHideProjectedHistoryMessage(
   message: Record<string, unknown>,
   roleContent: RoleContentMessage | null,
@@ -396,6 +410,7 @@ function shouldHideProjectedHistoryMessage(
     roleContent.role === "user" &&
     provenance?.kind === "internal_system" &&
     (provenance.sourceTool === "exec" ||
+      provenance.sourceTool === "restart" ||
       provenance.sourceTool === "cron_failure_repair" ||
       provenance.sourceTool === "tool_handoff")
   ) {
@@ -423,7 +438,7 @@ function shouldHideProjectedHistoryMessage(
   if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {
     return false;
   }
-  return heartbeatUser || isHeartbeatOkResponse(roleContent);
+  return heartbeatUser || isDisplayHeartbeatAcknowledgement(roleContent);
 }
 
 /** Identifies the hidden native input that starts a heartbeat-driven turn. */
@@ -436,7 +451,7 @@ function isHeartbeatHistoryTurnBoundaryMessage(message: unknown): boolean {
   return roleContent?.role === "user" && isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT);
 }
 
-/** Hidden heartbeat or exec input that must keep the next reply in its own turn. */
+/** Hidden heartbeat, exec, or restart input keeps the next reply in its own turn. */
 export function isProjectedHistoryTurnBoundaryMessage(message: unknown): boolean {
   if (isHeartbeatHistoryTurnBoundaryMessage(message)) {
     return true;
@@ -450,7 +465,7 @@ export function isProjectedHistoryTurnBoundaryMessage(message: unknown): boolean
   return (
     roleContent?.role === "user" &&
     provenance?.kind === "internal_system" &&
-    provenance.sourceTool === "exec"
+    (provenance.sourceTool === "exec" || provenance.sourceTool === "restart")
   );
 }
 
@@ -569,9 +584,8 @@ export function filterVisibleProjectedHistoryMessages(
     if (
       next &&
       nextRoleContent &&
-      isHeartbeatOkResponse(
+      isDisplayHeartbeatAcknowledgement(
         nextRoleContent,
-        undefined,
         Boolean(
           currentRoleContent &&
           isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT, { heartbeatOnly: true }),

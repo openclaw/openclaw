@@ -235,7 +235,7 @@ async function buildClawHubQueryError(
   ]
     .filter((value): value is string => Boolean(value))
     .join(" ");
-  return new Error(`${message}: ${response.status} ${detail}`);
+  return new Error(`${message}: HTTP ${response.status} ${detail}`);
 }
 
 function formatClawHubPackageArtifactName(

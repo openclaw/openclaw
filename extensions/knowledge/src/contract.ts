@@ -104,7 +104,7 @@ export const contract = defineFeatureContract({
     timeline: {
       kind: "query",
       description:
-        "Chronological structured records, optionally scoped to an entity page ID and date range. Defaults to occurrence time; choose recorded_at/updated_at for when Knowledge changed or due_at for commitments. No dates inferred from prose or ingestion. Explicit source-event claims fold matching meeting pages. Unknown dates excluded. Follow nextOffset with the same filters and returned snapshot; restart on change.",
+        "Chronological structured records, optionally scoped to an entity page ID and date range. Defaults to occurrence time; choose recorded_at/updated_at for when Knowledge changed or due_at for commitments. No dates inferred from prose or ingestion. Explicit source-event claims fold matching meeting pages. group=source with entity returns its Timeline: one row per dated source with their relationship note and claim count. Unknown dates excluded. Follow nextOffset with the same filters and returned snapshot; restart on change.",
       input: TimelineInput,
       output: ChronicleOutput,
       tool: { name: "knowledge_timeline", label: "Read knowledge timeline" },
@@ -465,7 +465,7 @@ export const contract = defineFeatureContract({
     grep: {
       kind: "query",
       description:
-        "Find records by words in titles, aliases and bodies. Use for discovery when the exact identity is unknown. Rank authorized valid knowledge by title/alias/body keywords with SQLite FTS5. Default: all word tokens, active records. Saved pages need no approval. mode=any ORs literal words; mode=phrase matches their order. No raw FTS/regex operators. lifecycle=superseded/all includes history, never withdrawn records. Filters apply before ranking. Agents get compact hits (id, title, type, path, revision, short snippet, matched fields; default limit 10); detail=full adds revision/hash citations, body line locators, score, attribution and evidence. index.state=unavailable and total=null mean failed retrieval, not no matches. Compare index.snapshot across pages; restart on changes. Not exhaustive inventory: use knowledge_records. No embeddings.",
+        "Find records by words in titles, aliases and bodies. Use for discovery when the exact identity is unknown. Rank authorized valid knowledge by title/alias/body keywords with SQLite FTS5. Default: all word tokens, active records. Saved pages need no approval. mode=any ORs literal words; mode=phrase matches their order. No raw FTS/regex operators. lifecycle=superseded/all includes history, never withdrawn records. An active search also matches superseded wording and lists the current replacement after direct matches, with matches=[superseded] and via naming the earlier revision that matched. Filters apply before ranking. Agents get compact hits (id, title, type, path, revision, short snippet, matched fields; default limit 10); detail=full adds revision/hash citations, body line locators, score, attribution and evidence. index.state=unavailable and total=null mean failed retrieval, not no matches. Compare index.snapshot across pages; restart on changes. Not exhaustive inventory: use knowledge_records. No embeddings.",
       input: withSearchDetail(SearchInput),
       output: ToolSearchOutput,
       tool: { name: "knowledge_grep", label: "Search knowledge" },
@@ -484,7 +484,7 @@ export const contract = defineFeatureContract({
         "List current eligible authorized records exhaustively using pagination, with optional kind, ontology type/alias, or ID/title/alias filtering. lifecycle=all is an explicit historical inventory including inactive/invalid records; originals remain available by exact record/history inspection. includeCards adds bounded claim text and card metadata from the same scan, without evidence excerpts. includeEndpoints adds deduplicated current eligible relationship endpoint summaries for this page from the same authorized scan. Responses are bounded by bytes and nested values and may return fewer rows than requested; follow nextOffset, not offset+limit. Oversized individual cards fall back to clickable summaries; use knowledge_record for full content.",
       input: Type.Object(
         {
-          offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 500 })),
+          offset: Type.Optional(Type.Integer({ minimum: 0 })),
           limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
           kind: Type.Optional(
             Type.Union([Type.Literal("page"), Type.Literal("claim"), Type.Literal("relationship")]),
@@ -556,7 +556,7 @@ export const contract = defineFeatureContract({
       kind: "query",
       description:
         "Operator settings: agents, effective store assignments and store inventory. Never creates storage.",
-      input: empty,
+      input: Type.Object({ includeRecordCounts: Type.Optional(Type.Boolean()) }),
       output: StoresSnapshot,
     },
     stores_change: {

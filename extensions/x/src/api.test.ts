@@ -10,46 +10,102 @@ const reply = (
 ) => api.reply({ text: "Reply", inReplyToId: "20", assertActive });
 
 describe("X API authentication", () => {
-  it("lists and streams Activity with the app bearer but creates mentions with the user token", async () => {
-    vi.useFakeTimers();
-    const requests: string[] = [];
-    let subscribed = false;
+  it.each(["mentions", "media"])("bounds oversized %s response streams", async (operation) => {
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(1024 * 1024).fill(32);
+    let pulls = 0;
+    const oversized = new Response(
+      new ReadableStream({
+        pull(controller) {
+          if (++pulls <= 17) {
+            controller.enqueue(chunk);
+          } else {
+            controller.enqueue(
+              new TextEncoder().encode(
+                JSON.stringify({ data: operation === "mentions" ? [] : { id: "101" } }),
+              ),
+            );
+            controller.close();
+          }
+        },
+        cancel,
+      }),
+    );
     const api = createXApiClient({
-      bearerToken: "app-bearer",
-      fetch: async (url, init) => {
-        const path = new URL(url).pathname;
-        const authorization = new Headers(init?.headers).get("authorization");
-        requests.push(`${init?.method} ${path} ${authorization}`);
-        if (path === "/2/oauth2/token") {
-          return Response.json({ access_token: "user-access" });
-        }
-        if (path === "/2/activity/stream") {
-          return new Response(null);
-        }
-        if (init?.method === "POST") {
-          expect(await new Response(init.body).json()).toEqual({
-            event_type: "post.mention.create",
-            filter: { user_id: "9" },
-          });
-          subscribed = true;
-          return Response.json({ data: { subscription_id: "1" } });
-        }
-        return Response.json({
-          data: subscribed ? [{ event_type: "post.mention.create", filter: { user_id: "9" } }] : [],
-        });
-      },
+      fetch: vi
+        .fn<XFetch>()
+        .mockResolvedValue(Response.json({ data: { id: "101" } }))
+        .mockResolvedValueOnce(Response.json({ access_token: "access" }))
+        .mockResolvedValueOnce(oversized),
     });
-    await api.ensureActivitySubscriptions("9");
-    await api.ensureActivitySubscriptions("9");
-    await api.openActivityStream(new AbortController().signal);
-    expect(requests).toEqual([
-      "GET /2/activity/subscriptions Bearer app-bearer",
-      `POST /2/oauth2/token Basic ${Buffer.from("client:secret").toString("base64")}`,
-      "POST /2/activity/subscriptions Bearer user-access",
-      "GET /2/activity/subscriptions Bearer app-bearer",
-      "GET /2/activity/stream Bearer app-bearer",
-    ]);
+    await expect(
+      operation === "mentions"
+        ? api.getMentions({ userId: "9" })
+        : api.uploadMedia({
+            buffer: Buffer.alloc(0),
+            contentType: "image/png",
+            fileName: "test.png",
+            mediaCategory: "tweet_image",
+          }),
+    ).rejects.toThrow(/X (API|media upload): .*response exceeds 16777216 bytes/);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pulls).toBeLessThanOrEqual(18);
   });
+
+  it.each([
+    { existing: [], missing: ["post.mention.create", "post.reply.create"] },
+    { existing: ["post.mention.create"], missing: ["post.reply.create"] },
+    { existing: ["post.reply.create"], missing: ["post.mention.create"] },
+    { existing: ["post.mention.create", "post.reply.create"], missing: [] },
+  ])(
+    "creates only missing Activity subscriptions with user auth: $existing",
+    async ({ existing, missing }) => {
+      vi.useFakeTimers();
+      const requests: string[] = [];
+      const subscriptions = [
+        ...existing.map((event_type) => ({ event_type, filter: { user_id: "9" } })),
+        { event_type: "post.mention.create", filter: { user_id: "8" } },
+        { event_type: "post.reply.create", filter: { user_id: "8" } },
+      ];
+      const created: unknown[] = [];
+      const api = createXApiClient({
+        bearerToken: "app-bearer",
+        fetch: async (url, init) => {
+          const path = new URL(url).pathname;
+          const authorization = new Headers(init?.headers).get("authorization");
+          requests.push(`${init?.method} ${path} ${authorization}`);
+          if (path === "/2/oauth2/token") {
+            return Response.json({ access_token: "user-access" });
+          }
+          if (path === "/2/activity/stream") {
+            return new Response(null);
+          }
+          if (init?.method === "POST") {
+            const subscription = await new Response(init.body).json();
+            created.push(subscription);
+            subscriptions.push(subscription);
+            return Response.json({ data: { subscription_id: String(subscriptions.length) } });
+          }
+          return Response.json({ data: subscriptions });
+        },
+      });
+      await api.ensureActivitySubscriptions("9");
+      await api.ensureActivitySubscriptions("9");
+      await api.openActivityStream(new AbortController().signal);
+      expect(created).toEqual(
+        missing.map((event_type) => ({ event_type, filter: { user_id: "9" } })),
+      );
+      expect(requests).toEqual([
+        "GET /2/activity/subscriptions Bearer app-bearer",
+        ...(missing.length
+          ? [`POST /2/oauth2/token Basic ${Buffer.from("client:secret").toString("base64")}`]
+          : []),
+        ...missing.map(() => "POST /2/activity/subscriptions Bearer user-access"),
+        "GET /2/activity/subscriptions Bearer app-bearer",
+        "GET /2/activity/stream Bearer app-bearer",
+      ]);
+    },
+  );
 
   it.each([
     {

@@ -50,6 +50,7 @@ full behavior and rationale of each numbered check, follow the links under
     - Session transcript repair for duplicated prompt-rewrite branches created by affected 2026.4.24 builds.
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Warnings for SQLite databases on confirmed network filesystems, including NFS, SMB, and SSHFS. Doctor recommends a local disk; this diagnostic does not move data, change journaling, or block updates. Unknown filesystems and cross-VM mounts are not identified as network storage.
+    - On NFS, open files can delay removal of temporary SQLite snapshot directories. Busy or nonempty removal after snapshot retirement produces warnings and retains cleanup for later. A verified backup remains usable; Doctor and Gateway preflight still surface permission, I/O, retirement, identity, content, and integrity failures. Candidate update checks log temporary cleanup failures separately, preserving the check's result or original error. If a reported temporary directory remains after OpenClaw exits, remove it once no process holds its files open.
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
     - Claude CLI discovery uses the Anthropic plugin's executable resolver, including native installations in `~/.local/bin`. During updates, a Doctor child can inherit the Gateway service's narrower `PATH`; Doctor reports the discovered binary's location when it is outside that path. A missing binary still produces installation guidance.
@@ -77,9 +78,10 @@ full behavior and rationale of each numbered check, follow the links under
 
   </Accordion>
   <Accordion title="Workspace and shell">
-    - Partial or shallow registry-owned project clone warnings, with manual repair commands for every detected partial-clone key and shallow history.
+    - Shallow registry-owned project clone warnings; `--fix` fetches full history while retaining blob filtering, skips busy clones, and reports per-clone outcomes without repacking or pruning.
     - systemd linger check on Linux.
     - Workspace bootstrap file size check (truncation/near-limit warnings for context files).
+    - Memory provenance check: root `MEMORY.md`, `USER.md`, or personal `users/<profile-id>/USER.md` recorded as `untrusted` and therefore excluded from automatic context, with the last recorded tracked write.
     - Skills readiness checks for every configured agent; missing local binaries produce warnings and leave skills enabled because paired nodes may provide them. `--fix` can still disable skills with other missing requirements when no configured agent can use them. Updates leave optional skills enabled.
     - Shell completion status check and auto-install/upgrade.
     - Memory search embedding provider readiness check (local model or remote API key).

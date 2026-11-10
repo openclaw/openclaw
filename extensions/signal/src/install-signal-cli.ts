@@ -3,6 +3,7 @@ import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -14,7 +15,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type NamedAsset = {
   name: string;
@@ -126,6 +127,12 @@ async function resolveBrewSignalCliPath(brewExe: string): Promise<string | null>
   return null;
 }
 
+// Homebrew prints warnings before its final Error line, so keep the stderr tail.
+function brewErrorTail(stderr: string): string {
+  const text = redactToolPayloadText(stderr).trim();
+  return text.length > 200 ? `...${sliceUtf16Safe(text, -200)}` : text;
+}
+
 async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInstallResult> {
   const brewExe = resolveBrewExecutable();
   if (!brewExe) {
@@ -146,7 +153,7 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
   if (result.code !== 0) {
     return {
       ok: false,
-      error: `brew install signal-cli failed (exit ${result.code}): ${truncateUtf16Safe(result.stderr.trim(), 200)}`,
+      error: `brew install signal-cli failed (exit ${result.code}): ${brewErrorTail(result.stderr)}`,
     };
   }
 

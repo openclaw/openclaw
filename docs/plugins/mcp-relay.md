@@ -139,7 +139,7 @@ with Gateway** opens the Gateway's Control UI behind its usual sign-in, and you
 approve the request as yourself. The grant is a person grant tied to your
 verified profile, so **Full role access** carries your role into the app,
 including administrator access if your role has it. A later role change also
-limits the grant. See [Team server](/gateway/team-server) for Gateway setup.
+limits the grant. See [Multiplayer](/start/multiplayer#production-deployment) for Gateway setup.
 
 ## Show the full Control UI in ChatGPT
 
@@ -227,6 +227,16 @@ the relay receives only the principal kind and display label. Effective access
 is the intersection of the ceiling and the principal's current authority, so a
 role change also limits existing grants. Grants are not restricted to one
 conversation; normal principal and role visibility still applies.
+
+New person grants approved through OpenClaw ID also retain the approving
+membership and device listing. Removing the member or approving key, changing
+that member's role, or disabling OpenClaw ID closes active access. Re-adding a
+removed member or key requires a fresh approval. The same restriction follows
+an approval made through an already-connected app, including after restart.
+Local roles and approvals made through other sign-in paths remain independent.
+Before rollout, revoke and approve again any existing ID-origin grants created
+without this source binding; their original sign-in source cannot be inferred
+from the stored profile.
 
 Person grants approved through Gateway sign-in have an absolute refresh-token
 lifetime of 30 days. After that, sign in and approve again. Owner grants and

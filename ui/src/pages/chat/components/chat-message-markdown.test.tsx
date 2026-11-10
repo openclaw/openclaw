@@ -1,10 +1,13 @@
-/* @vitest-environment jsdom */
 // Contract for full-message eligibility: the Gateway marks every display-
 // capped projection; pending inputs share assistant expansion without gaining
 // transcript mutation actions.
 import { For } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+/* @vitest-environment jsdom */
+import {
+  prepareChatMessageRender,
+  resolveMessageDisplayMarkdown,
+} from "../../../lib/chat/message-display.ts";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../../lib/chat/tool-cards.ts";
@@ -16,10 +19,7 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { prepareGroupedMessage } from "./chat-message-bubble-presentation.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import {
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-} from "./chat-message-markdown-view.tsx";
+import { resolveMessageActionDetails } from "./chat-message-markdown-view.tsx";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };

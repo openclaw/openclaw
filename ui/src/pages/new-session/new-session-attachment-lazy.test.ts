@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import * as staleChunkReload from "../../app/stale-chunk-reload.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { restoreChatApiAttachments } from "../chat/attachment-restoration.ts";
+import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
 import { createNewSessionRouteData as routeData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "./new-session-page-entry.ts";
@@ -36,14 +38,19 @@ async function enterMessage(page: NewSessionElement, message: string) {
   return textarea;
 }
 
-async function pasteAttachment(page: NewSessionElement, text: string) {
-  const textarea = await enterMessage(page, "Review the attachment");
-  const paste = new Event("paste", { bubbles: true, cancelable: true });
-  Object.defineProperty(paste, "clipboardData", {
-    value: { items: [], getData: () => text },
-  });
-  textarea.dispatchEvent(paste);
-  expect(paste.defaultPrevented).toBe(true);
+async function restorePasteAttachment(page: NewSessionElement, text: string) {
+  const inputs = vi.spyOn(attachmentInputs, "ChatAttachmentInputs");
+  await enterMessage(page, "Review the attachment");
+  inputs.mock.calls.at(-1)![0].onAttachmentsChange!(
+    restoreChatApiAttachments([
+      {
+        mimeType: "text/plain",
+        fileName: "pasted-text-1.txt",
+        origin: "paste",
+        content: Buffer.from(text).toString("base64"),
+      },
+    ]),
+  );
   await page.updateComplete;
   await vi.dynamicImportSettled();
   await waitForSolid(() =>
@@ -60,12 +67,14 @@ afterEach(async () => {
   detailImport.recovery.resolve();
   document.querySelectorAll("openclaw-new-session-page").forEach((element) => element.remove());
   await vi.dynamicImportSettled();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   sessionStorage.clear();
   window.history.replaceState({}, "", "/");
 });
 
 it("keeps the draft usable through a cold preview retry and retires it before the import settles", async () => {
+  vi.spyOn(attachmentInputs, "ChatAttachmentInputs");
   const isStaleChunkImportError = staleChunkReload.isStaleChunkImportError;
   // Vitest wraps rejected mock imports; browsers deliver the original import error.
   vi.spyOn(staleChunkReload, "isStaleChunkImportError").mockImplementation((error) =>
@@ -90,7 +99,7 @@ it("keeps the draft usable through a cold preview retry and retires it before th
     "fetch",
     vi.fn<typeof fetch>().mockImplementation(async () => new Response(original)),
   );
-  await pasteAttachment(page, original);
+  await restorePasteAttachment(page, original);
   await waitForSolid(() => {
     expect(detailImport.started).toBe(true);
     expect(page.querySelector(".new-session-attachment-panel [role='status']")).not.toBeNull();
@@ -118,7 +127,7 @@ it("keeps the draft usable through a cold preview retry and retires it before th
   await vi.dynamicImportSettled();
   expect(page.querySelector("openclaw-chat-detail-panel")).toBeNull();
 
-  await pasteAttachment(page, original);
+  await restorePasteAttachment(page, original);
   await waitForSolid(() =>
     expect(page.querySelector("openclaw-chat-detail-panel pre")?.textContent).toBe(original),
   );

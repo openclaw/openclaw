@@ -46,6 +46,7 @@ import {
 } from "./subagent-registry-run-launch-record.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
 import { prepareSubagentRegistrationRows } from "./subagent-registry-state.js";
+import { startSubagentTyping } from "./subagent-registry-typing.js";
 import type {
   RegisterSubagentRunOptions,
   SubagentRegistrationScope,
@@ -222,7 +223,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       const assertCurrent = () => {
         options.assertCurrent?.();
         authority?.assertCurrent();
-        authority?.signal.throwIfAborted();
         registrationOwnership.assertCurrent();
         if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
           throw new SubagentRegistryMutationRejectedError(
@@ -408,7 +408,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         options.assertCurrent?.();
         options.assertPublicationCurrent?.();
         authority?.assertCurrent();
-        authority?.signal.throwIfAborted();
         const current = currentEntry();
         if (
           !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
@@ -431,6 +430,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           current,
           this.options.resolveSubagentWaitTimeoutMs(cfg, registerParams.runTimeoutSeconds ?? 0),
         );
+        await startSubagentTyping(current, authority, currentEntry);
       }
     } catch (error) {
       if (!queuedScope) {

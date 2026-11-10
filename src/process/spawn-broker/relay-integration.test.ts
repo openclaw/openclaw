@@ -93,7 +93,7 @@ it("launches the stable Homebrew Node after an upgrade removed the running Cella
     } finally {
       process.execPath = originalExecPath;
     }
-    expect(spawnProcess).toHaveBeenLastCalledWith(stableNode, [workerPath], expect.any(Object));
+    expect(vi.mocked(spawnProcess).mock.lastCall?.slice(0, 2)).toEqual([stableNode, [workerPath]]);
   });
 });
 

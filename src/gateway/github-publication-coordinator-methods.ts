@@ -10,13 +10,13 @@ import type {
   GitHubPublicationRow as PublicationRow,
   RepositoryGitHubPublicationRow,
 } from "../state/github-publication-read.types.js";
+import { deriveGitHubPublicationTaskId } from "../state/github-publication-requester.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
-  type PublicationSessionIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
@@ -35,6 +35,7 @@ import {
   type GitHubPublicationRequester,
   type GitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
@@ -328,7 +329,9 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       workspaceTree: string;
     }): Promise<PublicationRow> => {
       const now = Date.now();
-      const requestId = randomUUID();
+      const requestId = input.requester.snapshot.origin
+        ? deriveGitHubPublicationTaskId(input.requester.snapshot.origin, input.idempotencyKey)
+        : randomUUID();
       assertRequester();
       {
         worktreeOwner.assertCurrent();

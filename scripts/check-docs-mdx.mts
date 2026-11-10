@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { compile } from "@mdx-js/mdx";
 import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 type DocsCheckError = {
   type: string;
@@ -26,6 +27,7 @@ function validationCache(cacheFile: string) {
   for (const input of [
     fileURLToPath(import.meta.url),
     fileURLToPath(new URL("./lib/arg-utils.runtime.mjs", import.meta.url)),
+    fileURLToPath(new URL("./lib/numeric-options.mjs", import.meta.url)),
     path.join(root, "package.json"),
     path.join(root, "package-lock.json"),
     path.join(root, "node_modules", ".package-lock.json"),
@@ -102,18 +104,6 @@ const POISON_TEXT_PATTERNS = [
   },
 ];
 
-function parsePositiveIntegerArg(raw: string | undefined, label: string): number {
-  const text = raw?.trim() ?? "";
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
-}
-
 export function parseArgs(argv: string[]) {
   const roots: string[] = [];
   let jsonOut = "";
@@ -136,7 +126,7 @@ export function parseArgs(argv: string[]) {
       continue;
     }
     if (part === "--max-errors") {
-      maxErrors = parsePositiveIntegerArg(
+      maxErrors = parsePositiveInt(
         requireOptionArgument(argv, index, "--max-errors"),
         "--max-errors",
       );

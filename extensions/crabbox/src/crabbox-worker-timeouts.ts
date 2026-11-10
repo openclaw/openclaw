@@ -22,6 +22,8 @@ const CRABBOX_COORDINATOR_READ_BUDGET_MS = 60_000;
 const CRABBOX_LIFECYCLE_MARGIN_MS = 60_000;
 export const CRABBOX_LIFECYCLE_TIMEOUT_MS =
   CRABBOX_COORDINATOR_READ_BUDGET_MS + CRABBOX_LIFECYCLE_MARGIN_MS;
+// Released Azure Sandbox retentionLifecycle owns a three-minute mutation window.
+export const CRABBOX_RETENTION_MUTATION_TIMEOUT_MS = 3 * 60_000 + CRABBOX_LIFECYCLE_MARGIN_MS;
 // `config show` reads local configuration without contacting the coordinator.
 export const CRABBOX_CONFIG_TIMEOUT_MS = 60_000;
 // Crabbox stop resolves twice (10s each), cleans the guest (35s), retries release

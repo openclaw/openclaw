@@ -17,7 +17,11 @@ export class GatewayControlUiIngressError extends Error {
   }
 }
 
-export type GatewayIngressPrincipal = { kind: "owner" } | { kind: "person"; profileId: string };
+export type GatewayIngressPrincipal =
+  | { kind: "owner" }
+  | { kind: "person"; profileId: string }
+  /** Host-captured admission, retained verbatim by the consent owner. */
+  | { kind: "delegated-person"; profileId: string; admission: string };
 
 /** The plugin owns consent, expiry, persistence, and revocation of this exact grant. */
 export type GatewayIngressPrincipalOptionsV1 = {
@@ -53,8 +57,15 @@ export interface GatewayIngressPrincipalBindingV1 {
 }
 
 /** Versioned principal-bound ingress supplied by an admitted plugin service. */
+/** Reconstruct the exact owner-issued grant; undefined means definitively revoked. */
+export type GatewayIngressPrincipalRecovery = (
+  audienceId: string,
+) => Promise<(GatewayIngressPrincipalOptionsV1 & { recoveryId: string }) | undefined>;
+
 export interface GatewayControlUiIngressFactoryV2 {
   readonly capabilityVersion: 2;
+  /** Service-owned recovery; throw while the canonical grant store is unavailable. */
+  registerPrincipalRecovery?(resume: GatewayIngressPrincipalRecovery): Promise<void>;
   open(options: GatewayControlUiIngressOpenOptionsV2): Promise<GatewayControlUiIngressV2>;
   bindPrincipal(
     options: GatewayIngressPrincipalOptionsV1,

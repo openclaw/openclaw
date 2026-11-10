@@ -56,16 +56,11 @@ function serveDist(distDir: string): Promise<{ baseUrl: string; close: () => Pro
     }
     res.setHeader("Content-Type", mime[path.extname(filePath)] ?? "application/octet-stream");
     const source = fs.readFileSync(filePath);
-    // Like the Gateway, anchor the portable entry before a canonical deep route
-    // reloads; otherwise /chat/main asks this fixture for /chat/assets/*.js.
+    // Like the Gateway, anchor entries and import-map keys/targets before a
+    // deep-route reload; rooting only src/href leaves placeholder imports unmapped.
     res.end(
       filePath.endsWith("index.html")
-        ? source
-            .toString("utf8")
-            // Measure requested boot code, not speculative idle preparation.
-            .replace(/<meta id="openclaw-navigation-preloads"[^>]*>/u, "")
-            .replaceAll('src="./assets/', 'src="/assets/')
-            .replaceAll('href="./assets/', 'href="/assets/')
+        ? source.toString("utf8").replaceAll('"./assets/', '"/assets/')
         : source,
     );
   });
@@ -112,6 +107,10 @@ async function collectBootChunkPaths(
       try {
         await context.addInitScript(deferControlUiBootSpeculation);
         const page = await context.newPage();
+        // Capture required boot code, not the shell's optional idle menu/route warmups.
+        // Removing navigation metadata alone does not disable registered menu warmups.
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Emulation.setDataSaverOverride", { dataSaverEnabled: true });
         page.on("request", (request) => {
           const { pathname } = new URL(request.url());
           if (pathname.startsWith("/assets/") && pathname.endsWith(".js")) {

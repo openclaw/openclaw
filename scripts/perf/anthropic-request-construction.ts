@@ -7,12 +7,21 @@
  * --retained measures real projection/fragment ownership and release (use --expose-gc).
  * --images uses 48 messages with 12 frozen 64 KiB inline images (user + tool results),
  * the real host image normalizer and existing serialization on both revisions.
+ * --mode system isolates system normalization; use --prepared-system and --iterations 20000.
+ * --prepared-system carries a session-owned 64 KiB prompt revision through request construction.
  * All non-build modes consume contiguous bytes, matching the guarded Blob body path.
  * scenarioHashes must match across revisions: tool turns, moved cache boundaries, hook edits.
  * Run five alternating base/candidate arms per workload and instrumentation mode.
- * Acceptance: identical wireSha256, lower allocation/CPU per request, no controlled
- * material GC regression. Gate CPU/GC on untraced passes, allocation separately.
- * This measures request preparation, not fetch, provider calls or Gateway latency.
+ * --restored replays 199 restored messages with 40 KiB tool results through attempt
+ * preparation and the real transport, appending a tool turn per iteration (use 20).
+ * In restored mode --baseline-dir overlays the owner, including the real serializer.
+ * Acceptance: identical wireSha256 and lower warm CPU/allocation. For restored mode,
+ * the one-time preparation + first-request CPU increase must be less than one warm
+ * request CPU saving (or within control noise). Report GC/tails separately; p95Ms
+ * is the floor(n * .95) order statistic, hence the maximum with 20 iterations.
+ * Other modes retain their no-material-GC-regression rule. Measure allocation separately.
+ * Restored mode includes transport/SSE replay; other modes measure preparation only.
+ * No mode measures live provider calls or whole-Gateway latency.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -24,28 +33,31 @@ import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import type { AnthropicOptions } from "../../packages/ai/src/provider-options.js";
 import type { Context, Model } from "../../packages/llm-core/src/types.js";
+import { summarizeGcByKind } from "../lib/gc-profile-summary.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
   options: {
     messages: { type: "string", default: "40" },
     mode: { type: "string", default: "full" },
-    iterations: { type: "string", default: "2000" },
+    iterations: { type: "string" },
     allocation: { type: "boolean", default: false },
     retained: { type: "boolean", default: false },
+    "prepared-system": { type: "boolean", default: false },
     images: { type: "boolean", default: false },
+    restored: { type: "boolean", default: false },
     "baseline-dir": { type: "string" },
   },
 });
 assert(values.messages === "40" || values.messages === "150", "--messages must be 40 or 150");
 assert(
-  values.mode === "full" || values.mode === "build" || values.mode === "serialize",
-  "--mode must be full, build or serialize",
+  ["full", "build", "serialize", "system"].includes(values.mode),
+  "--mode must be full, build, serialize or system",
 );
 const messageCount = values.images ? 48 : Number(values.messages);
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
-  fallback: 2000,
+  fallback: values.restored ? 20 : 2000,
   min: 1,
   label: "iterations",
 });
@@ -53,7 +65,16 @@ if (values["baseline-dir"]) {
   process.env.OPENCLAW_BENCH_BASELINE_DIR = path.resolve(values["baseline-dir"]);
   await import("./worker-retained-heap-preload.js");
 }
+if (values.restored) {
+  const { measureRestoredAnthropicSession } = await import("./anthropic-restored-session.js");
+  await measureRestoredAnthropicSession({ iterations, allocation: values.allocation });
+  process.exit(0);
+}
+const { prepareSystemPrompt, SYSTEM_PROMPT_CACHE_BOUNDARY } =
+  await import("../../packages/ai/src/utils/system-prompt-cache-boundary.js");
 const { configureAiTransportHost } = await import("../../packages/ai/src/host.js");
+const { buildAnthropicSystemBlocks } =
+  await import("../../packages/ai/src/transports/anthropic-payload-policy.js");
 const { buildAnthropicRequest, prepareAnthropicRequest } =
   await import("../../packages/ai/src/transports/anthropic-messages.js");
 const { transformTransportMessages } =
@@ -137,7 +158,9 @@ if (values.images) {
 }
 messages.slice(0, -1).forEach(freezeJsonSnapshot);
 let context: Context | undefined = {
-  systemPrompt: "Synthetic system block. ".repeat(100),
+  systemPrompt:
+    "Synthetic system block. ".repeat(values["prepared-system"] ? 2800 : 100) +
+    (values["prepared-system"] ? `${SYSTEM_PROMPT_CACHE_BOUNDARY}Runtime facts.` : ""),
   messages,
   tools: [
     {
@@ -151,6 +174,9 @@ let context: Context | undefined = {
     },
   ],
 };
+if (values["prepared-system"]) {
+  context.preparedSystemPrompt = prepareSystemPrompt(context.systemPrompt!);
+}
 const options: AnthropicOptions = {
   cacheRetention: "long",
   thinkingEnabled: true,
@@ -324,8 +350,20 @@ changeTail(0);
 const prepared = await build();
 let lastPrepared = prepared;
 let last: Uint8Array<ArrayBuffer> | undefined;
+let lastSystem: ReturnType<typeof buildAnthropicSystemBlocks>;
 async function run() {
   for (let index = 0; index < iterations; index++) {
+    if (values.mode === "system") {
+      assert(context);
+      lastSystem = buildAnthropicSystemBlocks(
+        context.systemPrompt,
+        false,
+        { type: "ephemeral", ttl: "1h" },
+        undefined,
+        context.preparedSystemPrompt,
+      );
+      continue;
+    }
     if (values.mode !== "serialize") {
       changeTail(index);
     }
@@ -334,6 +372,9 @@ async function run() {
   }
 }
 async function verifyLast() {
+  if (values.mode === "system") {
+    assert.deepEqual(lastSystem, prepared.params.system);
+  }
   const expectedWire = JSON.stringify({ ...lastPrepared.params, stream: true });
   if (last) {
     assert.equal(hash("sha256", last), hash("sha256", expectedWire));
@@ -385,6 +426,7 @@ console.log(
   JSON.stringify({
     messages: messageCount,
     mode: values.mode,
+    preparedSystem: values["prepared-system"],
     images: values.images ? 12 : 0,
     allocation: values.allocation,
     iterations,
@@ -398,17 +440,7 @@ console.log(
     gcMs: collections.reduce((sum, entry) => sum + entry.cost / 1000, 0),
     gcMaxMs: Math.max(0, ...collections.map((entry) => entry.cost / 1000)),
     gcCount: collections.length,
-    gcByKind: [...new Set(collections.map((entry) => entry.gcType))].map((kind) => {
-      const pauses = collections
-        .filter((entry) => entry.gcType === kind)
-        .map((entry) => entry.cost / 1000);
-      return {
-        kind,
-        count: pauses.length,
-        totalMs: pauses.reduce((sum, ms) => sum + ms, 0),
-        maxMs: Math.max(0, ...pauses),
-      };
-    }),
+    gcByKind: summarizeGcByKind(collections),
     memoryBeforeFinalGc,
     memory: process.memoryUsage(),
     hostLoadBefore,
