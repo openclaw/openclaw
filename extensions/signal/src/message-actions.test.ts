@@ -77,21 +77,6 @@ describe("signalMessageActions", () => {
     expect(signalMessageActions.supportsAction?.({ action: "edit" })).toBe(true);
   });
 
-  it("edits an earlier message in place through the send path", async () => {
-    sendMessageSignalMock.mockClear();
-    await signalMessageActions.handleAction?.({
-      channel: "signal",
-      action: "edit",
-      cfg: DEFAULT_CFG,
-      params: { to: "+15559999999", messageId: "1700000000123", text: "Status: done" },
-    });
-    expect(sendMessageSignalMock).toHaveBeenCalledWith(
-      "+15559999999",
-      "Status: done",
-      expect.objectContaining({ editTimestamp: 1700000000123 }),
-    );
-  });
-
   it("aims a second edit of the original message at its newest revision", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("signal-edit-action-") };
     const runtime = createPluginRuntimeMock({
@@ -115,8 +100,15 @@ describe("signalMessageActions", () => {
     });
     await edit("rev 1");
     await edit("rev 2");
-    expect(sendMessageSignalMock.mock.calls.map((call) => call[2]?.editTimestamp)).toEqual([
-      1700000000500, 1700000000600,
+    expect(
+      sendMessageSignalMock.mock.calls.map(([to, text, options]) => [
+        to,
+        text,
+        options?.editTimestamp,
+      ]),
+    ).toEqual([
+      ["+15559999998", "rev 1", 1700000000500],
+      ["+15559999998", "rev 2", 1700000000600],
     ]);
     runtimeSpy.mockRestore();
   });
