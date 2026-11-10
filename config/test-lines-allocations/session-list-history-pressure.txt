@@ -1,0 +1,2 @@
+# Regression: steady sidebar readers keep their newest baseline when old generations fill the view byte budget.
+37
