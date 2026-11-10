@@ -315,13 +315,13 @@ it.skipIf(!chromiumAvailable)(
       await dialog.getByRole("checkbox", { name: optionalFile }).uncheck();
       await waitForRequests("templates.drafts.review", 2);
       await gateway.deferNext("templates.drafts.publish");
-      await dialog.getByRole("button", { name: "Publish to ClawHub" }).click();
+      await dialog.getByRole("button", { name: "Publish", exact: true }).click();
       await gateway.waitForRequest("templates.drafts.publish");
       await expect
         .poll(() => dialog.locator("button.btn.primary").getAttribute("aria-busy"))
         .toBe("true");
       await dialog.locator(".btn__spinner").waitFor({ state: "visible" });
-      await dialog.getByRole("button", { name: "Ask for changes" }).click();
+      await page.keyboard.press("Escape");
       await dialog.waitFor({ state: "detached" });
       await gateway.rejectDeferred("templates.drafts.publish", {
         code: "UNAVAILABLE",
@@ -334,7 +334,7 @@ it.skipIf(!chromiumAvailable)(
       await setReview("e");
       await publicationError.getByRole("button", { name: "Retry review" }).click();
       await waitForRequests("templates.drafts.review", 3);
-      await dialog.getByRole("button", { name: "Publish to ClawHub" }).click();
+      await dialog.getByRole("button", { name: "Publish", exact: true }).click();
       await waitForRequests("templates.drafts.publish", 2);
       const published = await gateway.getRequests("templates.drafts.publish");
       expect(published[1]?.params).toMatchObject({

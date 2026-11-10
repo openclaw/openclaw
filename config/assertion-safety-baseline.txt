@@ -1057,7 +1057,7 @@ src/agents/cli-runner/bundle-mcp.ts	5
 src/agents/cli-runner/cli-backend-auth-policy.ts	1
 src/agents/cli-runner/cli-run-transcript.ts	1
 src/agents/cli-runner/execute-node-claude.ts	3
-src/agents/cli-runner/execute.ts	2
+src/agents/cli-runner/execute.ts	1
 src/agents/cli-runner/prepare.ts	1
 src/agents/cli-runner/session-history.ts	1
 src/agents/code-mode-runtime.ts	1

@@ -77,11 +77,10 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
-  // Josh Lehman approved the OpenClaw ID account menu styles (#192352, 2026-11-06):
-  // measured 325,045 B gzip / 1,675,690 B raw; retain 64 B headroom.
-  totalCssGzipBytes: 325_109,
-  totalCssRawBytes: 1_675_754,
+  // Coordinator-accepted shipped feature cost after paydown #196291 and #196320.
+  // Measured on main a58dbe09: exact totals, with no added headroom.
+  totalCssGzipBytes: 326_575,
+  totalCssRawBytes: 1_682_231,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

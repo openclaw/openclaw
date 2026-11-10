@@ -65,7 +65,7 @@ async function run(argv) {
       counts.set(name, (counts.get(name) ?? 0) + 1);
     }
     return new Map(
-      [...names].map(([id, name]) => [id, counts.get(name) > 1 ? name + "#" + id.slice(-4) : name]),
+      [...names].map(([id, name]) => [id, counts.get(name) > 1 ? name + "#" + id : name]),
     );
   }
 
