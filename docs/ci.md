@@ -300,6 +300,8 @@ The same release job caches Xcode's `SourcePackages` downloads separately from o
 
 Release qualification disables Spotlight indexing on the disposable runner's Data volume before checkout. After Simulator boot, it requires ten seconds of at least 30% idle host CPU within five minutes before issuing the pairing credential. This keeps first-launch background work out of the Gateway and XCTest deadlines. Local qualification uses the same CPU readiness check and leaves host indexing settings to the operator.
 
+iOS qualification proof records assertion basenames and line numbers from the snapshot suite and its Chat and Helpers files, without assertion text or checkout paths. Pairing handles the expected Local Network permission prompt directly before opening manual setup, and also supports authorization retained by subsequent tests. Raw XCTest output and result bundles remain private and are cleaned up by the harness.
+
 Android screenshot-input PRs and ordinary full manual CI run the existing phone
 and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
 capture to succeed; unit-test-only and documentation changes omit it. See

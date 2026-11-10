@@ -853,5 +853,6 @@ describe("remote Control UI ingress production composition", () => {
       sharedToken: SHARED_TOKEN,
       ownerSessionKey: OWNER_SESSION_KEY,
       configure,
+      gatewayServer: () => listener.listener,
     }));
 });

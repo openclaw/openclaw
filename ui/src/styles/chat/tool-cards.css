@@ -130,12 +130,6 @@
 }
 
 .chat-tool-row__chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 14px;
-  width: 14px;
-  height: 14px;
   opacity: 0;
   transition:
     opacity 150ms ease-out,
