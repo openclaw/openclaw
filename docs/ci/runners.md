@@ -402,8 +402,15 @@ validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime
 placement and deadlines.
 
 Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
-The QA controls honor their `runner_group` input. QA profile planning, builds,
-shards, aggregation, and live transport workloads keep their existing runners.
+The QA controls honor their `runner_group` input. Reusable live/E2E and QA
+profile runtime jobs are prepared to use Boat when
+`OPENCLAW_CI_RUNNER_BACKEND=boat`. Existing source and actor admission still
+apply. Live/E2E jobs using the xlarge selector and repo E2E jobs use
+`boat-xlarge` (16 vCPU, 32 GiB). Medium live/E2E and QA profile jobs use
+`boat` (4 vCPU, 8 GiB). Explicit hosted overrides and
+runner groups retain their precedence, and other backend settings retain their
+existing routes. Activation requires compatible Boat account policy; these
+selectors do not change that policy. Live transport placement remains separate.
 
 Ordinary iOS smoke CI builds the app and embedded Watch targets for the runner's
 architecture, using the same iPhone simulator for compilation and voice-cleanup
