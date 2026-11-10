@@ -4,8 +4,13 @@
  * and lids are separate groups so CSS alone can move them: no script, no external asset.
  */
 export function renderOpenClawMascot(gradientId: string): string {
-  const fill = `url(#${gradientId})`;
-  return `<span class="mascot" aria-hidden="true"><span class="mascot-ground"></span><svg class="mascot-figure" viewBox="-2 2 124 112" focusable="false"><defs><linearGradient id="${gradientId}" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs><g fill="none" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round"><path d="M45 15 Q35 5 30 8"/><path d="M75 15 Q85 5 90 8"/></g><g class="mascot-claw mascot-claw-left"><path d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z" fill="${fill}"/></g><g class="mascot-claw mascot-claw-right"><path d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z" fill="${fill}"/></g><path d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z" fill="${fill}"/><g class="mascot-eyes"><g class="mascot-lids"><circle cx="45" cy="35" r="6" fill="#181A1F"/><circle cx="75" cy="35" r="6" fill="#181A1F"/><circle cx="46" cy="34" r="2.5" fill="#DDE2E9" opacity=".82"/><circle cx="76" cy="34" r="2.5" fill="#DDE2E9" opacity=".82"/></g></g></svg></span>`;
+  return `<span class="mascot" aria-hidden="true"><span class="mascot-ground"></span>${renderOpenClawMascotSvg(gradientId)}</span>`;
+}
+
+/** Standalone canonical artwork for local image rendering, without status-page animation. */
+export function renderOpenClawMascotSvg(gradientId: string, monochrome = false): string {
+  const fill = monochrome ? "#000" : `url(#${gradientId})`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" class="mascot-figure" viewBox="-2 2 124 112" focusable="false"><defs><linearGradient id="${gradientId}" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff4d4d"/><stop offset="100%" stop-color="#991b1b"/></linearGradient></defs><g fill="none" stroke="${monochrome ? "#000" : "#ff4d4d"}" stroke-width="3" stroke-linecap="round"><path d="M45 15 Q35 5 30 8"/><path d="M75 15 Q85 5 90 8"/></g><g class="mascot-claw mascot-claw-left"><path d="M20 45 C5 40 0 50 5 60 C10 70 20 65 25 55 C28 48 25 45 20 45Z" fill="${fill}"/></g><g class="mascot-claw mascot-claw-right"><path d="M100 45 C115 40 120 50 115 60 C110 70 100 65 95 55 C92 48 95 45 100 45Z" fill="${fill}"/></g><path d="M60 10 C30 10 15 35 15 55 C15 75 30 95 45 100 L45 110 L55 110 L55 100 C55 100 60 102 65 100 L65 110 L75 110 L75 100 C90 95 105 75 105 55 C105 35 90 10 60 10Z" fill="${fill}"/><g class="mascot-eyes"><g class="mascot-lids"><circle cx="45" cy="35" r="6" fill="${monochrome ? "#fff" : "#181A1F"}"/><circle cx="75" cy="35" r="6" fill="${monochrome ? "#fff" : "#181A1F"}"/><circle cx="46" cy="34" r="2.5" fill="${monochrome ? "#fff" : "#DDE2E9"}" opacity=".82"/><circle cx="76" cy="34" r="2.5" fill="${monochrome ? "#fff" : "#DDE2E9"}" opacity=".82"/></g></g></svg>`;
 }
 
 /**

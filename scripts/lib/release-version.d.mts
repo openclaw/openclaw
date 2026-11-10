@@ -29,3 +29,5 @@ export function collectReleaseVersionFloorErrors(
 ): string[];
 export function compareReleaseVersions(left: string, right: string): number | null;
 export function isStableReleaseVersionAtLeast(version: string, minimum: string): boolean;
+
+export function validateRetiredLineReason(reason: unknown): string;

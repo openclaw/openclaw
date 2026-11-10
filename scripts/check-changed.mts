@@ -280,6 +280,7 @@ function changedCheckDiffRefsReady({
     try {
       execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
         cwd,
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
         stdio: "ignore",
       });
     } catch {

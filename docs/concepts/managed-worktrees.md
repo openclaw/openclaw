@@ -490,7 +490,11 @@ tracking branches confirmed deleted upstream (unless the fetch explicitly uses
 `--no-prune`), preserving tracking refs required by local symbolic refs or
 worktree HEADs, then fetches missing ref and
 worktree-HEAD objects by ID with commit-graph lookup and automatic maintenance
-disabled. Local branches, tags, and worktree HEADs are never deleted. Repair is
+disabled. Repair negotiates from a physically present commit when available,
+including in isolated transport metadata, to reuse local history. If requested
+objects remain missing, it retries once without negotiation: a resident descendant
+can otherwise hide a missing ancestor. Local branches, tags, and worktree HEADs
+are never deleted. Repair is
 limited to 50,000 refs, 4,096 missing tips, and five minutes; healthy fetches do
 not scan repository health. Managed project refresh retains its isolated,
 URL-pinned transport during recovery.

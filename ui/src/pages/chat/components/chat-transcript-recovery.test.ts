@@ -253,15 +253,14 @@ describe("chat transcript full-message recovery", () => {
         },
       ],
     };
-    await pane.updateComplete;
-    await expectDefined(load.mock.results[0]?.value, "full-message load");
-    await pane.updateComplete;
-    expect(load).toHaveBeenCalledExactlyOnceWith({
-      sessionKey: "agent:work:main",
-      agentId: "work",
-      messageId: "oversized-tools",
-      maxChars: 8_000_000,
-    });
+    await waitForSolid(() =>
+      expect(load).toHaveBeenCalledExactlyOnceWith({
+        sessionKey: "agent:work:main",
+        agentId: "work",
+        messageId: "oversized-tools",
+        maxChars: 8_000_000,
+      }),
+    );
     const disclosure = await waitForSolid(() =>
       expectDefined(
         pane.querySelector<HTMLButtonElement>(".chat-tool-msg-summary:enabled"),

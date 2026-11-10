@@ -473,6 +473,17 @@ it("shows whether the stream is following as the reader leaves and returns to th
     wheelTo(end());
     frames(1);
     expect(toggle.checked).toBe(false);
+
+    // A native wheel offset can arrive before the browser's coalesced scroll event.
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaY: -1000 }));
+    stream.scrollTop = end() - 200;
+    setEntries(lines(540));
+    flush();
+    vi.advanceTimersByTime(16);
+    flush();
+    // The append already sampled the reader's offset; only the final scroll is delivered.
+    wheelTo(end());
+    expect(toggle.checked).toBe(true);
   } finally {
     view.unmount();
   }

@@ -76,12 +76,15 @@ export function prepareGroupMessage(
   return { item, source, actions: details, ownsActions };
 }
 
-export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = false): boolean {
-  if (normalizeRoleForGrouping(group.role) !== "tool") {
+export function isActivityMessageGroup(
+  group: MessageGroupData,
+  options: Pick<NativeMessageGroupOptions, "bubbleMode" | "frameContent">,
+): boolean {
+  if (options.frameContent !== undefined || normalizeRoleForGrouping(group.role) !== "tool") {
     return false;
   }
   if (
-    bubbleMode &&
+    options.bubbleMode &&
     group.messages.some(
       (item) => item.hasVisibleContent && resolveMessageRole(item.message) === "assistant",
     )
@@ -90,7 +93,7 @@ export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = fal
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
   return (
-    bubbleMode ||
+    options.bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
     (cards.length === 0 &&
