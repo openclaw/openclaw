@@ -547,7 +547,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
   it.each([400, 820, 1280])(
     "adds a personal Template directly from its card with stable chat and retained input at %i px",
     async (width) => {
-      const community = {
+      const community: ClawHubTemplateCatalogEntry = {
         ...workflowOperator,
         packageName: "@maker/workflow-operator",
         channel: "community",
