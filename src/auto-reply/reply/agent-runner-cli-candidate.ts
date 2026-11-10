@@ -237,7 +237,7 @@ export async function runCliFallbackCandidate(
         // The CLI owner must see explicit pins before provider scoping can discard them.
         // A recorded account runs only when this backend forwards exactly that account.
         const authProfileId = scheduledInference
-          ? await scheduledInference.resolveCliAuthProfile(async (selected) =>
+          ? await scheduledInference.resolveCliAuthProfile(params.provider, async (selected) =>
               allowCliAuthProfileForwarding
                 ? await resolveCliExecutionAuthProfileId({
                     cliExecutionProvider: params.cliExecutionProvider,
@@ -492,7 +492,7 @@ export async function runCliFallbackCandidate(
             assertCurrent: scheduledInference
               ? () => {
                   assertSettlementCurrent();
-                  scheduledInference.runParams.authProfileBinding?.assertCurrent();
+                  scheduledInference.runParams(params.provider).authProfileBinding?.assertCurrent();
                 }
               : undefined,
             nativeAuthOnly:

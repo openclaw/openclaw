@@ -230,7 +230,7 @@ it.each(["model", "provider", "session"] as const)(
                   timeoutMs: 1000,
                   trigger: "cron",
                   config: cfg,
-                  ...inference?.runParams,
+                  ...inference?.runParams("openai"),
                 },
                 provider: "openai",
                 modelId: "gpt-5.5",

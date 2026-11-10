@@ -29,7 +29,10 @@ import {
 } from "../../state/agent-database-preparation-context.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronExecutionActor } from "../human-owner.js";
-import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
+import {
+  resolveCronInferenceAccount,
+  resolveCronRuntimeSessionEntry,
+} from "../inference-binding.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronWorkspaceLease } from "../run-workspace.js";
@@ -432,9 +435,14 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           workspaceDir,
           allowGatewaySubagentBinding: true,
           runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
+            // Each provider resolves on the runtime its own recorded account was captured for.
+            const binding = input.job.inferenceBinding;
+            const account = binding && resolveCronInferenceAccount(binding, candidate.provider);
             const runtime = resolveSessionRuntimeOverrideForProvider({
               provider: candidate.provider,
-              entry: runtimeSessionEntry,
+              entry: account
+                ? resolveCronRuntimeSessionEntry(account, cronSession.sessionEntry)
+                : runtimeSessionEntry,
               cfg: cfgWithAgentDefaults,
             });
             return runtime

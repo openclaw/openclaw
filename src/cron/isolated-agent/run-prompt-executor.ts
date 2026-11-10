@@ -533,7 +533,7 @@ export function createCronPromptExecutor(
                     : Promise.resolve(undefined);
                 // A recorded account runs only when this backend forwards exactly that account.
                 const authProfileId = inference
-                  ? await inference.resolveCliAuthProfile(resolveForwardedProfile)
+                  ? await inference.resolveCliAuthProfile(providerOverride, resolveForwardedProfile)
                   : await resolveForwardedProfile(
                       params.liveSelection.authProfileId
                         ? {
@@ -575,7 +575,7 @@ export function createCronPromptExecutor(
                   assertCurrent: inference
                     ? () => {
                         assertSettlementCurrent();
-                        inference.runParams.authProfileBinding?.assertCurrent();
+                        inference.runParams(providerOverride).authProfileBinding?.assertCurrent();
                       }
                     : undefined,
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
@@ -658,7 +658,7 @@ export function createCronPromptExecutor(
           authProfileIdSource: runOptions.authProfileId
             ? "user"
             : params.liveSelection.authProfileIdSource,
-          ...inference?.runParams,
+          ...inference?.runParams(providerOverride),
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           verboseLevel: params.resolvedVerboseLevel,

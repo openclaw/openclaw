@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { isCronInferenceBindingAddition } from "../cron/inference-binding.js";
 import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import { resolveCronJobGrantDefinitionRevision } from "../cron/store/job-config-codec.js";
 import {
@@ -94,7 +95,7 @@ function decodeDefinitionGeneration(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : null;
 }
 
-/** Preserve derivative references when offline Doctor only narrows a legacy job to an account. */
+/** Preserve derivative references when offline Doctor only narrows a job to recorded accounts. */
 export function migrateCronInferenceStandingGrantReferences(
   db: EngineConnection,
   previous: CronStoredJob,
@@ -120,10 +121,11 @@ export function migrateCronInferenceStandingGrantReferences(
     // Doctor may update only the derivative revision, never the captured authority.
     unchanged.operatorSource = source;
   }
+  const { inferenceBinding: previousBinding, ...previousUnchanged } = previous;
   if (
-    previous.inferenceBinding !== undefined ||
     !inferenceBinding ||
-    !isDeepStrictEqual(previous, unchanged)
+    !isCronInferenceBindingAddition(previousBinding, inferenceBinding) ||
+    !isDeepStrictEqual(previousUnchanged, unchanged)
   ) {
     throw new Error("Cron inference migration must preserve the entire approved job definition.");
   }

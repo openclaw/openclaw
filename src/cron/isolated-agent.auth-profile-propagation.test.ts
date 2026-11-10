@@ -479,7 +479,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         // Fail the resolver's second store read, after the saved account was admitted.
         // Failing initial authorization would never reach the compatibility wrapper.
         await expect(
-          inference.resolveCliAuthProfile((selected) =>
+          inference.resolveCliAuthProfile("anthropic", (selected) =>
             resolveCliExecutionAuthProfileId({
               cliExecutionProvider: "claude-cli",
               authProfileProvider: "anthropic",
@@ -524,7 +524,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       }
       try {
         await expect(
-          inference.resolveCliAuthProfile((selected) =>
+          inference.resolveCliAuthProfile("anthropic", (selected) =>
             resolveCliExecutionAuthProfileId({
               cliExecutionProvider: "claude-cli",
               authProfileProvider: "anthropic",

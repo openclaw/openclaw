@@ -4,7 +4,11 @@ import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
-import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
+import {
+  type CronInferenceBinding,
+  isCronInferenceBindingAddition,
+  normalizeCronInferenceBinding,
+} from "../../../cron/inference-binding.js";
 import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { noteCronJobsStoreCommit } from "../../../cron/store.js";
 import { resolveCronJobGrantDefinitionRevision } from "../../../cron/store/job-config-codec.js";
@@ -210,13 +214,16 @@ export async function repairCronInferenceBindingsForDoctor(
   }
   const expected = definitionEvidence(inventory.jobs);
   const selected = new Set<string>();
-  for (const { job } of changes) {
+  for (const { job, binding } of changes) {
     const key = JSON.stringify([job.storeKey, job.id]);
     if (
       selected.has(key) ||
       !inventory.jobs.some((row) => isDeepStrictEqual(row, job)) ||
       !job.definition ||
-      job.definition.inferenceBinding !== undefined
+      !isCronInferenceBindingAddition(
+        normalizeCronInferenceBinding(job.definition.inferenceBinding),
+        binding,
+      )
     ) {
       throw new Error("Inference migration requires distinct inspected legacy cron definitions.");
     }

@@ -21,7 +21,11 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
-import { type CronInferenceBinding, describeCronInferenceBinding } from "./inference-binding.js";
+import {
+  type CronInferenceAccount,
+  type CronInferenceBinding,
+  describeCronInferenceBinding,
+} from "./inference-binding.js";
 import { resolveCronCandidateExecution } from "./isolated-agent/candidate-execution.js";
 import {
   resolveCronModelSelection,
@@ -283,9 +287,138 @@ export async function captureCronInferenceBinding(params: {
   }
 }
 
+type CronFallbackChainParams = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  primaryProvider: string;
+  /** The job's payload model and fallbacks; omitted fallbacks inherit the agent policy. */
+  model?: string;
+  fallbacks?: string[];
+  isGmailHook?: boolean;
+};
+
+/** The first fallback model of each provider other than the primary's, in run order. */
+export async function resolveCronFallbackProviderModels(
+  params: CronFallbackChainParams,
+): Promise<Array<{ provider: string; model: string }>> {
+  const owner = await resolveCronModelSelectionOwner({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    requiredAgentId: params.agentId,
+  });
+  const { config: cfg, agentId, agentDir, workspaceDir } = owner;
+  const primary = await resolveCronModelSelection({
+    cfg,
+    owner,
+    agentConfigOverride: resolveAgentConfig(cfg, agentId),
+    agentId,
+    agentDir,
+    workspaceDir,
+    payloadModel: params.model,
+    sessionEntry: {},
+    isGmailHook: params.isGmailHook === true,
+  });
+  if (!primary.ok) {
+    return [];
+  }
+  const { resolveCronPreflightCandidates } =
+    await import("./isolated-agent/run-fallback-policy.js");
+  // The same chain a run builds: payload fallbacks first, then subagent/agent/default policy.
+  const chain = resolveCronPreflightCandidates({
+    cfg: primary.cfgWithAgentDefaults,
+    job: {
+      payload: {
+        kind: "agentTurn",
+        message: "",
+        ...(params.model ? { model: params.model } : {}),
+        ...(params.fallbacks ? { fallbacks: params.fallbacks } : {}),
+      },
+    },
+    agentId,
+    provider: primary.provider,
+    model: primary.model,
+    useSubagentFallbacks: primary.useSubagentFallbacks,
+    inheritDefaultFallbacksForAgentStringModel: primary.inheritDefaultFallbacksForAgentStringModel,
+  });
+  const seen = new Set([params.primaryProvider]);
+  const models: Array<{ provider: string; model: string }> = [];
+  for (const candidate of chain) {
+    if (!seen.has(candidate.provider)) {
+      seen.add(candidate.provider);
+      models.push({
+        provider: candidate.provider,
+        model: `${candidate.provider}/${candidate.model}`,
+      });
+    }
+  }
+  return models;
+}
+
+/** A fallback provider whose account could not be recorded; its candidates are refused. */
+export type CronUnrecordedFallbackAccount = { provider: string; model: string; reason: string };
+
+/**
+ * Record one account per fallback provider other than the primary's, using the same capture
+ * rules as the primary. A fallback that cannot be recorded never blocks the job: it is
+ * reported and its candidates fail closed at run time.
+ */
+export async function captureCronFallbackInferenceAccounts(
+  params: CronFallbackChainParams & {
+    runtimeSessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
+    /** Fallback accounts recorded before this edit keep their captured runtime. */
+    recordedAccounts?: CronInferenceAccount[];
+    authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
+  },
+): Promise<{
+  accounts: CronInferenceAccount[];
+  unrecorded: CronUnrecordedFallbackAccount[];
+}> {
+  const accounts: CronInferenceAccount[] = [];
+  const unrecorded: CronUnrecordedFallbackAccount[] = [];
+  for (const { provider, model } of await resolveCronFallbackProviderModels(params)) {
+    try {
+      const captured = await captureCronInferenceBinding({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        model,
+        isGmailHook: params.isGmailHook,
+        runtimeSessionEntry: params.runtimeSessionEntry,
+        recordedRuntime: params.recordedAccounts?.find((account) => account.provider === provider)
+          ?.runtime,
+        authorizeProfile: params.authorizeProfile,
+      });
+      if (!captured) {
+        unrecorded.push({
+          provider,
+          model,
+          reason:
+            captured === null
+              ? "it signs in through a native CLI login, not a stored account"
+              : "it has no stored account (environment or provider-config key)",
+        });
+        continue;
+      }
+      accounts.push({
+        provider: captured.provider,
+        profileId: captured.profileId,
+        authorizationId: captured.authorizationId,
+        authRequirement: captured.authRequirement,
+        ...(captured.runtime !== undefined ? { runtime: captured.runtime } : {}),
+      });
+    } catch (error) {
+      unrecorded.push({
+        provider,
+        model,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { accounts, unrecorded };
+}
+
 /** Reacquire the same owner, including its live revocation and replacement checks. */
 export async function acquireCronInferenceAuthorization(params: {
-  binding: CronInferenceBinding;
+  binding: CronInferenceAccount;
   cfg: OpenClawConfig;
   agentDir: string;
 }) {

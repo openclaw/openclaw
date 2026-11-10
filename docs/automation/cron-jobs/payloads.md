@@ -245,6 +245,18 @@ At creation, account capture follows scheduled-model selection, including an
 allowed `model@profile` value in per-agent or global `subagents.model`. A disallowed
 scheduled model falls back without retaining that model's account.
 
+Fallback models on other providers keep working. When a job records its primary
+account, it also records one account for each other provider in its fallback chain
+(the job's `fallbacks`, or the inherited agent/default fallbacks), using the same
+selection rules. When the primary fails, for example because a provider is down or
+a subscription is exhausted, a fallback on another provider runs on its own recorded
+account. Changing interactive defaults or profile order does not switch that account
+either. A fallback provider with no recorded account is refused when the chain
+reaches it, as is a fallback account that was replaced or revoked; this never blocks
+the primary. Editing the job's model or `fallbacks` records accounts for the new
+chain. A fallback that can't be recorded (for example, one that only has an
+environment or provider-config key) is logged at creation and refused at run time.
+
 To change an account deliberately, update the job with a model/profile selection,
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
 For legacy jobs without a recorded inference owner, `openclaw doctor --fix` records
@@ -256,8 +268,10 @@ of them. When several accounts are eligible, Doctor names the others and the com
 to change the choice.
 Doctor can also adopt host-managed accounts on an explicitly selected Codex runtime; it records that runtime with the account. Native-owned or model-locked sessions remain unchanged.
 Doctor uses normal automation model selection, preserves inherited defaults and
-fallback lists, leaves existing bindings unchanged, and backs up cron state before
-committing. Missing accounts, and personal accounts needing their owner's
+fallback lists, and backs up cron state before committing. It also records missing
+fallback-provider accounts, both for jobs it adopts and for jobs that already have a
+binding (including bindings recorded by 2026.10.10, which have none). It never
+changes an account that is already recorded. Missing accounts, and personal accounts needing their owner's
 authorization, are left unchanged with job-specific adoption instructions.
 Run `openclaw doctor --lint` to preview missing bindings. Add `--all` to inspect
 unavailable profiles referenced by saved account order. An empty per-agent credential store

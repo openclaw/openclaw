@@ -288,13 +288,13 @@ describe("ordinary session event execution", () => {
       };
       using acquire = vi.spyOn(cronInference, "prepareCronRunInference");
       acquire.mockResolvedValue({
-        runParams: {
+        runParams: () => ({
           authProfileId: "scheduled-profile",
           authProfileIdSource: "auto",
           authProfileBinding,
           allowAuthProfileFallback: false,
           onSuccessfulAuthProfile,
-        },
+        }),
         runtimeSessionEntry: (entry) => entry,
         assertCandidate,
         resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
@@ -364,11 +364,11 @@ describe("ordinary session event execution", () => {
     const assertCandidate = vi.fn();
     using acquire = vi.spyOn(cronInference, "prepareCronRunInference");
     acquire.mockResolvedValue({
-      runParams: {
+      runParams: () => ({
         authProfileId: "scheduled-profile",
         authProfileIdSource: "auto",
         allowAuthProfileFallback: false,
-      },
+      }),
       runtimeSessionEntry,
       assertCandidate,
       resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
@@ -382,7 +382,7 @@ describe("ordinary session event execution", () => {
     });
 
     expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
-    expect(runtimeSessionEntry).toHaveBeenCalledWith(rowEntry);
+    expect(runtimeSessionEntry).toHaveBeenCalledWith(rowEntry, "anthropic");
     expect(assertCandidate).toHaveBeenCalledWith("anthropic", false, "openclaw");
     expect(state.runCliAgentMock).not.toHaveBeenCalled();
   });

@@ -31,7 +31,14 @@ import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
-import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
+import {
+  type CronInferenceBinding,
+  normalizeCronInferenceBinding,
+} from "../../../cron/inference-binding.js";
+import {
+  captureCronFallbackInferenceAccounts,
+  resolveCronFallbackProviderModels,
+} from "../../../cron/inference-binding.runtime.js";
 import {
   inspectCronInferenceAccount,
   prepareCronInferenceDiagnosticSession,
@@ -48,6 +55,71 @@ import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-sta
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { isUserModelAuthProfileId } from "../../../state/user-model-account-id.js";
 import { inspectCronJobsForDoctor, repairCronInferenceBindingsForDoctor } from "./store-repair.js";
+
+/**
+ * Record accounts for fallback providers the binding lacks, so a provider outage can still fail
+ * over. Existing accounts are never replaced. Lint only names the missing providers. Returns
+ * undefined when nothing new is (or would be) recorded.
+ */
+async function recordCronFallbackAccountsForDoctor(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  label: string;
+  model?: string;
+  fallbacks?: string[];
+  isGmailHook: boolean;
+  binding: CronInferenceBinding;
+  shouldRepair: boolean;
+  warnings: string[];
+}): Promise<{ binding: CronInferenceBinding; providers: string[] } | undefined> {
+  const known = params.binding.fallbackAccounts ?? [];
+  const chainParams = {
+    cfg: params.cfg,
+    agentId: params.agentId,
+    primaryProvider: params.binding.provider,
+    model: params.model,
+    fallbacks: params.fallbacks,
+    isGmailHook: params.isGmailHook,
+  };
+  const missing = (await resolveCronFallbackProviderModels(chainParams)).filter(
+    ({ provider }) => !known.some((account) => account.provider === provider),
+  );
+  if (missing.length === 0) {
+    return undefined;
+  }
+  if (!params.shouldRepair) {
+    return { binding: params.binding, providers: missing.map(({ provider }) => provider) };
+  }
+  const { accounts, unrecorded } = await captureCronFallbackInferenceAccounts({
+    ...chainParams,
+    recordedAccounts: known,
+    authorizeProfile: async (profileId) => {
+      if (isUserModelAuthProfileId(profileId)) {
+        throw new Error(
+          "A personal inference account requires explicit adoption by its authorized owner",
+        );
+      }
+      return undefined;
+    },
+  });
+  for (const fallback of unrecorded) {
+    if (!known.some((account) => account.provider === fallback.provider)) {
+      params.warnings.push(
+        `Automation ${params.label}: fallback ${fallback.model} has no recorded inference account and is refused: ${fallback.reason}.`,
+      );
+    }
+  }
+  const added = accounts.filter(
+    (account) => !known.some((existing) => existing.provider === account.provider),
+  );
+  if (added.length === 0) {
+    return undefined;
+  }
+  return {
+    binding: { ...params.binding, fallbackAccounts: [...known, ...added] },
+    providers: added.map((account) => `${account.profileId} for ${account.provider}`),
+  };
+}
 
 /** Adopt a current, unambiguous account once; never reinterpret run telemetry as authority. */
 export async function maybeRepairCronInferenceBindings(params: {
@@ -81,10 +153,58 @@ export async function maybeRepairCronInferenceBindings(params: {
       if (
         !definition ||
         stored.invalidReason ||
-        definition.inferenceBinding !== undefined ||
         definition.runtimeAuthority !== undefined ||
         definition.runtimeAuthorityRecoveryRequired
       ) {
+        continue;
+      }
+      if (definition.inferenceBinding !== undefined) {
+        // Recorded jobs keep every recorded account; Doctor only adds missing fallback providers.
+        const label = `${normalizeOptionalString(definition.name) ?? stored.id} (${stored.id})`;
+        try {
+          const binding = normalizeCronInferenceBinding(definition.inferenceBinding);
+          const job = normalizeCronJobCreate(definition);
+          const agentId =
+            job &&
+            tryResolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(params.cfg));
+          if (
+            !binding ||
+            !job ||
+            job.payload.kind !== "agentTurn" ||
+            job.sessionTarget === "main" ||
+            !agentId
+          ) {
+            continue;
+          }
+          const recorded = await recordCronFallbackAccountsForDoctor({
+            cfg: captureConfig(params.cfg),
+            agentId,
+            label,
+            model: job.payload.model,
+            fallbacks: job.payload.fallbacks,
+            isGmailHook: job.payload.externalContentSource === "gmail",
+            binding,
+            shouldRepair: params.shouldRepair,
+            warnings,
+          });
+          if (!recorded) {
+            continue;
+          }
+          if (!params.shouldRepair) {
+            warnings.push(
+              `Automation ${label}: fallbacks on ${recorded.providers.join(", ")} have no recorded inference account and are refused. Run openclaw doctor --fix to record them.`,
+            );
+            continue;
+          }
+          changes.push({ job: stored, binding: recorded.binding });
+          descriptions.push(
+            `Automation ${label}: retain fallback accounts ${recorded.providers.join(", ")}; the primary account is unchanged.`,
+          );
+        } catch (error) {
+          warnings.push(
+            `Automation ${label}: fallback inference accounts were not recorded: ${formatErrorMessage(error)}`,
+          );
+        }
         continue;
       }
       let modelRef: string | undefined;
@@ -400,20 +520,29 @@ export async function maybeRepairCronInferenceBindings(params: {
         });
         retained.push(authority);
         authority.assertCurrent();
-        changes.push({
-          job: stored,
-          binding: {
-            version: 1,
-            provider: selected.provider,
-            profileId: candidate.profileId,
-            authorizationId: authority.authorizationId,
-            authRequirement: candidate.authRequirement,
-            ...(runtime === "codex" ? { runtime } : {}),
-            source: explicitUserSelection
-              ? "user"
-              : (currentAuth.plan.forwardedAuthProfileSource ?? "auto"),
-          },
+        const adopted: CronInferenceBinding = {
+          version: 1,
+          provider: selected.provider,
+          profileId: candidate.profileId,
+          authorizationId: authority.authorizationId,
+          authRequirement: candidate.authRequirement,
+          ...(runtime === "codex" ? { runtime } : {}),
+          source: explicitUserSelection
+            ? "user"
+            : (currentAuth.plan.forwardedAuthProfileSource ?? "auto"),
+        };
+        const withFallbacks = await recordCronFallbackAccountsForDoctor({
+          cfg: config,
+          agentId,
+          label,
+          model: job.payload.model,
+          fallbacks: job.payload.fallbacks,
+          isGmailHook: job.payload.externalContentSource === "gmail",
+          binding: adopted,
+          shouldRepair: true,
+          warnings,
         });
+        changes.push({ job: stored, binding: withFallbacks?.binding ?? adopted });
         descriptions.push(description);
       } catch (error) {
         const recovery = isInvalidCronSessionTargetIdError(error)
