@@ -33,7 +33,6 @@ export type TranscriptLayoutProps = {
   scrollElementRef: (element?: Element) => void;
   captureInteractionResize: (event: Event) => void;
   measureRowRefFor: (key: string) => (element?: Element) => void;
-  measureRows: boolean;
   initialPositionPending: () => boolean;
   layout: TranscriptLayoutOwner;
   headerHeight: number;

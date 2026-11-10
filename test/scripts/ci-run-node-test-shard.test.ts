@@ -205,6 +205,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/canonical-descendant.integration.test.ts",
         "test/codex-web-search-native.integration.test.ts",
         "test/cron-conversation-delivery.codex.integration.test.ts",
+        "test/runtime-agent.codex-initialization.integration.test.ts",
         "test/skill-usage.codex.integration.test.ts",
         "test/slack-outbound-permanent-rejection-loopback.test.ts",
       ],
@@ -312,11 +313,38 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       preset: "full",
     },
     {
+      configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+      files: ["test/codex-account-usage.integration.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+      files: ["test/codex-account-usage.integration.test.ts", "unknown.test.ts"],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+      files: [],
+      preset: "full",
+    },
+    {
       configs: ["test/vitest/vitest.tooling.config.ts"],
       files: [
         "test/scripts/ci-changed-build-selection.test.ts",
         "test/scripts/ci-changed-node-test-plan.integration.test.ts",
         "test/scripts/test-projects.test.ts",
+      ],
+      preset: "tooling",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: [
+        "test/scripts/vitest-runtime-worker-selection.test.ts",
+        "test/scripts/ci-workflow-cost.test.ts",
+        "test/scripts/vitest-isolated.test.ts",
+        "test/scripts/update-restart-module-outcome.test.ts",
+        "test/scripts/eager-import-closure.test.ts",
+        "test/scripts/pr-wrapper-source-closure.test.ts",
       ],
       preset: "tooling",
     },
@@ -333,6 +361,29 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         includePatterns: ["src/config/io.load-async.test.ts"],
       },
       preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: undefined,
+      sibling: {
+        configs: ["test/vitest/vitest.tooling.config.ts"],
+        includePatterns: [
+          "test/scripts/test-projects.test.ts",
+          "test/scripts/ci-ui-e2e-selection.test.ts",
+        ],
+      },
+      preset: "tooling",
+    },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: ["src/infra/boundary-path.test.ts"],
+      preset: "tooling",
+    },
+    { configs: ["test/vitest/vitest.boundary.config.ts"], files: [], preset: "full" },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: ["test/unknown-boundary.test.ts"],
+      preset: "full",
     },
     { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
     { configs: [gatewayDatabaseConfig], files: null, preset: "full" },
@@ -375,7 +426,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               for (const spec of specs) {
                 const selectionArgs = [
                   spec.config,
-                  args,
+                  spec.pnpmArgs.slice(
+                    spec.pnpmArgs.indexOf(buildPrerequisites.resolveVitestCliEntry()) + 1,
+                  ),
                   spec.env,
                   undefined,
                   spec.includePatterns ?? undefined,
