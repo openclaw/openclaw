@@ -214,7 +214,7 @@ extension OnboardingView {
                         localized: "%lld gateways found on your network — click for connection instructions."),
                     count)
         }
-        return "For advanced setups — use a gateway that runs elsewhere."
+        return String(localized: "Find gateways on your network.")
     }
 
     @ViewBuilder
@@ -813,43 +813,46 @@ extension OnboardingView {
                         subtitle: "Your remote connection is ready.",
                         systemImage: "checkmark.circle")
                 }
-                Divider()
-                    .padding(.vertical, 6)
-                self.featureRow(
-                    title: "Open the menu bar panel",
-                    subtitle: "Click the OpenClaw menu bar icon for the compact chat panel and status.",
-                    systemImage: "bubble.left.and.bubble.right")
-                self.featureRow(
-                    title: "Connect Discord, Slack, Telegram, WhatsApp, …",
-                    subtitle: "Open Dashboard → Settings → Channels to link channels and monitor status.",
-                    systemImage: "link",
-                    buttonTitle: "Open Dashboard → Settings → Channels")
-                {
-                    AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.channelsSettingsPath)
-                }
-                self.featureRow(
-                    title: "Try Voice Wake",
-                    subtitle: "Enable Voice Wake in Dashboard → Settings → Talk for hands-free commands " +
-                        "with a live transcript overlay.",
-                    systemImage: "waveform.circle")
-                self.featureRow(
-                    title: "Use the panel + Canvas",
-                    subtitle: "Open the compact chat panel; the agent can show previews " +
-                        "and richer visuals in Canvas.",
-                    systemImage: "rectangle.inset.filled.and.person.filled")
-                self.featureRow(
-                    title: "Give your agent more powers",
-                    subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Dashboard → Skills.",
-                    systemImage: "sparkles",
-                    buttonTitle: "Open Dashboard → Skills")
-                {
-                    AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.skillsPagePath)
-                }
-                if AppProfile.current.isActive {
-                    LabeledContent("Launch at login", value: "Unavailable under profile")
-                } else {
-                    Toggle("Launch at login", isOn: self.$state.launchAtLogin)
-                        .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
+                if self.savedBrowserGatewayName == nil {
+                    Divider()
+                        .padding(.vertical, 6)
+                    self.featureRow(
+                        title: "Open the menu bar panel",
+                        subtitle: "Click the OpenClaw menu bar icon for the compact chat panel and status.",
+                        systemImage: "bubble.left.and.bubble.right")
+                    self.featureRow(
+                        title: "Connect Discord, Slack, Telegram, WhatsApp, …",
+                        subtitle: "Open Dashboard → Settings → Channels to link channels and monitor status.",
+                        systemImage: "link",
+                        buttonTitle: "Open Dashboard → Settings → Channels")
+                    {
+                        AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.channelsSettingsPath)
+                    }
+                    self.featureRow(
+                        title: "Try Voice Wake",
+                        subtitle: "Enable Voice Wake in Dashboard → Settings → Talk for hands-free commands " +
+                            "with a live transcript overlay.",
+                        systemImage: "waveform.circle")
+                    self.featureRow(
+                        title: "Use the panel + Canvas",
+                        subtitle: "Open the compact chat panel; the agent can show previews " +
+                            "and richer visuals in Canvas.",
+                        systemImage: "rectangle.inset.filled.and.person.filled")
+                    self.featureRow(
+                        title: "Give your agent more powers",
+                        subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Dashboard → Skills.",
+                        systemImage: "sparkles",
+                        buttonTitle: "Open Dashboard → Skills")
+                    {
+                        AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.skillsPagePath)
+                    }
+                    if AppProfile.current.isActive {
+                        LabeledContent("Launch at login", value: "Unavailable under profile")
+                    } else {
+                        Toggle("Launch at login", isOn: self.$state.launchAtLogin)
+                            .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state
+                                .launchAtLogin)
+                    }
                 }
             }
         }

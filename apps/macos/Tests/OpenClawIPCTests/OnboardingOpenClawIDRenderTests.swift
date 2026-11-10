@@ -5,7 +5,7 @@ import Testing
 @MainActor
 struct OnboardingOpenClawIDRenderTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil))
-    func `native ID screens render with explicit fixture data`() throws {
+    func `native ID screens render with explicit fixture data`() async throws {
         let output = try OnboardingRenderTests.outputDirectory()
         let approval = URL(string: "https://fixture.example.test/access")
         let cases: [(String, OnboardingOpenClawIDStep)] = [
@@ -43,11 +43,29 @@ struct OnboardingOpenClawIDRenderTests {
         ]
         for (name, step) in cases {
             let dependency = try #require(dependencies[name])
-            try OnboardingRenderTests.capture(
-                OnboardingOpenClawIDContent(step: step, unavailableReason: nil, action: { _ in }),
-                name: name,
-                label: "Native SwiftUI · FIXTURE data\nMissing: \(dependency)",
-                output: output)
+            for dark in [false, true] {
+                let model = OnboardingOpenClawIDModel(service: RenderService(step: step))
+                await model.begin(.connect)?.value
+                try #require(model.step == step)
+                try OnboardingRenderTests.capture(
+                    OnboardingOpenClawIDView(model: model),
+                    name: name,
+                    label: "Native sheet · FIXTURE data\nMissing: \(dependency)",
+                    output: output,
+                    width: 574,
+                    dark: dark)
+                model.cancel()
+            }
         }
     }
+}
+
+@MainActor
+private struct RenderService: OnboardingOpenClawIDService {
+    let unavailableReason: String? = nil
+    let step: OnboardingOpenClawIDStep
+
+    func start(_: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep { self.step }
+    func perform(_: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep { self.step }
+    func cancel() {}
 }
