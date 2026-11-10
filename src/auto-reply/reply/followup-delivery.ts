@@ -18,6 +18,9 @@ import {
   shouldDeliverMissingReplyNotice,
 } from "../../agents/reply-completion.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
+import { applyChannelDeliverableReplyPayload } from "../../channels/message/reply-transform.js";
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
+import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -565,6 +568,10 @@ export async function deliverFollowupDecision(params: {
     provider: turn.queued.run.messageProvider,
   });
   const origin = resolveOriginMessageProvider({ originatingChannel });
+  const loadedOriginPlugin = origin ? getLoadedChannelPlugin(origin) : undefined;
+  const bundledOriginPlugin =
+    origin && !loadedOriginPlugin ? getBundledChannelPlugin(origin) : undefined;
+  const originMessaging = loadedOriginPlugin?.messaging ?? bundledOriginPlugin?.messaging;
   const sameChannelOrigin = Boolean(origin && origin === provider);
   const crossChannelOrigin = Boolean(origin && provider && origin !== provider);
   const prepareSpeech = createFollowupSpeechPreparer({ turn, defaults, kind });
@@ -614,6 +621,18 @@ export async function deliverFollowupDecision(params: {
         logVerbose("followup queue: origin reply suppressed by source policy");
         continue;
       }
+      const deliverablePayload = applyChannelDeliverableReplyPayload({
+        messaging: originMessaging,
+        payload,
+        kind,
+        cfg: turn.config,
+        accountId: turn.queued.originatingAccountId,
+      });
+      if (!deliverablePayload) {
+        logVerbose("followup queue: origin reply suppressed by channel deliverable policy");
+        continue;
+      }
+      payload = deliverablePayload;
     }
     await typing.signalTextDelta(payload.text);
     // The stalled recovery owner delivers its terminal notice after the operation aborts.

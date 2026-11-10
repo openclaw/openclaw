@@ -10,7 +10,11 @@ import {
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
   transcodeAudioBufferToOpus,
 } from "openclaw/plugin-sdk/media-runtime";
-import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
+import {
+  resolveOutboundMediaUrls,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   sanitizeAssistantVisibleText,
@@ -92,6 +96,28 @@ export function resolveAdditiveWhatsAppMediaUrls(
     ...(payload.mediaUrl ? [payload.mediaUrl] : []),
     ...(payload.mediaUrls ?? []),
   ]);
+}
+
+export function resolveWhatsAppDeliverablePayload(
+  payload: ReplyPayload,
+  info: { kind: ReplyDispatchKind },
+): ReplyPayload | null {
+  if (payload.isReasoning === true || payload.isCompactionNotice === true) {
+    return null;
+  }
+  // Only mid-turn error noise (streamed blocks, tool progress) is suppressed. A final error
+  // payload is the host-owned terminal outcome of the turn; dropping it leaves the chat silent
+  // or replaced by the generic no-visible-reply fallback after a refused or failed run.
+  if (payload.isError === true && info.kind !== "final") {
+    return null;
+  }
+  if (info.kind === "tool") {
+    if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
+      return null;
+    }
+    return { ...payload, text: undefined };
+  }
+  return payload;
 }
 
 // Keep new WhatsApp outbound-media behavior in this helper so payload, gateway, and auto-reply paths stay aligned.

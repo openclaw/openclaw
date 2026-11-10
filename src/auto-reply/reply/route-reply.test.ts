@@ -161,12 +161,7 @@ describe("routeReply", () => {
       }),
     } satisfies ChannelMessagingAdapter;
     register(createChannelPlugin("slack", { messaging, threading: slackThreading }));
-
-    const result = await routeTestReply(
-      { text: "private reply" },
-      { sessionKey: "agent:main:test" },
-    );
-
+    const result = await routeTestReply({ text: "private reply" }, { sessionKey: "s" });
     expect(result).toEqual({
       ok: true,
       delivered: false,
@@ -174,6 +169,21 @@ describe("routeReply", () => {
       reason: "channel_transform",
     });
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("filters kind-scoped deliverable payloads before prefixing or transport", async () => {
+    const messaging = {
+      prepareDeliverableReplyPayload: ({ payload, kind }) =>
+        kind !== "tool" ? payload : payload.mediaUrl ? { ...payload, text: undefined } : null,
+    } satisfies ChannelMessagingAdapter;
+    register(createChannelPlugin("slack", { messaging, threading: slackThreading }));
+    const cfg = { channels: { slack: { responsePrefix: "[b]" } } } as unknown as OpenClawConfig;
+    const dropped = await routeTestReply({ text: "tool out" }, { cfg, replyKind: "tool" });
+    expect(dropped).toEqual({ ok: true, delivered: false, suppressed: true });
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    const url = "https://x.test/a.png";
+    await routeTestReply({ text: "tool out", mediaUrl: url }, { cfg, replyKind: "tool" });
+    expect(lastDeliveryPayload()).toMatchObject({ text: "", mediaUrls: [url] });
   });
 
   it("does not drop payloads that merely start with the silent token", async () => {
@@ -254,44 +264,26 @@ describe("routeReply", () => {
   );
 
   it("uses the policy session's direct conversation type over a group routing hint", async () => {
-    const res = await routeTestReply(
-      { text: "native command response" },
-      {
-        sessionKey: "agent:main:main",
-        policySessionKey: "agent:main:slack:direct:U123",
-        isGroup: true,
-      },
-    );
-
+    const policySessionKey = "agent:main:slack:direct:U123";
+    const opts = { sessionKey: "agent:main:main", policySessionKey, isGroup: true };
+    const res = await routeTestReply({ text: "native command response" }, opts);
     expect(res.ok).toBe(true);
     expect(lastDeliveryPayload().text).toBe("native command response");
     expect(lastDelivery().session).toMatchObject({
       key: "agent:main:main",
-      policyKey: "agent:main:slack:direct:U123",
+      policyKey: policySessionKey,
       conversationType: "direct",
     });
   });
 
   it("interpolates responsePrefix from the routed channel and account", async () => {
-    const cfg = {
-      channels: {
-        slack: {
-          responsePrefix: "[slack]",
-          accounts: {
-            support: { responsePrefix: "[{modelFull} think:{thinkingLevel}]" },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    await routeTestReply(
-      { text: "hi" },
-      {
-        accountId: "support",
-        sessionKey: "agent:main:main",
-        responsePrefixContext: { modelFull: "anthropic/claude-opus-4-6", thinkingLevel: "high" },
-        cfg,
-      },
-    );
+    const support = { responsePrefix: "[{modelFull} think:{thinkingLevel}]" };
+    const slack = { responsePrefix: "[slack]", accounts: { support } };
+    const cfg = { channels: { slack } } as unknown as OpenClawConfig;
+    const ctx = { modelFull: "anthropic/claude-opus-4-6", thinkingLevel: "high" };
+    const sessionKey = "agent:main:main";
+    const opts = { accountId: "support", sessionKey, responsePrefixContext: ctx, cfg };
+    await routeTestReply({ text: "hi" }, opts);
     expect(lastDeliveryPayload().text).toBe("[anthropic/claude-opus-4-6 think:high] hi");
   });
 
