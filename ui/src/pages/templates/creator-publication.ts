@@ -17,15 +17,19 @@ export interface TemplateCreator {
   choices: TemplateDraftReviewChoices | null;
   modalOpen: boolean;
   publication: TemplatesDraftsPublishResult | null;
+  publicationIssue: "failed" | "unconfirmed" | null;
   error: string | null;
   presentationLifetime: PromiseWithResolvers<void>;
   readonly hasActiveDraft: boolean;
   readonly subscribe: (listener: () => void) => () => void;
+  readonly sessionKey: string | undefined;
+  hydrate(agentId: string, draftId: string, sessionKey: string): void;
   retirePresentation(): void;
   start(agentId: string): Promise<void>;
   open(agentId: string, draftId: string, sessionKey?: string): void;
   updateChoices(next: TemplateDraftReviewChoices): void;
   publish(): Promise<void>;
+  checkPublication(): Promise<void>;
   close(): void;
   reopen(): void;
   retryReview(): void;
@@ -40,6 +44,7 @@ type PendingIntent = {
 };
 export type CreatorOwner = {
   flow: TemplateCreator | null;
+  inlineFlows: Map<string, TemplateCreator>;
   pending: PendingIntent | null;
   loading: boolean;
   subscribe: (listener: () => void) => () => void;
@@ -52,7 +57,13 @@ const owners = new WeakMap<ApplicationContext, CreatorOwner>();
 export function templateCreatorOwner(context: ApplicationContext): CreatorOwner {
   let owner = owners.get(context);
   if (!owner) {
-    owner = { flow: null, pending: null, loading: false, ...createChangeListeners() };
+    owner = {
+      flow: null,
+      inlineFlows: new Map(),
+      pending: null,
+      loading: false,
+      ...createChangeListeners(),
+    };
     owners.set(context, owner);
   }
   return owner;

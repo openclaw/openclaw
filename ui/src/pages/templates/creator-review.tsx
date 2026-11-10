@@ -4,20 +4,23 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import "../../styles/template-creator.css";
 import { templateCreatorOwner, type TemplateCreator } from "./creator-publication.ts";
 
 const CreatorReviewView = lazy(() => import("./creator-review-view.tsx"), {
   export: "TemplateCreatorReviewView",
 });
 
-export function TemplateCreatorReview(props: { context: ApplicationContext }) {
+export function TemplateCreatorReview(props: { context: ApplicationContext; sessionKey?: string }) {
   const current = createMemo(() =>
     projectOwner(templateCreatorOwner(props.context), (owner) => owner.flow),
   );
   return (
     <Show when={current().read()} keyed>
-      {(flow) => <ActiveTemplateCreatorReview context={props.context} flow={flow} />}
+      {(flow) => (
+        <Show when={!props.sessionKey || flow.sessionKey === props.sessionKey}>
+          <ActiveTemplateCreatorReview context={props.context} flow={flow} />
+        </Show>
+      )}
     </Show>
   );
 }
@@ -44,12 +47,7 @@ function ActiveTemplateCreatorReview(props: {
   });
   const visible = () => {
     const state = view().read();
-    return (
-      (state.modalOpen && state.review) ||
-      (!state.modalOpen &&
-        !state.publication &&
-        (state.review || (state.hasActiveDraft && state.error)))
-    );
+    return Boolean(state.review || (state.hasActiveDraft && state.error));
   };
   return (
     <Show when={visible()}>

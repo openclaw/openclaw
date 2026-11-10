@@ -3,13 +3,47 @@ import { Value } from "typebox/value";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { UiCommand, UiCommandParams } from "../../../packages/gateway-protocol/src/index.js";
 import { TemplatesDraftsReadParamsSchema } from "../../../packages/gateway-protocol/src/schema/template-drafts.js";
-// The tool returns the Gateway result unchanged, so the wire schema remains the single owner.
 import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
+import { bindPluginInlineViewInvocation } from "../../plugins/inline-view.js";
 import { requesterProfileSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { withGatewayPersonalToolUser } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
+
+// The screen acknowledgement retains its wire contract; only this native tool can
+// attach the durable, invocation-bound review descriptor.
+const ScreenToolResultSchema = Type.Object(
+  {
+    ...UiCommandResultSchema.properties,
+    pluginInlineView: Type.Optional(
+      Type.Object(
+        {
+          pluginId: Type.Literal("openclaw"),
+          viewId: Type.Literal("template-review"),
+          version: Type.Literal(1),
+          payload: Type.Object(
+            { ...TemplatesDraftsReadParamsSchema.properties, sessionKey: Type.String() },
+            { additionalProperties: false },
+          ),
+          summary: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    pluginInlineViewInvocation: Type.Optional(
+      Type.Object(
+        {
+          pluginId: Type.Literal("openclaw"),
+          toolName: Type.Literal("screen"),
+          toolCallId: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 const BASE_ACTIONS = [
   "split_right",
@@ -184,11 +218,11 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
   return {
     label: "Screen",
     name: "screen",
-    description: `Drive the requesting user's Control UI. desktop_show opens a native app's remote desktop using environmentId; portal_show opens a running web app's portal using portalId. Both default to the right chat sidebar. Panel show actions accept expanded:true to fill the conversation pane, or expanded:false to restore split view while retaining the selected panel and dock. desktop_hide/portal_hide hide the view without stopping the app. browser_show/browser_hide toggle the agent Browser panel; terminal_show/terminal_hide toggle Terminal; sidebar_show/sidebar_hide toggle the session list.${githubIdentitySettingsAvailable ? " github_identity_settings opens the current agent's GitHub identity settings so the operator can reconnect without exposing authorization data to the model." : ""} template_review opens human review of a request-specific private Template draft in the current agent conversation using draftId; it does not publish or send another model turn. Also supports split_right/split_down, close_pane, focus, navigate. Optional sessionKey selects the conversation; default current. Only the selected person's requesting browser is changed; it must still be connected. This changes presentation only; it does not control application input. delivery=dispatched means only that the command was sent. portal_show returns the requesting browser’s presentation diagnosis: blocked/new-tab-required needs action; unverified is not a working-preview claim, including network-reachable. Inspect the actual app before claiming delivery.`,
+    description: `Drive the requesting user's Control UI. desktop_show opens a native app's remote desktop using environmentId; portal_show opens a running web app's portal using portalId. Both default to the right chat sidebar. Panel show actions accept expanded:true to fill the conversation pane, or expanded:false to restore split view while retaining the selected panel and dock. desktop_hide/portal_hide hide the view without stopping the app. browser_show/browser_hide toggle the agent Browser panel; terminal_show/terminal_hide toggle Terminal; sidebar_show/sidebar_hide toggle the session list.${githubIdentitySettingsAvailable ? " github_identity_settings opens the current agent's GitHub identity settings so the operator can reconnect without exposing authorization data to the model." : ""} template_review renders native inline human review of a request-specific private Template draft in the current agent conversation using draftId; it does not publish or send another model turn. Also supports split_right/split_down, close_pane, focus, navigate. Optional sessionKey selects the conversation; default current. Only the selected person's requesting browser is changed; it must still be connected. This changes presentation only; it does not control application input. delivery=dispatched means only that the command was sent. portal_show returns the requesting browser’s presentation diagnosis: blocked/new-tab-required needs action; unverified is not a working-preview claim, including network-reachable. Inspect the actual app before claiming delivery.`,
     parameters: githubIdentitySettingsAvailable
       ? ScreenWithGithubIdentityParameters
       : ScreenParameters,
-    outputSchema: UiCommandResultSchema,
+    outputSchema: ScreenToolResultSchema,
     requiredClientCaps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -200,6 +234,31 @@ export function createScreenTool(opts: ScreenToolOptions = {}): AnyAgentTool {
           : {}),
         ...(opts.agentId ? { agentId: opts.agentId } : {}),
       };
+      if (payload.command.kind === "template-review") {
+        const result = jsonResult({ ok: true });
+        return bindPluginInlineViewInvocation(
+          {
+            ...result,
+            details: {
+              ok: true,
+              pluginInlineView: {
+                pluginId: "openclaw",
+                viewId: "template-review",
+                version: 1,
+                payload: {
+                  agentId: opts.agentId!,
+                  sessionKey: opts.agentSessionKey!.trim(),
+                  draftId: payload.command.draftId,
+                },
+                summary: "Preview the assembled Template before publishing to ClawHub.",
+              },
+            },
+          },
+          "openclaw",
+          "screen",
+          _toolCallId,
+        );
+      }
       return jsonResult(
         await withGatewayPersonalToolUser(readToolStringParam(params, "user"), () =>
           callInProcessGatewayTool("ui.command", payload),

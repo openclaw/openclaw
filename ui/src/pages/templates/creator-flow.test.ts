@@ -2,7 +2,10 @@ import type { TemplateDraftReviewChoices } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showToast } from "../../lib/toast.ts";
-import { createContext } from "../skill-workshop/skill-workshop-page.test-support.ts";
+import {
+  createContext,
+  createRuntimeConfigStub,
+} from "../skill-workshop/skill-workshop-page.test-support.ts";
 import { TemplateCreatorFlow } from "./creator-flow.ts";
 
 vi.mock("../../lib/toast.ts", async (importOriginal) => ({
@@ -80,7 +83,12 @@ it("invokes the bundled skill in the existing main session, then reviews and pub
         return startResult(method);
     }
   });
-  const context = createContext(request);
+  const context = createContext(request, {
+    methods: ["templates.drafts.create", "chat.send"],
+    runtimeConfig: createRuntimeConfigStub({
+      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
+    }),
+  });
   const flow = new TemplateCreatorFlow(context);
   await flow.start("research");
   const calls = request.mock.calls;
@@ -110,7 +118,7 @@ it("invokes the bundled skill in the existing main session, then reviews and pub
   expect(flow.reviewCurrent).toBe(true);
   await flow.publish();
   expect(flow).toMatchObject({ modalOpen: false, publication: { publicationStatus: "pending" } });
-  expectToast("Submitted to ClawHub. Publication pending security review.", "View on ClawHub");
+  expect(showToast).not.toHaveBeenCalled();
   expect(request.mock.lastCall).toEqual([
     "templates.drafts.publish",
     expect.objectContaining({ reviewToken: "c".repeat(64), choices }),
