@@ -1,5 +1,4 @@
 import { setImmediate } from "node:timers/promises";
-import { SessionTranscriptReadFenceError } from "openclaw/plugin-sdk/context-engine-transcript-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -100,7 +99,13 @@ it("defers queued reviews when a foreground turn hits the shared rate limit", as
 });
 
 it.each([
-  [new SessionTranscriptReadFenceError("Session transcript changed during context read"), "debug"],
+  [
+    {
+      name: "SessionTranscriptReadFenceError",
+      message: "Session transcript changed during context read",
+    },
+    "debug",
+  ],
   [new Error("provider request failed"), "warn"],
 ] as const)(
   "correlates rejected review evidence without exposing source values (%s)",

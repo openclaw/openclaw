@@ -270,6 +270,8 @@ export type PreparedAgentRunAdmission = Readonly<{
   assertCurrent: () => void;
   /** Host-only source restriction available before the runtime prepares its tools. */
   readOperatorAuthority?: () => AdmittedRunOperatorAuthority | undefined;
+  /** First delegated source failure, for bounded terminal diagnostics only. */
+  readSourceFailure?: () => Error | undefined;
   /** Idempotently closes the exact delegated approval lease, if admission occurred. */
   close: () => void;
 }>;
@@ -581,6 +583,13 @@ export function prepareAgentRunAdmission(params: {
         operatorAuthority.assertCurrent();
       }
       return operatorAuthority;
+    },
+    readSourceFailure: () => {
+      const lease = admittedContext && delegatedAuthorityLeases.get(admittedContext);
+      const delegatedFailure =
+        lease && readAgentRunDelegatedAuthorityFailure(lease.authority)?.cause;
+      const failure = delegatedFailure ?? sourceFailure?.cause;
+      return failure instanceof Error ? failure : undefined;
     },
     close: () => {
       if (closed) {

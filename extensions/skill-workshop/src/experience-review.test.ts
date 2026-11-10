@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { SessionTranscriptReadFenceError } from "openclaw/plugin-sdk/context-engine-transcript-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { WorkshopChange } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -128,11 +127,15 @@ it("keeps a cleanup failure visible, apart from an expected cancellation", async
 });
 
 it("retains the host's bounded fence diagnostic through cancelled fork settlement", async () => {
-  const error = new SessionTranscriptReadFenceError(
-    "Completed-turn transcript anchor changed (generation)",
-  );
+  const diagnostic = {
+    name: "SessionTranscriptReadFenceError",
+    message: "Completed-turn transcript anchor changed (generation)",
+  };
+  const error = new Error("admitted run authority is no longer active", {
+    cause: diagnostic,
+  });
   outcome = { runId: "", ok: false, cancelled: true, error };
-  await expect(runSkillExperienceReview(candidate)).rejects.toBe(error);
+  await expect(runSkillExperienceReview(candidate)).rejects.toBe(diagnostic);
 });
 
 it.each(["off", "replaced", "refused"] as const)("runs nothing visible when %s", async (cause) => {

@@ -1,8 +1,8 @@
-import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
+import { isSessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import { GatewayDrainingError } from "./gateway-work-admission.js";
 
 export function isExpectedRunCancellation(error: unknown): boolean {
-  if (error instanceof GatewayDrainingError || error instanceof SessionTranscriptReadFenceError) {
+  if (error instanceof GatewayDrainingError || isSessionTranscriptReadFenceError(error)) {
     return true;
   }
   if (error instanceof AggregateError) {
