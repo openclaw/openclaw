@@ -54,6 +54,53 @@ function parseSample(value: unknown, requests: number) {
   };
 }
 
+function parseProductionSample(
+  value: unknown,
+  evaluations: number,
+  workload: string,
+  fixture: string,
+  mode: string,
+) {
+  assert(isRecord(value), "Missing conversion result");
+  assert.equal(value.case, workload);
+  assert.equal(
+    value.fixture,
+    workload === "conversion" ? "provider-defined-v1-estimates" : fixture,
+  );
+  if (workload === "runtime-v1") assert.equal(value.mode, mode);
+  const clones = mode === "work" ? value.clones : undefined;
+  if (mode === "work") assert(isRecord(clones));
+  else assert(!Object.hasOwn(value, "clones"), "Cost must use the unwrapped native clone");
+  assert.equal(value.evaluations, evaluations);
+  assert.equal(value.validatedOutputs, evaluations);
+  for (const field of ["connections", "responseBytes", "socketsAfterPoolClose"]) {
+    assert(!Object.hasOwn(value, field), "HTTP measurements cannot stand in for conversion proof");
+  }
+  assert(Array.isArray(value.warmTimingsMs));
+  assert.equal(value.warmTimingsMs.length, evaluations - 1);
+  return {
+    evaluations,
+    ...(isRecord(clones)
+      ? {
+          clones: {
+            calls: nonNegative(clones.calls),
+            stateBearingBatches: nonNegative(clones.stateBearingBatches),
+            questions: nonNegative(clones.questions),
+            results: nonNegative(clones.results),
+          },
+        }
+      : {}),
+    firstEvaluationMs: nonNegative(value.firstEvaluationMs),
+    warmTimingsMs: value.warmTimingsMs.map(nonNegative),
+    cpuMs: nonNegative(value.cpuMs),
+    peakRssBytes: nonNegative(value.peakRssBytes),
+    memoryBefore: memory(value.memoryBefore),
+    memoryAfter: memory(value.memoryAfter),
+    processCpuMs: nonNegative(value.processCpuMs),
+    processPeakRssBytes: nonNegative(value.processPeakRssBytes),
+  };
+}
+
 function hash(value: unknown) {
   assert(typeof value === "string" && /^[a-f0-9]{64}$/u.test(value));
   return value;
@@ -85,6 +132,18 @@ function artifact(manifestPath: string) {
     workerSourceSha256: hash(value.workerSourceSha256),
     harnessSourceSha256: hash(value.harnessSourceSha256),
     outputs,
+    productionInputs: isRecord(value.productionInputs)
+      ? {
+          packageSha256: hash(value.productionInputs.packageSha256),
+          workspaceSha256: hash(value.productionInputs.workspaceSha256),
+          builderSourceSha256: hash(value.productionInputs.builderSourceSha256),
+          installedLockfileSha256: hash(value.productionInputs.installedLockfileSha256),
+          modulesMetadataSha256: hash(value.productionInputs.modulesMetadataSha256),
+          benchmarkRevision: value.productionInputs.benchmarkRevision,
+          platform: value.productionInputs.platform,
+          arch: value.productionInputs.arch,
+        }
+      : undefined,
   };
   return {
     manifest,
@@ -93,16 +152,79 @@ function artifact(manifestPath: string) {
   };
 }
 
+function qualifyProductionBenchmark(
+  options: {
+    runs: number;
+    requests: number;
+  },
+  artifacts: Record<"baseline" | "candidate", ReturnType<typeof artifact>>,
+) {
+  assert(options.runs >= 20, "Production cost needs at least twenty samples per revision");
+  assert(options.requests >= 21, "Warm p95 needs at least twenty measured entries per worker");
+  const variants = ["baseline", "candidate"] as const;
+  for (const variant of variants) {
+    const inputs = artifacts[variant].manifest.productionInputs;
+    assert(inputs, "Production cost requires a provenance-bound build");
+    assert.equal(inputs.platform, process.platform);
+    assert.equal(inputs.arch, process.arch);
+    assert(
+      typeof inputs.benchmarkRevision === "string" &&
+        /^[a-f0-9]{40}$/u.test(inputs.benchmarkRevision),
+    );
+  }
+  for (const field of [
+    "packageSha256",
+    "workspaceSha256",
+    "builderSourceSha256",
+    "benchmarkRevision",
+    "installedLockfileSha256",
+    "modulesMetadataSha256",
+  ] as const) {
+    assert.equal(
+      artifacts.baseline.manifest.productionInputs?.[field],
+      artifacts.candidate.manifest.productionInputs?.[field],
+      `Unmatched production input: ${field}`,
+    );
+  }
+  assert.equal(
+    artifacts.baseline.manifest.lockfileSha256,
+    artifacts.candidate.manifest.lockfileSha256,
+  );
+}
+
 await runBenchmarkEntrypoint("bench-decision-transport", () => {
   const options = parseBenchmarkOptions(
     process.argv.slice(2),
-    { baseline: "", candidate: "", runs: 20, requests: 50, json: false, help: false, output: "" },
+    {
+      baseline: "",
+      candidate: "",
+      case: "http",
+      fixture: "small",
+      mode: "cost",
+      runs: 20,
+      requests: 50,
+      json: false,
+      help: false,
+      output: "",
+    },
     {
       "--baseline": (opts, value) => {
         opts.baseline = value;
       },
       "--candidate": (opts, value) => {
         opts.candidate = value;
+      },
+      "--case": (opts, value) => {
+        assert(["http", "conversion", "runtime-v1"].includes(value), "Unknown benchmark case");
+        opts.case = value;
+      },
+      "--fixture": (opts, value) => {
+        assert(value === "small" || value === "near-limit", "Unknown runtime fixture");
+        opts.fixture = value;
+      },
+      "--mode": (opts, value) => {
+        assert(value === "cost" || value === "work", "Unknown measurement mode");
+        opts.mode = value;
       },
       "--runs": (opts, value) => {
         opts.runs = parseBenchmarkInteger(value, "--runs", 1, 100);
@@ -117,11 +239,12 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
   );
   if (options.help) {
     console.log(
-      "Usage: node scripts/bench-decision-transport.mts --baseline <manifest.json> --candidate <manifest.json> [--runs 20] [--requests 50] [--json] [--output <report.json>]\nBuild each revision with scripts/build-decision-transport-bench.mts first. First evaluation and total CPU include lazy initialization. HTTP proves TCP reuse, not TLS-handshake savings.",
+      "Usage: node scripts/bench-decision-transport.mts --baseline <manifest.json> --candidate <manifest.json> [--case http|conversion|runtime-v1] [--fixture small|near-limit] [--mode cost|work] [--runs 20] [--requests 50] [--json] [--output <report.json>]\nBuild each revision with scripts/build-decision-transport-bench.mts first. HTTP remains the default and proves TCP reuse, not TLS-handshake savings. Conversion separates setup from the cold first production entry.",
     );
     return;
   }
   assert(options.baseline && options.candidate, "Both build manifests are required");
+  assert(options.mode === "cost" || options.case === "runtime-v1", "Clone work is runtime-only");
   const variants = ["baseline", "candidate"] as const;
   const artifacts = {
     baseline: artifact(options.baseline),
@@ -135,6 +258,9 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
     artifacts.baseline.manifest.harnessSourceSha256,
     artifacts.candidate.manifest.harnessSourceSha256,
   );
+  if (options.case !== "http") {
+    qualifyProductionBenchmark(options, artifacts);
+  }
   const jobs = Array.from({ length: options.runs }, (_, sample) =>
     variants.map((variant) => ({ variant, sample })),
   ).flat();
@@ -147,27 +273,91 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
   const samples = runBenchmarkJobs(jobs, {
     prefix: "bench-decision-transport",
     describe: ({ variant, sample }) => `${variant} sample=${sample + 1}`,
-    run: ({ variant, sample }) => ({
-      variant,
-      sample,
-      result: runBenchmarkWorker({
-        args: [artifacts[variant].entry, String(options.requests)],
+    run: ({ variant, sample }) => {
+      const started = performance.now();
+      const result = runBenchmarkWorker({
+        args: [
+          artifacts[variant].entry,
+          String(options.requests),
+          ...(options.case === "http" ? [] : [options.case, options.fixture, options.mode]),
+        ],
         label: variant,
         sentinel: "[bench-decision-transport-result] ",
         timeoutMs: 120_000,
-        validate: (value) => parseSample(value, options.requests),
-      }),
-    }),
+        validate: (value) =>
+          options.case === "http"
+            ? parseSample(value, options.requests)
+            : parseProductionSample(
+                value,
+                options.requests,
+                options.case,
+                options.fixture,
+                options.mode,
+              ),
+      });
+      return { variant, sample, commandWallMs: performance.now() - started, result };
+    },
   });
   const summary = Object.fromEntries(
     variants.map((variant) => {
       const rows = samples
         .filter((sample) => sample.variant === variant)
         .map((sample) => sample.result);
+      if (options.mode === "work") {
+        const counts = rows.map((row) => {
+          assert("clones" in row && row.clones);
+          return row.clones;
+        });
+        return [
+          variant,
+          {
+            calls: summarizeBenchmarkTimings(counts.map((row) => row.calls)),
+            stateBearingBatches: summarizeBenchmarkTimings(
+              counts.map((row) => row.stateBearingBatches),
+            ),
+            questions: summarizeBenchmarkTimings(counts.map((row) => row.questions)),
+            results: summarizeBenchmarkTimings(counts.map((row) => row.results)),
+          },
+        ];
+      }
       return [
         variant,
         {
-          connectionsPerSample: summarizeBenchmarkTimings(rows.map((row) => row.connections)),
+          ...(options.case === "http"
+            ? {
+                connectionsPerSample: summarizeBenchmarkTimings(
+                  rows.map((row) => {
+                    assert("connections" in row);
+                    return row.connections;
+                  }),
+                ),
+              }
+            : {
+                warmSampleP95Ms: summarizeBenchmarkTimings(
+                  rows.map((row) => {
+                    const p95 = summarizeBenchmarkTimings(row.warmTimingsMs).p95;
+                    assert(p95 !== undefined);
+                    return p95;
+                  }),
+                ),
+                commandWallMs: summarizeBenchmarkTimings(
+                  samples
+                    .filter((sample) => sample.variant === variant)
+                    .map((sample) => sample.commandWallMs),
+                ),
+                processCpuMs: summarizeBenchmarkTimings(
+                  rows.map((row) => {
+                    assert("processCpuMs" in row);
+                    return row.processCpuMs;
+                  }),
+                ),
+                processPeakRssBytes: summarizeBenchmarkTimings(
+                  rows.map((row) => {
+                    assert("processPeakRssBytes" in row);
+                    return row.processPeakRssBytes;
+                  }),
+                ),
+              }),
           firstEvaluationMs: summarizeBenchmarkTimings(rows.map((row) => row.firstEvaluationMs)),
           warmSampleMedianMs: summarizeBenchmarkTimings(
             rows.map((row) => summarizeBenchmarkTimings(row.warmTimingsMs).p50),
@@ -184,9 +374,35 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
   emitBenchmarkReport(
     {
       schemaVersion: 1,
-      workload: "registered-decision-http-loopback",
-      scope: "instrumented component; no model inference, TLS or Gateway startup claims",
-      initialization: "firstEvaluationMs and cpuMs include lazy client/validator initialization",
+      ...(options.case === "http"
+        ? {
+            workload: "registered-decision-http-loopback",
+            scope: "instrumented component; no model inference, TLS or Gateway startup claims",
+            initialization:
+              "firstEvaluationMs and cpuMs include lazy client/validator initialization",
+            requests: options.requests,
+          }
+        : {
+            workload:
+              options.case === "conversion"
+                ? "decision-result-conversion"
+                : "registered-same-v1-runtime",
+            fixture:
+              options.case === "conversion" ? "provider-defined-v1-estimates" : options.fixture,
+            mode: options.mode,
+            scope:
+              options.case === "conversion"
+                ? "Real converters plus independent public result validation; no HTTP or model inference"
+                : "Actual registry, operator authority and evaluateDecisionInRegistry; provider mutates its admitted copy",
+            costQualified: options.mode === "cost",
+            initialization:
+              "Setup precedes timing; first entry is cold in a fresh worker, without warmup",
+            cpuScope:
+              options.case === "conversion"
+                ? "cpuMs covers the validated loop; processCpuMs/peak cover the worker through its result snapshot"
+                : "cpuMs includes evaluation loop and owned teardown; clone-instrumented work runs are not cost",
+            evaluationsPerWorker: options.requests,
+          }),
       runtime: { node: process.version, platform: process.platform, arch: process.arch },
       hardware: {
         availableParallelism: availableParallelism(),
@@ -212,7 +428,6 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
         ]),
       ),
       runs: options.runs,
-      requests: options.requests,
       order: "ABAB",
       summary,
       samples,
