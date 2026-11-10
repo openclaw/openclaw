@@ -260,10 +260,9 @@ export async function runSessionCompactionIfNeeded(params: {
   }
   const shouldCompactByTranscriptBytes =
     exceedsTranscriptByteThreshold && !transcriptByteCompactionLatched;
-  if (transcriptByteCompactionLatched) {
-    await notifyCompaction("context_bounded");
-    assertActive();
-  }
+  // No omission warning here: a latched byte count alone does not prove
+  // this turn omits history. A context engine may assemble within budget,
+  // and the turn's assembly emits context_bounded when it actually does.
   const projectedTokenCount = resolveProjectedPromptTokens(
     freshPersistedTokens,
     promptTokenEstimate,
@@ -456,7 +455,8 @@ export async function runSessionCompactionIfNeeded(params: {
       if (exceedsTranscriptByteThreshold) {
         await recordCompactionAccounting(expectedSession, undefined, undefined, 0);
         assertActive();
-        await notifyCompaction("context_bounded");
+        // No omission warning here either: the turn's assembly reports
+        // whether it actually omits history.
         return compactionStore[compactionSessionKey] ?? entry;
       }
       await notifyCompaction("incomplete");
@@ -492,10 +492,10 @@ export async function runSessionCompactionIfNeeded(params: {
       followupRun: params.followupRun,
     });
     assertActive();
-    const notice = resolveCompactionCompletionNotice(
-      result,
-      Boolean(transcriptByteCompactionLatch),
-    );
+    // The completion notice must not claim bounded context from the latch
+    // alone: a context engine may still assemble within budget, and the
+    // turn's assembly emits context_bounded when it actually omits history.
+    const notice = resolveCompactionCompletionNotice(result, false);
     await notifyCompaction(notice.phase, notice.text);
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;

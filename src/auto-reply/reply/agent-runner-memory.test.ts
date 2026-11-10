@@ -1698,7 +1698,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("reports bounded context when server compaction leaves oversized history", async () => {
+  it("reports compaction completion when server compaction leaves oversized history", async () => {
     await writeTranscript([
       { type: "message", message: { role: "user", content: "x".repeat(5_000) } },
     ]);
@@ -1721,10 +1721,10 @@ describe("runMemoryFlushIfNeeded", () => {
       onCompactionNotice,
     });
 
-    expect(onCompactionNotice.mock.calls.map(([phase]) => phase)).toEqual([
-      "start",
-      "context_bounded",
-    ]);
+    // A persisting byte latch does not prove this turn omits history: the
+    // bounded warning now comes from the turn's assembly outcome (#196475),
+    // so the preflight reports the completed compaction instead.
+    expect(onCompactionNotice.mock.calls.map(([phase]) => phase)).toEqual(["start", "end"]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

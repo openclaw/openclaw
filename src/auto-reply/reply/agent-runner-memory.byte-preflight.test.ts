@@ -29,7 +29,7 @@ it.each([
   { runtime: "openclaw", ok: false, compacted: false },
   { runtime: "openclaw", ok: true, compacted: true },
 ])(
-  "continues built-in byte preflight with bounded context (ok=$ok, compacted=$compacted)",
+  "continues built-in byte preflight without a premature bounded notice (ok=$ok, compacted=$compacted)",
   async ({ runtime, ok, compacted }) => {
     compact.mockReset().mockResolvedValue({ ok, compacted, reason: "fixture declines compaction" });
     account
@@ -53,6 +53,8 @@ it.each([
       );
     const followupRun = createTestFollowupRun({ provider: "openai", model: "gpt-5.5" });
     const notice = vi.fn();
+    // A failing notice delivery must not break the preflight.
+    notice.mockRejectedValueOnce(new Error("fixture notice delivery failed"));
     const params: Parameters<typeof runSessionCompactionIfNeeded>[0] = {
       cfg: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "32kb" } } } },
       followupRun,
@@ -80,13 +82,21 @@ it.each([
         sessionId: "session",
       },
     });
-    expect(notice.mock.calls.map(([phase]) => phase)).toContain("context_bounded");
-    notice.mockClear().mockRejectedValueOnce(new Error("fixture notice delivery failed"));
+    // The latch alone proves stored bytes are over the cap, not that this
+    // turn omits history: the omission warning belongs to the turn's
+    // assembly outcome (#196475), so the preflight must not emit it.
+    expect(notice.mock.calls.map(([phase]) => phase)).toEqual(
+      compacted ? ["start", "end"] : ["start"],
+    );
+    expect(notice.mock.calls.map(([phase]) => phase)).not.toContain("context_bounded");
+    notice.mockClear();
     await runSessionCompactionIfNeeded({
       ...params,
       sessionEntry: { ...params.sessionEntry!, ...entry },
     });
     expect(compact).toHaveBeenCalledOnce();
-    expect(notice.mock.calls.map(([phase]) => phase)).toContain("context_bounded");
+    // Repeated preflight on the latched session emits no notice at all:
+    // nothing was compacted and no assembly ran here to omit anything.
+    expect(notice).not.toHaveBeenCalled();
   },
 );
