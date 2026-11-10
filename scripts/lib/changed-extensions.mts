@@ -20,6 +20,7 @@ type ChangedExtensionParams = Partial<Record<"base" | "cwd" | "head", string>> &
 function runGit(args: string[], cwd = repoRoot) {
   return execFileSync("git", args, {
     cwd,
+    env: args[0] === "rev-parse" ? { ...process.env, GIT_NO_LAZY_FETCH: "1" } : process.env,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
   });
