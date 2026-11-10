@@ -28,7 +28,11 @@ the regular stable channel. Its GitHub release is not marked Latest. A monthly
 line retires when `main` advances into the next month. Maintain only one
 extended-stable line: the trailing completed month relative to `main`'s version;
 older `.33+` lines are retired. Publishing a retired line requires an explicit
-maintainer decision; never bypass the release guards.
+maintainer decision; never bypass the release guards. The shared publisher records
+that decision with `retired_line_publication_reason` in its human-approved
+`npm-release` receipt, scoped to the exact release tag, source, channel, and
+parent attempt. Empty or historical ordinary approvals do not authorize a
+retired-line publication; all source, validation, and live-authority gates remain.
 
 ## Version naming
 

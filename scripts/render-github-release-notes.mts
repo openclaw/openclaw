@@ -37,6 +37,7 @@ type ReleaseNotesTarget = {
   tag: unknown;
   repository: unknown;
   regularStableVersion?: unknown;
+  retiredLineReason?: string;
   contributionRecordPath?: string;
   validationManifest?: unknown;
 };
@@ -100,10 +101,12 @@ function extendedStableReleaseNotice({
   version,
   repository,
   regularStableVersion,
+  retiredLineReason,
 }: {
   version: string;
   repository: string;
   regularStableVersion: unknown;
+  retiredLineReason?: string;
 }) {
   const release = parseReleaseVersion(version);
   if (!release || classifyReleaseTrain(release) !== "extended-stable") {
@@ -113,12 +116,12 @@ function extendedStableReleaseNotice({
     return "";
   }
   assertString(regularStableVersion, "regular stable version");
-  validateActiveExtendedStableLine(version, regularStableVersion);
+  validateActiveExtendedStableLine(version, regularStableVersion, retiredLineReason);
   const month = MONTH_NAMES[release.month - 1];
   if (!month) {
     fail(`unsupported extended-stable release month: ${release.month}`);
   }
-  return `This is a gateway-only \`extended-stable\` release, which is our current equivalent to LTS. This release is OpenClaw from the end of ${month} ${release.year}, plus critical security updates, reliability and performance fixes, and features like new model support. The latest version of OpenClaw at the time of this release is [${regularStableVersion}](https://github.com/${repository}/releases#release-v${regularStableVersion})`;
+  return `This is a gateway-only \`extended-stable\` release, ${retiredLineReason ? "published from a retired maintenance line by explicit maintainer decision." : "which is our current equivalent to LTS."} This release is OpenClaw from the end of ${month} ${release.year}, plus critical security updates, reliability and performance fixes, and features like new model support. The latest version of OpenClaw at the time of this release is [${regularStableVersion}](https://github.com/${repository}/releases#release-v${regularStableVersion})`;
 }
 
 export function formatContributionRecordProvenance(provenance: ContributionRecordProvenance) {
@@ -392,6 +395,7 @@ export function renderGithubReleaseNotes({
   tag,
   repository,
   regularStableVersion,
+  retiredLineReason,
   contributionRecordPath,
   validationManifest,
   verification = "",
@@ -409,7 +413,12 @@ export function renderGithubReleaseNotes({
     fail("docs-mirrored release notes require the docs-publication renderer");
   }
   const section = releaseNotesSectionForTag(changelog, version, tag);
-  const notice = extendedStableReleaseNotice({ version, repository, regularStableVersion });
+  const notice = extendedStableReleaseNotice({
+    version,
+    repository,
+    regularStableVersion,
+    retiredLineReason,
+  });
   const fullBody = joinBody(notice, section);
   const mode = fitsGithubReleaseBody(fullBody) ? "full" : "compact";
   const compactBody =
@@ -482,6 +491,7 @@ function parseArgs(argv: string[]) {
     ["--tag", "tag"],
     ["--repository", "repository"],
     ["--regular-stable-version", "regularStableVersion"],
+    ["--retired-line-reason", "retiredLineReason"],
     ["--verification-file", "verificationFile"],
     ["--validation-manifest", "validationManifest"],
     ["--output", "output"],
@@ -554,6 +564,7 @@ function main() {
     tag,
     repository,
     regularStableVersion: options.regularStableVersion,
+    retiredLineReason: options.retiredLineReason,
     contributionRecordPath: source?.recordPath ?? undefined,
     validationManifest,
   };
