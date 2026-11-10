@@ -6,6 +6,7 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { expect, it, vi } from "vitest";
 import "./backup-worker.test-support.js";
+import { backupDoctorPostgresMigration } from "../../commands/doctor-postgres-migration.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capturePostgresSchema } from "../../snapshot/database-backup-core.worker.js";
 import {
@@ -276,6 +277,30 @@ it.skipIf(!connection)(
         expect(await schemaExists(client, schema), schema).toBe(true);
       }
       expect(await prunePostgresSchemaCaptures(anchorPath, config, prefix)).toEqual([]);
+    }),
+);
+
+it.skipIf(!connection)(
+  "keeps Doctor captures portable unless server recovery captures are chosen",
+  () =>
+    withSeededWorkboard(async ({ client, namespaces, anchorPath }) => {
+      assert(connection);
+      for (const server of [false, true]) {
+        const input = { connection, schemaPrefix: "openclaw" };
+        const { changes } = await backupDoctorPostgresMigration(
+          anchorPath,
+          server ? { ...input, serverRecoveryCaptures: true } : input,
+          { assertAdmission() {} },
+        );
+        const directory = changes.at(-1)!.replace("Saved pre-migration PostgreSQL backup: ", "");
+        const manifest = await verifyMatchedPostgresBackup(directory, "exact");
+        if (manifest.schema) {
+          namespaces.add(manifest.schema);
+          expect(await schemaExists(client, manifest.schema)).toBe(true);
+        }
+        expect(manifest.carrier, String(server)).toBe(server ? "postgres-schema" : undefined);
+        expect((await fs.readdir(directory)).includes("database.sqlite")).toBe(!server);
+      }
     }),
 );
 

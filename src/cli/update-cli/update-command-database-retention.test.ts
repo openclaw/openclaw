@@ -145,6 +145,8 @@ it.each(
     let snapshotPath = "";
     // Snapshot generation has its own tests; retain both real transaction lifecycles here.
     vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async (input) => {
+      // Server captures are opt-in; this config leaves them portable.
+      expect(input.postgresSchemaCaptures).toBe(false);
       const directory = `${input.backupRoot}.databases`;
       snapshotPath = path.join(directory, "snapshot.sqlite");
       await fs.mkdir(directory);

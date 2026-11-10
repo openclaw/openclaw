@@ -796,7 +796,8 @@ automatically. `openclaw backup sqlite` refuses a PostgreSQL anchor and directs
 you to `openclaw backup create`.
 
 A PostgreSQL backup contains a portable SQLite export image, the original anchor,
-and a format-2 manifest. The export reads one `REPEATABLE READ READ ONLY` snapshot,
+and a format-2 manifest. Update and Doctor recovery captures use the same format
+unless [server recovery captures](#server-recovery-captures) are enabled. The export reads one `REPEATABLE READ READ ONLY` snapshot,
 including the store's sequence allocation facts, then applies the existing user-backup sanitizer before compaction and hashing.
 The manifest records the backup profile, engine, store UUID, schema versions,
 active fragments, allocation facts, artifact sizes, and hashes. It never records
@@ -841,6 +842,41 @@ PostgreSQL into a fresh owned namespace and publishes its matched anchor; the
 migrated namespace remains available until recovery is confirmed. Changed state
 or uncertain custody prevents automatic restore and retains the captures for
 recovery. An update never silently ports a store or falls back to SQLite.
+
+### Server recovery captures
+
+By default, update rollback captures and Doctor pre-migration captures of a
+PostgreSQL store are portable: each `.postgres.bak` or `.postgres` directory holds
+`anchor.sqlite`, a `database.sqlite` export image, and `manifest.json`. You can
+copy that set to another host and restore it without the original server.
+
+Set `database.postgres.recoveryCaptures: "server"` to keep those rows on the
+server instead:
+
+- The capture copies the store into a frozen `restore_<uuid>` schema in the same
+  database and writes only `anchor.sqlite` and `manifest.json` locally. The
+  manifest records `carrier: "postgres-schema"`, the schema name, and the same
+  verification hashes and allocation facts as a portable capture.
+- Rollback copies that schema into a fresh namespace, checks it against the
+  manifest hashes, and publishes the anchor. The capture schema stays unchanged.
+- The capture depends on the server. Copying the directory off-host keeps no
+  rows, and losing the server loses the capture. For an off-server copy, run
+  `openclaw backup create`, which always writes portable images.
+- A verified update drops its capture schemas before it removes the snapshot
+  directory. If the drop fails, the directory stays and the update reports that
+  cleanup is pending. Rolled-back or refused updates keep their captures.
+- Doctor keeps its server captures like other `.bak` directories. Before each new
+  pre-migration capture of a store, Doctor drops that store's capture schemas
+  whose directory was removed. This also runs after you switch back to
+  `portable`.
+- The update rollback capture of the shared `state` family and the candidate
+  state copy stay portable, because client credential rollback and the update
+  rehearsal read their SQLite images.
+
+The server capture uses space on the database server and the runtime role's
+existing `CREATE` privilege. Existing portable captures stay readable and
+restorable either way. Older releases reject the setting, so remove it before
+downgrading below the release that added it.
 
 Recovery generations include the live PostgreSQL catalog, exact rows, and sequence
 allocation state (`last_value` and `is_called`). The installed driver can fingerprint

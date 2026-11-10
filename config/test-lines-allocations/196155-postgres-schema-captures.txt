@@ -1,2 +1,2 @@
-384
-# PostgreSQL schema captures: real-PostgreSQL round trip, failure-path cleanup, Doctor prune scoping, mixed state/agent install, and capture-drop retention cases.
+421
+# PostgreSQL schema captures: real-PostgreSQL round trip, failure-path cleanup, Doctor prune scoping, mixed state/agent install, capture-drop retention cases, and the recoveryCaptures opt-in (config selection, portable default vs server Doctor carrier).

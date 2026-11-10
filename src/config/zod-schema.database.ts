@@ -49,6 +49,10 @@ export const DatabaseConfigSchema = z
             label: "PostgreSQL Schema Prefix",
             help: "Prefix for new PostgreSQL store schemas (default: openclaw). Use 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors retain their schema.",
           }),
+        recoveryCaptures: z.enum(["portable", "server"]).optional().register(configUiMetadata, {
+          label: "PostgreSQL Recovery Captures",
+          help: "Where update and Doctor rollback captures keep PostgreSQL rows (default: portable). portable writes a local SQLite export image. server keeps the rows in a restore_ schema on the same database and writes only the anchor and manifest locally; it saves local disk and export time but does not survive loss of the server. User backups stay portable.",
+        }),
       })
       .optional()
       .register(configUiMetadata, {

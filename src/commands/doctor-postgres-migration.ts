@@ -17,7 +17,7 @@ export async function backupDoctorPostgresMigration(
   const directory = `${prefix}${randomUUID()}.postgres.bak`;
   const config = { database: { engine: "postgres" as const, postgres: input } };
   maintenance.assertAdmission();
-  // Each capture's schema lives on the server; drop the ones whose backup was removed.
+  // Server captures outlive the setting; drop the ones whose backup was removed.
   const pruned = await prunePostgresSchemaCaptures(sourcePath, config, prefix);
   maintenance.assertAdmission();
   const before = hasUpdateDoctorMigrationCapture()
@@ -27,7 +27,7 @@ export async function backupDoctorPostgresMigration(
     sourcePath,
     directory,
     profile: "exact",
-    carrier: "postgres-schema",
+    ...(input.serverRecoveryCaptures ? { carrier: "postgres-schema" as const } : {}),
     config,
     assertCurrent: () => maintenance.assertAdmission(),
   });

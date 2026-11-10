@@ -154,7 +154,7 @@ export async function captureUpdateDatabases(params: {
         timeoutMs: execution.updateStepTimeoutMs,
         nodeRunner: execution.packageUpdateNodeRunner,
         postgresOffline: maintenance !== null && unavailable === undefined,
-        postgresSchemaCaptures: true,
+        postgresSchemaCaptures: source.config.database?.postgres?.recoveryCaptures === "server",
       });
       if (execution.updateInstallKind === "git") {
         // Git runtime transactions have no package journal; retire these snapshots with them.

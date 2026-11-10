@@ -6,6 +6,8 @@ export type DatabaseEngineInput =
       connectionEnvKey?: string;
       /** Existing sealed stores only; the connection never admits writes or migration. */
       readOnly?: true;
+      /** Opt-in: rollback captures keep their rows on the server instead of a SQLite image. */
+      serverRecoveryCaptures?: true;
     }>
   | undefined;
 export type DatabaseEngineId = "sqlite" | "postgres";

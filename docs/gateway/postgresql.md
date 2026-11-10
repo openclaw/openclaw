@@ -997,6 +997,10 @@ preserves current update-run history. Independent writes, changed recovery
 generations, or uncertain custody/commit outcomes prevent automatic restore and
 retain captures for recovery. This is not an unconditional rollback guarantee.
 See [update compatibility and recovery](/reference/database-engines#updates-and-target-compatibility).
+These captures are portable SQLite images by default. To keep their rows on the
+server and skip the local export, set `database.postgres.recoveryCaptures: "server"`;
+see [server recovery captures](/reference/database-engines#server-recovery-captures)
+for the durability and cleanup trade.
 
 Store owners run consecutive forward schema migrations under a writer transaction.
 Admission verifies the generated destination schema before publication. Missing

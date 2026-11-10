@@ -338,15 +338,17 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       );
       const manifest = await verifyMatchedPostgresBackup(directory, "exact");
       expect(manifest.source).toMatchObject({ owner: "state", schemaVersion: sourceVersion });
-      // Doctor keeps the predecessor in a frozen schema on the server, not a SQLite image.
-      expect(manifest.carrier).toBe("postgres-schema");
-      namespaces.add(String(manifest.schema));
-      expect(fs.existsSync(path.join(directory, "database.sqlite"))).toBe(false);
-      expect(
-        await rows(
-          `SELECT last_sequence::int, pruned_max_sequence::int FROM "${manifest.schema}".session_state_heads`,
-        ),
-      ).toEqual([{ last_sequence: 81, pruned_max_sequence: 7 }]);
+      {
+        using image = openNodeSqliteDatabase(path.join(directory, "database.sqlite"));
+        expect(image.prepare("PRAGMA user_version").get()?.user_version).toBe(sourceVersion);
+        expect(
+          image.prepare("SELECT wr FROM pragma_table_list WHERE name = 'session_state_heads'").get()
+            ?.wr,
+        ).toBe(sourceVersion >= 26 ? 1 : 0);
+        expect(
+          image.prepare("SELECT last_sequence, pruned_max_sequence FROM session_state_heads").all(),
+        ).toEqual([{ last_sequence: 81, pruned_max_sequence: 7 }]);
+      }
       const restoredPath = path.join(env.OPENCLAW_STATE_DIR!, `restored-v${sourceVersion}.sqlite`);
       const restored = await preparePostgresRestore({
         directory,
@@ -443,13 +445,13 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     );
     const manifest = await verifyMatchedPostgresBackup(directory, "exact");
     expect(manifest.source).toMatchObject({ owner: "state", schemaVersion: target - 1, namespace });
-    expect(manifest.carrier).toBe("postgres-schema");
-    namespaces.add(String(manifest.schema));
+    using image = openNodeSqliteDatabase(path.join(directory, "database.sqlite"));
     expect(
-      await rows(
-        `SELECT value_json FROM "${manifest.schema}".config_machine_state WHERE state_key = 'doctor.fixture'`,
-      ),
-    ).toEqual([{ value_json: '"before"' }]);
+      image
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'doctor.fixture'")
+        .get(),
+    ).toEqual({ value_json: '"before"' });
+    expect(image.prepare("PRAGMA user_version").get()?.user_version).toBe(target - 1);
     expect(original.version).toBe(String(target - 1));
     expect(fs.readFileSync(pathname)).toEqual(anchorBytes);
   });
@@ -466,7 +468,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       path.dirname(pathname),
       archives().find((entry) => !before.has(entry))!,
     );
-    namespaces.add(String((await verifyMatchedPostgresBackup(directory, "exact")).schema));
+    await verifyMatchedPostgresBackup(directory, "exact");
     const restored = await preparePostgresRestore({
       directory,
       anchorPath: path.join(env.OPENCLAW_STATE_DIR!, "restored.sqlite"),
