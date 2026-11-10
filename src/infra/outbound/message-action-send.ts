@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
@@ -95,6 +98,19 @@ export async function buildMessagePayload(params: {
   agentId?: string;
 }): Promise<SendPayloadParts> {
   const { actionParams, input } = params;
+  const rawPresentation = asOptionalRecord(actionParams.presentation);
+  const rawBlocks = Array.isArray(rawPresentation?.blocks) ? rawPresentation.blocks : [];
+  for (const rawBlock of rawBlocks) {
+    const block = asOptionalRecord(rawBlock);
+    if (
+      normalizeOptionalLowercaseString(block?.type) === "table" &&
+      !normalizeOptionalString(block?.caption)
+    ) {
+      throw new Error(
+        "presentation table blocks require a non-empty caption; set presentation.blocks[].caption before sending.",
+      );
+    }
+  }
   if (actionParams.pin === true && actionParams.delivery == null) {
     actionParams.delivery = { pin: { enabled: true } };
   }

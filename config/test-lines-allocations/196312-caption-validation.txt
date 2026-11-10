@@ -1,0 +1,2 @@
+# Reject captionless table sends before any delivery; preserve valid-caption delivery.
+31
