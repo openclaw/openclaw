@@ -49,7 +49,7 @@ it("emits a real submit with credential fields only after explicit confirmation"
   await userEvent.click(page.getByRole("button", { name: "Show", exact: true }));
   expect(password.type).toBe("text");
   expect(submit).not.toHaveBeenCalled();
-  await userEvent.click(page.getByRole("switch"));
+  await userEvent.click(page.getByRole("checkbox"));
   expect(continued).not.toHaveBeenCalled();
   await userEvent.click(page.getByRole("button", { name: "Continue", exact: true }));
   expect(submit).toHaveBeenCalledOnce();

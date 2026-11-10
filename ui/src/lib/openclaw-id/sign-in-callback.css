@@ -1,0 +1,11 @@
+body.openclaw-id-callback {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--text);
+  text-align: center;
+  color-scheme: light dark;
+}

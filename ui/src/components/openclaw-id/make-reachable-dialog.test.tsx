@@ -6,6 +6,14 @@ import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";
 import { showMakeReachableDialog } from "./make-reachable-dialog.tsx";
 
+const signedIn = {
+  sub: "owner",
+  email: "owner@example.test",
+  name: null,
+  exp: 2_000_000_000,
+  idToken: "synthetic",
+};
+
 // Dialogs open only while the enabled feature's lifetime runs.
 let endFeature = () => {};
 beforeEach(() => {
@@ -37,7 +45,7 @@ vi.mock("../../lib/openclaw-id/link.ts", () => ({
 // Click only enabled controls, so assertions follow the actual wizard gates.
 async function click(label: string) {
   await vi.waitFor(() => {
-    const button = [...document.querySelectorAll("button")].find(
+    const button = [...document.querySelectorAll("button")].findLast(
       (candidate) => candidate.textContent?.trim() === label,
     );
     expect(button).toBeDefined();
@@ -92,13 +100,6 @@ describe("Make reachable publication outcome", () => {
         }
         return { claw_id: "synthetic-claw", hostname: "studio-test.claws.test", available: true };
       });
-      const signedIn = {
-        sub: "owner",
-        email: "owner@example.test",
-        name: null,
-        exp: 2_000_000_000,
-        idToken: "synthetic",
-      };
       const storage = installSafeLocalStorageForTesting();
       storage.setItem("openclaw.openclawId.account", JSON.stringify(signedIn));
       window.dispatchEvent(
@@ -113,7 +114,6 @@ describe("Make reachable publication outcome", () => {
         signedIn,
       });
       await click("Continue");
-      await click("Create recovery kit");
       await vi.waitFor(() =>
         expect(document.querySelector('input[type="checkbox"]')).not.toBeNull(),
       );
@@ -134,6 +134,7 @@ describe("Make reachable publication outcome", () => {
       form.removeEventListener("submit", submitted);
       expect(password.value).toBe("");
       expect(document.body.textContent).toContain(expected);
+      expect(document.querySelectorAll(".openclaw-id-steps li")).toHaveLength(4);
       if (online && !retryable) {
         expect(document.body.textContent).not.toContain("will keep trying");
       }
@@ -175,13 +176,6 @@ describe("Make reachable preparation", () => {
       }
       return Promise.resolve({ hostname: "studio-test.claws.test", available: true });
     });
-    const signedIn = {
-      sub: "owner",
-      email: "owner@example.test",
-      name: null,
-      exp: 2_000_000_000,
-      idToken: "synthetic",
-    };
     installSafeLocalStorageForTesting().setItem(
       "openclaw.openclawId.account",
       JSON.stringify(signedIn),
@@ -215,9 +209,14 @@ describe("Make reachable preparation", () => {
     next.click();
     expect(preparations).toHaveLength(1);
     preparations[0]!({ claw_id: "synthetic-claw", hostname: "studio-test.claws.test" });
-    await click("Create recovery kit");
     await vi.waitFor(() => expect(document.querySelector('input[type="checkbox"]')).not.toBeNull());
     expect(preparations).toHaveLength(1);
+    await click("Cancel");
+    await click("Back");
+    expect(document.querySelector('input[autocomplete="new-password"]')).not.toBeNull();
+    document
+      .querySelector("openclaw-modal-dialog")!
+      .dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
     await click("Cancel");
     expect(await done).toBe(false);
   });
