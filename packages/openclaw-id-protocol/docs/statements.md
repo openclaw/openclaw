@@ -294,10 +294,13 @@ a client that verified the new binding refuses the old one (`rollback`), and a c
 stored the new snapshot's binding_seq refuses it (`stale_binding`). Snapshots signed by the
 retired K_gw do not verify under the new binding.
 
-The newest `(seq, issued_at)` is kept per K_gw (proposed): when the pin's K_gw changes, the
+The newest `(seq, issued_at)` is kept per K_gw (#196402): when the pin's K_gw changes, the
 client restarts that order with the first snapshot verified under the new binding, and keeps
 the highest binding_seq. A retired K_gw could have signed an inflated `seq` or a future
 `issued_at`; without the restart, honest snapshots from the new K_gw would look like replays.
+Only R-signed bindings raise the binding_seq high-water (decided, J5): a snapshot naming a
+binding_seq above the binding it verified under is `snapshot_ahead` and is never stored, so a
+retired K_gw cannot retire bindings for good.
 
 **Accepted v1 limitation:** an attacker holding both the old K_srv and the old K_gw can sign
 fresh snapshots for the old binding until the client has pinned the newer binding.
@@ -313,8 +316,8 @@ binding_seq; K_gw can already refuse service.
 A re-bind (enrollment.md) narrows this limitation to clients that never verified the newer
 binding: once a client has, the old keys get nothing from it. For a client that is still
 pinned to the old binding (offline since the re-bind) and reads from an attacker-chosen
-Discovery, the old keys keep every power listed here, including the inflated binding_seq that
-forces the browser to be set up again.
+Discovery, the old keys keep the other powers listed here; an inflated binding_seq is refused
+(`snapshot_ahead`) and never stored.
 
 ## Test vectors
 

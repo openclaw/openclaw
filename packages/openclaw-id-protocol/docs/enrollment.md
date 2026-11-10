@@ -83,8 +83,9 @@ devices) offer the expiry as an optional field.
 ### Re-bind: moving a claw to new machine keys (proposed, openclaw-bec)
 
 **Status: proposed; implementation in review.** The key rule is #196380, the ceremony and
-`openclaw id rebind` are #196388, and Discovery's one write is discovery#11. Still open: the
-cap on a retired K_gw's binding_seq. Pins already follow an R-signed ServerBinding at a higher binding_seq
+`openclaw id rebind` are #196388, Discovery's one write and owner code are discovery#11, and
+the client freshness rules (per-K_gw order, and only verified bindings raising the binding_seq
+high-water) are #196402. Pins already follow an R-signed ServerBinding at a higher binding_seq
 (this package).
 
 A re-bind moves a claw to new machine keys under the **same** root R: R signs a new
