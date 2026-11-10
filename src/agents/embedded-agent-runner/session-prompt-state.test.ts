@@ -2,10 +2,12 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as normalization from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
 import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { createComputerTool } from "../tools/computer-tool.js";
+import { buildAttemptSystemPrompt } from "./run/attempt-system-prompt.js";
 import {
   clearEmbeddedSessionPromptStates,
   beginSessionSystemPrompt,
@@ -183,15 +185,19 @@ describe("system prompt series", () => {
     expect(temporal.update?.content).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
-  it("keeps withheld continuation workspace files instead of announcing them removed", () => {
-    const head =
-      "Opening instructions.\n## Workspace Files (injected)\nUser-editable; OpenClaw loads below as Project Context.\n";
-    const projectContext =
-      "# Project Context\nLoaded project context:\n## /workspace/AGENTS.md\n# AGENTS\n## Rules\nBe brief.\n";
-    const withFiles = (day: string) =>
-      `${head}${projectContext}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Temporal Context\n${day}`;
-    const withheld = (day: string) =>
-      `${head}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Temporal Context\n${day}`;
+  it("keeps withheld continuation workspace files instead of announcing them removed", async () => {
+    const render = async (contextFiles: EmbeddedContextFile[]) =>
+      (
+        await buildAttemptSystemPrompt({
+          isRawModelRun: false,
+          embeddedSystemPrompt: { workspaceDir: "/workspace", tools: [], contextFiles },
+          transformSystemPrompt: (value) => value,
+        })
+      ).systemPrompt;
+    const withFiles = await render([
+      { path: "/workspace/AGENTS.md", content: "# AGENTS\n## Rules\nBe brief." },
+    ]);
+    const withheld = await render([]);
     const continuation = (systemPrompt: string, retainProjectContext?: boolean) =>
       prepareSessionSystemPrompt({
         state: fixture.state,
@@ -201,21 +207,20 @@ describe("system prompt series", () => {
         retainProjectContext,
       });
 
-    project(withFiles("day-1"));
-    const skipped = continuation(withheld("day-1"), true);
+    project(withFiles);
+    const skipped = continuation(withheld, true);
     expect(skipped.update).toBeUndefined();
     skipped.commit();
-
-    const nextDay = continuation(withheld("day-2"), true);
-    expect(nextDay.update?.content).toBe(`${updateHeading}## Temporal Context\nday-2`);
-    nextDay.commit();
     // Redelivering unchanged files after the skip window is not a prompt change.
-    expect(project(withFiles("day-2")).update).toBeUndefined();
+    expect(project(withFiles).update).toBeUndefined();
 
     // An explicit removal, such as contextInjection "never", is still announced.
-    const removed = continuation(withheld("day-2"));
+    const removed = continuation(withheld);
     expect(removed.update?.content).toContain("## /workspace/AGENTS.md\n(removed)");
     expect(removed.update?.content).toContain("## Rules\n(removed)");
+    removed.commit();
+    // Comparison state saved by an older skipped turn lost the files; redeliver them once.
+    expect(continuation(withheld, true).update?.content).toContain("Be brief.");
   });
 
   it("preserves large prompt revisions, including distinct lone surrogates", () => {

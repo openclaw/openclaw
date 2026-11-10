@@ -274,23 +274,38 @@ export function beginSessionSystemPrompt(params: {
 }
 
 const PROJECT_CONTEXT_HEADING = "\n# Project Context\n";
+const STABLE_SECTION_END = "<!-- /openclaw:attempt:STABLE -->";
+
+/** Project Context closes the stable region: before its framing marker, or the cache boundary. */
+function stableContextEnd(prompt: string): number {
+  const boundary = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+  if (boundary < 0) {
+    return -1;
+  }
+  const framed = prompt.lastIndexOf(STABLE_SECTION_END, boundary);
+  const end = framed < 0 ? boundary : framed;
+  return prompt[end - 1] === "\n" ? end - 1 : end;
+}
+
+function projectContextBlock(prompt: string): string | undefined {
+  const end = stableContextEnd(prompt);
+  const start = end < 0 ? -1 : prompt.slice(0, end).indexOf(PROJECT_CONTEXT_HEADING);
+  return start < 0 ? undefined : prompt.slice(start, end);
+}
 
 /**
  * A continuation-skip turn withholds workspace files that the pinned prefix still carries.
- * Reuse the pinned block so the delta does not announce those instructions as removed.
+ * Reuse the pinned block so the delta does not announce those instructions as removed. A
+ * comparison state saved by an earlier skipped turn has lost the block; the admitted prefix
+ * still has it, so that comparison redelivers the files once instead.
  */
-function retainPinnedProjectContext(pinned: string, current: string): string {
-  const pinnedBoundary = pinned.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
-  const currentBoundary = current.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
-  if (pinnedBoundary < 0 || currentBoundary < 0) {
+function retainPinnedProjectContext(series: SystemPromptSeries, current: string): string {
+  const end = stableContextEnd(current);
+  const block = projectContextBlock(series.renderedPrefix) ?? projectContextBlock(series.prefix);
+  if (end < 0 || !block || projectContextBlock(current)) {
     return current;
   }
-  const start = pinned.slice(0, pinnedBoundary).indexOf(PROJECT_CONTEXT_HEADING);
-  if (start < 0 || current.slice(0, currentBoundary).includes(PROJECT_CONTEXT_HEADING)) {
-    return current;
-  }
-  const block = pinned.slice(start + 1, pinnedBoundary);
-  return current.slice(0, currentBoundary) + block + current.slice(currentBoundary);
+  return current.slice(0, end) + block + current.slice(end);
 }
 
 function promptSections(text: string): Map<string, string> {
@@ -387,7 +402,7 @@ export function prepareSessionSystemPrompt(params: {
           : `restarted:${changedPromptRoutePart(previous.routeKey, params.routeKey)}`;
   const renderedPrefix =
     params.retainProjectContext && !restart && series
-      ? shareSystemPromptPrefix(retainPinnedProjectContext(series.renderedPrefix, freshPrefix))
+      ? shareSystemPromptPrefix(retainPinnedProjectContext(series, freshPrefix))
       : freshPrefix;
   const sections =
     !restart && series && series.renderedPrefix !== renderedPrefix
