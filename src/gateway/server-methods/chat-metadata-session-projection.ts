@@ -192,7 +192,9 @@ export function resolveSessionCatalogProfiles(
   const profileId = sessionEntry?.authProfileOverride?.trim();
   const runtime = sessionEntry?.agentRuntimeOverride?.trim();
   const provider =
-    sessionEntry?.providerOverride ??
+    (sessionEntry?.modelOverrideSource === "default"
+      ? undefined
+      : sessionEntry?.providerOverride) ??
     (runtime
       ? resolveSessionModelRef(config, sessionEntry, agentId, {
           allowPluginNormalization: false,
@@ -272,7 +274,7 @@ export function projectSessionModelCatalog(
   const authProfileSource = resolveCollapsedSessionAuthPinSource(entry);
   const workerAuth =
     (readParams.workerInference === "worker" || requiredWorker !== undefined) &&
-    !entry?.modelOverride?.trim() &&
+    (entry?.modelOverrideSource === "default" || !entry?.modelOverride?.trim()) &&
     !entry?.agentRuntimeOverride?.trim() &&
     !(entry?.authProfileOverride?.trim() && authProfileSource === "user");
   if (!nativeAuth && !workerAuth) {

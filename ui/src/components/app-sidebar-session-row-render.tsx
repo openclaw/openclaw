@@ -35,7 +35,7 @@ type RecentSessionParams = {
   listItem?: boolean;
   icon?: JSX.Element;
 };
-export function renderRecentSession(params: RecentSessionParams) {
+function renderRecentSession(params: RecentSessionParams) {
   return (
     <Show when={params.session.key} keyed>
       {(_key) => renderRecentSessionRow(params)}

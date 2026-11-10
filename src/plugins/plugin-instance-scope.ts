@@ -84,9 +84,11 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
+  readonly retainedInstances?: readonly PluginInstanceHandle[];
   readonly holdsPendingReplacement?: boolean;
   readonly pendingReplacementInstances?: readonly PluginInstanceHandle[];
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
+  retainInvocation?: (instance: PluginInstanceHandle) => void;
 };
 
 export type PluginInstanceOwner = {
