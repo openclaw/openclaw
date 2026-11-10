@@ -3,6 +3,7 @@ import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { mountRouterOutlet, settleRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -156,6 +157,8 @@ describe("GitHub identity view", () => {
     flush();
     expect(view.getByRole("alert").textContent).toContain("Synthetic GitHub status unavailable");
     expect(view.getByText("Couldn’t load account status. Try again.")).toBeTruthy();
+    expect(view.queryByText("No verified account")).toBeNull();
+    expect(view.queryByText("System GitHub")).toBeNull();
     identity.showPatFallback();
     await identity.configure();
     flush();
@@ -172,6 +175,46 @@ describe("GitHub identity view", () => {
     flush();
     expect(view.getByText("@managed-user")).toBeTruthy();
     expect(view.getByText("Verified")).toBeTruthy();
+  });
+
+  it("shows account absence only after a successful status read and retires it on access loss", async () => {
+    const pending = createDeferred<ToolsGitHubStatusResult>();
+    const { identity, sync } = setupRequest(() => pending.promise, { context: { scope: "agent" } });
+    const view = mountSolid(() => (
+      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+    ));
+    const expectUnknown = () => {
+      expect(view.queryByText("No verified account")).toBeNull();
+      expect(view.queryByText("System GitHub")).toBeNull();
+    };
+    flush();
+    expectUnknown();
+    expect(view.getByText("Status not loaded")).toBeTruthy();
+    const reading = identity.verify();
+    flush();
+    expectUnknown();
+    expect(view.getByText("Loading account status…")).toBeTruthy();
+    const empty = {
+      ...availableStatus().effective,
+      source: "system-detected" as const,
+      credentialState: "unavailable" as const,
+      account: null,
+    };
+    pending.resolve({
+      agentId: "main",
+      selectedScope: "agent",
+      selected: { scope: "agent", configured: false, identity: null },
+      effective: empty,
+    });
+    await reading;
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.getByText("No verified account")).toBeTruthy();
+    expect(view.getByText("System GitHub")).toBeTruthy();
+    sync({ statusReadable: false, configurable: false, authorizable: false });
+    flush();
+    expectUnknown();
+    expect(view.getByText("Status not loaded")).toBeTruthy();
   });
 
   it("shows one shared error when the other identity read is still pending", async () => {

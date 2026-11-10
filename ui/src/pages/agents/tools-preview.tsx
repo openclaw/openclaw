@@ -1,3 +1,4 @@
+import { Dynamic } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
@@ -90,7 +91,7 @@ function previewStatus(preview: EffectivePreview) {
 export function ToolRuntime(props: {
   preview: EffectivePreview;
   sessionKey: string;
-  onJump: (event: Event, anchorId: string) => void;
+  onJump?: (event: Event, anchorId: string) => void;
 }) {
   const uniqueEffectiveTools = () => [...(props.preview.facts?.available.values() ?? [])];
   const visibleEffectiveTools = () => uniqueEffectiveTools().slice(0, MAX_RUNTIME_TOOL_CHIPS);
@@ -113,10 +114,11 @@ export function ToolRuntime(props: {
             {(tool) => {
               const anchorId = () => toToolAnchorId(tool().id);
               return (
-                <a
+                <Dynamic
+                  component={props.onJump ? "a" : "span"}
                   class="agent-tools-runtime-chip"
-                  href={`#${anchorId()}`}
-                  onClick={(event: Event) => props.onJump(event, anchorId())}
+                  href={props.onJump ? `#${anchorId()}` : undefined}
+                  onClick={(event: Event) => props.onJump?.(event, anchorId())}
                 >
                   <span class="mono" translate="no">
                     {tool().label}
@@ -124,7 +126,7 @@ export function ToolRuntime(props: {
                   <span class="agent-tools-runtime-chip__meta">
                     {renderEffectiveToolBadge(tool())}
                   </span>
-                </a>
+                </Dynamic>
               );
             }}
           </For>

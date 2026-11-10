@@ -119,6 +119,7 @@ describe("renderAgents", () => {
         <Agents
           {...props}
           tools={{ ...props.tools, readCatalog }}
+          config={config({})}
           readData={() => ({ ...props.readData(), agentsPanel: "tools" })}
         />
       );
@@ -954,7 +955,7 @@ describe("renderAgents toolbar", () => {
     },
   );
 
-  it("keeps unavailable creation visible and disabled with a recovery reason", () => {
+  it("hides unavailable creation without replacing authorized page content", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const onCreateAgent = vi.fn();
@@ -980,10 +981,8 @@ describe("renderAgents toolbar", () => {
       );
       expect(container.querySelector("openclaw-agent-select")).toBeNull();
       const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
-      expect(createButton).not.toBeNull();
-      expect(createButton?.disabled).toBe(true);
-      expect(createButton?.title).toBe("You need admin access to set up OpenClaw.");
-      createButton?.click();
+      expect(createButton).toBeNull();
+      expect(container.querySelector("#agents-tab-overview")).not.toBeNull();
       expect(onCreateAgent).not.toHaveBeenCalled();
     } finally {
       container.remove();

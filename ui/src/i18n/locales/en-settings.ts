@@ -59,6 +59,7 @@ const enSettings = {
     },
     copyId: "Copy ID",
     setDefault: "Set default",
+    accessRestricted: "You do not have access to this agent setting.",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -631,7 +632,6 @@ const enSettings = {
     enabledSummary: "{enabled}/{total} enabled",
     enableAll: "Enable all",
     disableAll: "Disable all",
-    loadConfig: "Load the config to change tool profiles.",
     explicitAllowlist: "This agent uses a tool allowlist. Manage it in Config:",
     globalAllowlist: "Agent overrides can’t enable tools blocked by the global allowlist:",
     loadingCatalog: "Loading tools…",

@@ -152,6 +152,44 @@ const toolFact = (root: Element | null | undefined, label: string) =>
     ?.nextElementSibling?.textContent?.trim();
 
 describe("agents tools panel (browser)", () => {
+  it.each([false, true])(
+    "does not invent configured facts while config is absent (loading: %s)",
+    (configLoading) => {
+      const { container } = mountTools({ configForm: null, configLoading, effective: toolPreview });
+      expect(container.querySelector(".agent-tools-buttons")).toBeNull();
+      expect(container.querySelector(".agent-tools-group")).toBeNull();
+      expect(
+        [...container.querySelectorAll(".settings-kv dt")].map((term) => text(term)),
+      ).not.toContain("Tool profile");
+      expect(container.querySelector(".agent-tools-runtime-chip")?.textContent).toContain("read");
+    },
+  );
+
+  it("does not present retained config as readable after access is lost", () => {
+    const { container } = mountTools({
+      canReadConfig: false,
+      configForm: {},
+      effective: toolPreview,
+    });
+    expect(container.querySelector(".agent-tools-buttons")).toBeNull();
+    expect(container.querySelector(".agent-tools-group")).toBeNull();
+    expect(container.querySelector(".settings-kv")).toBeNull();
+    expect(container.querySelector(".agent-tools-runtime-chip")?.textContent).toContain("read");
+  });
+
+  it("retains accepted default configuration facts without read-only editor controls", () => {
+    const { container } = mountTools({ configForm: {}, canUpdateConfig: false });
+    const facts = container.querySelector(".settings-kv");
+    expect(facts?.textContent).toContain("full");
+    expect(facts?.textContent).toContain("Default");
+    expect(container.querySelector(".agent-tools-group")).not.toBeNull();
+    expect(container.querySelector(".agent-tools-buttons")).toBeNull();
+    expect(container.querySelector("input.settings-toggle__input")).toBeNull();
+    expect(
+      [...container.querySelectorAll("button")].some((control) => text(control) === "Enable all"),
+    ).toBe(false);
+  });
+
   it("updates preset and catalog labels when the mounted panel changes language", async () => {
     const restoreI18n = captureI18nStateForTesting();
     try {
@@ -633,7 +671,7 @@ describe("agents tools panel (browser)", () => {
       { allow: ["group:fs"], deny: ["write"] },
       { read: true, write: false, apply_patch: true },
     ],
-  ] as const)("renders policy-controlled switches: %s", async (_name, tools, expected) => {
+  ] as const)("renders configured tool policy: %s", async (_name, tools, expected) => {
     const { container } = mountTools({
       configForm: {
         agents: { entries: { main: { tools } } },
@@ -644,10 +682,15 @@ describe("agents tools panel (browser)", () => {
 
     expect(
       Object.fromEntries(
-        Array.from(container.querySelectorAll(".agent-tool-card"), (card) => [
-          content(card, ".agent-tool-title"),
-          card.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked,
-        ]),
+        Array.from(container.querySelectorAll(".agent-tool-card"), (card) => {
+          const toggle = card.querySelector<HTMLInputElement>("input.settings-toggle__input");
+          expect(Boolean(toggle)).toBe(!("allow" in tools));
+          expect(toolFact(card, "Agent setting")).toBeDefined();
+          return [
+            content(card, ".agent-tool-title"),
+            toggle ? toggle.checked : toolFact(card, "Agent setting")?.startsWith("Enabled by "),
+          ];
+        }),
       ),
     ).toEqual(expected);
   });
