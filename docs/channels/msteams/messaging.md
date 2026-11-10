@@ -177,12 +177,12 @@ Private/shared channels have their own site scoped to channel members. The bot r
 
 ### Sharing behavior
 
-| Context and permission                                                  | Sharing behavior                                          |
-| ----------------------------------------------------------------------- | --------------------------------------------------------- |
-| Standard channel or explicit `sharePointSiteId` + `Sites.ReadWrite.All` | Organization-wide sharing link (anyone in org can access) |
-| Private/shared channel, auto-discovered site + `Sites.ReadWrite.All`    | No sharing link; channel-site membership grants access    |
-| Group chat + `Sites.ReadWrite.All` + a supported chat-member read grant | Per-user sharing link (only chat members can access)      |
-| Group chat without a supported chat-member read grant                   | Send is blocked                                           |
+| Context and permission                                                               | Sharing behavior                                          |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| Standard channel or channel with explicit `sharePointSiteId` + `Sites.ReadWrite.All` | Organization-wide sharing link (anyone in org can access) |
+| Private/shared channel, auto-discovered site + `Sites.ReadWrite.All`                 | No sharing link; channel-site membership grants access    |
+| Group chat + `Sites.ReadWrite.All` + a supported chat-member read grant              | Per-user sharing link (only chat members can access)      |
+| Group chat without a supported chat-member read grant                                | Send is blocked                                           |
 
 Per-user sharing is more secure since only chat participants can access the file. OpenClaw requires a successful member lookup for group chats; timeouts, transport failures, empty results, and Graph API denials fail the send instead of widening access to the organization.
 
