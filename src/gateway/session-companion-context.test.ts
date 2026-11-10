@@ -89,6 +89,7 @@ describe("session companion context", () => {
         sessionKey: scope.sessionKey,
         question: "Why?",
         connId: "conn-1",
+        ownerId: "shared",
       };
       try {
         if (warm) {

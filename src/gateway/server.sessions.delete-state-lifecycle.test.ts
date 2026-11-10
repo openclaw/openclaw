@@ -567,7 +567,13 @@ async function ask(
   question: string,
   agentId = "main",
 ) {
-  return service.ask({ agentId, sessionKey, question, connId: `conn-${agentId}` });
+  return service.ask({
+    agentId,
+    sessionKey,
+    question,
+    ownerId: "shared",
+    connId: `conn-${agentId}`,
+  });
 }
 
 async function readState(service: SessionCompanionService, sessionKey: string, agentId = "main") {

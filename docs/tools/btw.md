@@ -79,11 +79,11 @@ conversation history. The Control UI does not consume that event; it calls the
 
 ## Surface behavior
 
-| Surface           | Behavior                                                                                                                                                                                                                                     |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                    |
-| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                  |
-| Control UI / web  | Routes `/btw` and `/side` to the expanded Side chat. The read-only thread is keyed by session, rehydrates from Gateway memory, and preserves a failed question for Retry. It can be cleared with the trash button. `Esc` collapses the rail. |
+| Surface           | Behavior                                                                                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                                           |
+| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                                         |
+| Control UI / web  | Routes `/btw` and `/side` to the expanded Side chat. The read-only thread is private to each person within a session, rehydrates from Gateway memory, and preserves a failed question for Retry. It can be cleared with the trash button. `Esc` collapses the rail. |
 
 ## Selection popup (Control UI)
 

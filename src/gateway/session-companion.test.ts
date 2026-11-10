@@ -24,6 +24,7 @@ function askRequest(
     agentId: "main",
     sessionKey: "agent:main:main",
     question,
+    ownerId: "shared",
     connId: "conn-1",
     ...overrides,
   };
@@ -118,7 +119,8 @@ describe("session companion asks", () => {
     expect(call?.messages[0]?.content).toContain("Headline: Running tests");
     expect(call?.messages[0]?.content).toContain("Tool: read package.json");
     expect(
-      harness.service.state({ agentId: "main", sessionKey: "agent:main:main" }).exchanges,
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" })
+        .exchanges,
     ).toEqual([
       {
         question: "Why is it reading that file?",
@@ -211,6 +213,7 @@ describe("session companion asks", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         question: "What changed?",
+        ownerId: "shared",
         connId: "conn-1",
         assertSourceCurrent: () => {
           if (!authorized) {
@@ -304,7 +307,9 @@ describe("session companion asks", () => {
     ).rejects.toMatchObject({
       reason: "unavailable",
     } satisfies Partial<SessionCompanionAskError>);
-    expect(wrapper.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
+    expect(
+      wrapper.service.state({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" }),
+    ).toEqual({
       exchanges: [],
     });
     wrapper.service.dispose();
@@ -349,7 +354,9 @@ describe("session companion asks", () => {
     await expect(active).rejects.toMatchObject({
       reason: "context-unavailable",
     } satisfies Partial<SessionCompanionAskError>);
-    expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" }),
+    ).toEqual({
       exchanges: [],
     });
 
@@ -383,28 +390,32 @@ describe("session companion asks", () => {
       agentId: "main",
       sessionKey: "global",
       question: "Main?",
+      ownerId: "shared",
       connId: "conn-main",
     });
     await harness.service.ask({
       agentId: "work",
       sessionKey: "global",
       question: "Work?",
+      ownerId: "shared",
       connId: "conn-work",
     });
 
-    expect(harness.service.state({ agentId: "main", sessionKey: "global" }).exchanges).toEqual([
-      expect.objectContaining({ question: "Main?" }),
-    ]);
-    expect(harness.service.state({ agentId: "work", sessionKey: "global" }).exchanges).toEqual([
-      expect.objectContaining({ question: "Work?" }),
-    ]);
-    harness.service.reset({ agentId: "main", sessionKey: "global" });
-    expect(harness.service.state({ agentId: "main", sessionKey: "global" })).toEqual({
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "global" }).exchanges,
+    ).toEqual([expect.objectContaining({ question: "Main?" })]);
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "work", sessionKey: "global" }).exchanges,
+    ).toEqual([expect.objectContaining({ question: "Work?" })]);
+    harness.service.reset({ ownerId: "shared", agentId: "main", sessionKey: "global" });
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "global" }),
+    ).toEqual({
       exchanges: [],
     });
-    expect(harness.service.state({ agentId: "work", sessionKey: "global" }).exchanges).toHaveLength(
-      1,
-    );
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "work", sessionKey: "global" }).exchanges,
+    ).toHaveLength(1);
     harness.service.dispose();
   });
 
@@ -413,8 +424,8 @@ describe("session companion asks", () => {
     async (sessionKey) => {
       vi.useFakeTimers();
       const harness = createHarness();
-      const selected = { agentId: "work", sessionKey };
-      const other = { agentId: "main", sessionKey: "global" };
+      const selected = { agentId: "work", sessionKey, ownerId: "shared" };
+      const other = { agentId: "main", sessionKey: "global", ownerId: "shared" };
       const databaseIdentity = Symbol("session-companion-database");
       await harness.service.ask({ ...selected, question: "Work?", connId: "conn-work" });
       await harness.service.ask({ ...other, question: "Main?", connId: "conn-main" });
@@ -442,6 +453,7 @@ describe("session companion asks", () => {
         agentId: "main",
         sessionKey: `agent:main:session-${index}`,
         question: `Question ${index}?`,
+        ownerId: "shared",
         connId: "conn-1",
       });
     }
@@ -450,6 +462,7 @@ describe("session companion asks", () => {
         agentId: "main",
         sessionKey: "agent:main:session-5",
         question: "One too many?",
+        ownerId: "shared",
         connId: "conn-1",
       }),
     ).rejects.toMatchObject({
@@ -468,6 +481,7 @@ describe("session companion asks", () => {
         agentId: "main",
         sessionKey: `agent:main:global-${index}`,
         question: `Question ${index}?`,
+        ownerId: "shared",
         connId: `conn-${index}`,
       });
     }
@@ -476,6 +490,7 @@ describe("session companion asks", () => {
         agentId: "main",
         sessionKey: "agent:main:global-overflow",
         question: "One too many globally?",
+        ownerId: "shared",
         connId: "conn-overflow",
       }),
     ).rejects.toMatchObject({
@@ -546,7 +561,9 @@ describe("session companion asks", () => {
     const harness = createHarness({ now: clock.clock.now, scheduler });
     await harness.service.ask(askRequest("Before idle?"));
     await clock.advanceBy(2 * 60 * 60_000);
-    expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" }),
+    ).toEqual({
       exchanges: [],
     });
     harness.service.dispose();
@@ -597,11 +614,13 @@ describe("session companion asks", () => {
     const harness = createHarness({ run: async () => await pending.promise });
     const active = harness.service.ask(askRequest("Still there?"));
     await vi.waitFor(() => expect(harness.run).toHaveBeenCalledOnce());
-    harness.service.reset({ agentId: "main", sessionKey: "agent:main:main" });
+    harness.service.reset({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" });
     await expect(active).rejects.toMatchObject({
       reason: "unavailable",
     } satisfies Partial<SessionCompanionAskError>);
-    expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" }),
+    ).toEqual({
       exchanges: [],
     });
     harness.service.dispose();
@@ -620,7 +639,9 @@ describe("session companion asks", () => {
     await expect(active).rejects.toMatchObject({
       reason: "context-unavailable",
     } satisfies Partial<SessionCompanionAskError>);
-    expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" }),
+    ).toEqual({
       exchanges: [],
     });
     harness.service.dispose();
@@ -646,7 +667,9 @@ describe("session companion asks", () => {
     await expect(active).rejects.toMatchObject({
       reason: "unavailable",
     } satisfies Partial<SessionCompanionAskError>);
-    expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" }),
+    ).toEqual({
       exchanges: [
         {
           question: "What is already known?",
@@ -671,7 +694,9 @@ describe("session companion asks", () => {
     await expect(active).rejects.toMatchObject({
       reason: "unavailable",
     } satisfies Partial<SessionCompanionAskError>);
-    expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" }),
+    ).toEqual({
       exchanges: [],
     });
   });
@@ -690,7 +715,9 @@ describe("session companion asks", () => {
       } satisfies Partial<SessionCompanionAskError>,
     );
     expect(harness.run).toHaveBeenCalledOnce();
-    expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" }),
+    ).toEqual({
       exchanges: [],
     });
     harness.service.dispose();
@@ -701,14 +728,144 @@ describe("session companion asks", () => {
     const harness = createHarness();
     await harness.service.ask(askRequest("Before reset?"));
     expect(
-      harness.service.state({ agentId: "main", sessionKey: "agent:main:main" }).exchanges,
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" })
+        .exchanges,
     ).toHaveLength(1);
 
     notifyGatewaySessionReset("agent:main:main", "main");
 
-    expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
+    expect(
+      harness.service.state({ ownerId: "shared", agentId: "main", sessionKey: "agent:main:main" }),
+    ).toEqual({
       exchanges: [],
     });
     harness.service.dispose();
+  });
+});
+
+describe("private Side chat lifecycle", () => {
+  it("runs different owners independently and resets only the caller's in-flight ask", async () => {
+    const finishAlice = createDeferredCore<string>();
+    const finishBob = createDeferredCore<string>();
+    const harness = createHarness({
+      run: async ({ messages }) =>
+        messages.at(-1)?.content === "Alice?" ? finishAlice.promise : finishBob.promise,
+    });
+    const alice = askRequest("Alice?", { ownerId: "profile:alice", connId: "alice" });
+    const bob = askRequest("Bob?", { ownerId: "profile:bob", connId: "bob" });
+    const aliceAsk = harness.service.ask(alice);
+    const bobAsk = harness.service.ask(bob).catch((error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(harness.run).toHaveBeenCalledTimes(2));
+      expect(harness.run.mock.calls[1]?.[0].messages).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ content: "Alice?" })]),
+      );
+      harness.service.reset(bob);
+      await expect(bobAsk).resolves.toMatchObject({ reason: "unavailable" });
+      finishAlice.resolve("Alice answer");
+      await expect(aliceAsk).resolves.toMatchObject({ answer: "Alice answer" });
+      expect(harness.service.state(alice).exchanges).toEqual([
+        { question: "Alice?", answer: "Alice answer", ts: 100 },
+      ]);
+      expect(harness.service.state(bob).exchanges).toEqual([]);
+      finishBob.resolve("Late Bob answer");
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(harness.service.state(bob).exchanges).toEqual([]);
+      notifyGatewaySessionReset(alice.sessionKey, alice.agentId);
+      expect(harness.service.state(alice).exchanges).toEqual([]);
+    } finally {
+      finishAlice.resolve("cleanup");
+      finishBob.resolve("cleanup");
+      await Promise.allSettled([aliceAsk, bobAsk]);
+      harness.service.dispose();
+    }
+  });
+
+  it("deletes all old-generation owners without retiring newer owners or replayed replacements", async () => {
+    let sessionId = "old-session";
+    const finishBob = createDeferredCore<string>();
+    const harness = createHarness({
+      currentSessionId: () => sessionId,
+      readContext: async () => ({
+        kind: "ready",
+        context: { empty: true, messages: [], sessionId },
+      }),
+      run: async ({ messages }) =>
+        messages.at(-1)?.content === "Bob old?" ? finishBob.promise : "Current answer",
+    });
+    const alice = askRequest("Alice old?", { ownerId: "profile:alice", connId: "alice" });
+    const bob = askRequest("Bob old?", { ownerId: "profile:bob", connId: "bob" });
+    const carol = askRequest("Carol new?", { ownerId: "profile:carol", connId: "carol" });
+    await harness.service.ask(alice);
+    const bobAsk = harness.service.ask(bob).catch((error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(harness.run).toHaveBeenCalledTimes(2));
+      sessionId = "new-session";
+      await harness.service.ask(carol);
+      const deletion = {
+        kind: "delete" as const,
+        agentId: "main",
+        databaseIdentity: Symbol("private-companion-deletion"),
+        previous: { sessionId: "old-session", sessionKeys: [alice.sessionKey] },
+      };
+      emitSessionIdentityMutation(deletion);
+      await expect(bobAsk).resolves.toMatchObject({ reason: "context-unavailable" });
+      expect(harness.service.state(alice).exchanges).toEqual([]);
+      expect(harness.service.state(bob).exchanges).toEqual([]);
+      expect(harness.service.state(carol).exchanges).toEqual([
+        { question: "Carol new?", answer: "Current answer", ts: 100 },
+      ]);
+      await harness.service.ask({ ...alice, question: "Alice new?" });
+      emitSessionIdentityMutation(deletion);
+      finishBob.resolve("Stale old answer");
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(harness.service.state(alice).exchanges).toEqual([
+        { question: "Alice new?", answer: "Current answer", ts: 100 },
+      ]);
+      expect(harness.service.state(carol).exchanges).toHaveLength(1);
+      expect(harness.service.state(bob).exchanges).toEqual([]);
+    } finally {
+      finishBob.resolve("cleanup");
+      await bobAsk;
+      harness.service.dispose();
+    }
+  });
+
+  it("revokes every owner still preparing context before a thread exists", async () => {
+    const context =
+      createDeferredCore<Awaited<ReturnType<SessionCompanionContextReader["read"]>>>();
+    const harness = createHarness({ readContext: () => context.promise });
+    const requests = ["alice", "bob"].map((owner) =>
+      askRequest("Preparing?", { ownerId: "profile:" + owner, connId: owner }),
+    );
+    const asks = requests.map((request) =>
+      harness.service.ask(request).catch((error: unknown) => error),
+    );
+    try {
+      await vi.waitFor(() => expect(harness.readContext).toHaveBeenCalledTimes(2));
+      notifyGatewaySessionReset(requests[0]!.sessionKey, "main");
+      for (const ask of asks) {
+        await expect(ask).resolves.toMatchObject({ reason: "context-unavailable" });
+      }
+      context.resolve({
+        kind: "ready",
+        context: { empty: true, messages: [], sessionId: "session-1" },
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(harness.run).not.toHaveBeenCalled();
+      for (const request of requests) {
+        expect(harness.service.state(request).exchanges).toEqual([]);
+      }
+    } finally {
+      context.resolve({ kind: "missing" });
+      await Promise.all(asks);
+      harness.service.dispose();
+    }
   });
 });

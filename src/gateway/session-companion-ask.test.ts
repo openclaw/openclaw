@@ -111,6 +111,7 @@ const question = {
   sessionKey: "agent:main:main",
   question: "What is it doing?",
   connId: "conn-1",
+  ownerId: "shared",
 };
 
 describe("session companion embedded invocation", () => {
@@ -156,7 +157,8 @@ describe("session companion embedded invocation", () => {
       );
       expect(runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain("User comment:\nCheck this.");
       expect(
-        companion.state({ sessionKey: question.sessionKey, agentId: "main" }).exchanges,
+        companion.state({ sessionKey: question.sessionKey, agentId: "main", ownerId: "shared" })
+          .exchanges,
       ).toEqual([
         { question: "What changed?", answer: expect.any(String), ts: expect.any(Number) },
       ]);
@@ -396,6 +398,7 @@ describe("session companion embedded invocation", () => {
           sessionKey: "agent:main:main",
           question: "What is it doing?",
           connId: "conn-1",
+          ownerId: "shared",
         }),
       ).resolves.toMatchObject({ answer: "The session is reading a file." });
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();

@@ -94,6 +94,7 @@ it.each(["missing", "replaced", "reset with the same id", "claimed by another wr
             sessionKey: "agent:main:main",
             question: "What is it doing?",
             connId: "conn-1",
+            ownerId: "shared",
           }),
         ).rejects.toThrow("Side chat could not answer right now.");
         const target = expectDefined(prepared, "prepared companion session");

@@ -257,6 +257,7 @@ describe("session companion RPC", () => {
       agentId: "main",
       sessionKey: "agent:main:main",
       question: "Who owns this ask?",
+      ownerId: "shared",
       connId: "conn-1",
       assertSourceCurrent: expect.any(Function),
       signal: controller.signal,
@@ -317,6 +318,7 @@ describe("session companion RPC", () => {
       expect(companion[operation]).toHaveBeenCalledWith({
         agentId: "main",
         sessionKey: "agent:main:main",
+        ownerId: "shared",
       });
       expect(respond).toHaveBeenCalledWith(true, operation === "state" ? state : { ok: true });
 
@@ -384,6 +386,7 @@ describe("session companion RPC", () => {
         expect(state).toHaveBeenCalledExactlyOnceWith({
           agentId: "main",
           sessionKey: keys[0],
+          ownerId: `profile:${client.authenticatedUserProfile?.profileId}`,
         });
       } finally {
         release.resolve();
@@ -447,7 +450,11 @@ describe("session companion RPC", () => {
       undefined,
       config,
     );
-    expect(state).toHaveBeenCalledWith({ agentId: "work", sessionKey: "global" });
+    expect(state).toHaveBeenCalledWith({
+      agentId: "work",
+      sessionKey: "global",
+      ownerId: "shared",
+    });
     expect(selected).toHaveBeenCalledWith(true, { exchanges: [] });
 
     state.mockClear();
