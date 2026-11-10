@@ -163,18 +163,28 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
     },
   );
 
-  it.each(["true", "false", "invalid"])(
-    "preserves frozen policy through pnpm bootstrap and workspace config (%s)",
-    (frozen) => {
+  it.each([
+    ["true", true],
+    ["false", true],
+    ["invalid", true],
+    ["true", false],
+  ] as const)(
+    "preserves prepared pnpm and frozen policy (%s, prepared: %s)",
+    (frozen, prepared) => {
       const root = tempDirs.make("openclaw-frozen-bootstrap-");
       const bin = path.join(root, "bin");
+      const nodeBin = path.join(root, "node-bin");
       mkdirSync(bin);
-      symlinkSync(resolveTestNodeExecPath(), path.join(bin, "node"));
+      mkdirSync(nodeBin);
+      symlinkSync(resolveTestNodeExecPath(), path.join(nodeBin, "node"));
+      if (prepared) {
+        write(nodeBin, "pnpm", "#!/bin/sh\nexit 77\n", 0o755);
+      }
       const lock = path.join(root, "pnpm-lock.yaml");
       const calls = path.join(root, "pnpm-calls");
       writeFileSync(lock, "original\n");
       write(
-        bin,
+        prepared ? bin : nodeBin,
         "pnpm",
         `#!/bin/bash
 printf '%s\\n' "$*" >> "$PNPM_CALLS"
@@ -193,8 +203,8 @@ fi
       const result = spawnSync("bash", [".github/actions/setup-node-env/install-dependencies.sh"], {
         encoding: "utf8",
         env: {
-          PATH: process.env.PATH,
-          NODE_BIN: bin,
+          PATH: `${prepared ? `${bin}:` : ""}/usr/bin:/bin`,
+          NODE_BIN: nodeBin,
           FROZEN_LOCKFILE: frozen,
           DEPENDENCY_CACHE: "false",
           DEPENDENCY_CACHE_HIT: "false",
