@@ -144,6 +144,33 @@ async function expectArmed() {
 }
 
 describe("service publication refresh scheduling", () => {
+  it("keeps a code given to publish for its retries after a transient failure", async () => {
+    await commitLink();
+    await authority.recordDiscovery({
+      owner_account_id: null,
+      published_binding_seq: 0,
+      published_snapshot_seq: 0,
+    });
+    const answer = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    const codes: unknown[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/v1/claws") && init?.method === "POST") {
+        codes.push(JSON.parse(new TextDecoder().decode(init.body as Uint8Array)).code);
+        if (codes.length === 1) {
+          return Response.json({ error: { code: "unavailable", message: "x" } }, { status: 503 });
+        }
+      }
+      return await answer(input, init);
+    });
+    expect(await service.publish("FRESH-CODE")).toMatchObject({ state: "failed", retryable: true });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await vi.waitFor(async () =>
+      expect((await service.linkStatus()).publication?.state).toBe("published"),
+    );
+    expect(codes).toEqual(["FRESH-CODE", "FRESH-CODE"]);
+  });
+
   it("arms after a successful fresh commitLink", async () => {
     await commitLink();
     await expectArmed();
