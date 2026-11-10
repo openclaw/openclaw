@@ -1,0 +1,2 @@
+36
+# OAuth shadow scan: cover readdir ENOENT (silent) vs non-ENOENT (warning surfaced) dir-scan scenarios.
