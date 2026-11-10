@@ -17,16 +17,16 @@ function usage(message) {
 
 function resolveRuntimeDir(explicit) {
   const value = explicit || process.env.SHERPA_ONNX_RUNTIME_DIR || "";
-  return value.trim();
+  return value;
 }
 
 function resolveModelDir(explicit) {
   const value = explicit || process.env.SHERPA_ONNX_MODEL_DIR || "";
-  return value.trim();
+  return value;
 }
 
 function resolveModelFile(modelDir, explicitFlag) {
-  const explicit = (explicitFlag || process.env.SHERPA_ONNX_MODEL_FILE || "").trim();
+  const explicit = explicitFlag || process.env.SHERPA_ONNX_MODEL_FILE || "";
   if (explicit) return explicit;
   try {
     const candidates = fs
@@ -41,14 +41,14 @@ function resolveModelFile(modelDir, explicitFlag) {
 }
 
 function resolveTokensFile(modelDir, explicitFlag) {
-  const explicit = (explicitFlag || process.env.SHERPA_ONNX_TOKENS_FILE || "").trim();
+  const explicit = explicitFlag || process.env.SHERPA_ONNX_TOKENS_FILE || "";
   if (explicit) return explicit;
   const candidate = path.join(modelDir, "tokens.txt");
   return fs.existsSync(candidate) ? candidate : "";
 }
 
 function resolveDataDir(modelDir, explicitFlag) {
-  const explicit = (explicitFlag || process.env.SHERPA_ONNX_DATA_DIR || "").trim();
+  const explicit = explicitFlag || process.env.SHERPA_ONNX_DATA_DIR || "";
   if (explicit) return explicit;
   const candidate = path.join(modelDir, "espeak-ng-data");
   return fs.existsSync(candidate) ? candidate : "";
