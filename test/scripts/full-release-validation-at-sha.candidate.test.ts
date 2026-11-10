@@ -374,8 +374,12 @@ describe("candidate-owned full release dispatch entry point", () => {
     expectDispatchFailure(f.run(publication), "gh: Bad credentials (HTTP 401)");
     const pending = f.record();
     const ref = `refs/heads/${pending.request.workflowRef}`;
-    if (failure === "missing") runGit(f.origin, ["update-ref", "-d", ref]);
-    if (failure === "moved") runGit(f.origin, ["update-ref", ref, f.workflowSha]);
+    if (failure === "missing") {
+      runGit(f.origin, ["update-ref", "-d", ref]);
+    }
+    if (failure === "moved") {
+      runGit(f.origin, ["update-ref", ref, f.workflowSha]);
+    }
     if (["existing run", "ambiguous runs", "incomplete inventory"].includes(failure)) {
       writeFileSync(
         f.acceptedRunPath,
@@ -397,16 +401,24 @@ describe("candidate-owned full release dispatch entry point", () => {
     const resumed = f.run(["--resume-request", f.requestPath()], true);
     expect(resumed.status).toBe(1);
     expect(resumed.stderr).not.toContain("unexpected gh call");
-    if (failure === "missing") expect(resumed.stderr).toContain("unknown revision");
-    if (failure === "moved") expect(resumed.stderr).toContain("transport ref moved");
-    if (["existing run", "ambiguous runs"].includes(failure))
+    if (failure === "missing") {
+      expect(resumed.stderr).toContain("unknown revision");
+    }
+    if (failure === "moved") {
+      expect(resumed.stderr).toContain("transport ref moved");
+    }
+    if (["existing run", "ambiguous runs"].includes(failure)) {
       expect(resumed.stderr).toContain("already has workflow runs");
-    if (failure === "incomplete inventory")
+    }
+    if (failure === "incomplete inventory") {
       expect(resumed.stderr).toContain("inventory omitted its next page");
-    if (failure === "revoked operator")
+    }
+    if (failure === "revoked operator") {
       expect(resumed.stderr).toContain("no longer has repository qualification authority");
-    if (failure === "revoked signer")
+    }
+    if (failure === "revoked signer") {
       expect(resumed.stderr).toContain("lacks maintain/admin access");
+    }
     expect(readFileSync(f.requestPath(), "utf8")).toBe(before);
     expect(runGit(f.origin, ["for-each-ref", "--format=%(refname) %(objectname)"])).toBe(
       refsBefore,
