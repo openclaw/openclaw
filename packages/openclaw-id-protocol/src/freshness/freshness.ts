@@ -43,10 +43,18 @@ export type FreshnessState = {
    * Independent high-water facts from verified snapshots: newest (seq, issued_at) among
    * those signed by `k_gw`, and the highest binding_seq of any. This unsigned marker only
    * refuses replays/retired bindings; it never supplies membership or protocols for
-   * authorization. A marker without `k_gw` (stored before per-key order) counts as the
-   * current K_gw's.
+   * authorization. `k_gw_binding_seq` is the R-signed binding the `k_gw` snapshot verified
+   * under: only a snapshot verified under a higher binding moves the order to another key
+   * (the snapshot's own binding_seq is K_gw's claim and could be inflated). A marker without
+   * `k_gw` (stored before per-key order) counts as the current K_gw's.
    */
-  snapshot: { seq: number; issued_at: number; binding_seq: number; k_gw?: Ed25519PublicKey } | null;
+  snapshot: {
+    seq: number;
+    issued_at: number;
+    binding_seq: number;
+    k_gw?: Ed25519PublicKey;
+    k_gw_binding_seq?: number;
+  } | null;
 };
 
 /** Untrusted evidence as served by Discovery (null: not served, or the call failed). */
@@ -111,6 +119,7 @@ export async function assessFreshness(
           issued_at: storable.issued_at,
           binding_seq: storable.binding_seq,
           k_gw: binding.k_gw,
+          k_gw_binding_seq: binding.binding_seq,
         }
       : null,
   });
@@ -210,16 +219,20 @@ export function mergeFreshnessState(
   if (!next) {
     return { claw_id: candidate.claw_id, snapshot: before };
   }
-  // Order is kept per K_gw; a new K_gw's snapshot restarts it, but only for a newer binding.
+  // Order is kept per K_gw; a new K_gw's snapshot restarts it only when it verified under a
+  // newer R-signed binding than the stored key's.
   const sameKey = (before.k_gw ?? next.k_gw) === next.k_gw;
   const newest = sameKey
     ? isOlderSnapshot(before, next)
       ? next
       : before
-    : next.binding_seq > before.binding_seq
+    : (next.k_gw_binding_seq ?? 0) > (before.k_gw_binding_seq ?? 0)
       ? next
       : before;
   const k_gw = sameKey ? (next.k_gw ?? before.k_gw) : newest.k_gw;
+  const k_gw_binding_seq = sameKey
+    ? Math.max(before.k_gw_binding_seq ?? 0, next.k_gw_binding_seq ?? 0)
+    : newest.k_gw_binding_seq;
   return {
     claw_id: candidate.claw_id,
     snapshot: {
@@ -227,6 +240,7 @@ export function mergeFreshnessState(
       issued_at: newest.issued_at,
       binding_seq: Math.max(before.binding_seq, next.binding_seq),
       ...(k_gw ? { k_gw } : {}),
+      ...(k_gw_binding_seq ? { k_gw_binding_seq } : {}),
     },
   };
 }

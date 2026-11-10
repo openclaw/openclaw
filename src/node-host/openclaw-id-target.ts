@@ -82,7 +82,8 @@ export function parseSavedNodeHostOpenClawIdTarget(value: unknown): SavedNodeHos
         !isNonNegativeInteger(marker.seq) ||
         !isNonNegativeInteger(marker.issued_at) ||
         !isNonNegativeInteger(marker.binding_seq) ||
-        (marker.k_gw !== undefined && !isEd25519PublicKey(marker.k_gw))
+        (marker.k_gw !== undefined && !isEd25519PublicKey(marker.k_gw)) ||
+        (marker.k_gw_binding_seq !== undefined && !isNonNegativeInteger(marker.k_gw_binding_seq))
       ) {
         throw new Error("invalid OpenClaw ID node freshness state");
       }
@@ -93,6 +94,9 @@ export function parseSavedNodeHostOpenClawIdTarget(value: unknown): SavedNodeHos
           issued_at: marker.issued_at,
           binding_seq: marker.binding_seq,
           ...(marker.k_gw !== undefined ? { k_gw: marker.k_gw } : {}),
+          ...(marker.k_gw_binding_seq !== undefined
+            ? { k_gw_binding_seq: marker.k_gw_binding_seq }
+            : {}),
         },
       };
     }
