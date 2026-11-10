@@ -185,6 +185,9 @@ struct OnboardingViewSmokeTests {
 
     @Test func `discovered gateway summary uses localized runtime strings`() {
         #expect(
+            OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 0) ==
+                "Find gateways on your network.")
+        #expect(
             OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 1) ==
                 "1 gateway found on your network — click for connection instructions.")
         #expect(

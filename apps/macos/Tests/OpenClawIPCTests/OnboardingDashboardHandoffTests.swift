@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import OpenClawKit
+import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -116,6 +118,48 @@ private func transientVerificationErrorResponse(id: String) -> Data {
 @Suite(.serialized)
 @MainActor
 struct OnboardingDashboardHandoffTests {
+    @Test(
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil),
+        arguments: [false, true])
+    func `browser completion does not offer primary Gateway actions`(browserCompletion: Bool) async throws {
+        let output = try OnboardingRenderTests.outputDirectory()
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        state.isPaused = true
+        let view = OnboardingView(state: state)
+        if browserCompletion { view.savedBrowserGatewayName = "Fixture browser Gateway" }
+        _ = AppKitTestSupport.application
+        let hosting = NSHostingView(rootView: view.readyPage()
+            .frame(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight)
+            .environment(\.locale, Locale(identifier: "en_US")))
+        hosting.setFrameSize(hosting.fittingSize)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        hosting.layoutSubtreeIfNeeded()
+        let elements = try await AppKitTestSupport.accessibilityElements(in: hosting)
+        let names = elements.flatMap { element -> [String] in
+            let value: Any? = element.accessibilityValue?()
+            return [element.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: element), value as? String]
+                .compactMap { $0 }
+        }
+        try #require(names.contains("You’re all set!"))
+        #expect(names.contains("Gateway added") == browserCompletion)
+        #expect(names.contains("Open Dashboard → Settings → Channels") == !browserCompletion)
+        #expect(names.contains("Open Dashboard → Skills") == !browserCompletion)
+        if browserCompletion {
+            try OnboardingRenderTests.capturePage(
+                view.readyPage(),
+                name: "done-browser",
+                label: "Native page · browser profile fixture · navigation omitted",
+                output: output)
+        }
+    }
+
     @Test func `saving a primary route clears browser completion and restores AI verification`() {
         let state = AppState(preview: true)
         state.connectionMode = .remote

@@ -105,9 +105,16 @@ chat approval are separate stages: the six-digit node code does not grant chat
 or Gateway administration. Existing address/discovery routes retain their own
 authentication instead of displaying a fabricated OpenClaw ID ceremony.
 
-`OnboardingRenderTests` captures the real page views without launching the app.
-`OnboardingOpenClawIDRenderTests` renders explicitly labeled synthetic service
-states, not successful enrollment evidence. Both are opt-in through
+`OnboardingRenderTests` captures the real page views without launching the app,
+using the default 630×752-point content rectangle and production mascot metrics.
+The 535-point page area vertically centers shorter pages in production; the
+resulting title gaps are not compressed for screenshots. Navigation is omitted
+rather than presenting an unverified connection as complete. The evidence label
+sits below the content rectangle.
+`OnboardingOpenClawIDRenderTests` captures the actual 574-point-wide sheet view
+at its intrinsic height, including Close and without an onboarding mascot. Its
+synthetic service states and missing dependencies are labeled explicitly; they
+are not successful enrollment evidence. Both are opt-in through
 `OPENCLAW_ONBOARDING_RENDER_DIR` and require `CFFIXED_USER_HOME` plus an unreadable
 `OPENCLAW_ONBOARDING_DENIED_FILE` canary. Use the native render sandbox
 (`scripts/macos-health-render.sb`) with private home/state/output directories;

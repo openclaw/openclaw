@@ -2100,6 +2100,7 @@
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift","kind":"ui-call-concatenated","surface":"apple","id":"native.apple.6ecd5476953df13f","source":"Runs the Gateway as a background service so channels and automations keep working after you quit OpenClaw."},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.5db406d8825be33c","source":"%lld gateways found on your network — click for connection instructions."},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.fb1ad26ac8e739a2","source":"1 gateway found on your network — click for connection instructions."},
+    {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.744d2f81913eca91","source":"Find gateways on your network."},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.563bcd613a32ec5c","source":"Retry discovery (Bonjour + Tailscale DNS-SD)."},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.74f27d64ff20b370","source":"Ask, create, and automate"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.78a48529a7212df8","source":"Chat wherever you like"},
