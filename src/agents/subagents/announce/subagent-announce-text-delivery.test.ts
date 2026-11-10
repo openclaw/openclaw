@@ -1,8 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement as beforeSettled } from "../../../../test/helpers/promise.js";
 import { chunkText } from "../../../auto-reply/chunk.js";
+import { createTestInstance } from "../../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import * as transcript from "../../../sessions/confirmed-visible-message.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   createOutboundTestPlugin,
   createTestRegistry,
@@ -38,7 +41,12 @@ function setup(outcome: "rejected" | "aborted" | "sent" = "sent") {
   });
   const plugin = createOutboundTestPlugin({
     id: "discord",
-    outbound: { deliveryMode: "direct", chunker: chunkText, textChunkLimit: 2_000, sendText },
+    outbound: {
+      deliveryMode: "direct",
+      chunker: chunkText,
+      textChunkLimit: 2_000,
+      sendText: createTestInstance("discord").wrap(sendText),
+    },
   });
   setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
   const deliver = () =>
@@ -102,6 +110,21 @@ it.each(["history", "report"] as const)("keeps delivery after %s rejects", async
   }
 
   await expect(fixture.deliver()).resolves.toMatchObject({ delivered: true, path: "direct" });
+  expect(fixture.received.join(" ")).toBe(content);
+  expect(fixture.onDeliveryResult).toHaveBeenCalledOnce();
+});
+
+it("delivers completion after the producing plugin scope closes", async () => {
+  const fixture = setup();
+  const scope = new PluginInvocationScope(createTestRegistry(), []);
+  const resume = createDeferredCore();
+  const delivery = scope.run(async () => {
+    await resume.promise;
+    return fixture.deliver();
+  });
+  scope.release();
+  resume.resolve();
+  await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
   expect(fixture.received.join(" ")).toBe(content);
   expect(fixture.onDeliveryResult).toHaveBeenCalledOnce();
 });
