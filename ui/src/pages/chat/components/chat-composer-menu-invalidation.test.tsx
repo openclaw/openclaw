@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { createApplicationConfigCapability } from "../../../app/config.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
@@ -11,6 +12,64 @@ import {
 } from "./chat-composer-menu.test-support.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuProps } from "./chat-composer-plus-menu.types.ts";
+
+it.each([
+  ["standard", "camera media file separator open-skills open-connectors toggle-web-search"],
+  ["images-only", "camera photo separator open-skills open-connectors toggle-web-search"],
+  ["native", "file separator open-skills open-connectors toggle-web-search"],
+  ["attachments-only", "camera media file"],
+  ["root-toggle", "camera media file separator root-toggle"],
+  ["uploads-disabled", "open-skills open-connectors toggle-web-search"],
+])(
+  "puts attachments first and separates only populated root groups: %s",
+  async (variant, order) => {
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    if (variant === "native") {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue("iPhone");
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+      );
+    }
+    const uploadConfig = createApplicationConfigCapability({ resourceBasePath: "" });
+    vi.spyOn(uploadConfig, "current", "get").mockReturnValue({
+      ...uploadConfig.current,
+      uploadsEnabled: variant !== "uploads-disabled",
+    });
+    const capabilities = variant !== "attachments-only" && variant !== "root-toggle";
+    const mounted = mountSolid(() => (
+      <ChatComposerPlusMenu
+        menu={makeMenu({
+          open: true,
+          attachments: { uploadConfig, imagesOnly: variant === "images-only" },
+          capabilityMenu: capabilities ? makeCapabilities() : undefined,
+          rootToggles:
+            variant === "root-toggle"
+              ? [
+                  {
+                    value: "root-toggle",
+                    label: "Root toggle",
+                    checked: false,
+                    disabled: false,
+                    onChange: vi.fn(),
+                  },
+                ]
+              : undefined,
+        })}
+      />
+    ));
+    const panel = mounted.container.querySelector(".agent-chat__capability-menu-panel")!;
+    await waitForSolid(() =>
+      expect(panel.textContent).toContain(capabilities ? "Skills" : "Camera"),
+    );
+    expect(
+      [...panel.querySelectorAll('[role^="menuitem"], [role="separator"]')].map(
+        (node) => node.getAttribute("data-value") ?? "separator",
+      ),
+    ).toEqual(order.split(" "));
+  },
+);
 
 it.each(["root", "skills", "connectors", "libraries", "library:missing"] as const)(
   "retains %s menu content on unrelated publications and admits in-place display changes",
