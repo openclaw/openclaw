@@ -18,6 +18,10 @@ async function capturePermissionPicker(
   artifacts: string,
   stage: string,
 ) {
+  // The empty mobile chat composer reveals its toolbar when editing starts.
+  if (!(await trigger.isVisible())) {
+    await page.locator(".agent-chat__composer-combobox textarea").click();
+  }
   await trigger.click();
   const menu = page.locator(".chat-controls__permission-menu:visible");
   const defaultOption = menu.locator('[data-chat-permission-option="default"]');
@@ -31,6 +35,33 @@ async function capturePermissionPicker(
   await writeFile(`${artifacts}/${stage}.png`, frame.png);
   await writeFile(`${artifacts}/${stage}-menu.png`, frame.elements[0]!.png);
   await writeFile(`${artifacts}/${stage}-trigger.png`, frame.elements[1]!.png);
+  const alignment = await menu.locator("[data-chat-permission-option]").evaluateAll((rows) =>
+    rows.map((row) => {
+      const bounds = row.getBoundingClientRect();
+      const center = bounds.y + bounds.height / 2;
+      return {
+        mode: row.getAttribute("data-chat-permission-option"),
+        offsets: [
+          ...row.querySelectorAll(
+            ":scope > .oc-menu-item__icon, :scope > .oc-menu-item__details, .chat-controls__permission-option-icon svg, .chat-controls__permission-option-state svg, .btn__spinner",
+          ),
+        ]
+          .filter((slot) => slot.getBoundingClientRect().height > 0)
+          .map((slot) => {
+            const rect = slot.getBoundingClientRect();
+            return Math.abs(rect.y + rect.height / 2 - center);
+          }),
+      };
+    }),
+  );
+  await writeFile(`${artifacts}/${stage}-alignment.json`, JSON.stringify(alignment, null, 2));
+  for (const row of alignment) {
+    for (const offset of row.offsets) {
+      expect
+        .soft(offset, `${stage}: ${row.mode} icon centers in its whole row`)
+        .toBeLessThanOrEqual(1);
+    }
+  }
   const label = (await trigger.textContent())?.trim();
   await defaultOption.click();
   return label;
@@ -38,13 +69,14 @@ async function capturePermissionPicker(
 
 suite.define(() => {
   it.each([
-    { scope: "operator.admin", mode: "full", label: "Full access" },
-    { scope: "operator.write", mode: "workspace", label: "Auto-review" },
+    { scope: "operator.admin", mode: "full", label: "Full access", width: 1280 },
+    { scope: "operator.write", mode: "workspace", label: "Auto-review", width: 320 },
   ])(
     "shows the attended default for $scope without overriding existing sessions or the request",
-    async ({ scope, mode, label }) => {
+    async ({ scope, mode, label, width }) => {
       const artifacts = createControlUiE2eArtifactDir(`new-session-permission-default-${scope}`);
-      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const options = { ...createControlUiE2eContextOptions(), viewport: { width, height: 800 } };
+      await suite.withPage(options, async ({ page }) => {
         const session = {
           key: "agent:main:existing-permission",
           kind: "direct",

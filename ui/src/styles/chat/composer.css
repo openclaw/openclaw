@@ -2172,11 +2172,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   padding: 8px;
 }
 
-.chat-controls__permission-option > .oc-menu-item__icon,
-.chat-controls__permission-option > .oc-menu-item__details {
-  align-self: flex-start;
-}
-
 .chat-controls__permission-option > .oc-menu-item__check {
   display: none;
 }
