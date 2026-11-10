@@ -126,17 +126,24 @@ it("keeps a cleanup failure visible, apart from an expected cancellation", async
   await expect(runSkillExperienceReview(candidate)).rejects.toMatchObject({ name: "AbortError" });
 });
 
-it("retains the host's bounded fence diagnostic through cancelled fork settlement", async () => {
-  const diagnostic = {
-    name: "SessionTranscriptReadFenceError",
-    message: "Completed-turn transcript anchor changed (generation)",
-  };
-  const error = new Error("admitted run authority is no longer active", {
-    cause: diagnostic,
-  });
-  outcome = { runId: "", ok: false, cancelled: true, error };
-  await expect(runSkillExperienceReview(candidate)).rejects.toBe(diagnostic);
-});
+it.each(["fence", "mixed", "wrapped"] as const)(
+  "retains the host's fence or independent cleanup failure (%s)",
+  async (kind) => {
+    const diagnostic = {
+      name: "SessionTranscriptReadFenceError",
+      message: "Completed-turn transcript anchor changed (generation)",
+    };
+    const failure =
+      kind === "fence"
+        ? diagnostic
+        : new AggregateError([diagnostic, new Error("database close failed")], "read failed");
+    const error = kind === "mixed" ? failure : new Error("admitted run failed", { cause: failure });
+    outcome = { runId: "", ok: false, cancelled: kind === "fence", error };
+    await expect(runSkillExperienceReview(candidate)).rejects.toBe(
+      kind === "fence" ? diagnostic : error,
+    );
+  },
+);
 
 it.each(["off", "replaced", "refused"] as const)("runs nothing visible when %s", async (cause) => {
   if (cause === "off") {

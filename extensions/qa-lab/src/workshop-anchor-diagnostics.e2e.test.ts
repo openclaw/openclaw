@@ -6,11 +6,13 @@ import path from "node:path";
 import { json } from "node:stream/consumers";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
+import { closeQaHttpServer, dispatchQaHttpRequest } from "./bus-server.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import {
   extractLastUserText,
   normalizeResponsesInput,
 } from "./providers/mock-openai/mock-openai-input.js";
+import { writeMockOpenAiResponsesHttp } from "./providers/mock-openai/mock-openai-responses-http.js";
 import { attachQaMockResponsesWebSocketServer } from "./providers/mock-openai/mock-openai-responses-websocket.js";
 import { MockResponseStream } from "./providers/mock-openai/mock-openai-stream.js";
 
@@ -58,19 +60,17 @@ it(
       };
     };
     const server = createServer((request, response) => {
-      void (async () => {
+      dispatchQaHttpRequest(response, async () => {
         if (request.method !== "POST" || request.url !== "/v1/responses") {
           response.writeHead(404).end();
           return;
         }
-        const { events } = await dispatch({
-          body: (await json(request)) as Record<string, unknown>,
-        });
-        response.writeHead(200, { "Content-Type": "text/event-stream" });
-        response.end(
-          events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n",
+        await writeMockOpenAiResponsesHttp(
+          response,
+          true,
+          await dispatch({ body: (await json(request)) as Record<string, unknown> }),
         );
-      })().catch(() => response.writeHead(500).end("synthetic provider failure"));
+      });
     });
     const sockets = attachQaMockResponsesWebSocketServer({ server, dispatch });
     await once(server.listen(0, "127.0.0.1"), "listening");
@@ -355,19 +355,8 @@ it(
       },
       () => releaseBackground.resolve(),
       () => stopQaGatewayFixture(owner),
-      async () => {
-        await sockets.close();
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => {
-            if (error) {
-              reject(error);
-            } else {
-              resolve();
-            }
-          });
-        });
-      },
+      () => sockets.close(),
+      () => closeQaHttpServer(server),
     );
   },
 );
