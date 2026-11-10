@@ -491,6 +491,14 @@ this exact-head SDK report alongside push coverage and use the admitted runner
 backend. They use the full validation tier; the main validation tier is reserved
 for ordinary same-revision manual or scheduled validation.
 
+### Android Store routing
+
+The standalone Android Store Release job selects `boat-xlarge` when
+`OPENCLAW_CI_RUNNER_BACKEND=boat`. Its 16-vCPU, 32-GiB shape applies to first
+attempts and retries. Other backend modes retain
+`blacksmith-8vcpu-ubuntu-2404`. Scheduled and manual releases keep their existing
+canonical-main admission, protected environments, commands, and 120-minute deadline.
+
 ### Boat build qualification
 
 Live Media Runner Image and Sandbox Common Smoke are prepared to use
