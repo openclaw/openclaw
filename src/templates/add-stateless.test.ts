@@ -37,7 +37,6 @@ import { workspaceIdentity } from "./add-checkpoint.js";
 import {
   applyTemplateAddPlanStateless,
   type StatelessTemplateAddOptions,
-  type TemplateConfiguredAgentCheckpoint,
 } from "./add-stateless.js";
 import * as bootstrapInstall from "./bootstrap.js";
 import { createTemplateCronGateway } from "./cron-gateway.js";
@@ -51,6 +50,10 @@ import { readTemplateManifestFile } from "./reader.js";
 import { parseTemplateOpenClawProfile } from "./schema.js";
 import type { TemplateManifest, TemplateReadResult } from "./types.js";
 import * as workspaceFiles from "./workspace.js";
+
+type TemplateConfiguredAgentCheckpoint = Parameters<
+  NonNullable<StatelessTemplateAddOptions["onAgentConfigured"]>
+>[0];
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => clearRuntimeConfigSnapshot());
