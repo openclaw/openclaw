@@ -443,6 +443,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/transcript-payload.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["clearSessionTranscriptActiveFacts"],
+        evidence:
+          "Cold navigation retention calls this only from session-cold-storage-worker.ts. Exact-row rewrites run in session-message-rewrite.worker.ts, media maintenance, or the native message/correction adapters whose callers require !isMainThread. createTranscriptPayloadUpdater is consumed only by updateSqliteTranscriptEventJsonInTransaction, called by Doctor transcript-label repair and transcript-directives migration. These invalidation callers have no plugin-SDK value export; other payload operations retain their mixed classification.",
+      },
+    ],
+  ],
+  [
     "src/agents/bash-durable-process-store.ts",
     [
       {
@@ -1882,7 +1893,7 @@ const reviewedOperations = new Map([
           "hasSessionStateWatchersInDatabase",
           "isSessionStateUpstreamCurrentInDatabase",
         ],
-        evidence: "session-state-events.worker.ts and session-upstream-links.worker.ts",
+        evidence: "session-state-events-record.worker.ts and session-upstream-links.worker.ts",
       },
       {
         tier: "W",
@@ -1898,13 +1909,13 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
         evidence:
-          "Watch commands and event recording execute only in session-state-events.worker.ts and subagent-registry.store.worker.ts",
+          "Watch/record workers and subagent-registry.store.worker.ts execute these queries",
       },
       {
         tier: "W",
         operations: ["recordSessionStateEventsInDatabase"],
         evidence:
-          "All producers await sessionState.record; the only direct production kernel callers are session-state-events.worker.ts and subagent-registry.store.worker.ts",
+          "sessionState.record dispatches to session-state-events-record.worker.ts; subagent-registry.store.worker.ts is the other direct caller",
       },
     ],
   ],
@@ -3532,6 +3543,7 @@ const workerModules = new Set([
   "src/state/user-profile-read.worker.ts", // Shared-state read registry owns catalog identity and channel identity reads.
   "src/state/user-profile-enterprise-github-identity.ts", // Profile read-worker dispatch and profile writer merge/commit projections own these SQL readers; host attribution uses the async read command.
   "src/state/user-profile-catalog-identity.read.ts", // Only readUserProfileReadCommand in user-profile-read.worker.ts executes this reader.
+  "src/state/user-profile-openclaw-id.read.ts", // Only openclaw-state-read-operation-registry.ts imports this worker operation table.
   "src/gateway/github-personal-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
   "src/gateway/github-publication-store.worker.ts", // Shared-state publication request, mutation, and read workers only.
   "src/state/user-github-connections.worker.ts", // openclaw-state-worker-registry installs its operation table; host imports are type-only.

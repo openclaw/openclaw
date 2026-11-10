@@ -482,6 +482,7 @@ test("retained preparation preserves rotated generations only through exact immu
   db.exec(
     "INSERT INTO session_windows VALUES ('rotated-session','agent:controller-test-agent:existing'); INSERT INTO transcript_rewrite_watermarks VALUES ('rotated-session','rotated-generation');",
   );
+  db.exec("UPDATE transcript_rewrite_watermarks SET generation='rewritten' WHERE session_id='synthetic-generation'");
   db.close();
   assert.deepEqual(success(f, "check", snapshot), result);
   const corrupt = new DatabaseSync(f.agentDatabasePath);

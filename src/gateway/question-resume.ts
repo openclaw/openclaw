@@ -9,18 +9,66 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
+import type { ResumableQuestion } from "./question-manager.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 const log = createSubsystemLogger("gateway/questions");
+type AskingSession = { agentId: string; sessionKey: string; sessionId: string };
+
+/**
+ * Sessions whose restart marker carries a pending question, added after live owners so
+ * their resume and parked facts win. Graceful shutdown writes them; a crash loses them.
+ */
+export function questionSessions(questions: readonly ResumableQuestion[] = []) {
+  return questions.flatMap(({ record, sessionId }) =>
+    record.sessionKey
+      ? [{ sessionKey: record.sessionKey, agentId: record.agentId, sessionId, needsResume: false }]
+      : [],
+  );
+}
+
+/**
+ * The pending questions a session generation's restart marker carries. Questions from
+ * child sessions never match their root's key: children do not resume independently.
+ */
+export function markerQuestions(
+  questions: readonly ResumableQuestion[] | undefined,
+  sessionKey: string,
+  sessionId: string,
+): QuestionRecord[] {
+  return (questions ?? []).flatMap(({ record, sessionId: asked }) =>
+    record.sessionKey === sessionKey && asked === sessionId ? [record] : [],
+  );
+}
+
+/** Restores a restart marker's questions; true when any now waits to continue the session. */
+export function restoreMarkerQuestions(
+  context: GatewayRequestContext,
+  session: AskingSession,
+  marker: { questions?: QuestionRecord[] },
+): boolean {
+  const manager = context.questionManager;
+  let restored = false;
+  for (const record of marker.questions ?? []) {
+    const continueSession = (outcome: QuestionRecord) => {
+      void resumeRestoredQuestion(context, session, outcome);
+    };
+    if (!manager?.restore({ record, sessionId: session.sessionId }, continueSession)) {
+      continue;
+    }
+    restored = true;
+  }
+  return restored;
+}
 
 /**
  * Admits one turn in the asking session, in the same sequence restart resume uses and
  * under the session's recorded principal. A failure leaves a visible transcript notice.
  */
-export async function resumeRestoredQuestion(
+async function resumeRestoredQuestion(
   context: GatewayRequestContext,
-  target: { agentId: string; sessionKey: string; sessionId: string },
+  target: AskingSession,
   record: QuestionRecord,
 ): Promise<void> {
   const { agentId, sessionKey, sessionId } = target;

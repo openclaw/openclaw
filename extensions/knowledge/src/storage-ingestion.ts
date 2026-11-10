@@ -202,9 +202,6 @@ export class StorageIngestion extends StorageLifecycle {
       ) {
         throw new Error("Source hash must match retained evidence on a batch record.");
       }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during batch validation.");
-      }
       return {
         ...parts[0]!,
         artifacts,
@@ -279,6 +276,11 @@ export class StorageIngestion extends StorageLifecycle {
     let receipt: Receipt | null = null;
     if (prior) {
       // A replay finds its own published claims as duplicates; keys map them back.
+      if (inserts.length) {
+        throw new Error(
+          "Request ID already belongs to a different payload. Use the original payload for retries.",
+        );
+      }
       receipt = this.resume(access, requestId);
       for (const item of receipt.items ?? []) {
         const n = Number(item.key.slice(1));

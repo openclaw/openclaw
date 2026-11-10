@@ -47,7 +47,7 @@ import { matchesControlUiBootstrapConfigPath } from "./control-ui-bootstrap-cont
 import { prepareControlUiBootstrapConfig } from "./control-ui-bootstrap.js";
 import {
   isControlUiRootPublicAsset,
-  isControlUiVersionedPublicAsset,
+  isImmutableControlUiPublicAsset,
   parseControlUiResourcePath,
 } from "./control-ui-contract.js";
 import { applyControlUiSecurityHeaders } from "./control-ui-csp.js";
@@ -55,7 +55,6 @@ import { startControlUiDocumentDiagnostics } from "./control-ui-document-diagnos
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
-  respondPlainText,
 } from "./control-ui-http-utils.js";
 import { serveControlUiIndexHtml } from "./control-ui-index.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
@@ -67,6 +66,7 @@ import {
   resolveControlUiAssetEncodings,
   resolveControlUiHtmlEncoding,
   respondControlUiStaticAsset,
+  respondControlUiAssetsUnavailable,
   respondControlUiNotAcceptable,
   respondHeadForControlUiFile,
 } from "./control-ui-static.js";
@@ -90,8 +90,6 @@ import { readControlUiRootAsset, type ControlUiRootState } from "./server-contro
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
-const CONTROL_UI_ASSETS_MISSING_MESSAGE =
-  "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 const loadAvatarThumbnail = createLazyRuntimeModule(
   () => import("./assistant-avatar-thumbnail.runtime.js"),
 );
@@ -105,6 +103,8 @@ type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
   /** Protected session-entry restores the canonical route before any app script runs. */
   sessionEntryPath?: string;
   isSessionEntryCurrent?: () => boolean;
+  /** Startup owns the asset-free recovery document; static serving detects missing bytes. */
+  onUnavailableDocument?: () => boolean;
 };
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
@@ -112,22 +112,6 @@ const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.setHeader("Cache-Control", "no-cache");
   sendJsonResponse(res, status, body);
-}
-
-function respondControlUiAssetsUnavailable(res: ServerResponse, root?: ControlUiRootState) {
-  const message =
-    root?.kind === "preparing"
-      ? "Control UI assets are being prepared. Try again shortly."
-      : root?.kind === "failed"
-        ? "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`."
-        : root?.kind === "invalid" && root.path
-          ? `Control UI assets not found at ${root.path}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`
-          : CONTROL_UI_ASSETS_MISSING_MESSAGE;
-  if (root?.kind === "preparing") {
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Retry-After", "1");
-  }
-  respondPlainText(res, 503, message);
 }
 
 function isValidAgentPathSegment(agentId: string): boolean {
@@ -405,7 +389,8 @@ export async function handleControlUiAssistantMediaRequest(
     const stream = byteStream;
     await publishResponse(() => {
       media.assertSourceCurrent();
-      if (media.outsideRoots && mediaKind === "image") {
+      // Allowed roots authorize file reads, not active document content.
+      if (mediaKind === "image") {
         applyHttpImageContentSecurityPolicy(res);
       }
       res.setHeader("Content-Type", contentType);
@@ -629,7 +614,9 @@ export async function handleControlUiHttpRequest(
 
   const rootState = opts?.root;
   if (!rootState || (rootState.kind !== "bundled" && rootState.kind !== "resolved")) {
-    respondControlUiAssetsUnavailable(res, rootState);
+    if (!opts?.onUnavailableDocument?.()) {
+      respondControlUiAssetsUnavailable(res, rootState);
+    }
     return true;
   }
 
@@ -643,7 +630,9 @@ export async function handleControlUiHttpRequest(
       throw error;
     }));
   if (!rootReal) {
-    respondControlUiAssetsUnavailable(res);
+    if (!opts?.onUnavailableDocument?.()) {
+      respondControlUiAssetsUnavailable(res);
+    }
     return true;
   }
 
@@ -712,8 +701,7 @@ export async function handleControlUiHttpRequest(
     fingerprintedAsset ||
     Boolean(
       publicAssetBuildId &&
-      url.searchParams.get("v") === publicAssetBuildId &&
-      isControlUiVersionedPublicAsset(fileRel),
+      isImmutableControlUiPublicAsset(fileRel, url.searchParams.get("v"), publicAssetBuildId),
     );
   const readBody =
     req.method !== "HEAD" &&
@@ -786,7 +774,7 @@ export async function handleControlUiHttpRequest(
         uiPath,
         basePath,
         terminalEnabled,
-        opts?.config?.gateway?.controlUi?.environment,
+        opts?.getRuntimeConfig?.() ?? opts?.config,
         publicAssetBuildId,
         opts?.sessionEntryPath,
         () =>
@@ -808,7 +796,9 @@ export async function handleControlUiHttpRequest(
     }
     asset = await readControlUiRootAsset(rootState, fileRel, true, encodings);
   }
-  respondControlUiNotFound(res);
+  if (!opts?.onUnavailableDocument?.()) {
+    respondControlUiNotFound(res);
+  }
   return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,3 +1,85 @@
+import { isTestFileTarget } from "./changed-path-facts.mjs";
+
+export const PG16_GATEWAY_SMOKE_RESERVATION_SECONDS = 150;
+
+const DATABASE_ENGINE_TARGET = "src/infra/database-engine";
+const postgresConformanceTargets = [
+  "extensions/workboard",
+  "extensions/logbook/src/postgres-store.test.ts",
+  "extensions/logbook/src/store-transport.postgres.test.ts",
+  "extensions/clickclack/src/discussions/revoked-channel-store.postgres.test.ts",
+  "extensions/imessage/src/monitor/recovery-cursor.postgres.test.ts",
+  "extensions/matrix/src/matrix/account-state.postgres.test.ts",
+  "extensions/team-reports/src/postgres-store.test.ts",
+  "extensions/team-reports/src/store-recovery.postgres.test.ts",
+  "src/infra/postgres-sync",
+  DATABASE_ENGINE_TARGET,
+  "src/agents/agent-deletion-recovery-hold.postgres.test.ts",
+  "src/agents/worktrees/capacity.postgres.test.ts",
+  "src/commands/database-prepare-state.postgres.test.ts",
+  "src/commands/doctor/cron/legacy-repair.postgres.test.ts",
+  "src/commands/doctor-database-diagnostics.postgres.test.ts",
+  "src/commands/doctor/auth-alias-migration.postgres.test.ts",
+  "src/commands/startup-client-credentials.postgres.test.ts",
+  "src/config/sessions/session-cold-storage-selection.postgres.test.ts",
+  "src/config/sessions/session-accessor.sqlite-lifecycle-artifacts.postgres.test.ts",
+  "src/config/sessions/session-accessor.sqlite-maintenance-age.postgres.test.ts",
+  "src/config/sessions/session-accessor.sqlite-read-hold.postgres.test.ts",
+  "src/config/sessions/session-turn-resident.postgres.test.ts",
+  "src/config/sessions/session-turn-commit.postgres.test.ts",
+  "src/infra/client-credential-migration.postgres.test.ts",
+  "src/infra/client-credential-startup.gateway.postgres.test.ts",
+  "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
+  "src/infra/gateway-lock-recovery.postgres.test.ts",
+  "src/infra/exec-approvals-native.test.ts",
+  "src/infra/client-credential-update.test.ts",
+  "src/infra/update-candidate-state.postgres.test.ts",
+  "src/infra/update-managed-service-handoff-engine.test.ts",
+  "src/snapshot/postgres-generation.postgres.test.ts",
+  "src/state/openclaw-state-db.postgres.test.ts",
+  "src/state/openclaw-state-db-open.postgres.test.ts",
+  "src/state/openclaw-agent-active-event-facts-migration.postgres.test.ts",
+  "src/state/openclaw-agent-creation-operations-migration.postgres.test.ts",
+  "src/state/openclaw-agent-db.postgres.test.ts",
+  "src/state/openclaw-agent-doctor-media.postgres.test.ts",
+  "src/state/openclaw-agent-db-engine.postgres.test.ts",
+  "src/talk/client-voice-session-entry.postgres.test.ts",
+  "extensions/memory-core/src/memory/manager-embedding-cache.postgres.test.ts",
+  "extensions/memory-core/src/memory/manager-embedding-cache-rebuild.postgres.test.ts",
+  "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts",
+  "extensions/memory-core/src/memory/manager-duplicate-chunks.postgres.test.ts",
+  "extensions/memory-core/src/memory/manager-publication.postgres.test.ts",
+  "extensions/memory-core/src/memory/manager-search.postgres.test.ts",
+  "extensions/memory-core/src/tools.postgres.test.ts",
+  "extensions/memory-core/src/standing-intents.postgres.test.ts",
+  "extensions/memory-core/src/memory-forget.postgres.test.ts",
+  "src/gateway/server-database-engine.postgres.test.ts",
+  "src/gateway/server-handoff-sentinel.socket.postgres.test.ts",
+  "src/transcripts/meeting-chronology.postgres.test.ts",
+] as const;
+
+/** Preserve inventory order while the runner owns filesystem discovery. */
+export function resolvePostgresConformanceTargets(
+  databaseEngineTests: readonly string[],
+): string[] {
+  return postgresConformanceTargets.flatMap((target) =>
+    target === DATABASE_ENGINE_TARGET ? databaseEngineTests : [target],
+  );
+}
+
+/** Changed paths include deleted tests, so ownership must not depend on existence. */
+export function isPostgresConformanceTestTarget(file: string): boolean {
+  return (
+    isTestFileTarget(file) &&
+    postgresConformanceTargets.some((target) =>
+      isTestFileTarget(target)
+        ? file === target
+        : file.startsWith(`${target}/`) &&
+          (target !== DATABASE_ENGINE_TARGET || file.endsWith(".test.ts")),
+    )
+  );
+}
+
 type PostgresConformanceTimings = {
   workers: number;
   preparationSeconds: { base: number; runtime: number };
@@ -62,7 +144,13 @@ export function assignPostgresConformanceShards(
   count: number,
   estimate: (targets: readonly string[]) => number,
 ): string[][] {
-  const shards = Array.from({ length: count }, () => ({ targets: new Array<string>(), weight: 0 }));
+  // PR row 1 also pays ~140s for the PG16 smoke, including worker preparation.
+  // Keep one deterministic plan for every caller, reserving service lifecycle headroom too.
+  const shards = Array.from({ length: count }, (_, index) => ({
+    targets: new Array<string>(),
+    overhead: index === 0 ? PG16_GATEWAY_SMOKE_RESERVATION_SECONDS : 0,
+    weight: 0,
+  }));
   const ordered = targets
     .map((target) => ({ target, weight: estimate([target]) }))
     .toSorted((a, b) => b.weight - a.weight || a.target.localeCompare(b.target));
@@ -75,7 +163,9 @@ export function assignPostgresConformanceShards(
     let bestTotal = Infinity;
     for (const shard of shards) {
       const next = estimate([...shard.targets, target]);
-      const candidate = shards.map((other) => (other === shard ? next : other.weight));
+      const candidate = shards.map(
+        (other) => other.overhead + (other === shard ? next : other.weight),
+      );
       const tail = Math.max(...candidate);
       const total = candidate.reduce((sum, weight) => sum + weight, 0);
       if (tail < bestTail || (tail === bestTail && total < bestTotal)) {

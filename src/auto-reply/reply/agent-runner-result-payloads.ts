@@ -44,6 +44,7 @@ import {
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { appendCyberAccessProgramNotice } from "./access-program-notice.js";
 import {
   buildSilentFallbackFailurePayload,
   hasSuccessfulSourceReplyDelivery,
@@ -485,6 +486,10 @@ export async function prepareReplyAgentPayloads(state: {
         previousActiveModel: fallbackTransition.previousState.activeModel,
       });
     }
+  }
+  // Silent finals drop notices, so leave the one-time claim for a visible reply.
+  if (!authoredSilence && !automationNoChange) {
+    fallbackNoticeText = appendCyberAccessProgramNotice(fallbackNoticeText, context, accounting);
   }
   const fallbackNoticePayloads: ReplyPayload[] = fallbackNoticeText
     ? [

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.11.1",
+  "version": "2026.11.2",
   "description": "OpenClaw ACP runtime backend with plugin-owned session and transport management.",
   "repository": {
     "type": "git",
@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.99.0",
+    "@agentclientprotocol/claude-agent-acp": "0.99.1",
     "@agentclientprotocol/codex-acp": "2.3.0",
     "@openclaw/fs-safe": "0.27.1",
     "acpx": "0.21.1",
@@ -45,10 +45,10 @@
       ]
     },
     "compat": {
-      "pluginApi": ">=2026.11.1"
+      "pluginApi": ">=2026.11.2"
     },
     "build": {
-      "openclawVersion": "2026.11.1"
+      "openclawVersion": "2026.11.2"
     },
     "release": {
       "publishToClawHub": true,

@@ -640,14 +640,13 @@ describe("cua-computer desktop frames", () => {
     },
   );
 
-  it("maps scroll and key through typed SDK enums", async () => {
+  it("dispatches text and key inputs", async () => {
     const { session, typeText, pressKey } = driver();
     const computer = await execution(session);
     await computer.send("type", { text: "hello" });
     await computer.send("key", { keys: "ctrl+enter" });
     expect(typeText).toHaveBeenCalledWith("hello", undefined);
     expect(pressKey).toHaveBeenCalledWith({ key: "enter", modifiers: ["ctrl"] }, undefined);
-    expect(ScrollDirection.Down).toBeTypeOf("number");
   });
 
   it("turns a direct SDK refusal into a typed computer error", async () => {

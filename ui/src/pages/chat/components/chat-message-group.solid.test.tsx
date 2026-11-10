@@ -19,7 +19,7 @@ import { buildLocalUserMessage } from "../user-message-content.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
-import { prepareGroupMessage } from "./chat-message-group-frame.ts";
+import { prepareGroupMessage, prepareMessageGroupFrame } from "./chat-message-group-frame.ts";
 import {
   ActivityGroup,
   MessageGroup,
@@ -248,6 +248,7 @@ it.each([false, true])(
         options={{
           streamOptions: { bubbleMode },
           workPreviews: new Map(),
+          partDependencies: (part) => [part],
           renderGroupOptions: () => ({
             bubbleMode,
             showReasoning: false,
@@ -291,6 +292,21 @@ it("does not give provider speech unframed answer actions", () => {
   expect(prepared.ownsActions).toBe(false);
   expect(prepared.actions?.replyTarget).toBeUndefined();
   expect(prepared.source.displayMarkdown).toBe(speech.content);
+});
+
+it("paints every right-side user turn with the viewer accent and only peers with identity hues", () => {
+  const profile = (id: string) => ({ id, name: id, identity: { type: "profile" as const, id } });
+  // [sender, viewer profile, peer]; without a viewer profile every user turn is the viewer's.
+  for (const [sender, userId, peer] of [
+    [profile("viewer"), "viewer", false],
+    [profile("peer"), "viewer", true],
+    [{ id: "pat@example.com" }, undefined, false],
+    [profile("viewer"), undefined, false],
+  ] as const) {
+    const group = createMessageGroup({ role: "user", content: "Hi" }, "user", { sender });
+    const frame = prepareMessageGroupFrame(group, { showReasoning: false, userId });
+    expect([frame.isPeerGroup, frame.senderHue !== null]).toEqual([peer, peer]);
+  }
 });
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
@@ -630,7 +646,7 @@ describe("owned message controls", () => {
       />
     ));
     const disclosure = view.container.querySelector<HTMLDetailsElement>(
-      ".chat-context-attachment",
+      "details.chat-context-attachment",
     )!;
     expect(disclosure).not.toBeNull();
     disclosure.open = true;

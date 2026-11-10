@@ -440,13 +440,20 @@ it.concurrent.for([
       "scripts/ci-static-step.sh": "workflow static-step script\n",
       "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
       "scripts/macos-native-runtime-artifact.mjs": "workflow native runtime artifact script\n",
+      ...readFiles([
+        "scripts/lib/process-memory.mts",
+        "packages/normalization-core/src/mountinfo-path.ts",
+      ]),
     };
     const nodeSetupScripts = readFiles(["scripts/lib/pnpm-lockfile-documents.mjs"]);
     const platformScripts = {
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
       "scripts/ci-xcodebuild.py": "workflow Xcode diagnostics helper\n",
     };
-    const preflightScripts = readFiles(["scripts/ci-build-manifest.mjs"]);
+    const preflightScripts = readFiles([
+      "scripts/ci-build-manifest.mjs",
+      "scripts/lib/ci-blacksmith-capacity.mjs",
+    ]);
     const simulatorScripts = readFiles(["scripts/lib/ci-ios-smoke-plan.mjs"]);
     const releasePolicy = readFiles([
       "scripts/lib/release-context.mjs",

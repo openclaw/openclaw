@@ -12,7 +12,12 @@
   padding-block-start: var(--space-5);
 }
 
+/* One toolbar row: the quiet refresh icon, the bordered action and the menu
+   trigger share the settings control height (settings-controls.css) and the
+   field radius. */
 .agents-toolbar-actions {
+  --icon-button-radius: var(--field-radius);
+
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -26,8 +31,8 @@
 }
 
 .btn.agents-page-menu__trigger {
-  width: 33px;
-  height: 33px;
+  width: var(--settings-control-height);
+  height: var(--settings-control-height);
   padding: 0;
 }
 
@@ -45,6 +50,11 @@
   display: flex;
   align-items: flex-end;
   gap: var(--space-2);
+}
+
+.agent-file-tabs > .hub-tabs {
+  /* This row shares width with Add File rather than height with a panel. */
+  flex-shrink: 1;
 }
 
 .agent-tab-add {
@@ -323,6 +333,13 @@
   inset-inline-end: 3px;
   top: 50%;
   transform: translateY(-50%);
+}
+
+/* Nested 3px inside the 32px field, so its box and radius are the field's minus that inset. */
+.agent-identity-editor__emoji-control .agent-emoji-picker__trigger {
+  width: 26px;
+  height: 26px;
+  border-radius: calc(var(--field-radius) - 3px);
 }
 
 @media (max-width: 640px) {
@@ -1074,11 +1091,6 @@
   .agents-layout > *,
   .agents-main > * {
     min-width: 0;
-  }
-
-  .btn.agents-page-menu__trigger {
-    width: 44px;
-    height: 44px;
   }
 
   /* With the menu in the floating header, no row is left above the tabs. */

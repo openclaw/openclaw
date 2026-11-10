@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse } from "acorn";
 import type { BuildOptions, BuildResult, PluginBuild } from "esbuild";
-import { ExpectedCliError } from "./expected-cli-error.js";
+import { ExpectedCliError, throwExpectedCliError } from "./expected-cli-error.js";
 import { createSolidControlUiBuildPlugin } from "./plugins-build-solid.js";
 
 const moduleLocationImport = "openclaw-plugin-bundle:module-location";
@@ -125,7 +125,8 @@ export async function buildPluginBundle(options: PluginBundleOptions) {
           Object.hasOwn(loadDiagnostics, diagnostic.id),
       )
     ) {
-      throw new Error(`${cause.message}\n${recovery}`, { cause });
+      const message = `${cause.message}\n${recovery}`;
+      throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message, cause });
     }
     throw cause;
   }
@@ -135,7 +136,7 @@ export async function buildPluginBundle(options: PluginBundleOptions) {
     const reason = backend
       ? "Plugin artifacts cannot use module-relative runtime files or require.resolve."
       : "Control UI builds cannot use require.resolve.";
-    throw new Error(`${reason} ${recovery}`);
+    throwExpectedCliError(`${reason} ${recovery}`);
   }
   const outputPaths = new Set(
     Object.keys(outputs).map((file) => resolve(options.absWorkingDir, file)),
@@ -148,7 +149,7 @@ export async function buildPluginBundle(options: PluginBundleOptions) {
     ) ||
     (backend && result.outputFiles.some((file) => !file.path.endsWith(".js")))
   ) {
-    throw new Error(
+    throwExpectedCliError(
       backend
         ? "Plugin artifact must bundle all dependencies into its JavaScript runtime files."
         : "Control UI builds must bundle their browser dependencies.",
@@ -165,7 +166,7 @@ export async function buildPluginBundle(options: PluginBundleOptions) {
             outputPaths.has(resolve(dirname(file.path), specifier))),
       )
     ) {
-      throw new Error(
+      throwExpectedCliError(
         `Dynamic imports in plugin builds must use bundled literal paths; a retained import expression in ${file.path} will not be bundled. ${recovery}`,
       );
     }

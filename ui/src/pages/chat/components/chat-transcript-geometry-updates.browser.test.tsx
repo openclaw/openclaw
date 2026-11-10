@@ -173,7 +173,7 @@ it("publishes native scroll policy and row position in one Solid update", async 
           state: new TranscriptOffsetState(),
           getScrollElement: () => viewport,
           endAnchor: new TranscriptEndAnchor(() => {}),
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
           canFollowEnd: () => false,
           isProgrammaticScroll: () => false,
           cancelScroll: vi.fn(),
@@ -241,6 +241,81 @@ function scrollReader(viewport: HTMLElement, offset: number) {
   viewport.dispatchEvent(new Event("scroll"));
   flush();
 }
+
+it.each([30, "estimate", "oversized"] as const)(
+  "keeps a measuring predecessor paintable without moving retained content (%s)",
+  async (size) => {
+    const messages = [
+      makeMessage("geometry-question", 1, { role: "user" }),
+      ...Array.from({ length: 260 }, (_, index) =>
+        makeMessage(`geometry-work-${index}`, index + 2, { phase: "commentary" }),
+      ),
+      makeMessage("geometry-answer", 262, { phase: "final_answer", stopReason: "stop" }),
+    ];
+    // One 120px question, three 480px fragments, then the viewport's 20px inset.
+    const offset = 120 + 3 * 480 + 20;
+    const { host, viewport, virtualizer } = await mountPane(
+      false,
+      480,
+      undefined,
+      offset,
+      messages,
+    );
+    const retained = requireElement(host, '.chat-virtual-row[data-index="4"]');
+    expect(host.querySelector('.chat-virtual-row[data-index="2"]')).toBeNull();
+    const style = document.createElement("style");
+    const estimate = virtualizer.options.estimateSize(2);
+    const height = size === "oversized" ? estimate + 2_000 : size === "estimate" ? estimate : size;
+    style.textContent = `.geometry-transcript-fixture .chat-virtual-row[data-index="2"] { height: ${height}px; }`;
+    host.append(style);
+    const before = retained.getBoundingClientRect().top;
+    const painted = vi.fn();
+    const frame = requestAnimationFrame(painted);
+    try {
+      scrollReader(viewport, offset - 1);
+      await Promise.resolve();
+      flush();
+      await Promise.resolve();
+      flush();
+      const predecessor = requireElement(host, '.chat-virtual-row[data-index="2"]');
+      const item = expectDefined(
+        virtualizer.getVirtualItems().find((row) => row.index === 2),
+        "measuring predecessor slot",
+      );
+      const sizer = requireElement(host, ".chat-virtual-sizer");
+      const expectedTop =
+        sizer.getBoundingClientRect().top + item.start - virtualizer.options.scrollMargin;
+      expect(Math.abs(predecessor.getBoundingClientRect().top - expectedTop)).toBeLessThanOrEqual(
+        1,
+      );
+      expect(predecessor.getBoundingClientRect().height).toBe(height);
+      expect(getComputedStyle(predecessor).opacity).toBe("1");
+      expect(getComputedStyle(predecessor).position).toBe("absolute");
+      expect(getComputedStyle(predecessor).clip).toBe(`rect(0px, auto, ${item.size}px, auto)`);
+      expect(predecessor.hasAttribute("inert")).toBe(true);
+      expect(requireElement(host, '.chat-virtual-row[data-index="4"]')).toBe(retained);
+      expect(painted).not.toHaveBeenCalled();
+      expect(viewport.scrollTop).toBe(offset - 1);
+      expect(Math.abs(retained.getBoundingClientRect().top - before - 1)).toBeLessThanOrEqual(1);
+      await settleLayout();
+      expect(
+        requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
+      ).toBe(false);
+    } finally {
+      cancelAnimationFrame(frame);
+    }
+  },
+);
+
+it("keeps ordinary incoming rows in normal flow", async () => {
+  const { host, viewport } = await mountPane(false, 120, undefined, 500);
+  scrollReader(viewport, 499);
+  await Promise.resolve();
+  flush();
+  expect(
+    requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
+  ).toBe(false);
+});
 
 it.each([
   { name: "interior", offset: 100, height: 1600, resize: false, expected: 100 },
@@ -789,46 +864,45 @@ it("commits rows before paint when an uncompensated extent shrink clamps the rea
   }
 });
 
-it("commits reader compensation before paint after a deferred measurement", async () => {
+it("holds deferred reader compensation without interrupting native scrolling", async () => {
   const { host, viewport, virtualizer } = await mountPane();
   // The observer's receipt can arrive after this row leaves the mounted window.
-  requireElement(host, '.chat-virtual-row[data-index="2"]').style.height = "150px";
+  // Its physical height must survive a later overscan remount.
+  const style = document.createElement("style");
+  style.textContent =
+    '.geometry-transcript-fixture .chat-virtual-row[data-index="2"] { height: 150px; }';
+  host.append(style);
   scrollReader(viewport, 480);
   expect(virtualizer.isScrolling).toBe(true);
   expect(virtualizer.scrollDirection).toBe("forward");
+  // A delayed measurement can restore preceding overscan after the movement window.
+  const now = performance.now.bind(performance);
+  vi.spyOn(performance, "now").mockImplementation(() => now() + 110);
   const inner = requireElement(host, ".chat-thread-inner");
   const height = Number.parseFloat(inner.style.height);
-  const notification = vi.spyOn(virtualizer.options, "onChange");
   const paint = vi.fn();
   const frame = requestAnimationFrame(paint);
   try {
     requireElement(host, '.chat-virtual-row[data-index="6"]').style.height = "180px";
     virtualizer.resizeItem(6, 180);
     expect(Number.parseFloat(inner.style.height)).toBe(height + 60);
-    const compensated = new Promise<void>((resolve) => {
-      viewport.addEventListener("scroll", () => resolve(), { once: true });
-    });
+    const retained = requireElement(host, '.chat-virtual-row[data-index="5"]');
+    const top = retained.getBoundingClientRect().top;
     virtualizer.resizeItem(2, 150);
     flush();
     await Promise.resolve();
     flush();
 
-    expect(notification.mock.calls).toEqual([
-      [virtualizer, false],
-      [virtualizer, true],
-    ]);
-    expect(viewport.scrollTop).toBe(510);
-    expect(Number.parseFloat(inner.style.height)).toBe(height + 90);
+    expect(viewport.scrollTop).toBe(480);
+    expect(Number.parseFloat(inner.style.height)).toBe(height + 60);
     expect(paint).not.toHaveBeenCalled();
 
-    // The later native offset receipt must preserve the compensated geometry.
-    await compensated;
-    flush();
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await settleLayout();
+    expect(retained.getBoundingClientRect().top).toBe(top);
+    await expect.poll(() => [virtualizer.isScrolling, viewport.scrollTop]).toEqual([false, 510]);
     flush();
     expect(viewport.scrollTop).toBe(510);
+    expect(retained.getBoundingClientRect().top).toBe(top);
     expect(Number.parseFloat(inner.style.height)).toBe(height + 90);
   } finally {
     cancelAnimationFrame(frame);

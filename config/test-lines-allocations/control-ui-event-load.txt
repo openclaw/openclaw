@@ -1,0 +1,3 @@
+# Canonical mock-row regression, event-load fixture support, and settled read-coalescing scope.
+# Exact net test/helper growth; no credit for the comparison base's existing debt.
+47

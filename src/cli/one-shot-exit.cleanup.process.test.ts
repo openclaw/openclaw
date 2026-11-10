@@ -8,7 +8,10 @@ import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { doctorConfigRuntimeEntrypoints } from "../commands/doctor-config-runtime.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { storageProcessTestEntrypoints } from "../infra/storage-process-runtime.test-support.js";
-import { cliMessageExitEntrypoints } from "./cli-entrypoint.test-support.js";
+import {
+  cliMessageExitEntrypoints,
+  gatewayDirectStopEntrypoints,
+} from "./cli-entrypoint.test-support.js";
 
 it("retires a real retained SQLite snapshot before a one-shot command exits", async ({
   expect,
@@ -168,16 +171,17 @@ it.for([
   { leak: true, exitCode: 0, status: null, signal: "SIGTERM", terminated: true },
   // A non-zero status can be a supervisor's restart instruction, so it is only reported.
   { leak: true, exitCode: 7, status: 7, signal: null, terminated: false },
+  { leak: true, exitCode: 7, status: null, signal: "SIGTERM", terminated: true, oneShot: true },
 ])(
-  "bounds a leaked handle after settled finalization (leak=$leak, exitCode=$exitCode)",
-  ({ leak, exitCode, status, signal, terminated }, { expect }) => {
+  "bounds a leaked handle after settled finalization (leak=$leak, exitCode=$exitCode, oneShot=$oneShot)",
+  ({ leak, exitCode, status, signal, terminated, oneShot }, { expect }) => {
     if (terminated && process.platform === "win32") {
       return;
     }
     const script = `
       import { createServer } from "node:net";
       import { setTimeout as delay } from "node:timers/promises";
-      import { requestSettledExitWatchdog, runCliWithExitFinalization } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit).href)};
+      import { requestOneShotSettledExitWatchdog, requestSettledExitWatchdog, runCliWithExitFinalization } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit).href)};
       process.on("SIGTERM", () => {});
       if (${leak}) {
         const server = createServer().listen(0, "127.0.0.1");
@@ -187,7 +191,7 @@ it.for([
       await runCliWithExitFinalization({
         run: async () => {
           process.exitCode = ${exitCode};
-          requestSettledExitWatchdog(200);
+          ${oneShot ? "requestOneShotSettledExitWatchdog" : "requestSettledExitWatchdog"}(200);
         },
         // Finalization longer than the watchdog proves it is armed only afterwards.
         finalize: async () => {
@@ -213,9 +217,77 @@ it.for([
       expect(result.stderr, diagnostics).toContain(
         "command settled but the process is still alive after 200ms; active resources:",
       );
+      expect(result.stderr, diagnostics).toContain("; active handles:");
       expect(result.stderr.includes("; terminating"), diagnostics).toBe(terminated);
     } else {
       expect(result.stderr, diagnostics).not.toContain("still alive");
     }
+  },
+);
+
+it.skipIf(process.platform === "win32").for([600, 5_000])(
+  "allows natural Gateway exit while bounding a lingering $0 ms timer after finalization",
+  async (lingerMs, { expect, signal, onTestFinished }) => {
+    const fixture = createFixtureLifetime();
+    onTestFinished(() => fixture.cleanup());
+    await fixture.run(async () => {
+      const directory = fixture.createTempDir("gateway-settled-exit-");
+      const receipt = path.join(directory, "closed.txt");
+      const result = await fixture.track(
+        runNodeScript(
+          [
+            "--input-type=module",
+            "--eval",
+            `
+      import fs from "node:fs";
+      import { setTimeout as delay } from "node:timers/promises";
+      import { runGatewayLoop } from ${JSON.stringify(resolveRuntimeWorkerUrl(gatewayDirectStopEntrypoints.runLoop).href)};
+      import { runCliWithExitFinalization } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit).href)};
+      await runCliWithExitFinalization({
+        run: async () => {
+          await runGatewayLoop({ ownsProcessLifecycle: true, start: async () => {
+            setImmediate(() => process.kill(process.pid, "SIGTERM"));
+            return {
+              startupSettled: Promise.resolve(), getTailscaleIngressEndpoint: () => undefined,
+              close: async () => {
+                const lingering = setTimeout(() => {}, ${lingerMs});
+                if (${lingerMs} > 1_000) setTimeout(() => { clearTimeout(lingering); process.exitCode = 1; }, 2_000).unref();
+                console.log("completed cleanly");
+              },
+            };
+          }});
+        },
+        finalize: async () => {
+          await delay(250);
+          fs.writeFileSync(${JSON.stringify(receipt)}, "accepted writes settled");
+          console.log("finalized");
+        },
+        onError: error => { throw error; },
+      });
+    `,
+          ],
+          {
+            PATH: process.env.PATH,
+            HOME: directory,
+            OPENCLAW_STATE_DIR: directory,
+            OPENCLAW_CONFIG_PATH: path.join(directory, "openclaw.json"),
+            OPENCLAW_NO_RESPAWN: "1",
+          },
+          15_000,
+          { signal },
+        ),
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.stdout).toContain("completed cleanly");
+      expect(result.stdout).toContain("finalized");
+      expect(fs.readFileSync(receipt, "utf8")).toBe("accepted writes settled");
+      if (lingerMs < 1_000) {
+        expect(result.status).toBe(0);
+        expect(result.stderr).not.toContain("still alive");
+      } else {
+        expect(result.stderr).toContain("still alive after 1000ms");
+        expect(result.stderr).toMatch(/active handles:.*Socketx2/u);
+      }
+    });
   },
 );

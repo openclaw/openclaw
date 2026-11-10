@@ -5,10 +5,9 @@ import {
 import { action, createMemo, createOptimistic, createSignal, onSettled, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadSettings } from "../../app/settings.ts";
 import { FilePreviewModal } from "../../components/file-preview-modal.tsx";
+import { ModalDialog } from "../../components/modal-dialog.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
-import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
@@ -20,13 +19,11 @@ import {
   buildAgentMainSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { preparePaneSessionHandoff } from "../chat/chat-pane-shared.ts";
 import {
   applyTemplateAdd,
   readTemplateAddReviewPlan,
   readTemplateDetail,
   readTemplatePreview,
-  searchTemplates,
   type TemplateCatalogDetail,
   type TemplateCatalogEntry,
   type TemplateCatalogSource,
@@ -41,6 +38,8 @@ type TemplatesDialogProps = {
   onClose?: () => void;
   onAdded?: () => void;
   initialPackageName: string;
+  initialVersion?: string;
+  modal?: boolean;
 };
 
 class TemplatesCatalogModel {
@@ -104,17 +103,18 @@ class TemplatesCatalogModel {
 
   private loadDetail() {
     this.cancelDetailRead();
-    const selected = this.selected;
     const scope = this.gateway.capture();
-    if (!selected || !selected.latestVersion || !scope) {
-      this.presentDetailRequest(Promise.reject(new Error(t("templatesCatalog.noVersion"))));
+    if (!scope) {
       return;
     }
     const revision = ++this.detailRevision;
     this.detail = null;
     this.installedPluginPackages = new Set();
     this.addError = null;
-    const source = { packageName: selected.packageName, version: selected.latestVersion };
+    const source = {
+      packageName: this.props.initialPackageName,
+      ...(this.props.initialVersion ? { version: this.props.initialVersion } : {}),
+    };
     this.presentDetailRequest(
       new Promise((resolve, reject) => {
         // Disconnect stops a pending skeleton without clearing a settled receipt or error.
@@ -122,6 +122,7 @@ class TemplatesCatalogModel {
         void readTemplateDetail(scope.client, source).then(
           (detail) => {
             if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
+              this.selected = detail;
               this.detail = detail;
               if (detail.contents.integrations.some((item) => item.kind === "plugin")) {
                 void this.loadInstalledPlugins(revision);
@@ -161,10 +162,10 @@ class TemplatesCatalogModel {
     }
   }
 
-  private resetSelection(selected: TemplateCatalogEntry | null = null) {
+  private resetSelection() {
     this.cancelDetailRead();
     this.closePreview();
-    this.selected = selected;
+    this.selected = null;
     this.detail = null;
     this.presentDetailRequest(undefined);
     this.installedPluginPackages = new Set();
@@ -175,8 +176,7 @@ class TemplatesCatalogModel {
     this.addedAgentId = null;
   }
 
-  select(entry: TemplateCatalogEntry) {
-    this.resetSelection(entry);
+  refresh() {
     this.loadDetail();
   }
 
@@ -191,7 +191,7 @@ class TemplatesCatalogModel {
     this.close();
   }
 
-  private openAgentChat(agentId: string, agentName: string, context: ApplicationContext) {
+  private openAgentChat(agentId: string, context: ApplicationContext) {
     const mainKey =
       resolveUiConfiguredMainKey({
         agentsList: context.agents.state.agentsList,
@@ -204,16 +204,6 @@ class TemplatesCatalogModel {
       sessionKey,
       agentId,
     });
-    preparePaneSessionHandoff(
-      context,
-      loadSettings().chatSplitLayout?.activePaneId ?? "p1",
-      sessionKey,
-      {
-        draft: `${agentName}, what can you do?`,
-        attachments: [],
-        send: true,
-      },
-    );
     selectApplicationSession({
       selection: context.agentSelection,
       gateway: context.gateway,
@@ -247,7 +237,7 @@ class TemplatesCatalogModel {
           const agent = roster?.agents.find((entry) => entry.id === agentId);
           if (agent) {
             this.props.onAdded?.();
-            this.openAgentChat(agentId, normalizeAgentLabel(agent), context);
+            this.openAgentChat(agentId, context);
             return;
           }
         } catch {
@@ -384,14 +374,13 @@ class TemplatesCatalogModel {
     }
   }
 
-  view(): Omit<
-    TemplatesCatalogViewProps,
-    "readEntries" | "catalogRequest" | "onRetryCatalog" | "readDetail" | "detailRequest"
-  > {
+  view(): Omit<TemplatesCatalogViewProps, "readDetail" | "detailRequest"> {
     return {
       basePath: this.context.basePath,
       selected: this.selected,
       detail: this.detail,
+      preview: this.preview,
+      onClosePreview: () => this.closePreview(),
       installedPluginPackages: this.installedPluginPackages,
       addError: this.addError,
       applying: this.applying,
@@ -433,8 +422,6 @@ class TemplatesCatalogModel {
 
 export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
   const context = useApplication();
-  const [catalogRequest, setCatalogRequest] = createSignal<Promise<TemplateCatalogEntry[]>>();
-  let cancelSearch = () => {};
   const [detailRequest, setDetailRequest] = createSignal<Promise<TemplateCatalogDetail | null>>();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const [applying, showApplying] = createOptimistic(false);
@@ -461,53 +448,12 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
     getGateway: () => context.gateway,
     onIdentityChange: () => model.onIdentityChange(),
     invalidateRequests: () => {
-      cancelSearch();
-      setCatalogRequest(undefined);
       model.invalidateRequests();
     },
-    ensureInitialData: () => loadCatalog(),
+    ensureInitialData: () => model.refresh(),
   });
   onSettled(() => () => {
-    cancelSearch();
     model.dispose();
-  });
-  function loadCatalog() {
-    cancelSearch();
-    const scope = model.gateway.capture();
-    if (!scope) {
-      return;
-    }
-    const packageName = props.initialPackageName;
-    let cancelled = false;
-    cancelSearch = () => {
-      cancelled = true;
-    };
-    const isCurrent = () => !cancelled && model.gateway.isCurrent(scope);
-    // Admission also refreshes hidden detail pages on reconnect. Keep selection
-    // at request completion, outside the async rendering computation.
-    void setCatalogRequest(
-      (async () => {
-        if (!isCurrent()) {
-          return [];
-        }
-        const entries = await searchTemplates(scope.client, packageName, 100);
-        if (isCurrent()) {
-          const entry = entries.find((candidate) => candidate.packageName === packageName);
-          if (!entry) {
-            throw new Error(t("templatesCatalog.unavailable"));
-          }
-          model.select(entry);
-        }
-        return entries;
-      })(),
-    );
-  }
-  const entries = createMemo(() => {
-    const request = catalogRequest();
-    if (!request && !model.gateway.connected) {
-      throw new Error(t("templatesCatalog.unavailable"));
-    }
-    return request ?? [];
   });
   const detail = createMemo(() => detailRequest() ?? null);
   const view = createMemo(() => {
@@ -551,22 +497,39 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
       ? []
       : [{ path: previewPath(), size: "", contents: current.content }];
   };
+  const content = (
+    <TemplatesCatalogView
+      {...view()}
+      modal={props.modal}
+      readPreview={readFile}
+      readDetail={detail}
+      detailRequest={detailRequest()}
+      applying={applying() && view().applying}
+      onConfirm={() => mutate(view().onConfirm)}
+      onConfirmConsent={() => mutate(view().onConfirmConsent)}
+      onConfirmReview={() => mutate(view().onConfirmReview)}
+      onRetryOpenChat={() => mutate(view().onRetryOpenChat)}
+    />
+  );
   return (
     <openclaw-templates-catalog-dialog>
-      <TemplatesCatalogView
-        {...view()}
-        readEntries={entries}
-        catalogRequest={catalogRequest()}
-        readDetail={detail}
-        detailRequest={detailRequest()}
-        onRetryCatalog={() => loadCatalog()}
-        applying={applying() && view().applying}
-        onConfirm={() => mutate(view().onConfirm)}
-        onConfirmConsent={() => mutate(view().onConfirmConsent)}
-        onConfirmReview={() => mutate(view().onConfirmReview)}
-        onRetryOpenChat={() => mutate(view().onRetryOpenChat)}
-      />
-      <Show when={preview()}>
+      <Show when={props.modal} fallback={content}>
+        <ModalDialog
+          label={t("templatesCatalog.review")}
+          open
+          style={{ "--openclaw-modal-width": "960px" }}
+          onModal-cancel={(event: Event) => {
+            if (model.applying) {
+              event.preventDefault();
+            } else {
+              props.onClose?.();
+            }
+          }}
+        >
+          {content}
+        </ModalDialog>
+      </Show>
+      <Show when={!props.modal && preview()}>
         {(current) => (
           <FilePreviewModal
             label={

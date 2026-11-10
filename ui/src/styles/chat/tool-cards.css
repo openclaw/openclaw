@@ -130,12 +130,6 @@
 }
 
 .chat-tool-row__chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 14px;
-  width: 14px;
-  height: 14px;
   opacity: 0;
   transition:
     opacity 150ms ease-out,
@@ -726,7 +720,7 @@
 
 .chat-tool-card__action-btn:hover,
 .chat-tool-card__action-btn:focus-visible,
-.chat-tool-card__actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
+.chat-tool-card__actions :where(.chat-copy-btn:is(:hover, :focus-visible)) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
 }
@@ -1090,8 +1084,16 @@
   }
 }
 
+/* Completed work reads as a quiet heading over what follows: a medium label and
+   a resting chevron, with no divider. Two extra pixels below the uniform
+   run-block gap keep the label from crowding the reply or a leading code block. */
+.chat-work-group {
+  margin-block-end: 2px;
+}
+
 .chat-work-group .chat-activity-group__label {
   color: inherit;
+  font-weight: var(--control-ui-font-weight-semibold);
 }
 
 .chat-work-group__total {
@@ -1136,12 +1138,6 @@
         text-shimmer var(--text-shimmer-duration) var(--text-shimmer-easing) infinite;
     }
   }
-}
-
-.chat-work-group__separator {
-  width: 100%;
-  height: 1px;
-  background: var(--border);
 }
 
 @media (pointer: coarse) {

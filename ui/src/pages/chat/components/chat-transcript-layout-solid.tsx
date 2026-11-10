@@ -141,6 +141,9 @@ function TranscriptRows(props: {
               });
               const active = createMemo(() => props.snapshot.activeRowKeys.has(row()?.key ?? ""));
               const preparing = createMemo(() => row()?.key === props.snapshot.preparingRowKey);
+              const preparingPredecessor = createMemo(
+                () => preparing() && virtualRow().index + 1 === activeRows()[0]?.index,
+              );
               const streaming = createMemo(() => row()?.streaming === true);
               const gap = () => gaps().get(virtualRow().key) ?? 0;
               return (
@@ -155,20 +158,26 @@ function TranscriptRows(props: {
                       { "chat-virtual-row--first": virtualRow().index === 0 },
                     ]}
                     style={{
-                      // Live content stays measurable; reflecting every resize back into
-                      // its own style would invalidate it again after native layout.
-                      "contain-intrinsic-block-size": streaming()
-                        ? undefined
-                        : `${virtualRow().size}px`,
                       "min-height": `${props.snapshot.layout.rowMinimum(index())}px`,
                       display: active() ? undefined : preparing() ? "flow-root" : "none",
                       position: active() ? undefined : "absolute",
-                      top: active() ? undefined : "0",
-                      opacity: active() ? undefined : "0",
+                      top: active()
+                        ? undefined
+                        : preparingPredecessor()
+                          ? `${virtualRow().start - blockStart()}px`
+                          : "0",
+                      opacity: active() || preparingPredecessor() ? undefined : "0",
+                      // Keep speculative preparation hidden; the incoming predecessor
+                      // paints inside its estimated slot before entering normal flow.
+                      clip:
+                        !active() && preparingPredecessor()
+                          ? `rect(0, auto, ${virtualRow().size}px, auto)`
+                          : undefined,
                       "content-visibility":
                         preparing() || streaming() ? "visible" : active() ? undefined : "hidden",
                     }}
                     data-index={String(virtualRow().index)}
+                    data-row-size={streaming() ? undefined : String(virtualRow().size)}
                     data-virtual-row-key={row()?.key}
                     data-prepared-row={active() ? undefined : "true"}
                     data-preparing-row={preparing() ? "true" : undefined}
@@ -294,7 +303,7 @@ export class ChatTranscriptRenderer {
     }
   }
 
-  queueAfterCommit(effect: () => void): void {
+  queueAfterCommit(effect: () => void, yieldToBrowser = false): void {
     if (!this.lifecycle || this.layoutEffects.has(effect)) {
       return;
     }
@@ -302,14 +311,41 @@ export class ChatTranscriptRenderer {
     const release = () => {
       this.layoutEffects.delete(effect);
     };
-    this.lifecycle.afterCommit(() => {
-      // Nested row islands finish their commits before initial geometry is read.
-      queueMicrotask(() => {
+    this.lifecycle.afterCommit((done) => {
+      // The initial tail ladder can yield between rows. Position restoration
+      // and other geometry effects keep their before-paint microtask timing.
+      // SAFETY: scheduler.yield is an optional browser scheduling capability.
+      const browser = globalThis as typeof globalThis & {
+        scheduler?: { yield?: () => Promise<void> };
+      };
+      if (!yieldToBrowser || !browser.scheduler?.yield) {
+        // Nested row islands finish their commits before geometry is read.
+        queueMicrotask(() => {
+          release();
+          if (this.isPresented()) {
+            effect();
+          }
+        });
+        return undefined;
+      }
+      let pending = true;
+      void browser.scheduler.yield().then(() => {
+        if (!pending) {
+          return;
+        }
+        pending = false;
         release();
         if (this.isPresented()) {
           effect();
         }
+        done();
       });
+      return () => {
+        if (pending) {
+          pending = false;
+          release();
+        }
+      };
     }, release);
   }
 
@@ -329,7 +365,6 @@ export class ChatTranscriptRenderer {
         // Keep layout measurable, but do not paint the initial estimated range
         // before the session owner has placed it at the correct reading edge.
         this.syncInitialPosition();
-        this.element.toggleAttribute("data-measuring-rows", current.measureRows);
         current.layout.commitRange(
           this.element,
           current.virtualizer.getTotalSize() + current.headerHeight,
