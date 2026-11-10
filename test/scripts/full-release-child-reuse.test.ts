@@ -500,6 +500,9 @@ describe("independent release child reuse", () => {
     });
     expect(zipReads).toBe(1);
     expect(jobReads).toBe(acquiredJobReads);
+    expect(
+      payload.entries.some(([route]: [string]) => route === "actions/runs/77/attempts/1"),
+    ).toBe(false);
     data.parent.run_attempt = 2;
     await expect(
       validateReusableReleaseChild(selection, data.request, {
