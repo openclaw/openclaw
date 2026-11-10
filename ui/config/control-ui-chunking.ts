@@ -247,7 +247,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/agent-select.tsx":
     case "ui/src/components/agent-select-registration.ts":
     case "ui/src/lib/sessions/session-placement-recovery.ts":
-    case "ui/src/components/solid/connect-command.tsx":
     case "ui/src/components/cloud-profile-icon-data.ts":
     case "ui/src/components/solid/cloud-profile-icon.tsx":
       // Creation fetches these together; keep their compression without a whole route.
@@ -632,6 +631,13 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/pages/new-session/preferences.ts");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
+                // Keep existing cross-route config writers in their shared boot chunk.
+                modules.add("ui/src/lib/config/config-mutation-runner.ts");
+                modules.add("ui/src/lib/plugins/index.ts");
+                // Shared roster and dialog controls copy without loading Chat.
+                modules.add("ui/src/lib/clipboard.ts");
+                modules.add("ui/src/components/copy-button-state.ts");
+                modules.add("ui/src/components/solid/copy-button.tsx");
                 // Cross-route labels must not pull the New Session or Chat renderers.
                 modules.add("ui/src/i18n/locales/en-chat-welcome.ts");
                 modules.add("ui/src/i18n/locales/en-session-people.ts");
@@ -666,6 +672,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
               );
               if (route === "shared") {
                 styles.add("ui/src/components/solid/text-overflow.css");
+                // Copy controls also serve dialogs outside the Chat route.
+                styles.add("ui/src/styles/copy-button.css");
                 // Document styles also serve Agents without loading Chat's visible renderers.
                 styles.add("ui/src/styles/sidebar-markdown.css");
                 styles.add("ui/src/styles/mcp-app-extensions.css");
@@ -674,6 +682,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
               }
               if (route === "chat") {
                 styles.delete("ui/src/components/solid/text-overflow.css");
+                styles.delete("ui/src/styles/copy-button.css");
                 styles.delete("ui/src/styles/sidebar-markdown.css");
                 styles.delete("ui/src/styles/mcp-app-extensions.css");
                 styles.delete("ui/src/styles/session-panel-rail.css");

@@ -28,6 +28,7 @@ const runtimeOnlyBuiltCliFiles = new Set([
 const runtimeOnlyUnitFiles = new Set([
   "src/agents/agent-tools.delegated-authority.test.ts",
   "src/agents/session-placement-computer.test.ts",
+  "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
   "src/auto-reply/reply/commands-system-prompt.test.ts",
@@ -46,7 +47,9 @@ const runtimeOnlyUnitFiles = new Set([
   "src/plugins/loader.runtime-registry.test.ts",
   "src/plugins/plugin-generation-source-inspection.worker.test.ts",
   "src/plugins/plugin-generation-worker.test.ts",
+  "src/state/dreaming-startup-admission.test.ts",
   "test/canonical-descendant.integration.test.ts",
+  "test/codex-account-usage.integration.test.ts",
   "test/codex-settled-turn-finalization.integration.test.ts",
   "test/codex-web-search-native.integration.test.ts",
   "test/codex-web-search-policy.integration.test.ts",
@@ -56,6 +59,7 @@ const runtimeOnlyUnitFiles = new Set([
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-native-search.gateway.test.ts",
   "test/plugins/deep-research-routing.gateway.test.ts",
+  "test/runtime-agent.codex-initialization.integration.test.ts",
   "test/scripts/ci-test-timings-tooling.test.ts",
   "test/scripts/eager-import-closure.test.ts",
   "test/scripts/lint-suppressions.test.ts",
@@ -63,6 +67,7 @@ const runtimeOnlyUnitFiles = new Set([
   "test/scripts/pr-wrapper-source-closure.test.ts",
   "test/scripts/type-suppression-inventory.test.ts",
   "test/skill-usage.codex.integration.test.ts",
+  "test/slack-outbound-permanent-rejection-loopback.test.ts",
   "test/vitest-projects-config.test.ts",
 ]);
 
@@ -188,6 +193,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
       config === "test/vitest/vitest.runtime-config.config.ts" ||
       config === "test/vitest/vitest.plugins.config.ts" ||
       config === "test/vitest/vitest.tooling.config.ts" ||
+      config === "test/vitest/vitest.tooling-isolated.config.ts" ||
       config === "test/vitest/vitest.unit-fast.config.ts" ||
       config === "test/vitest/vitest.unit-fast-isolated.config.ts" ||
       config === "test/vitest/vitest.gateway-client.config.ts" ||
