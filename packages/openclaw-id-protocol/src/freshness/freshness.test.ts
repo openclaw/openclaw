@@ -34,10 +34,23 @@ async function world() {
   const oldSrv = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
   const newSrv = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
   const k_gw = formatEd25519PublicKey(kgw.publicKey);
-  const binding = (seq: number, k_srv: IrohEndpointKey, issued_at = now - 10) =>
+  const binding = (
+    seq: number,
+    k_srv: IrohEndpointKey,
+    issued_at = now - 10,
+    gateway: StatementSigner = kgw,
+  ) =>
     signStatement(
       "ServerBinding",
-      { claw_id, hostname: HOST, k_srv, k_gw, binding_seq: seq, root_epoch: 1, issued_at },
+      {
+        claw_id,
+        hostname: HOST,
+        k_srv,
+        k_gw: formatEd25519PublicKey(gateway.publicKey),
+        binding_seq: seq,
+        root_epoch: 1,
+        issued_at,
+      },
       root,
     );
   const snapshot = (
@@ -65,7 +78,7 @@ async function world() {
     root_fp: await fingerprint(root_pub),
     binding_seq: 4,
   };
-  return { root_pub, claw_id, oldSrv, newSrv, binding, snapshot, pin };
+  return { root_pub, claw_id, oldSrv, newSrv, binding, snapshot, pin, kgw, k_gw };
 }
 type World = Awaited<ReturnType<typeof world>>;
 
@@ -109,7 +122,12 @@ describe("assessFreshness", () => {
       snapshot: await w.snapshot(9, 5),
     });
     expect(r).toMatchObject({ ok: true, fresh: true });
-    expect(r.state?.snapshot).toEqual({ seq: 9, issued_at: now - 60, binding_seq: 5 });
+    expect(r.state?.snapshot).toEqual({
+      seq: 9,
+      issued_at: now - 60,
+      binding_seq: 5,
+      k_gw: w.k_gw,
+    });
   });
 
   it("enforce refuses withheld freshness; report dials and names the gap", async () => {
@@ -190,7 +208,12 @@ describe("assessFreshness", () => {
       { stored: first.state },
     );
     expect(inconsistent).toMatchObject({ ok: false, code: "stale_binding" });
-    expect(inconsistent.state?.snapshot).toEqual({ seq: 10, issued_at: now - 60, binding_seq: 5 });
+    expect(inconsistent.state?.snapshot).toEqual({
+      seq: 10,
+      issued_at: now - 60,
+      binding_seq: 5,
+      k_gw: w.k_gw,
+    });
     const replay = await gate(
       w,
       old,
@@ -206,6 +229,46 @@ describe("assessFreshness", () => {
       { stored: inconsistent.state },
     );
     expect(membershipReplay).toMatchObject({ ok: false, code: "freshness_unavailable" });
+  });
+
+  it("restarts snapshot order at a re-bind to a new K_gw and keeps the binding high-water", async () => {
+    const w = await world();
+    const old = await w.binding(4, w.oldSrv);
+    // Whoever held the retired K_gw signed far ahead before the re-bind.
+    const inflated = await gate(w, old, { snapshot: await w.snapshot(1_000, 4) });
+    expect(inflated).toMatchObject({ ok: true, fresh: true });
+    const kgw2 = await generateEd25519Signer();
+    const rebound = await w.binding(5, w.newSrv, now - 10, kgw2);
+    const honest = await gate(
+      w,
+      rebound,
+      { snapshot: await w.snapshot(9, 5, { signer: kgw2 }) },
+      { stored: inflated.state },
+    );
+    expect(honest).toMatchObject({ ok: true, fresh: true });
+    expect(honest.state?.snapshot).toEqual({
+      seq: 9,
+      issued_at: now - 60,
+      binding_seq: 5,
+      k_gw: formatEd25519PublicKey(kgw2.publicKey),
+    });
+    // Ordered among the new K_gw's snapshots from here.
+    const replay = await gate(
+      w,
+      rebound,
+      { snapshot: await w.snapshot(8, 5, { signer: kgw2 }) },
+      { stored: honest.state, policy: "report" },
+    );
+    expect(replay.gap).toBe("snapshot_replayed");
+    // The retired binding and its key's snapshots stay refused.
+    const retired = await gate(
+      w,
+      old,
+      { snapshot: await w.snapshot(2_000, 4) },
+      { stored: honest.state },
+    );
+    expect(retired).toMatchObject({ ok: false, code: "stale_binding" });
+    expect(retired.state?.snapshot?.k_gw).toBe(formatEd25519PublicKey(kgw2.publicKey));
   });
 
   it("never stores a snapshot from the future", async () => {
