@@ -282,19 +282,22 @@ remain errors; ending the phone session suppresses pending consult results.
 ### Barge-in
 
 When the caller speaks over a reply, OpenClaw always clears the queued
-telephony audio and cancels the active reply. That stops the talking-over, but
-by default the OpenClaw agent run behind the turn keeps going: the caller waits
-out work they already interrupted, and the answer that eventually arrives
-addresses the question they abandoned.
+telephony audio and cancels the active reply. The obsolete spoken answer is
+already suppressed by that cancellation, but by default the OpenClaw agent run
+behind the turn keeps going, so the caller waits out work they already
+interrupted.
 
 `bargeIn.abortAgentRun` (default `false`) also aborts the in-flight agent run
 for that call. The abort is immediate rather than graceful: it does not wait for
-an in-flight tool call to finish, and an exec tool call's child process is killed
-as soon as the run's abort signal fires.
+an in-flight tool call to finish, and a **foreground** exec tool call's child
+process is killed as soon as the run's abort signal fires. Commands the agent
+explicitly backgrounded are detached from the run and keep running.
 
-The option is top level, not under `realtime`, because both call paths honour
-it: the streaming path aborts the run started for the turn, and the realtime
-bridge aborts the run behind an agent consult. Only the trigger point differs.
+**Streaming calls only.** The flag is read where the streaming barge-in trigger
+lives. The realtime bridge does not consult it, so enabling it changes nothing
+for realtime agent consults. Streaming and realtime cannot both be enabled, so
+any one call is only ever on a single path. The option stays top level rather
+than under `realtime` so that scope can widen later without moving it.
 
 ```json
 {
@@ -312,9 +315,9 @@ bridge aborts the run behind an agent consult. Only the trigger point differs.
 }
 ```
 
-| Option          | Default | Behavior                                                                                                       |
-| --------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
-| `abortAgentRun` | `false` | Abort the in-flight agent run on barge-in, killing in-flight tool calls and their child processes immediately. |
+| Option          | Default | Behavior                                                                                                                                                                       |
+| --------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `abortAgentRun` | `false` | Streaming calls only. Abort the in-flight agent run on barge-in, killing in-flight foreground tool-call child processes immediately. Explicitly backgrounded commands survive. |
 
 History is preserved across the abort, so the next turn resumes rather than
 restarts:

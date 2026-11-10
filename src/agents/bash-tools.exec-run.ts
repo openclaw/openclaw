@@ -69,7 +69,7 @@ import {
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
-import { clampWithDefault, deriveSessionName, readEnvInt } from "./bash-tools.shared.js";
+import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import {
   createExecToolExecutionTimeoutResolver,
   resolveExecDefaultTimeoutSec,
@@ -632,12 +632,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         }
         if (!run.session.requestCancelled) {
           // Without this line an operator sees the agent run abort but never
-          // learns which child process died with it. Log the derived verb+target
-          // label rather than the raw command: full command strings can carry
-          // tokens in their arguments and must not reach the log.
+          // learns which child process died with it. Identifiers only: no part
+          // of the command reaches the log. Raw command strings and derived
+          // command labels both retain arguments, and arguments carry
+          // credentials, so neither is safe for ordinary logging.
           const abortedPid = run.pid ?? run.session.pid;
           logInfo(
-            `exec: abort killed child session=${run.session.id} pid=${abortedPid ?? "unknown"} command=${deriveSessionName(run.session.command) || "unknown"}`,
+            `exec: abort killed child session=${run.session.id} pid=${abortedPid ?? "unknown"}`,
           );
           run.kill();
         }

@@ -2,16 +2,22 @@
 // webhook.ts: that file is already over its line cap and the growth ratchet
 // rejects additions, so the whole concern lives here and webhook.ts retains
 // only its call sites.
-import { abortAgentHarnessRun } from "openclaw/plugin-sdk/agent-harness";
-import { BargeInAgentAbortCoordinator } from "../barge-in-agent-abort.js";
+import {
+  BargeInAgentAbortCoordinator,
+  type BargeInTrackedAgentRun,
+} from "../barge-in-agent-abort.js";
 
 export type BargeInAbortTrigger = {
   /** Guarded abort for the interrupted turn; never throws to the audio path. */
   abortForBargeIn: (callId: string) => void;
-  /** Publishes the run backing this turn so barge-in can abort that exact run. */
-  registerRun: (callId: string, run: { sessionId: string; runId: string }) => void;
-  /** Drops this turn's tracked run, clearing only the run it registered. */
-  clearTurn: (callId: string) => void;
+  /**
+   * Publishes the run backing this turn so barge-in can abort that exact run.
+   *
+   * Returns the cleanup for this response, bound to the run it registered. The
+   * caller holds it instead of re-deriving identity at removal time, so a late
+   * settle cannot drop the run that replaced it.
+   */
+  registerRun: (callId: string, run: BargeInTrackedAgentRun) => () => void;
 };
 
 /**
@@ -27,16 +33,12 @@ export function createBargeInAbortTrigger(
   getConfig: () => { bargeIn?: { abortAgentRun?: boolean } },
   logger: { info: (message: string) => void; warn: (message: string) => void },
 ): BargeInAbortTrigger {
+  // The run carries its own cancellation authority, so there is no session-keyed
+  // abort entry point here and no second registry to keep in step: the
+  // coordinator is the single owner of what is tracked per call.
   const coordinator = new BargeInAgentAbortCoordinator({
-    // Same run-abort entry point the TUI escape key uses; it signals the run's
-    // abort signal, which kills in-flight tool child processes immediately
-    // instead of waiting for a tool-call boundary.
-    abortAgentRun: (sessionId) => abortAgentHarnessRun(sessionId),
     log: (message) => logger.info(message),
   });
-  // Turns overlap because handleInboundResponse is void-called, so a late
-  // settle must clear only the run it started, not its replacement's.
-  const runIdByCallId = new Map<string, string>();
   return {
     abortForBargeIn: (callId) => {
       try {
@@ -54,16 +56,11 @@ export function createBargeInAbortTrigger(
       }
     },
     registerRun: (callId, run) => {
-      runIdByCallId.set(callId, run.runId);
       coordinator.registerRun(callId, run);
-    },
-    clearTurn: (callId) => {
-      const runId = runIdByCallId.get(callId);
-      if (runId === undefined) {
-        return;
-      }
-      runIdByCallId.delete(callId);
-      coordinator.clearRun(callId, runId);
+      // Turns overlap because handleInboundResponse is void-called. Closing over
+      // this run's id is what makes a late settle a no-op rather than a clear of
+      // its replacement.
+      return () => coordinator.clearRun(callId, run.runId);
     },
   };
 }

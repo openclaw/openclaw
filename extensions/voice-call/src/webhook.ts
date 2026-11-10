@@ -939,7 +939,6 @@ export class VoiceCallWebhookServer {
         await speakResponse("Sorry, I hit a problem working out a response. Please try again.");
       }
     } finally {
-      this.bargeIn.clearTurn(callId);
       response.release();
     }
   }

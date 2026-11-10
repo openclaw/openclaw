@@ -28,21 +28,22 @@
 
 /** An agent run currently executing on behalf of one call. */
 export type BargeInTrackedAgentRun = {
-  /** Session the embedded run is executing in; the abort key. */
+  /** Session the embedded run is executing in; logged for correlation only. */
   sessionId: string;
   /** Run id, logged and used to ignore stale clears. */
   runId: string;
+  /**
+   * Cancels this exact run.
+   *
+   * Supplied by the response that started the run, so the authority cannot
+   * outlive or escape that response. A session-keyed abort was deliberately
+   * rejected here: it resolves whichever turn currently occupies the session,
+   * which with shared sessions can be a different call's work.
+   */
+  abort: () => void;
 };
 
 export type BargeInAgentAbortOptions = {
-  /**
-   * Aborts the embedded agent run owning `sessionId`.
-   *
-   * Injected so the coordinator stays unit-testable; production wiring passes
-   * the plugin SDK's `abortAgentHarnessRun`, which is the same run-abort path
-   * the TUI escape key uses.
-   */
-  abortAgentRun: (sessionId: string) => boolean;
   /** Structured logging seam; defaults to no logging. */
   log?: (message: string) => void;
 };
@@ -59,11 +60,9 @@ export type BargeInAgentAbortOptions = {
  */
 export class BargeInAgentAbortCoordinator {
   private readonly runsByCallId = new Map<string, BargeInTrackedAgentRun>();
-  private readonly abortAgentRun: (sessionId: string) => boolean;
   private readonly log: (message: string) => void;
 
-  constructor(options: BargeInAgentAbortOptions) {
-    this.abortAgentRun = options.abortAgentRun;
+  constructor(options: BargeInAgentAbortOptions = {}) {
     this.log = options.log ?? (() => {});
   }
 
@@ -115,12 +114,10 @@ export class BargeInAgentAbortCoordinator {
       return false;
     }
     this.runsByCallId.delete(params.callId);
-    if (!this.abortAgentRun(tracked.sessionId)) {
-      // Silent: the turn settled before the abort landed but its clear had not
-      // run yet. That window is normal and fired several times per call, so a
-      // log line here reads like a failure while describing routine timing.
-      return false;
-    }
+    // Aborting the run this response owns. A settled turn has already retired
+    // its authority through clearRun, so reaching here means the run was still
+    // live and this call still owned it.
+    tracked.abort();
     this.log(
       `barge-in aborted agent run callId=${params.callId} source=${params.source} runId=${tracked.runId} sessionId=${tracked.sessionId}`,
     );

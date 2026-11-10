@@ -1,10 +1,15 @@
-398
+272
 # Barge-in agent-run abort on caller interruption (voice-call streaming path).
-# Three new suites, none of which have an existing home:
-#   barge-in-agent-abort.test.ts      coordinator registry, opt-in gate, abort dispatch
-#   webhook.barge-in-abort.test.ts    the streaming trigger end to end, including the
-#                                     guarded-throw path that must not drop a caller frame
-#   bash-tools.exec.abort-kill-log.test.ts  the exec abort-kill log line, foreground and
-#                                     backgrounded, since only the foreground child is killed
-# Each covers a distinct defect class and the coverage cannot be folded into an
-# existing suite without losing the isolation these fixtures provide.
+# Two suites, neither of which has an existing home:
+#   barge-in-agent-abort.test.ts    coordinator registry, run-scoped abort dispatch,
+#                                   stale-clear rejection, and cross-call isolation
+#                                   when sessionScope "main" shares one session
+#   webhook.barge-in-abort.test.ts  the streaming trigger end to end: the opt-in gate,
+#                                   the guarded-throw path that must not drop a caller
+#                                   frame, replacement cleanup, and authority retirement
+# The exec abort-kill-log suite was withdrawn with the command-label logging it
+# pinned; the surviving abort diagnostic carries identifiers only, and the
+# pre-existing foreground/background kill behaviour it re-asserted is not this
+# change's to cover.
+# Each remaining case covers a distinct defect class and cannot fold into an
+# existing suite without losing the call-ownership isolation these fixtures provide.

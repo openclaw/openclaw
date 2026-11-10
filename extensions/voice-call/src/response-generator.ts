@@ -43,7 +43,19 @@ type VoiceResponseParams = {
    * only known here. This publishes it so the webhook can abort that exact run
    * when the caller speaks over the answer.
    */
-  onAgentRunStarted?: (run: { sessionId: string; runId: string }) => void;
+  onAgentRunStarted?: (run: {
+    sessionId: string;
+    runId: string;
+    /**
+     * Aborts this exact response's run, and only this one.
+     *
+     * Cancellation authority is per response rather than per session: `runId`
+     * is minted locally and the harness never sees it, and a session-keyed
+     * abort resolves whichever turn currently occupies the session, which with
+     * shared sessions can belong to a different call.
+     */
+    abort: () => void;
+  }) => (() => void) | void;
 };
 
 type VoiceResponsePayload = {
@@ -282,6 +294,9 @@ export async function generateVoiceResponse(params: VoiceResponseParams) {
   });
 
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
+  // Retired in the finally below, so this run's cancellation authority never
+  // outlives the response that owns it on either the success or failure path.
+  let releaseBargeInRun: (() => void) | undefined;
   try {
     return await agentRuntime.session.runWithWorkAdmission(
       { storePath, sessionKey: resolvedSessionKey },
@@ -384,10 +399,14 @@ export async function generateVoiceResponse(params: VoiceResponseParams) {
         const timeoutMs =
           voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
         const runId = `voice:${callId}:${Date.now()}`;
-        // Publish the run identity so caller barge-in can abort this exact run.
-        // The webhook owns the abort; this is only the handoff, and it is inert
-        // when barge-in abort is disabled.
-        onAgentRunStarted?.({ sessionId, runId });
+        // This controller is the only cancellation authority over this run, so
+        // barge-in on one call can never reach another call's work in a shared
+        // session. It is retired when the turn settles.
+        const bargeInAbort = new AbortController();
+        // The webhook owns when to fire it; this is only the handoff, and it is
+        // inert when barge-in abort is disabled.
+        releaseBargeInRun =
+          onAgentRunStarted?.({ sessionId, runId, abort: () => bargeInAbort.abort() }) ?? undefined;
 
         const blockReplyPayloads: VoiceResponsePayload[] = [];
         let latestToolBoundaryMessageIndex: number | undefined;
@@ -429,7 +448,10 @@ export async function generateVoiceResponse(params: VoiceResponseParams) {
           extraSystemPrompt,
           agentDir,
           senderIsOwner,
-          abortSignal,
+          // Work admission keeps its own cancellation; barge-in adds a second,
+          // response-scoped reason. Either aborts this run, and neither can
+          // reach a different turn.
+          abortSignal: AbortSignal.any([abortSignal, bargeInAbort.signal]),
           blockReplyBreak: "text_end",
           resolveReplyDelivery: async (minimumAssistantMessageIndex = 0) =>
             deliveredEarly && minimumAssistantMessageIndex === 0 ? "pending" : "missing",
@@ -514,5 +536,9 @@ export async function generateVoiceResponse(params: VoiceResponseParams) {
     }
     console.error(`[voice-call] Response generation failed:`, err);
     return { text: null, deliveredEarly: false, error: String(err) };
+  } finally {
+    // The response that started the run is the one that retires it, so a late
+    // settle cannot clear the run that replaced it.
+    releaseBargeInRun?.();
   }
 }
