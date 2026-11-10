@@ -265,10 +265,13 @@ OpenClaw release:
     openclaw models auth login --provider anthropic --method setup-token
     ```
 
-    Direct Messages API requests using a setup token advertise a maintained
-    Claude Code client version, or the installed CLI version when newer.
-    Anthropic uses that identity to gate newer models. A missing, older, or
-    failed CLI check uses OpenClaw's maintained version floor. Discovery is
+    Direct Messages API requests using a setup token advertise a Claude Code
+    client version, or the installed CLI version when newer. Anthropic uses that
+    identity to gate newer models. When Anthropic rejects a request because the
+    version is too old, OpenClaw adopts the version named in the rejection,
+    resends the request once, and keeps that version for later requests until
+    the process restarts. A new model therefore needs no OpenClaw update; each
+    new process pays for at most one rejected request. Discovery is
     shared with the CLI backend and cached for the resolved executable file.
     After an in-place update or symlink change, the next request checks the new
     file without a Gateway restart. Failed checks keep the floor until the
