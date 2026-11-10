@@ -332,6 +332,18 @@ async function waitForPublicationState(
   }
 }
 
+/**
+ * @param {object} options
+ * @param {unknown} options.manifest
+ * @param {string} options.reason
+ * @param {string} [options.registry]
+ * @param {string} options.token
+ * @param {typeof fetch} [options.fetchImpl]
+ * @param {(milliseconds: number) => Promise<void>} [options.wait]
+ * @param {number} [options.timeoutMilliseconds]
+ * @param {(message: string) => void} [options.report]
+ * @param {() => void | Promise<void>} [options.revalidateAuthority]
+ */
 export async function executeClawHubRecoveryManifest({
   manifest: rawManifest,
   reason,
@@ -344,6 +356,7 @@ export async function executeClawHubRecoveryManifest({
     }),
   timeoutMilliseconds = 30 * 60 * 1000,
   report = console.error,
+  revalidateAuthority,
 }) {
   const manifest = validateClawHubRecoveryManifest(rawManifest);
   const trimmedReason = reason?.trim();
@@ -395,6 +408,9 @@ export async function executeClawHubRecoveryManifest({
           publication.attemptId,
         ),
       );
+      // Registry observations and conflict waits may outlive the current
+      // parent admission. Retained attempts identify bytes, not live authority.
+      await revalidateAuthority?.();
       started = await requestRecovery(
         `/api/v1/publish/attempts/${encodeURIComponent(entry.attemptId)}/recover`,
         {
@@ -607,7 +623,15 @@ async function main() {
   }
 }
 
-if (process.argv[1] && isDirectRunUrl(realpathSync(process.argv[1]), import.meta.url)) {
+let invokedAsMain = false;
+if (process.argv[1]) {
+  try {
+    invokedAsMain = isDirectRunUrl(realpathSync(process.argv[1]), import.meta.url);
+  } catch {
+    // Inline and stdin importers need not have a filesystem entrypoint.
+  }
+}
+if (invokedAsMain) {
   try {
     await main();
   } catch (error) {

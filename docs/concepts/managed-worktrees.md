@@ -47,6 +47,9 @@ local message attachments, and generation tools reading local references, wait f
 initial diff baseline. Tools that do not use the workspace can run immediately,
 including generation with inline or remote references. Completion also waits
 for preparation, and a preparation failure ends the turn with a retryable error.
+If workspace ownership expires or is lost, retry the operation. Caller access
+revocation is separate: restore access before retrying. Preparation diagnostics
+retain the failing phase when a lease error wraps the original failure.
 Accelerated clones can start prompt preparation once their files are complete,
 while Git index preparation finishes behind the same workspace-tool gate.
 

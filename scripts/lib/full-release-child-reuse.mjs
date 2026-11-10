@@ -81,7 +81,7 @@ function dependencies(repository, deps) {
     requireEvidence(milliseconds > 0, `${stage} exceeded its time budget`);
     return milliseconds;
   };
-  const github = async (endpoint, { smallerPageFallback = false } = {}) => {
+  const github = async (endpoint, { smallerPageFallback = false, replay = true } = {}) => {
     const args = ["api", "repos/" + repository + "/" + endpoint];
     const stage = `API GET ${args[1]}`;
     remaining(stage);
@@ -120,7 +120,7 @@ function dependencies(repository, deps) {
       }
     };
     const value = JSON.parse(
-      await (deps.immutableReads ? deps.immutableReads.text(endpoint, load) : load()),
+      await (replay && deps.immutableReads ? deps.immutableReads.text(endpoint, load) : load()),
     );
     deps.immutableReads?.observeRun(endpoint, value);
     return value;
@@ -340,11 +340,7 @@ async function validateEvidence(selection, request, deps) {
       "workflow SHA is not a main ancestor or the candidate SHA",
     );
   }
-  const artifact = await deps.github(`actions/artifacts/${String(selection.artifact.id)}`);
-  requireEvidence(
-    canonical(artifactIdentity(artifact, request, run, deps.now)) === canonical(selection.artifact),
-    "artifact identity changed after selection",
-  );
+  // The archive owner returns fresh metadata; validate that one acquisition below.
   const downloaded = await deps.downloadArchive({
     deadlineMs: deps.deadlineMs,
     expected: {
@@ -439,6 +435,7 @@ async function validateEvidence(selection, request, deps) {
   // Read the exact origin below, including when immutable payloads are replayed.
   const parent = await deps.github(
     `actions/runs/${selection.sourceParentRunId}/attempts/${selection.sourceParentAttempt}`,
+    { replay: false },
   );
   requireEvidence(
     String(parent?.id) === selection.sourceParentRunId &&
