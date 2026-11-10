@@ -44,7 +44,6 @@ it.skipIf(windows)(
   async () => {
     const spawnRelay = relaySpawn.spawnServiceChildRelay;
     const cleanupStarted = Promise.withResolvers<Promise<unknown>>();
-    let service: OwnedStdioProcess | undefined;
     let failedWrites = 0;
     const spawnSpy = vi.spyOn(relaySpawn, "spawnServiceChildRelay").mockImplementation((params) => {
       const spawned = spawnRelay(params);
@@ -66,8 +65,8 @@ it.skipIf(windows)(
       // Only write delivery is faulted; receipt, lineage and OS exit remain native.
       readLines(control, (line) => {
         const message: unknown = JSON.parse(line);
-        if (isRecord(message) && message.type === "root-result" && service) {
-          const cleanup = closeOwnedStdioProcess(service);
+        if (isRecord(message) && message.type === "root-result") {
+          const cleanup = closeOwnedStdioProcess(child);
           void cleanup.catch(() => {});
           cleanupStarted.resolve(cleanup);
         }
@@ -79,7 +78,6 @@ it.skipIf(windows)(
     const { child } = await spawnScript('process.stdin.once("data", () => process.exit(0));', {
       terminateOnHostLoss: true,
     });
-    service = child;
     const shutdownErrors: string[] = [];
     const closing = runGatewayCloseSteps({
       owner: {
