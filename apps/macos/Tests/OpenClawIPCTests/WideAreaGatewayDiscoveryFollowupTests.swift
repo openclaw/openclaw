@@ -9,20 +9,6 @@ struct WideAreaGatewayDiscoveryFollowupTests {
     private static let srv = "0 0 18789 lab.example.test."
     private static let txt = #""displayName=Lab" "gatewayPort=18789""#
 
-    private actor StatusSpy {
-        let output: String?
-        private(set) var calls = 0
-
-        init(output: String?) {
-            self.output = output
-        }
-
-        func read() -> String? {
-            self.calls += 1
-            return self.output
-        }
-    }
-
     private struct ProbeState: Sendable {
         var now = Date(timeIntervalSinceReferenceDate: 0)
         var paths: [String] = []
@@ -30,42 +16,7 @@ struct WideAreaGatewayDiscoveryFollowupTests {
         var timeouts: [TimeInterval] = []
     }
 
-    @Test func `legacy status adapter runs once per discover including reused context`() async {
-        let outputs: [String?] = [nil, "not-json", "{}", Self.status]
-        for output in outputs {
-            let spy = StatusSpy(output: output)
-            let queries = Mutex<[String]>([])
-            let context = WideAreaGatewayDiscovery.DiscoveryContext(
-                tailscaleStatus: { await spy.read() },
-                dig: { args, _ in
-                    let type = args.last ?? ""
-                    queries.withLock { $0.append(type) }
-                    switch type {
-                    case "PTR": return Self.ptr
-                    case "SRV": return Self.srv
-                    case "TXT": return Self.txt
-                    default: Issue.record("Unexpected DNS query"); return nil
-                    }
-                },
-                now: { Date(timeIntervalSinceReferenceDate: 0) },
-                serviceDomain: { "example.test." })
-
-            for call in 1...2 {
-                let beacons = await WideAreaGatewayDiscovery.discover(context: context)
-                #expect(await spy.calls == call)
-                if output == Self.status {
-                    #expect(beacons.count == 1)
-                    #expect(beacons.first?.displayName == "Lab")
-                    #expect(queries.withLock { $0.count } == call * 3)
-                } else {
-                    #expect(beacons.isEmpty)
-                    #expect(queries.withLock { $0.isEmpty })
-                }
-            }
-        }
-    }
-
-    @Test func `command adapter retains all four status candidates then resolves DNS`() async {
+    @Test func `fourth status candidate can resolve DNS`() async {
         let state = Mutex(ProbeState())
         let context = WideAreaGatewayDiscovery.DiscoveryContext(
             run: { path, args, timeout in

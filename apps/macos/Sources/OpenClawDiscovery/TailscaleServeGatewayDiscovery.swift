@@ -15,7 +15,6 @@ enum TailscaleServeGatewayDiscovery {
 
     struct DiscoveryContext: Sendable {
         let run: @Sendable (_ path: String, _ args: [String], _ timeout: TimeInterval) async -> String?
-        let tailscaleStatus: (@Sendable () async -> String?)?
         let probeHost: @Sendable (_ host: String, _ timeout: TimeInterval) async -> Bool
         let now: @Sendable () -> Date
 
@@ -25,18 +24,6 @@ enum TailscaleServeGatewayDiscovery {
             now: @escaping @Sendable () -> Date = { Date() })
         {
             self.run = run
-            self.tailscaleStatus = nil
-            self.probeHost = probeHost
-            self.now = now
-        }
-
-        init(
-            tailscaleStatus: @escaping @Sendable () async -> String?,
-            probeHost: @escaping @Sendable (String, TimeInterval) async -> Bool,
-            now: @escaping @Sendable () -> Date = { Date() })
-        {
-            self.run = { _, _, _ in nil }
-            self.tailscaleStatus = tailscaleStatus
             self.probeHost = probeHost
             self.now = now
         }
@@ -157,11 +144,6 @@ enum TailscaleServeGatewayDiscovery {
         remaining: @Sendable () -> TimeInterval,
         context: DiscoveryContext) async -> String?
     {
-        guard remaining() > 0 else { return nil }
-        // A legacy adapter supplies an entire status lookup, not one executable attempt.
-        if let tailscaleStatus = context.tailscaleStatus {
-            return await tailscaleStatus()
-        }
         return await BoundedCommand.tailscaleStatus { candidate in
             let budget = min(1.0, remaining())
             guard budget > 0 else { return nil }

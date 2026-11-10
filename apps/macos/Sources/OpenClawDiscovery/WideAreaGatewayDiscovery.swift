@@ -24,7 +24,6 @@ enum WideAreaGatewayDiscovery {
 
     struct DiscoveryContext: Sendable {
         let run: @Sendable (_ path: String, _ args: [String], _ timeout: TimeInterval) async -> String?
-        let tailscaleStatus: (@Sendable () async -> String?)?
         let now: @Sendable () -> Date
         let serviceDomain: @Sendable () -> String?
 
@@ -34,22 +33,6 @@ enum WideAreaGatewayDiscovery {
             serviceDomain: @escaping @Sendable () -> String? = { OpenClawBonjour.wideAreaGatewayServiceDomain })
         {
             self.run = run
-            self.tailscaleStatus = nil
-            self.now = now
-            self.serviceDomain = serviceDomain
-        }
-
-        init(
-            tailscaleStatus: @escaping @Sendable () async -> String?,
-            dig: @escaping @Sendable ([String], TimeInterval) async -> String?,
-            now: @escaping @Sendable () -> Date = { Date() },
-            serviceDomain: @escaping @Sendable () -> String? = { OpenClawBonjour.wideAreaGatewayServiceDomain })
-        {
-            self.run = { path, args, timeout in
-                guard path == digPath else { return nil }
-                return await dig(args, timeout)
-            }
-            self.tailscaleStatus = tailscaleStatus
             self.now = now
             self.serviceDomain = serviceDomain
         }
@@ -149,12 +132,6 @@ enum WideAreaGatewayDiscovery {
         remaining: @Sendable () -> TimeInterval,
         context: DiscoveryContext) async -> String?
     {
-        guard remaining() > 0 else { return nil }
-        // The legacy closure owns the whole lookup. Do not retry it per executable
-        // or cache its result across separate discover calls using the same context.
-        if let tailscaleStatus = context.tailscaleStatus {
-            return await tailscaleStatus()
-        }
         return await BoundedCommand.tailscaleStatus { candidate in
             // Status lookup shares the DNS budget; each fallback must spend only what remains.
             let budget = min(0.7, remaining())
