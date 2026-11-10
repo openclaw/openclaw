@@ -236,7 +236,7 @@ export class TranscriptInitialRange {
     return forecast.viewport(
       this.virtualizer(),
       pendingDelta || this.scrollSample.direction * this.scrollSample.distance,
-      pendingDelta !== 0,
+      Boolean(this.pendingWheel && performance.now() - this.pendingWheel.time < 100),
     );
   }
 

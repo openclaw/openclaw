@@ -124,15 +124,20 @@ it.each([
   },
 );
 
-it.each([1, -1])(
-  "discounts same-direction native travel observed before a wheel (%s)",
-  (direction) => {
+it.each([
+  { direction: 1, consumed: 100, remaining: 140 },
+  { direction: -1, consumed: 100, remaining: 140 },
+  { direction: 1, consumed: 240, remaining: 0 },
+  { direction: -1, consumed: 240, remaining: 0 },
+])(
+  "retains the wheel input after discounting $consumed px of native travel ($direction)",
+  ({ direction, consumed, remaining }) => {
     const { element, virtualizer, onWheel, onOffset } = createWheelForecastObserver();
-    element.scrollTop += direction * 100;
+    element.scrollTop += direction * consumed;
     element.dispatchEvent(new WheelEvent("wheel", { deltaY: direction * 240 }));
-    expect(onOffset).toHaveBeenCalledExactlyOnceWith(direction * 100);
-    expect(onWheel).toHaveBeenCalledExactlyOnceWith(direction * 140);
-    expect(virtualizer.scrollOffset).toBe(1000 + direction * 100);
+    expect(onOffset).toHaveBeenCalledExactlyOnceWith(direction * consumed);
+    expect(onWheel).toHaveBeenCalledExactlyOnceWith(direction * remaining);
+    expect(virtualizer.scrollOffset).toBe(1000 + direction * consumed);
   },
 );
 

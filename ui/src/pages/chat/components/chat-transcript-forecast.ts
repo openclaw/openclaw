@@ -1,19 +1,19 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
-type TranscriptForecast = { top: number; direction: number; pending: boolean };
+type TranscriptForecast = { top: number; direction: number; wholeViewport: boolean };
 
 export function viewport(
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
   delta: number,
-  pending: boolean,
+  wholeViewport: boolean,
 ): TranscriptForecast {
   let top = Math.max(0, (virtualizer.scrollOffset ?? 0) + delta);
-  if (pending) {
+  if (wholeViewport) {
     const viewport = virtualizer.scrollRect?.height ?? 600;
     top = Math.min(top, Math.max(0, virtualizer.getTotalSize() - viewport));
   }
-  return { top, direction: Math.sign(delta), pending };
+  return { top, direction: Math.sign(delta), wholeViewport };
 }
 
 export function indexes(
@@ -36,11 +36,12 @@ export function indexes(
   if (!first || !last) {
     return [];
   }
-  // Pending input has a destination before the native offset arrives. Cover
-  // it within the existing allowance; observed movement retains one-step preparation.
+  // Wheel input can arrive after native scrolling. Cover its destination within
+  // the existing allowance even after consumption; other movement prepares one row.
   const indexes: number[] = [];
-  const limit = forecast.pending ? prepareRowLimit : 1;
-  const endIndex = forecast.pending && last.start >= top + viewport ? last.index - 1 : last.index;
+  const limit = forecast.wholeViewport ? prepareRowLimit : 1;
+  const endIndex =
+    forecast.wholeViewport && last.start >= top + viewport ? last.index - 1 : last.index;
   for (
     let index = direction < 0 ? endIndex : first.index;
     index >= first.index && index <= endIndex;

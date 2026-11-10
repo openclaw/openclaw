@@ -502,9 +502,8 @@ export function observeTranscriptOffset(
         Math.sign(observed) === Math.sign(wheelDelta)
           ? Math.sign(wheelDelta) * Math.max(0, Math.abs(wheelDelta) - Math.abs(observed))
           : wheelDelta;
-      if (remaining) {
-        owner.onWheel?.(remaining);
-      }
+      // A consumed wheel still identifies a fling whose next viewport needs preparation.
+      owner.onWheel?.(remaining);
     }
   };
   const moveTouch = (event: TouchEvent) => {

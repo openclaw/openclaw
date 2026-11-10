@@ -118,6 +118,22 @@ it.each([
   expect(present().forecastRowKeys.size).toBe(0);
 });
 
+it.each([
+  { direction: 1, expected: ["58", "59", "60"] },
+  { direction: -1, expected: ["42", "43", "44"] },
+])(
+  "covers the next wheel viewport after native consumption ($direction)",
+  ({ direction, expected }) => {
+    const { range, virtualizer, present } = createPendingWheelRange();
+    range.recordWheel(direction * 480);
+    range.recordReaderMovement(direction * 480);
+    virtualizer.scrollOffset = 6000 + direction * 480;
+    expect(present().forecastRowKeys).toEqual(new Set(expected));
+    range.recordWheel(0);
+    expect(present().forecastRowKeys).toEqual(new Set(expected));
+  },
+);
+
 it("keeps following rows during a viewport-sized jump past shorter-than-estimated rows", () => {
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
     count: 20,
