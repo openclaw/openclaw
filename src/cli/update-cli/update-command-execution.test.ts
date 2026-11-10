@@ -524,11 +524,15 @@ describe("mutable update execution", () => {
       }),
   );
 
-  it.each(["git", "package"] as const)(
-    "refuses a held PostgreSQL owner before candidate validation of a %s install",
-    async (kind) =>
+  it.each(
+    (["git", "package"] as const).flatMap((kind) =>
+      (["absent", "owned", "unresolved"] as const).map((verdict) => ({ kind, verdict })),
+    ),
+  )(
+    "refuses a held PostgreSQL owner before $kind validation when $verdict service cannot stop",
+    async ({ kind, verdict }) =>
       withTestDir({ prefix: "postgres-capture-early-" }, async (root) => {
-        const params = await runParams(root, kind);
+        const params = { ...(await runParams(root, kind)), shouldRestart: verdict === "absent" };
         const { env } = params.opts.run;
         await writeFixtureJson(path.join(root, "openclaw.json"), {
           database: {
@@ -536,12 +540,15 @@ describe("mutable update execution", () => {
             postgres: { connection: "postgresql://synthetic.invalid/update-capture" },
           },
         });
-        // A foreign or absent service is never stopped by the updater.
+        // An absent service or --no-restart cannot release the held owner.
         mocks.maybeStopService.mockImplementation(async () => ({
           ...inspectOrStopService("inspect"),
-          running: false,
+          running: verdict !== "absent",
           serviceEnv: env,
-          serviceUpdateVerdict: { kind: "absent" },
+          serviceUpdateVerdict:
+            verdict === "absent"
+              ? { kind: "absent" }
+              : { kind: verdict, root, fingerprint: "fixture" },
         }));
         const acquire = gatewayLock.acquireGatewayLock;
         vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) =>
@@ -592,8 +599,8 @@ describe("mutable update execution", () => {
     "keeps candidate validation when a running %s service will release the owner",
     async (verdict) =>
       withTestDir({ prefix: "postgres-capture-managed-" }, async (root) => {
-        // The restart executor check is covered elsewhere; this case owns validation order.
-        const params = { ...(await runParams(root, "package")), shouldRestart: false };
+        const params = await runParams(root, "package");
+        mocks.nativeSupport.mockResolvedValue(true);
         const { env } = params.opts.run;
         await writeFixtureJson(path.join(root, "openclaw.json"), {
           database: {

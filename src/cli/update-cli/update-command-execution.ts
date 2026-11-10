@@ -407,7 +407,7 @@ export async function executeMutableUpdate(
           assertCurrent: assertExecutionCurrent,
           writeOptions: captureWriteOptions(),
           gatewayStartupRuntime,
-          ownerService: preManagedServiceStop,
+          ownerService: params.shouldRestart ? preManagedServiceStop : undefined,
         },
         params,
         originalRun,
