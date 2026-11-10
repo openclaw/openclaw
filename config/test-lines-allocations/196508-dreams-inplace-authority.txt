@@ -4,5 +4,7 @@
 # rejection, and exact-byte recovery after a partial write. Plus 16 lines for
 # the re-review follow-up: the revoked-rejection regression now also asserts
 # the request performs no write or truncation, and the exact-mode assertion is
-# guarded on Windows.
-168
+# guarded on Windows. Plus 21 lines for upstream test-line growth on current
+# main since this allocation was written (CI reported the ceiling short by 21
+# with the +168 net delta unchanged).
+189
