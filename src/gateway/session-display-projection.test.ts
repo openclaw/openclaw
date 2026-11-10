@@ -165,4 +165,11 @@ describe("projectSessionDisplayMessage", () => {
     );
     expect(projectSessionDisplayMessage(message, { maxChars: 800 })?.text).toBe(content);
   });
+
+  test("keeps code with embedded backticks literal in a flattened preview", () => {
+    const message = assistant("Rename to ``a`b`` and match ``**/*.ts``.");
+    expect(projectSessionDisplayMessage(message, { flattenMarkdown: true })?.text).toBe(
+      "Rename to a`b and match **/*.ts.",
+    );
+  });
 });

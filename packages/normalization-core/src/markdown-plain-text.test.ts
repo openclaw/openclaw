@@ -6,6 +6,11 @@ describe("flattenMarkdownToPlainText", () => {
     ["fences", "a\n````\n```\nx\n```\n````x\nx\n`````\n~~~\nx\n~~~~\n```\nx\n```\nb", "a b"],
     ["code", "**`_i_`** [`**/*`](u`v`) `[x](y)`\0`\x00` ````z````", "_i_ **/* [x](y)\x00\x00 `"],
     [
+      "code with embedded backticks",
+      "Rename to ``a`b`` and match ``**/*.ts``.",
+      "Rename to a`b and match **/*.ts.",
+    ],
+    [
       "links and escaped image markers",
       String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,
       String.raw`Read the deployment guide, \!important, \\diagram`,

@@ -35,6 +35,63 @@ function stripCompletedLongOrTildeFences(text: string): string {
 }
 
 /**
+ * Replaces inline code spans with a `\0<index>\0` placeholder and records their
+ * literal content, so block-marker and emphasis stripping cannot rewrite code.
+ * CommonMark pairs a span by backtick runs of equal length, so code that itself
+ * contains a backtick — ``a`b`` — is kept whole instead of being truncated by a
+ * single-backtick regex. NULs outside code are doubled so they cannot look like
+ * a placeholder. This runs after link stripping so backticks inside link
+ * destinations remain visible to link parsing.
+ */
+function holdInlineCodeSpans(text: string, code: string[]): string {
+  let output = "";
+  let cursor = 0;
+  for (let index = 0; index < text.length;) {
+    const char = text.charAt(index);
+    if (char === "\0") {
+      output += text.slice(cursor, index) + "\0\0";
+      cursor = index + 1;
+      index += 1;
+      continue;
+    }
+    if (char !== "`") {
+      index += 1;
+      continue;
+    }
+    let openLength = 1;
+    while (text.charAt(index + openLength) === "`") {
+      openLength += 1;
+    }
+    // Find the next backtick run of exactly this length, which closes the span.
+    let close = -1;
+    for (let j = index + openLength; j < text.length;) {
+      if (text.charAt(j) !== "`") {
+        j += 1;
+        continue;
+      }
+      let runLength = 1;
+      while (text.charAt(j + runLength) === "`") {
+        runLength += 1;
+      }
+      if (runLength === openLength) {
+        close = j;
+        break;
+      }
+      j += runLength;
+    }
+    if (close === -1) {
+      index += 1;
+      continue;
+    }
+    output += text.slice(cursor, index) + `\0${code.length}\0`;
+    code.push(text.slice(index + openLength, close));
+    cursor = close + openLength;
+    index = cursor;
+  }
+  return output + text.slice(cursor);
+}
+
+/**
  * Flattens Markdown into a single line of readable plain text.
  *
  * For one-line surfaces that render text verbatim — session-list previews,
@@ -47,12 +104,10 @@ export function flattenMarkdownToPlainText(text: string): string {
   const withoutFences = stripCompletedLongOrTildeFences(text)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/```/g, " ");
-  // Code spans become `\0<index>\0` so block and emphasis stripping cannot rewrite them; other NULs are doubled.
-  const withoutCode = stripInlineLinks(withoutFences).replace(
-    /\0|`([^`]*)`/g,
-    (_match, literal: string | undefined) =>
-      literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
-  );
+  // Link stripping runs first so backticks inside link destinations stay visible.
+  const withoutLinks = stripInlineLinks(withoutFences);
+  // Code spans become `\0<index>\0` so block and emphasis stripping cannot rewrite them.
+  const withoutCode = holdInlineCodeSpans(withoutLinks, code);
   // Quote markers may nest with horizontal whitespace, but must not consume another line.
   let flattened = withoutCode.replace(
     /^[\t ]{0,3}(?:(?:>[\t ]*)+|(?:#{1,6}|[-+*]|\d+[.)])\s+)/gm,
