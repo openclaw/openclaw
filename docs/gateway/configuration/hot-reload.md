@@ -208,6 +208,18 @@ allowed; removing that permission or changing its provider's configuration still
 rechecks the occurrence under current policy. These unrelated edits do not consume
 the occurrence's bounded readmission attempts.
 
+Every session event, including a background command's completion follow-up,
+compares only the configuration its own agent uses: shared settings, agent
+defaults, and that agent's entry. Scheduled events compare the channels on their
+route and re-admit other message actions against current policy. Unscheduled
+events retain all channel configuration because their tools keep the captured
+configuration. Adding or editing another agent, including that agent's secret
+references, leaves a running
+event alone, and so do logging changes. A change to the event's own agent, the
+agent defaults, or shared settings still rechecks the occurrence under current
+policy. Only scheduled events narrow auth, model-provider, and MCP changes to
+their selected model; other session events treat any such change as relevant.
+
 Session detail and process-list reads that encounter a retired model-catalog
 callback refresh their catalog binding once before preparing the response.
 If the replacement is unavailable, the read reports a session-read error.

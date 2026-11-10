@@ -180,7 +180,7 @@ function runBuildGate(
     [
       `enter_worktree() { PR_MAIN_SHA=${headSha}; }`,
       "checkout_prep_branch() { :; }",
-      "prepare_local_gate_workspace() { :; }",
+      'bootstrap_deps_if_needed() { test "${OPENCLAW_BUNDLED_PLUGINS_DIR-}" = "$PWD/extensions"; }',
       changePlan(headSha),
       "run_quiet_logged() {",
       '  local label="$1"; shift 2',
@@ -195,6 +195,7 @@ function runBuildGate(
       cwd: repoDir,
       env: {
         OPENCLAW_PR_GATES_REMOTE: "local",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
         OPENCLAW_BUILD_PRIVATE_QA: options.qa,
         OPENCLAW_VITEST_MAX_WORKERS: options.workers,
       },
@@ -529,6 +530,7 @@ it("does not derive recent-parent evidence for a runtime commit", () => {
   );
 
   expect(result.status).toBe(0);
+  expect(result.stdout).toContain(`ARG:--sha\nARG:${currentHead}\n`);
   expect(result.stdout).not.toContain("ARG:--recent-sha");
 });
 it.each(["docs", "hosted", "github"])(
@@ -656,18 +658,3 @@ it.each(["foreign PR", "foreign branch", "different tree", "unpublished fixup"])
     expect(f.read("prep.env")).toBe(retained);
   },
 );
-
-it("pins the worktree before dependency bootstrap", () => {
-  const result = runGatesBash(
-    [
-      "events=$(mktemp)",
-      'pin_worktree_bundled_plugins_dir() { echo pin >> "$events"; }',
-      'bootstrap_deps_if_needed() { echo bootstrap >> "$events"; }',
-      "prepare_local_gate_workspace",
-      'cat "$events"',
-    ].join("\n"),
-  );
-
-  expect(result.status).toBe(0);
-  expect(result.stdout.trim().split("\n")).toEqual(["pin", "bootstrap"]);
-});
