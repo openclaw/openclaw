@@ -486,7 +486,8 @@ struct OpenClawIDNodeEnrollmentTests {
         #expect(pinned.bindingSequence == 2)
         #expect(pinned.snapshotSequence == 0 && pinned.snapshotIssuedAt == 0)
         #expect(pinned.snapshotBindingSequence == 2 && pinned.snapshotGatewayKey == nil)
-        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("node-enrollment.sqlite")
         let id = UUID()
