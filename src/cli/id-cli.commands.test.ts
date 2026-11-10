@@ -14,8 +14,12 @@ import { callGatewayFromCli } from "./gateway-rpc.js";
 import type { RebindPreparation } from "./id-cli-rebind.js";
 import { registerIdCli } from "./id-cli.js";
 
-vi.mock("./gateway-rpc.js", () => ({ callGatewayFromCli: vi.fn() }));
-vi.mock("@openclaw/media-core/read-byte-stream-with-limit", () => ({
+vi.mock(import("./gateway-rpc.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  callGatewayFromCli: vi.fn(),
+}));
+vi.mock(import("@openclaw/media-core/read-byte-stream-with-limit"), async (importOriginal) => ({
+  ...(await importOriginal()),
   readByteStreamWithLimit: () => Promise.resolve(Buffer.from(kitText)),
 }));
 
