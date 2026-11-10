@@ -666,7 +666,7 @@ it("operator proxy is operator-only and validates inner operations", async () =>
   await expect(
     f.service.agent_query({ agent: "ghost", operation: "records_detail", input: {} }, f.reader),
   ).rejects.toThrow(/Unknown agent/);
-  await expect(query(f, "records", { bogus: 1 })).rejects.toThrow(/Invalid input/);
+  await expect(query(f, "records_detail", { bogus: 1 })).rejects.toThrow(/Invalid input/);
 });
 
 it("recovery keeps a shared store bound to its data even when other edits conflict", async () => {

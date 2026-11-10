@@ -14,7 +14,7 @@ const answers: Record<string, unknown> = {
     definitions: [{ name: "person", label: "Person", primitive: "entity", recordCount: 410 }],
   },
   recent: { items: [], upperSequence: 0, nextBefore: null },
-  records: { records: [], total: 0, offset: 0, nextOffset: null },
+  records_detail: { records: [], total: 0, offset: 0, nextOffset: null },
 };
 
 // Mounts the page on a fake host. Each `held` answer ("scribes" is the Scribes count's job
@@ -127,7 +127,7 @@ it("lets Browse follow every returned page beyond offset 500", async () => {
   const { request } = mount();
   const original = request.getMockImplementation()!;
   request.mockImplementation(async (method, params) => {
-    if (method !== "plugins.sessionAction" || params?.actionId !== "records") {
+    if (method !== "plugins.sessionAction" || params?.actionId !== "records_detail") {
       return original(method, params);
     }
     const { offset = 0 } = params.payload as { offset?: number };

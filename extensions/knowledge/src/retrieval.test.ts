@@ -103,7 +103,7 @@ it("UI and tool share FTS title/alias/body retrieval, literal modes and stable c
     ["purple flower", "aliases"],
     ["distinctive", "body"],
   ] as const) {
-    const result = await f.agent.grep({ query, detail: "full" }, f.owner),
+    const result = await f.service.grep({ query }, f.owner),
       ui = await f.service.grep({ query }, f.operator),
       compact = await f.agent.grep({ query }, f.owner);
     expect(Check(contract.operations.grep.output, result)).toBeTruthy();

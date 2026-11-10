@@ -84,11 +84,11 @@ const invokeAll = async (service: any, ctx: any) =>
     await Promise.all(
       Object.entries(service)
         .filter(([name]) =>
-          ["status", "records", "record", "ontology", "diagnostics"].includes(name),
+          ["status", "records_detail", "record_detail", "ontology", "diagnostics"].includes(name),
         )
         .map(async ([name]) => [
           name,
-          await service[name](name === "record" ? { id: "sample_person_alex" } : {}, ctx),
+          await service[name](name === "record_detail" ? { id: "sample_person_alex" } : {}, ctx),
         ]),
     ),
   );
@@ -159,7 +159,7 @@ it("missing, foreign, and revoked tool authority fails for every operation", asy
     for (const [name, op] of Object.entries(f.service)) {
       // One probe input for every operation, deliberately invalid for most; authority fails first.
       await expect(async () =>
-        op((name === "record" ? { id: "sample_person_alex" } : {}) as never, {
+        op((name === "record_detail" ? { id: "sample_person_alex" } : {}) as never, {
           ...f.owner,
           tool: { ...f.owner.tool, ...override },
         }),
@@ -248,7 +248,7 @@ it("empty conversation scope returns an empty catalog, without creating files or
   const ctx = { ...f.owner, tool: { ...f.owner.tool, memoryAudience: conversation(sessionId) } };
   const output = await invokeAll(f.service, ctx);
   expect(output.status.records).toBe(0);
-  expect(output.record.record).toBe(null);
+  expect(output.record_detail.record).toBe(null);
   expect(output.diagnostics.total).toBe(0);
   expect(output.ontology.available).toBe(true);
   expect(JSON.stringify(output)).not.toMatch(/PRIVATE SENTINEL/);
@@ -265,7 +265,7 @@ it("mismatched scope content is withheld, malformed files preserved", async () =
   );
   await writeFile(file, foreign);
   const output = await invokeAll(f.service, f.owner);
-  expect(output.record.record).toBe(null);
+  expect(output.record_detail.record).toBe(null);
   expect(JSON.stringify(output)).not.toMatch(/PRIVATE SENTINEL/);
   expect(await readFile(file, "utf8")).toBe(foreign);
 });

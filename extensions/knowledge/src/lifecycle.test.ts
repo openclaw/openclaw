@@ -255,11 +255,11 @@ for (const stage of [
     });
     await expect(publisher.correct(input, f.access(), "agent")).rejects.toThrow(/crash/);
     for (const [method, arg] of [
-      ["records", {}],
-      ["record", { id: original.id }],
+      ["records_detail", {}],
+      ["record_detail", { id: original.id }],
       ["grep", { query: "option" }],
       ["lookup", { query: original.id }],
-      ["connections", { id: f.pages.project.id }],
+      ["connections_detail", { id: f.pages.project.id }],
       ["ontology", {}],
       ["status", {}],
       ["recent", {}],
