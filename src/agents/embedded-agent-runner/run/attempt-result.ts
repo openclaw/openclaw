@@ -294,17 +294,15 @@ export function completeEmbeddedAttemptResult(
       input.prepared.toolCatalog.toolSearchRunPlan;
     // Deferred names need native correction too; detection never executes text.
     const allowedToolNames = new Set([...liveAllowedToolNames, ...capabilityToolNames]);
-    const attemptedName =
-      allowedToolNames.size > 0
-        ? resolvePlainTextToolCallAttemptName(
-            extractAssistantTranscriptSourceText(assistant) ?? "",
-            (name) => Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
-          )
-        : undefined;
-    textToolCallAttempt = attemptedName !== undefined;
+    const assistantText = extractAssistantTranscriptSourceText(assistant) ?? "";
+    const hasAllowedToolName = (name: string) =>
+      Boolean(resolveToolCallName(name, allowedToolNames, undefined, true));
+    textToolCallAttempt =
+      allowedToolNames.size > 0 &&
+      resolvePlainTextToolCallAttemptName(assistantText, hasAllowedToolName) !== undefined;
     const { toolBase } = input.prepared;
     if (
-      attemptedName &&
+      textToolCallAttempt &&
       toolBase.toolSearchControlsEnabledForRun &&
       toolBase.toolSearchConfig.mode === "tools" &&
       visibleAllowedToolNames.has(TOOL_CALL_RAW_TOOL_NAME)
@@ -321,14 +319,22 @@ export function completeEmbeddedAttemptResult(
           )
           .map((entry) => entry.name),
       ]);
-      const name = resolveToolCallName(attemptedName, registeredNames, undefined, true);
-      // Use the current authorized catalog; ambiguous or retired names stay generic.
-      const tool =
-        name &&
-        !visibleAllowedToolNames.has(name) &&
-        (!attempt.toolExecutionAllow || isToolExecutionAllowed(attempt.toolExecutionAllow, name))
+      const resolveDeferredTool = (candidate: string) => {
+        const name = resolveToolCallName(candidate, registeredNames, undefined, true);
+        // Use the current authorized catalog; ambiguous or retired names stay generic.
+        return name &&
+          !visibleAllowedToolNames.has(name) &&
+          (!attempt.toolExecutionAllow || isToolExecutionAllowed(attempt.toolExecutionAllow, name))
           ? resolveToolSearchCatalogTool({ catalogRef }, name)
           : undefined;
+      };
+      // A direct or restricted call must not hide a later eligible deferred call.
+      const deferredName = resolvePlainTextToolCallAttemptName(
+        assistantText,
+        hasAllowedToolName,
+        (candidate) => Boolean(resolveDeferredTool(candidate)),
+      );
+      const tool = deferredName ? resolveDeferredTool(deferredName) : undefined;
       if (tool) {
         textToolCallRecovery = {
           toolName: tool.name,

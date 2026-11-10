@@ -279,6 +279,42 @@ describe("attempt result projection", () => {
     },
   );
 
+  it.each([
+    '[{"name":"read","arguments":{}},{"name":"web_fetch","arguments":{}}]',
+    '[{"name":"web_fetch","arguments":{}},{"name":"read","arguments":{}}]',
+    '{"tool_calls":[{"function":{"name":"read","arguments":{}}},{"function":{"name":"web_fetch","arguments":{}}}]}',
+    "<tool_calls><function=read><parameter=path>proof.txt</parameter></function><function=web_fetch><parameter=url>https://example.com/</parameter></function></tool_calls>",
+    'I\'ll call read now.\n[{"name":"read","arguments":{}},{"name":"web_fetch","arguments":{}}]',
+  ])("names the deferred route in mixed text calls: %s", (text) => {
+    const fixture = deferredTextFixture();
+    fixture.settled.currentAttemptCompletedAssistant = textAssistant(text);
+    const plan = fixture.input.prepared.toolCatalog.toolSearchRunPlan;
+    plan.visibleAllowedToolNames.add("read");
+    plan.liveAllowedToolNames.add("read");
+    // Direct OpenClaw tools remain capabilities too; this is not a deferred-only set.
+    plan.capabilityToolNames.add("read");
+    const instruction = textRetryInstruction(fixture);
+    expect(instruction).toContain("dispatch_action");
+    expect(instruction).toContain('id set to "web_fetch"');
+  });
+
+  it("skips a restricted deferred call before an eligible one", () => {
+    const fixture = deferredTextFixture();
+    fixture.settled.currentAttemptCompletedAssistant = textAssistant(
+      '[{"name":"web_search","arguments":{}},{"name":"web_fetch","arguments":{}}]',
+    );
+    const { toolBase, toolCatalog } = fixture.input.prepared;
+    toolCatalog.toolSearchRunPlan.capabilityToolNames.add("web_search");
+    registerHeadlessToolSearchCatalog({
+      catalogRef: toolBase.toolSearchCatalogRef,
+      tools: [createStubTool("web_search"), createStubTool("web_fetch")],
+    });
+    Object.assign(fixture.input.attempt, { toolExecutionAllow: ["web_fetch"] });
+    const instruction = textRetryInstruction(fixture);
+    expect(instruction).toContain('id set to "web_fetch"');
+    expect(instruction).not.toContain('id set to "web_search"');
+  });
+
   it.each<[string, string[], boolean]>([
     ["Read_Public_Item", [], true],
     ["functions.Read_Public_Item", [], true],

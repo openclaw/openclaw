@@ -346,12 +346,17 @@ function splitTrailingFence(text: string): { prefix: string; body: string } | un
 export function resolvePlainTextToolCallAttemptName(
   text: string,
   hasToolName: PlainTextToolCallNameMatcher["hasExactName"],
+  selectToolName?: PlainTextToolCallNameMatcher["hasExactName"],
 ): string | undefined {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 256_000) {
     return undefined;
   }
-  const name = resolveStructuredCallName(trimmed, hasToolName);
+  // Narrow the selected call without narrowing which action announcements are valid.
+  const matchesCallName = selectToolName
+    ? (name: string) => hasToolName(name) && selectToolName(name)
+    : hasToolName;
+  const name = resolveStructuredCallName(trimmed, matchesCallName);
   if (name) {
     return name;
   }
@@ -374,13 +379,5 @@ export function resolvePlainTextToolCallAttemptName(
   if (!body || (prefix && !toolLabel && !hasToolName(announcedTool ?? "") && !fileAnnouncement)) {
     return undefined;
   }
-  return resolveStructuredCallName(body.trim(), hasToolName);
-}
-
-/** Detects a non-executable near miss; this must never be used to dispatch a tool. */
-export function isPlainTextToolCallAttempt(
-  text: string,
-  hasToolName: PlainTextToolCallNameMatcher["hasExactName"],
-): boolean {
-  return resolvePlainTextToolCallAttemptName(text, hasToolName) !== undefined;
+  return resolveStructuredCallName(body.trim(), matchesCallName);
 }
