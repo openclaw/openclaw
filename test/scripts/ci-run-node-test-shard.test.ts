@@ -465,6 +465,16 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     { extra: [], args: [], jobArgs: undefined, preset: "runtime" },
     {
       targets: [
+        "src/agents/provider-auth-websocket.test.ts",
+        "src/cron/session-run.session-model-strictness.integration.test.ts",
+        "src/agents/sessions/agent-session-steering-context.test.ts",
+      ],
+      args: [],
+      jobArgs: undefined,
+      preset: "runtime",
+    },
+    {
+      targets: [
         "src/flows/doctor-health.update-schema.test.ts",
         "src/commands/doctor-config-preflight.container-upgrade.test.ts",
         "src/commands/doctor-maintenance.schema-preflight.test.ts",

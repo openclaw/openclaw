@@ -18,6 +18,8 @@ const built = { OPENCLAW_TUI_PTY_USE_BUILT_CLI: "1" };
 const reply = "test/vitest/vitest.auto-reply.config.ts";
 const delivery = "src/auto-reply/reply/dispatch-from-config.delivery.test.ts";
 const commands = "test/vitest/vitest.commands.config.ts";
+const cron = "test/vitest/vitest.cron.config.ts";
+const agentsSupport = "test/vitest/vitest.agents-support.config.ts";
 const doctorCommandFiles = [
   "src/commands/doctor-config-preflight.container-upgrade.test.ts",
   "src/commands/doctor-maintenance.schema-preflight.test.ts",
@@ -26,6 +28,34 @@ const doctorCommandFiles = [
 ];
 
 it.each([
+  {
+    name: "provider auth websocket",
+    config: "test/vitest/vitest.agents-core.config.ts",
+    files: ["src/agents/provider-auth-websocket.test.ts"],
+    runtime: true,
+  },
+  {
+    name: "cron session model",
+    config: cron,
+    files: ["src/cron/session-run.session-model-strictness.integration.test.ts"],
+    runtime: true,
+  },
+  {
+    name: "agent session steering",
+    config: agentsSupport,
+    files: ["src/agents/sessions/agent-session-steering-context.test.ts"],
+    runtime: true,
+  },
+  { name: "broad cron", config: cron, files: [], runtime: false },
+  {
+    name: "mixed agents support",
+    config: agentsSupport,
+    files: [
+      "src/agents/sessions/agent-session-steering-context.test.ts",
+      "src/agents/sessions/unknown.test.ts",
+    ],
+    runtime: false,
+  },
   { name: "Doctor commands", config: commands, files: doctorCommandFiles, runtime: true },
   {
     name: "Doctor update schema",
