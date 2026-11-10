@@ -27,6 +27,7 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 import { formatErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   isNumericTargetId,
   sendPayloadWithChunkedTextAndMedia,
@@ -36,10 +37,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  chunkTextForOutbound,
-  sanitizeAssistantVisibleText,
-} from "openclaw/plugin-sdk/text-chunking";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import {
   checkZcaAuthenticated,
@@ -558,7 +556,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     },
     outbound: {
       deliveryMode: "direct" as const,
-      chunker: chunkTextForOutbound,
+      chunker: (text, limit) => chunkMarkdownTextWithMode(text, limit, "length"),
       chunkerMode: "markdown" as const,
       sendPayload: async (ctx: { payload: object } & Parameters<typeof sendZalouserOutbound>[0]) =>
         await sendPayloadWithChunkedTextAndMedia({

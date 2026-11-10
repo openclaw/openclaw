@@ -103,6 +103,8 @@ it("chunks outbound text without requiring Zalouser runtime initialization", () 
   const chunker = required(outbound.chunker);
 
   expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  const fenced = "```py\n  a\n  b\n```\n\nend";
+  expect(chunker(fenced, 14)).toEqual(["```py\n  a\n```", "```py\n  b\n```", "end"]);
 });
 
 describe("zalouser channel policies", () => {

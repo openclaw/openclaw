@@ -49,6 +49,7 @@ export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 // compat record's removeAfter window expires (deleted in retirement PR 4).
 export { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+export { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";

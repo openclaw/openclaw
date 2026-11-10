@@ -270,6 +270,8 @@ describe("tlon outbound loopback", () => {
     }
 
     expect(outbound.chunkerMode).toBe("markdown");
+    const fenced = "```py\n  a\n  b\n```\n\nend";
+    expect(chunker(fenced, 14)).toEqual(["```py\n  a\n```", "```py\n  b\n```", "end"]);
     expect(chunks).toEqual(["x".repeat(TEXT_LIMIT), "x"]);
     expect(pokes).toHaveLength(chunks.length);
     expect(loginCount).toBeGreaterThan(0);

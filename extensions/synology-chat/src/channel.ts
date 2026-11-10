@@ -24,6 +24,7 @@ import {
   channelStoppedPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -34,7 +35,6 @@ import {
   normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  chunkTextForOutbound,
   findCodeRegions,
   isInsideCode,
   sanitizeAssistantVisibleText,
@@ -245,9 +245,10 @@ async function sendSynologyChatMedia(ctx: SynologyMediaContext & { mediaUrl: str
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
   });
-  const [caption, ...overflow] = chunkTextForOutbound(
+  const [caption, ...overflow] = chunkMarkdownTextWithMode(
     ctx.text ?? "",
     SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT,
+    "length",
   );
   const dispatch = ctx.onPlatformSendDispatch;
   const sendResult = await sendHostedFileUrl(
@@ -483,7 +484,7 @@ export const synologyChatPlugin = {
           };
     },
     deliveryMode: "gateway" as const,
-    chunker: chunkTextForOutbound,
+    chunker: (text, limit) => chunkMarkdownTextWithMode(text, limit, "length"),
     chunkerMode: "markdown" as const,
     textChunkLimit: SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT,
     sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
