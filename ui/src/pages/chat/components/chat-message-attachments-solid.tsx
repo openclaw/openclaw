@@ -151,9 +151,7 @@ export function AssistantAttachments(
             const presentation = (): "inline" | "card" => {
               const current = item();
               return props.inlinePlayback !== false ||
-                (current.type === "attachment" &&
-                  current.attachment.kind === "audio" &&
-                  current.attachment.isVoiceNote)
+                (current.type === "attachment" && current.attachment.kind === "audio")
                 ? "inline"
                 : "card";
             };

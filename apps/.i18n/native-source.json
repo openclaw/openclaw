@@ -3705,7 +3705,6 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaAudioAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.ff8a624b35b28e5e","source":"Pause Talk mode before playing this attachment."},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaAudioAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.415bee26bcfef18a","source":"Play"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaAudioAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.3dbb1cd8e1596c66","source":"Preparing playback…"},
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaAudioAttachment.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.bbbc693d37d1e48d","source":"Voice note"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.8d9042ceb485045a","source":"Collapse tool result"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.bb0299b1ae4d2ef5","source":"Expand tool result"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatToolActivityViews.swift","kind":"ui-call","surface":"apple","id":"native.apple.98ff0a205ca51067","source":"Collapsed"},

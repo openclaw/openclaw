@@ -1399,7 +1399,7 @@ openclaw-chat-video-player {
 
 .chat-audio-player__time {
   display: block;
-  width: 62px;
+  min-width: 62px;
   flex: none;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
@@ -2866,6 +2866,25 @@ openclaw-chat-ci-details {
 }
 
 @media (pointer: coarse) {
+  .chat-audio-player__toggle,
+  .chat-audio-player__volume {
+    width: 44px;
+    height: 44px;
+  }
+
+  .chat-audio-player__seek {
+    height: 44px;
+    background-size: 100% 4px;
+    background-repeat: no-repeat;
+    background-position: center;
+  }
+
+  .chat-audio-player__waveform {
+    display: flex;
+    align-items: center;
+    height: 44px;
+  }
+
   .chat-subagent-detail__stop {
     min-width: 44px;
     min-height: 44px;
