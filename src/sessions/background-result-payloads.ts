@@ -22,6 +22,7 @@ import {
 import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.js";
 import { hasReplyChannelData } from "../interactive/payload.js";
 import { logWarn } from "../logger.js";
+import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import {
@@ -128,8 +129,8 @@ function toTranscriptPayload(payload: ReplyPayload): ReplyPayload {
 }
 
 // Builds display blocks for delivered media. Images become managed media;
-// documents are recorded as named references because delivery confirms the
-// reference, not permission to ingest the local file.
+// documents and untrusted local audio/video are recorded as named references
+// because delivery confirms the reference, not permission to ingest the local file.
 async function buildResultDisplayContent(params: {
   agentId: string;
   sessionKey: string;
@@ -143,7 +144,12 @@ async function buildResultDisplayContent(params: {
     // Split each payload's media into embeddable entries and document references.
     const media = collectReplyMediaEntries(payload).filter(({ url, attachment }) => {
       const mimeType = attachment?.mimeType ?? mimeTypeFromFilePath(url);
-      if (payload.sensitiveMedia === true || mediaKindFromMime(mimeType) !== "document") {
+      const kind = mediaKindFromMime(mimeType);
+      const trusted = attachment?.trustedLocalMedia ?? payload.trustedLocalMedia === true;
+      const reference =
+        kind === "document" ||
+        ((kind === "audio" || kind === "video") && !trusted && !!resolveLocalMediaPath(url));
+      if (payload.sensitiveMedia === true || !reference) {
         return true;
       }
       if (!documentReferences.has(url)) {
@@ -151,7 +157,7 @@ async function buildResultDisplayContent(params: {
         documentReferences.set(url, {
           type: "attachment",
           attachment: {
-            kind: "document",
+            kind,
             label: resolveMirroredTranscriptText({ mediaUrls: [attachment?.name || url] }),
             mimeType,
           },
