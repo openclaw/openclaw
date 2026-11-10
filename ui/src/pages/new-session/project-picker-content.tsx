@@ -393,13 +393,13 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                   each={localProjects()}
                   keyed={(project) => project.id}
                   fallback={
-                    projectsReady() && !projectCatalogError() ? (
+                    <Show when={projectsReady() && !projectCatalogError()}>
                       <div class="new-session-page__menu-note">
                         {view().query
                           ? t("newSession.noLocalProjectMatches")
                           : t("newSession.noLocalProjects")}
                       </div>
-                    ) : undefined
+                    </Show>
                   }
                 >
                   {(project) => {
@@ -466,11 +466,11 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                         each={remoteProjects()}
                         keyed={(project) => project.cloneUrl}
                         fallback={
-                          projectSearchResult() ? (
+                          <Show when={projectSearchResult()}>
                             <div class="new-session-page__menu-note">
                               {t("newSession.noAdditionalGithubProjects")}
                             </div>
-                          ) : undefined
+                          </Show>
                         }
                       >
                         {(project) => {

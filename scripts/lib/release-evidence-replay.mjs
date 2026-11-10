@@ -6,8 +6,9 @@ import { isDeepStrictEqual } from "node:util";
 export const MAX_REPLAY_BYTES = 64 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 16 * 1024 * 1024;
 const MAX_ENTRIES = 512;
+const runAttemptRoute = /^actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*$/u;
 const immutableRoute =
-  /^(?:contents\/(?:\.github\/workflows\/[a-z0-9-]+\.yml|scripts\/lib\/[a-z0-9-]+\.json)\?ref=[a-f0-9]{40}|actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*\/jobs\?per_page=(?:30|50|100)(?:&page=[1-9][0-9]*)?|actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*\/jobs\?page=[1-9][0-9]*&per_page=(?:30|50|100)|actions\/jobs\/[1-9][0-9]*\/logs|actions\/artifacts\/[1-9][0-9]*\/zip)$/u;
+  /^(?:contents\/(?:\.github\/workflows\/[a-z0-9-]+\.yml|scripts\/lib\/[a-z0-9-]+\.json)\?ref=[a-f0-9]{40}|actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*\/jobs\?per_page=(?:30|50|100)(?:&page=[1-9][0-9]*)?|actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*\/jobs\?page=[1-9][0-9]*&per_page=(?:30|50|100)|actions\/runs\/[1-9][0-9]*\/attempts\/[1-9][0-9]*|compare\/[a-f0-9]{40}\.\.\.[a-f0-9]{40}(?:\?per_page=1&page=2)?|actions\/jobs\/[1-9][0-9]*\/logs|actions\/artifacts\/[1-9][0-9]*\/zip)$/u;
 const archiveIdentity = (metadata) => [
   metadata.id,
   metadata.name,
@@ -41,6 +42,9 @@ export function createReleaseEvidenceReplay(binding, payload) {
       (value.kind === "bytes" && bytes.toString("base64") !== value.data)
     ) {
       throw new Error("Immutable evidence response digest or size mismatch");
+    }
+    if (runAttemptRoute.test(route) && JSON.parse(bytes.toString("utf8")).status !== "completed") {
+      throw new Error("Only completed exact-attempt run evidence can be reused");
     }
     if (route.includes("/jobs?")) {
       const response = JSON.parse(bytes.toString("utf8"));
@@ -98,15 +102,21 @@ export function createReleaseEvidenceReplay(binding, payload) {
       return kind === "bytes" ? Buffer.from(found.data, "base64") : found.data;
     }
     if (payload !== undefined) {
-      // Historical attempts can retain nonterminal rows. Those pages are not
-      // immutable evidence: fetch them live through the same strict validators.
-      if (route.includes("/jobs?")) {
+      // Historical runs and jobs can retain nonterminal rows. Fetch those live;
+      // only completed exact-attempt responses may enter the replay payload.
+      if (runAttemptRoute.test(route) || route.includes("/jobs?")) {
         return load();
       }
       throw new Error(`Missing immutable evidence response: ${route}`);
     }
     const record = (raw) => {
       const bytes = Buffer.from(raw);
+      if (
+        runAttemptRoute.test(route) &&
+        JSON.parse(bytes.toString("utf8")).status !== "completed"
+      ) {
+        return raw;
+      }
       if (route.includes("/jobs?")) {
         const response = JSON.parse(bytes.toString("utf8"));
         if (

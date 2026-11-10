@@ -114,7 +114,7 @@ verify_child_run_sha() {
 
 cleanup_clawhub_children() {
   local run_id run_json failed=0
-  for run_id in "${RELEASE_CLAWHUB_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_RUN_ID:-}}" "${RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID:-}}"; do
+  for run_id in "${RELEASE_CLAWHUB_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_RUN_ID:-}}" "${RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID:-${CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID:-}}" "${CHILD_CLAWHUB_RECOVERY_RUN_ID:-}"; do
     [[ -n "$run_id" ]] || continue
     run_json="$(gh_read api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")" || { failed=1; continue; }
     [[ "$(jq -r '.status' <<< "$run_json")" != completed ]] || continue
@@ -368,6 +368,7 @@ dispatch_workflow_at_ref() {
   case "$workflow" in
     plugin-npm-release.yml) output_key=plugin_npm_run_id; env_key=CHILD_PLUGIN_NPM_RUN_ID ;;
     plugin-clawhub-release.yml) output_key=plugin_clawhub_run_id; env_key=RELEASE_CLAWHUB_RUN_ID ;;
+    plugin-clawhub-recovery.yml) output_key=clawhub_recovery_run_id; env_key=CHILD_CLAWHUB_RECOVERY_RUN_ID ;;
     plugin-clawhub-new.yml) output_key=plugin_clawhub_bootstrap_run_id; env_key=RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID ;;
     openclaw-npm-release.yml) output_key=openclaw_npm_run_id; env_key=CHILD_OPENCLAW_NPM_RUN_ID ;;
   esac

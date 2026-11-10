@@ -783,6 +783,8 @@ it("continues idle warming when the viewport fills the retained DOM budget", asy
 });
 
 it("stops preparing when the predicted DOM window has no retainable rows", async () => {
+  // Drain preparation tasks with the fixture clock before sampling their work count.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const view = await transcriptFixture(0, true, false, true);
   // Optional module readiness must precede the DOM-preparation work-count boundary.
   await waitForSolid(() => expect(view.host.renderer.prewarmRow(0)).not.toBeUndefined());
