@@ -292,6 +292,30 @@ describe("legacy state migration read-only refusals", () => {
     ]);
   });
 
+  it("keeps an OAuth directory spelled through a state-dir alias in the read-only plan", async () => {
+    const fixture = await makeFixture();
+    // state-alias resolves to the copied state dir, so alias/operator-credentials is
+    // lexically outside the snapshot while its real path is inside it.
+    const alias = path.join(fixture.root, "state-alias");
+    fs.symlinkSync(fixture.stateDir, alias, process.platform === "win32" ? "junction" : "dir");
+    const oauthDir = path.join(alias, "operator-credentials");
+    const pairingPath = path.join(oauthDir, "telegram-pairing.json");
+    fs.mkdirSync(oauthDir);
+    fs.writeFileSync(pairingPath, '{"version":1,"requests":[]}\n');
+
+    const plan = await planLegacyStateMigrationsReadOnly({
+      mode: "doctor",
+      candidate: candidateAt(fixture.root),
+      snapshot: createCallerModeSnapshot(fixture),
+      env: { ...fixture.env, OPENCLAW_OAUTH_DIR: oauthDir },
+    });
+
+    expect(plan.refusal?.code).not.toBe("oauth-dir-outside-snapshot");
+    expect(plan.steps.find((step) => step.id === "channel-pairing")?.source).toEqual([
+      { kind: "path", path: pairingPath },
+    ]);
+  });
+
   it("rejects a WAL symlink before shared-memory classification can inspect its target", async () => {
     const fixture = await makeFixture();
     const databasePath = path.join(fixture.stateDir, "snapshot.sqlite");

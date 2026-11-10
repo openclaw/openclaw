@@ -1601,7 +1601,11 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     ? resolveOAuthDir({ ...callerEnv, OPENCLAW_OAUTH_DIR: rawOAuthDir }, requestedSnapshot.stateDir)
     : undefined;
   const oauthDirOutsideSnapshot =
-    callerOAuthDir !== undefined && !isPathInside(requestedSnapshot.stateDir, callerOAuthDir);
+    callerOAuthDir !== undefined &&
+    !isPathInside(
+      resolveIdentityPathViaExistingAncestorSync(requestedSnapshot.stateDir),
+      resolveIdentityPathViaExistingAncestorSync(callerOAuthDir),
+    );
   const pendingStateDirMigration = resolvePendingLegacyStateDirMigrationPaths({
     env: params.env,
     homedir: () => requestedSnapshot.homeDir,
