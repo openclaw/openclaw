@@ -276,3 +276,31 @@ it.skipIf(process.platform !== "linux")(
     expect((await fs.readdir(destination)).toSorted()).toEqual(names.slice(0, 128).toSorted());
   },
 );
+
+it("rejects an included file replaced by a symlink during portable copy inspection", async () => {
+  vi.spyOn(childProcess, "execFileSync").mockImplementationOnce(() => {
+    throw Object.assign(new Error("GNU cp unavailable"), { code: "ENOENT" });
+  });
+  const { source: repo, destination } = fixture();
+  const source = path.join(repo, "settings.local");
+  await fs.writeFile(source, "included bytes\n");
+  const outside = path.join(directories.make("provisioned-copy-outside-"), "outside.txt");
+  await fs.writeFile(outside, "outside bytes\n");
+  const lstat = fs.lstat.bind(fs);
+  let replaced = false;
+  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    const observed = await lstat(...args);
+    if (args[0] === source && !replaced) {
+      replaced = true;
+      await fs.rename(source, `${source}.original`);
+      await fs.symlink(outside, source);
+    }
+    return observed;
+  });
+
+  await expect(copyProvisionedPaths(repo, destination, ["settings.local"], {})).rejects.toThrow();
+
+  expect(replaced).toBe(true);
+  expect(await fs.readdir(destination)).toEqual([]);
+  expect(await fs.readFile(outside, "utf8")).toBe("outside bytes\n");
+});
