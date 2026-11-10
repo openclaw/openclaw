@@ -145,11 +145,15 @@ it.each([false, true])(
     const root = createTempDir("openclaw-testbox-pnpm-");
     const exposed = path.join(root, "bin");
     const bin = coincident ? exposed : path.join(root, "prepared tools");
-    for (const directory of new Set([bin, exposed])) fs.mkdirSync(directory);
+    for (const directory of new Set([bin, exposed])) {
+      fs.mkdirSync(directory);
+    }
     const writeTool = (name: string, text: string) =>
       fs.writeFileSync(path.join(bin, name), text, { mode: 0o755 });
     writeTool("node", '#!/bin/sh\nprintf "%s\\n" "$TESTBOX_NODE"\n');
-    for (const name of ["npm", "npx"]) writeTool(name, "#!/bin/sh\nexit 0\n");
+    for (const name of ["npm", "npx"]) {
+      writeTool(name, "#!/bin/sh\nexit 0\n");
+    }
     writeTool("git", '#!/bin/sh\nprintf "%s\\n" fixture-base\n');
     writeTool("sudo", '#!/bin/sh\nexec "$@"\n');
     fs.writeFileSync(
