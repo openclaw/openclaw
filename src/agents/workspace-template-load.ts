@@ -23,8 +23,10 @@ const RETIRED_GENERATED_TEMPLATE_SHA256: Readonly<Record<string, readonly string
     "1e17784e422c0e47e44c5214d0b37092f7b378bb2d3746976032be3075203c88",
     "490fc2b32865dd310a3af1225a409ac5c942d89ba456167feb0fd95e2807aaff",
   ],
-  // Stock BOOTSTRAP.md seeded by v2026.9.2 (3928bad9badf), after frontmatter removal.
   [DEFAULT_BOOTSTRAP_FILENAME]: [
+    // Stock BOOTSTRAP.md seeded by v2026.7.1 (2d2ddc43d0dc), after frontmatter removal.
+    "204b441f369bb8ae932deefc13835f639a1eae2eb5e6a4facebfe784893b09de",
+    // Stock BOOTSTRAP.md seeded by v2026.9.2 (3928bad9badf), after frontmatter removal.
     "5743df065658a002025a52190f114c57b0883b71c84a55670b9b3fbdaaed3c1b",
   ],
   [DEFAULT_SOUL_FILENAME]: ["4f9042f259b076e429d0f01ce39340030f47ea5b7f5befe306296c36baf1f60f"],
