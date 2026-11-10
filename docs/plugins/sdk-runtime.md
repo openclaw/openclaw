@@ -168,9 +168,11 @@ system prompt at fork time.
 Completed-session forks apply the configured channel history window and preserve
 compaction summaries. Forks rebuild context independently and do not share the
 parent's complete request preparation or its live connection. On OpenAI routes they
-send the parent's prompt-cache routing key so the provider can reuse the cached
-prefix: a running parent's exact key, or the session's default key for a completed
-session. A run-only explicit key is not recorded after the run ends, so a completed
+send the parent's `prompt_cache_key`: a running parent's exact key, or the
+session's default key for a completed session. On models before GPT-5.6 the key
+helps cache routing; on GPT-5.6 and later it separates cache accounting while
+OpenAI routes automatically, so it does not guarantee reuse (see
+[OpenAI prompt caching](/reference/prompt-caching#openai-direct-api)). A run-only explicit key is not recorded after the run ends, so a completed
 fork falls back to the default key.
 
 The fork uses the same provider payload builders as a normal request. Unchanged
