@@ -340,10 +340,11 @@ export function observeTranscriptOffset(
     const command = owner.state.scrollCommand;
     // Measurement sync can consume the numeric offset before this event. Decide
     // retirement from pane policy's movement and the OLD maintenance target.
+    // Smooth preparation can carry motion from the preceding native journey.
     const retiringCommand =
-      delta !== 0 &&
+      delta < 0 &&
       command?.target === "end" &&
-      command.offset === undefined &&
+      command.behavior !== "smooth" &&
       owner.state.pendingScrollOffset === null &&
       !isTranscriptMaintenanceScroll(owner.state, element, offset, maintenanceTarget)
         ? command

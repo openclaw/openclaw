@@ -26,6 +26,7 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
+import { createTimeout } from "../../../lib/reactive/timers.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import {
   getExpandedToolCards,
@@ -99,16 +100,22 @@ export function ChatThread(input: ChatThreadInput) {
   const initialReady = Boolean(input.props.restoring);
   const [ready, setReady] = createSignal(initialReady);
   const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
+  const reveal = createTimeout(() => {
+    if (isPresented()) {
+      setReady(true);
+    }
+  });
   return (
     <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
       <Show when={ready() || isPresented()}>
         {(_presented) => {
           onSettled(() => {
-            // Paint the pane and composer before preparing the initial transcript range.
-            scheduleLayout(setReady, () => () => {
-              scheduleLayout(setReady, () => () => setReady(true));
-            });
-            return () => cancelLayout(setReady);
+            // Let this frame paint the composer before preparing the transcript in a task.
+            scheduleLayout(reveal, () => () => reveal.schedule());
+            return () => {
+              cancelLayout(reveal);
+              reveal.cancel();
+            };
           });
           return (
             <>

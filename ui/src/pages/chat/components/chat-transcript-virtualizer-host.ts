@@ -650,14 +650,14 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   scrollToEnd({ source = "manual", behavior = "auto" }: ChatScrollToEndOptions = {}): boolean {
     // Hydration/resize follow cannot replace a saved reader. A new latest
     // command intentionally supersedes restoration.
-    const allowed =
-      source !== "auto" || (!this.offsetState.pendingScrollOffset && this.canAutoFollow());
-    if (!allowed || (source === "auto" && this.initialRange.preparingEnd)) {
-      return allowed;
-    }
     if (source !== "auto") {
       // End-follow must not let speculative history measurements move its target.
       this.initialRange.finish(true);
+    } else if (this.offsetState.pendingScrollOffset || !this.canAutoFollow()) {
+      return false;
+    } else if (this.initialRange.preparingEnd && this.offsetState.scrollCommand?.target === "end") {
+      // Preparation and native settling already own this destination.
+      return true;
     }
     scrollTranscriptToEnd(
       this.offsetState,
@@ -678,7 +678,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     const element = this.scrollElement;
     const lifecycle = this.cleanupVirtualizer;
     this.bookmarkState.bookmark = undefined;
-    // Retire the old owner before finishEnd can refresh and admit another command.
+    // Retire the old owner before range work can refresh and admit another command.
     this.offsetState.scrollCommand = null;
     this.offsetState.pendingScrollOffset = null;
     cancelPendingScrollRetry(this.scrollRestoreHost);
@@ -691,11 +691,15 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     }
     this.prependAnchor.clear();
     if (!preserveEnd || unissuedEnd) {
-      // Retire the vendor target before finishEnd can admit a replacement.
+      // Retire the vendor target before range work can admit a replacement.
       // Unissued preparation must not manufacture a native offset target.
       this.virtualizer.cancelScroll();
     }
-    this.initialRange.finishEnd();
+    if (preserveEnd) {
+      this.initialRange.finishEndWhenSettled();
+    } else {
+      this.initialRange.finishEnd();
+    }
     if (
       unissuedEnd ||
       (!command && !pendingOffset) ||

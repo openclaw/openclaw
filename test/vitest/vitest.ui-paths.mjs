@@ -89,6 +89,7 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/components/form-controls.browser.test.ts",
   "ui/src/components/sidebar-footer-layout.browser.test.ts",
   "ui/src/styles/corner-shape.browser.test.ts",
+  "ui/src/styles/settings-rhythm.browser.test.ts",
   "ui/src/styles/page-toolbar-rhythm.browser.test.ts",
   "ui/src/styles/cursor-policy.browser.test.ts",
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",

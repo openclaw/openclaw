@@ -1322,7 +1322,7 @@ it.each([
       selectedTest = testArgument.slice("-only-testing:".length);
       const reader = selectedTest === IOS_RELEASE_TESTS[1];
       lifecycle.push(reader ? "reader-test" : "live-test");
-      if (!reader) {
+      if (!reader && scenario !== "test-exit") {
         stdout.write("IOS_RELEASE_CHECKPOINT paired\nIOS_RELEASE_CHECKPOINT private-credential\n");
       }
       if (reader) {
@@ -1409,7 +1409,7 @@ it.each([
             : "IOS_RELEASE_CHAT_FAILURE relaunch reply draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false";
         stdout.write(
           "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' started.\n" +
-            `/private/checkout/OpenClawSnapshotUITests.swift:1913: error: private ${failureMessage}\n` +
+            `/private/checkout/OpenClawSnapshotUITests+Chat.swift:1913: error: private ${failureMessage}\n` +
             "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' failed (99 seconds).\n",
         );
         await Promise.resolve();
@@ -1430,11 +1430,20 @@ it.each([
         throw commandFailure("ETIMEDOUT", "unknown");
       }
       if (scenario === "test-exit") {
+        stdout.write("IOS_RELEASE_CHECKPOINT pairing-launching\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT pairing-launched\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT pairing-code-field\n");
+        stdout.write("IOS_RELEASE_CHECKPOINT private-credential\n");
+        nativeCommandActive = true;
         stdout.write(
-          "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
+          "/private/checkout/OpenClawSnapshotUITests+Helpers.swift:401: error: private assertion details\n" +
+            "/private/checkout/OpenClawSnapshotUITests+Helpers.swift:401: error: repeated private details\n" +
+            "/private/checkout/OpenClawSnapshotUITests+Private.swift:42: error: private details\n" +
             "private teardown details\n".repeat(256),
         );
         stderr.write("TEST FAILED: private setup code and private path\n");
+        await Promise.resolve();
+        nativeCommandActive = false;
         return 65;
       }
       if (!reader) {
@@ -1833,7 +1842,11 @@ it.each([
         [
           diagnostic("native-test", "timeout", {
             errorCode: "ETIMEDOUT",
-            context: containing(["xctest-started", "xctest-failed", "xctest-line:1904"]),
+            context: containing([
+              "xctest-started",
+              "xctest-failed",
+              "xctest-location:OpenClawSnapshotUITests.swift:1904",
+            ]),
           }),
         ],
         ["failed"],
@@ -1983,9 +1996,25 @@ it.each([
           operation: "native-test",
           code: "exit",
           exitCode: 65,
-          context: containing(["test-failed", "xctest-line:1904"]),
+          context: containing([
+            "test-failed",
+            "xctest-location:OpenClawSnapshotUITests+Helpers.swift:401",
+            expect.stringMatching(/^failure-evidence-at-ms:\d+$/),
+          ]),
         },
       ]);
+      const context = report.trials[0]?.diagnostics[0]?.context ?? [];
+      expect(context.filter((fact) => fact.startsWith("xctest-location:"))).toEqual([
+        "xctest-location:OpenClawSnapshotUITests+Helpers.swift:401",
+      ]);
+      expect(proof.phases).toEqual(
+        containing([matching({ operation: "native-test", checkpoint: "pairing-code-field" })]),
+      );
+      expect(
+        progressSnapshots.some((snapshot) => snapshot.includes('"checkpoint":"pairing-launched"')),
+      ).toBe(true);
+      expect(historyReadBeforeCommandExit).toBe(true);
+      expect(JSON.stringify(report)).not.toMatch(/private|OPENCLAW_E2E_|metadata/);
       return;
     }
     if (scenario === "source-late-dirty" || scenario === "source-late-head-change") {

@@ -1,0 +1,5 @@
+# Latest retains measured destination rows until three stable end frames.
+# Preserve the existing 32-LF Latest credit plus 147 LF of new regression coverage.
+# The billing-route (350) and main-red-mentions-followup-debt (6) records
+# already fund the inherited 356 LF; this grant carries only Latest coverage.
+179

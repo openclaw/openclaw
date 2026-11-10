@@ -135,6 +135,7 @@ async function mountRestoration(paneId: string, height: number) {
 }
 
 beforeEach(installTranscriptDomMocks);
+
 afterEach(() => {
   for (const cleanup of cleanups.splice(0).toReversed()) {
     cleanup();
