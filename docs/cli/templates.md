@@ -36,6 +36,58 @@ Publishing and searching Templates through ClawHub use the separate registry
 surface. The Control UI can browse official and community Templates from **Pages → Templates** at `/templates`
 when **Templates** is enabled in **Settings → Labs**.
 
+## Add an unpublished local project to a running Gateway
+
+```bash
+openclaw templates add ./incident-triage --json
+```
+
+When a local Gateway owns the state directory, Add forwards the canonical local
+project directory to that Gateway's existing installation owner. No publication
+or Gateway restart is required. The path must be accessible on the Gateway host;
+this is not a browser upload or a remote file transfer. Online Add requires
+operator-admin authority and a canonical project accepted by `templates validate`.
+Online Add selects the workspace on the Gateway and rejects `--workspace`.
+Offline Add retains its existing local-source behavior.
+
+The Gateway builds a snapshot containing only declared project files, reviews its
+exact artifact integrity, and retains that artifact before installation. A project
+changed between preview and apply must be reviewed again. Local content is not
+published to or scanned by ClawHub; dependencies still use their existing registry
+verification and consent checks. Online plugin installation requires
+`--accept-capabilities`; dependency trust warnings additionally require
+`--acknowledge-clawhub-risk`. Review dependencies before passing these flags.
+
+API clients can preview with `templates.add.plan` and apply with
+`templates.add.apply`, using `source: { kind: "local", path: "/absolute/project" }`.
+Pass the returned `planIntegrity` and any required dependency acknowledgements to
+apply. Paths refer to directories on the Gateway host, not the caller's machine.
+
+## Import a Template archive in the Control UI
+
+With Templates enabled, open **Pages → Templates**, click **+ Import**, and select
+a `.tgz` built with `openclaw templates build`. The file is read from your
+browser's computer, not from a path on the Gateway. Uploads are limited to 1 MiB
+compressed, 8 MiB extracted, and 4,096 archive entries. Unsafe paths, links,
+malformed archives, and invalid projects are rejected before installation.
+
+The native file picker opens on your computer. After selecting an archive,
+review its filename, proposed agent, actions, dependency capabilities, and trust
+warnings in the review dialog, then confirm Add. Choosing a file does not install it. The exact archive bytes bind the review to installation through
+the existing live Add owner; no publication or restart is needed. Local uploads
+are not ClawHub-scanned. Current operator-admin authority is required. Canceling,
+leaving the page, or changing the connection drops the browser's pending archive.
+After an uncertain installation result, inspect the agent before uploading again.
+
+For API clients, the same `templates.add.plan` and `templates.add.apply` methods
+accept `source: { kind: "upload", archiveBase64: "..." }`. Reuse the exact payload
+and the returned `planIntegrity`, with the normal dependency acknowledgements,
+for apply. No permanent upload registry is created.
+
+Template Add logs record a correlation ID, operation stage, outcome, and duration
+without archive bytes or Template contents. Use the correlation ID when
+investigating an unsuccessful import.
+
 ## Create with an agent
 
 Ask the agent, “create a new template from this agent.” The bundled

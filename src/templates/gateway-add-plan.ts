@@ -14,11 +14,12 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { selectNextTemplateAgentId } from "./add-agent-id.js";
+import type { ClawHubTemplateTrust } from "./clawhub-source.js";
 import {
-  withResolvedClawHubSource,
-  type ClawHubTemplateTrust,
-  type ClawHubCoordinate,
-} from "./clawhub-source.js";
+  withResolvedTemplateAddSource,
+  type TemplateAddSource,
+  type TemplateAddStageHook,
+} from "./gateway-add-source.js";
 import { bindTemplateLifecycleTrust, projectTemplateAddPlan } from "./gateway-plan-projection.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { preflightTemplatePackage } from "./packages.js";
@@ -116,7 +117,7 @@ export async function buildGatewayTemplateAddPlan(
 export function projectGatewayTemplateAddPlan(
   plan: TemplateAddPlan,
   source: VerifiedTemplateSource,
-  trust: ClawHubTemplateTrust,
+  trust: Pick<ClawHubTemplateTrust, "trustWarning" | "riskAcknowledgementRequired">,
   config: OpenClawConfig,
 ): TemplateLifecyclePlanResult {
   const pluginReviews = projectTemplatePluginCapabilityReviews(plan);
@@ -129,16 +130,19 @@ export function projectGatewayTemplateAddPlan(
 export async function planTemplateAddForGateway(
   input: GatewayTemplateAddPlanningContext &
     ClawHubFetchOptions & {
-      source: ClawHubCoordinate;
+      source: TemplateAddSource;
+      onStage?: TemplateAddStageHook;
     },
 ): Promise<TemplateLifecyclePlanResult> {
-  const resolved = await withResolvedClawHubSource({
+  const resolved = await withResolvedTemplateAddSource({
     coordinate: input.source,
+    onStage: input.onStage,
     mode: "preview",
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
     ...(input.token ? { token: input.token } : {}),
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
     run: async (source, trust) => {
+      input.onStage?.("plan");
       const plan = await buildGatewayTemplateAddPlan(source, input);
       return projectGatewayTemplateAddPlan(plan, source, trust, input.config);
     },

@@ -104,6 +104,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
   "ui/src/e2e/skill-workshop-plugin-enable.real-gateway.e2e.test.ts",
   "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
+  "ui/src/e2e/template-upload.real-gateway.e2e.test.ts",
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
   "ui/src/e2e/toast-page-offset.e2e.test.ts",

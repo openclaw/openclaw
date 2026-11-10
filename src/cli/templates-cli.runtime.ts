@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
+import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { filterStringEntries } from "@openclaw/normalization-core";
+import type { TemplateLifecyclePlanResult } from "../../packages/gateway-protocol/src/schema/templates.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -28,6 +30,7 @@ import {
   withResolvedClawHubSource,
   type ClawHubTemplateTrust,
 } from "../templates/clawhub-source.js";
+import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-apply.js";
 import {
   assertTemplatesLabsEnabled,
   TEMPLATES_LABS_DISABLED_MESSAGE,
@@ -270,7 +273,65 @@ export async function runTemplatesAddCommand(
     method: "templates.add",
     params: {},
     target: "Template configuration and provenance",
-    onForeignOwner: "refuse",
+    onForeignOwner: async ({ requestOwner }) => {
+      if (opts.workspace) {
+        throw new Error(
+          "Online Template Add does not support --workspace; omit it to use the Gateway-selected workspace.",
+        );
+      }
+      if (!existsSync(sourcePath) && isCanonicalClawHubPackageName(sourcePath)) {
+        throw new Error("Online Template Add currently requires a local project directory.");
+      }
+      const source = { kind: "local", path: path.resolve(sourcePath) };
+      const input = { source, ...(opts.agentId !== undefined ? { agentId: opts.agentId } : {}) };
+      const plan = await requestOwner<TemplateLifecyclePlanResult>("templates.add.plan", input);
+      if (plan.blockers.length) {
+        throw new Error(plan.blockers.map((blocker) => blocker.message).join("\n"));
+      }
+      const plugins = plan.pluginReviews.filter((review) => review.ownerAction === "install");
+      if (plugins.length && !opts.acceptCapabilities) {
+        throw new Error(
+          "Plugin capabilities require --accept-capabilities for online Add. Review templates.add.plan first.",
+        );
+      }
+      if (
+        (plugins.some((review) => review.riskWarning) || plan.skillReviews.length) &&
+        !opts.acknowledgeClawhubRisk
+      ) {
+        throw new Error(
+          "Dependency trust warnings require --acknowledge-clawhub-risk. Review templates.add.plan first.",
+        );
+      }
+      const result = await requestOwner<GatewayTemplateAddApplyResult>("templates.add.apply", {
+        ...input,
+        planIntegrity: plan.planIntegrity,
+        acknowledgeCapabilities: plugins.map((review) => ({
+          actionId: review.actionId,
+          pluginId: review.pluginId,
+          reviewToken: review.reviewToken,
+          capabilityGrants: review.capabilityGrants,
+          capabilityGrantsByPluginId: review.capabilityGrantsByPluginId,
+          acknowledgeRiskWarning: review.riskWarning ? true : undefined,
+        })),
+        acknowledgeSkillWarnings: plan.skillReviews.map((review) => ({
+          actionId: review.actionId,
+          ref: review.ref,
+          reviewToken: review.reviewToken,
+          acknowledgeRiskWarning: true,
+        })),
+      });
+      if (opts.json) {
+        writeRuntimeJson(runtime, result);
+      } else {
+        runtime.log(`Template Add ${result.status}: ${sanitizeTerminalText(result.agentId)}`);
+        if (result.error) {
+          runtime.error(redactSensitiveText(result.error.message));
+        }
+      }
+      if (result.status !== "complete") {
+        runtime.exit(1);
+      }
+    },
     runLocal: run,
   });
 }

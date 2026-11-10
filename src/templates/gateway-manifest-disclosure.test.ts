@@ -43,10 +43,6 @@ describe("Template manifest disclosure", () => {
         source,
         {
           riskAcknowledgementRequired: false,
-          trustRecord: {
-            clawhubTrustDisposition: "clean",
-            clawhubTrustCheckedAt: "2026-10-15T00:00:00.000Z",
-          },
         },
         config,
       );

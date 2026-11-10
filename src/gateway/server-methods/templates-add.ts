@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
@@ -35,12 +36,14 @@ import {
   TemplateGatewayPlanChangedError,
 } from "../../templates/gateway-add-apply.js";
 import { planTemplateAddForGateway } from "../../templates/gateway-add-plan.js";
+import type { TemplateAddDiagnosticStage } from "../../templates/gateway-add-source.js";
 import { TemplateGatewayConsentError } from "../../templates/gateway-plugin-consent.js";
 import { TemplateSkillConsentError } from "../../templates/gateway-skill-consent.js";
 import {
   assertTemplatesLabsEnabled,
   TemplatesLabsDisabledError,
 } from "../../templates/labs-gate.js";
+import { TemplateProjectError } from "../../templates/project.js";
 import type { TemplateAddPlan } from "../../templates/types.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { deleteAgentConfigEntry } from "./agents-config-mutations.js";
@@ -49,12 +52,57 @@ import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/templates-add");
 
+// One terminal record per request; never serialize request data or caught errors.
+function templateAddDiagnostic(operation: "plan" | "apply") {
+  const correlationId = randomUUID();
+  const started = performance.now();
+  return (
+    stage: "params" | "policy" | TemplateAddDiagnosticStage,
+    outcome: "success" | "partial" | "invalid_params" | "forbidden" | "failed",
+    sourceKind?: "local" | "upload" | "clawhub",
+  ) => {
+    const metadata = {
+      operation,
+      stage,
+      outcome,
+      correlationId,
+      durationMs: Math.round(performance.now() - started),
+      ...(sourceKind ? { sourceKind } : {}),
+    };
+    if (outcome === "success") {
+      log.info("Template add completed", metadata);
+    } else {
+      log.warn("Template add did not complete", metadata);
+    }
+  };
+}
+
 export const templatesAddHandlers: GatewayRequestHandlers = {
-  "templates.add.plan": async ({ params, respond, context }) => {
+  "templates.add.plan": async ({ params, respond, context, client, hasCurrentClientAuthority }) => {
+    const diagnostic = templateAddDiagnostic("plan");
     if (!assertValidParams(params, validateTemplatesAddPlanParams, "templates.add.plan", respond)) {
+      diagnostic("params", "invalid_params");
       return;
     }
+    const sourceKind = "kind" in params.source ? params.source.kind : "clawhub";
+    let stage: "policy" | TemplateAddDiagnosticStage = "policy";
+    const assertLocalSourceAuthority = () => {
+      if (
+        "kind" in params.source &&
+        (hasCurrentClientAuthority?.() === false ||
+          (client &&
+            (client.invalidated ||
+              (client.connect.role ?? "operator") !== "operator" ||
+              !client.connect.scopes?.includes(ADMIN_SCOPE))) ||
+          (!client && !context.localEmbedded))
+      ) {
+        throw new TemplateGatewayAuthorityError(
+          "Local Template preview requires current operator-admin authority.",
+        );
+      }
+    };
     try {
+      assertLocalSourceAuthority();
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
       const config = await readCurrentConfigForPolicyCheckAsync({
         configPath: resolveConfigPath(),
@@ -65,27 +113,46 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       if (!listedMcp.ok) {
         throw new Error(listedMcp.error);
       }
+      stage = "source_resolution_and_plan";
       const plan = await planTemplateAddForGateway({
         source: params.source,
+        onStage: (nextStage) => {
+          stage = nextStage;
+        },
         ...(params.agentId ? { agentId: params.agentId } : {}),
         config,
         sourceMcpServers: listedMcp.mcpServers,
       });
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
+      assertLocalSourceAuthority();
+      diagnostic(stage, "success", sourceKind);
       respond(true, plan);
     } catch (error) {
-      if (error instanceof TemplatesLabsDisabledError) {
+      if (
+        error instanceof TemplatesLabsDisabledError ||
+        error instanceof TemplateGatewayAuthorityError
+      ) {
+        diagnostic(stage, "forbidden", sourceKind);
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return;
       }
-      log.error(
-        `templates.add.plan failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      diagnostic(stage, "failed", sourceKind);
       const message =
-        error instanceof ClawHubSourceError
-          ? error.message
-          : "Template Add preview is unavailable. Review Gateway logs.";
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+        error instanceof TemplateProjectError && error.code === "project_invalid"
+          ? `${error.message} Run openclaw templates validate <project> and correct the reported diagnostics before retrying.`
+          : error instanceof ClawHubSourceError
+            ? error.message
+            : "Template Add preview is unavailable. Review Gateway logs.";
+      respond(
+        false,
+        undefined,
+        errorShape(
+          error instanceof TemplateProjectError && error.code === "project_invalid"
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          message,
+        ),
+      );
     }
   },
   "templates.add.apply": async ({
@@ -97,11 +164,15 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
     sessionMutationCommitGuard,
     hasCurrentClientAuthority,
   }) => {
+    const diagnostic = templateAddDiagnostic("apply");
     if (
       !assertValidParams(params, validateTemplatesAddApplyParams, "templates.add.apply", respond)
     ) {
+      diagnostic("params", "invalid_params");
       return;
     }
+    const sourceKind = "kind" in params.source ? params.source.kind : "clawhub";
+    let stage: "policy" | TemplateAddDiagnosticStage = "policy";
     const configPath = resolveConfigPath();
     const configEnv = process.env;
     const assertCurrent = () => {
@@ -149,8 +220,12 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       const application = createRuntimeConfigWriteApplication(
         captureGatewayRootWorkAdmissionContinuationScope()?.run,
       );
+      stage = "apply";
       const result = await applyTemplateAddForGateway({
         source: params.source,
+        onStage: (nextStage) => {
+          stage = nextStage;
+        },
         ...(params.agentId ? { agentId: params.agentId } : {}),
         planIntegrity: params.planIntegrity,
         ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
@@ -306,16 +381,15 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           });
         },
       });
+      diagnostic(stage, result.status === "complete" ? "success" : "partial", sourceKind);
       respond(true, result);
     } catch (error) {
-      log.error(
-        `templates.add.apply failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
       const code =
         error instanceof TemplateGatewayAuthorityError ||
         error instanceof TemplatesLabsDisabledError
           ? ErrorCodes.FORBIDDEN
-          : error instanceof TemplateGatewayPlanChangedError ||
+          : (error instanceof TemplateProjectError && error.code === "project_invalid") ||
+              error instanceof TemplateGatewayPlanChangedError ||
               error instanceof TemplateGatewayPlanBlockedError ||
               error instanceof TemplateGatewayConsentError ||
               error instanceof TemplateSkillConsentError ||
@@ -323,16 +397,19 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
                 error.code === "clawhub_risk_acknowledgement_required")
             ? ErrorCodes.INVALID_REQUEST
             : ErrorCodes.UNAVAILABLE;
+      diagnostic(stage, code === ErrorCodes.FORBIDDEN ? "forbidden" : "failed", sourceKind);
       const message =
-        error instanceof TemplateGatewayAuthorityError ||
-        error instanceof TemplatesLabsDisabledError ||
-        error instanceof TemplateGatewayConsentError ||
-        error instanceof TemplateSkillConsentError ||
-        error instanceof TemplateGatewayPlanBlockedError ||
-        error instanceof TemplateGatewayPlanChangedError ||
-        error instanceof ClawHubSourceError
-          ? error.message
-          : "Could not add this Template. Review Gateway logs before retrying.";
+        error instanceof TemplateProjectError && error.code === "project_invalid"
+          ? `${error.message} Run openclaw templates validate <project> and correct the reported diagnostics before retrying.`
+          : error instanceof TemplateGatewayAuthorityError ||
+              error instanceof TemplatesLabsDisabledError ||
+              error instanceof TemplateGatewayConsentError ||
+              error instanceof TemplateSkillConsentError ||
+              error instanceof TemplateGatewayPlanBlockedError ||
+              error instanceof TemplateGatewayPlanChangedError ||
+              error instanceof ClawHubSourceError
+            ? error.message
+            : "Could not add this Template. Review Gateway logs before retrying.";
       respond(
         false,
         undefined,

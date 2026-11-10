@@ -2,6 +2,7 @@ import { Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
@@ -201,12 +202,62 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
   );
 }
 
-function ReviewWarning(props: { view: TemplatesCatalogViewProps }) {
+/** Shared plan facts for both catalog and local archive confirmation. */
+export function TemplatePlanDisclosures(props: { plan: TemplateAddReviewPlan }) {
+  return (
+    <div class="templates-plan-disclosures">
+      <SettingsDisclosure title="Planned changes" open>
+        <ul>
+          <For each={props.plan.actions}>
+            {(item) => (
+              <li>
+                {item.kind}: {item.id} — {item.action}
+                <Show when={item.reason}>
+                  <p>{item.reason}</p>
+                </Show>
+                <Show when={item.effect}>
+                  <pre>{JSON.stringify(item.effect, null, 2)}</pre>
+                </Show>
+              </li>
+            )}
+          </For>
+        </ul>
+      </SettingsDisclosure>
+      <Show when={props.plan.configuredAccess}>
+        <SettingsDisclosure title="Configured access" open>
+          <pre>{JSON.stringify(props.plan.configuredAccess, null, 2)}</pre>
+        </SettingsDisclosure>
+      </Show>
+      <Show when={props.plan.scheduledJobs}>
+        <SettingsDisclosure title="Scheduled jobs" open>
+          <pre>{JSON.stringify(props.plan.scheduledJobs, null, 2)}</pre>
+        </SettingsDisclosure>
+      </Show>
+      <Show when={props.plan.manifestDisclosure}>
+        <SettingsDisclosure title="Manifest disclosure" open>
+          <pre>{JSON.stringify(props.plan.manifestDisclosure?.source, null, 2)}</pre>
+          <pre>{props.plan.manifestDisclosure?.manifestJson}</pre>
+          <Show when={props.plan.manifestDisclosure?.openClawProfileJson}>
+            <pre>{props.plan.manifestDisclosure?.openClawProfileJson}</pre>
+          </Show>
+        </SettingsDisclosure>
+      </Show>
+    </div>
+  );
+}
+
+export function ReviewWarning(props: {
+  view: Pick<
+    TemplatesCatalogViewProps,
+    "reviewPlan" | "applying" | "onConfirmReview" | "onCancelReview"
+  >;
+}) {
   return (
     <Show when={props.view.reviewPlan}>
       <section class="templates-add-consent" aria-label={t("templatesCatalog.reviewTitle")}>
         <h3>{t("templatesCatalog.reviewTitle")}</h3>
         <p>{t("templatesCatalog.reviewDescription")}</p>
+        <TemplatePlanDisclosures plan={props.view.reviewPlan!} />
         <For
           each={props.view.reviewPlan?.pluginReviews.filter(
             (item) => item.ownerAction === "install",
@@ -247,8 +298,17 @@ function ReviewWarning(props: { view: TemplatesCatalogViewProps }) {
             </div>
           )}
         </For>
-        <div class="templates-add-consent__actions">
-          <button type="button" class="btn" onClick={() => props.view.onCancelReview()}>
+        <openclaw-modal-actions class="templates-add-consent__actions">
+          <button
+            type="button"
+            class="btn"
+            disabled={props.view.applying}
+            onClick={() => {
+              if (!props.view.applying) {
+                props.view.onCancelReview();
+              }
+            }}
+          >
             {t("common.cancel")}
           </button>
           <button
@@ -259,7 +319,7 @@ function ReviewWarning(props: { view: TemplatesCatalogViewProps }) {
           >
             {t("templatesCatalog.addAnyway")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </section>
     </Show>
   );
