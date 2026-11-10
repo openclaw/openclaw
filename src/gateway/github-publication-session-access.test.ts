@@ -344,8 +344,8 @@ describe("local checkout publication", () => {
       githubPublicationService: f.coordinator,
     };
     const invoke = async (
+      workspacePath: string | undefined,
       handoff = true,
-      workspacePath = source.cwd,
       idempotencyKey = "local-checkout",
       runId = "initial-publication-run",
     ) => {
@@ -382,12 +382,12 @@ describe("local checkout publication", () => {
       return response;
     };
     const dirty = await worktreeState(source);
-    expect(await invoke(false)).toMatchObject([
+    expect(await invoke(source.cwd, false)).toMatchObject([
       false,
       undefined,
       { message: expect.stringContaining("agent handoff") },
     ]);
-    expect(await invoke()).toMatchObject([
+    expect(await invoke(source.cwd)).toMatchObject([
       false,
       undefined,
       { message: expect.stringContaining("Commit the task changes") },
@@ -470,7 +470,20 @@ describe("local checkout publication", () => {
       });
     }
     const publicationSource = outcome === "linked project worktree" ? linked : source.cwd;
-    const result = await invoke(true, publicationSource);
+    if (outcome === "published") {
+      expect(await invoke(undefined)).toMatchObject([
+        false,
+        undefined,
+        {
+          message: expect.stringContaining(
+            "call github_publish with workspacePath set to the checkout's absolute path",
+          ),
+        },
+      ]);
+      expect(source.effects).toEqual([]);
+      expect(await listSessionChildEntriesReadOnly(scope)).toEqual([]);
+    }
+    const result = await invoke(publicationSource);
     expect(await worktreeState(source)).toEqual(before);
     // Publishing a task must not redirect the next turn's editor or shell.
     expect(loadSessionEntryReadOnly(scope)?.spawnedCwd).toBe(root);
@@ -542,7 +555,7 @@ describe("local checkout publication", () => {
     expect(await worktreeState(source)).toEqual(before);
     expect(source.effects).toEqual(["push", "pull_request"]);
     expect(
-      await invoke(true, publicationSource, "local-checkout", "retry-publication-run"),
+      await invoke(publicationSource, true, "local-checkout", "retry-publication-run"),
     ).toEqual(result);
     expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
     expect(await worktreeState(source)).toEqual(before);
@@ -594,8 +607,8 @@ describe("local checkout publication", () => {
       }
       if (outcome === "project") {
         projectVisibility = "private";
-        expect(await invoke(true, publicationSource)).toEqual(result);
-        expect(await invoke(true, publicationSource, "new-project-task")).toMatchObject([
+        expect(await invoke(publicationSource)).toEqual(result);
+        expect(await invoke(publicationSource, true, "new-project-task")).toMatchObject([
           false,
           undefined,
           { message: expect.stringContaining("project is unavailable to this requester") },
@@ -637,7 +650,7 @@ describe("local checkout publication", () => {
           )
         : undefined;
     });
-    const nextPublication = await invoke(true, other, "another-checkout");
+    const nextPublication = await invoke(other, true, "another-checkout");
     expect(nextPublication, JSON.stringify(nextPublication)).toMatchObject([
       true,
       { status: "published" },
@@ -665,7 +678,7 @@ describe("local checkout publication", () => {
       loadSessionEntryReadOnly({ agentId: "main", sessionKey: task.sessionKey }),
     ).toBeUndefined();
     const effects = [...source.effects];
-    expect(await invoke()).toMatchObject([
+    expect(await invoke(source.cwd)).toMatchObject([
       false,
       undefined,
       { message: expect.stringContaining("original publication task is unavailable") },
