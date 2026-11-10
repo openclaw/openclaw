@@ -1,4 +1,5 @@
-# before_agent_finalize on the settled-turn finalization answer: revision carried and retried,
-# accepted answer delivered, budget and no-answer skips, committed session identity.
+# before_agent_finalize on the settled-turn finalizer's answer: the budget grant and its cut-off
+# withholding, the carried revision and its retry, the stream gate, the finalizer's rewind to
+# before its prompt, the result projection and the harness forwarding.
 # Exact net growth for PR #196170.
-174
+265

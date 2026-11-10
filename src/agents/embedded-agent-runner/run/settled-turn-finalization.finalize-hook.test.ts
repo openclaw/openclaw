@@ -11,10 +11,6 @@ import { makeTerminalInput } from "./terminal-resolution.test-support.js";
 const backendMocks = vi.hoisted(() => ({
   finalize: vi.fn(),
 }));
-const hookMocks = vi.hoisted(() => ({
-  hasHooks: vi.fn((name: string) => name === "before_agent_finalize"),
-  runBeforeAgentFinalize: vi.fn(),
-}));
 
 // mock-isolation: no runtime plan exists in these fixtures, so the model attempt stays empty.
 vi.mock("./backend.js", () => ({
@@ -27,13 +23,6 @@ vi.mock("../../harness/selection.js", () => ({
 // mock-isolation: record synthetic mirror writes without loading transcript persistence.
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: vi.fn(),
-}));
-// mock-isolation: a plugin's before_agent_finalize hook, without loading plugins.
-vi.mock("../../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => ({
-    hasHooks: hookMocks.hasHooks,
-    runBeforeAgentFinalize: hookMocks.runBeforeAgentFinalize,
-  }),
 }));
 
 /** A turn whose side-effecting tool settled with no visible answer. */
@@ -55,15 +44,23 @@ function settledToolAttempt(): EmbeddedRunAttemptWithReceiptEvidence {
   });
 }
 
-const getContext = useFinalizationAdmission([
-  backendMocks.finalize,
-  hookMocks.runBeforeAgentFinalize,
-]);
+const getContext = useFinalizationAdmission([backendMocks.finalize]);
 
 function finalizationInput() {
   const input = makeInput(settledToolAttempt(), getContext());
   Object.assign(input.terminalBase.runParams, { onAttemptTerminalReplaced: vi.fn() });
+  Object.assign(input.finalization.preparedAttempt, {
+    maxBeforeAgentFinalizeRevisions: 3,
+    beforeAgentFinalizeRevisionAttempts: 1,
+  });
   return input;
+}
+
+/** The params the isolated finalizer ran with. */
+function finalizerParams() {
+  const call = backendMocks.finalize.mock.calls[0];
+  assert(call, "Expected a finalizer call");
+  return call[0];
 }
 
 /** Terminal resolution of a finalized turn, as the run loop hands it over. */
@@ -83,41 +80,56 @@ function terminalInputOf(
 }
 
 describe("before_agent_finalize on the settled-turn finalization answer", () => {
-  it("carries a hook revision of the answer, and terminal resolution runs one more pass", async () => {
-    backendMocks.finalize.mockResolvedValueOnce(
-      finalizationReply("answered", "Built: the plugin is ready."),
-    );
-    hookMocks.runBeforeAgentFinalize.mockResolvedValueOnce({
-      action: "revise",
-      reason: "The project changed after its last build: build it, then answer.",
-    });
-
+  it("grants the finalizer the run's revision budget under the committed session", async () => {
+    backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", "Done."));
     const input = finalizationInput();
-    // The settled attempt adopted a successor session: the hook must see that one.
+    // The settled attempt adopted a successor session: the finalizer's hooks see that one.
     Object.assign(input.initial, {
       sessionIdUsed: "session-successor",
       sessionFileUsed: "/tmp/session-successor.jsonl",
     });
+
+    await finalize(input);
+
+    expect(finalizerParams()).toMatchObject({
+      operation: "settled-tool-finalization",
+      sessionId: "session-successor",
+      sessionFile: "/tmp/session-successor.jsonl",
+      maxBeforeAgentFinalizeRevisions: 3,
+      beforeAgentFinalizeRevisionAttempts: 1,
+    });
+  });
+
+  it("withholds the budget from the summary of a turn an output limit cut off", async () => {
+    backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", "Done."));
+    const input = finalizationInput();
+    const { terminalState } = input.initial;
+    input.initial.terminalState = {
+      ...terminalState,
+      outcome: { ...terminalState.outcome, stopReason: "length" },
+    };
+
+    await finalize(input);
+
+    expect(finalizerParams().maxBeforeAgentFinalizeRevisions).toBeUndefined();
+    expect(finalizerParams().beforeAgentFinalizeRevisionAttempts).toBeUndefined();
+  });
+
+  it("carries the finalizer's revision of its answer, and terminal resolution runs one more pass", async () => {
+    backendMocks.finalize.mockResolvedValueOnce(
+      finalizationReply("answered", "Built: the plugin is ready.", {
+        beforeAgentFinalizeRevisionReason:
+          "The project changed after its last build: build it, then answer.",
+      }),
+    );
+
+    const input = finalizationInput();
     const finalized = await finalize(input);
 
     expect(finalized.finalizationOutcome).toBe("answered");
-    expect(hookMocks.runBeforeAgentFinalize).toHaveBeenCalledTimes(1);
-    const call = hookMocks.runBeforeAgentFinalize.mock.calls[0];
-    assert(call, "Expected a before_agent_finalize call");
-    const [event, ctx] = call;
-    expect(event).toMatchObject({
-      runId: "run-settled",
-      sessionId: "session-successor",
-      transcriptPath: "/tmp/session-successor.jsonl",
-      lastAssistantMessage: "Built: the plugin is ready.",
-      stopHookActive: false,
-    });
-    expect(Array.isArray(event.messages)).toBe(true);
-    expect(ctx).toMatchObject({ runId: "run-settled", sessionId: "session-successor" });
     expect(finalized.attempt.beforeAgentFinalizeRevisionReason).toBe(
       "The project changed after its last build: build it, then answer.",
     );
-
     const terminal = terminalInputOf(input, finalized);
     const resolved = await resolveEmbeddedRunTerminal(terminal);
     expect(resolved.action).toBe("retry");
@@ -127,40 +139,17 @@ describe("before_agent_finalize on the settled-turn finalization answer", () => 
     );
   });
 
-  it("delivers the answer when the hooks accept it", async () => {
+  it("delivers an answer the hooks accepted", async () => {
     backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", "Done."));
-    hookMocks.runBeforeAgentFinalize.mockResolvedValueOnce({ action: "continue" });
 
     const input = finalizationInput();
     const finalized = await finalize(input);
 
-    expect(hookMocks.runBeforeAgentFinalize).toHaveBeenCalledTimes(1);
     expect(finalized.attempt.beforeAgentFinalizeRevisionReason).toBeUndefined();
     const resolved = await resolveEmbeddedRunTerminal(terminalInputOf(input, finalized));
     expect(resolved.action).toBe("complete");
     assert(resolved.action === "complete", "Expected a completed run");
     expect(resolved.result.payloads?.[0]?.text).toBe("Done.");
-  });
-
-  it("runs no hook once the run revision budget is spent", async () => {
-    backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", "Done."));
-    const input = finalizationInput();
-    input.finalization.preparedAttempt.maxBeforeAgentFinalizeRevisions = 3;
-    input.finalization.preparedAttempt.beforeAgentFinalizeRevisionAttempts = 3;
-
-    const finalized = await finalize(input);
-
-    expect(hookMocks.runBeforeAgentFinalize).not.toHaveBeenCalled();
-    expect(finalized.attempt.beforeAgentFinalizeRevisionReason).toBeUndefined();
-  });
-
-  it("runs no hook when the finalizer produced no answer", async () => {
-    backendMocks.finalize.mockResolvedValue(finalizationReply("empty"));
-
-    const finalized = await finalize(finalizationInput());
-
-    expect(finalized.finalizationOutcome).not.toBe("answered");
-    expect(hookMocks.runBeforeAgentFinalize).not.toHaveBeenCalled();
   });
 
   it("ignores a revision reason after a failed finalization", async () => {

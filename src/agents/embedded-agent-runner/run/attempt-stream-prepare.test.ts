@@ -24,6 +24,7 @@ import {
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { getActiveNativeAttempt, getEmbeddedRunAttachment } from "../run-state.js";
+import { registerSettledFinalizationHookTests } from "./attempt-stream-prepare.finalize-hook.test-support.js";
 import { registerReplyPromotionTests } from "./attempt-stream-prepare.reply-promotion.test-support.js";
 import { registerPreparationSteeringTests } from "./attempt-stream-prepare.steering.test-support.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
@@ -685,6 +686,8 @@ describe("prepareEmbeddedAttemptStream", () => {
       }
     },
   );
+
+  registerSettledFinalizationHookTests(mocks);
 
   it("keeps already-started steering authoritative over finalization", async () => {
     let resolveSteer: (() => void) | undefined;

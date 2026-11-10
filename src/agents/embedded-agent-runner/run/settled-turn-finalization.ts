@@ -1,21 +1,16 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
-import { isSilentReplyText } from "../../../auto-reply/tokens.js";
 import type { SessionTranscriptWriterFence } from "../../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
   buildAgentRunTerminalOutcome,
   classifyAgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
-import { resolveSessionAgentIds } from "../../agent-scope.js";
-import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
 import { runAgentHarnessSettledTurnFinalization } from "../../harness/selection.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { observeReplyDelivery, resolveReplyExpectation } from "../../reply-completion.js";
@@ -30,7 +25,6 @@ import {
   mergeAttemptRunStatsIntoAccumulator,
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
-import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { resolveRuntimeModelAttempt } from "./backend.js";
@@ -209,6 +203,19 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     Boolean(initial.attempt.lastToolError) ||
     isEmbeddedRunTerminalTimeout(initial.terminalState.outcome) ||
     classifyAgentRunTerminalOutcome(initial.terminalState.outcome) === "failure";
+  // The finalizer writes the turn's final answer, so it keeps the run's before_agent_finalize
+  // budget: a revision excludes its answer from the transcript like any rejected draft, and
+  // terminal resolution runs one more ordinary pass. Not for a summary of work an output limit
+  // cut off, nor once the source reply was delivered.
+  const finalizerAttempt =
+    initial.terminalState.outcome.stopReason !== "length" &&
+    prepared.sourceReplyDeliveryState === "missing"
+      ? finalizationParams
+      : {
+          ...finalizationParams,
+          maxBeforeAgentFinalizeRevisions: undefined,
+          beforeAgentFinalizeRevisionAttempts: undefined,
+        };
   log.warn(
     `settled post-tool turn lacked a final answer: ${describeRun()} — running isolated finalization`,
   );
@@ -222,7 +229,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       assertFinalizationActive();
       const runFinalization = () =>
         runPreparedSettledTurnFinalization({
-          attempt: finalizationParams,
+          attempt: finalizerAttempt,
           settledAttempt: initial.attempt,
           harness: input.finalization.harness,
           prompt,
@@ -376,29 +383,6 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     failureSignal: prepared.failureSignal,
     terminalToolFailure: prepared.terminalToolFailure,
   };
-  // The finalizer's answer is the turn's final answer, so before_agent_finalize sees it as it
-  // sees any other: a hook may know the settled tools left the work unfinished. Terminal
-  // resolution honors its revision with one more ordinary pass, tools available, while the
-  // answer is still undelivered. Nothing is rewound or replayed: the answer stays in the
-  // transcript and the revision request follows it.
-  if (
-    finalizerAnswered &&
-    finalizationOutcome === "answered" &&
-    !recoveredOutputLimit &&
-    prepared.sourceReplyDeliveryState === "missing" &&
-    !input.finalization.abortSignal.aborted
-  ) {
-    const revisionReason = await runSettledTurnBeforeAgentFinalize({
-      // The committed identity: the attempt may have adopted a successor session.
-      preparedAttempt: finalizationParams,
-      attempt,
-      provider: errorContext.provider,
-      model: errorContext.model,
-    });
-    if (revisionReason) {
-      attempt.beforeAgentFinalizeRevisionReason = revisionReason;
-    }
-  }
   if (finalizerAnswered && finalizationOutcome === "answered") {
     // Recovery owns the selected terminal only after delivery observation and
     // authority checks; failed or cancelled summaries retain the original facts.
@@ -414,70 +398,6 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     finalizationOutcome:
       finalizationOutcome === "answered" ? ("answered" as const) : ("failed" as const),
   };
-}
-
-/**
- * Runs before_agent_finalize on the finalizer's answer, within the run's revision budget, and
- * returns the revision reason a hook asked for. The finalizer itself runs no hooks: its pass is
- * tool-free, so a revision is a fresh ordinary pass that terminal resolution starts.
- */
-async function runSettledTurnBeforeAgentFinalize(input: {
-  preparedAttempt: EmbeddedRunAttemptParams;
-  attempt: EmbeddedRunAttemptWithReceiptEvidence;
-  provider: string;
-  model: string;
-}): Promise<string | undefined> {
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("before_agent_finalize")) {
-    return undefined;
-  }
-  const prepared = input.preparedAttempt;
-  const maxRevisionAttempts = prepared.maxBeforeAgentFinalizeRevisions ?? 0;
-  if (
-    maxRevisionAttempts > 0 &&
-    (prepared.beforeAgentFinalizeRevisionAttempts ?? 0) >= maxRevisionAttempts
-  ) {
-    return undefined;
-  }
-  const lastAssistantMessage = normalizeOptionalString(input.attempt.assistantTexts.join("\n\n"));
-  if (!lastAssistantMessage || isSilentReplyText(lastAssistantMessage)) {
-    return undefined;
-  }
-  const agentId = resolveSessionAgentIds({
-    sessionKey: prepared.sessionKey,
-    config: prepared.config,
-    agentId: prepared.agentId,
-  }).sessionAgentId;
-  const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
-    event: {
-      runId: prepared.runId,
-      sessionId: prepared.sessionId,
-      ...(prepared.sessionKey ? { sessionKey: prepared.sessionKey } : {}),
-      provider: input.provider,
-      model: input.model,
-      ...((prepared.cwd ?? prepared.workspaceDir)
-        ? { cwd: prepared.cwd ?? prepared.workspaceDir }
-        : {}),
-      ...(prepared.sessionFile ? { transcriptPath: prepared.sessionFile } : {}),
-      stopHookActive: false,
-      lastAssistantMessage,
-      messages: input.attempt.messagesSnapshot,
-    },
-    ctx: {
-      ...buildEmbeddedAgentHookContext(prepared, agentId, undefined),
-      modelProviderId: input.provider,
-      modelId: input.model,
-    },
-    hookRunner,
-  });
-  if (outcome.action !== "revise") {
-    return undefined;
-  }
-  log.warn(
-    `before_agent_finalize asked to revise the settled-turn finalization: runId=${prepared.runId} ` +
-      `sessionId=${prepared.sessionId}`,
-  );
-  return outcome.reason;
 }
 
 function resolveSessionWriterDeliveryAuthority(
@@ -584,6 +504,10 @@ async function runPreparedSettledTurnFinalization(input: {
         lastAssistant: result.assistant,
         currentAttemptAssistant: result.assistant,
         currentAttemptCompletedAssistant: result.assistant,
+        // The finalizer excluded its answer before handing over a hook's revision of it.
+        ...(result.beforeAgentFinalizeRevisionReason
+          ? { beforeAgentFinalizeRevisionReason: result.beforeAgentFinalizeRevisionReason }
+          : {}),
         toolMetas: settledAttempt.toolMetas,
         lastToolError: settledAttempt.lastToolError,
         successfulNestedToolNames: settledAttempt.successfulNestedToolNames,

@@ -178,6 +178,11 @@ export type AgentHarnessSettledTurnFinalizationResult = {
   /** Assistant stream generation index used to correlate final reply delivery. */
   assistantMessageIndex?: number;
   diagnosticTrace?: import("../../infra/diagnostic-trace-context.js").DiagnosticTraceContext;
+  /**
+   * A before_agent_finalize revision of this answer. The harness has excluded the answer from
+   * the active transcript branch; the host runs one more ordinary pass with the revision.
+   */
+  beforeAgentFinalizeRevisionReason?: string;
 };
 /** @deprecated Use AgentHarnessIsolatedCompletionParamsV2. Remove after 2026-10-12. */
 type AgentHarnessIsolatedCompletionParams = {

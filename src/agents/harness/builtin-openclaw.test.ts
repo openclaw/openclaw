@@ -83,6 +83,8 @@ it.each([undefined, "openclaw-transcript", "unavailable", "harness", null])(
       onAttemptTimeoutArmed: vi.fn(),
       onAgentEvent: vi.fn<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>(),
       deferTerminalLifecycle: true,
+      maxBeforeAgentFinalizeRevisions: 3,
+      beforeAgentFinalizeRevisionAttempts: 1,
     };
     const attempt = { ...ambient, ...forwarded, disableTools: false };
     const messages = Object.freeze([{ role: "user" as const, content: "assembled", timestamp: 1 }]);

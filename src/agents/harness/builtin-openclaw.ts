@@ -78,6 +78,10 @@ function buildRestrictedFinalizationAttempt(
     thinkLevel: attempt.thinkLevel,
     fastMode: attempt.fastMode,
     fastModeAuto: attempt.fastModeAuto,
+    // The finalizer writes the turn's final answer: before_agent_finalize checks it within the
+    // run's revision budget, when the caller grants one.
+    maxBeforeAgentFinalizeRevisions: attempt.maxBeforeAgentFinalizeRevisions,
+    beforeAgentFinalizeRevisionAttempts: attempt.beforeAgentFinalizeRevisionAttempts,
     operation: "settled-tool-finalization",
     disableTools: true,
     disableTrajectory: true,
