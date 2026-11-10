@@ -1,5 +1,5 @@
 # Exact net test-line growth from the #196475 fix (context_bounded notice
 # tied to the turn's actual assembly outcome): regression coverage for the
 # byte preflight, bounded assembly, context-engine lifecycle, and attempt
-# history preparation.
-123
+# history preparation, plus the per-turn retry dedupe of the notice.
+140
