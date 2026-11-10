@@ -18,15 +18,19 @@ import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getAgentToolExecutionLocation } from "./agent-tool-metadata.js";
+import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import {
   applyCodeModeCatalog,
   buildCodeModeCatalogPrompt,
   createCodeModeTools,
 } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
+import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
+import { applyToolPolicyPipeline } from "./tool-policy-pipeline.js";
+import { attachToolAllowlistIntersection, collectExplicitAllowlist } from "./tool-policy.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
@@ -664,4 +668,75 @@ describe("materializeNodeTools", () => {
       }),
     ).toEqual([]);
   });
+
+  it.each([
+    { registered: false, allow: ["read", "remote-demo"], expected: [] },
+    { registered: true, allow: ["read", "remote-demo"], expected: ["remote_echo"] },
+    { registered: false, allow: ["read", "remote_echo"], expected: ["remote_echo"] },
+    {
+      registered: false,
+      allow: attachToolAllowlistIntersection(["*"], [["read", "remote-demo"]]),
+      expected: [],
+    },
+  ])("preserves node owner trust across policy layers: %j", ({ registered, allow, expected }) => {
+    connectTool(remoteEcho, { registered });
+    const steps = [
+      { label: "tools.allow", policy: { allow: ["group:plugins"] } },
+      { label: "agent tools.allow", policy: { allow } },
+    ];
+    const tools = materializeNodeTools({
+      toolAllowlist: collectExplicitAllowlist(steps.map((step) => step.policy)),
+    });
+    expect(tools.map((tool) => tool.name)).toEqual(["remote_echo"]);
+    expect(
+      applyToolPolicyPipeline({ tools, toolMeta: getPluginToolMeta, warn: () => {}, steps }).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(expected);
+    expect(
+      applyToolPolicyPipeline({
+        tools,
+        toolMeta: getPluginToolMeta,
+        warn: () => {},
+        steps: [{ label: "plugin deny", policy: { deny: ["remote-demo"] } }],
+      }),
+    ).toEqual([]);
+  });
+
+  it.each([false, true])(
+    "retains node owner trust in the caller snapshot (registered=%s)",
+    async (registered) => {
+      connectTool(remoteEcho, { registered });
+      const tools = materializeNodeTools({ toolAllowlist: ["group:plugins", "remote-demo"] });
+      const config = {
+        tools: { allow: ["group:plugins"] },
+        agents: { entries: { fixture: { tools: { allow: ["read", "remote-demo"] } } } },
+      };
+      const identity = { agentId: "fixture", sessionKey: "agent:fixture:main" };
+      const bind = createCodingToolsGatewayCaller({
+        options: { config },
+        ...identity,
+        capabilityProfile: resolveConversationCapabilityProfile({ config, ...identity }),
+        tools,
+      });
+      const probe = bind({
+        ...expectDefined(tools[0], "materialized node tool"),
+        execute: async () => {
+          expectDefined(getGatewayToolCallerIdentity(), "caller identity").assertToolAllowed?.(
+            "remote_echo",
+          );
+          return { content: [], details: {} };
+        },
+      });
+      if (registered) {
+        await expect(probe.execute("owner-check", {})).resolves.toEqual({
+          content: [],
+          details: {},
+        });
+      } else {
+        await expect(probe.execute("owner-check", {})).rejects.toThrow("not allowed");
+      }
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 });

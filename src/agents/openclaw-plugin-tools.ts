@@ -692,6 +692,7 @@ function* resolveOpenClawPluginToolSteps(
     setPluginToolMeta(tool, {
       pluginId: descriptor.pluginId,
       optional: false,
+      ...(pluginIdTrusted ? {} : { ownerUnverified: true as const }),
       ...(descriptor.mcp
         ? {
             mcp: {

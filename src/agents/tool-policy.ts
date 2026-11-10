@@ -32,7 +32,10 @@ export type ToolPolicyLike = {
 /** Plugin-owned tool group expansion state. */
 export type PluginToolGroups = {
   all: string[];
+  /** Claimed owners still match deny entries. */
   byPlugin: Map<string, string[]>;
+  /** Only verified owners can grant plugin-scoped access. */
+  allowByPlugin: Map<string, string[]>;
 };
 
 /** Analysis of an allowlist after matching core and plugin tool ids. */
@@ -158,10 +161,11 @@ export function collectExplicitDenylist(policies: Array<ToolPolicyLike | undefin
 
 export function buildPluginToolGroups<T extends { name: string }>(params: {
   tools: T[];
-  toolMeta: (tool: T) => { pluginId: string } | undefined;
+  toolMeta: (tool: T) => { pluginId: string; ownerUnverified?: boolean } | undefined;
 }): PluginToolGroups {
   const all: string[] = [];
   const byPlugin = new Map<string, string[]>();
+  const allowByPlugin = new Map<string, string[]>();
   for (const tool of params.tools) {
     const meta = params.toolMeta(tool);
     if (!meta) {
@@ -176,22 +180,29 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
     const list = byPlugin.get(pluginId) ?? [];
     list.push(name);
     byPlugin.set(pluginId, list);
+    if (!meta.ownerUnverified) {
+      const allowed = allowByPlugin.get(pluginId) ?? [];
+      allowed.push(name);
+      allowByPlugin.set(pluginId, allowed);
+    }
   }
-  return { all, byPlugin };
+  return { all, byPlugin, allowByPlugin };
 }
 
 /** Expands group:plugins and plugin-id entries into concrete plugin tool names. */
 function expandPluginGroups(
   list: string[] | undefined,
   groups: PluginToolGroups,
+  mode: "allow" | "deny",
 ): string[] | undefined {
   const renamed = expandShippedCoreToolPolicyNames(list);
   if (!renamed || renamed.length === 0) {
     return renamed;
   }
   const expanded: string[] = [];
+  const byPlugin = mode === "allow" ? groups.allowByPlugin : groups.byPlugin;
   for (const entry of renamed) {
-    const tools = entry === "group:plugins" ? groups.all : groups.byPlugin.get(entry);
+    const tools = entry === "group:plugins" ? groups.all : byPlugin.get(entry);
     expanded.push(...(tools?.length ? tools : [entry]));
   }
   return uniqueStrings(expanded);
@@ -205,17 +216,19 @@ export function expandPolicyWithPluginGroups(
   if (!policy) {
     return undefined;
   }
-  const allow = expandPluginGroups(policy.allow, groups);
+  const allow = expandPluginGroups(policy.allow, groups, "allow");
   const restrictions = policy.allow && readToolAllowlistIntersection(policy.allow);
   return {
     allow:
       allow && restrictions
         ? attachToolAllowlistIntersection(
             allow,
-            restrictions.map((restriction) => expandPluginGroups(restriction, groups) ?? []),
+            restrictions.map(
+              (restriction) => expandPluginGroups(restriction, groups, "allow") ?? [],
+            ),
           )
         : allow,
-    deny: expandPluginGroups(policy.deny, groups),
+    deny: expandPluginGroups(policy.deny, groups, "deny"),
   };
 }
 
