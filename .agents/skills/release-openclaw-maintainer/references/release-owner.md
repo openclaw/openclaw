@@ -90,11 +90,10 @@ Use local evidence if access is unavailable; ledger synchronization does not
 hold up the release. A hotfix opportunity is not inclusion approval. Follow
 the approved selection scope; obtain the categorized-set approval required by
 backport discovery unless that decision was already explicitly delegated.
-Fix a shared defect once on main through the maintainer workflow, then backport
-with provenance; reuse an already-merged fix. Respect each track's mutation
-route, including extended-stable staging PRs. Preserve the documented exception
-for a blocker that must be fixed/proven on the release branch, and track its
-forward-port for closeout.
+Follow [backports and new fixes](../SKILL.md#backports-and-new-fixes) on every
+track: reuse merged main fixes through individual direct backports, never
+release-branch PRs. Prefer individual main PRs for new fixes; urgent release-first
+fixes go directly to the branch with an owned post-release forward-port.
 
 Make intake explicit:
 
@@ -165,7 +164,8 @@ track's scope: extended-stable excludes native apps and ClawHub. Native
 publication does not hold the priority npm/GitHub/main-closeout path; pending
 platform work still needs an owner and an accurate status.
 
-Finish `$verify-release`, required platform work, applicable
+Finish the [hotfix ledger integrity check](hotfix-ledger-management.md#final-closeout-integrity-check),
+`$verify-release`, required platform work, applicable
 [main closeout](stable-main-closeout.md), and
 [retrospective](retrospective.md), including its shared issue ledger. Keep
 findings and operator corrections from the start, not only the final context

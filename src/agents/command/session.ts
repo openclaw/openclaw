@@ -52,6 +52,7 @@ import {
 } from "../../routing/session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   AgentSelectionRequiredError,
@@ -380,7 +381,11 @@ export async function resolveStoredSessionKeyForSessionId(opts: {
 }
 
 async function resolveSessionKeyForRequestInternal(
-  opts: SessionRequest & { createMissingSessionId: boolean; prepareBoundEntry?: boolean },
+  opts: SessionRequest & {
+    createMissingSessionId: boolean;
+    prepareBoundEntry?: boolean;
+    signal?: AbortSignal;
+  },
 ): Promise<SessionKeyResolution> {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -479,6 +484,14 @@ async function resolveSessionKeyForRequestInternal(
   // Doctor guards without enumerating the agent store or exposing hidden run-owned rows.
   // Exclusion and lookup share the persisted locator; routing keeps the request key.
   const storeSessionKey = sessionKey ? normalizeStoreSessionKey(sessionKey) : undefined;
+  if (opts.prepareBoundEntry && storeSessionKey) {
+    await waitForAgentInputAdmission(storeAgentId, {
+      cfg: opts.cfg,
+      storePath,
+      sessionKey: storeSessionKey,
+      signal: opts.signal,
+    });
+  }
   const sessionEntry =
     storeSessionKey &&
     !isInternalSessionEffectsKey(storeSessionKey) &&
@@ -526,6 +539,13 @@ async function resolveSessionKeyForRequestInternal(
       requestedSessionId,
     );
     if (selectedMatch) {
+      if (opts.prepareBoundEntry) {
+        await waitForAgentInputAdmission(selectedMatch.resolution.agentId ?? storeAgentId, {
+          cfg: opts.cfg,
+          ...selectedMatch.resolution,
+          signal: opts.signal,
+        });
+      }
       return {
         ...selectedMatch.resolution,
         sessionEntry: await readCommandSessionIdMatch(selectedMatch.resolution, requestedSessionId),
@@ -553,11 +573,15 @@ async function resolveSessionKeyForRequestInternal(
       sessionId: requestedSessionId,
       agentId: explicitSessionAgentId,
     });
-    return {
-      agentId: explicitSessionAgentId,
-      sessionKey,
-      storePath,
-    };
+    if (opts.prepareBoundEntry) {
+      await waitForAgentInputAdmission(explicitSessionAgentId, {
+        cfg: opts.cfg,
+        storePath,
+        sessionKey,
+        signal: opts.signal,
+      });
+    }
+    return { agentId: explicitSessionAgentId, sessionKey, storePath };
   }
 
   return { agentId: storeAgentId, sessionKey, sessionEntry, storePath };

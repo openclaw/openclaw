@@ -35,7 +35,7 @@ import "./app-shell-locale-recovery.ts";
 import type { FocusDashboardRouteState } from "./app-root-focus.ts";
 import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { ShellLoader } from "./app-shell-loader.tsx";
-import { adoptBootComposer } from "./boot-composer.ts";
+import { adoptBootComposer, finishBootFrame } from "./boot-composer.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type {
   createSolidControlUiReadiness,
@@ -91,6 +91,9 @@ const LoginGate = lazy(() => import("../components/login-gate-solid.tsx"), {
 export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplication()): () => void {
   // The boot frame's composer survives its frame; Solid's loading frames reinsert it.
   adoptBootComposer(runtime.documentMode === null && runtime.focusLocation === null);
+  if (!runtime.warmBoot) {
+    finishBootFrame();
+  }
   // render() appends to existing children; retire the HTML frame in the same
   // task as the first Solid commit so it cannot remain beside the live app.
   host.replaceChildren();
@@ -356,6 +359,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     };
     onSettled(() => {
       readiness?.invalidate();
+      finishBootFrame();
       return retire;
     });
     const retry = async () => {
@@ -495,6 +499,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     );
   }
   function Login(): SolidJSX.Element {
+    onSettled(() => finishBootFrame());
     return (
       <LazyRootBoundary fallback={<Splash />}>
         <LoginGate
@@ -532,6 +537,11 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
             onOpenGatewaySettings: context.gateway.hasStoredDeviceToken?.()
               ? () => context.navigate("connection")
               : undefined,
+            onBrowserPaired: (gatewayUrl: string) => {
+              setLoginGatePinned(true);
+              // Empty session credentials let connect select the stored device token.
+              context.gateway.connect({ gatewayUrl, token: "", password: "", bootstrapToken: "" });
+            },
             onConnect: () => {
               setLoginGatePinned(true);
               context.gateway.connect({

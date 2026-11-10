@@ -134,6 +134,57 @@ const tails: Array<
 ];
 
 describe("GitHub publication transcript reporting", () => {
+  it("delivers a source task receipt to its exact parent and suppresses delivery after reset", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const origin = await createSession("publication-parent", "parent-generation");
+      const markReportedAsync = vi.fn().mockResolvedValue(undefined);
+      const params = {
+        agentId: "main",
+        sessionKey: "agent:main:publication:source",
+        sessionId: "publication-source",
+        origin: { ...origin, runId: "parent-publication-run" },
+        result: publishedResult,
+      };
+      const coordinator = {
+        markReportedAsync,
+        readReportLifecycleAsync: async () => "source-generation",
+      };
+      await expect(
+        reportGitHubPublicationTranscript(() => import("./session-utils.js"), coordinator, {
+          ...params,
+          origin: { ...params.origin, agentId: "another-agent" },
+        }),
+      ).rejects.toThrow("GitHub publication transcript origin is invalid.");
+      expect(markReportedAsync).not.toHaveBeenCalled();
+      await reportGitHubPublicationTranscript(
+        () => import("./session-utils.js"),
+        coordinator,
+        params,
+      );
+      const events = await loadTranscriptEvents(origin);
+      expect(reportMessages(events, params.result.requestId)).toHaveLength(1);
+      expect(JSON.stringify(events)).toContain("parent-publication-run");
+      await upsertSessionEntryCore(origin, {
+        sessionId: origin.sessionId,
+        lifecycleRevision: "reset-parent-generation",
+        updatedAt: 2,
+      });
+      const afterReset = { ...params, result: failedResult("publication-after-reset") };
+      await reportGitHubPublicationTranscript(
+        () => import("./session-utils.js"),
+        coordinator,
+        afterReset,
+      );
+      expect(
+        reportMessages(await loadTranscriptEvents(origin), afterReset.result.requestId),
+      ).toEqual([]);
+      expect(markReportedAsync.mock.calls).toEqual([
+        [params.result.requestId],
+        [afterReset.result.requestId],
+      ]);
+    });
+  });
+
   it("commits one memory-only private report before marking its publication receipt", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const session = {

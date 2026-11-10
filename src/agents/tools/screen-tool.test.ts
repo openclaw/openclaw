@@ -25,6 +25,50 @@ function createGatewayRecorder() {
 }
 
 describe("screen tool", () => {
+  it("hands a request-specific Template draft to review in this agent's current conversation", async () => {
+    const { calls } = createGatewayRecorder();
+    const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
+    const sessionKey = "agent:research:dashboard:current-request";
+    const tool = createScreenTool({ agentSessionKey: sessionKey, agentId: "research" });
+    await tool.execute("review", { action: "template_review", draftId });
+    expect(calls).toEqual([
+      [
+        "ui.command",
+        {
+          command: { kind: "template-review", draftId },
+          sessionKey,
+          agentId: "research",
+        },
+      ],
+    ]);
+    expect(Value.Check(UiCommandParamsSchema, calls[0]?.[1])).toBe(true);
+    expect(tool.description).toContain("does not publish");
+  });
+
+  it.each([
+    { draftId: "../latest" },
+    {},
+    { draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087", sessionKey: "agent:other:main" },
+  ])("rejects invalid or redirected Template review: %j", async (params) => {
+    const { calls } = createGatewayRecorder();
+    const tool = createScreenTool({ agentSessionKey: "agent:research:main", agentId: "research" });
+    await expect(
+      tool.execute("review", { action: "template_review", ...params }),
+    ).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
+
+  it("requires current agent and conversation for Template review", async () => {
+    const { calls } = createGatewayRecorder();
+    await expect(
+      createScreenTool().execute("review", {
+        action: "template_review",
+        draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
+      }),
+    ).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
+
   it("declares the exact ui.command result contract", async () => {
     createGatewayRecorder();
     const tool = createScreenTool();

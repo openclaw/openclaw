@@ -1,7 +1,7 @@
 .chat-outputs {
   min-width: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .chat-outputs__row {
@@ -17,7 +17,7 @@
   background: transparent;
   color: var(--text);
   font: inherit;
-  line-height: 24px;
+  line-height: calc(24px * var(--control-ui-text-scale));
   text-align: start;
   cursor: var(--cursor-action);
 }
@@ -87,13 +87,13 @@
   flex-direction: column;
   gap: 16px;
   min-height: 100%;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 
 .chat-outputs__section h3 {
   margin: 0 12px 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
 }
 
@@ -106,7 +106,7 @@
 .chat-outputs--mobile .chat-outputs__row {
   position: relative;
   gap: var(--mobile-list-gap, 12px);
-  font: 400 14px/20px var(--font-body);
+  font: 400 var(--control-ui-text-md)/calc(20px * var(--control-ui-text-scale)) var(--font-body);
   min-height: 44px;
   padding: 8px 12px;
   border-radius: 0;

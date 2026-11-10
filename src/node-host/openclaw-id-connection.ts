@@ -10,12 +10,7 @@ import {
   RELAY_DENIAL_BACKOFF_MAX_MS,
   TUNNEL_ALPN,
 } from "../../packages/openclaw-id-protocol/src/index.js";
-
-export class OpenClawIdNodeRemovedError extends Error {
-  constructor() {
-    super("OpenClaw ID node access was removed or is not admitted; re-join this node");
-  }
-}
+import { NodeDiscoveryError, OpenClawIdNodeRemovedError } from "./openclaw-id-discovery.js";
 
 /** One authenticated connection shared by the host's WS and HTTP streams. */
 export class NodeTunnelConnection {
@@ -24,7 +19,6 @@ export class NodeTunnelConnection {
   private lastProbe = 0;
   private terminal?: Error;
   private readonly abort = new AbortController();
-  private lastReceived = Date.now();
   private backoff = RELAY_DENIAL_BACKOFF_INITIAL_MS;
   private nextDialAt = 0;
   private probing = false;
@@ -33,8 +27,7 @@ export class NodeTunnelConnection {
   constructor(
     private readonly options: {
       endpoint: Endpoint;
-      serverKey: string;
-      relayUrl?: string;
+      resolveTarget: (signal: AbortSignal) => Promise<{ serverKey: string; relayUrl?: string }>;
       directAddrs?: string[];
       onTerminal: (error: Error) => void;
     },
@@ -47,31 +40,50 @@ export class NodeTunnelConnection {
     return this.connected?.pathKind() ?? "none";
   }
 
-  received(): void {
-    this.lastReceived = Date.now();
+  private checkStopped(): void {
+    this.abort.signal.throwIfAborted();
+    if (this.terminal) {
+      throw this.terminal;
+    }
+  }
+
+  private nodeRemoved(): never {
+    if (!this.terminal) {
+      this.terminal = new OpenClawIdNodeRemovedError();
+      this.options.onTerminal(this.terminal);
+    }
+    throw this.terminal;
   }
 
   private checkClosed(code?: number): void {
     if (code === CONNECTION_CLOSE.not_a_member || code === CONNECTION_CLOSE.revoked) {
-      if (!this.terminal) {
-        this.terminal = new OpenClawIdNodeRemovedError();
-        this.options.onTerminal(this.terminal);
-      }
-      throw this.terminal;
+      this.nodeRemoved();
     }
   }
 
   private async dial(): Promise<Connection> {
-    if (this.terminal) {
-      throw this.terminal;
-    }
+    this.checkStopped();
     await sleepWithAbort(Math.max(0, this.nextDialAt - Date.now()), this.abort.signal);
-    this.abort.signal.throwIfAborted();
+    this.checkStopped();
+    const target = await this.options.resolveTarget(this.abort.signal).catch((error: unknown) => {
+      if (error instanceof OpenClawIdNodeRemovedError) {
+        this.nodeRemoved();
+      }
+      if (error instanceof NodeDiscoveryError) {
+        this.nextDialAt = Date.now() + Math.max(this.backoff, error.retryAfterMs);
+        this.backoff = Math.min(this.backoff * 2, RELAY_DENIAL_BACKOFF_MAX_MS);
+      }
+      throw error;
+    });
+    this.checkStopped();
+    if (this.connected && this.connected.remoteId() !== target.serverKey.slice(5)) {
+      this.connected.close(CONNECTION_CLOSE.claw_lost, "server authority changed");
+    }
     const pending = this.options.endpoint.connect(
-      this.options.serverKey.slice(5),
+      target.serverKey.slice(5),
       Buffer.from(TUNNEL_ALPN),
       {
-        relayUrl: this.options.relayUrl,
+        relayUrl: target.relayUrl,
         directAddrs: this.options.directAddrs,
       },
     );
@@ -116,10 +128,7 @@ export class NodeTunnelConnection {
   }
 
   async connection(): Promise<Connection> {
-    this.abort.signal.throwIfAborted();
-    if (this.terminal) {
-      throw this.terminal;
-    }
+    this.checkStopped();
     if (!this.current) {
       const pending = this.dial();
       this.current = pending;
@@ -154,8 +163,7 @@ export class NodeTunnelConnection {
       Date.now() - this.lastProbe < LIVENESS_REPROBE_MS ||
       this.probing ||
       this.terminal ||
-      this.abort.signal.aborted ||
-      Date.now() - this.lastReceived < LIVENESS_SILENCE_MS
+      this.abort.signal.aborted
     ) {
       return;
     }
@@ -164,7 +172,6 @@ export class NodeTunnelConnection {
     const current = this.connected;
     try {
       const probe = await this.dial();
-      this.received();
       probe.close(CONNECTION_CLOSE.shutdown, "probe complete");
     } catch {
       current.close(CONNECTION_CLOSE.claw_lost, "claw lost");

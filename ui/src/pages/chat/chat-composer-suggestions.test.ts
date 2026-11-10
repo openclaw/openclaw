@@ -33,6 +33,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   resetChatViewState();
   replaceSlashCommands(buildFallbackSlashCommands());
@@ -95,15 +96,17 @@ describe("chat composer suggestion accessibility", () => {
     await waitForSolid(() => {
       const listbox = menu(container, "skill-menu-listbox");
       const renderedTextarea = getComposerTextarea(container);
-      expect(renderedTextarea.getAttribute("aria-label")).toBe("Chat composer");
-      expectAbsent(renderedTextarea, "role");
+      expectAbsent(renderedTextarea, "role", "aria-expanded");
       expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
       expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
       expect(renderedTextarea.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
-      expectAbsent(renderedTextarea, "aria-expanded");
       expect(renderedTextarea.getAttribute("aria-haspopup")).toBe("listbox");
       expect(onSlashIntent).toHaveBeenCalledOnce();
     });
+    for (const draft of ["Use `$pro`", "```text\nUse $pro\n```"]) {
+      inputDraftAtEnd(container, draft, draft.indexOf("$pro") + 4);
+      expect(menu(container, "skill-menu-listbox"), draft).toBeNull();
+    }
   });
 
   it.each(["/", "/tools "])(
@@ -270,9 +273,6 @@ describe("chat composer suggestion accessibility", () => {
 it("leaves mobile Return for editing even with slash suggestions open", async () => {
   const draft = "/res";
   vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
-  onTestFinished(() => {
-    vi.restoreAllMocks();
-  });
   replaceSlashCommands([
     { key: "reset", name: "reset", description: "Reset the session.", executeLocal: true },
   ]);
@@ -287,4 +287,75 @@ it("leaves mobile Return for editing even with slash suggestions open", async ()
     expect(textarea.value).toBe(draft);
     expect(onSend).not.toHaveBeenCalled();
   }
+});
+
+// A slash token at the draft start is the draft's command, not an inline shortcut.
+it.each([{ dispatchable: true }, { dispatchable: false }])(
+  "offers native commands for a leading slash token before prose (dispatchable: $dispatchable)",
+  async ({ dispatchable }) => {
+    const onSend = vi.fn();
+    const onSlashCommand = vi.fn();
+    const { container, readDraft } = createReactiveDraftHarness({
+      onSend,
+      onSlashCommand,
+      // The inline dispatch gate must not hide the draft's own command.
+      ...(dispatchable ? {} : { submitDisabledReason: "Loading conversation" }),
+    });
+    const textarea = getComposerTextarea(container);
+    const prose = " Apply the prompt to every surface";
+    textarea.value = `/loo${prose}`;
+    textarea.setSelectionRange(4, 4);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    flush();
+
+    await import("./components/chat-composer-slash-menu.tsx");
+    await waitForSolid(() =>
+      expect(container.querySelector(".slash-menu-name")?.textContent?.trim()).toContain("/loop"),
+    );
+    keydownComposer(container, "Enter");
+
+    expect(onSlashCommand).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(readDraft()).toBe(`/loop${prose}`);
+    expect(textarea.value).toBe(readDraft());
+    expect(container.querySelector(".slash-menu")).toBeNull();
+
+    if (dispatchable) {
+      keydownComposer(container, "Enter");
+      expect(onSlashCommand).not.toHaveBeenCalled();
+      expect(onSend).toHaveBeenCalledOnce();
+    }
+  },
+);
+
+it("starts Goal mode with the prose behind a leading /goal token as its objective", async () => {
+  const onGoalSubmit = vi.fn(async () => false);
+  const onSend = vi.fn();
+  const onSlashCommand = vi.fn();
+  const { container, readDraft } = createReactiveDraftHarness({
+    onGoalSubmit,
+    onSend,
+    onSlashCommand,
+  });
+  const textarea = getComposerTextarea(container);
+  const objective = "Ship the composer fix\nwith proof";
+  textarea.value = `/goa ${objective}`;
+  textarea.setSelectionRange(4, 4);
+  textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  flush();
+
+  await import("./components/chat-composer-slash-menu.tsx");
+  await waitForSolid(() =>
+    expect(container.querySelector(".slash-menu-name")?.textContent?.trim()).toContain("/goal"),
+  );
+  keydownComposer(container, "Enter");
+
+  await waitForSolid(() =>
+    expect(container.querySelector(".agent-chat__goal-mode")).not.toBeNull(),
+  );
+  expect(getComposerTextarea(container).value).toBe(objective);
+  expect(readDraft()).toBe(objective);
+  expect(onSlashCommand).not.toHaveBeenCalled();
+  expect(onSend).not.toHaveBeenCalled();
+  expect(onGoalSubmit).not.toHaveBeenCalled();
 });

@@ -319,7 +319,7 @@ export function projectionOperations(
         );
       }
       let snapshot = preparedSnapshot;
-      if (!snapshot && selected.checkpoint_json) {
+      if (!snapshot && (selected.checkpoint_json || owner.worktree.removedAt === undefined)) {
         // No Git receipt owns these bytes yet. After interruption, recapture the
         // still-owned source into the same reservation before staging its delta.
         snapshot = await scan(target);
@@ -365,7 +365,6 @@ export function projectionOperations(
         },
         { target, refresh, snapshot, current, signal },
       );
-      current();
     }
     const checkpoint = current().checkpoint_json
       ? (JSON.parse(current().checkpoint_json!) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
@@ -625,7 +624,6 @@ export function projectionOperations(
         archiveRoot: owner.worktree.repoRoot,
         snapshotCommit,
       });
-      const projection = current().projection_path;
       if (archive.kind !== "archive") {
         throw new Error("Local workspace archive preparation is missing");
       }
@@ -641,17 +639,19 @@ export function projectionOperations(
         pending_target: "canonical",
         checkpoint_json: null,
       });
-      await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
-        root: owner.worktree.repoRoot,
-        stagingRoot: projection,
-        stagedResultRef: resultRef,
-        baseManifestRaw: archiveBase.rawManifest,
-        baseManifestRef: archiveBase.manifestRef,
-        currentManifestRaw: accepted.rawManifest,
-        currentManifestRef: accepted.manifestRef,
-        buildCacheInputs: await buildCacheInputs(),
-        assertCurrent,
-      });
+      await rejection.settle(async () => {
+        await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+          root: owner.worktree.repoRoot,
+          stagingRoot: current().projection_path,
+          stagedResultRef: resultRef,
+          baseManifestRaw: archiveBase.rawManifest,
+          baseManifestRef: archiveBase.manifestRef,
+          currentManifestRaw: accepted.rawManifest,
+          currentManifestRef: accepted.manifestRef,
+          buildCacheInputs: await buildCacheInputs(),
+          assertCurrent,
+        });
+      }, current().baseline_ref ?? undefined);
       current();
     },
     expire: async (retireSnapshot?: (assertCurrent: () => void) => Promise<void>) => {
