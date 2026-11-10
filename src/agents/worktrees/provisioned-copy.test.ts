@@ -356,7 +356,9 @@ IFS= read -r release < "$PROVISION_COPY_RELEASE"
       if (kind === "abort") {
         controller.abort(failure);
       } else if (kind === "helper-exit") {
-        const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+        const exited = new Promise<void>((resolve) => {
+          child.once("exit", () => resolve());
+        });
         child.kill("SIGTERM");
         await withinTest(exited, context.signal);
       }
