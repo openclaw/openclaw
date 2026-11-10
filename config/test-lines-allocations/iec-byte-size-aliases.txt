@@ -1,0 +1,4 @@
+# IEC aliases: exact +7 LF lines in src/config/byte-size.test.ts.
+# Reuse existing parser tests for independent IEC byte values, legacy
+# spellings, and safe-integer overflow; no new fixture or test helper.
+7
