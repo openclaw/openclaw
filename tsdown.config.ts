@@ -285,6 +285,11 @@ function nodeBuildConfig(
   build?: Parameters<typeof buildInputOptions>[1],
 ): UserConfig {
   return {
+    // Update compatibility and standalone codegen need module labels and top-level names.
+    minify:
+      typeof declarations === "object" && declarations.emitDtsOnly
+        ? undefined
+        : { codegen: false, compress: false, mangle: { toplevel: false, keepNames: true } },
     ...config,
     // Recovery diagnostics must parse on Node 22; runtime admission still guards live writers.
     target: "node22",
@@ -1024,6 +1029,7 @@ const configs: UserConfig[] = [
       {
         name: TSDOWN_UNIFIED_CONFIG_GROUP,
         entry: { [name]: source },
+        minify: { codegen: true, compress: true, mangle: { keepNames: true } },
         deps: {
           ...unifiedDeps,
           neverBundle: bundleFsSafe

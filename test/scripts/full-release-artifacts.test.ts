@@ -165,11 +165,18 @@ const { responses, downloads } = JSON.parse(readFileSync(process.env.FIXTURE_RES
 if (process.env.FIXTURE_STOP_ON_WAIT === "true") {
   globalThis.setTimeout = () => { throw new Error("Fixture reached another artifact poll"); };
 }
-globalThis.fetch = async (input) => {
+const timeoutMs = new WeakMap();
+const originalTimeout = AbortSignal.timeout;
+AbortSignal.timeout = (ms) => {
+  const signal = originalTimeout(ms);
+  timeoutMs.set(signal, ms);
+  return signal;
+};
+globalThis.fetch = async (input, init) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   if (url.origin !== "https://api.github.com") throw new Error("Unexpected fetch origin");
   const endpoint = url.pathname.slice(1) + url.search;
-  appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(["fetch", endpoint]) + "\\n");
+  appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(["fetch", endpoint, String(timeoutMs.get(init?.signal))]) + "\\n");
   if (Object.hasOwn(downloads, endpoint)) {
     if (process.env.FIXTURE_RERUN_DURING_DOWNLOAD === "true") {
       const current = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
@@ -636,7 +643,11 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
   it("authenticates every original payload without replacing the recovery tooling identity", () => {
     const test = publicationReuseFixture(false, true);
     const result = expectSuccess(
-      test.verifyRetained({ verifyPayloads: true, expectedPackage: test.expectedPackage }),
+      test.verifyRetained({
+        verifyPayloads: true,
+        expectedPackage: test.expectedPackage,
+        dockerArchiveTimeoutMs: 240_000,
+      }),
     );
     const verified = JSON.parse(result.stdout);
     expect(verified.outputs).toMatchObject({
@@ -662,6 +673,18 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
         producer: { workflowSha: TOOLING_SHA },
         ...(index < 2 ? { package: test.expectedPackage } : {}),
       });
+    }
+    const dockerIds = test.archives.slice(4, 6).map(({ metadata }) => metadata.id);
+    const requests = result.calls.filter(([kind]) => kind === "fetch");
+    expect(requests.filter(([, endpoint]) => endpoint?.endsWith("/zip"))).toHaveLength(9);
+    for (const [, endpoint, timeoutMs] of requests) {
+      const dockerBody = dockerIds.some((id) => endpoint?.endsWith(`/artifacts/${id}/zip`));
+      if (dockerBody) {
+        expect(Number(timeoutMs)).toBeGreaterThan(60_000);
+        expect(Number(timeoutMs)).toBeLessThanOrEqual(240_000);
+      } else {
+        expect(timeoutMs).toBe("60000");
+      }
     }
     expect(result.outputs).toEqual({});
   });
