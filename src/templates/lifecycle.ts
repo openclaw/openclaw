@@ -87,6 +87,7 @@ export async function buildTemplateAddPlan(params: {
     context.agentId ??
     selectNextTemplateAgentId(params.manifest.agent.id, context.existingAgentIds ?? []);
   const copyNumber = templateAgentCopyNumber(params.manifest.agent.id, finalId);
+  const copyNameBase = params.manifest.agent.name ?? params.manifest.agent.identity?.name;
   const workspace = canonicalWorkspacePath(
     context.workspace ?? resolve(resolveRequiredHomeDir(), ".openclaw", `workspace-${finalId}`),
   );
@@ -130,7 +131,7 @@ export async function buildTemplateAddPlan(params: {
   const agentConfig: TemplateAddPlan["agent"]["config"] = templateOwnedAgentConfig({
     ...params.manifest.agent,
     ...persistedOpenClawAgentSettings,
-    ...(copyNumber > 1 ? { name: `${params.manifest.agent.name} ${copyNumber}` } : {}),
+    ...(copyNumber > 1 && copyNameBase ? { name: `${copyNameBase} ${copyNumber}` } : {}),
     id: finalId,
     workspace,
   });

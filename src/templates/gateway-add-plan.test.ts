@@ -120,6 +120,21 @@ describe("Gateway Template Add plan", () => {
     expect(pinned.planIntegrity).toBe(plan.planIntegrity);
   });
 
+  it.each([
+    ["its identity name", { identity: { name: "Workspace" } }, "Workspace 2"],
+    ["no name", {}, undefined],
+  ] as const)("names a copy of a Template without agent.name from %s", async (_, naming, name) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-templates-unnamed-copy-"));
+    const fixture = await readFixture();
+    const source = {
+      ...fixture,
+      manifest: { ...fixture.manifest, agent: { id: "workspace-agent", ...naming } },
+    };
+    const plan = await buildPlan(source, { agents: { entries: { "workspace-agent": {} } } });
+    expect(plan.agent.finalId).toBe("workspace-agent-2");
+    expect(plan.agent.config.name).toBe(name);
+  });
+
   it("uses the canonical planner and keeps source paths out of reviewed facts", async () => {
     const source = await readGatewayPackageFixture();
     const config = { agents: { entries: {} } };
