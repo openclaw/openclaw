@@ -22,7 +22,7 @@ import {
   isSafeTemplateRelativePath,
   portableTemplatePathKey,
 } from "./schema-portability.js";
-import { parseTemplateManifest } from "./schema.js";
+import { parseTemplateManifest, type TemplateManifest } from "./schema.js";
 
 export const MAX_TEMPLATE_DRAFT_BYTES = 1_000_000;
 const DRAFT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -143,6 +143,12 @@ function titleCaseTemplateName(value: string) {
     .join(" ");
 }
 
+function packageReviewId(kind: "skill" | "plugin", pkg: TemplateManifest["skills"][number]) {
+  return "path" in pkg
+    ? `package:${kind}:bundled:${pkg.path}`
+    : `package:${kind}:clawhub:${pkg.ref}`;
+}
+
 /** Build a disposable, immutable publication snapshot from authored text only. */
 export async function prepareTemplateDraft(params: {
   workspaceDir: string;
@@ -180,7 +186,7 @@ export async function prepareTemplateDraft(params: {
   }
   for (const pkg of templateDependencyInventory(draftManifest)) {
     add({
-      id: `package:${pkg.kind}:${pkg.source === "bundled" ? pkg.path : pkg.ref}`,
+      id: packageReviewId(pkg.kind, pkg),
       kind: pkg.kind === "skill" ? "skill" : "plugin",
       label: pkg.source === "bundled" ? pkg.path : pkg.ref,
       detail: pkg.source === "bundled" ? "bundled folder" : `${pkg.source} · ${pkg.version}`,
@@ -225,10 +231,10 @@ export async function prepareTemplateDraft(params: {
     }
   }
   draftManifest.skills = draftManifest.skills.filter(
-    (pkg) => !excluded.has(`package:skill:${"path" in pkg ? pkg.path : pkg.ref}`),
+    (pkg) => !excluded.has(packageReviewId("skill", pkg)),
   );
   draftManifest.plugins = draftManifest.plugins.filter(
-    (pkg) => !excluded.has(`package:plugin:${"path" in pkg ? pkg.path : pkg.ref}`),
+    (pkg) => !excluded.has(packageReviewId("plugin", pkg)),
   );
   for (const key of Object.keys(draftManifest.mcpServers)) {
     if (excluded.has(`mcp:${key}`)) {
@@ -240,7 +246,7 @@ export async function prepareTemplateDraft(params: {
   );
   const excludedBundles = templateDependencyInventory(
     manifestFromDraft(authored.manifest).manifest,
-  ).filter((pkg) => pkg.source === "bundled" && excluded.has(`package:${pkg.kind}:${pkg.path}`));
+  ).filter((pkg) => pkg.source === "bundled" && excluded.has(packageReviewId(pkg.kind, pkg)));
   const retainedWorkspaceSources = new Set([
     ...draftManifest.workspace.files.map((file) => file.source),
     ...Object.values(draftManifest.workspace.bootstrapFiles).flatMap((file) =>

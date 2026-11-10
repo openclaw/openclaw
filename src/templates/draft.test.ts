@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createTemplateDraft, prepareTemplateDraft } from "./draft.js";
 import { createResearchBriefProposal } from "./draft.test-support.js";
 import { extractBuiltTemplateArtifact } from "./project-build.js";
+import { parseTemplateMarkdown } from "./reader.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const proposal = createResearchBriefProposal();
@@ -22,6 +23,49 @@ const expectNoSharedDraft = (workspaceDir: string) =>
   ).rejects.toMatchObject({ code: "ENOENT" });
 
 describe("agent-created Template drafts", () => {
+  it.each(["bundled", "clawhub"] as const)(
+    "excludes only the selected %s skill when its path matches a registry ref",
+    async (source) => {
+      const { target, prepare } = await draftFixture({
+        ...proposal,
+        manifest: proposal.manifest.replace(
+          "---\nCompare",
+          "skills:\n  - path: research\n  - ref: research\n    version: 1.0.0\n---\nCompare",
+        ),
+        files: [
+          {
+            path: "research/SKILL.md",
+            content:
+              "---\nname: local-research\ndescription: Compare public research sources.\n---\nCite primary sources.\n",
+          },
+        ],
+      });
+      await using initial = await prepare();
+      const selected = initial.items.find(
+        (item) => item.kind === "skill" && item.detail.startsWith(source),
+      );
+      expect(selected).toBeDefined();
+      await using prepared = await prepareTemplateDraft({
+        ...target,
+        choices: { excluded: [selected!.id] },
+      });
+      expect(
+        prepared.items.filter((item) => item.kind === "skill").map((item) => item.included),
+      ).toEqual(source === "bundled" ? [false, true] : [true, false]);
+      const manifest = prepared.files.find((file) => file.path === "CLAW.md")!;
+      expect(parseTemplateMarkdown(Buffer.from(manifest.content), "CLAW.md")).toMatchObject({
+        ok: true,
+        value: {
+          skills:
+            source === "bundled" ? [{ ref: "research", version: "1.0.0" }] : [{ path: "research" }],
+        },
+      });
+      expect(prepared.files.some((file) => file.path === "research/SKILL.md")).toBe(
+        source === "clawhub",
+      );
+    },
+  );
+
   it("reviews and builds a paused automation without enabling it", async () => {
     const { prepare } = await draftFixture({
       ...proposal,

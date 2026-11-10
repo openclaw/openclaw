@@ -265,8 +265,8 @@ Research public sources.
       description: "Researches public sources for a new user.",
       excluded: [
         "file:workspace/checklist.md",
-        "package:skill:@maker/sources",
-        "package:plugin:@maker/github",
+        "package:skill:clawhub:@maker/sources",
+        "package:plugin:clawhub:@maker/github",
         "mcp:research",
         "cron:weekly-recap",
       ],
