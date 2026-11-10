@@ -13,6 +13,7 @@ import {
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import { loadExecApprovals, updateExecApprovalsForMaintenance } from "../infra/exec-approvals-store.js";
 import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-owner-record.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
@@ -24,6 +25,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
@@ -268,3 +270,45 @@ it.each(["invalid config", "rejected guard"] as const)(
     });
   },
 );
+
+it("creates the missing agent deletion journal for a mature native bootstrap database", async () => {
+  await withOpenClawTestState({ label: "gateway-native-bootstrap-journal" }, async (state) => {
+    await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
+    const databasePath = state.statePath("state", "openclaw.sqlite");
+    seedMacNodeWorkerProofState(databasePath);
+    const first = await runStartupConfigPreflight({ gateway: true, observe: false });
+    expect(first.snapshot.valid).toBe(true);
+    await closeOpenClawStateDatabaseAsync();
+    // Simulate a node whose state was migrated before the journal backfill:
+    // the table was never created, so drop it after migration.
+    const migrated = new DatabaseSync(databasePath);
+    try {
+      expect(tableExists(migrated, "agent_deletion_journal")).toBe(true);
+      migrated.exec("DROP TABLE agent_deletion_journal");
+    } finally {
+      migrated.close();
+    }
+    const second = await runStartupConfigPreflight({ gateway: true, observe: false });
+    expect(second.snapshot.valid).toBe(true);
+    await closeOpenClawStateDatabaseAsync();
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(tableExists(database, "agent_deletion_journal")).toBe(true);
+    } finally {
+      database.close();
+    }
+    // The reporter's save: allow /usr/bin/pmset for the main agent.
+    expect(() =>
+      updateExecApprovalsForMaintenance((file) => ({
+        ...file,
+        agents: {
+          ...file.agents,
+          main: { allowlist: [{ pattern: "/usr/bin/pmset" }] },
+        },
+      })),
+    ).not.toThrow();
+    expect(loadExecApprovals().agents?.main?.allowlist).toMatchObject([
+      { pattern: "/usr/bin/pmset" },
+    ]);
+  });
+});
