@@ -1,0 +1,4 @@
+# Test-line budget for PR #196426 (structured AUTH_/DEVICE_AUTH_ restart-probe rejections).
+# 27 = two rows in the existing HTTP policy matrix plus the optional detail code on the
+#      shared gatewayResponseError fixture (the helpers file nets to zero).
+27
