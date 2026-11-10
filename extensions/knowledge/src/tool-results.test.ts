@@ -174,7 +174,7 @@ it("connections default to one lean row per connection, with claim text", async 
   expect(paged).toMatchObject({ nextOffset: 1, snapshot: full.snapshot });
   // The last page still carries it, so a change between pages is detectable.
   const last = await s.tool("knowledge_connections", { id: s.project.id, limit: 1, offset: 1 });
-  expect(last.nextOffset).toBeUndefined();
+  expect(last.nextOffset).toBeNull();
   expect(last.snapshot).toBe(full.snapshot);
 });
 
