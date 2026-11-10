@@ -176,7 +176,12 @@ export async function runPluginReleasePretagPackCheck(
         console.log(`npm pack: ${target.packageName}`);
         await runCommand(
           "bash",
-          [join(toolingRoot, "scripts/plugin-npm-publish.sh"), "--pack-dry-run", target.packageDir],
+          [
+            join(toolingRoot, "scripts/plugin-npm-publish.sh"),
+            ...(options.toolingRoot ? ["--repo-root", sourceRoot] : []),
+            "--pack-dry-run",
+            target.packageDir,
+          ],
           {
             commandLabel: `bash scripts/plugin-npm-publish.sh --pack-dry-run ${target.packageDir}`,
             cwd: sourceRoot,

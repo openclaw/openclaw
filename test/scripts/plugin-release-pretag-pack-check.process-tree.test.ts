@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -7,8 +8,8 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { delimiter, join, resolve } from "node:path";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { runPluginReleasePretagPackCheck } from "../../scripts/plugin-release-pretag-pack-check.ts";
 import {
   resolveRuntimeWorkerArgv,
@@ -31,6 +32,7 @@ import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 const fixtureLifetime = createFixtureLifetime();
 // Join timed-out bodies before releasing their inputs.
 afterEach(() => fixtureLifetime.cleanup());
+afterEach(() => vi.unstubAllEnvs());
 const posixIt = process.platform === "win32" ? it.skip : it;
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -333,10 +335,30 @@ writeFileSync("build-proof", marker + ":" + process.argv.slice(2).join(" "));
     "plugin-clawhub-publish.sh",
     '#!/bin/bash\nprintf "%s\\n" "$@" > pack-proof\n',
   );
-  await runPluginReleasePretagPackCheck(source.repoDir, {
-    toolingRoot: tooling.repoDir,
-    clawHubOnly: true,
-  });
+  tooling.writeScript(
+    "plugin-npm-publish.sh",
+    readFileSync("scripts/plugin-npm-publish.sh", "utf8"),
+  );
+  mkdirSync(join(tooling.repoDir, "scripts/lib"));
+  symlinkSync(
+    resolve("scripts/lib/npm-publish-plan.mjs"),
+    join(tooling.repoDir, "scripts/lib/npm-publish-plan.mjs"),
+  );
+  tooling.writeScript("generate-npm-package-lock.mjs", "");
+  tooling.writeScript(
+    "lib/plugin-npm-package-manifest.mjs",
+    `
+import { readFileSync, writeFileSync } from "node:fs";
+const pkg = JSON.parse(readFileSync(process.argv[3] + "/package.json", "utf8"));
+writeFileSync("npm-proof", pkg.version);
+`,
+  );
+  const npm = join(tooling.repoDir, "npm");
+  writeFileSync(npm, "#!/bin/sh\nexit 1\n");
+  chmodSync(npm, 0o755);
+  vi.stubEnv("PATH", `${tooling.repoDir}${delimiter}${process.env.PATH ?? ""}`);
+  await runPluginReleasePretagPackCheck(source.repoDir, { toolingRoot: tooling.repoDir });
+  expect(readFileSync(join(source.repoDir, "npm-proof"), "utf8")).toBe("2026.8.26");
   expect(readFileSync(join(source.repoDir, "build-proof"), "utf8")).toBe(
     "trusted:--package extensions/demo-plugin",
   );
