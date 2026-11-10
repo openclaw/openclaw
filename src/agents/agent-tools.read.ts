@@ -32,6 +32,7 @@ import {
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
+  type ApplyPatchContainmentSource,
   isSandboxRootEscapeError,
   withWorkspaceRecoveryHint,
 } from "./apply-patch-containment-hint.js";
@@ -735,6 +736,7 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
     resolutionCwd?: string;
+    containmentSource?: ApplyPatchContainmentSource;
     bridge?: SandboxFsBridge;
     readPathValidation?: "bridge";
   },
@@ -805,7 +807,11 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
             });
           }
         } catch (error) {
-          throw withWorkspaceRecoveryHint(error, !options?.bridge && mounts.length === 0);
+          throw withWorkspaceRecoveryHint(
+            error,
+            !options?.bridge && mounts.length === 0,
+            options?.containmentSource,
+          );
         }
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };

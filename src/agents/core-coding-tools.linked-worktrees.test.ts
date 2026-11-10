@@ -23,6 +23,7 @@ function fileTools(root: string, attachmentReadRoot?: string) {
     readOnly: false,
     applyPatchEnabled: true,
     applyPatchWorkspaceOnly: true,
+    applyPatchContainmentSource: "config",
     workspaceOnly: true,
     execDefaults: {},
     processDefaults: {},
