@@ -204,11 +204,16 @@ it("registers and retires aliases in the captured caller-selected state database
   expect((await read(dir, { path: selectedPath })).setupExists).toBe(false);
 });
 
-it("keeps bootstrap provenance with the write that won the initial seed", async () => {
+it("adds bootstrap provenance only with the write that won a supplied seed", async () => {
+  sql("ALTER TABLE workspace_setup_state DROP COLUMN bootstrap_supplied").run();
+  const column = sql("SELECT name FROM pragma_table_info('workspace_setup_state') WHERE name = ?");
   await seed();
   const late = { bootstrapSeededAt: "2026-07-16T02:00:00.000Z", bootstrapSupplied: true } as const;
   await mergeWorkspaceSetupState(dir, late);
   expect((await read(dir)).setup).toEqual({ version: 1, bootstrapSeededAt: seededAt });
+  expect(column.get("bootstrap_supplied")).toBeUndefined();
+  await mergeWorkspaceSetupState(testState.path("added"), late);
+  expect((await read(testState.path("added"))).setup).toEqual({ version: 1, ...late });
 });
 
 it("cleans current state and only the stale association for a repointed alias", async () => {

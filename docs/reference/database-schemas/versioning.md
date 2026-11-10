@@ -551,7 +551,7 @@ preserve every observable job value and timestamp cannot be reconstructed later.
 No backfill or schema-version bump is required. The accepted design and rollback
 contract are recorded in [#142153](https://github.com/openclaw/openclaw/pull/142153).
 
-Template Add bootstrap provenance adds the bare nullable `workspace_setup_state.bootstrap_supplied INTEGER` column at writable startup under the same-version additive-column exception. Only the write that records a workspace's first `bootstrap_seeded_at` sets it, and Template Add rollback clears it with that seed. Existing rows stay NULL. Older same-version builds ignore and preserve it, and treat those workspaces like any other.
+Template Add bootstrap provenance uses the first-use column `workspace_setup_state.bootstrap_supplied INTEGER`: only the write that records a workspace's first `bootstrap_seeded_at` from Template Add adds and sets it, and Template Add rollback clears it with that seed. Opening or upgrading a database never adds it, so existing rows and older readers are unaffected; older writers leave it untouched and treat those workspaces like any other.
 
 Retained ACP imports use the same-version additive-column exception for the bare
 nullable `session_nodes.legacy_acp_migration_json TEXT` column. Legacy session
