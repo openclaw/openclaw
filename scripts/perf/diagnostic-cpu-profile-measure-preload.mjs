@@ -126,48 +126,52 @@ if (isMainThread) {
     stallMaxMs,
     workload: workload?.snapshot(),
   });
-  const server = createServer(async (request, response) => {
-    if (
-      request.method !== "POST" ||
-      !["/start", "/stop", "/workload", "/profile"].includes(request.url)
-    ) {
-      response.writeHead(404).end();
-      return;
-    }
-    if (request.url === "/workload") {
-      try {
-        const { createLargeGraphWorkload } =
-          await import("./diagnostic-cpu-profile-measure-workload.mjs");
-        workload ??= await createLargeGraphWorkload();
-      } catch (error) {
-        response.writeHead(500).end(String(error));
+  const server = createServer((request, response) => {
+    void (async () => {
+      if (
+        request.method !== "POST" ||
+        !["/start", "/stop", "/workload", "/profile"].includes(request.url)
+      ) {
+        response.writeHead(404).end();
         return;
       }
-    } else if (request.url === "/profile") {
-      // Serialize only after telemetry stopped, so inspection adds no measured stalls.
-      if (measuring) {
-        response.writeHead(409).end();
+      if (request.url === "/workload") {
+        try {
+          const { createLargeGraphWorkload } =
+            await import("./diagnostic-cpu-profile-measure-workload.mjs");
+          workload ??= await createLargeGraphWorkload();
+        } catch (error) {
+          response.writeHead(500).end(String(error));
+          return;
+        }
+      } else if (request.url === "/profile") {
+        // Serialize only after telemetry stopped, so inspection adds no measured stalls.
+        if (measuring) {
+          response.writeHead(409).end();
+          return;
+        }
+        const profile = lastProfile;
+        lastProfile = undefined;
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify(profile ?? null));
         return;
+      } else if (request.url === "/start") {
+        starts = [];
+        stopMeasurements = [];
+        stalls = [];
+        lastProfile = undefined;
+        stops = stallCount = stallTotalMs = stallMaxMs = 0;
+        previousTick = performance.now();
+        measuring = true;
+      } else {
+        measuring = false;
+        workload?.stop();
       }
-      const profile = lastProfile;
-      lastProfile = undefined;
       response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify(profile ?? null));
-      return;
-    } else if (request.url === "/start") {
-      starts = [];
-      stopMeasurements = [];
-      stalls = [];
-      lastProfile = undefined;
-      stops = stallCount = stallTotalMs = stallMaxMs = 0;
-      previousTick = performance.now();
-      measuring = true;
-    } else {
-      measuring = false;
-      workload?.stop();
-    }
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify(snapshot()));
+      response.end(JSON.stringify(snapshot()));
+    })().catch((/** @type {unknown} */ error) => {
+      response.destroy(error instanceof Error ? error : undefined);
+    });
   });
   server.listen(42360, "127.0.0.1");
   server.unref();
