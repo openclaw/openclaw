@@ -275,6 +275,7 @@ jobs:
             EVIDENCE_ARGS=(--evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json")
           fi
           node .release-tooling/scripts/plugin-npm-prepared-release.mjs load \
+            --report-capacity true \
             --artifact "$PREPARED_ARTIFACT" \
             --source-sha "$SOURCE_SHA" \
             --selection-mode "$PUBLISH_SCOPE" \
@@ -282,6 +283,9 @@ jobs:
             --npm-dist-tag "$NPM_DIST_TAG" \
             --policy-file .release-tooling/.github/workflows/plugin-npm-release.yml \
             --archive-path "$RUNNER_TEMP/plugin-npm-prepared.zip" \
+            --prune-published true \
+            --cache-dir "$RUNNER_TEMP/plugin-npm-preview-downloads" \
+            --output-dir "$RUNNER_TEMP/plugin-npm-preview-packages" \
             "${EVIDENCE_ARGS[@]}" \
             --output .local/plugin-npm-prepared.json \
             --github-output "$GITHUB_OUTPUT"
@@ -1454,6 +1458,7 @@ jobs:
       contents: read
       id-token: write
     env:
+      PREPARED_PACKAGE: ${{ toJson(matrix.plugin) }}
       PREPARED_NPM_EVIDENCE_ID: ${{ needs.preview_plugins_npm.outputs.evidence_attempt == github.run_attempt && needs.preview_plugins_npm.outputs.evidence_id || '' }}
       PREPARED_NPM_EVIDENCE_DIGEST: ${{ needs.preview_plugins_npm.outputs.evidence_attempt == github.run_attempt && needs.preview_plugins_npm.outputs.evidence_digest || '' }}
     strategy:
@@ -1819,7 +1824,7 @@ jobs:
           trap 'rm -f "$npmrc" "$publish_log"' EXIT
           # Publish the attested bytes; rebuilding here loses the candidate's patched install.
           if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
-            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$RELEASE_TARGET_SHA"
+            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$RELEASE_TARGET_SHA" --package "$PREPARED_PACKAGE"
           fi
           node scripts/release-tooling-identity.mjs verify \
             --repository "$OPENCLAW_RELEASE_TOOLING_REPOSITORY" \
@@ -2016,7 +2021,7 @@ jobs:
           # A timeout can race a committed publish. On rerun, the preceding check
           # accepts only this tarball's exact integrity and shasum before skipping.
           if [[ -n "$PREPARED_NPM_ARTIFACT" ]]; then
-            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$PREPARED_NPM_SOURCE_SHA"
+            node scripts/plugin-npm-prepared-release.mjs authorize --source-sha "$PREPARED_NPM_SOURCE_SHA" --package "$PREPARED_PACKAGE"
           fi
           node scripts/release-tooling-identity.mjs verify \
             --repository "$GITHUB_REPOSITORY" \

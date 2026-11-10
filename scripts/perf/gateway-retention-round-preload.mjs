@@ -3,7 +3,7 @@
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { getHeapSpaceStatistics } from "node:v8";
+import { getHeapSpaceStatistics, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
 
 const targets = [
@@ -19,6 +19,15 @@ const targets = [
   "prepareEmbeddedAttemptSystemPrompt",
   "buildSystemPromptReport",
   "serializeLifecycle",
+  "SessionManager",
+  "SubagentRunMap",
+  "SubagentSessionReadLookup",
+  "registerSubagentRun",
+  "createPluginInvocation",
+  "createSessionActor",
+  "putSessionRow",
+  "presentSessionRow",
+  "setTimeout",
 ];
 
 function summarizeProfile(profile) {
@@ -51,6 +60,21 @@ function summarizeProfile(profile) {
     totalBytes,
     inclusiveBytesByTarget: inclusive,
     sites: [...sites].toSorted((a, b) => b[1] - a[1]).slice(0, 100),
+  };
+}
+
+function ownerCounts() {
+  const lifetimes = globalThis[Symbol.for("openclaw.preparedPluginLifetimes")];
+  const ephemeral = globalThis[Symbol.for("openclaw.ephemeralPreparedRegistryResources")];
+  const resources = {};
+  for (const name of process.getActiveResourcesInfo()) {
+    resources[name] = (resources[name] ?? 0) + 1;
+  }
+  return {
+    preparedPluginLifetimes: lifetimes?.active.size ?? null,
+    preparedPluginRetirements: lifetimes?.retirements.size ?? null,
+    ephemeralPreparedRegistryViews: ephemeral?.views.size ?? null,
+    referencedResources: resources,
   };
 }
 
@@ -108,6 +132,8 @@ if (isMainThread && process.send) {
       spaces,
       hostLoad: loadavg(),
       sampled,
+      ownerCounts: ownerCounts(),
+      snapshotPath: message.snapshotPath ? writeHeapSnapshot(message.snapshotPath) : undefined,
     };
     cpu = process.threadCpuUsage();
     startedAt = performance.now();

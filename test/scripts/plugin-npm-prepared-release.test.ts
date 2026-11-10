@@ -3,17 +3,21 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createReleaseEvidenceReplay } from "../../scripts/lib/release-evidence-replay.mjs";
 import {
   authenticatePreparedNpmArtifact,
   consumePreparedNpmPackage,
   createPreparedNpmRelease,
+  createPreparedNpmCapacityObserver,
   downloadPreparedNpmRelease,
   PREPARED_NPM_MANIFEST,
   preparedNpmArtifactName,
+  selectUnpublishedPreparedNpmPackages,
   validatePreparedNpmRelease,
   verifyPreparedNpmRegistry,
 } from "../../scripts/plugin-npm-prepared-release.mjs";
 import { createPluginPublicationArtifact } from "../../scripts/plugin-publication-artifact.mjs";
+import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
@@ -286,8 +290,10 @@ function descriptor(artifact: ReturnType<typeof metadata>) {
   };
 }
 
-function artifactFetch(artifact: ReturnType<typeof metadata>, bytes: Buffer) {
-  return async (input: string) => {
+function artifactFetch(artifact: ReturnType<typeof metadata>, bytes: Buffer): typeof fetch {
+  return async (request) => {
+    const input =
+      typeof request === "string" ? request : request instanceof URL ? request.href : request.url;
     if (input.endsWith(`/artifacts/${artifact.id}/zip`)) {
       return new Response(new Uint8Array(bytes));
     }
@@ -459,30 +465,92 @@ it("rejects another prepared sourceSha", () => {
   ).toThrow();
 });
 
-it("admits only the exact successful preparation artifact and source inventory", async () => {
-  const { sourceRoot, manifest } = sourcePreparation();
-  const bytes = await archive({ [PREPARED_NPM_MANIFEST]: manifest });
-  const artifact = metadata(10, preparedNpmArtifactName(sourceSha, producer), bytes);
-  const approvedArtifact = descriptor(artifact);
-  const download = {
-    ...expected,
-    sourceRoot,
-    artifact: approvedArtifact,
-    token: "synthetic-token",
-    fetchImpl: artifactFetch(artifact, bytes),
-  };
-  const admitted = await downloadPreparedNpmRelease({
-    ...download,
-    archivePath: join(sourceRoot, "prepared.zip"),
-  });
-  expect(admitted.packages).toEqual(manifest.packages);
-  await expect(
-    downloadPreparedNpmRelease({
+it.each([false, true])(
+  "observes prepared metadata without adding reads (evidence replay: %s)",
+  async (replay) => {
+    const { sourceRoot, manifest } = sourcePreparation();
+    const bytes = await archive({ [PREPARED_NPM_MANIFEST]: manifest });
+    const artifact = {
+      ...metadata(10, preparedNpmArtifactName(sourceSha, producer), bytes),
+      expires_at: "2099-01-01T00:00:00Z",
+    };
+    const approvedArtifact = descriptor(artifact);
+    const download = {
+      ...expected,
+      sourceRoot,
+      artifact: approvedArtifact,
+      token: "synthetic-token",
+      fetchImpl: artifactFetch(artifact, bytes),
+    };
+    const capacity = vi.spyOn(console, "error").mockImplementation(() => {});
+    const requests: string[] = [];
+    const observation = createPreparedNpmCapacityObserver(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      requests.push(url);
+      const response = await download.fetchImpl(input, init);
+      response.headers.set("x-ratelimit-limit", "1000");
+      response.headers.set("x-ratelimit-remaining", String(701 - requests.length));
+      response.headers.set("x-ratelimit-reset", "1794310000");
+      response.headers.set("x-ratelimit-resource", "core");
+      response.headers.set("authorization", "must-not-log");
+      return response;
+    });
+    const admitted = await downloadPreparedNpmRelease({
       ...download,
-      artifact: { ...approvedArtifact, runAttempt: 1 },
-    }),
-  ).rejects.toThrow("approved producer");
-});
+      fetchImpl: observation.fetchImpl,
+      evidenceClient: replay
+        ? {
+            ...createReleaseEvidenceClient(producer.repository, {
+              immutableReads: createReleaseEvidenceReplay({}),
+            }),
+            getArtifact: () => artifact,
+          }
+        : undefined,
+      archivePath: join(sourceRoot, "prepared.zip"),
+    });
+    observation.report(0);
+    expect(requests).toHaveLength(replay ? 2 : 3);
+    expect(capacity).toHaveBeenNthCalledWith(
+      1,
+      JSON.stringify({
+        githubCapacity: {
+          phase: "before",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "700",
+          "x-ratelimit-reset": "1794310000",
+          "x-ratelimit-resource": "core",
+        },
+      }),
+    );
+    expect(capacity).toHaveBeenNthCalledWith(
+      2,
+      JSON.stringify({
+        githubCapacity: {
+          phase: "after",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": replay ? "700" : "699",
+          "x-ratelimit-reset": "1794310000",
+          "x-ratelimit-resource": "core",
+        },
+        githubRequestAccounting: {
+          scope: "fetch-metadata-only",
+          fixed: replay ? 1 : 2,
+          perPackage: 0,
+          packages: 0,
+        },
+      }),
+    );
+    expect(capacity).toHaveBeenCalledTimes(2);
+    capacity.mockRestore();
+    expect(admitted.packages).toEqual(manifest.packages);
+    await expect(
+      downloadPreparedNpmRelease({
+        ...download,
+        artifact: { ...approvedArtifact, runAttempt: 1 },
+      }),
+    ).rejects.toThrow("approved producer");
+  },
+);
 
 it("consumes the original qualified package in another run without a source install or pack", async () => {
   const { root, entry, source, evidence, tarballName, tarballPath } = await packedPluginFixture();
@@ -506,7 +574,7 @@ it("consumes the original qualified package in another run without a source inst
     "plugin-publication-manifest.json": readFileSync(created.manifestPath),
   });
   const artifact = metadata(11, artifactName, bytes);
-  const result = await consumePreparedNpmPackage({
+  const consumeParams = {
     ...expected,
     token: "synthetic-token",
     package: {
@@ -518,10 +586,37 @@ it("consumes the original qualified package in another run without a source inst
     cacheDir: join(root, "downloads"),
     outputDir: join(root, "verified"),
     fetchImpl: artifactFetch(artifact, bytes),
-  });
+  };
+  const result = await consumePreparedNpmPackage(consumeParams);
   expect(readFileSync(result.tarballPath)).toEqual(readFileSync(tarballPath));
   expect(result.producerRunId).toBe(producer.runId);
   expect(result.producerRunAttempt).toBe(producer.runAttempt);
+  const registry = npmRegistryPackument(entry.packageName, version, readFileSync(tarballPath));
+  let verificationAttempt = 0;
+  const verify = (requirePublished: boolean) =>
+    selectUnpublishedPreparedNpmPackages({
+      ...consumeParams,
+      outputDir: join(root, `registry-verification-${++verificationAttempt}`),
+      sourceRoot: root,
+      packages: [consumeParams.package],
+      requirePublished,
+      fetchImpl: (url: string) =>
+        url.startsWith("https://registry.npmjs.org/")
+          ? Promise.resolve(
+              url.endsWith(".tgz")
+                ? new Response(new Uint8Array(readFileSync(tarballPath)))
+                : Response.json(registry),
+            )
+          : consumeParams.fetchImpl(url),
+    });
+  expect(await verify(true)).toEqual([]);
+  const published = registry.versions[version]!;
+  delete registry.versions[version];
+  expect(await verify(false)).toEqual([consumeParams.package]);
+  await expect(verify(true)).rejects.toThrow("complete original plugin roster");
+  registry.versions[version] = published;
+  published.dist.integrity = "sha512-conflicting";
+  await expect(verify(false)).rejects.toThrow("registry bytes conflict");
 });
 function registryFixture() {
   const bytes = Buffer.from("exact qualified bytes");
