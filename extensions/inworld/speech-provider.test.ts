@@ -50,6 +50,19 @@ afterEach(() => {
 });
 
 it("rejects blank API keys across every request entrypoint", async () => {
+  for (const [apiKey, envKey, expected] of [
+    [undefined, undefined, false],
+    [" \t ", "   ", false],
+    ["  padded-key  ", undefined, true],
+    ["configured-key", "environment-key", true],
+    [undefined, " environment-key ", true],
+    [undefined, undefined, false],
+  ] as const) {
+    vi.stubEnv("INWORLD_API_KEY", envKey);
+    const context = { providerConfig: apiKey === undefined ? {} : { apiKey }, timeoutMs: 30_000 };
+    expect(provider.isConfigured(context)).toBe(expected);
+    expect(await provider.isConfiguredAsync?.(context)).toBe(expected);
+  }
   vi.stubEnv("INWORLD_API_KEY", "   ");
   const blankRequest = { ...request, providerConfig: {}, timeoutMs: 5_000 };
   const rejectsMissingKey = (result: unknown) =>
@@ -178,6 +191,7 @@ it.each([
   ["OGG_OPUS voice-note", false],
   ["22050 Hz telephony PCM", true],
 ] as const)("synthesizes %s", async (_label, telephony) => {
+  vi.stubEnv("INWORLD_API_KEY", "environment-key");
   const audioBuffer = Buffer.from(telephony ? "pcm" : "opus");
   inworldTTSMock.mockResolvedValueOnce(audioBuffer);
   const req = {
