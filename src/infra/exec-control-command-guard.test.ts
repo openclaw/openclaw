@@ -26,4 +26,47 @@ describe("exec control command guard", () => {
       /exceeds the command explanation work limit/,
     );
   });
+
+  it.each([
+    ["openclaw cron --help", "cron-cli", /exec cannot run `openclaw cron` commands directly/],
+    [
+      "openclaw --no-color cron --help",
+      "cron-cli",
+      /exec cannot run `openclaw cron` commands directly/,
+    ],
+    [
+      "openclaw automations create --at '2m'",
+      "automations-cli",
+      /exec cannot run `openclaw automations` commands directly/,
+    ],
+    [
+      "npx openclaw --profile dev automations create",
+      "automations-cli",
+      /exec cannot run `openclaw automations` commands directly/,
+    ],
+    ["npx openclaw message send --target 123", "message-cli", /message: \.\.\./],
+  ])(
+    "rejects direct CLI state mutation commands in gateway context: %s",
+    async (command, expectedKind, expectedError) => {
+      await expect(detectUnsafeExecControlShellCommand(command)).resolves.toBe(expectedKind);
+      await expect(rejectUnsafeExecControlShellCommand(command)).rejects.toThrow(expectedError);
+    },
+  );
+
+  it("permits openclaw CLI execution outside gateway context (e.g. host=node or host=sandbox)", async () => {
+    const command = "openclaw cron list";
+    await expect(
+      detectUnsafeExecControlShellCommand(command, { host: "node" }),
+    ).resolves.toBeNull();
+    await expect(
+      rejectUnsafeExecControlShellCommand(command, { host: "node" }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      detectUnsafeExecControlShellCommand(command, { host: "sandbox" }),
+    ).resolves.toBeNull();
+    await expect(
+      rejectUnsafeExecControlShellCommand(command, { host: "sandbox" }),
+    ).resolves.toBeUndefined();
+  });
 });
