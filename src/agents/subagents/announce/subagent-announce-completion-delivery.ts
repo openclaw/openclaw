@@ -374,6 +374,17 @@ export function resolveDirectCompletionInjectionContent(params: {
   return extracted && (extracted.content || extracted.mediaUrls.length > 0) ? extracted : undefined;
 }
 
+/** Settled findings text with its media directives parsed into structured media. */
+export function resolveDirectCompletionTextContent(text: string): DirectCompletionContent {
+  return (
+    collectDirectCompletionContent({
+      agentResult: { payloads: [{ text }] },
+      events: undefined,
+      contentKind: "completed_result",
+    }) ?? { content: text, mediaUrls: [] }
+  );
+}
+
 export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;

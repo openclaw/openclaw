@@ -73,6 +73,7 @@ function deliver(options: {
   directOrigin?: { channel: string; to: string };
   spawns?: ChildSpawn[];
   onBeforeDispatch?: () => void | Promise<void>;
+  isSourceSessionEffectsAllowed?: () => boolean;
   onAccepted?: (payload: unknown) => void;
 }) {
   const cfg: OpenClawConfig = { session: { store: storePath } };
@@ -159,7 +160,7 @@ function deliver(options: {
       requesterIsSubagent: false,
       expectsCompletionMessage: options.expectsCompletionMessage ?? true,
       directIdempotencyKey: "paused-goal-completion",
-      isSourceSessionEffectsAllowed: () => true,
+      isSourceSessionEffectsAllowed: options.isSourceSessionEffectsAllowed ?? (() => true),
       ...(options.completionTarget
         ? {
             completionTarget: options.completionTarget,
@@ -225,6 +226,50 @@ it("keeps child media structured in the paused-goal result row", async () => {
     mediaUrls: ["/synthetic/chart.png"],
   });
   expect(payload.text).not.toContain("chart.png");
+});
+
+it("keeps settle-batch media structured in the paused-goal result row", async () => {
+  const fixture = deliver({
+    goal: goal("paused", pausedAt),
+    createdAt: 100,
+    startedAt: 200,
+    omitEvents: true,
+    sourceTool: "subagent_settle",
+    expectsCompletionMessage: false,
+    pausedGoalVisibleText: "Chart ready\nMEDIA:/synthetic/chart.png",
+  });
+  await fixture.run();
+  expect(fixture.inject.mock.calls[0]![0].payload).toMatchObject({
+    text: shown("Chart ready"),
+    mediaUrls: ["/synthetic/chart.png"],
+  });
+});
+
+it("refuses the result row when completion custody is revoked during the append", async () => {
+  let current = true;
+  const fixture = deliver({
+    goal: goal("paused", pausedAt),
+    createdAt: 100,
+    startedAt: 200,
+    isSourceSessionEffectsAllowed: () => current,
+  });
+  let refusedAtAppend = false;
+  fixture.inject.mockImplementation(async ({ assertCurrent }) => {
+    current = false;
+    try {
+      // The background-result owner calls this inside the transcript mutation.
+      assertCurrent?.();
+    } catch (error) {
+      refusedAtAppend = true;
+      throw error;
+    }
+  });
+  await expect(fixture.run()).resolves.toMatchObject({
+    delivered: false,
+    reason: "source_owner_changed",
+  });
+  expect(refusedAtAppend).toBe(true);
+  expect(methods(fixture)).toEqual(["inject"]);
 });
 
 it.each([

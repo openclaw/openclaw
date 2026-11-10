@@ -3,6 +3,7 @@ import type { AgentInternalEvent } from "../../internal-events.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
 import {
   resolveDirectCompletionInjectionContent,
+  resolveDirectCompletionTextContent,
   type DirectCompletionContent,
 } from "./subagent-announce-completion-delivery.js";
 
@@ -48,7 +49,7 @@ function visiblePausedGoalContent(params: {
   hasFailedOrMissingChildResult: boolean;
 }): DirectCompletionContent | undefined {
   // Completed event content wins, with its media kept structured. Settle findings
-  // supply text when those events are absent. The failed notice is reserved for
+  // supply the content, with their media parsed, when those events are absent. The failed notice is reserved for
   // a failed or no-output child.
   const completed = resolveDirectCompletionInjectionContent({
     events: params.internalEvents,
@@ -59,7 +60,7 @@ function visiblePausedGoalContent(params: {
   }
   const visible = params.pausedGoalVisibleText?.trim();
   if (visible) {
-    return { content: visible, mediaUrls: [] };
+    return resolveDirectCompletionTextContent(visible);
   }
   return params.hasFailedOrMissingChildResult
     ? resolveDirectCompletionInjectionContent({

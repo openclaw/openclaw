@@ -1,2 +1,2 @@
-# Covers holding pre-pause child completions in the requester transcript without a model turn (announce, retry, settle, failure and pass-through cases) behind one shared delivery fixture.
-310
+# Covers recording pre-pause child results in the requester transcript without a model turn (announce, settle findings, media, custody revocation, failure, private, channel and pass-through cases) behind one shared delivery fixture.
+363

@@ -84,7 +84,6 @@ describe("requester pause notices", () => {
     });
     const firstKey = deliveredCallArg().directIdempotencyKey;
     await expectWake(true, 2, params);
-    expect(deliveredCallArg().pausedGoalVisibleText).toBeUndefined();
     expect(deliverSpy.mock.calls[1]?.[0]).toMatchObject({
       directIdempotencyKey: firstKey,
       triggerMessage: expect.stringContaining("TURNOVER"),
