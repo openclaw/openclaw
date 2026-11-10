@@ -115,6 +115,9 @@ export function createOpenClawIdService(params: {
   let authority: OpenClawIdAuthority | undefined;
   let loadingAuthority: Promise<OpenClawIdAuthority> | undefined;
   let lastPublish: PublishOutcome | undefined;
+  // K_srv of the last binding seen. A binding is never removed, so authority withdrawn
+  // after an uncertain write still restarts the tunnel child on the bound key only.
+  let lastBoundEndpointKey: string | undefined;
   let loadEffects: (() => Promise<OpenClawIdEffects>) | undefined;
   let effectsPromise: Promise<OpenClawIdEffects> | undefined;
   let mailbox: { stop(): void } | undefined;
@@ -291,7 +294,9 @@ export function createOpenClawIdService(params: {
         settings,
         gatewayServer: params.getGatewayServer,
         membership: await (await getAuthority()).admittedPeerKeys(),
-        boundEndpointKey: () => authority?.current()?.binding?.body.k_srv,
+        boundEndpointKey: () =>
+          (lastBoundEndpointKey =
+            authority?.current()?.binding?.body.k_srv ?? lastBoundEndpointKey),
         log: params.log,
         onStatus: (tunnel) => {
           status = tunnelStatus(tunnel);
