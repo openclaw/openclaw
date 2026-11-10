@@ -494,12 +494,10 @@ export async function captureCronFallbackInferenceAccounts(
     profileId: explicitProfileId,
   } of await resolveCronFallbackProviderModels(params)) {
     const recorded = params.recordedAccounts?.find((account) => account.provider === provider);
-    // An edit never re-resolves a recorded account: auth order or a replaced credential must
-    // not silently move it. Only an `@profile` submitted in this edit adopts or reauthorizes one.
-    const explicitlySubmitted =
-      explicitProfileId !== undefined &&
-      (params.fallbacksSubmitted === true || explicitProfileId !== recorded?.profileId);
-    if (recorded && !explicitlySubmitted) {
+    // An edit never re-resolves a recorded account: auth order, inherited config or a replaced
+    // credential must not silently move it. Only an `@profile` submitted in this edit's own
+    // fallback list adopts or reauthorizes one.
+    if (recorded && !(explicitProfileId !== undefined && params.fallbacksSubmitted === true)) {
       accounts.push(recorded);
       continue;
     }

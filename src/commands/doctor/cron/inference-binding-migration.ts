@@ -159,6 +159,30 @@ export async function maybeRepairCronInferenceBindings(params: {
   const descriptions: string[] = [];
   const capturedConfigs = new Map<OpenClawConfig, OpenClawConfig>();
   const inspectedAgents = new Set<string>();
+  // The job's diagnostic target session; the inspection owner retains one image for sessions,
+  // auth and catalogs across jobs.
+  const loadDiagnosticSession = async (
+    config: OpenClawConfig,
+    agentId: string,
+    job: Parameters<typeof prepareCronInferenceDiagnosticSession>[0]["job"],
+  ) => {
+    if (isArtifactPreservingStateRead("agent") && !inspectedAgents.has(agentId)) {
+      const sessionTarget = await prepareSqliteTargetFromSessionStorePath(
+        resolveSessionStorePathCore(config.session?.store, { agentId, env }),
+        { agentId, env },
+      );
+      for (const agentPath of new Set([
+        resolveAuthProfileDatabasePath(resolveAgentDir(config, agentId, env)),
+        sessionTarget.path,
+      ])) {
+        if (existsSync(agentPath)) {
+          await prepareArtifactPreservingSqliteRead(agentPath);
+        }
+      }
+      inspectedAgents.add(agentId);
+    }
+    return await prepareCronInferenceDiagnosticSession({ cfg: config, agentId, job });
+  };
   const captureConfig = (config: OpenClawConfig): OpenClawConfig => {
     let captured = capturedConfigs.get(config);
     if (!captured) {
@@ -201,14 +225,18 @@ export async function maybeRepairCronInferenceBindings(params: {
           ) {
             continue;
           }
+          const config = captureConfig(params.cfg);
+          // A session-target run selects its primary from the target session; so does its chain.
+          const session = await loadDiagnosticSession(config, agentId, { ...job, id: stored.id });
           const recorded = await recordCronFallbackAccountsForDoctor({
-            cfg: captureConfig(params.cfg),
+            cfg: config,
             agentId,
             label,
             jobId: quoteCliArg(stored.id),
             model: job.payload.model,
             fallbacks: job.payload.fallbacks,
             isGmailHook: job.payload.externalContentSource === "gmail",
+            executionSessionEntry: session.sessionEntry,
             binding,
             shouldRepair: params.shouldRepair,
             requireUnambiguous: true,
@@ -256,27 +284,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         // Resolve legacy ownership before capturing; matching provider loads share this generation.
         // Account selection and authorization still use each job's own agent and session.
         const config = captureConfig(params.cfg);
-        // The inspection owner retains one image for sessions, auth and catalogs across jobs.
-        if (isArtifactPreservingStateRead("agent") && !inspectedAgents.has(agentId)) {
-          const sessionTarget = await prepareSqliteTargetFromSessionStorePath(
-            resolveSessionStorePathCore(config.session?.store, { agentId, env }),
-            { agentId, env },
-          );
-          for (const agentPath of new Set([
-            resolveAuthProfileDatabasePath(resolveAgentDir(config, agentId, env)),
-            sessionTarget.path,
-          ])) {
-            if (existsSync(agentPath)) {
-              await prepareArtifactPreservingSqliteRead(agentPath);
-            }
-          }
-          inspectedAgents.add(agentId);
-        }
-        const session = await prepareCronInferenceDiagnosticSession({
-          cfg: config,
-          agentId,
-          job: { ...job, id: stored.id },
-        });
+        const session = await loadDiagnosticSession(config, agentId, { ...job, id: stored.id });
         if (session.initialSessionEntry?.modelSelectionLocked === true) {
           warnings.push(
             `Automation ${label}: its session is owned by a native runtime; no host inference account was adopted. Recover ownership through that runtime before changing this job.`,

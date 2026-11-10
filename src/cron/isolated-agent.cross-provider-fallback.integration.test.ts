@@ -11,6 +11,7 @@ import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-ru
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../agents/ai-transport-runtime-host.js";
 import {
@@ -638,6 +639,21 @@ const gatewayCases: GatewayCase[] = [
     expectKey: "Bearer key-rotated",
     expectReauthorized: true,
   },
+  {
+    // An @profile that only appears in inherited config isn't this job's selection; a model-only
+    // edit keeps the recorded account.
+    name: "recorded fallback account when inherited config names another",
+    payload: {},
+    beforeUpdate: (cfg) => {
+      cfg.agents!.defaults!.model = {
+        primary: "openai/gpt-4.1",
+        fallbacks: ["backup/gpt-4.1@backup:other"],
+      };
+    },
+    update: { model: "openai/gpt-4.1" },
+    expectAccount: { profileId: "backup:main", source: "auto" },
+    expectKey: "Bearer key-backup",
+  },
 ];
 
 it.each(gatewayCases)("Gateway records the $name and the run uses it", async (testCase) => {
@@ -819,5 +835,52 @@ it("records fallbacks from the session target's selection, as the run does", asy
         },
       }),
     ).resolves.toEqual([{ provider: "backup", model: "backup/gpt-4.1" }]);
+  });
+});
+
+it("Doctor records a bound session-target job's fallbacks from its target session", async () => {
+  await withFallbackFixture(async ({ cfg, storePath }) => {
+    const { maybeRepairCronInferenceBindings } =
+      await import("../commands/doctor/cron/inference-binding-migration.js");
+    const { withDoctorConfigMaintenance } =
+      await import("../commands/doctor-config-flow.test-support.js");
+    // Subagent policy applies only without a session selection; the target session selects openai.
+    cfg.agents!.defaults!.subagents = {
+      model: { primary: "third/gpt-4.1", fallbacks: ["fourth/gpt-4.1"] },
+    };
+    for (const provider of ["third", "fourth"]) {
+      cfg.models!.providers![provider] = cfg.models!.providers!.backup!;
+      cfg.agents!.defaults!.models![`${provider}/gpt-4.1`] = loopbackModelRuntime;
+    }
+    setRuntimeConfigSnapshot(cfg);
+    // One shared backup account, so Doctor may record it for an already-bound job.
+    expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["backup:other"] })).toBe(true);
+    clearRuntimeAuthProfileStoreSnapshots();
+    const sessionKey = "agent:main:fallback-target";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      {
+        sessionId: "fallback-conversation",
+        updatedAt: Date.now(),
+        sessionStartedAt: Date.now(),
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1",
+        modelOverrideSource: "auto",
+      },
+    );
+    const bound = await boundJob(cfg, "doctor-session", { recordFallbacks: false });
+    const job: CronStoredJob = {
+      ...bound,
+      sessionTarget: `session:${sessionKey}`,
+      payload: { kind: "agentTurn", message: "Reply.", lightContext: true },
+    };
+    await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
+    await withDoctorConfigMaintenance(() =>
+      maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
+    );
+    const [repaired] = (await loadCronJobsStore(storePath)).jobs;
+    expect(repaired?.inferenceBinding?.fallbackAccounts).toMatchObject([
+      { provider: "backup", profileId: "backup:main", source: "auto" },
+    ]);
   });
 });
