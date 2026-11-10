@@ -150,21 +150,52 @@ describe("settings save indicator", () => {
     expect(next.onRetry).not.toHaveBeenCalled();
   });
 
-  it("keeps the failure card in place while a retry runs", async () => {
+  it.each(["error", "rejected", "deferred"] as const)(
+    "keeps the %s card in place while the owner synchronously admits a retry",
+    async (status) => {
+      const held = createDeferred<boolean>();
+      const onRetry = vi.fn(() => {
+        setProps(saveIndicatorProps({ status: "saving", saving: true, lastError: null, onRetry }));
+        return held.promise;
+      });
+      await update({ status, lastError: "permission denied", onRetry });
+      button("Retry")!.click();
+      await waitForSolid(() => expect(part("title")?.textContent).toBe("Saving…"));
+      expect(part("reason")?.textContent).toBe("permission denied");
+      expect(button("Retry")?.disabled).toBe(true);
+      expect(button("Discard changes")?.disabled).toBe(status === "deferred" ? undefined : true);
+      expect(indicator.querySelector("[aria-busy]")?.getAttribute("aria-busy")).toBe("true");
+      expect(onRetry).toHaveBeenCalledOnce();
+      await update({ status: "saving", saving: true, lastError: null, onRetry });
+      expect(part("title")?.textContent).toBe("Saving…");
+      expect(part("reason")?.textContent).toBe("permission denied");
+      await update({ status: "saved", savedNotice: true, onRetry });
+      held.resolve(true);
+      await waitForSolid(() => expect(indicator.textContent?.trim()).toBe("Saved"));
+    },
+  );
+
+  it("retires a held retry without carrying its failure into the next workspace", async () => {
     const held = createDeferred<boolean>();
+    const lifetime = createDeferred();
     const onRetry = vi.fn(() => held.promise);
-    await update({ status: "error", lastError: "permission denied", onRetry });
+    await update({
+      status: "error",
+      lastError: "old failure",
+      onRetry,
+      presentationRetired: () => lifetime.promise,
+    });
     button("Retry")!.click();
-    await waitForSolid(() => expect(part("title")?.textContent).toBe("Saving…"));
-    expect(part("reason")?.textContent).toBe("permission denied");
-    expect(button("Retry")?.disabled).toBe(true);
-    expect(button("Discard changes")?.disabled).toBe(true);
-    await update({ status: "saving", saving: true, lastError: null, onRetry });
-    expect(part("title")?.textContent).toBe("Saving…");
-    expect(part("reason")?.textContent).toBe("permission denied");
-    await update({ status: "saved", savedNotice: true, onRetry });
-    held.resolve(true);
-    await waitForSolid(() => expect(indicator.textContent?.trim()).toBe("Saved"));
+    await waitForSolid(() => expect(button("Retry")?.disabled).toBe(true));
+    lifetime.resolve();
+    await update({ status: "paused" });
+    await waitForSolid(() => expect(button("Save")?.disabled).toBe(false));
+    expect(part("reason")).toBeNull();
+    held.reject(new Error("retired failure"));
+    await Promise.resolve();
+    flush();
+    expect(indicator.querySelector('[role="alert"]')).toBeNull();
+    expect(button("Save")?.disabled).toBe(false);
   });
 
   it("retires the previous failure during a manual save and shows the same error again", async () => {
