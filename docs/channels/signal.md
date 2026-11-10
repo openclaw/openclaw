@@ -383,8 +383,14 @@ Allowed group messages that do not mention the bot stay silent and are kept only
 ## Typing + read receipts
 
 - **Typing indicators**: OpenClaw sends typing signals via `signal-cli sendTyping` and refreshes them while a reply is running.
-- **Read receipts**: when `channels.signal.sendReadReceipts` is true, OpenClaw forwards read receipts for allowed DMs.
+- **Outgoing read receipts**: when `channels.signal.sendReadReceipts` is true, OpenClaw sends read receipts for allowed incoming DMs.
 - `signal-cli` does not expose read receipts for groups.
+
+Incoming read receipts from admitted DM senders become model context by default.
+OpenClaw queues them as bounded, session-scoped system events for the agent’s next
+turn; receipt arrival does not trigger an unsolicited reply. These events are
+ephemeral context, not a durable read-state history. This is independent of
+`channels.signal.sendReadReceipts`, which controls only receipts OpenClaw sends.
 
 ## Lifecycle status reactions
 
