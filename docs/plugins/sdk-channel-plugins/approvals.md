@@ -111,6 +111,11 @@ target normalization plus transport/presentation facts. Use
 handler and own request filtering, routing, dedupe, expiry, gateway
 subscription, and routed-elsewhere notices.
 
+Gateway-owned handlers use the applied configuration when admitting a new
+request. The request keeps that configuration through routing, presentation,
+delivery, and cleanup, so a hot reload does not redirect an in-flight approval.
+Standalone handlers keep their explicitly supplied configuration.
+
 `nativeRuntime` is split into a few smaller interfaces:
 
 - `availability` - whether the account is configured and whether a request

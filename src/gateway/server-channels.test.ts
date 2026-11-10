@@ -3081,6 +3081,7 @@ describe("server-channels auto restart", () => {
   it("starts and stops approval bootstrap and task contexts with the account", async () => {
     const channelRuntime = createRuntimeChannel();
     const nativeApprovalRuntime = {
+      getRuntimeConfig: () => ({}),
       request: vi.fn(),
       requestRoute: vi.fn(),
       routeCoordinator: {} as never,
