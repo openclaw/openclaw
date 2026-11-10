@@ -58,7 +58,7 @@
 .rail-header__title {
   overflow: hidden;
   color: var(--text);
-  font-size: var(--rail-header-title-size, 12px);
+  font-size: var(--rail-header-title-size, var(--control-ui-text-sm));
   font-weight: var(--rail-header-title-weight, 600);
   line-height: 1.2;
   text-overflow: ellipsis;

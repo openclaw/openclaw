@@ -170,6 +170,7 @@ export function mergePreparedModelCatalogInventory(
   const outcomes = [...(before?.providerOutcomes ?? []), ...(catalog.providerOutcomes ?? [])];
   return {
     ...discovered,
+    ...(previous?.fullProviderDiscovery ? { fullProviderDiscovery: true as const } : {}),
     catalog: {
       ...catalog,
       entries: [...(before?.entries ?? []), ...catalog.entries],

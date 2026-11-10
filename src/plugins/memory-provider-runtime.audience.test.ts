@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { assertMemoryAudienceCurrent, delegateMemoryAudience } from "./memory-audience.js";
+import type { MemoryProviderHandle } from "./memory-provider-runtime-types.js";
 import {
   AUDIENCE_CHILD_KEY,
   AUDIENCE_ROOT_KEY,
@@ -9,11 +10,7 @@ import {
   withChildAudience,
   withNativeMemoryProvider,
 } from "./memory-provider-runtime.audience.test-support.js";
-import type {
-  MemoryAudience,
-  MemoryCallerContext,
-  MemoryProviderHandle,
-} from "./memory-provider-types.js";
+import type { MemoryAudience, MemoryCallerContext } from "./memory-provider-types.js";
 import { getActiveMemoryProviderCore } from "./memory-runtime.js";
 
 const providerOptions = (audience: MemoryAudience) => ({

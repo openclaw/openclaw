@@ -7,7 +7,7 @@ import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import { assistantGroupIsIndependentBoundary } from "./chat-turn-boundary.ts";
-import { extractMessageMediaText } from "./components/chat-message-media.ts";
+import { extractMessageMediaText } from "./components/chat-message-media-projection.ts";
 import { readLiveTerminalDisposition } from "./terminal-message-identity.ts";
 
 /** Host-stamped provider speech is a call transcript, not a backing-agent answer. */

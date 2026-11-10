@@ -1,14 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  action,
-  createEffect,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  Errored,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, Errored, onSettled, Show } from "solid-js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { currentDisplaySpeechConfig } from "../../../lib/config/config-state-model.ts";
@@ -96,9 +87,9 @@ function ReadAloudPlayback(
 ) {
   const context = useApplication();
   const playback = new GatewaySpeechPlayback();
-  const [playing, setPlaying] = createOptimistic(false);
+  const [playing, setPlaying] = createSignal(false);
   const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
-  // Readiness never hides a usable Stop control; the optimistic flag presents playback.
+  // Readiness never hides a usable Stop control while playback owns the audio.
   const outcome = createMemo(() => attempt()?.result.then(() => null), { loadingValue: undefined });
   let generation = 0;
   let resolving = false;
@@ -106,6 +97,7 @@ function ReadAloudPlayback(
     generation += 1;
     resolving = false;
     playback.stop();
+    setPlaying(false);
   };
   onSettled(() => {
     props.onReady(() => {
@@ -117,14 +109,7 @@ function ReadAloudPlayback(
       stop();
     };
   });
-  const presentPlayback = action(function* (pending: Promise<void>, isCurrent: () => boolean) {
-    if (!isCurrent()) {
-      return;
-    }
-    setPlaying(true);
-    yield pending;
-  });
-  const speak = async () => {
+  const speak = () => {
     if (resolving) {
       stop();
       return;
@@ -138,7 +123,9 @@ function ReadAloudPlayback(
     const connectionGeneration = client.connectionGeneration;
     const isCurrent = () => current === generation && context.gateway.snapshot.client === client;
     resolving = true;
-    // Prepare audio during the native gesture, before the presentation action begins.
+    // Audio must not hold a UI transition: replacing context retires this consumer.
+    setPlaying(true);
+    // Prepare audio during the native gesture, before awaiting synthesis.
     const pending = (async () => {
       try {
         await playback.speak(
@@ -158,14 +145,13 @@ function ReadAloudPlayback(
       } finally {
         if (isCurrent()) {
           resolving = false;
+          setPlaying(false);
         }
       }
     })();
     // Observe rejection even if this message retires before its error slot renders.
     void pending.catch(() => {});
     setAttempt({ result: pending });
-    await Promise.resolve();
-    await presentPlayback(pending, isCurrent).catch(() => {});
   };
   const label = () => t(playing() ? "chat.messages.stopReading" : "chat.messages.readAloud");
   return (
@@ -185,7 +171,7 @@ function ReadAloudPlayback(
           type="button"
           aria-label={label()}
           aria-pressed={playing() ? "true" : "false"}
-          onClick={() => void speak()}
+          onClick={() => speak()}
         >
           <Icon name={playing() ? "square" : "volume2"} />
         </button>

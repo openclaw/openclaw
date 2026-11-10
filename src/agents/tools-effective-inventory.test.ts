@@ -114,7 +114,7 @@ vi.mock("./agent-scope.js", async () => {
 });
 
 // mock-isolation: Project fixture inventories without constructing the agent tool runtime.
-vi.mock("./agent-tools.js", () => ({
+vi.mock("./agent-tools.async.js", () => ({
   createOpenClawCodingToolsInternalAsync: async (
     options?: Parameters<typeof createOpenClawCodingToolsInternal>[0],
   ) => effectiveInventoryState.createToolsMock(options),

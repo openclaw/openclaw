@@ -497,6 +497,9 @@ final class NodeAppModel {
     let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     let talkMode: TalkModeManager
     private(set) var locationAuthorizationSnapshot = LocationAuthorizationSnapshot.undetermined
+    /// Observed by gateway registration; refreshed on activation because these statuses post no changes.
+    private(set) var mediaAuthorizationSnapshot = MediaAuthorizationSnapshot.current()
+    @ObservationIgnored private let mediaAuthorizationProvider: @MainActor () -> MediaAuthorizationSnapshot
     private let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
     private let photosService: any PhotosServicing
@@ -696,6 +699,8 @@ final class NodeAppModel {
 
     /// Chat and the persistent sidebar consume the same Gateway-scoped request lifecycle.
     let chatPresentation = IOSChatViewModelOwner()
+    var agentAvatarImages: [String: UIImage] = [:]
+    var loadedAgentAvatarRequest: IOSAgentAvatarRequest?
     /// Request admission only; the connection controller owns the later handoff.
     var isGatewayPickerRequestInFlight = false
 
@@ -984,6 +989,10 @@ final class NodeAppModel {
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
     private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
     private static let backgroundAliveLastTriggerKey = "gateway.backgroundAlive.lastTrigger"
+    /// Apple allows a background wake about 30 s; silent pushes have no expiration handler.
+    private static let backgroundWakeBudgetMs = 25000
+    /// Upper bound for holding a wake open for queued chat sends; a slow reconnect leaves less.
+    private static let backgroundWakeChatOutboxDrainTimeoutMs = 8000
     private static let preferredCameraFacingKey = "camera.preferredFacing"
     private static let foregroundResumeHealthTimeoutSeconds = 1
 
@@ -1014,7 +1023,8 @@ final class NodeAppModel {
         talkMode: TalkModeManager = TalkModeManager(),
         voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder(),
         audioAdmissionInitiallyAllowed: Bool = true,
-        restoringSavedGatewayRoute: Bool = false)
+        restoringSavedGatewayRoute: Bool = false,
+        mediaAuthorizationProvider: @escaping @MainActor () -> MediaAuthorizationSnapshot = { .current() })
     {
         if restoringSavedGatewayRoute, let stableID = GatewaySettingsStore.activeGatewayEntry()?.stableID {
             self.connectedGatewayID = stableID
@@ -1027,6 +1037,8 @@ final class NodeAppModel {
         self.screenRecorder = screenRecorder
         self.locationService = locationService
         self.locationAuthorizationSnapshot = locationService.authorizationSnapshot()
+        self.mediaAuthorizationProvider = mediaAuthorizationProvider
+        self.mediaAuthorizationSnapshot = mediaAuthorizationProvider()
         self.notificationCenter = notificationCenter
         self.deviceStatusService = deviceStatusService
         self.photosService = photosService
@@ -1127,6 +1139,13 @@ final class NodeAppModel {
         }
     }
 
+    func refreshMediaAuthorizationSnapshot() {
+        let snapshot = self.mediaAuthorizationProvider()
+        // Publish only real changes; each publication can refresh the gateway registration.
+        guard snapshot != self.mediaAuthorizationSnapshot else { return }
+        self.mediaAuthorizationSnapshot = snapshot
+    }
+
     func setScenePhase(_ phase: ScenePhase) {
         let keepTalkActive = UserDefaults.standard.bool(forKey: "talk.background.enabled")
         if phase != .active {
@@ -1170,6 +1189,8 @@ final class NodeAppModel {
             break
         case .active:
             self.isBackgrounded = false
+            // Permission prompts and Settings changes return through activation.
+            self.refreshMediaAuthorizationSnapshot()
             if self.clientDatabases == nil {
                 // Recovery must run even after forgetting the final gateway;
                 // no chat facade may remain to initialize the container.
@@ -1705,6 +1726,11 @@ final class NodeAppModel {
         let currentSelectedAgentId = self.selectedAgentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedAgentChanged = currentSelectedAgentId != nextSelectedAgentId
         let stableID = GatewayStableIdentifier.exact(self.connectedGatewayID)
+        if selectedAgentChanged {
+            // Watch-started Talk may already target the next agent, so its key
+            // comparison cannot retire recognition captured for the old agent.
+            self.voiceWake.discardCaptureForRouteChange()
+        }
         self.selectedAgentId = nextSelectedAgentId
         if let stableID {
             GatewaySettingsStore.saveGatewaySelectedAgentId(
@@ -3249,7 +3275,14 @@ extension NodeAppModel {
     }
 
     func focusChatSession(_ sessionKey: String?) {
-        self.focusedChatSessionKey = Self.trimmedOrNil(sessionKey)
+        let previousSessionKey = self.chatSessionKey
+        let nextSessionKey = Self.trimmedOrNil(sessionKey)
+        // Talk can temporarily target a Watch-selected chat. Wake still belongs
+        // to phone focus, even when Talk already has the destination key.
+        if previousSessionKey != (nextSessionKey ?? self.mainSessionKey) {
+            self.voiceWake.discardCaptureForRouteChange()
+        }
+        self.focusedChatSessionKey = nextSessionKey
         if let stableID = self.connectedGatewayID {
             GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
                 stableID: stableID, sessionKey: self.focusedChatSessionKey)
@@ -3263,7 +3296,7 @@ extension NodeAppModel {
         let effectiveSessionKey = sessionKey ?? self.chatSessionKey
         guard !self.talkMode.isUsingMainSessionKey(effectiveSessionKey) else { return }
         self.talkPttCommandEpoch &+= 1
-        self.voiceWake.invalidatePendingCommand()
+        self.voiceWake.discardCaptureForRouteChange()
         self.talkMode.updateMainSessionKey(effectiveSessionKey)
     }
 
@@ -3460,7 +3493,7 @@ extension NodeAppModel {
         let nodeGatewayTask = self.nodeGatewayTask
         let operatorGatewayTask = self.operatorGatewayTask
         self.talkMode.updateGatewayConnected(false)
-        self.voiceWake.invalidatePendingCommand()
+        self.voiceWake.discardCaptureForRouteChange()
         self.gatewayRouteGeneration &+= 1
         self.stopNodeHostStatsPublisher()
         nodeGatewayTask?.cancel()
@@ -4638,7 +4671,7 @@ extension NodeAppModel {
 
     func invalidateNodePushToTalkRoute() {
         self.talkPttCommandEpoch &+= 1
-        self.voiceWake.invalidatePendingCommand()
+        self.voiceWake.discardCaptureForRouteChange()
         _ = self.talkMode.cancelPushToTalk(expectedTranscriptionOnly: false)
     }
 
@@ -4786,6 +4819,11 @@ extension NodeAppModel {
                 // control state owner-specific so resolving operator approval clears it cleanly.
                 self.lastGatewayProblem = nextProblem
                 self.gatewayStatusText = nextProblem.statusText
+                // Approval echoes stop the node loop; other shared pauses (rate limits, rejected
+                // credentials) must stop retries too, or the node keeps hitting a locked Gateway.
+                if nextProblem.pauseReconnect, !nextProblem.needsPairingApproval {
+                    self.gatewayAutoReconnectEnabled = false
+                }
             } else {
                 self.applyGatewayConnectionProblem(nextProblem)
             }
@@ -7409,6 +7447,7 @@ extension NodeAppModel {
     }
 
     func handleSilentPushWake(_ userInfo: [AnyHashable: Any]) async -> SilentPushWakeResult {
+        let wakeStartedAt = Date()
         let wakeId = Self.makePushWakeAttemptID()
         guard Self.isSilentPushPayload(userInfo) else {
             self.pushWakeLogger.info("Ignored APNs payload wakeId=\(wakeId, privacy: .public): not silent push")
@@ -7444,18 +7483,27 @@ extension NodeAppModel {
         let result = await performBackgroundAliveBeaconIfNeeded(
             wakeId: wakeId,
             trigger: .silentPush)
+        let chat = await self.drainChatOutboxForBackgroundWake(wakeId: wakeId, startedAt: wakeStartedAt)
+        // A throttled beacon mutates nothing and reports no data (#129026); delivered chat
+        // sends and their history refresh are new data for that same wake.
+        let disposition: SilentPushWakeResult = result.disposition == .noData && chat == .delivered
+            ? .newData
+            : result.disposition
         let outcomeMessage =
             "Silent push outcome wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
                 + "handled=\(result.handled) "
                 + "reason=\(result.reason) "
-                + "durationMs=\(result.durationMs)"
+                + "chat=\(chat?.rawValue ?? "skipped") "
+                + "disposition=\(disposition) "
+                + "durationMs=\(max(0, Int(Date().timeIntervalSince(wakeStartedAt) * 1000)))"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
-        return result.disposition
+        return disposition
     }
 
     func handleBackgroundRefreshWake(trigger: String = "bg_app_refresh") async -> Bool {
         guard !Task.isCancelled else { return false }
+        let wakeStartedAt = Date()
         let wakeId = Self.makePushWakeAttemptID()
         let normalizedTrigger = BackgroundAliveBeacon.normalizeTrigger(trigger)
         let receivedMessage =
@@ -7467,14 +7515,54 @@ extension NodeAppModel {
         let result = await performBackgroundAliveBeaconIfNeeded(
             wakeId: wakeId,
             trigger: normalizedTrigger)
+        let chat = await self.drainChatOutboxForBackgroundWake(wakeId: wakeId, startedAt: wakeStartedAt)
         let outcomeMessage =
             "Background refresh wake outcome wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
                 + "handled=\(result.handled) "
                 + "reason=\(result.reason) "
-                + "durationMs=\(result.durationMs)"
+                + "chat=\(chat?.rawValue ?? "skipped") "
+                + "durationMs=\(max(0, Int(Date().timeIntervalSince(wakeStartedAt) * 1000)))"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
         return !Task.isCancelled && result.handled
+    }
+
+    /// The wake's own work only reconnects; queued chat sends flush from the
+    /// reconnect events, so hold the wake open until they finish or time out.
+    /// Nil when the wake skipped the wait.
+    private func drainChatOutboxForBackgroundWake(
+        wakeId: String,
+        startedAt: Date) async -> OpenClawChatOutboxWakeDrain?
+    {
+        let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        let timeoutMs = min(Self.backgroundWakeChatOutboxDrainTimeoutMs, Self.backgroundWakeBudgetMs - elapsedMs)
+        let skipReason: String? = if !self.isBackgrounded {
+            "not_backgrounded"
+        } else if Task.isCancelled {
+            "cancelled"
+        } else if timeoutMs <= 0 {
+            "wake_budget_spent"
+        } else if !self.chatPresentation.isCurrent(appModel: self) || self.chatPresentation.viewModel == nil {
+            "no_chat_owner"
+        } else {
+            nil
+        }
+        guard skipReason == nil, let viewModel = self.chatPresentation.viewModel else {
+            let reason = skipReason ?? ""
+            self.pushWakeLogger.info(
+                "Wake chat outbox skipped wakeId=\(wakeId, privacy: .public) reason=\(reason, privacy: .public)")
+            return nil
+        }
+        // The beacon only waits for the node session; the operator session can lag it.
+        // Without the node session the wake did not reach the Gateway, so do not wait.
+        let result = await viewModel.drainOutboxForBackgroundWake(timeoutMs: timeoutMs) { [weak self] remainingMs in
+            guard let self, self.gatewayConnected else { return false }
+            if self.operatorConnected { return true }
+            return await self.waitForGatewayConnection(timeoutMs: remainingMs, pollMs: 250, owner: .operator)
+        }
+        self.pushWakeLogger.info(
+            "Wake chat outbox wakeId=\(wakeId, privacy: .public) result=\(result.rawValue, privacy: .public)")
+        return result
     }
 
     func handleSignificantLocationWakeIfNeeded() async {

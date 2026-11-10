@@ -49,6 +49,16 @@ and memory-limit enforcement still target the owned command tree. They do not
 terminate other commands sharing its session budget. Startup reports unavailable
 delegation with Doctor guidance; hosts without it retain their existing behavior.
 
+Linux host agent command processes receive a zero core-size limit (`RLIMIT_CORE=0`),
+including their descendants. Host execution requires `prlimit` from util-linux
+in a trusted system directory, including the NixOS system profile.
+The Gateway and its internal workers retain the service's
+core limit for crash diagnostics. Docker sandboxes default to `core=0` through
+the existing `docker.ulimits` setting; an explicit configured core limit wins.
+Durable commands receive the same zero limit on their transient systemd unit.
+This prevents direct-file core dumps. Linux ignores this limit for cores piped
+to a collector; those collectors retain their own capture policy.
+
 ## Parameters
 
 <ParamField path="command" type="string" required>
@@ -135,6 +145,8 @@ Notes:
 - Exact `"cat"` or empty `GIT_PAGER` and `PAGER` overrides are normalized to empty values, including on node shell-wrapper execution. This disables Git paging without passing an executable pager name through `PATH`. Other programs may interpret an empty `PAGER` differently. Use their noninteractive flags when needed. Other pager commands, paths, whitespace variants, and `MANPAGER` overrides remain blocked.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
 - On POSIX Gateway hosts and their Docker/Podman sandboxes, OpenClaw places a Git wrapper on the agent's `PATH`. `git cat-file -e/-t`, `git rev-parse --verify`, and `git merge-base --is-ancestor` run offline. In partial clones, a missing commit can otherwise trigger Git's lazy fetch of its entire commit/tree history. A failed probe preserves Git's exit status and prints recovery guidance; a valid negative ancestry answer remains exit 1 without a warning. This is a performance default, not a security boundary: absolute Git paths, shell aliases/functions, native harness shells, remote node execution, and SSH/Crabbox sandboxes do not use this wrapper.
+- In shared blobless clones, the wrapper prepares missing revision arguments before content/history commands such as `show`, `diff`, `log`, `cat-file -p`, `restore`, `checkout`, and `merge-base`. It checks revision roots in one offline batch, including `rev:path`, ranges, ancestry suffixes, and `restore --source`. Resolvable missing objects are fetched from `origin` with history negotiation and `--filter=blob:none`; present commits add no network request, and normal blob hydration remains available. If that fetch fails, the command stops with guidance to fetch from the owning remote. Unresolved names and paths after `--` pass through to Git; revisions supplied through standard input are not inspected.
+- The same wrapper refuses `git fetch`/`git pull` with `--depth`, `--deepen`, `--shallow-since`, `--shallow-exclude`, `--unshallow`, or `--update-shallow` when the repository's common Git directory has registered linked worktrees. This covers commands from the primary checkout too: all of those checkouts share `.git/shallow`. Standalone repositories, including sandbox projections, retain normal Git semantics. Fetch without shallow options to get new tips; this preserves an existing shallow boundary and does **not** acquire older history. For older history, use the GitHub commit/compare API, or ask the operator to repair the managed base with `openclaw doctor --fix` during maintenance, then retry `git log`.
 - Ordinary Git content commands (`show`, `log -p`, `blame`, and `diff`) still hydrate missing blobs. To acquire a missing commit explicitly, run `git fetch origin <sha> --negotiation-tip=origin/main`, replacing the tip with a locally available common commit if needed, then retry. A probe failure means the object is unavailable locally, not that it does not exist upstream. For GitHub repositories, use `gh api repos/<owner>/<repo>/commits/<sha>` or `gh api repos/<owner>/<repo>/compare/<base>...<head>` for remote existence or ancestry. `rev-parse --verify <sha>` alone can echo a full object ID without checking its existence; use `<sha>^{commit}` to verify a commit object.
 - With the default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy), non-durable Gateway-hosted exec receives shared-store `secret` entries only as process-local sentinels. The authenticated loopback proxy substitutes plaintext at outbound HTTPS request time. Each managed process has its own proxy grant, which survives the originating turn and is revoked on process exit, cancellation, timeout, or Gateway shutdown.
 - Shared-store `env` entries are intentionally plaintext and reach Gateway-hosted exec from the next agent run. They do not reach sandbox, remote `node`, ACP, or Codex-native shell execution. Under the Codex harness, use `gateway_exec` for this OpenClaw-managed environment path.

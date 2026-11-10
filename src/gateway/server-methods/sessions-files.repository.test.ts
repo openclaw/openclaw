@@ -78,6 +78,9 @@ vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
       raw: async () => {
         throw new Error("File browsing must consume visible transcript pages");
       },
+      replayGroups: async () => {
+        throw new Error("File browsing must consume visible transcript pages");
+      },
     })) satisfies typeof withSessionTranscriptDeltaReader,
 }));
 

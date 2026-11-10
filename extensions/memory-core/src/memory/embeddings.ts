@@ -13,16 +13,13 @@ import {
 } from "./local-embedding-provider.js";
 import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 
-export type EmbeddingProvider = MemoryEmbeddingProvider;
-export type EmbeddingProviderRuntime = MemoryEmbeddingProviderRuntime;
-
 export type EmbeddingProviderResult = {
-  provider: EmbeddingProvider | null;
+  provider: MemoryEmbeddingProvider | null;
   requestedProvider: string;
   fallbackFrom?: string;
   fallbackReason?: string;
   providerUnavailableReason?: string;
-  runtime?: EmbeddingProviderRuntime;
+  runtime?: MemoryEmbeddingProviderRuntime;
 };
 
 type CreateEmbeddingProviderOptions = Omit<MemoryEmbeddingProviderCreateOptions, "dimensions"> & {

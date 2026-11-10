@@ -91,18 +91,50 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   const repeated = await snapshot(dir, "current-repeat", rows.toReversed(), window);
   expect(await readFile(repeated.output)).toStrictEqual(await readFile(current.output));
   const newest = await plan(dir, current.output, current.output, old.output);
-  expect(newest.items.changed).toEqual([]);
-  expect(newest.items.unchanged).toEqual(["a", "b", "d"]);
-  const partial = await snapshot(dir, "partial", [], window, "partial");
-  const missing = await plan(dir, partial.output, current.output);
-  expect(missing.items.deleted).toEqual([]);
-  expect(missing.items.unresolved_missing).toEqual(["a", "b", "d"]);
+  expect(newest.items).toMatchObject({ changed: [], unchanged: ["a", "b", "d"] });
+  for (const completeness of ["partial", "unknown"]) {
+    const partial = await snapshot(dir, completeness, [], window, completeness);
+    const missing = await plan(dir, partial.output, old.output);
+    expect(missing.items).toMatchObject({ deleted: [], unresolved_missing: ["a", "b", "c", "z"] });
+  }
   await expect(snapshot(dir, "duplicate", [rows[0], rows[0]], window)).rejects.toThrow(
     /Duplicate item id/,
   );
   const scratch = tempDirs.make("knowledge-source-scratch-");
   const env = { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch };
   const options = { timeout: 10_000, env };
+  const malformed = Buffer.concat([
+    Buffer.from('{"id":"'),
+    Buffer.from([0xff]),
+    Buffer.from('"}\n'),
+  ]);
+  expect(() =>
+    run(
+      manifestScript,
+      [
+        "snapshot",
+        ...flags({
+          provider: "discord",
+          "source-key": "discord:guild:channel",
+          input: "-",
+          output: "-",
+          "coverage-start": at("000"),
+          "coverage-end": at("010"),
+        }),
+      ],
+      { ...options, input: malformed },
+    ),
+  ).toThrow(/encoded data was not valid/);
+  expect(await readdir(scratch)).toEqual([]);
+  const invalidManifest = path.join(dir, "invalid.manifest.jsonl");
+  await writeFile(
+    invalidManifest,
+    Buffer.concat([Buffer.from(content.split("\n")[0] + "\n"), malformed]),
+  );
+  expect(() => run(manifestScript, ["plan", "--current", invalidManifest], options)).toThrow(
+    /encoded data was not valid/,
+  );
+  expect(await readdir(scratch)).toEqual([]);
   expect(() =>
     run(manifestScript, ["plan", "--current", path.join(scratch, "missing.gz")], options),
   ).toThrow(/ENOENT/);

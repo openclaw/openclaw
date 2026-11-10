@@ -1,4 +1,5 @@
-import { readFileSync, rmSync } from "node:fs";
+import { chmodSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import path from "node:path";
 import { serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
@@ -9,11 +10,13 @@ import {
   readCloneFileMetadata,
 } from "@openclaw/fs-safe/copy";
 import { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
+import { hasErrnoCode } from "./errno.js";
 import type {
   FsSafeCopyRead,
   FsSafeCopyReply,
   FsSafeCopyWrite,
   FsSafeProvisionCopy,
+  ProvisionCopyDetails,
 } from "./fs-safe-copy-worker-contract.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 
@@ -27,6 +30,23 @@ function failure(error: unknown): FsSafeCopyReply {
   };
 }
 
+function prepareOwnedDirectoryRemoval(directory: string): void {
+  const stats = lstatSync(directory);
+  if (!stats.isDirectory()) {
+    return;
+  }
+  // Retired templates and captures have no writers. Repair their directories,
+  // including excluded outputs, without changing files or following symlinks.
+  if ((stats.mode & 0o700) !== 0o700) {
+    chmodSync(directory, (stats.mode & 0o7777) | 0o700);
+  }
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      prepareOwnedDirectoryRemoval(path.join(directory, entry.name));
+    }
+  }
+}
+
 normalizeFsSafeNativeEnv();
 
 if (parentPort) {
@@ -37,9 +57,21 @@ if (parentPort) {
   configureFsSafeNative(nativeConfig);
   serveWorkerTasks<FsSafeCopyReply, FsSafeCopyRead | FsSafeProvisionCopy>(
     async (command, channel, control) => {
+      let copyDetails: ProvisionCopyDetails | undefined;
       try {
         switch (command.type) {
           case "provision": {
+            copyDetails = {
+              copier: "portable",
+              batchCount: 0,
+              sourceBytes: 0,
+              spawnCount: 0,
+              spawnMs: 0,
+              childMs: 0,
+              authorityChecks: 0,
+              authorityMs: 0,
+            };
+            const details = copyDetails;
             if (!channel) {
               throw new Error("Worktree provisioning requires its live host channel");
             }
@@ -54,24 +86,32 @@ if (parentPort) {
                   command.destination,
                   command.paths,
                   {
+                    copyDetails: details,
                     signal: control.signal,
                     assertCurrent: () => {
-                      control.throwIfCancelled();
-                      Atomics.store(decision, 0, 0);
-                      channel.notify("authority");
-                      while (Atomics.load(decision, 0) === 0) {
-                        // Retirement can suppress notifications. Observe its shared
-                        // cancellation fence even while this callback cannot yield.
-                        Atomics.wait(decision, 0, 0, 1_000);
+                      const started = performance.now();
+                      details.authorityChecks++;
+                      try {
                         control.throwIfCancelled();
-                      }
-                      control.throwIfCancelled();
-                      if (Atomics.load(decision, 0) !== 1) {
-                        throw new Error("Worktree provisioning mutation authority refused");
+                        Atomics.store(decision, 0, 0);
+                        channel.notify("authority");
+                        while (Atomics.load(decision, 0) === 0) {
+                          // Retirement can suppress notifications. Observe its shared
+                          // cancellation fence even while this callback cannot yield.
+                          Atomics.wait(decision, 0, 0, 1_000);
+                          control.throwIfCancelled();
+                        }
+                        control.throwIfCancelled();
+                        if (Atomics.load(decision, 0) !== 1) {
+                          throw new Error("Worktree provisioning mutation authority refused");
+                        }
+                      } finally {
+                        details.authorityMs += performance.now() - started;
                       }
                     },
                   },
                 ),
+                copyDetails: details,
               };
             });
           }
@@ -89,7 +129,7 @@ if (parentPort) {
             throw new Error("Unknown native worktree read operation");
         }
       } catch (error) {
-        return failure(error);
+        return { ...failure(error), ...(copyDetails ? { copyDetails } : {}) };
       }
     },
   );
@@ -104,7 +144,19 @@ if (parentPort) {
     switch (command.type) {
       case "remove":
         // Node's synchronous remover walks natively, outside the Gateway's JS heap.
-        rmSync(command.destination, { recursive: true, force: true });
+        try {
+          rmSync(command.destination, { recursive: true, force: true });
+        } catch (error) {
+          if (
+            !hasErrnoCode(error, "EACCES") &&
+            !hasErrnoCode(error, "EPERM") &&
+            !hasErrnoCode(error, "ENOTEMPTY")
+          ) {
+            throw error;
+          }
+          prepareOwnedDirectoryRemoval(command.destination);
+          rmSync(command.destination, { recursive: true, force: true });
+        }
         break;
       case "create":
         await createCloneSource(command.destination, { signal: controller.signal });

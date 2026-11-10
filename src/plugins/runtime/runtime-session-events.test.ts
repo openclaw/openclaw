@@ -3,6 +3,7 @@ import type {
   SessionEventOptions,
   SessionEventTarget,
 } from "../../auto-reply/reply/session-event-contract.js";
+import { enqueueSessionEventForHost } from "../../auto-reply/reply/session-event-handoff.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { createRuntimeBase } from "./runtime-base.js";
@@ -13,8 +14,11 @@ const host = vi.hoisted(() => ({
 }));
 // mock-isolation: Verify the public adapter contract without admitting model work or reading live sessions.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
-  captureSessionEventTargetForHost: host.capture,
   enqueueSessionEventForHost: host.enqueue,
+}));
+// mock-isolation: Keep target capture at its owning boundary.
+vi.mock("../../auto-reply/reply/session-event-target.js", () => ({
+  captureSessionEventTargetForHost: host.capture,
 }));
 
 const target: SessionEventTarget = {
@@ -24,7 +28,7 @@ const target: SessionEventTarget = {
   generation: "process",
 };
 const address = { agentId: "main", sessionKey: "agent:main:main" };
-const system = () => createRuntimeBase().system;
+const system = () => createRuntimeBase(enqueueSessionEventForHost).system;
 const captureTarget = () => system().captureSessionEventTarget(address.agentId, address.sessionKey);
 let active: boolean;
 const inOwnerScope = <T>(run: () => T) =>
@@ -83,7 +87,7 @@ describe("plugin session-event boundary", () => {
     const expectedTarget = await captureTarget();
     vi.resetModules();
     const { createRuntimeBase: createDuplicate } = await import("./runtime-base.js");
-    createDuplicate().system.enqueueSessionEvent("Completed", {
+    createDuplicate(enqueueSessionEventForHost).system.enqueueSessionEvent("Completed", {
       ...address,
       expectedTarget,
     });
@@ -99,8 +103,13 @@ describe("plugin session-event boundary", () => {
 
   it("rejects capture when its owner retires during host preparation", async () => {
     const pending = createDeferredCore<SessionEventTarget>();
-    host.capture.mockReturnValueOnce(pending.promise);
+    const started = createDeferredCore();
+    host.capture.mockImplementationOnce(() => {
+      started.resolve();
+      return pending.promise;
+    });
     const capture = inOwnerScope(captureTarget);
+    await started.promise;
     active = false;
     pending.resolve(target);
     await expect(capture).rejects.toThrow("retired owner");

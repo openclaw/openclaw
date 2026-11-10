@@ -24,7 +24,7 @@ export async function invokeConfigPatch(args: {
 }
 
 export function startConfigWrite(
-  method: "config.patch" | "config.apply",
+  method: "config.set" | "config.patch" | "config.apply",
   args: { raw: unknown; baseHash?: string },
   overrides?: Partial<GatewayRequestHandlerOptions>,
 ) {
