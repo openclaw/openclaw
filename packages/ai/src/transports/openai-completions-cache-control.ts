@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CacheRetention } from "../types.js";
-import { splitSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { splitSystemPromptCacheBoundaryForWire } from "../utils/system-prompt-cache-boundary.js";
 import type { resolveAnthropicEphemeralCacheControl } from "./anthropic-payload-policy.js";
 import type { ResolvedOpenAICompletionsCompat } from "./openai-completions-compat.js";
 
@@ -86,7 +86,7 @@ export function applyCompletionsAnthropicCacheControl(
       ) {
         continue;
       }
-      const split = splitBoundary ? splitSystemPromptCacheBoundary(block.text) : undefined;
+      const split = splitBoundary ? splitSystemPromptCacheBoundaryForWire(block.text) : undefined;
       if (split) {
         content.splice(
           i,
