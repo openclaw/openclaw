@@ -169,7 +169,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
           };
           const replyOptions = state.getReplyOptions();
           const onReplyPreparation =
-            params.replyOptions?.isHeartbeat || state.sendPolicyDenied
+            ctx.InternalTurnSource === "heartbeat" || state.sendPolicyDenied
               ? undefined
               : wrapProgressCallback(params.replyOptions?.onReplyPreparation);
           // Progress belongs to this dispatch, before the resolver loads history or

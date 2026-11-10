@@ -93,7 +93,11 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("keeps denied preparation silent and preserves work when feedback fails", async () => {
-    for (const denied of [true, false]) {
+    for (const [denied, heartbeat] of [
+      [true, false],
+      [false, true],
+      [false, false],
+    ]) {
       setNoAbort();
       sessionStoreMocks.currentEntry = {
         sessionId: "session",
@@ -105,14 +109,17 @@ describe("dispatchReplyFromConfig", () => {
       });
       const replyResolver = vi.fn(async () => ({ text: "Done" }));
       const result = await dispatchReplyFromConfig({
-        ctx: createDirectCtx({ SessionKey: `preparation:${denied}` }),
+        ctx: createDirectCtx({
+          SessionKey: `preparation:${denied}:${heartbeat}`,
+          InternalTurnSource: heartbeat ? "heartbeat" : undefined,
+        }),
         cfg: emptyConfig,
         dispatcher: createDispatcher(),
         replyOptions: { onReplyPreparation },
         replyResolver,
       });
       expect(result.sendPolicyDenied).toBe(denied ? true : undefined);
-      expect(onReplyPreparation).toHaveBeenCalledTimes(denied ? 0 : 1);
+      expect(onReplyPreparation).toHaveBeenCalledTimes(denied || heartbeat ? 0 : 1);
       expect(replyResolver).toHaveBeenCalledOnce();
     }
   });
