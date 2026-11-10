@@ -8,7 +8,10 @@ import { expect, it, vi } from "vitest";
 import "./backup-worker.test-support.js";
 import { backupDoctorPostgresMigration } from "../../commands/doctor-postgres-migration.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { capturePostgresSchema } from "../../snapshot/database-backup-core.worker.js";
+import {
+  capturePostgresSchema,
+  pruneOrphanedPostgresCaptures,
+} from "../../snapshot/database-backup-core.worker.js";
 import {
   capturePostgresBackup,
   discardPostgresSchemaCaptures,
@@ -302,6 +305,48 @@ it.skipIf(!connection)(
         expect((await fs.readdir(directory)).includes("database.sqlite")).toBe(!server);
       }
     }),
+);
+
+it.skipIf(!connection)(
+  "leaves another role's capture alone under the same directory prefix",
+  async () => {
+    assert(connection);
+    const admin = new Client({ connectionString: connection });
+    const id = () => randomUUID().replaceAll("-", "");
+    const [runtime, foreign] = [`oc_runtime_${id()}`, `oc_foreign_${id()}`];
+    const schemas = { [runtime]: `restore_${id()}`, [foreign]: `restore_${id()}` };
+    // Two installs on separate hosts may share the same absolute state path.
+    const prefix = `/missing-${id()}/state/openclaw.sqlite.pre-startup-migration-`;
+    const storeId = randomUUID();
+    await admin.connect();
+    const url = new URL(connection);
+    url.username = runtime;
+    url.password = "";
+    const client = new Client({ connectionString: url.toString() });
+    try {
+      await admin.query(`CREATE ROLE "${runtime}" LOGIN; CREATE ROLE "${foreign}" NOLOGIN`);
+      for (const [owner, schema] of Object.entries(schemas)) {
+        const marker = JSON.stringify({ openclawCapture: `${prefix}${randomUUID()}.postgres.bak` });
+        await admin.query(`CREATE SCHEMA "${schema}" AUTHORIZATION "${owner}";
+        CREATE TABLE "${schema}".openclaw_schema_meta (store_id text);
+        ALTER TABLE "${schema}".openclaw_schema_meta OWNER TO "${owner}";
+        INSERT INTO "${schema}".openclaw_schema_meta VALUES ('${storeId}');
+        COMMENT ON SCHEMA "${schema}" IS '${marker}'`);
+      }
+      await client.connect();
+      expect(
+        await pruneOrphanedPostgresCaptures(client, { storeId, directoryPrefix: prefix }),
+      ).toEqual([schemas[runtime]]);
+      expect(await schemaExists(admin, schemas[foreign]!)).toBe(true);
+    } finally {
+      await client.end().catch(() => {});
+      for (const schema of Object.values(schemas)) {
+        await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      }
+      await admin.query(`DROP ROLE IF EXISTS "${runtime}"; DROP ROLE IF EXISTS "${foreign}"`);
+      await admin.end();
+    }
+  },
 );
 
 function readBackupEngineNamespace(anchorPath: string) {

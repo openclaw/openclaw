@@ -273,8 +273,9 @@ export async function pruneOrphanedPostgresCaptures(
   client: Client,
   params: { storeId: string; directoryPrefix: string },
 ) {
+  // Installs sharing a database may run as separate roles; only schemas this role may drop are read.
   const marked = await client.query<{ schema: string; note: string }>(
-    "SELECT nspname AS schema, obj_description(oid, 'pg_namespace') AS note FROM pg_namespace WHERE nspname ~ '^restore_[a-f0-9]{32}$' AND obj_description(oid, 'pg_namespace') IS NOT NULL",
+    "SELECT nspname AS schema, obj_description(oid, 'pg_namespace') AS note FROM pg_namespace WHERE nspname ~ '^restore_[a-f0-9]{32}$' AND pg_has_role(nspowner, 'USAGE') AND obj_description(oid, 'pg_namespace') IS NOT NULL",
   );
   const dropped: string[] = [];
   for (const { schema, note } of marked.rows) {
