@@ -864,6 +864,7 @@ admit_pr_workflow_binding() {
 pr_bootstrap_anchor="" pr_bootstrap_root="" pr_bootstrap_revision=""
 pr_bootstrap_components=(scripts/pr scripts/pr-lib/wrapper-components.txt
   scripts/pr-lib/cache-lifetime.mjs scripts/pr-lib/materialized-anchor.mjs
+  scripts/pr-lib/cache-lifetime-process.py scripts/pr-lib/dependency-lifetime-inherit.cjs
   scripts/pr-lib/git-invocation.mjs scripts/pr-lib/materialize-dependencies.mjs
   scripts/pr-lib/dependency-inputs.json scripts/windows-cmd-helpers.mjs)
 
@@ -930,11 +931,35 @@ pr_retire_created_anchor() {
 
 # Keep dependency sourcing independent of wrapper selection. In particular, an
 # older anchor still supplies its own package/version policy to this bootstrap.
+pr_start_dependency_lifetime() {
+  case "$requested_subcommand" in workspace | dependency-cache-recover | dependency-hold-release) return 0 ;; esac
+  if [ -n "${OPENCLAW_PR_LIFETIME_FILE:-}" ]; then return; fi
+  OPENCLAW_PR_LIFETIME_FILE=$(node "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" create-lifetime "$pr_bootstrap_anchor" "$$") || return 1
+  export OPENCLAW_PR_LIFETIME_FILE
+  exec 7<> "$OPENCLAW_PR_LIFETIME_FILE"
+  python3 -I -B "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime-process.py" shared 7 || return 1
+  node "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" register-lifetime "$pr_bootstrap_anchor" "$$" || return 1
+  local preload
+  preload=$(node -p 'JSON.stringify(process.argv[1])' "$pr_bootstrap_root/scripts/pr-lib/dependency-lifetime-inherit.cjs") || return 1
+  export NODE_OPTIONS="${NODE_OPTIONS:-} --require $preload"
+}
+
+pr_collect_dependencies() {
+  [ "${OPENCLAW_PR_CACHE_COLLECTION_PID:-}" != "$$" ] || return 0
+  # Recovery must retain its target and lock-recover needs no Node toolchain.
+  case "$requested_subcommand" in
+    workspace | *-recover | dependency-hold-release) ;;
+    *) node "$1" collect ;;
+  esac
+  export OPENCLAW_PR_CACHE_COLLECTION_PID="$$"
+}
+
 pr_materialize_dependencies() {
   # Discovery and cache recovery use built-ins only. Recovery still authenticates
   # the complete official-main source closure before it can open the ledger.
   case "$requested_subcommand" in workspace | dependency-cache-recover | dependency-hold-release) return 0 ;; esac
   pr_verify_bootstrap || { echo "Refusing unauthenticated parent dependency helpers." >&2; return 1; }
+  pr_collect_dependencies "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs"
   node --input-type=module - "$1" "$canonical_repo_root" "$2" "${3:-${PR_WORKFLOW_SOURCE_REVISION:-}}" "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" <<'EOF_TOOLING'
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -951,7 +976,7 @@ function repository(url, root) {
   return `${parsed.hostname.toLowerCase()}/${parsed.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, "").toLowerCase()}`;
 }
 
-const { claimCreatedAnchor, collectUnusedDependencyCaches, dependencyCacheRoot, holdDependencyCache, publishDependencyCache, privateDependencyDonor, withDependencyCacheLock } = await import((await import("node:url")).pathToFileURL(process.argv[6]));
+const { claimCreatedAnchor, dependencyCacheRoot, holdDependencyCache, publishDependencyCache, stageDependencyCache, sweepDependencyCaches, privateDependencyDonor, withDependencyCacheLock } = await import((await import("node:url")).pathToFileURL(process.argv[6]));
 const { bindGitInvocation } = await import((await import("node:url")).pathToFileURL(join(dirname(process.argv[6]), "git-invocation.mjs")));
 
 function dependencyKey(rows, tree, audit) {
@@ -984,6 +1009,10 @@ function dependencyKey(rows, tree, audit) {
 }
 
 function materializeDependencies(owner, canonicalPath, destination, revision) {
+  if (process.env.OPENCLAW_PR_CACHE_COLLECTION_PID !== String(process.ppid)) {
+    try { sweepDependencyCaches(); }
+    catch (error) { console.error(`Warning: retaining PR dependency cache entries: ${error.message}`); }
+  }
   const canonical = realpathSync(canonicalPath);
   destination = resolve(destination);
   const gitBinary = process.env.OPENCLAW_PR_GIT;
@@ -1060,7 +1089,7 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
   const anchor = claimCreatedAnchor(dirname(destination), process.ppid);
   const use = (lock) => holdDependencyCache(lock, entry, anchor);
   if (!withDependencyCacheLock(cache, use)) {
-    const stage = mkdtempSync(join(cache, `install-${process.ppid}-`));
+    const stage = withDependencyCacheLock(cache, lock => stageDependencyCache(lock, entry, anchor));
     try {
       const archive = join(stage, ".pr-source.tar");
       git(canonical, ["archive", "--format=tar", `--output=${archive}`, revision]);
@@ -1117,10 +1146,6 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
   // helper must never keep the global metadata mutex across process execution.
   if (!materialize(entry, destination)) throw new Error("Cached dependencies do not match the trust anchor.");
   console.error(`Using frozen scripts/pr dependency installation: ${entry}`);
-  try {
-    const retired = withDependencyCacheLock(cache, (lock) => collectUnusedDependencyCaches(lock, entry));
-    for (const path of retired) rmSync(path, { recursive: true });
-  } catch (error) { console.error(`Warning: retaining PR dependency cache entries: ${error.message}`); }
 }
 
 try {
@@ -1163,6 +1188,7 @@ if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
   pr_prepare_bootstrap "$script_parent_dir/.." || exit 1
   if [ "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] && [ "${OPENCLAW_PR_ANCHOR_FD:-}" = 9 ]; then
     trap 'pr_retire_created_anchor "$pr_bootstrap_anchor" || true' EXIT
+    pr_start_dependency_lifetime || exit 1
   fi
   # Older parents pin only their own dependency set. The anchored child owns
   # completing its installation before any loader, supervisor, or lock starts.
@@ -1295,6 +1321,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
           exec 9< "$anchor_exec_dir"
           pr_prepare_bootstrap "$anchor_exec_dir" "$anchor_commit" || exit 1
           trap 'pr_retire_created_anchor "$anchor_exec_dir" || true' EXIT
+          pr_start_dependency_lifetime || exit 1
           pr_batch_wrapper_git bootstrap-disjoint "$anchor_git_root" "$anchor_commit" \
             "${anchor_components[@]}" || exit 1
           anchor_extraction_valid=0
@@ -1382,6 +1409,10 @@ fi
 # Keep the verified owner available after cleanup removes a linked wrapper.
 canonical_repo_root="$(cd "$canonical_repo_root" && pwd -P)"
 readonly canonical_repo_root
+
+# Ordinary installed-checkout runs also drain abandoned cache work. Recovery and
+# read-only discovery retain their independent, non-mutating bootstrap contract.
+pr_collect_dependencies "$script_parent_dir/pr-lib/cache-lifetime.mjs"
 
 if is_dependency_recovery_command; then
   if [ "$requested_subcommand" = dependency-cache-recover ]; then
