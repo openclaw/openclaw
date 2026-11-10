@@ -301,6 +301,8 @@ private final class OpenClawIDNodeWebSocketTask: WebSocketRequestSending, Sendab
         Task {
             await self.io.close(
                 code: UInt16(exactly: closeCode.rawValue),
+                // Preserve lossy decoding so malformed close-reason bytes retain their diagnostic text.
+                // swiftlint:disable:next optional_data_string_conversion
                 reason: reason.map { String(decoding: $0, as: UTF8.self) } ?? "")
             self.taskState.withLock { $0 = .completed }
         }

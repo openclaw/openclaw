@@ -107,6 +107,8 @@ public enum OpenClawIDNodeTunnelCodec {
             if bytes.isEmpty { return .close(nil, "") }
             guard bytes.count >= 2 else { throw OpenClawIDNodeTransportError.truncatedFrame }
             let code = UInt16(bytes[bytes.startIndex]) << 8 | UInt16(bytes[bytes.startIndex + 1])
+            // Preserve lossy decoding so malformed close-reason bytes retain their diagnostic text.
+            // swiftlint:disable:next optional_data_string_conversion
             return .close(code, String(decoding: bytes.dropFirst(2), as: UTF8.self))
         default: throw OpenClawIDNodeTransportError.unsupportedOpcode
         }
