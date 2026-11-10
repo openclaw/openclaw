@@ -198,7 +198,8 @@ struct RootTabs: View {
                 onShow: self.showSidebar,
                 onHide: self.hideSidebar,
                 sidebar: self.sidebarColumn(drawerSafeAreaInsets: isDrawerLayout ? proxy.safeAreaInsets : nil),
-                detail: self.sidebarDetailNavigationShell,
+                detail: self.sidebarDetailNavigationShell
+                    .environment(\.openClawChatIsObscured, isDrawerLayout && self.isSidebarVisible),
                 contentSafeAreaInsets: proxy.safeAreaInsets)
                 .onChange(of: layoutMode, initial: true) { _, mode in
                     self.updateSidebarLayout(mode)

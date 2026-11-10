@@ -142,22 +142,22 @@ heartbeat observer works independently of the optional V8 flight recorder.
 
 ## What survives a restart
 
-| State                                                             | Behavior                                                                        |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Conversations and transcripts                                     | Remain in the per-agent SQLite database                                         |
-| Running root session at graceful shutdown                         | Receives one resume input at the next startup                                   |
-| Root session left unfinished in a pending crash-recovery interval | Receives the same single resume input at the next startup                       |
-| Accepted user input captured in that shutdown marker              | Runs after the resume input, in FIFO order, with its sender's current authority |
-| Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                     |
-| Session parked in `sessions_yield` with a surviving wake source   | Keeps its recorded wait, including dashboard roots; no startup model request    |
-| Yielded requester whose descendants were stopped                  | Receives the root resume input to reconcile their work                          |
-| Yielded session whose external continuation source is gone        | Closes with a recorded, visible failure                                         |
-| Background process                                                | Ends with the old process; its root session receives the resume input           |
-| Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                    |
-| Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                   |
-| ACP or external-harness session                                   | Keeps its harness owner's restart policy                                        |
-| Update outcome                                                    | Remains a passive report in the originating conversation                        |
-| Gateway terminal PTY                                              | Ends with the old process                                                       |
+| State                                                             | Behavior                                                                                          |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Conversations and transcripts                                     | Remain in the per-agent SQLite database                                                           |
+| Running root session at graceful shutdown                         | Receives one resume input at the next startup                                                     |
+| Root session left unfinished in a pending crash-recovery interval | Receives the same single resume input at the next startup                                         |
+| Accepted user input captured in that shutdown marker              | Runs after the resume input, in FIFO order, with its original source limits and current authority |
+| Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                                       |
+| Session parked in `sessions_yield` with a surviving wake source   | Keeps its recorded wait, including dashboard roots; no startup model request                      |
+| Yielded requester whose descendants were stopped                  | Receives the root resume input to reconcile their work                                            |
+| Yielded session whose external continuation source is gone        | Closes with a recorded, visible failure                                                           |
+| Background process                                                | Ends with the old process; its root session receives the resume input                             |
+| Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                                      |
+| Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                                     |
+| ACP or external-harness session                                   | Keeps its harness owner's restart policy                                                          |
+| Update outcome                                                    | Remains a passive report in the originating conversation                                          |
+| Gateway terminal PTY                                              | Ends with the old process                                                                         |
 
 A session counts as running when its own agent loop is active, a descendant
 sub-agent is running, or it owns a running background process. The Gateway reads
@@ -167,8 +167,9 @@ Idle and finished sessions are not marked. Cron occurrence sessions and
 ACP/external-harness sessions are excluded.
 
 The marker is a small private field on the existing session entry. It records the
-IDs of accepted user inputs still queued behind that session at shutdown. The
-Gateway writes one marker per running root session or recorded yield wait,
+IDs and original authenticated source limits of accepted user inputs still queued
+behind that session at shutdown. These private limits are not included in chat
+history or model messages. The Gateway writes one marker per running root session or recorded yield wait,
 batched by session store, before aborting work. It uses the existing session-entry JSON in SQLite and needs
 no schema migration.
 Crash recovery uses the nonterminal run marker committed with accepted plain
@@ -586,10 +587,13 @@ revalidated authority of the person's recorded device.
 Only accepted user messages whose IDs were captured in the graceful-shutdown
 marker follow the resume input, in FIFO order. Older queued rows left by a crash
 remain inert, even if the session is marked during a later shutdown. Each retained
-message runs as its recorded sender under that sender's current authority. If the
-sender is revoked or cannot be resolved to a current principal, the message becomes
-an ordinary failed send that the sender can resend. A channel identity without a
-profile does not authorize queued execution after restart.
+message retains its original app grant, ID membership, and scope and model limits.
+The Gateway revalidates that source against current policy before replay; its live
+authority remains required at tool effects. A later sign-in by the same person
+cannot replace the accepted source. Missing, unsupported, or revoked sources
+produce an ordinary failed send that the sender can resend. This also applies to
+older shutdown markers without per-input source evidence. A channel identity
+without a profile does not authorize queued execution after restart.
 
 New messages arriving during a resumed run use ordinary steering and queue rules.
 Resumed turns execute on the bounded `restart-recovery` lane at
