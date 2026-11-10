@@ -22,7 +22,12 @@ export async function runLocalWorkspaceProjection<T>(
     quiescence?: Awaited<ReturnType<typeof quiesceLocalWorkspace>>,
     capture?: LocalWorkspaceSyncOptions["capture"],
   ) => Promise<T>,
-  options: { provision?: boolean; reason?: LocalWorkspacePauseReason } = {},
+  options: {
+    provision?: boolean;
+    reason?: LocalWorkspacePauseReason;
+    afterAcceptance?: () => void;
+    snapshotCapture?: boolean;
+  } = {},
 ) {
   owner.assertCurrent();
   let previous = store.get();
@@ -67,7 +72,7 @@ export async function runLocalWorkspaceProjection<T>(
         : undefined;
   };
   const capture =
-    previous && options.reason === "checkpoint"
+    previous && options.reason === "checkpoint" && options.snapshotCapture
       ? await prepareLocalWorkspaceCheckpointCapture(
           previous.projection_path,
           filesystemOptions,
@@ -76,8 +81,9 @@ export async function runLocalWorkspaceProjection<T>(
         )
       : undefined;
   await pause();
+  let accepted = false;
   try {
-    return await run(
+    const result = await run(
       operations,
       quiescence && {
         get retired() {
@@ -88,6 +94,8 @@ export async function runLocalWorkspaceProjection<T>(
       },
       capture,
     );
+    accepted = true;
+    return result;
   } catch (error) {
     if (error instanceof Error && workspaceSizeRecoveryPaths(error).length > 0) {
       const { describeLocalWorkspaceRecovery } = await import("./local-workspace-recovery.js");
@@ -111,8 +119,16 @@ export async function runLocalWorkspaceProjection<T>(
         await timeWorktreePreparationPhase("runtimeResume", quiescence.resume);
       }
     }
+    if (accepted) {
+      options.afterAcceptance?.();
+    }
     if (previous && options.reason === "checkpoint") {
-      await removeLocalWorkspaceCheckpointCapture(previous.projection_path, filesystemOptions);
+      // Command acceptance may release its session owner. This discardable artifact
+      // remains under the same reconciliation lease until removal finishes.
+      await removeLocalWorkspaceCheckpointCapture(previous.projection_path, {
+        signal: store.signal,
+        commitGuard: () => void store.get(),
+      });
     }
   }
 }

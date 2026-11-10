@@ -33,6 +33,20 @@ pause invocation through successful unpause return and conservatively include
 engine CLI overhead. Command latency includes guest execution and finalization;
 the subsequent correctness read is excluded.
 
+The native driver acquires the existing reconciliation lease after warmup and
+after the measured burst. This settles cleanup retained by that owner after
+canonical acceptance. `cleanupSettlementMs` reports the final tail separately;
+total CPU and allocation include it, while individual command latency does not.
+Apply the same driver to every source revision so deferred cleanup cannot make
+the candidate's total work disappear from the comparison.
+On btrfs, this also waits for `btrfs subvolume sync` after the burst. Native
+subvolume deletion delegates extent retirement to kernel threads, which can sit
+outside the rig's CPU cgroup. `hostCpuMs` therefore reports `/proc/stat` deltas
+for the whole Linux VM, including that work and unrelated daemon activity. Use
+the identical-code controls to assess noise; do not describe cgroup CPU alone
+as complete kernel-cleanup accounting. The final settlement may include the
+sync command's polling interval and is separate from command latency.
+
 Reports include raw pause and command samples, median/p95/max, main-process CPU,
 main-isolate allocation, source hashes, host load, and owner phases. The manifest
 phase includes worker dispatch; `withStagedWorkerWorkspaceManifest` contains
@@ -189,3 +203,23 @@ snapshot directory as a guest deletion. Snapshot device identity also differs
 from the source despite preserved inode and ctime, affecting fingerprint reuse.
 After retaining output, delete only the named snapshots and nested/source
 subvolumes, unmount this loop filesystem, and remove its task-owned image.
+
+## Dirty-writeback diagnostic
+
+After the command comparison, run the separate synthetic primitive probe on a
+new directory on the private btrfs mount, with `btrfs-progs` and `strace` present:
+
+```sh
+python3 scripts/perf/local-workspace-snapshot-writeback.py \
+  --root /owned-btrfs/writeback-probe > writeback.jsonl
+```
+
+It seeds 62,000 files/1.1 GB, then compares snapshots with and without explicit
+pre-capture `syncfs`. Steady samples write 1.7 GB/hour in five-second intervals;
+separate burst samples rewrite the whole tree immediately before capture. Keep
+those regimes separate: an hourly average does not describe burst size. The
+probe retains syscall timings beside the report and verifies snapshot isolation.
+`Dirty`/`Writeback` are whole-kernel counters, not private-cgroup metrics. Snapshot
+timings include `strace` overhead and qualify the primitive, not command latency.
+The probe removes its named source and snapshots; retain the small trace files
+with the report, then remove that task-owned probe directory.

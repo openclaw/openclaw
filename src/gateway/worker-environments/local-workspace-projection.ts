@@ -21,6 +21,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
@@ -36,6 +38,7 @@ import type { LocalWorkspaceCustody, LocalWorkspaceOwner } from "./local-workspa
 type PendingWorkspaceOperation<T> = { result: Promise<T>; signal?: AbortSignal };
 const pendingCheckpoints = new Map<string, PendingWorkspaceOperation<void>>();
 const pendingPreparations = new Map<string, PendingWorkspaceOperation<string>>();
+const log = createSubsystemLogger("agents/worktrees");
 
 /** Queued preparations share observation, while each caller retains its own run authority. */
 export function withLocalWorkspacePreparation(
@@ -140,12 +143,25 @@ export function checkpointLocalWorkspace(
     pendingCheckpoints,
     owner,
     [owner.agentId, owner.sessionKey, owner.sessionId, owner.lifecycleRevision],
-    (beginCapture) =>
-      withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
+    (beginCapture) => {
+      const completed = createDeferredCore();
+      let accepted = false;
+      const afterAcceptance = () => {
+        accepted = true;
+        completed.resolve();
+      };
+      // Keep cleanup in the lease and run-end lifetime after returning saved bytes
+      // to the command. A following checkpoint waits for this one bounded artifact.
+      void withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
         beginCapture();
+        let snapshotCapture = false;
         if (
           !options.knownMutation &&
-          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"]))
+          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"], (entries, elapsedMs) => {
+            // A probe stops at its first edit. The accepted inventory also covers
+            // large trees whose changed file happens to sort first.
+            snapshotCapture = entries >= 20_000 || elapsedMs >= 500;
+          }))
         ) {
           await removeLocalWorkspaceCheckpointCapture(store.get()!.projection_path, {
             signal: store.signal,
@@ -164,9 +180,17 @@ export function checkpointLocalWorkspace(
                 quiescence &&
                 (() => timeWorktreePreparationPhase("runtimeResume", quiescence.resume)),
             }),
-          { reason: "checkpoint" },
+          { reason: "checkpoint", afterAcceptance, snapshotCapture },
         );
-      }),
+      }).then(completed.resolve, (error: unknown) => {
+        if (accepted) {
+          log.warn(`Local workspace checkpoint capture cleanup failed: ${String(error)}`);
+        } else {
+          completed.reject(error);
+        }
+      });
+      return completed.promise;
+    },
     options,
   );
 }
@@ -399,6 +423,7 @@ async function probeUnchangedLocalWorkspace(
   owner: LocalWorkspaceOwner,
   store: LocalWorkspaceStore,
   targets: readonly ("canonical" | "projection")[],
+  observeProbe?: (entries: number, elapsedMs: number) => void,
 ) {
   let row = store.get();
   if (
@@ -416,6 +441,7 @@ async function probeUnchangedLocalWorkspace(
   projectionOperations(owner, store, row).current();
   for (const target of targets) {
     const selected = row;
+    const started = performance.now();
     const snapshot = await timeWorktreePreparationPhase(
       target === "canonical" ? "synchronizeCanonical" : "synchronizeProjection",
       async () => {
@@ -432,6 +458,10 @@ async function probeUnchangedLocalWorkspace(
           return undefined;
         }
       },
+    );
+    observeProbe?.(
+      snapshot?.kind === "rescan" ? (snapshot.entryCount ?? 0) : 0,
+      performance.now() - started,
     );
     store.assertCurrent();
     if (snapshot?.kind !== "scan" || snapshot.resultingRoot !== snapshot.previousRoot) {

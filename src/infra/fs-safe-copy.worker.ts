@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { chmodSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { serialize } from "node:v8";
@@ -122,6 +123,18 @@ if (parentPort) {
     const command = JSON.parse(readFileSync(0, "utf8")) as FsSafeCopyWrite;
     switch (command.type) {
       case "remove":
+        // Removing a btrfs root retires shared extents without unlinking every
+        // file. Minimal hosts and unprivileged mounts retain recursive removal.
+        if (
+          process.platform === "linux" &&
+          lstatSync(command.destination, { throwIfNoEntry: false })?.ino === 256 &&
+          spawnSync("btrfs", ["subvolume", "delete", "--", command.destination], {
+            stdio: "ignore",
+            timeout: 5_000,
+          }).status === 0
+        ) {
+          break;
+        }
         // Node's synchronous remover walks natively, outside the Gateway's JS heap.
         try {
           rmSync(command.destination, { recursive: true, force: true });

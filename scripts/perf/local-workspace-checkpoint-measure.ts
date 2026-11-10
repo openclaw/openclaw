@@ -985,6 +985,15 @@ const owner: LocalWorkspaceOwner = {
 };
 const projection =
   await import("../../src/gateway/worker-environments/local-workspace-projection.js");
+const { withLocalWorkspaceStore } =
+  await import("../../src/gateway/worker-environments/local-workspace-store.js");
+const settleCheckpointCleanup = async () => {
+  await withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async () => {});
+  if (fs.statfsSync(output).type === 0x9123683e) {
+    // Native subvolume deletion defers extent retirement to kernel threads.
+    execFileSync("btrfs", ["subvolume", "sync", output], { stdio: "ignore" });
+  }
+};
 const { prepareLocalSandboxWorkspace } =
   await import("../../src/agents/sandbox/local-workspace.js");
 const { resolveSandboxConfigForAgent } = await import("../../src/agents/sandbox/config.js");
@@ -1992,6 +2001,9 @@ measurement: try {
     break measurement;
   }
   await runOne(0);
+  if (nativeTurns) {
+    await settleCheckpointCleanup();
+  }
   if (fileReads) {
     await delay(5_000);
     await runOne(0);
@@ -2085,6 +2097,26 @@ measurement: try {
     nativeTurns && process.platform === "linux" && fs.existsSync("/sys/fs/cgroup/cpu.stat")
       ? readCgroupCpuUs()
       : undefined;
+  const clockTicks =
+    nativeTurns && process.platform === "linux"
+      ? Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }))
+      : 0;
+  if (nativeTurns && process.platform === "linux") {
+    assert(Number.isSafeInteger(clockTicks) && clockTicks > 0, "Invalid Linux clock tick rate");
+  }
+  const readHostCpu = () => {
+    const line = fs.readFileSync("/proc/stat", "utf8").split("\n")[0];
+    assert(line !== undefined && line.startsWith("cpu "), "Missing aggregate Linux CPU counters");
+    const ticks = line.trim().split(/\s+/).slice(1).map(Number);
+    return Object.fromEntries(
+      ["user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"].map((key, index) => {
+        const tick = ticks[index];
+        assert(tick !== undefined && Number.isFinite(tick), `Missing Linux CPU counter: ${key}`);
+        return [key, (1000 * tick) / clockTicks];
+      }),
+    );
+  };
+  const hostCpuBefore = clockTicks ? readHostCpu() : undefined;
   const hostLoad = loadavg(),
     before = process.threadCpuUsage(),
     processBefore = process.cpuUsage(),
@@ -2137,6 +2169,13 @@ measurement: try {
       }),
     );
   }
+  const cleanupSettlementStarted = performance.now();
+  if (nativeTurns) {
+    // The same lease settles bounded cleanup after acceptance. Include its CPU
+    // in every arm without adding the tail to individual command latency.
+    await settleCheckpointCleanup();
+  }
+  const cleanupSettlementMs = performance.now() - cleanupSettlementStarted;
   if (fileReads || nativeTurns) {
     // Include the last operation's resumed heartbeat, not just intervals arriving mid-request.
     await nextGuestHeartbeat();
@@ -2148,6 +2187,15 @@ measurement: try {
     processCpu = process.cpuUsage(processBefore);
   const cgroupCpuMs =
     cgroupCpuBefore === undefined ? undefined : (readCgroupCpuUs() - cgroupCpuBefore) / 1000;
+  const hostCpuMs = hostCpuBefore
+    ? Object.fromEntries(
+        Object.entries(readHostCpu()).map(([key, value]) => {
+          const previousCpu = hostCpuBefore[key];
+          assert(previousCpu !== undefined, `Missing initial Linux CPU counter: ${key}`);
+          return [key, value - previousCpu];
+        }),
+      )
+    : undefined;
   await waitForDiagnosticEventsDrained();
   stopLeaseDiagnostics();
   stopRpcDiagnostics();
@@ -2194,6 +2242,10 @@ measurement: try {
           engine: nativeTurns ? "native Podman" : "synthetic execContainer seam; no injected delay",
           pauseDurationsMs: [...pauseDurationsMs],
           checkpointPhases: [...checkpointPhases],
+          cleanupSettlementMs,
+          hostCpuMs,
+          hostCpuAccounting:
+            "Whole Linux VM CPU, including kernel cleanup and unrelated daemon work; cgroup CPU excludes some kernel threads",
           phaseAccounting:
             "withStagedWorkerWorkspaceManifest includes applyStagedWorkerWorkspace; phases overlap and must not be summed",
           percentileDefinition: "sorted sample at floor((count - 1) * percentile)",

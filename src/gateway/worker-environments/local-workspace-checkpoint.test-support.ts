@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+} from "../../../test/helpers/promise.js";
 import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
+import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
+import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -14,11 +20,12 @@ const expectText = async (directory: string, relative: string, expected: string)
 const expectMissing = async (directory: string, relative: string) =>
   expect(fs.stat(path.join(directory, relative))).rejects.toMatchObject({ code: "ENOENT" });
 
-export async function proveUnchangedSandboxCommandCheckpoints(
+async function proveUnchangedSandboxCommandCheckpoints(
   owner: LocalWorkspaceOwner,
   resumeAfterCapture = false,
   failAcceptance = false,
-  atomicCapture: boolean | "nested" = false,
+  atomicCapture: boolean | "nested" | "small" = false,
+  deferCleanup = false,
 ) {
   const { bindLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
   const { createSandboxTestContext } = await import("../../agents/sandbox/test-fixtures.js");
@@ -27,7 +34,21 @@ export async function proveUnchangedSandboxCommandCheckpoints(
   const stores = await import("./local-workspace-store.js");
   const registry = await import("../../agents/sandbox/registry.js");
   const engine = await import("../../agents/sandbox/container-engine.js");
-  using projection = await prepareSandboxCheckpointFixture(owner);
+  let disposed = false;
+  using projection = await prepareSandboxCheckpointFixture({
+    ...owner,
+    assertCurrent: () => {
+      owner.assertCurrent();
+      if (disposed) {
+        throw new Error("Checkpoint caller disposed");
+      }
+    },
+    [Symbol.dispose]: () => {
+      disposed = true;
+    },
+  });
+  const removing = createDeferred();
+  const releaseRemoval = createDeferred();
   const containerName = "unchanged-command-fixture";
   const backend: SandboxBackendHandle = {
     id: "docker",
@@ -64,13 +85,22 @@ export async function proveUnchangedSandboxCommandCheckpoints(
     });
     vi.spyOn(nativeWorktreeFilesystem, "probe").mockResolvedValue("btrfs");
     vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementation(async (source, destination) => {
+      expect(atomicCapture, "Fast small workspaces must avoid snapshot creation").not.toBe("small");
       expect(paused).toBe(true);
       await fs.cp(source, destination, { recursive: true });
     });
-    vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementation(async (destination) => {
-      expect(paused).toBe(false);
-      await fs.rm(destination, { recursive: true, force: true });
-    });
+    vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementation(
+      async (destination, options) => {
+        expect(paused).toBe(false);
+        if (deferCleanup) {
+          removing.resolve();
+          await releaseRemoval.promise;
+          // Cleanup retains its lease after the accepted command releases its caller.
+          options.commitGuard();
+        }
+        await fs.rm(destination, { recursive: true, force: true });
+      },
+    );
   }
   const reconciler = await import("./workspace-reconcile.js");
   const { AcceptedWorkspacePublicationIndeterminateError } =
@@ -124,7 +154,7 @@ export async function proveUnchangedSandboxCommandCheckpoints(
       pauses++;
     } else if (args[0] === "unpause") {
       paused = false;
-      if (atomicCapture && pauses === 1) {
+      if (atomicCapture && atomicCapture !== "small" && pauses === 1) {
         await writeText(projection.workspaceDir, "source.txt", "later background edit\n");
       }
     }
@@ -132,12 +162,16 @@ export async function proveUnchangedSandboxCommandCheckpoints(
   });
   const withStore = stores.withLocalWorkspaceStore;
   vi.spyOn(stores, "withLocalWorkspaceStore").mockImplementation((params, run) =>
-    withStore(params, (store) =>
-      run({
+    withStore(params, (store) => {
+      const initial = store.get();
+      const pendingRecovery = Boolean(initial?.journal_json || initial?.pending_target);
+      return run({
         ...store,
-        manifest: (row, action) => {
+        manifest: async (row, action) => {
           if (action.kind === "scan") {
-            expect(paused).toBe(atomicCapture === true ? false : !action.capture);
+            // Recovery skips the live probe, so its fresh capture remains paused.
+            // An ordinary large-workspace checkpoint must scan its snapshot after resume.
+            expect(paused).toBe(atomicCapture === true ? pendingRecovery : !action.capture);
             if (atomicCapture === "nested" && action.capture) {
               // The manifest worker reports omitted nested subvolumes before preparing CAS writes.
               throw Object.assign(new Error("Btrfs snapshot omitted a nested subvolume"), {
@@ -145,10 +179,17 @@ export async function proveUnchangedSandboxCommandCheckpoints(
               });
             }
           }
-          return store.manifest(row, action);
+          const result = await store.manifest(row, action);
+          // Native-copy ordering uses a tiny fixture with a large owner inventory fact.
+          return atomicCapture &&
+            atomicCapture !== "small" &&
+            action.kind === "probe" &&
+            result.kind === "rescan"
+            ? { ...result, entryCount: 20_000 }
+            : result;
         },
-      }),
-    ),
+      });
+    }),
   );
   await registry.updateRegistry({
     containerName,
@@ -177,6 +218,13 @@ export async function proveUnchangedSandboxCommandCheckpoints(
         timedOut: false,
         token: spec.finalizeToken,
       });
+      let finalizedAccepted = false;
+      void finalized.then(
+        () => {
+          finalizedAccepted = true;
+        },
+        () => {},
+      );
       if (resumeAfterCapture && command === 3) {
         try {
           await awaitGateBeforeSettlement(
@@ -198,6 +246,31 @@ export async function proveUnchangedSandboxCommandCheckpoints(
           await expectText(projection.workspaceDir, "source.txt", "later background edit\n");
           continue;
         }
+      }
+      if (deferCleanup && command === 3) {
+        await removing.promise;
+        await nextEventLoopTurn();
+        expect(finalizedAccepted, "Saved command still waits for capture cleanup").toBe(true);
+        await finalized;
+        await expectText(owner.worktree.path, "source.txt", "modified\n");
+        projection[Symbol.dispose]();
+        expect(disposed).toBe(true);
+        await expect(
+          withOpenClawStateLeaseAsync(
+            {
+              scope: "workspace.local-reconciliation",
+              key: owner.worktree.id,
+              leaseMs: 60_000,
+              waitMs: 0,
+            },
+            captureWorktreeRunEndContext(owner.env ?? process.env),
+            async () => {},
+          ),
+        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_HELD" });
+        releaseRemoval.resolve();
+        await withStore({ ...owner, worktreeId: owner.worktree.id }, async () => {});
+        await expectMissing(path.dirname(projection.workspaceDir), "checkpoint-capture");
+        return;
       }
       await finalized;
       expect(paused).toBe(false);
@@ -223,6 +296,31 @@ export async function proveUnchangedSandboxCommandCheckpoints(
     }
   } finally {
     accept.resolve();
+    releaseRemoval.resolve();
     await registry.removeRegistryEntry(containerName);
   }
+}
+
+export function registerSandboxCheckpointTests(owner: () => LocalWorkspaceOwner) {
+  it("keeps unchanged commands running while checkpointing edits and deletions", () =>
+    proveUnchangedSandboxCommandCheckpoints(owner()));
+
+  it.each([false, true])(
+    "resumes captured commands without losing later guest writes (interrupted acceptance: %s)",
+    (interrupted) => proveUnchangedSandboxCommandCheckpoints(owner(), true, interrupted),
+  );
+
+  it.each([false, true])(
+    "captures before scanning while preserving post-resume writes (interrupted acceptance: %s)",
+    (interrupted) => proveUnchangedSandboxCommandCheckpoints(owner(), true, interrupted, true),
+  );
+
+  it("re-pauses omitted nested subvolumes under the checkpoint lease before saving their live bytes", () =>
+    proveUnchangedSandboxCommandCheckpoints(owner(), true, false, "nested"));
+
+  it("acknowledges saved commands before capture cleanup while retaining its lease after caller disposal", () =>
+    proveUnchangedSandboxCommandCheckpoints(owner(), true, false, true, true));
+
+  it("keeps fast small workspaces on paused capture even when btrfs snapshots are available", () =>
+    proveUnchangedSandboxCommandCheckpoints(owner(), false, false, "small"));
 }
