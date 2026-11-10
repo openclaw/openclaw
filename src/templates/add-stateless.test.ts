@@ -668,6 +668,7 @@ it.each([false, true])(
     vi.stubEnv("TEMPLATE_ROUTINE_TEST_TOKEN", ready ? "synthetic-token" : undefined);
     await withOpenClawTestState({ label: "template-routine-readiness" }, async (fixture) => {
       const source = await portableSource(fixture, {
+        agent: { id: "portable", name: "Portable", heartbeat: { every: "5m" } },
         mcpServers: {
           calendar: {
             command: "fixture-mcp",
@@ -686,10 +687,7 @@ it.each([false, true])(
       let config = baseConfig();
       setRuntimeConfigSnapshot(config);
       const plan = await buildTemplateAddPlan({
-        manifest: {
-          ...source.manifest,
-          agent: { ...source.manifest.agent, heartbeat: { every: "5m" } },
-        },
+        manifest: source.manifest,
         source: source.source,
         context: { config, workspace: fixture.statePath("added-workspace") },
       });
