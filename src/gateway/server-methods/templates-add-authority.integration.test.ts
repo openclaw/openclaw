@@ -30,7 +30,8 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { templatesAddHandlers } from "./templates-add.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
-const { resolveSource, greeting } = vi.hoisted(() => ({
+const { resolveSource, greeting, instructionFailure } = vi.hoisted(() => ({
+  instructionFailure: { pending: false, edited: false, soulWritten: false },
   resolveSource: vi.fn(),
   greeting: vi.fn(async () => {}),
 }));
@@ -41,6 +42,40 @@ const pluginIo = vi.hoisted(() => ({
   download: vi.fn(),
   staged: vi.fn(async (_directory: string) => {}),
 }));
+// mock-isolation: Inject one disk write failure; real filesystem ownership, rollback,
+// canonical continuation and the subsequent request remain unchanged.
+vi.mock("../../infra/fs-safe.js", async (original) => {
+  const filesystem = await original<typeof import("../../infra/fs-safe.js")>();
+  return {
+    ...filesystem,
+    root: async (...args: Parameters<typeof filesystem.root>) => {
+      const root = await filesystem.root(...args);
+      return new Proxy(root, {
+        get(target, key, receiver) {
+          if (key !== "write") {
+            return Reflect.get(target, key, receiver);
+          }
+          return async (...write: Parameters<typeof root.write>) => {
+            if (instructionFailure.pending && write[0] === "IDENTITY.md") {
+              instructionFailure.pending = false;
+              if (instructionFailure.edited) {
+                await fs.writeFile(
+                  path.join(root.rootReal, "SOUL.md"),
+                  "User edited instructions.\n",
+                );
+              }
+              throw new Error("Fixture instruction disk write failed");
+            }
+            await root.write(...write);
+            if (write[0] === "SOUL.md") {
+              instructionFailure.soulWritten = true;
+            }
+          };
+        },
+      });
+    },
+  };
+});
 // mock-isolation: Fixed registry responses only; all probes, artifact transactions,
 // Template consent, installed-index writes and config publication remain real.
 vi.mock("../../infra/clawhub-packages.js", async (original) => ({
@@ -121,6 +156,8 @@ it.each([
   "initialization-runtime",
   "source-retry",
   "initialization-retry",
+  "instruction-retry",
+  "instruction-edited",
 ] as const)(
   "retains original templates.add.apply administrator through final owners: %s",
   async (boundary) => {
@@ -145,6 +182,10 @@ it.each([
         }),
       );
       await fs.writeFile(path.join(root, "SOUL.md"), "Only verified Template instructions.\n");
+      await fs.writeFile(path.join(root, "IDENTITY.md"), "Verified identity instructions.\n");
+      instructionFailure.pending = boundary.startsWith("instruction-");
+      instructionFailure.edited = boundary === "instruction-edited";
+      instructionFailure.soulWritten = false;
       const manifestPath = path.join(root, "CLAW.md");
       await fs.writeFile(
         manifestPath,
@@ -152,7 +193,12 @@ it.each([
           JSON.stringify({
             schemaVersion: 1,
             agent: { id: agentId, name: "Verified Authority Fixture" },
-            workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
+            workspace: {
+              bootstrapFiles: {
+                "SOUL.md": { source: "SOUL.md" },
+                "IDENTITY.md": { source: "IDENTITY.md" },
+              },
+            },
           }) +
           "\n---\n",
       );
@@ -238,8 +284,33 @@ it.each([
       const request = Promise.resolve(templatesAddHandlers["templates.add.apply"]!(options));
       const settled = request.then(() => "settled" as const);
       try {
+        if (boundary === "instruction-edited") {
+          await request;
+          expect(instructionFailure.soulWritten).toBe(true);
+          expect(respond.mock.calls[0]?.[1]).toMatchObject({
+            agentRetained: true,
+            initializationPending: true,
+            status: "partial",
+          });
+          const workspace = config.agents!.entries![agentId]!.workspace!;
+          expect(await fs.readFile(path.join(workspace, "SOUL.md"), "utf8")).toBe(
+            "User edited instructions.\n",
+          );
+          respond.mockClear();
+          await templatesAddHandlers["templates.add.apply"]!({
+            ...options,
+            req: { ...options.req, id: "edited-instruction-retry" },
+          });
+          expect(respond.mock.calls[0]?.[0]).toBe(false);
+          expect(greeting).not.toHaveBeenCalled();
+          return;
+        }
         let retainedSessionId: string | undefined;
-        if (boundary === "source-retry" || boundary === "initialization-retry") {
+        if (
+          boundary === "source-retry" ||
+          boundary === "initialization-retry" ||
+          boundary === "instruction-retry"
+        ) {
           await request;
           expect(respond.mock.calls[0]?.[1]).toMatchObject({
             agentRetained: true,
@@ -259,7 +330,8 @@ it.each([
         const successful =
           boundary === "allowed" ||
           boundary === "source-retry" ||
-          boundary === "initialization-retry";
+          boundary === "initialization-retry" ||
+          boundary === "instruction-retry";
         if (!successful) {
           expect(
             await Promise.race([reached.promise.then(() => "held" as const), settled]),
@@ -275,7 +347,7 @@ it.each([
         await request;
         expect(respond).toHaveBeenCalledOnce();
         const [ok, result] = respond.mock.calls[0]!;
-        expect(ok).toBe(true);
+        expect(ok, JSON.stringify(respond.mock.calls)).toBe(true);
         expect(result, JSON.stringify(result)).toMatchObject({
           agentId,
           status: successful ? "complete" : "partial",

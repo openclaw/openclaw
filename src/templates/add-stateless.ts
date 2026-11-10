@@ -197,6 +197,7 @@ export async function applyTemplateAddPlanStateless(
   let rollbackAgentSession: (() => Promise<void>) | undefined;
   let configCommitAttempted = false;
   let workspaceFiles: PersistedTemplateWorkspaceFile[] = [];
+  let rollbackWorkspaceFiles: (() => Promise<void>) | undefined;
   let bootstrapSeededAt: string | undefined;
   let packages: PersistedTemplatePackageRef[] = [];
   const mcpServers: PersistedTemplateMcpServerRef[] = [];
@@ -386,6 +387,17 @@ export async function applyTemplateAddPlanStateless(
     // Exposure is a one-way custody transfer, not a reason to delete a usable agent.
     // Keep its workspace, chat, requirements and actual routine outcomes on later failure.
     if (retained) {
+      if (!configCommitted && rollbackWorkspaceFiles) {
+        try {
+          await rollbackWorkspaceFiles();
+          workspaceFiles = [];
+        } catch (cleanupError) {
+          return result("partial", {
+            code: "add_rollback_incomplete",
+            message: `${coerceErrorMessage(error)} Owned instruction cleanup failed: ${coerceErrorMessage(cleanupError)}. The agent and chat were kept.`,
+          });
+        }
+      }
       return result("partial", {
         code,
         message: `${coerceErrorMessage(error)} The agent was already made available and was kept. Continue setup in this agent; do not add another copy.`,
@@ -466,7 +478,9 @@ export async function applyTemplateAddPlanStateless(
         await mkdir(workspace);
         workspaceCreated = true;
       }
-      workspaceFiles = await createTemplateWorkspaceFiles(plan, stageOptions());
+      const instructions = await createTemplateWorkspaceFiles(plan, stageOptions());
+      workspaceFiles = instructions.files;
+      rollbackWorkspaceFiles = instructions.rollback;
       workspaceBeforeExposure = await workspaceIdentity(workspace);
       const deletion = await readAgentDeletionJournalAsync(plan.agent.finalId);
       if (deletion && !deletion.cleanupCompleted) {
