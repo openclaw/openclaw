@@ -1,0 +1,2 @@
+# SQLite readback regression for the raised string bound and unchanged event cap.
+42

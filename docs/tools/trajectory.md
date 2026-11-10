@@ -198,6 +198,11 @@ The exporter also bounds input size:
 - total exported events: 250,000
 - individual runtime event lines are truncated above 256 KiB
 
+The general runtime string limit is 65,536 UTF-16 code units (JavaScript string
+length). Longer strings are replaced with an explicit truncation marker.
+Field-specific bounds and the separate event byte limit still apply, including
+UTF-8 and JSON escaping overhead.
+
 Runtime capture preserves structured results within its field limits, including
 explicit truncation markers. If a tool result exceeds the event size limit,
 capture keeps its tool identity and outcome while dropping oversized payload
