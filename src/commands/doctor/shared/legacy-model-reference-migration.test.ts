@@ -310,7 +310,7 @@ describe("canonical model-reference migration", () => {
     expectIdempotent(result);
   });
 
-  it.each<[string, OpenClawConfig]>([
+  it.each<[string, OpenClawConfigWithLegacyRoster]>([
     ["the default model", defaults({ model: "anthropic/claude-opus-4-7" })],
     ["a defaults utility model", defaults({ utilityModel: "anthropic/claude-opus-4-7" })],
     [
@@ -318,7 +318,7 @@ describe("canonical model-reference migration", () => {
       { agents: { list: [{ id: "main", utilityModel: "anthropic/claude-opus-4-7" }] } },
     ],
   ])("keeps an outside legacy ref when %s selects the same model directly", (_name, selected) => {
-    const config: OpenClawConfig = {
+    const config: OpenClawConfigWithLegacyRoster = {
       ...selected,
       channels: { modelByChannel: { discord: { "123": "claude-cli/claude-opus-4-7" } } },
     };
