@@ -350,6 +350,52 @@ it("gives a configured fallback its own model budget after the primary times out
   expect(isolated.mock.calls[1]?.[0].model).toBe("claude-haiku-5-5");
 });
 
+it("gives the JSON validation retry its own model budget", async () => {
+  const completeModel = vi.fn<typeof defaultCompleteModel>((params) => {
+    const attempt = completeModel.mock.calls.length - 1;
+    return new Promise<ReturnType<typeof modelMessage>>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          resolve(
+            attempt === 0
+              ? modelMessage({ headline: "Invalid", health: "on-track", planProgress: null })
+              : modelMessage({ headline: "Recovered", health: "on-track" }),
+          ),
+        attempt === 0 ? 25_000 : 10_000,
+      );
+      params.abortSignal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new Error("aborted", { cause: params.abortSignal?.reason }));
+        },
+        { once: true },
+      );
+    });
+  });
+  const request = createSessionObserverCompletion({
+    getConfig: () => ({}),
+    prepareModel: vi.fn(async () => preparedModel()),
+    completeModel,
+    isCurrent: () => true,
+  });
+  const completion = request(observerState(), []);
+  await vi.waitFor(() => expect(completeModel).toHaveBeenCalledOnce(), {
+    timeout: 1_000,
+    interval: 1,
+  });
+
+  await advance(25_000);
+  await vi.waitFor(() => expect(completeModel).toHaveBeenCalledTimes(2), {
+    timeout: 1_000,
+    interval: 1,
+  });
+  await advance(10_000);
+
+  await expect(completion).resolves.toMatchObject({ headline: "Recovered", health: "on-track" });
+  expect(completeModel.mock.calls[1]?.[0].abortSignal?.aborted).toBe(false);
+});
+
 it("times out stuck candidates independently and disables the run after two failures", async () => {
   const completeModel = completionAfter();
   const signal = (index: number) => completeModel.mock.calls[index]?.[0].abortSignal;
