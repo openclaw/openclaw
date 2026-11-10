@@ -1,2 +1,2 @@
-# Regression coverage for forecasts, wheel consumption, anchoring, end renewal, table layout, and zero-height receipts: 402 added lines plus 71 inherited lines over main's ceiling (e6afc3c54002).
-473
+# Regression coverage for forecasts, wheel consumption, anchoring, end renewal, table layout, and zero-height receipts: 402 added lines plus 70 inherited lines over main's ceiling (baccc7e15291).
+472
