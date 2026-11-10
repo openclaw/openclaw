@@ -28,6 +28,7 @@ import {
 } from "./cron-creator-authority-context.js";
 import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
+import { runOwnedAgentCleanup } from "./run-cleanup-timeout.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
 type ResolvedAgentCommandDeps = Awaited<ReturnType<typeof resolveAgentCommandDeps>>;
@@ -106,18 +107,36 @@ export async function runLocalAgentCommand<TResult>(params: {
                   // Tool policy dispatches through the global runner; a headless run has no root.
                   ensureGlobalHookRunner();
                   return await withPluginRuntimeGenerationScope(lease.snapshot, () =>
-                    lease.run(() =>
-                      params.run(
-                        {
-                          ...admittedPrepared,
-                          commandRuntimeContext: {
-                            config: lease.snapshot.config,
-                            pluginGeneration: lease.pluginGeneration,
+                    lease.run(async () => {
+                      try {
+                        return await params.run(
+                          {
+                            ...admittedPrepared,
+                            commandRuntimeContext: {
+                              config: lease.snapshot.config,
+                              pluginGeneration: lease.pluginGeneration,
+                            },
                           },
-                        },
-                        resolvedDeps,
-                      ),
-                    ),
+                          resolvedDeps,
+                        );
+                      } finally {
+                        if (opts.cleanupMemoryOnRunEnd) {
+                          // Keep indexing in its generation; the caller consumes any failure receipt.
+                          await runOwnedAgentCleanup({
+                            runId: prepared.runId,
+                            sessionId: prepared.sessionId,
+                            oneShotCliRun: opts.oneShotCliRun,
+                            step: "memory-search-managers",
+                            cleanup: async () => {
+                              const { closeActiveMemorySearchManagersCore } =
+                                await import("../plugins/memory-runtime.js");
+                              await closeActiveMemorySearchManagersCore();
+                            },
+                            log: { warn: (message) => params.runtime.error(message) },
+                          }).catch(() => undefined);
+                        }
+                      }
+                    }),
                   );
                 },
               );

@@ -1,0 +1,3 @@
+126
+# Agent exec memory cleanup runs within the local prepared plugin generation.
+# Covers database/file lifetime and state retention after a failed close.
