@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
@@ -57,5 +57,20 @@ it.each([false, true])("exports chat chunks (deleted=%s)", async (deleted) => {
     expect(texts[i].length).toBeLessThanOrEqual(1000);
     const label = `part ${chunk.part} of ${chunk.parts}`;
     expect(texts[i].includes(label)).toBe(chunk.parts > 1);
+  }
+  const files = (await readdir(out)).filter((file) => file !== "in.jsonl");
+  const originals = await Promise.all(files.map((file) => readFile(path.join(out, file))));
+  for (const invalid of ["2026-13-02T12:00:00Z", "2026-10-02T25:00:00Z"]) {
+    await writeFile(
+      path.join(out, "in.jsonl"),
+      jsonl([rows[0], { ...rows[1], occurred_at: invalid }]),
+    );
+    expect(() => execFileSync(process.execPath, [...args, "--channel", "#changed"])).toThrow(
+      /needs a valid UTC occurred_at/,
+    );
+    expect((await readdir(out)).filter((file) => file !== "in.jsonl")).toEqual(files);
+    expect(await Promise.all(files.map((file) => readFile(path.join(out, file))))).toEqual(
+      originals,
+    );
   }
 });
