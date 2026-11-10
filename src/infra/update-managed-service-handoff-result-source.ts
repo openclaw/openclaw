@@ -194,7 +194,10 @@ function stagedRuntimePath() {
 
 function shouldRecoverInterruptedUpdater() {
   if (!params.runId || params.foregroundOrigin) return false;
-  return restorationArmed || readManagedHandoffGatewayStop()?.runId === params.runId;
+  if (restorationArmed) return true;
+  // An unreadable history must not bypass the existing failure handling below.
+  try { return readManagedHandoffGatewayStop()?.runId === params.runId; }
+  catch (error) { appendLog("could not read update history for interrupted recovery: " + String(error)); return false; }
 }
 
 // Post-core repair may advance the state schema past this helper's staged reader.

@@ -21,7 +21,6 @@ import {
 } from "../daemon-cli/restart-health.js";
 import { readPackageVersion } from "./shared.js";
 import {
-  assertGatewayServiceAdmissionUnchanged,
   GatewayServiceUpdateOwnershipError,
   inspectManagedGatewayServiceBeforeUpdate,
   readGatewayServiceStateForUpdate,
@@ -82,9 +81,19 @@ export async function restoreRepairGateway(params: {
         );
       }
     };
+    const expectedVersion = await readPackageVersion(params.root);
+    const expectedBuildId = await readBuiltGatewayBuildId(params.root);
+    // One service inspection and admission check right before the effect; the
+    // synchronous checks below cover only this function's own awaits.
     const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
     assertDoctorServiceSelection(env, state.env);
     const verdict = await inspectManagedGatewayServiceBeforeUpdate({ root: params.root, state });
+    await assertUpdateRecoveryAdmission({ env });
+    const port = await resolveUpdatedGatewayRestartPort({
+      config: params.config,
+      serviceEnv: state.env,
+      serviceCommand: state.command,
+    });
     assertCurrent();
     if (verdict.kind !== "owned") {
       return {
@@ -92,15 +101,6 @@ export async function restoreRepairGateway(params: {
         warning: stoppedGatewayGuidance("its ownership could not be verified", env),
       };
     }
-    const port = await resolveUpdatedGatewayRestartPort({
-      config: params.config,
-      serviceEnv: state.env,
-      serviceCommand: state.command,
-    });
-    const expectedVersion = await readPackageVersion(params.root);
-    const expectedBuildId = await readBuiltGatewayBuildId(params.root);
-    await assertUpdateRecoveryAdmission({ env });
-    assertCurrent();
     if (!state.running && readPendingStop().started) {
       return {
         restart: false,
@@ -112,33 +112,12 @@ export async function restoreRepairGateway(params: {
     }
     const restart = !state.running;
     if (restart) {
-      const beforeMutation = async () => {
-        await assertUpdateRecoveryAdmission({ env });
-        const current = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
-        assertDoctorServiceSelection(env, current.env);
-        const serviceUpdateVerdict = await inspectManagedGatewayServiceBeforeUpdate({
-          root: params.root,
-          state: current,
-        });
-        assertGatewayServiceAdmissionUnchanged(
-          { serviceUpdateVerdict: verdict },
-          serviceUpdateVerdict,
-        );
-        if (readPendingStop().started) {
-          throw new Error(
-            "Recovered update's Gateway stop intent changed. Run openclaw gateway status --deep.",
-          );
-        }
-        assertCurrent();
-      };
-      await beforeMutation();
       await service.start({
         env: state.env,
         stdout: params.json ? process.stderr : process.stdout,
         preserveDefinition: true,
         assertCurrent,
         beforeEffect: assertCurrent,
-        beforeMutation,
       });
     }
     // Keep startup evidence independent of readiness failures and later stopped snapshots.
@@ -192,9 +171,11 @@ export async function restoreRepairGateway(params: {
     if (error instanceof GatewayServiceUpdateOwnershipError) {
       return { restart: false, warning: stoppedGatewayGuidance(error.message, env) };
     }
-    throw new Error(
-      `Gateway recovery after update repair failed: ${formatErrorMessage(error)}. After resolving the failure, start it with \`${formatCliCommand("openclaw gateway start", env)}\`, then check \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`,
-      { cause: error },
-    );
+    // Repair maintenance already finished; a Gateway that will not come back is
+    // its next step, not a failed repair. Startup evidence stays recorded.
+    return {
+      restart: false,
+      warning: `Gateway recovery after update repair was not verified: ${formatErrorMessage(error)}. After resolving the failure, start it with \`${formatCliCommand("openclaw gateway start", env)}\`, then check \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`,
+    };
   });
 }
