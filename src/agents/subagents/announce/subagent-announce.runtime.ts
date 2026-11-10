@@ -2,6 +2,7 @@ import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/sessi
 import type { callGateway as GatewayCaller } from "../../../gateway/call.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import { commitBackgroundPayloadsToSession } from "../../../sessions/background-result-payloads.js";
 import { resolveSubagentChildAgentId } from "../registry/subagent-child-owner-match.js";
 import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
 export { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
@@ -31,3 +32,29 @@ export async function readSubagentSessionEntry(
 export const callSubagentLifecycleGateway: typeof GatewayCaller = (request) =>
   bindGatewayLifecycleRequest()(request);
 export { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
+
+/**
+ * Record a child result in the requester conversation as a model-visible
+ * background result row, without starting a requester turn.
+ */
+export async function commitRequesterSubagentResult(
+  params: Omit<
+    Parameters<typeof commitBackgroundPayloadsToSession>[0],
+    "payloads" | "provenance"
+  > & {
+    text: string;
+  },
+): Promise<void> {
+  const { text, ...rest } = params;
+  const committed = await commitBackgroundPayloadsToSession({
+    ...rest,
+    payloads: [{ text }],
+    provenance: { kind: "subagent-completion" },
+  });
+  if (!committed.ok) {
+    throw new Error(committed.reason);
+  }
+  if (committed.skipped) {
+    throw new Error(committed.diagnostics ?? "subagent result was not recorded");
+  }
+}

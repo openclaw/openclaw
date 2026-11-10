@@ -60,6 +60,11 @@ import {
 } from "./subagent-announce-dispatch.js";
 import { resolveExactSubagentCompletionEvent } from "./subagent-announce-handoff.js";
 import { resolveCompletionDeliveryOrigins } from "./subagent-announce-origin.js";
+import {
+  PAUSED_GOAL_CHILD_RESULT_LABEL,
+  resolvePausedGoalChildInjection,
+} from "./subagent-announce-paused-goal.js";
+import { commitRequesterSubagentResult } from "./subagent-announce.runtime.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 /** Another owner (a yielded requester or an idle cron turn) settles this completion. */
@@ -438,6 +443,61 @@ async function sendSubagentAnnounceDirectlyBound(
     try {
       if (!isCompletionAdmissionAllowed()) {
         throw new SourceOwnerChangedError();
+      }
+      // Announce cleanup and requester-settle retries call this function again.
+      // A delivered injection settles the completion, so a later attempt cannot
+      // turn the same pre-pause child into a requester model run.
+      const pausedGoalMessage = resolvePausedGoalChildInjection({
+        completionTarget: params.completionTarget,
+        sourceSessionKey: params.sourceSessionKey,
+        settleWakeSourceSessionKeys: params.settleWakeSourceSessionKeys,
+        goal: requesterEntry?.goal,
+        internalEvents: params.internalEvents,
+        pausedGoalVisibleText: params.pausedGoalVisibleText,
+        hasFailedTrustedSubagentCompletion,
+        hasRequiredSubagentNoOutputCompletion,
+      });
+      // Without a resolved requester generation the ordinary turn path still owns it.
+      if (pausedGoalMessage && requesterAgentId && requesterSessionId) {
+        if (params.onBeforeDispatch) {
+          await params.onBeforeDispatch();
+          dispatchPrepared = true;
+        }
+        if (params.signal?.aborted) {
+          return { delivered: false, path: "none" };
+        }
+        if (!isCompletionAdmissionAllowed()) {
+          throw new SourceOwnerChangedError();
+        }
+        // The same model-visible result row a direct channel delivery records: shown
+        // now, and in context when the goal resumes. A retry reuses the committed row.
+        await commitRequesterSubagentResult({
+          agentId: requesterAgentId,
+          sessionKey: canonicalRequesterSessionKey,
+          expectedGeneration: {
+            sessionId: requesterSessionId,
+            lifecycleRevision: requesterLifecycleRevision,
+          },
+          text: `[${PAUSED_GOAL_CHILD_RESULT_LABEL}]\n\n${pausedGoalMessage}`,
+          idempotencyKey: `${params.directIdempotencyKey}:paused-goal`,
+          config: cfg,
+          signal: params.signal,
+          assertCurrent: () => {
+            if (!isCompletionAdmissionAllowed()) {
+              throw new SourceOwnerChangedError();
+            }
+          },
+        });
+        if (!isCompletionDeliveryAllowed()) {
+          return sourceOwnerChangedResult();
+        }
+        try {
+          params.onAccepted?.(undefined);
+          params.onExecutionStarted?.();
+        } catch {
+          // Acceptance bookkeeping cannot reopen a completion already in the transcript.
+        }
+        return { delivered: true, path: "direct" };
       }
       directAnnounceResponse = await runAnnounceAgentCall({
         agentParams: directAgentParams,

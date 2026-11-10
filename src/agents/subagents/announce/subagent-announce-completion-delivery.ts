@@ -358,6 +358,21 @@ function collectDirectCompletionContent(params: {
   return undefined;
 }
 
+/** Child text for one requested injection kind. Empty completed output stays empty. */
+export function resolveDirectCompletionInjectionText(params: {
+  events: readonly AgentInternalEvent[] | undefined;
+  contentKind: "completed_result" | "failed_notice";
+}): string | undefined {
+  const extracted = collectDirectCompletionContent({
+    events: params.events,
+    contentKind: params.contentKind,
+  });
+  const text = [extracted?.content, ...(extracted?.mediaUrls ?? [])]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
+  return text || undefined;
+}
+
 export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;

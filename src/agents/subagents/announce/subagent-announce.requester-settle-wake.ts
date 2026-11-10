@@ -570,6 +570,11 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             requesterSessionKey,
             requesterAgentId,
             triggerMessage: wakeMessage,
+            // A sessions_yield pause notice stays on the wake message. Child
+            // findings are injected only when that notice is absent.
+            ...(!pauseNotice && preparedFindings.text
+              ? { pausedGoalVisibleText: preparedFindings.text }
+              : {}),
             requesterSessionOrigin,
             directOrigin,
             sourceSessionKey: batchSessionKeys[0],
