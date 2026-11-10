@@ -122,7 +122,7 @@ describeSpawnTransports("POSIX child lifecycle", (transport) => {
       });
       await expect(cleanupScope()).rejects.toThrow("cleanup identity lost");
       await expect(run.waitForExtinction?.()).rejects.toThrow("cleanup identity lost");
-      await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+      await expect(supervisor.shutdown()).resolves.toBeUndefined();
       // Failed cleanup joins must not prevent TERM from reaching the command.
       await waitForPidFile(termPath, signal, realDelay);
       const pid = commandPid;

@@ -152,7 +152,7 @@ describe("process supervisor", () => {
     await run.waitForExtinction!().catch(() => undefined);
     await expectCollected(callerRef);
     await expect(cleanup()).rejects.toBe(failure);
-    await expect(supervisor.shutdown()).rejects.toBe(failure);
+    await expect(supervisor.shutdown()).resolves.toBeUndefined();
     expect(failure.code).toBe("ECLEANUP");
     expect(failure.stack).toContain("cleanup identity lost");
   });
@@ -729,7 +729,9 @@ describe("process supervisor", () => {
     },
   );
 
-  it("retains a cleanup failure for its owner without poisoning a later scope", async () => {
+  it("retains a terminal cleanup failure for its owner without poisoning later shutdown", async () => {
+    const log = await import("./supervisor-log.runtime.js");
+    const warning = vi.spyOn(log, "warnProcessSupervisorFailure").mockImplementation(() => {});
     const { adapter, extinction } = owned();
     const cleanup = supervisor.acquireScopeCleanup("scope", { processTree: "required-all" });
     const run = await spawn({ scopeKey: "scope" });
@@ -742,7 +744,10 @@ describe("process supervisor", () => {
     await expect(
       supervisor.acquireScopeCleanup("scope", { processTree: "required-all" })(),
     ).resolves.toBeUndefined();
-    await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+    await expect(supervisor.shutdown()).resolves.toBeUndefined();
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      "Earlier cleanup failed: Error: cleanup identity lost",
+    );
     await expect(spawn()).rejects.toThrow("process supervisor is shut down");
   });
 
@@ -821,7 +826,7 @@ describe("process supervisor", () => {
       await expect(
         supervisor.acquireScopeCleanup("scope", { processTree: "required-all" })(),
       ).resolves.toBeUndefined();
-      await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+      await expect(supervisor.shutdown()).resolves.toBeUndefined();
       await expect(spawn()).rejects.toThrow("process supervisor is shut down");
     },
   );
