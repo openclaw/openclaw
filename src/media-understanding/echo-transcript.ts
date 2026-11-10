@@ -13,6 +13,10 @@ const loadMessageRuntime = createLazyRuntimeModule(() => import("../channels/mes
 /** Default operator-visible transcript echo format for preflight audio transcription. */
 export const DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';
 
+export function formatAudioTranscriptForAgent(transcript: string): string {
+  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
+}
+
 const TELEGRAM_TRANSCRIPT_ECHO_INTENT_PREFIX = "transcript-echo:v1:";
 const TELEGRAM_TRANSCRIPT_ECHO_COMPLETION_RETENTION = {
   idPrefix: TELEGRAM_TRANSCRIPT_ECHO_INTENT_PREFIX,

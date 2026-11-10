@@ -413,46 +413,61 @@ it("publishes a confirmed cancellation exit and retains it for late subscribers"
   expect(lateExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
 });
 
-it("keeps cleanup authority when a root-exit consumer ends already-closed stdin", async () => {
-  const stub = mockWritableRelay();
-  vi.spyOn(process, "kill").mockImplementation(failGroup("ESRCH"));
-  const write = stub.control.write.bind(stub.control);
-  vi.spyOn(stub.control, "write").mockImplementation((chunk, encoding, callback) => {
-    const message: unknown = JSON.parse(chunk.toString());
-    if (isRecord(message) && message.type === "stdin-end") {
-      callback?.(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
-      return false;
+it.each(["root-exit consumer", "shutdown", "missing receipt"])(
+  "keeps cleanup authority when %s ends stdin",
+  async (caller) => {
+    const stub = mockWritableRelay();
+    vi.spyOn(process, "kill").mockImplementation(failGroup("ESRCH"));
+    const write = stub.control.write.bind(stub.control);
+    vi.spyOn(stub.control, "write").mockImplementation((chunk, encoding, callback) => {
+      const message: unknown = JSON.parse(chunk.toString());
+      if (isRecord(message) && message.type === "stdin-end") {
+        callback?.(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+        return false;
+      }
+      return write(chunk, encoding, callback);
+    });
+    const starting = startRelay({
+      stdinMode: "pipe-open",
+      terminateOnHostLoss: true,
+    });
+    const { emit } = relayPeer(stub);
+    emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
+    const adapter = await starting;
+    adapter.onExit(() => adapter.stdin!.end());
+    const extinction = adapter.waitForExtinction();
+    void extinction.catch(() => {});
+    try {
+      if (caller !== "root-exit consumer") {
+        adapter.stdin!.end();
+        await nextTurn();
+      }
+      emit({ type: "root-result", code: 0, signal: null });
+      stub.stdout.end();
+      stub.stderr.end();
+      await nextTurn();
+      if (caller !== "missing receipt") {
+        emit({ type: "closing", reason: "lineage-closed" });
+      }
+      await nextTurn();
+      stub.lineage.end();
+      stub.control.destroy();
+      stub.disconnectMock();
+      stub.emitExit(0);
+      if (caller === "missing receipt") {
+        await expect(extinction).rejects.toThrow(
+          "service child cleanup identity lost: write EPIPE",
+        );
+      } else {
+        await expect(extinction).resolves.toBeUndefined();
+      }
+      await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    } finally {
+      closeStub(stub);
+      adapter.dispose();
     }
-    return write(chunk, encoding, callback);
-  });
-  const starting = startRelay({
-    stdinMode: "pipe-open",
-    terminateOnHostLoss: true,
-  });
-  const { emit } = relayPeer(stub);
-  emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
-  const adapter = await starting;
-  adapter.onExit(() => adapter.stdin!.end());
-  const extinction = adapter.waitForExtinction();
-  void extinction.catch(() => {});
-  try {
-    emit({ type: "root-result", code: 0, signal: null });
-    stub.stdout.end();
-    stub.stderr.end();
-    await nextTurn();
-    emit({ type: "closing", reason: "lineage-closed" });
-    await nextTurn();
-    stub.lineage.end();
-    stub.control.destroy();
-    stub.disconnectMock();
-    stub.emitExit(0);
-    await expect(extinction).resolves.toBeUndefined();
-    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
-  } finally {
-    closeStub(stub);
-    adapter.dispose();
-  }
-});
+  },
+);
 
 it("keeps an observed Windows root result independent of failed extinction", async () => {
   const { adapter, emit, endOutput, close } = await createRelay("win32");

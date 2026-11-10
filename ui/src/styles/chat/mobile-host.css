@@ -193,7 +193,7 @@
     border-radius: 16px;
     background: transparent;
     color: var(--muted);
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
 
   .chat-mobile-host__segments button[aria-pressed="true"] {
@@ -205,8 +205,8 @@
     min-width: 0;
     min-height: 0;
     font-family: var(--font-body);
-    font-size: 16px;
-    line-height: 24px;
+    font-size: var(--control-ui-text-lg);
+    line-height: calc(24px * var(--control-ui-text-scale));
     font-weight: 500;
     color: var(--text-strong);
     overflow: hidden;
@@ -219,8 +219,8 @@
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 2;
       text-overflow: ellipsis;
-      font-size: 16px;
-      line-height: 20px;
+      font-size: var(--control-ui-text-lg);
+      line-height: calc(20px * var(--control-ui-text-scale));
       white-space: normal;
       overflow-wrap: anywhere;
     }
@@ -574,11 +574,6 @@
 
 /* The mobile viewport owns the outer edges; all spacing remains inside sheets. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .shell--mobile-nav .content--chat:not(.content--new-session) {
-    --content-inline-padding: 0px;
-    padding-inline: 0;
-  }
-
   .shell--mobile-nav .content--chat .chat.chat {
     border-radius: 0;
   }

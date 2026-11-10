@@ -34,7 +34,7 @@
   border-top: 1px solid var(--border);
   color: var(--muted);
   cursor: var(--cursor-action);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 650;
   list-style: none;
 }
@@ -75,14 +75,14 @@
 .memory-import__collection-choice strong {
   overflow: hidden;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .memory-import__collection-choice small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .memory-import__files {
@@ -122,14 +122,14 @@
 .memory-import__files code {
   overflow: hidden;
   color: var(--text);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .memory-import__file-status {
   color: var(--muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -162,11 +162,11 @@
 }
 
 .memory-import__result strong {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .memory-import__result div span {
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .memory-import__result-path,
@@ -190,7 +190,7 @@
   max-width: 100%;
   overflow: hidden;
   color: inherit;
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -210,7 +210,7 @@
 
 .memory-import__result-issues strong,
 .memory-import__result-issues span {
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .memory-import__loading {
@@ -238,7 +238,7 @@
   display: grid;
   gap: 4px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   text-align: left;
 }
 
@@ -276,7 +276,7 @@
 
 .memory-import__backfill-preview > ul > li > ul {
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 @media (max-width: 768px) {

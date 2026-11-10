@@ -1530,6 +1530,26 @@ function includePatternMatchesAnyFile(pattern: string, files: string[]) {
   );
 }
 
+function createIncludePatternMatcher(patterns: string[]) {
+  const literals = new Set<string>();
+  const globs: string[] = [];
+  for (const pattern of patterns) {
+    if (isNormalizedLiteralPath(pattern)) {
+      literals.add(pattern);
+    } else {
+      globs.push(pattern);
+    }
+  }
+  return (file: string) => {
+    if (literals.has(file)) {
+      return true;
+    }
+    // Noncanonical paths retain Node's separator and dot-segment semantics.
+    const candidates = isNormalizedLiteralPath(file) ? globs : patterns;
+    return candidates.some((pattern) => file === pattern || path.matchesGlob(file, pattern));
+  };
+}
+
 function resolveExplicitSourceTestTargets(
   targetArg: string,
   cwd: string,
@@ -3245,6 +3265,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "pr-metadata",
       "pr-prepare-gates",
       "pr-prepare-preflight",
+      "pr-prepare-testbox",
       "pr-wrappers",
       "pr-gate-base",
     ],
@@ -5534,8 +5555,8 @@ export function buildVitestRunPlans(
       ? [toScopedIncludePattern(targetArg, cwd)]
       : [];
   });
-  const impliedDatabaseWorkerTargets = databaseWorkerCoreTestFiles.filter((file) =>
-    databaseWorkerPatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
+  const impliedDatabaseWorkerTargets = databaseWorkerCoreTestFiles.filter(
+    createIncludePatternMatcher(databaseWorkerPatterns),
   );
   const hasPackageFileTarget = classifiedTargets.some(
     ({ kind, relative }) =>
@@ -5639,10 +5660,9 @@ export function buildVitestRunPlans(
   const activeIncludePatterns = activeTargetArgs.map((target) =>
     toScopedIncludePattern(target, cwd),
   );
+  const matchesActiveIncludePattern = createIncludePatternMatcher(activeIncludePatterns);
   const impliedToolingIsolatedTargets = !watchMode
-    ? toolingIsolatedTestFiles.filter((file) =>
-        activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-      )
+    ? toolingIsolatedTestFiles.filter(matchesActiveIncludePattern)
     : [];
   if (impliedToolingIsolatedTargets.length > 0) {
     const current = groupedTargets.get("toolingIsolated") ?? [];
@@ -5655,9 +5675,8 @@ export function buildVitestRunPlans(
   }
   const uiTargets = groupedTargets.get("ui") ?? [];
   const uiIncludePatterns = uiTargets.map((target) => toScopedIncludePattern(target, cwd));
-  const impliedUiTimingTargets = uiTimingTestFiles.filter((file) =>
-    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-  );
+  const matchesUiIncludePattern = createIncludePatternMatcher(uiIncludePatterns);
+  const impliedUiTimingTargets = uiTimingTestFiles.filter(matchesUiIncludePattern);
   if (impliedUiTimingTargets.length > 0) {
     groupedTargets.set("uiTiming", [
       ...new Set([...(groupedTargets.get("uiTiming") ?? []), ...impliedUiTimingTargets]),
@@ -5682,9 +5701,7 @@ export function buildVitestRunPlans(
       ]);
     }
   }
-  const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter((file) =>
-    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-  );
+  const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter(matchesUiIncludePattern);
   if (impliedUiIsolatedTargets.length > 0) {
     const current = groupedTargets.get("uiIsolated") ?? [];
     for (const target of impliedUiIsolatedTargets) {
@@ -5696,9 +5713,7 @@ export function buildVitestRunPlans(
   }
   // Source-child ownership can cross shared suites (for example state tests).
   // Match every active target so broad selections cannot silently omit excluded children.
-  const impliedCliProcessTargets = cliProcessTestFiles.filter((file) =>
-    activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
-  );
+  const impliedCliProcessTargets = cliProcessTestFiles.filter(matchesActiveIncludePattern);
   if (impliedCliProcessTargets.length > 0) {
     const current = groupedTargets.get("cliProcess") ?? [];
     for (const target of impliedCliProcessTargets) {

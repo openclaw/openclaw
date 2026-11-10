@@ -39,6 +39,7 @@ function createFixture(method: (typeof methods)[number]) {
   const startup = {
     hasPendingAgents: true,
     isAgentInputRecoveryPending: () => false,
+    registerInputRecovery: () => {},
     waitForAgentPreparation: () => {
       reachedAdmission.resolve();
       return startup.hasPendingAgents ? preparation.promise : undefined;

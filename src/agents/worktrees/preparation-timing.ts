@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
 import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
+import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 type PreparationPhase =
@@ -74,6 +76,7 @@ type PreparationTimingState = {
   enabled: boolean;
   template: TemplateState;
   templateDetails: TemplateDetails;
+  copyDetails?: ProvisionCopyDetails;
   phases: Partial<Record<PreparationPhase, number>>;
   activePhases: number;
   coveredSince: number;
@@ -106,8 +109,18 @@ export function setWorktreePreparationTemplate(
 export function recordWorktreePreparationFailure(phase: PreparationPhase, error: unknown) {
   const current = preparation.getStore();
   // Preserve the innermost failing phase as the error crosses enclosing waits.
-  if (current && (!current.failure || current.failure.error !== error)) {
+  if (
+    current &&
+    (!current.failure || !collectNestedErrorCandidates(error).includes(current.failure.error))
+  ) {
     current.failure = { error, phase };
+  }
+}
+
+export function setWorktreePreparationCopyDetails(details: ProvisionCopyDetails) {
+  const current = preparation.getStore();
+  if (current) {
+    current.copyDetails = details;
   }
 }
 
@@ -179,7 +192,8 @@ export async function withWorktreePreparationTiming<T>(
             ? {
                 errorClass: failure instanceof Error ? failure.name : typeof failure,
                 errorPhase:
-                  current.failure && current.failure.error === failure
+                  current.failure &&
+                  collectNestedErrorCandidates(failure).includes(current.failure.error)
                     ? current.failure.phase
                     : "unattributed",
               }
@@ -201,10 +215,11 @@ export async function withWorktreePreparationTiming<T>(
           Math.max(0, end - start - coveredMs),
         );
         log.info("managed worktree preparation", {
-          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} outcome=${outcome} errorDetails=${JSON.stringify(errorDetails)} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
+          consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} copyDetails=${JSON.stringify(current.copyDetails ?? {})} outcome=${outcome} errorDetails=${JSON.stringify(errorDetails)} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
           kind,
           template: current.template,
           templateDetails: current.templateDetails,
+          copyDetails: current.copyDetails,
           outcome,
           ...errorDetails,
           durationMs,
@@ -226,6 +241,12 @@ export async function withWorktreePreparationTiming<T>(
               ]),
             ),
             outcome,
+            ...Object.fromEntries(
+              Object.entries(current.copyDetails ?? {}).map(([key, value]) => [
+                `copy.${key}`,
+                value,
+              ]),
+            ),
             ...errorDetails,
             unattributedMs,
             ...phaseDurationsMs,

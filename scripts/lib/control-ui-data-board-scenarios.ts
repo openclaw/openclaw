@@ -956,7 +956,14 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     rowSelector: "[data-dashboard-session]",
     prepare: prepareGallery,
     run: async (page) => {
-      await page.locator(`${galleryHost} input[type=search]`).fill("Data dashboard 0000");
+      const search = page.locator(`${galleryHost} input[type=search]`);
+      if (!(await search.isVisible())) {
+        await page
+          .locator(galleryHost)
+          .getByRole("button", { name: "Search dashboards", exact: true })
+          .click();
+      }
+      await search.fill("Data dashboard 0000");
       await page.locator('[data-dashboard-session="agent:main:data-gallery-999"]').waitFor();
       await page.waitForFunction(
         () => document.querySelectorAll("[data-dashboard-session]").length === 1,
@@ -973,17 +980,9 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     rowSelector: "[data-dashboard-session]",
     prepare: prepareGallery,
     run: async (page) => {
-      const filter = page.locator(`${galleryHost} .dashboards-filter__trigger`);
-      if (await filter.isVisible()) {
-        await filter.click();
-        await page
-          .locator("#dashboards-filter-popover")
-          .getByRole("radio", { name: "Title A–Z", exact: true })
-          .click();
-        await page.keyboard.press("Escape");
-      } else {
-        await page.locator(`${galleryHost} select`).last().selectOption("title");
-      }
+      await page.locator(galleryHost).getByRole("button", { name: "Display", exact: true }).click();
+      await page.locator("#dashboards-display").getByLabel("Ordering").selectOption("title");
+      await page.keyboard.press("Escape");
       await page.waitForFunction(
         () =>
           document

@@ -1,0 +1,2 @@
+# Doctor device-pairing now reports an unreadable local credential store (identity or token inventory read) as a warning finding instead of a clean check; it.each regression covers both read-failure directions for PR #195963.
+36
