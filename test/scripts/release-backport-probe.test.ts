@@ -26,13 +26,12 @@ function commit(root: string, message: string): string {
 
 function fixture() {
   const root = createTempDir("release-backport-probe-");
-  git(root, ["init", "-q"]);
+  git(root, ["init", "-q", "--initial-branch=main"]);
   git(root, ["config", "user.name", "OpenClaw Test"]);
   git(root, ["config", "user.email", "test@openclaw.invalid"]);
   write(root, "shared.txt", "base\n");
   const base = commit(root, "base");
 
-  git(root, ["checkout", "-q", "-b", "main", base]);
   write(root, "clean.txt", "candidate\n");
   const clean = commit(root, "clean candidate");
 
