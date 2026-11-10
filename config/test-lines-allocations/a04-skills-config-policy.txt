@@ -1,0 +1,3 @@
+# Exact A04 net regression LF growth: pending/failed config policy, accepted
+# snapshot defaults/allowlists/Workshop, busy refresh/save, retained inventory DOM.
+136
