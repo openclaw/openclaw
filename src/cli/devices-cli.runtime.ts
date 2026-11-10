@@ -49,7 +49,6 @@ import {
   buildFallbackStateMismatchError,
   resolveLocalPairingFallback,
 } from "./devices-cli-fallback.js";
-import { isUnknownRequestIdError } from "./devices-cli.unknown-id.js";
 import {
   findPairedDevicePendingNodeApprovalNotices,
   formatKeptOpenClawIdNote,
@@ -58,6 +57,7 @@ import {
   pairedDeviceMatchesNodeApprovalQuery,
   stringsMatch,
 } from "./devices-cli-paired-notices.js";
+import { isUnknownRequestIdError } from "./devices-cli.unknown-id.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import { prepareCliGatewayStateAccess } from "./gateway-rpc.runtime.js";
