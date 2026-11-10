@@ -112,15 +112,43 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID"]);
     const entries = menu(current);
     expect(entries.text.trim()).toBe("");
-    expect(entries.rows[0]?.icon).toBeUndefined();
     expect(entries.rows[0]?.render).toBeTypeOf("function");
     expect(menu(current).text).not.toMatch(/People|\bAccess\b|Make reachable|Regenerate|Unlink/);
   });
 
-  it("does not allow loopback sign-in over an untrusted connection", () => {
-    expect(
-      menu(status({ channel: null, owner: false, connection: { kind: "none" } })).rows[0]?.disabled,
-    ).toBe(true);
+  it.each([
+    [status(), null],
+    [
+      status({ channel: null, owner: false, connection: { kind: "none" } }),
+      "Sign in on the computer that runs this claw.",
+    ],
+    [
+      status({ services: { issuerUrl: null, discoveryUrl: null, loaderDomain: null } }),
+      "OpenClaw ID is not set up for this claw. Ask the person who manages it to finish setup.",
+    ],
+  ])("renders the sign-in card with its availability reason", async (current, reason) => {
+    const onSelect = vi.fn();
+    const { container } = mountSolid(() => (
+      <Menu
+        id="account-sign-in"
+        label="Account"
+        open
+        items={openClawIdMenuEntries(current)}
+        onSelect={onSelect}
+      />
+    ));
+    const card = () =>
+      container.querySelector<HTMLButtonElement>('[data-value="openclaw-id:sign-in"]');
+    await waitForSolid(() => expect(card()).not.toBeNull());
+    expect(card()?.classList.contains("sidebar-openclaw-id__card")).toBe(true);
+    expect(card()?.getAttribute("aria-label")).toBe("Sign in with OpenClaw ID");
+    expect(card()?.disabled).toBe(Boolean(reason));
+    if (reason) {
+      expect(card()?.textContent).toContain(reason);
+      expect(card()?.getAttribute("aria-description")).toBe(reason);
+    }
+    card()!.click();
+    await waitForSolid(() => expect(onSelect).toHaveBeenCalledTimes(reason ? 0 : 1));
   });
 
   it("remote owner shows verified account, encrypted device, count, and no local actions", () => {

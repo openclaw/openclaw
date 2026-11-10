@@ -172,7 +172,7 @@ suite.define(() => {
           await suite.withPage(
             {
               ...createControlUiE2eContextOptions(),
-              viewport: { width, height: 844 },
+              viewport: { width, height: width === 390 ? 360 : 844 },
               colorScheme,
             },
             async ({ page }) => {
@@ -231,7 +231,6 @@ suite.define(() => {
                   ),
                 );
               }
-              await page.setViewportSize({ width, height: 844 });
               await page.goto(`${suite.server.baseUrl}/new`);
               await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready);
               if (width === 390) {
@@ -252,10 +251,11 @@ suite.define(() => {
               const geometry = await menu.evaluate((element) =>
                 [
                   ...element.querySelectorAll(
-                    ".sidebar-customize-menu__item, .sidebar-openclaw-id__status",
+                    ".sidebar-customize-menu__item, .sidebar-openclaw-id__status, .sidebar-openclaw-id__address",
                   ),
                 ].map((row) => {
                   const rect = row.getBoundingClientRect();
+                  const card = row.closest(".sidebar-openclaw-id__card")?.getBoundingClientRect();
                   const lines = [
                     ...row.querySelectorAll(
                       ".sidebar-openclaw-id__lines, .sidebar-identity-menu__identity",
@@ -270,6 +270,7 @@ suite.define(() => {
                     bottom: rect.bottom,
                     height: rect.height,
                     cssHeight: getComputedStyle(row).height,
+                    cardBottom: card?.bottom,
                     lines,
                   };
                 }),
@@ -286,6 +287,9 @@ suite.define(() => {
                 );
               }
               for (const row of geometry) {
+                if (row.cardBottom !== undefined) {
+                  expect.soft(row.bottom, row.text ?? "row").toBeLessThanOrEqual(row.cardBottom);
+                }
                 for (const line of row.lines) {
                   expect.soft(line.top, row.text ?? "row").toBeGreaterThanOrEqual(row.top);
                   expect.soft(line.bottom, row.text ?? "row").toBeLessThanOrEqual(row.bottom);
@@ -296,7 +300,7 @@ suite.define(() => {
                 expect.soft(await button.count()).toBe(1);
                 expect
                   .soft(await menu.locator('[data-value="openclaw-id:sign-in"] svg').count())
-                  .toBe(0);
+                  .toBe(2);
                 expect.soft(await menu.locator(".sidebar-customize-menu__title").count()).toBe(0);
                 expect
                   .soft(

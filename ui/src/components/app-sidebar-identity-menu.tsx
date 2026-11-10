@@ -199,7 +199,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
   const separator = (id: string): MenuEntry => ({
     kind: "content",
     id,
-    content: <div class="sidebar-identity-menu__space" role="separator" />,
+    content: <div class="sidebar-identity-menu__space" aria-hidden="true" />,
   });
   const gatewayTitle: MenuEntry = {
     kind: "content",
@@ -210,7 +210,11 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
   const signOutSeparator = separator("sign-out-separator");
   const gatewaySeparator = separator("gateway-separator");
   const retrySeparator = separator("retry-separator");
-  const footerSeparator = separator("footer-separator");
+  const footerSeparator: MenuEntry = {
+    kind: "content",
+    id: "footer-separator",
+    content: <div class="sidebar-customize-menu__separator" role="separator" />,
+  };
   const openclawIdentity = () => params.extension?.identity;
   const profileName = () =>
     openclawIdentity()?.name ??

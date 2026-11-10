@@ -20,6 +20,7 @@ import { renderSidebarMenuAction } from "../app-sidebar-dropdown.tsx";
 import { showConfirmDialog } from "../confirm-dialog.ts";
 import { Icon, type IconName } from "../solid/icon.tsx";
 import type { MenuEntry } from "../solid/menu.tsx";
+import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import { clawNameFromHostname } from "./claw-name.ts";
 
 registerEnglishCatalog(registerOpenClawIdEnglish);
@@ -131,11 +132,31 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
             {...attributes}
             type="button"
             role="button"
-            class="btn sidebar-openclaw-id__sign-in"
-            title={blocker}
+            class="oc-menu-item sidebar-openclaw-id__card sidebar-openclaw-id__status sidebar-openclaw-id__sign-in"
+            aria-description={blocker}
             disabled={attributes["aria-disabled"] === "true"}
           >
-            {t("openclawId.signIn")}
+            <span class="nav-item__icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="m10 17 5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+              </svg>
+            </span>
+            <span class="sidebar-openclaw-id__lines">
+              <span>{t("openclawId.signIn")}</span>
+              {blocker ? <span class="sidebar-openclaw-id__detail">{blocker}</span> : undefined}
+            </span>
+            {!blocker ? (
+              <span class="oc-menu-item__details">
+                <Icon name="arrowRight" />
+              </span>
+            ) : undefined}
           </button>
         ),
       },
@@ -216,7 +237,21 @@ export function openClawIdSignOutEntries(status: OpenClawIdStatusResult | null):
       ? Boolean(navigator.serviceWorker?.controller)
       : status.channel === "local_operator" && Boolean(openClawIdAccount());
   return available
-    ? [renderSidebarMenuAction(SIGN_OUT, t("openclawId.signOut"), "arrowRight")]
+    ? [
+        {
+          id: SIGN_OUT,
+          label: t("openclawId.signOut"),
+          class: "sidebar-customize-menu__item",
+          icon: (
+            <span class="nav-item__icon" aria-hidden="true">
+              <StrokeIcon>
+                <path d="m16 17 5-5-5-5M21 12H9M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              </StrokeIcon>
+            </span>
+          ),
+          content: <span class="sidebar-customize-menu__text">{t("openclawId.signOut")}</span>,
+        },
+      ]
     : [];
 }
 

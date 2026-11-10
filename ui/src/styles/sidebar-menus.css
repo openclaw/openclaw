@@ -1114,7 +1114,6 @@
 
 .sidebar-identity-menu__name {
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
 }
 
@@ -1126,7 +1125,6 @@
 
 .sidebar-identity-menu .sidebar-customize-menu__text {
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 /* One leading column: every label starts on one x, and the avatar fills it. */
@@ -1143,16 +1141,16 @@
 }
 
 .sidebar-identity-menu__space {
-  height: 8px;
+  flex: none;
+  height: 10px;
 }
 
 .sidebar-identity-menu__footer {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
-  padding: 4px 8px 0;
-  border-top: 1px solid var(--border);
+  padding: 2px 8px;
 }
 
 .sidebar-identity-menu__footer .sidebar-footer-build {
@@ -1162,10 +1160,6 @@
 .sidebar-identity-menu .theme-mode-toggle {
   justify-content: center;
   border: 0;
-}
-
-.sidebar-identity-menu__busyness {
-  margin-inline-start: auto;
 }
 
 .sidebar-identity-menu__updates {
@@ -1600,11 +1594,18 @@
   font-weight: 600;
 }
 
-.sidebar-openclaw-id__card {
+.sidebar-identity-menu .sidebar-openclaw-id__card {
+  flex: none;
   margin-block: 4px;
   border-radius: var(--radius-md);
-  background: var(--bg-accent);
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  font-size: var(--control-ui-text-sm);
   overflow: hidden;
+
+  & .oc-menu-item__details svg {
+    width: 14px;
+    height: 14px;
+  }
 }
 
 .sidebar-openclaw-id__card .sidebar-customize-menu__item {
@@ -1612,34 +1613,30 @@
   font-weight: 500;
 }
 
-.sidebar-openclaw-id__card .oc-menu-item__details svg {
-  width: 15px;
-  height: 15px;
-}
-
-.sidebar-openclaw-id__status {
+.sidebar-identity-menu .sidebar-openclaw-id__status {
   display: flex;
-  flex-shrink: 0;
   align-items: flex-start;
-  gap: 8px;
-  padding: 8px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  gap: 12px;
+  padding: 9px 14px 10px;
+
+  & > .nav-item__icon {
+    flex: 0 0 15px;
+    width: 15px;
+  }
 }
 
 .sidebar-openclaw-id__lines {
-  display: flex;
+  display: grid;
   flex: 1;
   min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-  line-height: 1.4;
+  gap: 3px;
+  line-height: 18px;
 }
 
 .sidebar-openclaw-id__detail {
   color: var(--muted);
-  font-size: calc(12px * var(--control-ui-text-scale));
-  overflow-wrap: anywhere;
-  white-space: normal;
+  font-size: var(--control-ui-text-xs);
+  line-height: 16px;
 }
 
 .sidebar-openclaw-id__pill,
@@ -1675,8 +1672,19 @@
   padding: 2px 12px 8px 42px;
 }
 
-.sidebar-openclaw-id__sign-in {
-  flex: none;
-  width: 100%;
-  margin-block: 4px;
+.sidebar-openclaw-id__sign-in.oc-menu-item {
+  margin-bottom: 0;
+  font-weight: 500;
+  letter-spacing: inherit;
+
+  & .sidebar-openclaw-id__detail {
+    padding-bottom: 1px;
+    text-wrap: pretty;
+  }
+}
+
+.sidebar-openclaw-id__sign-in:disabled {
+  color: var(--muted);
+  font-weight: 400;
+  opacity: 1;
 }
