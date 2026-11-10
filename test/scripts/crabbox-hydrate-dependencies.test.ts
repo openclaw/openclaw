@@ -175,6 +175,7 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
       const bin = path.join(root, "bin");
       const nodeBin = path.join(root, "node-bin");
       mkdirSync(bin);
+      write(bin, "which", '#!/bin/sh\ncommand -v "$1"\n', 0o755);
       mkdirSync(nodeBin);
       symlinkSync(resolveTestNodeExecPath(), path.join(nodeBin, "node"));
       if (prepared) {
@@ -203,7 +204,7 @@ fi
       const result = spawnSync("bash", [".github/actions/setup-node-env/install-dependencies.sh"], {
         encoding: "utf8",
         env: {
-          PATH: `${prepared ? `${bin}:` : ""}/usr/bin:/bin`,
+          PATH: bin,
           NODE_BIN: nodeBin,
           FROZEN_LOCKFILE: frozen,
           DEPENDENCY_CACHE: "false",
