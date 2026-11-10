@@ -817,9 +817,10 @@ merge_outcome_read_remote() {
 merge_outcome_require_commit() {
   local oid="$1" role="$2"
   # Fetch immutable objects only. Do not replace a pinned observation with the
-  # moving origin/main tracking ref or FETCH_HEAD.
+  # moving origin/main tracking ref or FETCH_HEAD. The URL is the repository the
+  # observation names, which origin need not be; blobs stay lazily fetched from origin.
   if ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$oid^{commit}" 2>/dev/null; then
-    pr_git fetch --no-tags --no-write-fetch-head "$MERGE_REPO_URL" "$oid" || { merge_outcome_stop "cannot fetch authoritative $role $oid"; return 1; }
+    fetch_source_with_canonical_promisor "$MERGE_REPO_URL" "$oid" --no-write-fetch-head || { merge_outcome_stop "cannot fetch authoritative $role $oid"; return 1; }
   fi
   GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$oid^{commit}"
 }
