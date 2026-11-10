@@ -2,7 +2,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n, t } from "../i18n/index.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
-import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import { setupSidebarTest, selectSidebarView } from "../test-helpers/app-sidebar-setup.ts";
 import {
   createGatewayHarness,
   createSessionsHarness,
@@ -62,7 +62,7 @@ async function mountFilters(width: number, teammates = 0, otherOwner = "Bob") {
   // Park before mounting: a previous case's pointer can otherwise reveal a
   // tooltip while the new sidebar settles, before keyboard actions begin.
   await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
-  document.body.classList.toggle("shell--mobile-nav", width < 560);
+  document.body.classList.toggle("shell--mobile-nav", width < 900);
   onTestFinished(() => document.body.classList.remove("shell--mobile-nav"));
   const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
   gateway.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
@@ -85,7 +85,7 @@ async function mountFilters(width: number, teammates = 0, otherOwner = "Bob") {
   const mounted = await mountSidebar(
     gateway.gateway,
     sessions.sessions,
-    width < 560 ? "drawer" : "panel",
+    width < 900 ? "drawer" : "panel",
   );
   mounted.provider.style.cssText = "display:block;width:300px;height:100vh";
   mounted.sidebar.setSessionOwnerFilter(null);
@@ -103,6 +103,41 @@ async function mountFilters(width: number, teammates = 0, otherOwner = "Bob") {
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popover", () => {
+  it.each([390, 820])(
+    "sizes the short People sheet from its active choices at %i px",
+    async (width) => {
+      const { sidebar, page, role, query } = await mountFilters(width);
+      await selectSidebarView(sidebar, "online");
+      const trigger = page.elementLocator(query(".sidebar-online__filter-toggle"));
+      await trigger.click();
+      const sort = role("button", "Sort by: Active people first");
+      await sort.click();
+      const list = query('.sidebar-people-filter-menu [role="listbox"][aria-label="Sort by"]');
+      await expect.element(list).toBeVisible();
+      await finishAnimations(list.closest(".picker-select__menu")!);
+      expect(list.querySelectorAll('[role="option"]')).toHaveLength(4);
+      expect(list.scrollHeight - list.clientHeight).toBeLessThanOrEqual(1);
+      const name = role("option", "Name");
+      const last = name.element().getBoundingClientRect();
+      const bounds = list.getBoundingClientRect();
+      expect(last.top).toBeGreaterThanOrEqual(bounds.top);
+      expect(last.bottom).toBeLessThanOrEqual(bounds.bottom);
+      await role("button", "Back").click();
+      await expect.element(sort).toHaveFocus();
+      await sort.click();
+      await expect.element(list).toBeVisible();
+      await page.viewport(width, 160);
+      await expect.poll(() => list.scrollHeight - list.clientHeight).toBeGreaterThan(1);
+      const panel = query(".sidebar-session-filter-panel").getBoundingClientRect();
+      expect(panel.top).toBeGreaterThanOrEqual(0);
+      expect(panel.bottom).toBeLessThanOrEqual(innerHeight);
+      await name.click();
+      await expect.element(trigger).toHaveFocus();
+      await page.viewport(width, 560);
+      await trigger.click();
+      await expect.element(role("button", "Sort by: Name")).toBeVisible();
+    },
+  );
   it("keeps a long selected owner clear of toolbar controls", async () => {
     const name = "Alexandria Montgomery Engineering";
     const { query, choose } = await mountFilters(390, 0, name);
