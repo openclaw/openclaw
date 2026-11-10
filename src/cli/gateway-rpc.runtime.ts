@@ -20,6 +20,7 @@ export type GatewayRpcExtraOptions = {
   progress?: boolean;
   scopes?: Parameters<typeof callGateway>[0]["scopes"];
   sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
+  prepareAuthenticatedRequest?: Parameters<typeof callGateway>[0]["prepareAuthenticatedRequest"];
 };
 
 type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {
@@ -108,6 +109,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
         allowLocalBackendAuthNone: extra?.clientName === undefined && extra?.mode === undefined,
         sharedStateMode: extra?.sharedStateMode,
         signal: extra?.signal,
+        prepareAuthenticatedRequest: extra?.prepareAuthenticatedRequest,
         timeoutMs,
         localPortOverride,
         clientName: extra?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,

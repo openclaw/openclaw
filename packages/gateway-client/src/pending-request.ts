@@ -249,7 +249,15 @@ export class GatewayPendingRequests {
       options?.signal?.addEventListener("abort", onAbort, { once: true });
       this.pending.set(id, pending);
       try {
-        const frame = JSON.stringify({ type: "req", id, method, params });
+        const frame = JSON.stringify({
+          type: "req",
+          id,
+          method,
+          params,
+          ...(options?.expectedProfileId !== undefined
+            ? { expectedProfileId: options.expectedProfileId }
+            : {}),
+        });
         const send = () => {
           if (
             this.pending.get(id) !== pending ||

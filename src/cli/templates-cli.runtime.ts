@@ -58,6 +58,7 @@ import {
   formatTemplateDiagnostics,
   logTemplateAgentConfiguration,
 } from "./templates-cli-output.js";
+import { captureTemplateCronOwner } from "./templates-cli.cron-owner.js";
 import type { TemplatesAddOptions, TemplatesInspectOptions } from "./templates-cli.js";
 
 type TemplateCliSkillWarning =
@@ -457,7 +458,11 @@ async function runTemplatesAddFromSource(
           consentPlanIntegrity: plan.planIntegrity,
           runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
           cronGateway: {
-            add: async (input) => await callGatewayFromCli("cron.add", {}, input),
+            add: async (input, options) =>
+              await callGatewayFromCli("cron.add", {}, input, {
+                prepareAuthenticatedRequest: async (request, signal) =>
+                  await captureTemplateCronOwner(request, signal, options),
+              }),
             list: async (agentId) =>
               await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
             get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
