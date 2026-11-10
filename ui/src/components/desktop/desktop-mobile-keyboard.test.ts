@@ -45,25 +45,37 @@ describe("desktop mobile keyboard", () => {
     }
   });
 
-  it("keeps a composing Enter off the wire while a plain Enter still reaches the remote", () => {
+  it("keeps a composing keydown off the wire while releases and shortcuts stay on it", () => {
     const { connection, input, dispose } = createKeyboard();
-    const press = (init: KeyboardEventInit) => {
-      for (const type of ["keydown", "keyup"] as const) {
-        input.dispatchEvent(new KeyboardEvent(type, { bubbles: true, cancelable: true, ...init }));
-      }
-    };
+    const key = (type: "keydown" | "keyup", init: KeyboardEventInit) =>
+      input.dispatchEvent(new KeyboardEvent(type, { bubbles: true, cancelable: true, ...init }));
     try {
-      // Chrome keeps isComposing set on the keydown that confirms the candidate.
+      // Chrome keeps isComposing set on the keydown that confirms the candidate. Its
+      // release still goes out: noVNC drops a release whose keydown it never saw.
       input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-      press({ key: "Enter", code: "Enter", keyCode: 229, isComposing: true });
+      key("keydown", { key: "Enter", code: "Enter", keyCode: 229, isComposing: true });
       expect(connection.events).toEqual([]);
+      key("keyup", { key: "Enter", code: "Enter", keyCode: 229, isComposing: true });
+      expect(connection.events).toEqual(["keyup:Enter"]);
 
       // WebKit clears both flags before the Enter that commits the composition.
+      connection.events.length = 0;
       input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-      press({ key: "Enter", code: "Enter", keyCode: 13 });
+      key("keydown", { key: "Enter", code: "Enter", keyCode: 13 });
       expect(connection.events).toEqual([]);
+      key("keyup", { key: "Enter", code: "Enter", keyCode: 13 });
+      expect(connection.events).toEqual(["keyup:Enter"]);
 
-      press({ key: "Enter", code: "Enter", keyCode: 13 });
+      // A shortcut released mid-composition keeps its keyup: the chord keydown already went
+      // out, so dropping the ArrowLeft release would hold that key on the remote.
+      connection.events.length = 0;
+      key("keyup", { key: "ArrowLeft", code: "ArrowLeft", isComposing: true });
+      expect(connection.events).toEqual(["keyup:ArrowLeft"]);
+
+      // An ordinary Enter is untouched on both edges.
+      connection.events.length = 0;
+      key("keydown", { key: "Enter", code: "Enter", keyCode: 13 });
+      key("keyup", { key: "Enter", code: "Enter", keyCode: 13 });
       expect(connection.events).toEqual(["keydown:Enter", "keyup:Enter"]);
     } finally {
       dispose();

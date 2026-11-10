@@ -96,12 +96,14 @@ export function createDesktopMobileKeyboard(
     if (event.type === "keyup") {
       clearCompositionEnd(event);
     }
-    // The composition owns plain keystrokes: committed text reaches the remote through
-    // handleInput, so forwarding a composing Enter would submit on the far side. Modifiers
-    // and shortcut chords keep their existing pairing.
+    // The composition owns plain keydowns: committed text reaches the remote through
+    // handleInput, so forwarding a composing Enter would submit on the far side. Releases
+    // stay on the wire — noVNC drops a release whose keydown it never received, while
+    // suppressing one would leave a shortcut key held on the remote until recovery.
+    // Modifiers and shortcut chords keep their existing pairing on keydown.
     const chord = event.ctrlKey || event.metaKey || event.altKey;
     const modifierKey = ["Meta", "Control", "Shift", "Alt"].includes(event.key);
-    if (composing && !chord && !modifierKey) {
+    if (event.type === "keydown" && composing && !chord && !modifierKey) {
       event.preventDefault();
       return;
     }
