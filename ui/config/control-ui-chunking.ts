@@ -623,6 +623,9 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/pages/new-session/preferences.ts");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
+                // Keep existing cross-route config writers in their shared boot chunk.
+                modules.add("ui/src/lib/config/config-mutation-runner.ts");
+                modules.add("ui/src/lib/plugins/index.ts");
                 // Shared roster and dialog controls copy without loading Chat.
                 modules.add("ui/src/lib/clipboard.ts");
                 modules.add("ui/src/components/copy-button-state.ts");
