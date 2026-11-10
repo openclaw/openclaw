@@ -66,6 +66,7 @@ import {
   resolveReportedModelRef,
 } from "./helpers.js";
 import { resolveProviderRefusal } from "./provider-refusal.js";
+import { projectSessionForkTools } from "./session-fork-tools.js";
 
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
   kind: "embedded";
@@ -625,13 +626,9 @@ function prepareStream(
       }
       return {
         model: attempt.model,
+        promptCacheKey: attempt.promptCacheKey,
         systemPrompt: activeSession.systemPrompt,
-        tools: activeSession.agent.state.tools.map(({ name, description, parameters, async }) => ({
-          name,
-          description,
-          parameters,
-          ...(async === false ? { async } : {}),
-        })),
+        tools: projectSessionForkTools(activeSession.agent.state.tools),
         messages: activeSession.messages,
         projectMessages: input.projectSessionForkMessages,
         sessionVersion: activeSession.sessionManager.getHeader()?.version,

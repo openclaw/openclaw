@@ -341,7 +341,7 @@ it.each([
         }
         expect(JSON.stringify(original.tools)).toContain("fork_probe");
         expect(replay.previous_response_id).toBeUndefined();
-        expect(replay.prompt_cache_key).toBeUndefined();
+        expect(replay.prompt_cache_key).toBe(original.prompt_cache_key);
         if (api !== "anthropic-messages") {
           expect(original.prompt_cache_key).toBeTruthy();
         } else {
@@ -388,7 +388,7 @@ it.each([
             ]);
             const whileRunning = await readTranscript();
             await expect(fork()).resolves.toEqual({ text: "Review answer" });
-            expect(payloads.at(-1)?.prompt_cache_key).toBeUndefined();
+            expect(payloads.at(-1)?.prompt_cache_key).toBe(original.prompt_cache_key);
             expect(JSON.stringify(payloads.at(-1))).toContain("This tool call is still running");
             expect(JSON.stringify(payloads.at(-1))).not.toContain("LIVE_TOOL_RESULT_1672");
             expect(await readTranscript()).toEqual(whileRunning);

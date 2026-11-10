@@ -166,9 +166,12 @@ Sessions with history can be forked after a restart without sending another norm
 message first. Routes without a persisted prompt pin rebuild their configured
 system prompt at fork time.
 Completed-session forks apply the configured channel history window and preserve
-compaction summaries. All built-in runtime forks omit the parent's prompt-cache
-identity, including forks of running sessions: they rebuild context independently
-and do not share the parent's complete request preparation.
+compaction summaries. Forks rebuild context independently and do not share the
+parent's complete request preparation or its live connection. On OpenAI routes they
+send the parent's prompt-cache routing key so the provider can reuse the cached
+prefix: a running parent's exact key, or the session's default key for a completed
+session. A run-only explicit key is not recorded after the run ends, so a completed
+fork falls back to the default key.
 
 The fork uses the same provider payload builders as a normal request. Unchanged
 prompt and tool prefixes can reuse the provider's prompt cache. Cache reuse is

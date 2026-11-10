@@ -131,7 +131,7 @@ export async function runBtwSessionFork(
   const { params, runtimeModel, apiKey, sessionId, workspaceDir, assertCurrent } = input;
   const delivery = params.sessionEntry.delivery;
   const externalDelivery = delivery?.kind === "external" ? delivery : undefined;
-  const context = await prepareEmbeddedSessionForkContext({
+  const { context, promptCacheKey } = await prepareEmbeddedSessionForkContext({
     target: {
       agentId: params.agentId,
       sessionId,
@@ -155,6 +155,7 @@ export async function runBtwSessionFork(
   return runEmbeddedSessionFork({
     context,
     streamFn: resolveSideQuestionStream(input),
+    options: { promptCacheKey },
     question: params.question,
     model: runtimeModel,
     apiKey,

@@ -1,11 +1,9 @@
-import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
-import type { LlmBoundaryOptions } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
@@ -21,7 +19,6 @@ import type { SessionAdmissionTransition } from "../config/sessions/session-admi
 import type { SessionEntryCohortReader } from "../config/sessions/session-entry-read-runtime.types.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
-import type { Context, Model } from "../llm/types.js";
 import type { Deferred, createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -54,6 +51,7 @@ import type {
   SessionControllerWatchdogAttempt,
   SessionControllerWatchdog,
 } from "./session-controller.watchdog.js";
+import type { SessionForkContextSnapshot } from "./session-fork-context.types.js";
 
 export type {
   ReplyBackendCancelReason,
@@ -768,18 +766,7 @@ export type EmbeddedAgentQueueHandle = {
   messageInjectionV2?: ReplyBackendMessageInjectionV2;
   isStreaming: () => boolean;
   /** Borrow current model context only while this attempt owns the session. */
-  readSessionForkContext?: () =>
-    | {
-        model: Model;
-        systemPrompt: string;
-        tools: Context["tools"];
-        messages: AgentMessage[];
-        projectMessages?: (messages: AgentMessage[]) => AgentMessage[];
-        sessionVersion?: number;
-        boundary?: LlmBoundaryOptions;
-        blockImages?: boolean;
-      }
-    | undefined;
+  readSessionForkContext?: () => SessionForkContextSnapshot | undefined;
   isStopped?: () => boolean;
   /** True after this handle has accepted an abort, even while cleanup retains it. */
   isAborted?: () => boolean;

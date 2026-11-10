@@ -24,6 +24,7 @@ import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { isCurrentEmbeddedRunAttachment } from "./run-state.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { applyRuntimeContextCarrierRetention } from "./run/runtime-context-prompt.js";
+import { resolveSessionBoundaryPromptCacheKey } from "./run/session-boundary-prompt-cache-key.js";
 import { resolveActiveEmbeddedRunBySessionFile } from "./runs.js";
 import {
   createToolResultPromptProjectionState,
@@ -59,7 +60,7 @@ export async function prepareEmbeddedSessionForkContext(params: {
   directApiKey?: boolean;
   signal?: AbortSignal;
   assertCurrent: () => void;
-}): Promise<Context> {
+}): Promise<{ context: Context; promptCacheKey?: string }> {
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent();
@@ -110,7 +111,7 @@ export async function prepareEmbeddedSessionForkContext(params: {
       context.messages = convertToLlm(live.projectMessages(context.messages));
     }
     applyRuntimeContextCarrierRetention(context.messages, live.boundary?.appendOnlyRuntimeContext);
-    return context;
+    return { context, promptCacheKey: live.promptCacheKey };
   }
 
   const marker = parseSqliteSessionFileMarker(params.sessionFile);
@@ -271,5 +272,14 @@ export async function prepareEmbeddedSessionForkContext(params: {
   );
   messages = convertToLlm(replayToolResultPromptProjections(messages, toolResultProjectionState));
   applyRuntimeContextCarrierRetention(messages, policy.appendOnlyRuntimeContext);
-  return { systemPrompt, tools, messages };
+  return {
+    context: { systemPrompt, tools, messages },
+    // The parent's default OpenAI routing key; a fork shares its prompt prefix, so the same key
+    // keeps provider cache affinity. Run-only explicit keys are not recorded and fall back here.
+    promptCacheKey: resolveSessionBoundaryPromptCacheKey({
+      api: params.model.api,
+      boundaryCount: manager.getBoundaryCount(),
+      sessionId: params.target.sessionId,
+    }),
+  };
 }
