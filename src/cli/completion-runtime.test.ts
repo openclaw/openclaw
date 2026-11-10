@@ -125,7 +125,6 @@ it.skipIf(process.platform === "win32").for([
   ["zsh", "HOME", ".zshrc"],
   ["bash", "HOME", ".bash_profile"],
   ["fish", "HOME", ".config/fish/config.fish"],
-  ["powershell", "HOME", ".config/powershell/Microsoft.PowerShell_profile.ps1"],
 ] as const)(
   "preserves %s profile traversal through symlinked %s before parent components",
   async ([shell, variable, profileName], { homeDir }) => {

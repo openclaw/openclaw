@@ -1,2 +1,0 @@
-# One regression row for PowerShell completion installation through XDG_CONFIG_HOME.
-1
