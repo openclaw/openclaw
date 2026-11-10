@@ -4,6 +4,7 @@
   padding: var(--space-5);
   color: var(--text);
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-5);
 }
 
@@ -27,6 +28,7 @@
 
 .ocid-access__group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-5);
 }
 
@@ -39,6 +41,7 @@
 
 .ocid-access__section {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
 }
 
@@ -68,6 +71,7 @@
 
 .ocid-access__list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -77,10 +81,27 @@
 
 .ocid-access__row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   padding: var(--space-3);
+}
+
+.ocid-access__row > div:first-child {
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ocid-access__row > .ocid-access__actions {
+  max-width: 100%;
+}
+
+.ocid-access__row .btn {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .ocid-access__row + .ocid-access__row {
