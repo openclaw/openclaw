@@ -25,7 +25,7 @@ async function fixture(setup?: (plugin: string, assets: string) => Promise<void>
   await setup?.(plugin, assets);
   const project = (source: string) => path.join(state, path.relative(root, source));
   const plan = await prepareUpdateCandidatePluginTrees({
-    roots: new Map([[plugin, project(plugin)]]),
+    roots: new Map([plugin, assets].map((source) => [source, project(source)])),
     project,
     targetStateDir: state,
     candidateRoot: candidate,
