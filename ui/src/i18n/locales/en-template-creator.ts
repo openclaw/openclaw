@@ -25,7 +25,7 @@ const enTemplateCreator = {
     updating: "Updating package preview…",
     reviewNeeded: "Review the current package before publishing.",
     refreshReview: "Refresh review",
-    publish: "Publish to ClawHub",
+    publish: "Publish",
     publishing: "Publishing…",
     published: "Published",
     pending: "Pending security scans",

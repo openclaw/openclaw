@@ -129,11 +129,9 @@ it("keeps the original card through a single explicit publication and pending re
   request.mockImplementation(async (method: string) =>
     method === "templates.drafts.publish" ? pending.promise : reviewed,
   );
-  await waitForSolid(() =>
-    expect(page.getByRole("button", { name: "Publish to ClawHub" })).toBeTruthy(),
-  );
+  await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
   const card = page.container.querySelector(".template-creator");
-  const publish = page.getByRole("button", { name: "Publish to ClawHub" });
+  const publish = page.getByRole("button", { name: "Publish" });
   fireEvent.click(publish);
   fireEvent.click(publish);
   await waitForSolid(() => expect(page.getByText("Publishing…")).toBeTruthy());
@@ -155,9 +153,7 @@ it.each(["none", "unconfirmed", "transport"])(
   async (effect) => {
     const { page, request } = fixture();
     await vi.advanceTimersByTimeAsync(0);
-    await waitForSolid(() =>
-      expect(page.getByRole("button", { name: "Publish to ClawHub" })).toBeTruthy(),
-    );
+    await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
     const card = page.container.querySelector(".template-creator");
     request.mockImplementation(async (method: string) => {
       if (method === "templates.drafts.publish") {
@@ -171,7 +167,7 @@ it.each(["none", "unconfirmed", "transport"])(
       }
       return { ...reviewed, publicationState: { status: "unconfirmed" } };
     });
-    fireEvent.click(page.getByRole("button", { name: "Publish to ClawHub" }));
+    fireEvent.click(page.getByRole("button", { name: "Publish" }));
     await waitForSolid(() =>
       expect(
         page.getByText(effect === "none" ? "Not published" : "Submission unconfirmed"),
@@ -191,9 +187,7 @@ it.each(["none", "unconfirmed", "transport"])(
       );
     } else {
       fireEvent.click(page.getByRole("button", { name: "Retry", exact: true }));
-      await waitForSolid(() =>
-        expect(page.getByRole("button", { name: "Publish to ClawHub" })).toBeTruthy(),
-      );
+      await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
     }
     expect(request.mock.calls.filter(([m]) => m === "templates.drafts.publish")).toHaveLength(1);
   },

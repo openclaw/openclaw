@@ -159,7 +159,6 @@
 .template-creator__footer {
   min-height: 64px;
   padding: 12px 20px;
-  border-top: 1px solid var(--border);
 }
 .template-creator__actions {
   display: flex;

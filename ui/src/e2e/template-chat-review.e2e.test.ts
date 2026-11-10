@@ -198,6 +198,11 @@ it.skipIf(!available).each([true, false])(
       expect(bounds?.width).toBe(620);
       expect(bounds?.height).toBe(565);
       expect(await card.locator("input, textarea").count()).toBe(0);
+      expect(
+        await card
+          .locator(".template-creator__footer")
+          .evaluate((footer) => getComputedStyle(footer).borderTopWidth),
+      ).toBe("0px");
       expect(await page.getByRole("dialog").count()).toBe(0);
       await capture("ready");
       for (const label of ["Workspace files", "Skills", "Plugins", "MCP servers", "Automations"]) {
@@ -228,7 +233,7 @@ it.skipIf(!available).each([true, false])(
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(0);
       await gateway.setMethodDelay("templates.drafts.publish", "forever");
-      await card.getByRole("button", { name: "Publish to ClawHub", exact: true }).click();
+      await card.getByRole("button", { name: "Publish", exact: true }).click();
       await card.getByRole("button", { name: "Publishing…", exact: true }).waitFor();
       await capture("publishing");
       expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(1);

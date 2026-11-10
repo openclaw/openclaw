@@ -1919,8 +1919,7 @@
   "ui/src/styles/mcp-app-extensions.css",
   "ui/src/styles/session-panel-rail.css",
   "ui/src/styles/sidebar-markdown.css",
-  "ui/src/styles/skill-file-hovercard.css",
-  "ui/src/styles/template-creator.css"
+  "ui/src/styles/skill-file-hovercard.css"
  ],
  "entries": {
   "shared": [
