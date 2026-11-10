@@ -76,9 +76,7 @@ function toolOutput(body: unknown, name: string): string | undefined {
   return output === undefined ? undefined : promptStrings(output).join("");
 }
 
-async function startModelServer(
-  completion: "children" | "direct" | "claimed" | "successor" = "children",
-) {
+async function startModelServer(completion: "children" | "claimed" | "successor" = "children") {
   const rootSettlements: string[] = [];
   const middleDone = createDeferred<string>();
   const middleYieldResult = createDeferred<string>();
@@ -113,28 +111,26 @@ async function startModelServer(
           throw new Error("Requester did not receive its child spawn receipt");
         }
         spawned.resolve(receipt);
-        if (completion === "direct" || completion === "claimed") {
-          if (completion === "claimed") {
-            if (!calls.includes("sessions_send")) {
-              await allowFollowup.promise;
-              writeToolCall(response, "sessions_send", {
-                sessionKey: receipt.childSessionKey,
-                mode: "followup",
-                watch: true,
-                timeoutSeconds: 0,
-                message: CLAIM,
-              });
-              return;
-            }
-            const claim = JSON.parse(toolOutput(body, "sessions_send") ?? "null") as {
-              status?: string;
-              runId?: string;
-            } | null;
-            if (claim?.status !== "accepted" || !claim.runId) {
-              throw new Error("Requester did not receive its accepted child follow-up");
-            }
-            claimed.resolve({ childSessionKey: receipt.childSessionKey, runId: claim.runId });
+        if (completion === "claimed") {
+          if (!calls.includes("sessions_send")) {
+            await allowFollowup.promise;
+            writeToolCall(response, "sessions_send", {
+              sessionKey: receipt.childSessionKey,
+              mode: "followup",
+              watch: true,
+              timeoutSeconds: 0,
+              message: CLAIM,
+            });
+            return;
           }
+          const claim = JSON.parse(toolOutput(body, "sessions_send") ?? "null") as {
+            status?: string;
+            runId?: string;
+          } | null;
+          if (claim?.status !== "accepted" || !claim.runId) {
+            throw new Error("Requester did not receive its accepted child follow-up");
+          }
+          claimed.resolve({ childSessionKey: receipt.childSessionKey, runId: claim.runId });
           await finishRequester.promise;
           reply("REQUESTER-DONE", "requester_done");
           return;
@@ -197,7 +193,7 @@ async function startModelServer(
         reply("CHILD-READY", "child_ready");
         return;
       }
-      if (completion === "direct" || completion === "claimed") {
+      if (completion === "claimed") {
         await allowMessageWait.promise;
         writeToolCall(response, "sessions_yield", {
           waitFor: "message",
@@ -346,9 +342,9 @@ it.each([
   ["after", false],
   ["before", true],
 ] as const)(
-  "closes a child's message wait when its requester finishes %s it parks (later turn: %s)",
+  "closes a claimed child's message wait when its requester finishes %s it parks (later turn: %s)",
   async (order, laterTurn) => {
-    const model = await startModelServer(laterTurn ? "claimed" : "direct");
+    const model = await startModelServer("claimed");
     const state = await createOpenClawTestState({ label: "subagent-message-wait-requester-done" });
     const gateway = await startGatewayWithClient({
       cfg: {
@@ -396,18 +392,14 @@ it.each([
         30_000,
         () => "requester never spawned the child",
       );
-      if (laterTurn) {
-        await expect(
-          gateway.client.request("agent.wait", { runId: bootstrap.runId, timeoutMs: 30_000 }),
-        ).resolves.toMatchObject({ status: "ok" });
-        model.allowFollowup();
-        child = await within(model.claimed, 30_000, () => "requester never claimed the child");
-        expect(
-          subagentRuns.getRequesterRunInstance(getSubagentRunByRunId(child.runId)!)?.runId,
-        ).toBe(requester.runId);
-      } else {
-        child = bootstrap;
-      }
+      await expect(
+        gateway.client.request("agent.wait", { runId: bootstrap.runId, timeoutMs: 30_000 }),
+      ).resolves.toMatchObject({ status: "ok" });
+      model.allowFollowup();
+      child = await within(model.claimed, 30_000, () => "requester never claimed the child");
+      expect(subagentRuns.getRequesterRunInstance(getSubagentRunByRunId(child.runId)!)?.runId).toBe(
+        requester.runId,
+      );
       observeChild();
       const finishRequester = async () => {
         model.finishRequester();

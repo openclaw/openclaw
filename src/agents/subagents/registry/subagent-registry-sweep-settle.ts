@@ -33,8 +33,8 @@ export async function settleUnreachableYieldedSubagentRun(params: {
   const { runId, entry, readScope, complete } = params;
   let requesterEnded = false;
   if (isYieldedSubagentRun(entry) && entry.waitForMessage) {
-    // A pause notice or tool handoff can end a turn while its requester still
-    // owns the task. Only the session owner's committed state ends that wait.
+    // An unclaimed wait belongs to the session across turns. Only a real
+    // continuation claim makes the requester's committed turn end close it.
     const requester = await loadSessionEntryByKey(
       entry.requesterSessionKey,
       entry.requesterAgentId,
@@ -44,8 +44,9 @@ export async function settleUnreachableYieldedSubagentRun(params: {
       requesterCompletion?.ended === true ||
       !requester ||
       requester.archivedAt !== undefined ||
-      (isTerminalSessionStatus(requester.status) &&
-        (!requesterCompletion || requester.lastRunId === requesterCompletion.runId));
+      (requesterCompletion !== undefined &&
+        isTerminalSessionStatus(requester.status) &&
+        requester.lastRunId === requesterCompletion.runId);
   }
   const retired = subagentRuns.isCompletionAuthorityRetired(entry);
   let continuation = isYieldedSubagentRun(entry)
