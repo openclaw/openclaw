@@ -8,14 +8,15 @@ or publication work. Treat backport discovery and preparation as an ability of
 this release skill, not as a separate release workflow.
 
 The backport flow covers mainline inventory, private-security reconciliation,
-approval, the staging PR, and proof handoff. After it lands, use the shared
+approval, individual direct backports, and proof handoff. After the canonical
+branch contains the approved commits, use the shared
 release pipeline with the extended-stable track inputs below.
 
 Extended-stable requires a visible **SDK/config backport warning** whenever a
 candidate changes the public plugin SDK or a config/default/schema/migration
 surface. Prefer an adaptation that uses the SDK and configuration already
 shipped on that line. If a contract change remains necessary, record its
-published impact and the maintainer decision in the ledger and staging PR.
+published impact and the maintainer decision in the release ledger.
 Read `extended-stable-backports.md`; a clean cherry-pick, green
 release checks, or a regenerated baseline does not by itself explain the
 maintenance risk.

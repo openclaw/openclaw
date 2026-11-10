@@ -261,6 +261,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             onWheel: (delta) => this.initialRange.recordWheel(delta),
             onComposerLayout: (changed) => this.commitComposerResize(changed),
             onReaderScroll: (towardEnd) => this.callbacks.onReaderScroll?.(towardEnd),
+            onRequestEnd: callbacks.onRequestEnd,
             onNativeScroll: (event) => {
               // Measurement may have consumed this offset before its native event.
               // Commit its queued rows now, ahead of this frame's paint.
@@ -581,13 +582,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.captureInteractionResize,
           measureRowRefFor: (key) => this.rowRefs.forKey(key),
-          measureRows:
-            // The first correction reveals new rows; their real sizes must land before retiring the anchor.
-            this.initialRange.pending ||
-            this.initialRange.preparingEnd ||
-            this.prependAnchor.messageKey !== null ||
-            this.offsetState.scrollCommand?.target === "message" ||
-            this.offsetState.scrollCommand?.target === "index",
         });
       },
       () =>
@@ -633,9 +627,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.initialRange.finish(true);
     } else if (this.offsetState.pendingScrollOffset || !this.canAutoFollow()) {
       return false;
-    } else if (this.initialRange.preparingEnd && this.offsetState.scrollCommand?.target === "end") {
-      // Preparation and native settling already own this destination.
-      return true;
     }
     scrollTranscriptToEnd(
       this.offsetState,
@@ -645,6 +636,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       () => this.presentation.queueRowMeasure(),
       this.endAnchor,
       this.initialRange.prepareEnd,
+      this.initialRange.preparingEnd,
     );
     return true;
   }

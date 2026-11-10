@@ -2750,6 +2750,7 @@ recover_journal() {
 			fi
 			return 1
 		fi
+		verified_markers record "$current_sha" || return 1
 		proof recovery-finish "$journal_file" "$evidence" "$serving_root" "$recovery_position" >/dev/null || return 1
 		if [[ -n "$reconcile_evidence" ]]; then
 			printf 'RECOVERY_CONFIG_RECONCILED config_sha256=%s journal_sha256=%s original-journal=retired-without-rewrite\n' "$reconcile_config_hash" "$reconcile_journal_hash"

@@ -116,7 +116,20 @@ export function scrollTranscriptToEnd(
   measureSkippedRows: () => void,
   endAnchor: TranscriptEndAnchor,
   prepareEnd: (ready: () => void, isCurrent: () => boolean, native: boolean) => void,
+  preparingEnd: boolean,
 ): void {
+  if (source === "auto" && preparingEnd && state.scrollCommand?.target === "end") {
+    // The stream can outlive virtual-core's finite scroll journey. Renew a
+    // grown destination without restarting its already measured preparation.
+    const command = state.scrollCommand;
+    if (
+      command.offset !== undefined &&
+      command.offset !== maxTranscriptScrollOffset(instance.scrollElement)
+    ) {
+      instance.scrollToEnd({ behavior: command.behavior });
+    }
+    return;
+  }
   if (source === "auto" && endAnchor.capture(instance.scrollElement)) {
     return;
   }
@@ -205,6 +218,7 @@ type OffsetOwner = {
   onOffset(readerDelta: number): void;
   onWheel?(delta: number): void;
   onReaderScroll(towardEnd?: boolean): void;
+  onRequestEnd?(): void;
   onNativeScroll?(event: Event): void;
   onComposerLayout(changed: boolean): void;
 };
@@ -488,6 +502,21 @@ export function observeTranscriptOffset(
     }
     const beforeSync = nativeOffset;
     syncOffset();
+    if (
+      event instanceof KeyboardEvent &&
+      event.key === "End" &&
+      event.target === element &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      owner.onRequestEnd
+    ) {
+      // Own End on the transcript itself; nested controls keep native navigation.
+      event.preventDefault();
+      owner.onRequestEnd();
+      return;
+    }
     const towardEnd =
       (event instanceof WheelEvent && event.deltaY > 0) ||
       (event instanceof KeyboardEvent &&
@@ -529,9 +558,10 @@ export function observeTranscriptOffset(
   if (element) {
     listen(element, "scroll", captureScroll, { ...passive, capture: true });
     listen(element, "touchmove", moveTouch, passive);
-    for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
+    for (const type of ["wheel", "touchstart", "pointerdown"]) {
       listen(element, type, interrupt, passive);
     }
+    listen(element, "keydown", interrupt, { signal: listeners.signal });
     listen(element, "scrollend", finishScroll, passive);
     listen(element, "touchend", finishTouch, passive);
     listen(element, "touchcancel", finishTouch, passive);
