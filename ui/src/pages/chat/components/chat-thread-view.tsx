@@ -237,7 +237,9 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
       return typeof visible === "object" ? visible.isPresented() : visible;
     },
   );
+  let splitRows = false;
   const current = createMemo(() => {
+    const started = performance.now();
     const searchState = search().read();
     const { session } = presentation();
     const projection = projectChatTranscript(input.props, session, searchState);
@@ -249,7 +251,17 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
         input.props.announceTranscript !== false && !projection.searchOpen && !input.props.loading,
       );
     }
+    splitRows ||= performance.now() - started > 15;
     return { session, projection };
+  });
+  // Sample once before choosing the first row frame; cheap preparations need no placeholder.
+  current();
+  const initialRestoring = Boolean(input.props.restoring);
+  const [renderReady, setRenderReady] = createSignal(initialRestoring || !splitRows);
+  onSettled(() => {
+    if (!renderReady()) {
+      void yieldChatTask().then(() => setRenderReady(true));
+    }
   });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
   const isEmpty = createMemo(() => current().projection.isEmpty);
@@ -281,6 +293,9 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   );
   const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
+    if (!renderReady()) {
+      return <ChatConversationLoading route />;
+    }
     // Native range changes redraw this island without preparing the whole pane.
     geometry().read();
     if (routeLoading() && mobile()) {

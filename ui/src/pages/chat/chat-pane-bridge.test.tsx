@@ -231,16 +231,11 @@ it.each(["ready", "unavailable"] as const)(
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const yielding = createDeferred();
     const yieldTask = vi.fn(() => yielding.promise);
-    if (outcome === "ready") {
-      vi.stubGlobal("chrome", {});
-      vi.stubGlobal("scheduler", { yield: yieldTask });
-      const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
-      onTestFinished(() => {
-        yielding.resolve();
-        hidden.mockRestore();
-        vi.unstubAllGlobals();
-      });
-    }
+    vi.stubGlobal("scheduler", { yield: yieldTask });
+    onTestFinished(() => {
+      yielding.resolve();
+      vi.unstubAllGlobals();
+    });
     const bootComposer = document.createElement("textarea");
     bootComposer.id = "openclaw-boot-composer";
     bootComposer.value = "Keep the pending draft";
@@ -321,6 +316,11 @@ it.each(["ready", "unavailable"] as const)(
       await prepared;
       await vi.advanceTimersByTimeAsync(0);
       flush();
+      expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
+      expect(view.pane.querySelector("textarea")).toBe(bootComposer);
+      yielding.resolve();
+      await yielding.promise;
+      flush();
       expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
       expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
       expect(view.pane.querySelector(".chat-pane__parent-session")?.textContent).toContain(
@@ -330,9 +330,12 @@ it.each(["ready", "unavailable"] as const)(
       expect(view.pane.querySelector(".agent-chat__input")).toBeNull();
       expect(view.pane.textContent).toContain("Stored conversation");
       expect(view.pane.querySelector('[data-cached-session="true"]')).not.toBeNull();
-      expect(yieldTask).not.toHaveBeenCalled();
     } else {
       await vi.advanceTimersByTimeAsync(1);
+      flush();
+      expect(view.pane.querySelector("textarea")).toBe(bootComposer);
+      yielding.resolve();
+      await yielding.promise;
       flush();
       expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
       expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
