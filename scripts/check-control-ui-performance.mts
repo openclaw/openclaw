@@ -62,9 +62,7 @@ const controlUiPerformanceBudgets = {
   // Cold construction split: add CI-measured 336 B, coordinator-accepted (local +508 B).
   chatBootJsGzipBytes: 1_301_131,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
-  // Picker-hidden agents (#194575): CI Node 24 measures 803,504 B (+288 B) plus 64 B;
-  // Node 26 reports +331 B more for the same tree, CI measurement is authoritative.
-  newBootJsGzipBytes: 803_568,
+  newBootJsGzipBytes: 803_364,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
