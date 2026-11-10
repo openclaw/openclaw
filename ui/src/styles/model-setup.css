@@ -407,12 +407,17 @@
   outline: none;
 }
 
-.model-setup-wizard--auth .model-setup-wizard__body {
+.model-setup-wizard--auth .model-setup-wizard__body,
+.model-setup-wizard--auth .wizard-step__form {
   display: flex;
   flex-direction: column;
 }
 
-.model-setup-wizard--auth .model-setup-wizard__body > .wizard-step__actions:last-child {
+.model-setup-wizard--auth .wizard-step__form {
+  flex: 1;
+}
+
+.model-setup-wizard--auth .wizard-step__actions:last-child {
   margin-top: auto;
 }
 
