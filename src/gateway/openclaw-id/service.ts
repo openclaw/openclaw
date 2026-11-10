@@ -115,8 +115,8 @@ export function createOpenClawIdService(params: {
   let authority: OpenClawIdAuthority | undefined;
   let loadingAuthority: Promise<OpenClawIdAuthority> | undefined;
   let lastPublish: PublishOutcome | undefined;
-  // K_srv of the last binding seen. A binding is never removed, so authority withdrawn
-  // after an uncertain write still restarts the tunnel child on the bound key only.
+  // K_srv selected by linking or seen in a binding. Keep it when uncertain storage
+  // withdraws authority, so a child restart cannot create another endpoint identity.
   let lastBoundEndpointKey: string | undefined;
   let loadEffects: (() => Promise<OpenClawIdEffects>) | undefined;
   let effectsPromise: Promise<OpenClawIdEffects> | undefined;
@@ -751,12 +751,13 @@ export function createOpenClawIdService(params: {
         return refusal("tunnel_not_running", "the tunnel is not running yet");
       }
       const { pub: kGw }: { pub: Ed25519PublicKey } = await gatewayKey.load();
+      // A link write can persist and then lose both its acknowledgement and reconciliation.
+      // Retain the running identity before awaiting settlement, not only after success.
+      lastBoundEndpointKey = kSrv;
       const result = await (await getAuthority()).commitLink(input, channel, { kSrv, kGw });
       if (!result.ok) {
         return result;
       }
-      // A child restart before the getter runs must still find this binding (see startRuntime).
-      lastBoundEndpointKey = kSrv;
       await pushMembership();
       const publication = await publicationRetry
         .publishDirect(() => publish(enrollmentCode))

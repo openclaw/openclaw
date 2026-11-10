@@ -60,43 +60,55 @@ describe("tunnel child restarts for a linked claw", () => {
     }
   });
 
-  it("stay on the K_srv a link committed, with no restart before the authority is withdrawn", async () => {
-    const store = memoryStore();
-    let uncertain = false;
-    const flaky = {
-      read: async () => {
-        if (uncertain) {
-          throw new Error("read unavailable");
+  it.each(["initial link", "later write"])(
+    "stay on K_srv when %s persistence is uncertain",
+    async (phase) => {
+      const store = memoryStore();
+      let uncertain = false;
+      const flaky = {
+        read: async () => {
+          if (uncertain) {
+            throw new Error("read unavailable");
+          }
+          return store.read();
+        },
+        write: async (next: StoredClaw) => {
+          await store.write(next);
+          if (uncertain) {
+            throw new Error("acknowledgement lost");
+          }
+        },
+      };
+      let service: ReturnType<typeof serviceFor>["service"] | undefined;
+      let owner: ReturnType<typeof createOpenClawIdAuthority> | undefined;
+      const linking = linkedClaw(flaky, async (authority, stateDir, input) => {
+        owner = authority;
+        service = serviceFor(
+          authority,
+          { enabled: true, relayUrl: "https://relay.test/" },
+          stateDir,
+        ).service;
+        await service.reconcileRuntimePolicy();
+        expect(runtime.boundEndpointKey?.()).toBeUndefined();
+        uncertain = phase === "initial link";
+        return await service.commitLink("local_operator", input);
+      });
+      try {
+        if (phase === "initial link") {
+          await expect(linking).rejects.toThrow("uncertain");
+        } else {
+          const claw = await linking;
+          uncertain = true;
+          await expect(claw.authority.recordDiscovery({ mailbox_cursor: "x" })).rejects.toThrow(
+            "uncertain",
+          );
         }
-        return store.read();
-      },
-      write: async (next: StoredClaw) => {
-        await store.write(next);
-        if (uncertain) {
-          throw new Error("acknowledgement lost");
-        }
-      },
-    };
-    let service: ReturnType<typeof serviceFor>["service"] | undefined;
-    const claw = await linkedClaw(flaky, async (authority, stateDir, input) => {
-      service = serviceFor(
-        authority,
-        { enabled: true, relayUrl: "https://relay.test/" },
-        stateDir,
-      ).service;
-      // The child starts unlinked; nothing reads the getter between the link and the withdrawal.
-      await service.reconcileRuntimePolicy();
-      return await service.commitLink("local_operator", input);
-    });
-    try {
-      uncertain = true;
-      await expect(claw.authority.recordDiscovery({ mailbox_cursor: "x" })).rejects.toThrow(
-        "uncertain",
-      );
-      expect(claw.authority.current()).toBeUndefined();
-      expect(runtime.boundEndpointKey?.()).toBe(TEST_K_SRV);
-    } finally {
-      await service?.stop();
-    }
-  });
+        expect((await store.read())?.binding?.body.k_srv).toBe(TEST_K_SRV);
+        expect(owner?.current()).toBeUndefined();
+        expect(runtime.boundEndpointKey?.()).toBe(TEST_K_SRV);
+      } finally {
+        await service?.stop();
+      }
+    },
+  );
 });
