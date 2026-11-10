@@ -3,7 +3,7 @@
 .palette-session-settings__title,
 .palette-session-settings__machine {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   line-height: 1.2;
@@ -74,10 +74,12 @@
   display: grid;
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
   grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
+  /* The unsized status row is intrinsic: zero until a failed Settings save occupies it. */
   grid-template-areas:
     "nav topbar"
     "nav notice"
-    "nav content";
+    "nav content"
+    "nav save-status";
   gap: 0;
   transition:
     grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease),
@@ -109,7 +111,7 @@
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--control-ui-environment-color) 16%, transparent);
   color: var(--control-ui-environment-ink);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
   line-height: 1;
 }
@@ -144,7 +146,6 @@
 }
 
 .shell--chat {
-  overflow: hidden;
   --shell-content-leading-inset: 12px;
 }
 
@@ -152,7 +153,6 @@
    Keep --shell-nav-width in sync for fixed-position consumers (e.g. the
    docked terminal panel). */
 .shell--nav-collapsed {
-  grid-template-columns: 0 minmax(0, 1fr);
   --shell-nav-width: 0px;
   /* The collapsed strip shows all three base controls, so unlike the expanded
      safe edge this keeps the complete collapsed width. */
@@ -243,10 +243,6 @@ html.openclaw-native-nav:not(.openclaw-native-web-chrome)
   .shell--nav-collapsed
   .shell-chrome-controls,
 html.openclaw-native-nav .topbar .topbar-nav-toggle {
-  display: none;
-}
-
-html.openclaw-native-web-chrome .shell--mobile-nav .sidebar-brand__desktop-control {
   display: none;
 }
 
@@ -341,12 +337,17 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .shell--onboarding {
-  grid-template-columns: 0 minmax(0, 1fr);
-  grid-template-rows: 0 auto minmax(0, 1fr);
   --shell-nav-width: 0px;
+  /* The incoming page already fills the viewport; do not sweep it through the old sidebar. */
+  transition: none;
 }
 
-.shell--onboarding .topbar,
+/* Keep mobile's one-column layout, but never restore its app-header row during setup. */
+div.shell.shell--onboarding {
+  grid-template-rows: 0 auto minmax(0, 1fr);
+}
+
+.shell.shell--onboarding .topbar,
 .shell--onboarding .shell-nav {
   display: none;
 }
@@ -382,7 +383,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .shell--settings:not(.shell--mobile-nav) .page-title {
-  font-size: 26px;
+  font-size: calc(26px * var(--control-ui-text-scale));
 }
 
 .shell--settings .content-header,
@@ -418,15 +419,18 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   padding: 8px 12px 6px;
 }
 
+/* Header, picker, search and nav rows share the 12px panel inset, a 32px
+   control height and the field radius; text and glyphs start 10px inside each
+   row (the nav rows reach it with a 1px border plus 9px padding). */
 .settings-sidebar__back {
   display: flex;
   align-items: center;
   gap: 7px;
   width: 100%;
   min-height: 32px;
-  padding: 0 9px;
+  padding: 0 10px;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--field-radius);
   background: transparent;
   color: var(--muted);
   font: inherit;
@@ -445,7 +449,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .settings-sidebar__title {
   margin: 14px 0 0;
-  padding: 0 9px;
+  padding: 0 10px;
   font-size: calc(21px * var(--control-ui-text-scale));
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -461,8 +465,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .settings-sidebar__loading-agent {
   display: block;
-  height: 40px;
-  border-radius: var(--radius-md);
+  height: 32px;
+  border-radius: var(--field-radius);
 }
 
 @media (pointer: coarse) {
@@ -500,7 +504,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .settings-sidebar__empty {
-  margin: 8px 9px 0;
+  margin: 8px 10px 0;
   color: var(--muted);
   font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.45;
@@ -521,14 +525,14 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .settings-sidebar__loading-search {
   display: block;
   width: 100%;
-  height: 34px;
+  height: 32px;
 }
 
 .settings-sidebar__loading-group-label {
   display: block;
   width: 64px;
   height: 9px;
-  margin: 2px 9px 8px;
+  margin: 2px 10px 8px;
   border-radius: var(--radius-sm);
 }
 
@@ -648,7 +652,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   min-width: 0;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
   letter-spacing: 0;
   text-overflow: ellipsis;
@@ -665,7 +669,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -830,6 +834,13 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 }
 
+/* Desktop list fills run flush with the panel's content box in every view
+   (Pages, Sessions, Users); the lead column sits 12px and the text column 40px
+   inside that edge. The mobile drawer keeps its own 8px inset rhythm. */
+.shell:not(.shell--mobile-nav) .sidebar-shell {
+  --sidebar-inset: 10px;
+}
+
 .sidebar-brand__icon {
   width: 30px;
   height: 30px;
@@ -950,7 +961,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   padding: 8px;
   border-top: 2px solid var(--accent);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-sessions--removal-drop {
@@ -1064,7 +1075,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   box-shadow: none;
   color: var(--danger);
   font-size: calc(12px * var(--control-ui-text-scale));
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .sidebar-session-tree__children > .sidebar-session-error .sidebar-session-tree__show-more {
@@ -1091,10 +1102,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 /* Pinned renders in its own list container above the chip list or agent roster. */
 .sidebar-recent-sessions--pinned {
   margin-block-end: var(--sidebar-group-gap);
-}
-
-.shell:not(.shell--mobile-nav) .sidebar-recent-sessions {
-  margin-inline: -6px;
 }
 
 .sidebar-shell__body--scroll-top,
@@ -1323,31 +1330,12 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 48%, transparent);
 }
 
-/* The wrapper keeps the dot outside the avatar's clipping. Self is excluded as
-   an always-on signal; idle dimming follows the Online roster's presence rule. */
+/* The wrapper keeps the shared presence dot outside the avatar's clipping.
+   Self is excluded as an always-on signal. */
 .sidebar-session-group-toggle__person {
   position: relative;
   display: inline-flex;
   flex: none;
-}
-
-.sidebar-session-group-presence {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--ok);
-  box-shadow: 0 0 0 1.5px var(--sidebar-bg, var(--bg));
-}
-
-.sidebar-session-group-presence--idle {
-  background: var(--presence-idle);
-}
-
-.sidebar-session-group-presence--unknown {
-  background: var(--muted);
 }
 
 .sidebar-session-catalog-load-more {
@@ -1529,7 +1517,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-session-tree__show-more {
   min-height: 28px;
-  padding: 6px var(--sidebar-text-offset) 6px calc(var(--sidebar-text-offset) + 3px);
+  padding: 6px var(--sidebar-text-offset) 6px
+    calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset));
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -1719,7 +1708,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   display: flex;
   justify-content: flex-start;
   gap: 14px;
-  padding: 0 10px 10px var(--sidebar-text-offset);
+  padding: 0 10px 10px calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset));
 }
 
 .sidebar-session-pagination__button {
@@ -1731,7 +1720,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   background: transparent;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .sidebar-session-pagination__button:hover:not(:disabled),
@@ -1739,19 +1728,25 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   color: var(--text);
 }
 
+/* Hints start on the rows' title column in every sidebar view. */
 .sidebar-session-empty-hint {
   display: block;
-  padding: 4px 10px 10px var(--sidebar-text-offset);
+  padding: 4px 10px 10px calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset));
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
-/* A section's empty hint reads as part of its heading, on the title column. */
+/* The startup hint sits beside the list, so it reclaims the same section inset. */
+.sidebar-sessions > .sidebar-session-empty-hint {
+  margin-inline: -8px;
+}
+
+/* A section's empty hint reads as part of its heading. */
 .sidebar-recent-sessions__group > .sidebar-session-empty-hint {
   margin: 0;
-  padding: 2px 10px 14px calc(var(--sidebar-text-offset) + 2px);
+  padding-block: 2px 14px;
   font-size: calc(12.5px * var(--control-ui-text-scale));
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .sidebar-session-empty-hint--startup,
@@ -2234,7 +2229,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   min-width: 0;
   min-height: 32px;
   margin-inline: -8px;
-  padding: 4px 8px;
+  /* The avatar shares the session rows' lead column in both reading directions. */
+  padding-block: 4px;
+  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 8px;
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
@@ -2268,7 +2265,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   height: 20px;
 }
 
-/* A hollow ring distinguishes connected people without observed activity. */
+/* Both sidebars share one presence dot; a hollow ring means connected without
+   observed activity. */
+.sidebar-session-group-presence,
 .sidebar-online__avatar::after {
   position: absolute;
   right: -2px;
@@ -2282,10 +2281,12 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   content: "";
 }
 
+.sidebar-session-group-presence--idle,
 .sidebar-online__person[data-presence-activity="idle"] .sidebar-online__avatar::after {
   background: var(--presence-idle);
 }
 
+.sidebar-session-group-presence--unknown,
 .sidebar-online__person[data-presence-activity="unknown"] .sidebar-online__avatar::after {
   background: var(--bg);
   box-shadow: inset 0 0 0 1.5px var(--ok);
@@ -2367,9 +2368,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-online__running .session-run-spinner {
+  --spinner-art: var(--spinner-mask-small);
   width: calc(9px * var(--control-ui-text-scale));
   height: calc(9px * var(--control-ui-text-scale));
-  mask: var(--spinner-mask-small);
   margin-inline-end: 4px;
   vertical-align: baseline;
 }
@@ -2425,14 +2426,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
     anchor-scope: --sidebar-online-name;
   }
 
-  /* Avatar and name share the session rows' axes; counts end on the header's icon edge. */
+  /* Counts end on the header's icon edge. */
   .sidebar-online__person {
     display: flex;
-    padding-inline: 12px 15px;
-  }
-
-  .sidebar-online__list > .sidebar-session-empty-hint {
-    margin-inline-start: 4px;
+    padding-inline-end: 15px;
   }
 
   .sidebar-online__person-name {
@@ -2739,7 +2736,8 @@ a:is(
 .sidebar-zone-entry .sidebar-recent-session {
   --session-row-bg: var(--session-row-tint, transparent);
 
-  padding: 0 11px;
+  padding-block: 0;
+  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 11px;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -2747,7 +2745,7 @@ a:is(
 }
 
 .sidebar-zone-entry .sidebar-recent-session__link {
-  gap: 10px;
+  gap: var(--sidebar-row-gap);
   padding: 3px 0;
 }
 
@@ -2765,12 +2763,13 @@ a:is(
     inset: 50% 4px auto auto;
   }
 
-  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
-    padding-right: var(--session-row-actions-reserve);
+  /* Reserve touch actions outside the link, without charging its text twice. */
+  .sidebar-recent-session > .sidebar-recent-session__link {
+    margin-inline-end: var(--session-row-actions-reserve);
   }
 
-  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__title-row {
-    padding-right: 0;
+  .sidebar-recent-session__text {
+    --session-row-actions-reserve: 0px;
   }
 }
 
@@ -3146,13 +3145,13 @@ openclaw-sidebar-attention {
   color: var(--text-strong);
   font-size: calc(13.5px * var(--control-ui-text-scale));
   font-weight: 600;
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .sidebar-identity-card__gateway {
   color: var(--muted);
-  font-size: 11px;
-  line-height: 14px;
+  font-size: var(--control-ui-text-xs);
+  line-height: var(--control-ui-text-md);
 }
 
 .sidebar-gateway-name,
@@ -3171,7 +3170,7 @@ openclaw-sidebar-attention {
 .sidebar-gateway-primary {
   flex: none;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-gateway-health {
@@ -3522,6 +3521,9 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .content {
   grid-area: content;
+  /* Keep the focusable frame stable when setup hands off to a sidebar route. */
+  grid-column: 1 / -1;
+  border-inline-start: var(--shell-nav-width) solid transparent;
   --content-inline-padding: 20px;
   padding: 16px var(--content-inline-padding) 32px;
   display: block;
@@ -3560,14 +3562,12 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .content--chat {
   gap: 2px;
-  padding-top: 0;
-  padding-bottom: 0;
+  padding-block: 0;
 }
 
 /* Session routes reserve the final frame before their lazy styles load. */
 .content--chat.content--workbench {
-  padding-left: 0;
-  padding-right: 0;
+  padding-inline: 0;
 }
 
 .content--chat > :where(:not(:first-child)),
@@ -3700,7 +3700,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
     }
 
     .page-title {
-      font-size: 15px;
+      font-size: calc(15px * var(--control-ui-text-scale));
       font-weight: 600;
       letter-spacing: -0.01em;
       line-height: 1;
@@ -3719,7 +3719,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
       clip-path: inset(50%);
     }
 
-    :is(.page-subtitle, .page-sub) {
+    .page-subtitle {
       grid-area: 3 / 1 / 4 / -1;
       margin-top: 8px;
     }
@@ -3812,7 +3812,7 @@ html.openclaw-native-web-chrome
 
 .page-title {
   margin: 0;
-  font-size: 22px;
+  font-size: calc(22px * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
@@ -3860,16 +3860,6 @@ html.openclaw-native-web-chrome
 }
 
 @media (max-width: 900px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .shell--mobile-nav {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto auto minmax(0, 1fr);
-    grid-template-areas:
-      "topbar"
-      "nav"
-      "notice"
-      "content";
-  }
-
   .shell--mobile-nav .topbar {
     position: static;
     padding: 6px 12px;
@@ -3902,7 +3892,8 @@ html.openclaw-native-web-chrome
   flex: 0 0 16px;
 }
 
-.sidebar-recent-sessions .sidebar-session-indicator {
+.sidebar-recent-sessions .sidebar-session-indicator,
+.sidebar-zone-entry .sidebar-session-indicator {
   width: var(--sidebar-lead);
   flex-basis: var(--sidebar-lead);
 }
@@ -3979,7 +3970,7 @@ html.openclaw-native-web-chrome
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: calc(12.5px * var(--control-ui-text-scale));
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
   letter-spacing: 0;
   color: var(--session-row-muted, var(--muted));
 }
@@ -3987,7 +3978,7 @@ html.openclaw-native-web-chrome
 .sidebar-recent-session__channel {
   max-width: 120px;
   font-size: calc(12px * var(--control-ui-text-scale));
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
   letter-spacing: 0;
 }
 
@@ -4121,8 +4112,8 @@ html.openclaw-native-web-chrome
   position: relative;
   margin: 0;
   color: var(--text-strong);
-  font-size: 22px;
-  line-height: 28px;
+  font-size: calc(22px * var(--control-ui-text-scale));
+  line-height: calc(28px * var(--control-ui-text-scale));
   letter-spacing: -0.01em;
   font-weight: 600;
   text-wrap: balance;
@@ -4130,8 +4121,8 @@ html.openclaw-native-web-chrome
 .gateway-connection-view__description {
   margin: 6px 0 0;
   color: var(--muted);
-  font-size: 14px;
-  line-height: 21px;
+  font-size: var(--control-ui-text-md);
+  line-height: calc(21px * var(--control-ui-text-scale));
   text-wrap: pretty;
 }
 .gateway-connection-view__actions {
@@ -4148,159 +4139,54 @@ html.openclaw-native-web-chrome
 .gateway-connection-view__actions .btn {
   height: 32px;
   padding: 0 14px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
 }
 
-/* The mascot sits 24px above the title; its own animation is the busy indicator. */
+/* index.html owns shared mascot anatomy and animations before runtime CSS loads. */
 .gateway-mascot {
-  --gateway-mascot-size: 88px;
-  --gateway-mascot-ground: radial-gradient(
+  --mount-fallback-ground: radial-gradient(
     closest-side,
     rgb(0 0 0 / 0.42),
     rgb(0 0 0 / 0.16) 60%,
     transparent
   );
-  --gateway-mascot-gaze-x: 0px;
-  --gateway-mascot-gaze-y: 0px;
-  position: absolute;
-  top: calc(-24px - var(--gateway-mascot-size));
-  left: 50%;
-  width: var(--gateway-mascot-size);
-  height: var(--gateway-mascot-size);
-  transform: translateX(-50%);
-  pointer-events: none;
 }
 :root[data-theme-mode="light"] .gateway-mascot {
-  --gateway-mascot-ground: radial-gradient(
+  --mount-fallback-ground: radial-gradient(
     closest-side,
     rgb(32 32 32 / 0.16),
     rgb(32 32 32 / 0.06) 60%,
     transparent
   );
 }
-.gateway-mascot__ground {
-  position: absolute;
-  bottom: 0;
-  left: 50%;
-  width: 62px;
-  height: 9px;
-  margin-left: -31px;
-  border-radius: 50%;
-  background: var(--gateway-mascot-ground);
-}
-.gateway-mascot__figure {
-  position: absolute;
-  top: 0;
-  left: 0;
-  display: block;
-  width: 100%;
-  height: auto;
-  aspect-ratio: 124 / 112;
-  overflow: visible;
-}
-.gateway-mascot__eyes {
-  transform: translate(var(--gateway-mascot-gaze-x), var(--gateway-mascot-gaze-y));
-  transition: transform 0.5s cubic-bezier(0.3, 0, 0.2, 1);
-}
-.gateway-mascot__lids {
-  transform-origin: 60px 35px;
-}
-.gateway-mascot__claw--left {
-  transform-origin: 28px 52px;
-}
-.gateway-mascot__claw--right {
-  transform-origin: 92px 52px;
-}
 /* Settled, it looks down toward the button, or up at the update with one blink. */
 .gateway-mascot[data-pose="error"] {
-  --gateway-mascot-gaze-y: 2.8px;
+  --mascot-gy: 2.8px;
 }
 .gateway-mascot[data-pose="updated"] {
-  --gateway-mascot-gaze-y: -1px;
+  --mascot-gy: -1px;
 }
 .gateway-mascot[data-pose="updated"] .gateway-mascot__lids {
   animation: gateway-mascot-blink-once 0.9s 0.5s linear 1 both;
 }
-/* Busy, it bobs 5px while the ground shadow shrinks, the claws open and the eyes scan. */
 .gateway-mascot[data-pose="busy"] .gateway-mascot__figure {
-  animation: gateway-mascot-bob 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+  animation: mount-fallback-bob 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 .gateway-mascot[data-pose="busy"] .gateway-mascot__ground {
-  animation: gateway-mascot-ground 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+  animation: mount-fallback-ground 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 .gateway-mascot[data-pose="busy"] .gateway-mascot__claw--left {
-  animation: gateway-mascot-pinch-left 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+  animation: mount-fallback-pinch-left 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 .gateway-mascot[data-pose="busy"] .gateway-mascot__claw--right {
-  animation: gateway-mascot-pinch-right 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+  animation: mount-fallback-pinch-right 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 .gateway-mascot[data-pose="busy"] .gateway-mascot__eyes {
-  animation: gateway-mascot-gaze 4.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+  animation: mount-fallback-gaze 4.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
 }
 .gateway-mascot[data-pose="busy"] .gateway-mascot__lids {
-  animation: gateway-mascot-blink 4.8s linear infinite;
-}
-@keyframes gateway-mascot-bob {
-  from {
-    transform: translateY(0);
-  }
-  to {
-    transform: translateY(-5px);
-  }
-}
-@keyframes gateway-mascot-ground {
-  from {
-    transform: scaleX(1);
-    opacity: 1;
-  }
-  to {
-    transform: scaleX(0.82);
-    opacity: 0.7;
-  }
-}
-@keyframes gateway-mascot-pinch-left {
-  from {
-    transform: rotate(0);
-  }
-  to {
-    transform: rotate(-7deg);
-  }
-}
-@keyframes gateway-mascot-pinch-right {
-  from {
-    transform: rotate(0);
-  }
-  to {
-    transform: rotate(7deg);
-  }
-}
-@keyframes gateway-mascot-gaze {
-  0%,
-  8%,
-  82%,
-  100% {
-    transform: translate(0, 0);
-  }
-  18%,
-  40% {
-    transform: translate(-3.2px, 0.6px);
-  }
-  50%,
-  72% {
-    transform: translate(3.2px, 0.6px);
-  }
-}
-@keyframes gateway-mascot-blink {
-  0%,
-  90%,
-  96%,
-  100% {
-    transform: scaleY(1);
-  }
-  93% {
-    transform: scaleY(0.12);
-  }
+  animation: mount-fallback-blink 4.8s linear infinite;
 }
 @keyframes gateway-mascot-blink-once {
   0%,
@@ -4328,7 +4214,7 @@ html.openclaw-native-web-chrome
   .gateway-connection-view__actions .btn {
     height: 36px;
     padding: 0 16px;
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
   }
 }
 
@@ -4341,11 +4227,8 @@ html.openclaw-native-web-chrome
     transform: none;
   }
   .gateway-connection-view h1 {
-    font-size: 20px;
-    line-height: 26px;
-  }
-  .gateway-mascot {
-    --gateway-mascot-size: 80px;
+    font-size: calc(20px * var(--control-ui-text-scale));
+    line-height: calc(26px * var(--control-ui-text-scale));
   }
 }
 

@@ -1,9 +1,11 @@
+import AVFoundation
 import CoreLocation
 import Foundation
 import Network
 import Observation
 import OpenClawChatUI
 import os
+import Speech
 import Testing
 import UIKit
 @testable import OpenClaw
@@ -236,7 +238,8 @@ private func waitUntil(
 {
     let deadline = ContinuousClock().now.advanced(by: timeout)
     while !condition(), ContinuousClock().now < deadline {
-        await Task.yield()
+        // Yield can immediately resume this task and starve the asynchronous work being observed.
+        try? await Task.sleep(for: .milliseconds(10))
     }
 }
 
@@ -1839,6 +1842,69 @@ private func pendingHandoffDiagnostic(
         }
     }
 
+    @Test @MainActor func `reconnects keep the user's auto-connect choice`() async throws {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let state = try TemporaryOpenClawState(instanceID: "autoconnect-\(UUID().uuidString)")
+        defer { state.restore() }
+        try await withUserDefaults(["gateway.autoconnect": false]) {
+            let defaults = UserDefaults.standard
+            let server = try await NativeGatewayWebSocketFixture.start(issuedDeviceTokens: [])
+            defer { server.stop() }
+            server.acceptedOperatorScopes = []
+            let stableID = "autoconnect-\(UUID().uuidString)"
+            let config = try GatewayConnectConfig(
+                url: server.url(),
+                stableID: stableID,
+                tls: GatewayTLSParams(required: false, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: GatewayConnectOptions(
+                    role: "node",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-ios",
+                    clientMode: "node",
+                    clientDisplayName: "Auto-connect Test",
+                    deviceAuthGatewayID: stableID),
+                ingressAuthorization: nil)
+            let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+            model.setScenePhase(.active)
+            func nodeConnects() -> Int {
+                server.roles.filter { $0 == "node" }.count
+            }
+            do {
+                model.applyGatewayConnectConfig(config)
+                try await TestWait.observed("node connected") { model.gatewayConnected }
+                #expect(defaults.bool(forKey: "gateway.autoconnect"))
+
+                // The user turns "Auto-connect on launch" off, then the app returns to the foreground
+                // and replaces a stale socket within the same connect attempt.
+                defaults.set(false, forKey: "gateway.autoconnect")
+                let connectsBeforeRestart = nodeConnects()
+                await model.restartGatewaySessionsAfterForegroundStaleConnection()
+                try await TestWait.state("node reconnected") { nodeConnects() > connectsBeforeRestart }
+                try await TestWait.observed("node connected again") { model.gatewayConnected }
+                #expect(!defaults.bool(forKey: "gateway.autoconnect"))
+
+                // A new connect attempt is an explicit connect and enables launch auto-connect again.
+                let connectsBeforeExplicit = nodeConnects()
+                model.applyGatewayConnectConfig(config, forceReconnect: true)
+                try await TestWait.state("explicit connect") { nodeConnects() > connectsBeforeExplicit }
+                try await TestWait.state("auto-connect enabled") { defaults.bool(forKey: "gateway.autoconnect") }
+            } catch {
+                model.disconnectGateway()
+                await model.waitForGatewaySessionResetIfNeeded()
+                throw error
+            }
+            model.disconnectGateway()
+            await model.waitForGatewaySessionResetIfNeeded()
+        }
+    }
+
     @Test @MainActor func `newer gateway connect generation rejects queued config`() throws {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
@@ -2080,12 +2146,8 @@ private func pendingHandoffDiagnostic(
 
         let resetFinished = AsyncStream<Void>.makeStream()
         let resetRelease = AsyncStream<Void>.makeStream()
-        let appModel = NodeAppModel()
+        let appModel = NodeAppModel(locationService: MockLocationService(authorizationStatus: .denied))
         defer { appModel.disconnectGateway() }
-        let currentConfig = try Self.makeGatewayConnectConfig(
-            url: #require(URL(string: "wss://127.0.0.1:1")),
-            stableID: "manual|current.gateway.invalid|443")
-        appModel.applyGatewayConnectConfig(currentConfig)
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
@@ -2096,6 +2158,13 @@ private func pendingHandoffDiagnostic(
                     return
                 }
             }, ingress: makeOrdinaryIngress())
+        // Use the current registration so lifecycle refresh does not replace a synthetic capability fixture.
+        let currentStableID = "manual|current.gateway.invalid|443"
+        let currentConfig = try await Self.makeGatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: currentStableID,
+            nodeOptions: controller.makeConnectOptions(deviceAuthGatewayID: nil))
+        appModel.applyGatewayConnectConfig(currentConfig)
         var finishedIterator = resetFinished.stream.makeAsyncIterator()
 
         await controller.connectManual(host: host, port: 443, useTLS: true, forceReconnect: true)
@@ -2112,9 +2181,15 @@ private func pendingHandoffDiagnostic(
     }
 
     @Test @MainActor func `cancel without pending task preserves reconnect pause`() async {
-        let appModel = NodeAppModel()
+        let appModel = NodeAppModel(locationService: MockLocationService(authorizationStatus: .denied))
         defer { appModel.disconnectGateway() }
-        let currentConfig = Self.makeGatewayConnectConfig()
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
+        // Use the current registration so lifecycle refresh does not replace a synthetic capability fixture.
+        let currentConfig = await Self.makeGatewayConnectConfig(
+            nodeOptions: controller.makeConnectOptions(deviceAuthGatewayID: nil))
         appModel.applyGatewayConnectConfig(currentConfig)
         await appModel.resetGatewaySessionsForForcedReconnect()
         let problem = GatewayConnectionProblem(
@@ -2125,10 +2200,6 @@ private func pendingHandoffDiagnostic(
             retryable: false,
             pauseReconnect: true)
         appModel.applyOperatorGatewayConnectionProblem(problem)
-        let controller = GatewayConnectionController(
-            appModel: appModel,
-            startDiscovery: false,
-            ingress: makeOrdinaryIngress())
 
         controller.cancelPendingConnectionAttempts()
         for _ in 0..<10 {
@@ -2256,14 +2327,17 @@ private func pendingHandoffDiagnostic(
             defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
             let resetRelease = AsyncStream<Void>.makeStream()
             defer { resetRelease.continuation.finish() }
-            let appModel = NodeAppModel()
+            let appModel = NodeAppModel(locationService: MockLocationService(authorizationStatus: .denied))
             defer {
                 appModel._test_setGatewaySessionResetTask(nil)
                 appModel.disconnectGateway()
             }
-            let currentConfig = try Self.makeGatewayConnectConfig(
+            // Use the current registration so lifecycle refresh does not replace a synthetic capability fixture.
+            let currentConfig = try await Self.makeGatewayConnectConfig(
                 url: #require(URL(string: "wss://127.0.0.1:1")),
-                stableID: "manual|current.gateway.invalid|443")
+                stableID: "manual|current.gateway.invalid|443",
+                nodeOptions: GatewayConnectionController(appModel: appModel, startDiscovery: false)
+                    .makeConnectOptions(deviceAuthGatewayID: nil))
             appModel.applyGatewayConnectConfig(currentConfig)
             await appModel.resetGatewaySessionsForForcedReconnect()
             let resetTask = Task {
@@ -2795,16 +2869,17 @@ private func pendingHandoffDiagnostic(
             port: 443,
             useTLS: true,
             lastConnectedAtMs: nil))
-        let appModel = NodeAppModel()
+        let appModel = NodeAppModel(locationService: MockLocationService(authorizationStatus: .denied))
         defer { appModel.disconnectGateway() }
-        let connectedConfig = try Self.makeGatewayConnectConfig(
-            url: #require(URL(string: "wss://connected.example.com")),
-            stableID: connectedID)
-        appModel.applyGatewayConnectConfig(connectedConfig)
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
             ingress: makeOrdinaryIngress())
+        let connectedConfig = try await Self.makeGatewayConnectConfig(
+            url: #require(URL(string: "wss://connected.example.com")),
+            stableID: connectedID,
+            nodeOptions: controller.makeConnectOptions(deviceAuthGatewayID: nil))
+        appModel.applyGatewayConnectConfig(connectedConfig)
 
         await controller.forgetGateway(stableID: selectedID)
 
@@ -3073,17 +3148,18 @@ private func pendingHandoffDiagnostic(
         ]
         try await withUserDefaults(updates) {
             let defaults = UserDefaults.standard
-            let appModel = NodeAppModel()
+            let appModel = NodeAppModel(locationService: MockLocationService(authorizationStatus: .denied))
             defer { appModel.disconnectGateway() }
-            let suspendedConfig = try Self.makeGatewayConnectConfig(
-                url: #require(URL(string: "ws://127.0.0.1:1")),
-                stableID: "manual|127.0.0.1|1")
-            appModel.applyGatewayConnectConfig(suspendedConfig)
-            appModel.gatewayAutoReconnectEnabled = true
             let controller = GatewayConnectionController(
                 appModel: appModel,
                 startDiscovery: false,
                 ingress: makeOrdinaryIngress())
+            let suspendedConfig = try await Self.makeGatewayConnectConfig(
+                url: #require(URL(string: "ws://127.0.0.1:1")),
+                stableID: "manual|127.0.0.1|1",
+                nodeOptions: controller.makeConnectOptions(deviceAuthGatewayID: nil))
+            appModel.applyGatewayConnectConfig(suspendedConfig)
+            appModel.gatewayAutoReconnectEnabled = true
             _ = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
 
             await controller.connectManual(host: "invalid.example.com", port: 70000, useTLS: true)
@@ -3470,7 +3546,8 @@ private func pendingHandoffDiagnostic(
     private static func makeGatewayConnectConfig(
         // Fail locally instead of making lifecycle tests depend on DNS or external network timing.
         url: URL = URL(string: "wss://127.0.0.1:1")!,
-        stableID: String = "manual|gateway.example.com|443") -> GatewayConnectConfig
+        stableID: String = "manual|gateway.example.com|443",
+        nodeOptions: GatewayConnectOptions? = nil) -> GatewayConnectConfig
     {
         GatewayConnectConfig(
             url: url,
@@ -3483,9 +3560,68 @@ private func pendingHandoffDiagnostic(
             token: "token",
             bootstrapToken: nil,
             password: nil,
-            nodeOptions: self.makeNodeOptions(
+            nodeOptions: nodeOptions ?? self.makeNodeOptions(
                 caps: ["screen", "camera"],
                 commands: ["notify", "location.get"],
                 permissions: ["screen": true]))
     }
+
+    @Test @MainActor func `media authorization from an in-app prompt refreshes the registration`() async throws {
+        let isolation = await GatewayRegistryTestIsolation()
+        defer { isolation.restore() }
+        try await withUserDefaults(["gateway.autoconnect": false]) {
+            let media = StubMediaAuthorization()
+            let appModel = NodeAppModel(
+                locationService: MockLocationService(authorizationStatus: .denied),
+                mediaAuthorizationProvider: { media.snapshot })
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let options = await controller.makeConnectOptions(
+                deviceAuthGatewayID: nil,
+                allowStoredDeviceAuth: false)
+            let config = try GatewayConnectConfig(
+                url: #require(URL(string: "ws://127.0.0.1:1")),
+                stableID: "manual|127.0.0.1|1",
+                tls: nil,
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: options)
+            appModel.applyGatewayConnectConfig(config)
+            #expect(appModel.activeGatewayConnectConfig?.nodeOptions.permissions["microphone"] == false)
+
+            // Talk's first-use prompts grant microphone and speech; dismissing the alert reactivates the scene.
+            media.snapshot.microphone = .authorized
+            media.snapshot.speechRecognition = .authorized
+            appModel.setScenePhase(.active)
+            #expect(await Self.waitForAdvertisedPermission("microphone", true, appModel: appModel))
+            #expect(appModel.activeGatewayConnectConfig?.nodeOptions.permissions["speechRecognition"] == true)
+            #expect(appModel.activeGatewayConnectConfig?.nodeOptions.permissions["camera"] == false)
+            #expect(appModel.activeGatewayConnectConfig?.stableID == config.stableID)
+            withExtendedLifetime(controller) {}
+        }
+    }
+
+    @MainActor
+    private static func waitForAdvertisedPermission(
+        _ name: String,
+        _ granted: Bool,
+        appModel: NodeAppModel) async -> Bool
+    {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while appModel.activeGatewayConnectConfig?.nodeOptions.permissions[name] != granted,
+              ContinuousClock.now < deadline
+        {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return appModel.activeGatewayConnectConfig?.nodeOptions.permissions[name] == granted
+    }
+}
+
+@MainActor
+private final class StubMediaAuthorization {
+    var snapshot = MediaAuthorizationSnapshot(
+        camera: .notDetermined,
+        microphone: .notDetermined,
+        speechRecognition: .notDetermined)
 }

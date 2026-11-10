@@ -1,0 +1,2 @@
+# PR workspace adoption proves a killed, never-polled background exec no longer blocks publication.
+5

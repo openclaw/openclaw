@@ -1,10 +1,10 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { settleReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
 import type { ReplyDispatchRuntimeInfo } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -116,13 +116,13 @@ describe("embedded run permissions and timeout delivery", () => {
     vi.clearAllMocks();
     const control = new WeakRef({ unowned: true });
     await nextTurn();
-    queryObjects(WeakRef);
+    forceFullGc();
     expect(control.deref()).toBeUndefined();
     const whileCallbacksRetained = snapshots.filter((reference) => reference.deref()).length;
     expect(retainedCallbacks.length).toBe(12);
     retainedCallbacks.length = 0;
     await nextTurn();
-    queryObjects(WeakRef);
+    forceFullGc();
     const afterCallbacksReleased = snapshots.filter((reference) => reference.deref()).length;
     expect({ whileCallbacksRetained, afterCallbacksReleased }).toEqual({
       whileCallbacksRetained: 0,

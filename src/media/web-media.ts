@@ -45,6 +45,7 @@ import {
   getDefaultLocalRootsCore,
   HostReadMediaTypeError,
   LocalMediaAccessError,
+  localMediaNotFoundError,
   readLocalMediaFile,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
@@ -692,9 +693,7 @@ async function loadWebMediaInternal(
           });
         }
         if (err.code === "not-found") {
-          throw new LocalMediaAccessError("not-found", `Local media file not found: ${mediaUrl}`, {
-            cause: err,
-          });
+          throw localMediaNotFoundError(mediaUrl, err);
         }
         if (err.code === "not-file") {
           throw new LocalMediaAccessError(

@@ -1469,7 +1469,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(predicted(measured)).toBe(
         runnerBackend === "blacksmith" ? 240 : runnerBackend === "hybrid" ? 435 : 440,
       );
-      expectPlanFiles(measured, files);
+      expectPlanFiles(
+        measured,
+        files.filter((file) => file !== e2eModel && file !== fastModel),
+      );
       expectEvery(
         measured.flatMap(jobGroups).filter((group) => group.shard_name.startsWith(models)),
         (group) => group.timing_key?.startsWith(`${models}-parallel`),
@@ -1479,13 +1482,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           .flatMap(jobGroups)
           .filter((group) => group.shard_name.startsWith(models));
         expect(modelGroups).toHaveLength(2);
-        expect(
-          modelGroups.map(
-            (group) =>
-              group.includePatterns?.filter((file) => file !== e2eModel && file !== fastModel)
-                .length,
-          ),
-        ).toEqual([1, 1]);
+        expect(modelGroups.map((group) => group.includePatterns?.length)).toEqual([1, 1]);
         modelGroups.forEach((group, index) => {
           seconds[group.timing_key!] = index === 0 ? 180 : 190;
         });
@@ -2711,7 +2708,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const configs = new Set([configPath("cli"), configPath("cli-process")]);
     const restore = selectFixtureProjects((config) => configs.has(config));
     const timings = spyTimings().mockReturnValue({
-      "agentic-cli": 136,
+      "agentic-cli": 130,
     });
     const options = compactOptions("hybrid", "pull-request");
     try {
@@ -2905,6 +2902,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     "prices fully measured tooling selections without discarded siblings on %s",
     (runnerBackend) => {
       const target = "test/scripts/update-restart-module-outcome.test.ts";
+      // Unknown files must cost more than startup headroom regardless of which
+      // siblings the current checkout places in the target's tooling stripe.
+      vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(60);
       const timings = vi
         .spyOn(testTimings, "readToolingFileTimings")
         .mockReturnValue({ [target]: 1 });
@@ -2918,6 +2918,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const unknown = required(selectTests([target], { runnerBackend }));
       expectPlanFiles(unknown, [target]);
       expect(sumSeconds(unknown)).toBeGreaterThan(25);
+      expect(sumSeconds(unknown)).toBeGreaterThanOrEqual(60);
     },
   );
 
@@ -4023,6 +4024,7 @@ function expectImpacts(
 describe("CI changed Node test plan", () => {
   it.each([
     ["ui/src/main.ts", true],
+    ["src/gateway/control-ui-route-preloads.ts", true],
     ["ui/src/pages/chat/chat-gateway.test.ts", false],
     // Erased TSX header imports do not bring Gateway server code into the UI runtime.
     ["packages/gateway-client/src/index.ts", false],

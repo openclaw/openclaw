@@ -31,6 +31,7 @@ const performanceSources = [
     "control-ui-i18n-config.ts",
     "control-ui-i18n-config.json",
     "control-ui-module-attribution.mts",
+    "control-ui-script-coverage.mts",
     "control-ui-optional-assets.ts",
     "record-shared.mjs",
     "regexp.mjs",
@@ -607,7 +608,11 @@ describe("Control UI performance budgets", () => {
           ).join(""),
       );
       for (let index = 0; index < 32; index++) {
-        fixture.writeAsset("extra-" + index + ".css", 53_000, 10_500);
+        fixture.writeAsset(
+          "extra-" + index + ".css",
+          Math.ceil(CONTROL_UI_PERFORMANCE_BUDGETS.totalCssRawBytes / 32) + 1,
+          Math.ceil(CONTROL_UI_PERFORMANCE_BUDGETS.totalCssGzipBytes / 32) + 1,
+        );
       }
       const summary = path.join(fixture.rootDir, "summary.md");
       const args = mode === "report-only" ? ["--report-only"] : ["--base-dist", fixture.distDir];

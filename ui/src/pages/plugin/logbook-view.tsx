@@ -301,7 +301,7 @@ function Ask(props: { model: LogbookModel; actions: LogbookActions }) {
         }}
       >
         <input
-          class="logbook-ask__input"
+          class="input logbook-ask__input"
           type="text"
           value={question()}
           placeholder={t("logbook.ask.placeholder")}
@@ -341,7 +341,7 @@ export function Logbook(props: LogbookProps) {
   const timelineRead = createMemo(() => completion());
   const load = (options?: Parameters<LogbookModel["load"]>[0]) => {
     const admitted = model.load(options);
-    void setCompletion(admitted);
+    void setCompletion(model.timelineRead);
     return admitted;
   };
   const readTimeline = () => {

@@ -20,6 +20,7 @@ import { resolveRuntimeWorkerArgv } from "../../../infra/runtime-worker-url.js";
 import { TUNNEL_EXIT_UNAVAILABLE, type TunnelReadyMessage } from "../tunnel-ipc.js";
 import { createTunnelSupervisor, type TunnelSupervisor } from "../tunnel-supervisor.js";
 import { loadIrohBinding, type IrohBinding } from "./addon.js";
+import { createKeyFile, ed25519PublicKeyHex, stagedKeyPath } from "./keyfile.js";
 import { createTunnelTestClient } from "./tunnel-client.test-support.js";
 
 // Runs the real tunnel child (production entry, supervisor launch path) against a
@@ -266,6 +267,71 @@ describe.skipIf(!binding)("tunnel child", () => {
     },
     30_000,
   );
+});
+
+// A linked claw's child loads only the K_srv its binding names (enrollment.md, "Key files at every start").
+describe.skipIf(!binding)("tunnel child for a linked claw", () => {
+  const supervisors: TunnelSupervisor[] = [];
+  afterAll(async () => {
+    await Promise.all(supervisors.map((started) => started.stop()));
+  });
+
+  // Starts a supervised production child bound to `expected`; resolves with its first settled status.
+  async function startBound(keyPath: string, expected: string) {
+    const entry = resolveRuntimeProcessEntrypointUrl("openclawIdTunnel");
+    const bound = createTunnelSupervisor({
+      launch: { entry, execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1) },
+      startMessage: () => ({
+        type: "start",
+        relayUrl: "http://127.0.0.1:9/",
+        keyPath,
+        expectedEndpointKey: expected,
+        bindAddr: "127.0.0.1:0",
+        ingress: { socketPath: path.join(dir, "ingress.sock"), proxyToken: PROXY_TOKEN },
+        forwardedProto: "https",
+      }),
+      log: { info: () => {}, warn: () => {} },
+    });
+    supervisors.push(bound);
+    bound.start();
+    await vi.waitFor(() => expect(["running", "key_refused"]).toContain(bound.status().state), {
+      timeout: 20_000,
+    });
+    return bound.status();
+  }
+
+  it("serves on the key file that holds the bound K_srv", async () => {
+    const keyPath = path.join(dir, "bound", "endpoint.key");
+    const expected = `iroh:${ed25519PublicKeyHex(createKeyFile(keyPath))}`;
+    expect(await startBound(keyPath, expected)).toMatchObject({
+      state: "running",
+      endpointKey: expected,
+    });
+  }, 30_000);
+
+  it("promotes a staged K_srv that the binding names", async () => {
+    const keyPath = path.join(dir, "staged", "endpoint.key");
+    createKeyFile(keyPath);
+    const next = createKeyFile(stagedKeyPath(keyPath));
+    const expected = `iroh:${ed25519PublicKeyHex(next)}`;
+    expect(await startBound(keyPath, expected)).toMatchObject({
+      state: "running",
+      endpointKey: expected,
+    });
+    expect(fs.readFileSync(keyPath)).toEqual(next);
+    expect(fs.existsSync(stagedKeyPath(keyPath))).toBe(false);
+  }, 30_000);
+
+  it("stays off without creating a key when the bound K_srv is gone", async () => {
+    const keyPath = path.join(dir, "lost", "endpoint.key");
+    const expected = `iroh:${ed25519PublicKeyHex(createKeyFile(keyPath))}`;
+    fs.rmSync(keyPath);
+    expect(await startBound(keyPath, expected)).toEqual({
+      state: "key_refused",
+      reason: "keys_missing",
+    });
+    expect(fs.readdirSync(path.dirname(keyPath))).toEqual([]);
+  }, 30_000);
 });
 
 // Forks the production child entry the way its supervisor does.

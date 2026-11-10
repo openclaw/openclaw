@@ -217,6 +217,78 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
+- X spend, pinned main `ee3ec605a59c`: remove one midnight reservation replay
+  already covered by the stronger limits table row. The keeper also checks
+  idempotent settlement, exhaustion and release; separate cases retain stored
+  receipt periods, reset and restart coverage. Spend and API-consumer suites pass
+  before/after on one Blacksmith Testbox (37→36 cases). Ten fewer test lines;
+  production unchanged. Format, lint, types and both unused-file scans pass.
+  Every dependency/export phase ran; unchanged Gateway, UI and changelog export
+  findings remain. Exact-head CI and security passed;
+  [194931](https://github.com/openclaw/openclaw/pull/194931) merged as `9a848bb13bfb`.
+
+- OC Path, pinned main `a606a90b4bf5`: remove one malformed-line append replay
+  and two newline counts implied by exact output equality. The unchanged JSONL
+  edit/emission keepers retain object rendering, malformed/blank bytes, ordering
+  and CRLF coverage. Four focused suites pass before/after (25→24 cases) on one
+  Blacksmith Testbox. Ten fewer test lines; production unchanged. Format, lint,
+  types and both unused-file scans pass. All dependency/export phases ran; the
+  unchanged UI export findings remain. Exact-head CI and security passed;
+  [194908](https://github.com/openclaw/openclaw/pull/194908) merged as `1a505759c0fe`.
+
+Cua, pinned main `058133da525b`: remove the scalar scroll-enum type assertion
+from the text/key dispatch case. The installed-SDK enum parity test, both
+platform scroll mappings and the SDK forwarding case remain unchanged. Both
+focused suites pass before/after (59→59 cases), with one fewer test line and no
+production changes. Format, typed lint, extension types and both unused-file
+scans pass. Both dependency phases and all three export phases ran with unchanged
+Gateway, UI and release-tool findings. Exact-head CI and landing remain pending.
+
+Batch115, pinned main `230f05c7ca37`, repairs the read-coalescing recorder
+on the actual socket returned by the mock constructor. The unchanged browser
+case passed; adding a positive assertion for its already-held `models.list`
+request failed on the original observer. The repaired observer records that same
+request and clears its exact ID on response. One final untraced full-file run
+passed (1/1, 16.88s Vitest; 61.647s routed), preserving all existing request
+counts, metadata/branch-read oracles and the global duplicate negative. A prior
+in-memory diagnostic correlated 11 unique sends and 11 responses with the actual
+Gateway fixture requests; no current overlap occurred. The historical overlapping
+`sessions.describe` signature remains an unattributed lead, not a production
+verdict or a repaired coalescing defect. The case inventory and source census are
+unchanged. The +20-line allocation covers actual-instance hooks and the paired
+held-request/response observer checks; production and shared fixtures are unchanged.
+Targeted typecheck, typed lint, formatting and the exact growth allocation passed.
+PR [194212](https://github.com/openclaw/openclaw/pull/194212) merged as
+`838f4bfc4d83` after exact-head CI and security passed.
+
+Diagnostics OTel, pinned main `b97bc15cd7af`: remove the retired NodeSDK
+comparison helper after production moved to a private `BasicTracerProvider`.
+Keep all 11 sampler rows, the case covering six span-limit variables, and the
+unchanged real-OTLP start/stop/restart suite. Both suites pass before and after
+(33→33 cases); 21 fewer test lines, production unchanged. Format, typed lint,
+extension types and both unused-file scans pass. Both dependency phases and all
+three export phases completed with unchanged Gateway, UI and release-tool
+export findings. Exact-head CI and landing remain pending.
+
+Core tool-result classification, pinned main `9b8aa392679f`: consolidate three
+duplicate cases into the existing table that checks both classification APIs.
+Carry all six distinct completed/failure/exit inputs into that table; preserve
+every existing row and network-error, authenticated-error and hostile-reflection
+case. The unchanged baseline passed all 28 cases in
+[CI job 128652430604](https://github.com/openclaw/openclaw/actions/runs/42455052153/job/128652430604)
+at `f4976c968539`; the owner, test, dependency and harness inputs match the pinned
+base. The containing workflow failed elsewhere. The candidate has 31 expanded
+cases, 11 rather than 14 declarations, and 20 fewer test lines; production is
+unchanged. At `32cb09b3f0ee`, all 31 cases passed on both Node and Bun in
+[CI job 128671390378](https://github.com/openclaw/openclaw/actions/runs/42461299705/job/128671390378);
+its separate broker-child exit-code assertion failed. Core types and lint passed.
+All seven removal-scan phases completed in
+[CI job 128671385713](https://github.com/openclaw/openclaw/actions/runs/42461299705/job/128671385713).
+Both unused-file scans were clean; export scans found only the unchanged UI
+`EventLoadProgress` export, removed by incoming main during conflict integration.
+The integration preserved the classification test and both production owners.
+PR: [195114](https://github.com/openclaw/openclaw/pull/195114).
+
 Batches113–118, pinned main `a07facd84480`, used one native checkout and
 separate scoped proofs. Unchanged baselines passed: destinations6, History1,
 read coalescing1, fallback8, dictation33 and annotation lifetime11.
@@ -332,16 +404,144 @@ permission to delete without root qualification.
 
 - Exact root/scripts records cover129 accepted paths (reconciled from the earlier117), including: the seven earlier retention/APNs/appcast/architecture/Buzz/descendant/channel-read records, the ClawRouter managed-Gateway fixture, all ten `cli-json-stdout` entry suites, CLI message authority, SQLite maintenance, provider-stall cancellation and Codex account usage, managed proxy and node cancellation. The latter four retain1/1,1/2,1/3 and1/1 physical/expanded cases respectively. All are source-only records and add no aggregate credit: overlap with older root/docs/scripts summaries is unresolved. The gross test/scripts inventory remains1,606 candidate paths, not certified unread paths.
 
+### Current-source script follow-up
+
+At `e08aa74ea39e35d01ba8e8f84e317747aba1bf3f`, eight suites added after the frozen
+census were reviewed with their owners, relevant callers, support and history.
+All 23 declarations / 36 expanded cases are retained. These are standalone
+counts, not additions to the overlapping root/scripts aggregate. This is source
+review only: no runtime qualification, test removal or production change.
+
+| Suite under `test/scripts/`           | Declarations / cases | Retained contract                                                                                                             |
+| ------------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `generated-output-utils.test.ts`      | 5 / 12               | Exact write/check results, empty output, one-read cost, metadata/mode preservation and real blocked-parent errors.            |
+| `package-root-modules.test.ts`        | 3 / 3                | Independent parser oracle, packaged sibling imports and transitive closure with a missing-file diagnostic.                    |
+| `perf-gc-collections.test.ts`         | 1 / 1                | Inclusive start/exclusive end, append behavior across observer batches and the next measurement window.                       |
+| `setup-node-env-git.test.ts`          | 5 / 7                | Actual setup shell, privilege selection, bounded installation, capability recheck and failure propagation.                    |
+| `shared-fixture-isolation.test.ts`    | 2 / 3                | Real enclosing Git repositories, ignored archive discovery and an authoritative empty root index.                             |
+| `stylelint-selector-indexing.test.ts` | 5 / 5                | Selector semantics and normalized allowances scoped by identity, file, context and occurrence count; stale-allowance removal. |
+| `vitest-declared-inputs.test.ts`      | 1 / 2                | Real dependency recording and selected-versus-full failure oracles for archive and manifest inputs.                           |
+| `vitest-worker-run.test.ts`           | 1 / 3                | Borrowers settle after close, listeners detach and disposal preserves failures, including rejection before readiness.         |
+
+The package parser oracle cannot replace manifest membership or missing-file
+proof. Mocked inventory and UI coordinator tests cannot replace the real nested
+Git and worker-owner boundaries. No safe consolidation was identified.
+
+### Adaptive CI follow-up
+
+At `9bdea97f3c1589841d1c1cf81a9bea7ae70886aa`, eight adaptive-CI suites were
+reviewed with their owners, callers, support and history: 40 declarations / 85
+expanded cases. These standalone counts do not add to the overlapping
+root/scripts aggregate. No safe removal or consolidation was identified.
+
+| Suite under `test/scripts/`      | Declarations / cases | Retained contract                                                                                                 |
+| -------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ci-adaptive-costs.test.ts`      | 7 / 7                | Setup and audit costs, per-execution billing rounding, unknown prices and real CLI output.                        |
+| `ci-adaptive-selection.test.ts`  | 4 / 11               | Full scheduled inventory, conservative fallback, incomplete history and recommendations that only add candidates. |
+| `ci-adaptive-decisions.test.ts`  | 1 / 2                | Revision/tree-bound comparisons in shallow checkouts and dirty-checkout fallback.                                 |
+| `ci-adaptive-evaluation.test.ts` | 4 / 10               | Project-qualified outcomes, unavailable evidence, source/timing validation and CLI reports.                       |
+| `ci-adaptive-priors.test.ts`     | 8 / 29               | Bounded tree comparisons, artifact provenance, cutoff, consumer identity and unavailable-network fallback.        |
+| `ci-adaptive-model.test.ts`      | 2 / 2                | Project-qualified dependencies, unknown inputs, validated model data and outcome-independent ranking.             |
+| `ci-adaptive-jev.test.ts`        | 5 / 13               | Opaque identity, complete responses, provider fallback, shared deadline and usage accounting.                     |
+| `ci-adaptive-markdown.test.ts`   | 9 / 11               | Content-qualified omissions, changed dependencies, symlinks and a shared selection graph.                         |
+
+Three fixture repairs retain the existing declarations: give same-path projects
+different dependencies; run invalid-tree cases against an isolated, bounded Git
+tree with a successful control; preserve the comparison tree when changing only
+the base revision. Previously the latter two checks could reject at unrelated
+guards. The source classification was R77/F8 expanded cases, with no C/D cases.
+All eight suites passed on the original and repaired tests (85 cases) with
+Node 26.13.0 on macOS. Eight deliberate owner mutations escaped the original
+tests and failed the repaired tests: project identity, tree identity,
+completeness, path, mode, duplicate path, byte bound and comparison base.
+Source bytes were restored after each mutation. No production code changed.
+
+### CI observation and timing follow-up
+
+At `2d5b14db1a64086d838c3f6a096a29900c299dfb`, four suites were reviewed with
+their owners, callers, support, history and CI routing: 23 declarations / 34
+expanded cases. These standalone counts do not add to the overlapping
+root/scripts aggregate. All cases remain; no safe deletion or consolidation
+was identified.
+
+| Suite under `test/scripts/`        | Declarations / cases | Retained contract                                                                                                                                         |
+| ---------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci-test-observations.test.ts`     | 14 / 17              | Checkout identity, immutable launch inputs, native outcomes, dependency graphs, bounded exports, privacy, malformed evidence and the real export command. |
+| `ci-shard-timings-refresh.test.ts` | 3 / 11               | Runtime-specific wall costs, selection identity, runner exclusions and unchanged timing bytes on invalid evidence.                                        |
+| `vitest-shard-timings.test.ts`     | 4 / 4                | Duplicate ownership rejection, whole-config identity, reordered selection history and named-shard duration persistence.                                   |
+| `weighted-test-shards.test.ts`     | 2 / 2                | Deterministic weighted assignment across batches and rejection of an empty shard list.                                                                    |
+
+One mixed declaration retains its interrupted/missing-dependency proof and
+repairs the unavailable-repository control. Previously it sent a terminal event
+without inventory, rejecting before any repository read. It now sends valid
+inventory and requires the existing snapshot to remain byte-identical.
+The named-shard timing test is renamed to describe its duration roundtrip;
+unused persisted metadata fields are not restored as incidental assertions.
+All four suites passed on the original and repaired tests (34 cases) under
+Node 26.13.0 on macOS. A deliberate owner mutation that ignored the configured
+repository root passed the original control and failed the repaired snapshot
+assertion. Production and test bytes were restored after the mutation.
+The baseline took 28.67 seconds and the candidate 22.67 seconds wall time;
+these single runs establish correctness, not a performance improvement.
+
+### PR preparation follow-up
+
+At `3f805fa2e950994cdad3f9e857eb966cf5fa8103`, three preparation suites were
+reviewed with their owners, callers, support, history and CI routing:
+24 declarations / 56 expanded cases, with R53/F3 by expanded case.
+These standalone counts do not add to the overlapping root/scripts aggregate.
+
+| Suite under `test/scripts/`    | Original declarations / cases | Retained contract                                                                                                    |
+| ------------------------------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `pr-prepare-preflight.test.ts` | 2 / 12                        | Mode selection and real wrapper rejection before observations, locks or evidence retirement.                         |
+| `pr-prepare-testbox.test.ts`   | 5 / 13                        | Remote argument normalization, input rejection, ordered stages, receipt integrity and last-success selection.        |
+| `pr-prepare-gates.test.ts`     | 17 / 31                       | Local and hosted qualification, source/alias authority, Git publication, evidence replacement and workspace pinning. |
+
+The stamp fixture now has two valid successes, so it distinguishes first-match
+from last-match selection. The runtime-commit case requires exact-head verifier
+dispatch as well as excluding parent reuse. The existing local-build fixture
+now runs real workspace pinning and checks its plugin root at bootstrap;
+the mock-only ordering case is consolidated into that keeper.
+The candidate has 23 declarations / 55 expanded cases and 12 fewer test lines.
+Qualification at `ac87d3b362f43d24e25aebbb241dfb7dd692e14a` used an independently
+installed native PR checkout. The baseline passed all 56 cases (140.94 seconds
+wall time); the candidate passed all 55 (108.38 seconds). These single runs do
+not establish a speedup. A separate changed-suite run passed 43 cases in 23.52
+seconds wall time: gates reported 6.495 seconds and Testbox 15.010 seconds.
+
+Selected original tests passed with first-success stamp selection, skipped
+exact-head verification and no-op real pinning. Their repaired keepers failed
+under those same mutations. Reversing pin/bootstrap order failed both the old
+ordering test and its keeper. The pinning mutations stopped before commands
+were recorded and surfaced as a missing fixture commands file; the other two
+failed their stamp and verifier assertions. All production and test bytes were
+restored exactly after qualification.
+
+Targeted tooling typecheck, lint, formatting and diff checks passed. The
+production and full-tree unused-file scans passed with zero entries. Both
+`deadcode:dependencies` (its export phase) and `deadcode:exports` reported exports
+in four untouched files: `src/daemon/launchd.ts`,
+`src/plugins/provider-external-auth.ts`, `src/plugins/provider-runtime.ts` and
+`ui/src/pages/dashboards/dashboard-tools.tsx`. Script unused exports passed with
+zero entries. The four files and both Knip configurations match the frozen base;
+these unrelated findings remain recorded rather than expanding this patch.
+
+Independent preservation review and full local ClawSweeper review found no
+lost contract or actionable source finding. Hosted CI and landing remain
+pending; local proof does not establish either.
+
 ## Pending qualification and proof repairs
 
-- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: X midnight-spend replay; Cua enum and Twitch settled flag; OC Path malformed-line replay and repeated round-trip assertion. Each needs current-source and runtime keeper qualification.
-- Transfer rows before consolidating core failed-tool classification, CodeMode deadline duplication, Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
+- Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
+- Transfer rows before consolidating Android loading/blank-auth, persisted outbox keys/epochs, terminal initial projection, and native PCM/decoder/reader cases. Keep typed host-error precedence and active-run settlement.
+- Retain the CodeMode worker-leg deadline case: its real warmed worker and interruption path are distinct from the cancellation table's typed host-error precedence. Both suites keep their active-run settlement checks; this is a source-only retention decision.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
-- Diagnostics OTel: obsolete NodeSDK replay only; preserve every private-provider sampler row and six span-limit probes. Content capture proof is a separate repair.
+- Diagnostics OTel: the NodeSDK replay removal is runtime-qualified above; content capture proof remains a separate repair.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.
 - CI merge-preparation source/comment candidates remain pending Linux keeper proof; the independent Git-owner admission guard stays. Do not treat a stopped Testbox allocation as a product result.
+- The `gates.sh` changed-file owner list omits `pr-prepare-testbox.test.ts`; full tooling includes it and direct edits select it. Repair that routing separately from the preparation proof audit.
 
 Remaining: classify unread core/plugin/native/script declarations and shared
 fixtures; qualify candidates at their actual boundaries; validate and land owner

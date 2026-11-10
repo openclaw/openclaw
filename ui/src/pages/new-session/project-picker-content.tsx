@@ -79,12 +79,15 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       canCallGatewayMethod(
         props.params.context?.gateway.snapshot,
         "projects.searchRemote",
-        "operator.read",
+        "operator.write",
       );
     const projectAddAvailable =
       !props.nativeTerminal &&
+      // Remote and pasted repositories open through projectGitUrl; the Gateway
+      // keeps that write-scoped so restricted roles cannot use its GitHub identity.
       readSessionMethodAccess(props.params.context?.gateway.snapshot, {
         method: "sessions.create",
+        params: { projectGitUrl: "" },
         sessionScope: true,
       }).allowed;
     return {
@@ -207,6 +210,14 @@ export function ProjectPickerContent(props: ProjectChipProps) {
         })
       : null;
   });
+  const remoteProjects = createMemo(() => {
+    const localIdentities = new Set(
+      localProjects().map((project) => project.repositoryIdentity?.toLowerCase()),
+    );
+    return (projectSearchResult()?.projects ?? []).filter(
+      (project) => !localIdentities.has(project.fullName.toLowerCase()),
+    );
+  });
   const browseButton = () => (
     <button
       type="button"
@@ -262,6 +273,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       ) : (
         <div class="new-session-page__environment-layout" data-chat-autotype-exempt>
           <HeaderSearch
+            class="new-session-page__project-search"
             typeToSearchWhenOpen
             title={t("newSession.projects")}
             label={t("newSession.projectSearchPlaceholder")}
@@ -366,27 +378,50 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                 </button>
               </div>
             </Show>
-            <Loading on={projectsReady()}>
-              <For each={localProjects()} keyed={(project) => project.id}>
-                {(project) => {
-                  const icon = <Icon name="book" />;
-                  return (
-                    <SessionMenuItem
-                      item={{
-                        value: `project:${project().id}`,
-                        label: project().displayName,
-                        icon,
-                        sub: project().repositoryIdentity,
-                        checked: props.params.place.browser.projectId === project().id,
-                        title: project().repositoryIdentity ?? project().repoRoot,
-                        onSelect: () => props.params.place.selectProjectId(project().id),
-                      }}
-                      submitting={props.params.submitting}
-                    />
-                  );
-                }}
-              </For>
-            </Loading>
+            <Show when={!props.nativeTerminal}>
+              <MenuHeading
+                class="new-session-page__menu-title"
+                label={t("newSession.localProjects")}
+              />
+              <Show when={!projectsReady() && !projectCatalogError()}>
+                <div class="new-session-page__project-status" role="status">
+                  {t("common.loading")}
+                </div>
+              </Show>
+              <Loading on={projectsReady()}>
+                <For
+                  each={localProjects()}
+                  keyed={(project) => project.id}
+                  fallback={
+                    projectsReady() && !projectCatalogError() ? (
+                      <div class="new-session-page__menu-note">
+                        {view().query
+                          ? t("newSession.noLocalProjectMatches")
+                          : t("newSession.noLocalProjects")}
+                      </div>
+                    ) : undefined
+                  }
+                >
+                  {(project) => {
+                    const icon = <Icon name="book" />;
+                    return (
+                      <SessionMenuItem
+                        item={{
+                          value: `project:${project().id}`,
+                          label: project().displayName,
+                          icon,
+                          sub: project().repositoryIdentity,
+                          checked: props.params.place.browser.projectId === project().id,
+                          title: project().repositoryIdentity ?? project().repoRoot,
+                          onSelect: () => props.params.place.selectProjectId(project().id),
+                        }}
+                        submitting={props.params.submitting}
+                      />
+                    );
+                  }}
+                </For>
+              </Loading>
+            </Show>
             {view().cloneInput && view().projectAddAvailable ? (
               <SessionMenuItem
                 item={{
@@ -428,8 +463,15 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                     ) : undefined}
                     {
                       <For
-                        each={projectSearchResult()?.projects ?? []}
+                        each={remoteProjects()}
                         keyed={(project) => project.cloneUrl}
+                        fallback={
+                          projectSearchResult() ? (
+                            <div class="new-session-page__menu-note">
+                              {t("newSession.noAdditionalGithubProjects")}
+                            </div>
+                          ) : undefined
+                        }
                       >
                         {(project) => {
                           const icon = <Icon name="book" />;

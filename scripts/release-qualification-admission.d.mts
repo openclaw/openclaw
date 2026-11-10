@@ -50,6 +50,7 @@ export type QualificationCoverage = {
     requiredJobs: string[];
   }>;
   requiredParentJobs: string[];
+  exemptions?: import("./lib/release-validation-waivers.mjs").QualificationExemption[];
 };
 export type QualificationAdmission = {
   kind: "openclaw.release-qualification-admission/v1";
@@ -87,6 +88,12 @@ export function validateQualificationAdmissionRequest(
   request: unknown,
 ): QualificationAdmissionRequest;
 export function qualificationAdmissionArtifactName(runId: number, runAttempt: number): string;
+export function verifyReleaseQualificationOperators(
+  repository: string,
+  actor: unknown,
+  triggeringActor: unknown,
+  runGh: QualificationAdmissionGh,
+): { operator: { id: number; login: string }; triggeringOperator: { id: number; login: string } };
 export function produceQualificationAdmission(params: {
   request: QualificationAdmissionRequest;
   producer: QualificationAdmissionProducer;
@@ -116,3 +123,8 @@ export function verifyQualificationAdmission(params: {
   runGh?: QualificationAdmissionGh;
   downloadArchive?: (args: string[]) => Uint8Array;
 }): QualificationAdmission;
+
+/** Authenticate the admission receipt for evidence acquisition, not admission. */
+export function qualificationAdmissionSupportingEvidence(
+  params: Parameters<typeof verifyQualificationAdmission>[0],
+): NonNullable<QualificationCoverage["exemptions"]>[number]["supportingEvidence"][];
