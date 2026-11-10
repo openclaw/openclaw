@@ -324,6 +324,17 @@ describe("fetchBrowserJson loopback auth", () => {
     });
   });
 
+  it("keeps the same crash guidance when Playwright appends its diagnostic block", async () => {
+    dispatchError(500, {
+      error: "page.screenshot: Target crashed\nCall log:\n  - taking page screenshot",
+    });
+
+    await expectThrownBrowserFetchError("/screenshot", {
+      contains: ["page.screenshot: Target crashed", "Open the page again in a new tab"],
+      omits: [retry, noRetry, "browser is currently unavailable"],
+    });
+  });
+
   it("does not repeat tab-crash guidance already present in the service error", async () => {
     dispatchError(409, { error: new BrowserTargetCrashedError().message });
 

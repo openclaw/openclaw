@@ -42,6 +42,12 @@ describe("browser target crash state", () => {
         message: new BrowserTargetCrashedError().message,
       },
     );
+    // Playwright appends a diagnostic block after the crash headline.
+    expect(
+      toBrowserTargetCrashedError(
+        new Error("page.screenshot: Target crashed\nCall log:\n  - taking page screenshot"),
+      ),
+    ).toMatchObject({ name: "BrowserTargetCrashedError" });
     expect(toBrowserTargetCrashedError(new BrowserTargetCrashedError())).toBeInstanceOf(
       BrowserTargetCrashedError,
     );
@@ -55,6 +61,11 @@ describe("browser target crash state", () => {
     expect(toBrowserTargetCrashedError(new Error("target crashed"))).toBeNull();
     expect(toBrowserTargetCrashedError(new Error("Error: target crashed"))).toBeNull();
     expect(toBrowserTargetCrashedError(new Error("renderer crashed while loading"))).toBeNull();
+    // The crash frame is the headline only; a caller error that mentions it
+    // inside its own diagnostic block is still a caller error.
+    expect(
+      toBrowserTargetCrashedError(new Error("page.evaluate: boom\nCall log:\n  - Target crashed")),
+    ).toBeNull();
   });
 
   it("does not translate a page-script error into crash guidance", () => {
@@ -73,5 +84,17 @@ describe("browser target crash state", () => {
     expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json).toHaveBeenCalledWith({ error: new BrowserTargetCrashedError().message });
     expect(new BrowserTargetCrashedError().message).not.toContain("currently unavailable");
+  });
+
+  it("returns the same 409 when Playwright appends its diagnostic block", () => {
+    const res = fakeResponse();
+
+    handleRouteError(
+      res as unknown as BrowserResponse,
+      new Error("page.screenshot: Target crashed\nCall log:\n  - taking page screenshot"),
+    );
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({ error: new BrowserTargetCrashedError().message });
   });
 });

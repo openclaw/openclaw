@@ -27,11 +27,15 @@ export class BrowserTargetCrashedError extends Error {
 
 // Only the browser's own crash frame proves a dead renderer. Page-script and
 // locator errors can contain the same words while the renderer is healthy, so
-// match the exact Chrome/Playwright message instead of scanning substrings.
-const BROWSER_TARGET_CRASH_MESSAGE_RE = /^(?:[a-z][\w.]*: )?Target crashed$/;
+// match the exact Chrome/Playwright headline instead of scanning substrings.
+// Playwright appends its diagnostic block after that headline, for example
+// `page.screenshot: Target crashed\nCall log:\n  - taking page screenshot`, so
+// only the first line is the frame; later lines stay out of the match.
+const BROWSER_TARGET_CRASH_HEADLINE_RE = /^(?:[a-z][\w.]*: )?Target crashed$/;
 
 export function isBrowserTargetCrashMessage(message: string): boolean {
-  return BROWSER_TARGET_CRASH_MESSAGE_RE.test(message.trim());
+  const [headline = ""] = message.trim().split("\n", 1);
+  return BROWSER_TARGET_CRASH_HEADLINE_RE.test(headline.trimEnd());
 }
 
 /** Map Playwright/CDP crash wording onto the tab-scoped error. */
