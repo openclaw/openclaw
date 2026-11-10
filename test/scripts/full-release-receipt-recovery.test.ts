@@ -178,8 +178,12 @@ function aggregateFixture() {
     vi.fn(async (input: string | URL | Request) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       downloads.push(url.pathname);
-      if (url.pathname.endsWith("/artifacts/444/zip")) return new Response(new Uint8Array(bytes));
-      if (url.pathname.endsWith("/artifacts/444")) return Response.json(observationArtifact);
+      if (url.pathname.endsWith("/artifacts/444/zip")) {
+        return new Response(new Uint8Array(bytes));
+      }
+      if (url.pathname.endsWith("/artifacts/444")) {
+        return Response.json(observationArtifact);
+      }
       throw new Error("Unexpected fixture fetch: " + url.pathname);
     }),
   );
@@ -252,7 +256,7 @@ describe("receipt-backed aggregate recovery", () => {
         vi.stubGlobal(
           "fetch",
           vi.fn(async (input: string | URL | Request) =>
-            String(input).endsWith("/zip")
+            (input instanceof Request ? input.url : input.toString()).endsWith("/zip")
               ? new Response(new Uint8Array(changed))
               : Response.json(test.observationArtifact),
           ),
@@ -493,7 +497,9 @@ describe("receipt-backed aggregate recovery", () => {
       vi.fn(async (input: string | URL | Request) => {
         const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
         const id = expectDefined(path.split("/")[6], "artifact URL");
-        if (!path.endsWith("/zip")) return Response.json(metadata.get(id));
+        if (!path.endsWith("/zip")) {
+          return Response.json(metadata.get(id));
+        }
         downloads.push(id);
         return new Response(new Uint8Array(expectDefined(archives.get(id), "archive")));
       }),

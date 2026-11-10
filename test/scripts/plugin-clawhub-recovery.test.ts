@@ -274,7 +274,7 @@ describe("sealed ClawHub recovery manifest", () => {
       const mutations: string[] = [];
       const messages: string[] = [];
       const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
-        const url = String(input);
+        const url = input instanceof Request ? input.url : input.toString();
         if (init?.method === "POST") {
           mutations.push(url);
           return Response.json({

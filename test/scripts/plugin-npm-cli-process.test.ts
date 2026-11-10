@@ -52,16 +52,20 @@ it(
     const categoryCounts = (name: string) => {
       const categories = { live: 0, immutable: 0, carrier: 0, selectedPackage: 0 };
       for (const { route = "" } of requests(name)) {
-        if (route === "actions/artifacts/900/zip") categories.carrier += 1;
-        else if (route === "actions/artifacts/9002/zip") categories.selectedPackage += 1;
-        else if (
+        if (route === "actions/artifacts/900/zip") {
+          categories.carrier += 1;
+        } else if (route === "actions/artifacts/9002/zip") {
+          categories.selectedPackage += 1;
+        } else if (
           route.endsWith("/zip") ||
           route.startsWith("contents/") ||
           route.endsWith("/logs") ||
           /\/attempts\/[0-9]+\/jobs\?/u.test(route)
-        )
+        ) {
           categories.immutable += 1;
-        else categories.live += 1;
+        } else {
+          categories.live += 1;
+        }
       }
       return categories;
     };

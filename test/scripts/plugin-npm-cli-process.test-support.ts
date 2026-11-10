@@ -241,7 +241,7 @@ export async function createNpmCliProcessFixture(root: string) {
     if (id === f.runId) {
       for (const job of [
         ...parentJobs,
-        ...jobs.filter((job) => job.name === "Seal release execution plan"),
+        ...jobs.filter((entry) => entry.name === "Seal release execution plan"),
       ]) {
         responses["actions/jobs/" + job.id + "/logs"] = {
           encoding: "utf8",
@@ -292,7 +292,9 @@ export async function createNpmCliProcessFixture(root: string) {
       },
     ],
   });
-  for (const [id, artifact] of artifacts) json("actions/artifacts/" + id, artifact);
+  for (const [id, artifact] of artifacts) {
+    json("actions/artifacts/" + id, artifact);
+  }
   const recovery = addRecoveryGraph({
     f,
     producer,

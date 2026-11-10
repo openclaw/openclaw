@@ -163,7 +163,9 @@ describe("exact artifact streaming digest verification", () => {
       immutableReads: replay(),
     });
     expect(result.archiveBytes).toEqual(Buffer.alloc(4, 7));
-    expect(params.fetchImpl.mock.calls.map(([url]) => String(url))).toEqual([
+    expect(
+      params.fetchImpl.mock.calls.map(([url]) => (url instanceof Request ? url.url : url.toString())),
+    ).toEqual([
       "https://api.github.com/repos/openclaw/openclaw/actions/artifacts/777",
     ]);
 
@@ -180,7 +182,11 @@ describe("exact artifact streaming digest verification", () => {
     await expect(
       downloadExactActionsArtifactArchive({ ...params, immutableReads: replay() }),
     ).rejects.toThrow(/does not match/iu);
-    expect(params.fetchImpl.mock.calls.every(([url]) => !String(url).endsWith("/zip"))).toBe(true);
+    expect(
+      params.fetchImpl.mock.calls.every(
+        ([url]) => !(url instanceof Request ? url.url : url.toString()).endsWith("/zip"),
+      ),
+    ).toBe(true);
   });
 
   it("rejects changed remote identity before reading the binary body", async () => {

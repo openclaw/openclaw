@@ -1,2 +1,2 @@
 # Regression for authenticated receipt replay, raw-transport CLI consumers, live gates, and unknown dispatch/registry outcomes.
-1413
+1382

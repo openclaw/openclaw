@@ -245,8 +245,8 @@ export function verifyReceiptRecoveryAuthority(repository, producer, completed =
   return run;
 }
 
-async function readPayload(repository, artifact, workflowSha, deps, mode = "archive", metadata) {
-  metadata ??= await deps.client.getArtifact(artifact.id);
+async function readPayload(repository, artifact, workflowSha, deps, mode, providedMetadata) {
+  const metadata = providedMetadata ?? (await deps.client.getArtifact(artifact.id));
   const expected = {
     repository,
     runId: Number(artifact.runId),
