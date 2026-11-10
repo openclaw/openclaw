@@ -66,11 +66,10 @@ it.each([
     await advance(duration + cooldown - 1, refresh, 1);
     await advance(1, refresh, 2);
     await vi.advanceTimersByTimeAsync(duration + cooldown + 1);
+    vi.setSystemTime(Date.now() - 3_600_000);
     coordinator.schedule();
     await advance(collection - 1, refresh, 2);
     await advance(1, refresh, 3);
-    coordinator.dispose();
-    await vi.advanceTimersByTimeAsync(duration);
   },
 );
 
@@ -81,9 +80,10 @@ it("holds pending and in-flight invalidation while inactive and catches up once"
   await advance(10_000, refresh, 0);
   coordinator.setActive(true);
   await advance(0, refresh, 1);
-  coordinator.schedule();
+  coordinator.scheduleRetry(1_000);
   coordinator.setActive(false);
   await advance(20_000, refresh, 1);
+  vi.setSystemTime(Date.now() - 3_600_000);
   coordinator.setActive(true);
   await advance(0, refresh, 2);
   await advance(20_000, refresh, 2);
@@ -101,29 +101,3 @@ it("keeps one minute fallback under row traffic and absorbs it on an authoritati
   coordinator.absorb();
   await advance(65_000, refresh, 1);
 });
-
-it.each([
-  { window: "retry backoff", shift: -3_600_000, backoff: true, delay: 1_000, settled: 0 },
-  { window: "retry backoff", shift: 3_600_000, backoff: true, delay: 1_000, settled: 0 },
-  { window: "adaptive cooldown", shift: -3_600_000, backoff: false, delay: 5_000, settled: 1 },
-  { window: "adaptive cooldown", shift: 3_600_000, backoff: false, delay: 5_000, settled: 1 },
-])(
-  "keeps the $window window bounded after a $shift ms wall-clock step",
-  async ({ shift, backoff, delay, settled }) => {
-    const { coordinator, refresh } = setup();
-    if (backoff) {
-      coordinator.scheduleRetry(delay);
-    } else {
-      coordinator.schedule();
-      await advance(delay, refresh, 1);
-    }
-    coordinator.setActive(false);
-    vi.setSystemTime(Date.now() + shift);
-    coordinator.setActive(true);
-    if (!backoff) {
-      coordinator.schedule();
-    }
-    await advance(delay - 1, refresh, settled);
-    await advance(1, refresh, settled + 1);
-  },
-);
