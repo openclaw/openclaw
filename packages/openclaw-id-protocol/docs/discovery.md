@@ -60,7 +60,7 @@ ready message.
 | registerClaw            | `POST /v1/claws`                                      | gateway (key = binding.k_gw)              | `{ code, descriptor }` -> `{ claw_id, owner_account_id }`                                          |
 | getRegistration         | `GET /v1/claws/{claw_id}/registration`                | gateway (current registered K_gw only)    | -> `{ claw_id, owner_account_id, descriptor }`; no account-session fallback                        |
 | listClaws               | `GET /v1/claws`                                       | user                                      | -> `{ claws: [{ claw_id, hostname, name, relationship, role, online, descriptor_published_at }] }` |
-| publishDescriptor       | `PUT /v1/claws/{claw_id}/descriptor`                  | gateway                                   | `{ descriptor }` -> 204; `stale_binding` if binding_seq decreases                                  |
+| publishDescriptor       | `PUT /v1/claws/{claw_id}/descriptor`                  | gateway (stored K_gw, or see Re-bind)     | `{ descriptor, snapshot?, code? }` -> 204; `stale_binding` if binding_seq decreases                |
 | getDescriptor           | `GET /v1/claws/{claw_id}/descriptor`                  | user                                      | -> `{ descriptor }`                                                                                |
 | publishSnapshot         | `PUT /v1/claws/{claw_id}/snapshot`                    | gateway                                   | `{ snapshot }` -> 204; `stale_snapshot` unless newer by (seq, issued_at)                           |
 | getSnapshot             | `GET /v1/claws/{claw_id}/snapshot`                    | user                                      | -> `{ snapshot }`                                                                                  |
@@ -133,6 +133,45 @@ descriptor as one row. The request is signed by the same K_gw (a reset keeps it)
   Gateway publishes the snapshot for the new binding (it has no owner devices or members, so
   this matches the claw).
 
+### Re-bind
+
+**Status: proposed (openclaw-bec); implementation in review (discovery#11).**
+
+After a re-bind on the machine (enrollment.md), the Gateway publishes a descriptor with the
+same root and a binding at a higher binding_seq that names a new K_srv and K_gw.
+
+- **Accepting the binding.** The republish check is unchanged: the binding verifies under
+  the stored root as the pin, for the stored claw and hostname, and its binding_seq is not lower
+  (`stale_binding`); an equal binding_seq must be the identical binding (`conflict`). The new
+  K_srv must not belong to another claw (`conflict`).
+- **Who may publish it.** A descriptor that keeps the stored K_gw must be signed by it. A
+  descriptor that names a new K_gw must be signed by that new K_gw (the old one may be lost,
+  and the Gateway proves it holds the key it moves to); the old K_gw cannot move the claw.
+- **Owner-account code.** A descriptor that names a new K_gw must also carry `code`, a
+  one-time enrollment code from the claw's owner account (`createEnrollmentCode`). A wrong
+  account, used or expired code is `code_invalid`. Without it, anyone holding a leaked kit could
+  move the claw to keys of their choosing at Discovery and lock the machine out, since an owner
+  reset at Discovery must then be vouched for by the attacker's K_gw. This protects the mirror
+  only: a client trusts any binding R signed, whatever Discovery checked.
+- **One write (new).** A descriptor that names a new K_gw must also carry `snapshot`, signed by
+  that K_gw for the new binding_seq. Discovery replaces the descriptor and the snapshot and
+  spends the code in one storage transaction, conditioned on the code being live for the
+  owner account and on the claw row version it read. A failed condition changes nothing and
+  leaves the code unspent. So there is never a stored descriptor without a usable snapshot,
+  and the member, owner, node and relay rows switch together.
+- **Reading the published binding.** `getPublishedDescriptor` answers the claw's stored
+  descriptor to a request carrying a live code from the owner account (any request key, so a
+  Gateway that lost every key Discovery knows can still ask). The code is not spent. The owner
+  verifies the binding with the root before using its binding_seq (enrollment.md, "Re-bind").
+- **Snapshot order restarts.** The snapshot stored with a new K_gw replaces the old one
+  without the (`seq`, `issued_at`) comparison: the old one was signed by the retired key,
+  which may have signed an inflated `seq` or a future `issued_at`. Later snapshots are ordered
+  against it as before. Resending exactly the stored snapshot (a retry after a lost response)
+  is accepted.
+- **After the switch.** The stored K_gw becomes the new one: the old K_gw's Gateway sessions
+  are closed and its requests are treated like an unknown key (404). The relay admits the new
+  K_srv and no longer the old one.
+
 ### Claw addresses
 
 A claw's hostname is `<name>-<account tag>.<claw origin domain>`, e.g.
@@ -176,7 +215,10 @@ device in the latest snapshot), or one device fingerprint (`fp:<hex>`). Payload 
 | `enrollment`        | new device / owner device | fp / owners | SAS protocol (below)                                                                      |
 | `notice`            | Gateway                   | owners / fp | none: a hint; the device confirms at the Gateway directly                                 |
 
-Notice events are `MAILBOX_NOTICE_EVENTS`. `seq_conflict` goes only to the one device fingerprint
+Notice events are `MAILBOX_NOTICE_EVENTS`. A re-bind adds `rebind` (proposed): `ref` is the new
+binding_seq in decimal, sent to `owners` by the Gateway after it committed the binding. Like
+every notice it is a hint, so an owner device can say "this claw moved to new keys" and
+suggest checking the recovery kit if the owner did not do it. `seq_conflict` goes only to the one device fingerprint
 whose `root_statement` the Gateway refused for a stale seq (`noticeRecipientAllowed`); its `ref` is
 the Gateway's current seq in decimal (`parseSeqConflictRef`). Discovery delivers it only to a
 device of the claw's owner account, in the control lane. Every other event goes to `owners`.

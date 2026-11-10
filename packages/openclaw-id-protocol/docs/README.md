@@ -42,6 +42,8 @@ endpoint key held by the tunnel child, sidecar -> tunnel child process, DERP -> 
    Gateway key K_gw; a client never moves its pin to the new root, it is set up again
    (enrollment.md, "Owner reset"). Certificates have no expiry unless one is entered
    explicitly (enrollment.md).
+   Moving a claw to new machine keys under the same root (re-bind, proposed) is also done only
+   on the machine, by a new binding R signs; clients follow it without being set up again.
 
 6. **Nodes are a separate key class.** Node W has no owner/member authority. An owner or R
    signs every node admission; neither Discovery nor K_gw alone can add a node. A redemption

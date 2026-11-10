@@ -25,6 +25,10 @@ child, Service Worker client) live with their owners.
   TTL). Not admitted -> close with `not_a_member` **before accepting any stream**. Gateway
   unreachable -> admit nobody.
 - **Removal**: the server closes every live connection of a removed key with `revoked`.
+- **Re-bind** (proposed, enrollment.md): the tunnel child restarts on the new K_srv and every
+  live connection closes with `shutdown`. A client must check for a newer verified binding
+  before it redials. It may redial the K_srv it verified earlier only while Discovery cannot
+  answer, and must check again before every later retry.
 - The client waits `ADMISSION_WAIT_MS` (500 ms) after the handshake for a `not_a_member`
   close before it reports "connected" (iroh's `connect()` resolves before the server can
   refuse).
