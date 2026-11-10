@@ -20,6 +20,8 @@ export const LAST_SEEN_KEY = "openclaw.control.serverPrefs.v1";
 export const PENDING_KEY = "openclaw.control.serverPrefs.pending.v1";
 // Connected read-only edits never enter the replay outbox. Retain only their keys until the next
 // snapshot establishes a LAST_SEEN baseline, then normal server-delta reconciliation resumes.
+// Profile appearance retains these markers through startup restoration. Legacy true markers
+// await their first baseline; confirmed markers yield only to a later server delta or reset/retry.
 const RETAINED_LOCAL_KEY = "openclaw.control.serverPrefs.retained-local.v1";
 
 // The sync engine keeps its in-memory vocabulary; persisted rail intent has a fresh identity.
@@ -110,22 +112,41 @@ export function readStoredPrefs(
   };
 }
 
-export function readRetainedLocalKeys(scope: string): Set<SyncedPrefKey> {
+export type RetainedLocalPref = {
+  state: "pending" | "confirmed";
+  // Absent only on legacy key-only markers. Null retains a local reset.
+  value?: unknown;
+};
+
+export function readRetainedLocalPrefs(scope: string): Map<SyncedPrefKey, RetainedLocalPref> {
   const stored = parseStoredPrefs(readStorage(RETAINED_LOCAL_KEY, scope));
   if (!stored) {
-    return new Set();
+    return new Map();
   }
   const keys = Object.keys(stored).filter((key) => Object.hasOwn(SYNCED_PREFS, key));
   // SAFETY: filtered against SYNCED_PREFS, so every key is a SyncedPrefKey.
-  return new Set(keys as SyncedPrefKey[]);
+  return new Map(
+    (keys as SyncedPrefKey[]).map((key) => {
+      const entry = asRecord(stored[key]);
+      const value = entry?.value === null ? null : SYNCED_PREFS[key].extract(entry?.value);
+      return [
+        key,
+        {
+          state: entry?.state === "confirmed" ? "confirmed" : "pending",
+          ...(value !== undefined ? { value } : {}),
+        },
+      ];
+    }),
+  );
 }
 
-export function writeRetainedLocalKeys(scope: string, keys: ReadonlySet<SyncedPrefKey>): void {
+export function writeRetainedLocalPrefs(
+  scope: string,
+  prefs: ReadonlyMap<SyncedPrefKey, RetainedLocalPref>,
+): void {
   writeStorage(
     RETAINED_LOCAL_KEY,
     scope,
-    keys.size
-      ? serializeStoredPrefs(Object.fromEntries([...keys].map((key) => [key, true])))
-      : null,
+    prefs.size ? serializeStoredPrefs(Object.fromEntries(prefs)) : null,
   );
 }

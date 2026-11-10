@@ -18,6 +18,7 @@ import {
   SYNCED_PREF_KEYS,
   SYNCED_PREFS,
   prefValuesEqual,
+  isAppearancePref,
   clearSidebarEntriesMetadata,
   type ServerUiPrefs,
 } from "./server-prefs-state.ts";
@@ -461,6 +462,13 @@ export async function drainPendingPrefs(
             result.error,
             result.reason === "rejected",
           );
+          if (useProfile && result.reason === "rejected") {
+            sync.updateRetainedLocalKeys(
+              sync.pendingScope,
+              SYNCED_PREF_KEYS.filter((key) => isAppearancePref(key) && Object.hasOwn(failed, key)),
+              true,
+            );
+          }
           const localPins = SYNCED_PREFS.sidebarEntries.extract(failed.sidebarEntries);
           if (result.reason === "rejected" && localPins && sync.batchIsCurrent(acknowledgedBatch)) {
             // Preserve the choice in the existing profile mirror before retiring its

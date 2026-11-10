@@ -21,6 +21,7 @@ import {
 } from "./server-prefs.test-support.ts";
 import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
+import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 const profileId = "profile-ada";
 const scope = "ws://profiles";
@@ -65,6 +66,136 @@ async function resetProfile(
 }
 
 installServerPrefsStorage(scope);
+
+it.each([
+  ["same", { theme: "knot", themeMode: "dark" }],
+  ["missing", null],
+  ["older", { theme: "rose", themeMode: "light" }],
+] as const)(
+  "restores stale startup appearance with a %s server baseline",
+  async (_name, baseline) => {
+    patchSettings({ theme: "claw", themeMode: "system" });
+    if (baseline) {
+      localStorage.setItem(
+        `openclaw.control.serverPrefs.v1:${scope}:profile:${profileId}`,
+        JSON.stringify(baseline),
+      );
+    }
+    const request = readRequest({ "ui.theme": "knot", "ui.themeMode": "dark" });
+    const { options, refresh } = readProfile(request, {});
+    applyServerUiPrefs(options.configObject, options);
+    await refresh();
+    expect(loadSettings()).toMatchObject({ theme: "knot", themeMode: "dark" });
+    // Startup restoration is not permission to reapply unchanged values on later syncs.
+    patchSettings({ theme: "rose", themeMode: "light" });
+    await refresh();
+    expect(loadSettings()).toMatchObject({ theme: "rose", themeMode: "light" });
+  },
+);
+
+it.each(["pending", "read-only"])(
+  "preserves %s startup appearance through repeated reloads until a server change",
+  async (intent) => {
+    const config = configWithPrefs({ chatShowThinking: false });
+    const entries = { "ui.theme": "knot", "ui.themeMode": "dark" };
+    const request = readRequest(entries);
+    const { options, refresh } = readProfile(request, config);
+    const local = { theme: "claw", themeMode: "system" } as const;
+    patchSettings(local);
+    const writer = createServerPrefsWriter(
+      request,
+      scope,
+      intent !== "pending",
+      { ok: true },
+      false,
+    );
+    pushServerUiPrefs(writer, local, { profileId, canWrite: false });
+    for (let reload = 0; reload < 3; reload++) {
+      resetServerUiPrefsSync();
+      applyServerUiPrefs(config, options);
+      await refresh();
+      expect(loadSettings()).toMatchObject(local);
+    }
+    entries["ui.theme"] = "rose";
+    invalidateUserPreferences(options.client);
+    await refresh();
+    expect(loadSettings().theme).toBe(intent === "pending" ? "claw" : "rose");
+    expect(loadSettings().themeMode).toBe("system");
+    expect(request.mock.calls.every(([method]) => method === "users.prefs.get")).toBe(true);
+  },
+);
+
+it("restores each appearance field when its source arrives without replaying settled fields", async () => {
+  patchSettings({ theme: "claw", themeMode: "system" });
+  localStorage.setItem(
+    `openclaw.control.serverPrefs.v1:${scope}:profile:${profileId}`,
+    JSON.stringify({ theme: "knot", themeMode: "dark" }),
+  );
+  const { options, refresh } = readProfile(readRequest({ "ui.theme": "knot" }), null);
+  await refresh();
+  expect(loadSettings()).toMatchObject({ theme: "knot", themeMode: "system" });
+  patchSettings({ theme: "rose" });
+  applyServerUiPrefs(configWithPrefs({ themeMode: "dark" }), options);
+  expect(loadSettings()).toMatchObject({ theme: "rose", themeMode: "dark" });
+});
+
+it.each(["pending", "read-only", "legacy"])(
+  "restores %s local appearance after a different profile replaces the mirror",
+  async (intent) => {
+    const config = configWithPrefs({ theme: "claw" });
+    const request = readRequest({ "ui.theme": "knot" });
+    const { options, refresh } = readProfile(request, config);
+    await refresh();
+    patchSettings({ theme: "rose" });
+    const writer = createServerPrefsWriter(
+      request,
+      scope,
+      intent !== "pending",
+      { ok: true },
+      false,
+    );
+    pushServerUiPrefs(writer, { theme: "rose" }, { profileId, canWrite: false });
+    if (intent === "legacy") {
+      localStorage.setItem(
+        `openclaw.control.serverPrefs.retained-local.v1:${scope}:profile:${profileId}`,
+        JSON.stringify({ theme: true }),
+      );
+    }
+    await refresh();
+    request.mockResolvedValue(response({ "ui.theme": "dash" }));
+    await refreshPrefs({ ...options, profileId: "profile-b" });
+    expect(loadSettings().theme).toBe("dash");
+    applyServerUiPrefs(config, options);
+    request.mockResolvedValue(response({ "ui.theme": "knot" }));
+    invalidateUserPreferences(options.client);
+    await refresh();
+    expect(loadSettings().theme).toBe("rose");
+    expect(profileState(config, "theme")).toMatchObject({
+      provenance: intent === "pending" ? "pending" : "device-local",
+      value: "rose",
+    });
+  },
+);
+
+it.each([false, true])(
+  "restores pending profile resets with delayed defaults=%s",
+  async (delayed) => {
+    const config = configWithPrefs({ theme: "rose" });
+    const request = readRequest({ "ui.theme": "knot" });
+    const { options, refresh } = readProfile(request, delayed ? null : config);
+    patchSettings({ theme: "rose" });
+    const offline = createServerPrefsWriter(request, scope, false);
+    pushServerUiPrefs(offline, { theme: null }, { profileId, canWrite: true });
+    resetServerUiPrefsSync();
+    await refresh();
+    expect(loadSettings().theme).toBe("rose");
+    if (delayed) {
+      patchSettings({ theme: "dash" });
+      applyServerUiPrefs(config, options);
+      expect(loadSettings().theme).toBe("rose");
+    }
+  },
+);
 
 it("publishes empty navigation without importing legacy profile entries or writing defaults", async () => {
   patchSettings({ sidebarEntries: ["route:usage"] });
@@ -344,6 +475,11 @@ it.each([false, true])("retains device-local appearance when rejected=%s", async
   expect(afterCommit).toHaveBeenCalledWith({ needsRefresh: false, retainedLocal: true });
   expect(loadSettings()).toMatchObject(local);
   if (rejected) {
+    await refresh();
+    expect(loadSettings()).toMatchObject(local);
+  }
+  for (let reload = 0; reload < 2; reload++) {
+    resetServerUiPrefsSync();
     await refresh();
     expect(loadSettings()).toMatchObject(local);
   }
