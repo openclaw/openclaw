@@ -292,3 +292,9 @@ export type {
   RepositoryConnectionIdentity,
   RepositoryAdmission,
 } from "../plugins/repository-integration.types.js";
+
+export type {
+  PluginConversationBindingAuthority,
+  PluginConversationBindingCurrent,
+  WithCurrentPluginConversationBinding,
+} from "../plugins/conversation-binding-authority.types.js";

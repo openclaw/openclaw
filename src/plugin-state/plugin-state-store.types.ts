@@ -44,6 +44,8 @@ export type PluginStateComparisonCondition = {
 
 export type PluginStateActionAuthority = {
   assertCurrent: () => void;
+  /** Opaque exact-assignment restriction minted by the invocation binding owner. */
+  conversationBindingCurrent?: import("../plugins/conversation-binding-authority.types.js").PluginConversationBindingCurrent;
   sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
 };
 

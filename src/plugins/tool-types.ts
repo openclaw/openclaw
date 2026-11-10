@@ -144,6 +144,8 @@ type OpenClawPluginToolContextBase = {
    * shared across calls must run it through `AsyncLocalStorage.snapshot()` taken at call start.
    */
   assertInvocationCurrent?: () => void;
+  /** V2 invocation-only exact plugin assignment; unavailable on legacy hosts. */
+  withCurrentConversationBinding?: import("./conversation-binding-authority.types.js").WithCurrentPluginConversationBinding;
   /**
    * Host-bound client-input policy. Pure synchronous guard for final storage admission;
    * performs no database reads and grants no invocation or mutation authority.

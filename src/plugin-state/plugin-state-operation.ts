@@ -176,6 +176,9 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
             context,
             assertActive,
             sessionEntryCurrent,
+            conversationBindingsCurrent: allBindings.flatMap(
+              (binding) => binding.conversationBindingCurrent ?? [],
+            ),
             module,
             exportName: handler.exportName,
             stores: bindings.map(({ options: { env: _env, ...scope } }) => scope),

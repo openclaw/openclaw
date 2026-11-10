@@ -1,7 +1,13 @@
+import { isDeepStrictEqual } from "node:util";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { requestSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
+import {
+  inspectCurrentConversationBindingRecordsInDatabase,
+  isBindingExpired,
+} from "../infra/outbound/current-conversation-bindings.kernel.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
@@ -231,11 +237,30 @@ export function executePluginStateCommand(
   const submitted = preparePluginStateReceiptInput(command);
   // Initial grants may wait for the host, so request them before taking the writer.
   // Commit grants still recheck session authority inside the transaction.
-  const admit = (stage: "transaction" | "commit") =>
+  const admit = (stage: "transaction" | "commit", db?: EngineConnection) => {
     requestSessionEntriesCurrentAdmission(command.input?.sessionEntryCurrentSources, {
       stage,
       facts: undefined,
     });
+    // Binding and effect share this SQLite writer. A host snapshot is not this predicate.
+    if (db && command.input?.conversationBindingsCurrent?.length) {
+      const expected = command.input.conversationBindingsCurrent;
+      const current = inspectCurrentConversationBindingRecordsInDatabase(
+        db,
+        expected.map((source) => source.record.conversation),
+      );
+      if (
+        expected.some(
+          (source, index) =>
+            !current[index] ||
+            isBindingExpired(current[index]!) ||
+            !isDeepStrictEqual(current[index], source.record),
+        )
+      ) {
+        throw new Error("Plugin conversation assignment changed before state commit");
+      }
+    }
+  };
   const failure = (error: unknown) =>
     err(
       capturePluginStateWorkerFailure(
@@ -311,7 +336,7 @@ export function executePluginStateCommand(
                 },
               }),
             );
-            admit("commit");
+            admit("commit", store.db);
             return result;
           },
           { ...options, database },
@@ -362,7 +387,7 @@ export function executePluginStateCommand(
           withPluginStateWorkerReceipt(store.db, submitted, () =>
             deletePluginStateEntry(store.db, command.input),
           );
-          admit("commit");
+          admit("commit", store.db);
         },
         { ...options, database },
       );
@@ -423,7 +448,7 @@ export function executePluginStateCommand(
                 throw new Error("Plugin-state read command entered its write path");
             }
           });
-          admit("commit");
+          admit("commit", store.db);
           return result;
         },
         { ...options, database },
