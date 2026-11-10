@@ -14,6 +14,30 @@ Creation summaries strip terminal escape sequences and show embedded newlines,
 tabs, and carriage returns as `\n`, `\t`, and `\r`. Workspace paths and other
 values in saved configuration and `--json` output retain their original contents.
 
+## Reserved agent IDs and setup recovery
+
+`openclaw` and `crestodian` are reserved system-agent IDs (case-insensitive),
+not names for configured user agents. A display name such as `OpenClaw` is fine
+when the agent's ID is different.
+
+An existing configured agent with a reserved ID conflicts with managed setup.
+For the `openclaw` ID, the setup helper is also omitted to prevent recursive
+self-delegation. Full Access and tool allowlists do not resolve that collision.
+The agent prompt reports the configured conflict instead of treating it as an
+approval problem.
+
+Have the Gateway operator plan a move to a non-reserved ID, preserving the
+workspace, sessions and database ownership, channel bindings, and credentials.
+Changing only the config key or deleting and recreating the agent is not a
+history-preserving migration. Back up the affected state before making changes;
+there is no automatic rename in this recovery path.
+
+The `openclaw` setup tool manages the Gateway hosting the conversation; it does
+not select another Gateway by node or host. For an authorized task on another
+machine, verify the destination and use the available remote execution tools
+with their normal approvals. `/openclaw` rescue accepts supported commands, not
+arbitrary setup instructions; it cannot enable a missing tool from free-form text.
+
 ## Examples
 
 ```bash
