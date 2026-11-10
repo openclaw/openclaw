@@ -199,7 +199,7 @@ function retainConflictingLegacyCliProviders(
       }
     }
   }
-  for (const { path, agentId, groups } of routeGroups(cfg.agents, migrate)) {
+  for (const { path, agentId, groups } of routeGroups(cfg, migrate)) {
     for (const refs of groups) {
       for (const ref of refs) {
         const migrated = migrate(ref);
@@ -259,14 +259,18 @@ const SELECTION_OWNERS = ["", "heartbeat", "subagents"] as const;
  * legacy entries alone are a sign-in seed, so both still migrate.
  */
 function* routeGroups(
-  agents: unknown,
+  cfg: OpenClawConfig,
   migrate: LegacyRuntimeRefMigrator,
 ): Generator<{ path: string; agentId?: string; groups: string[][] }> {
+  const agents: unknown = cfg.agents;
   const defaults = isRecord(agents) && isRecord(agents.defaults) ? agents.defaults : undefined;
   const selections = (agent: Record<string, unknown> | undefined) =>
     SELECTION_OWNERS.map((key) => selectionRefs(key ? agent?.[key] : agent));
   const inherited = selections(defaults);
-  const inheritedLegacy = inherited.flat().filter((ref) => migrate(ref));
+  // Selections outside agent scopes take their pin from agents.defaults, so every agent runs them.
+  const outside = [...inherited.flat(), ...outsideAgentRefs(cfg)];
+  const inheritedLegacy = outside.filter((ref) => migrate(ref));
+  yield { path: "config", groups: [outside] };
   for (const [path, agent, agentId] of agentScopes(agents)) {
     const isDefaults = agent === defaults;
     const effective = selections(agent).flatMap((refs, index) =>
@@ -287,6 +291,16 @@ function* routeGroups(
       ],
     };
   }
+}
+
+/** Model refs configured outside agent scopes: channel overrides, hook mappings, tools. */
+function outsideAgentRefs(cfg: OpenClawConfig): string[] {
+  const refs: string[] = [];
+  rewriteModelRefs({ ...cfg, agents: undefined }, "config", [], (ref) => {
+    refs.push(ref);
+    return null;
+  });
+  return refs;
 }
 
 function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
@@ -454,13 +468,27 @@ export function normalizeLegacyRuntimeModelRefs(
   for (const [path, agent] of agentScopes(next.agents)) {
     migrateRuntimeAgent(agent, path, changes, migrate);
   }
-  const rewritten = rewriteModelRefs(next, "config", changes, (ref) => {
+  const migrateCliRef: LegacyRuntimeRefMigrator = (ref) => {
     const migrated = migrate(ref);
     return migrated &&
       ["codex-cli", "claude-cli", "google-gemini-cli"].includes(migrated.legacyProvider)
-      ? migrated.ref
+      ? migrated
       : null;
-  }).value as OpenClawConfigWithLegacyRoster; // SAFETY: The ref rewriter preserves config containers and value types.
+  };
+  const outside = createRuntimeModelRefRewriter(migrateCliRef);
+  outsideAgentRefs(next).forEach(outside.rewrite);
+  if (
+    outside.selected.length &&
+    ensureSelectedModelRuntimePolicies(((next.agents ??= {}).defaults ??= {}), outside.selected)
+  ) {
+    changes.push("Selected agents.defaults.models runtime for legacy refs outside agents.");
+  }
+  const rewritten = rewriteModelRefs(
+    next,
+    "config",
+    changes,
+    (ref) => migrateCliRef(ref)?.ref ?? null,
+  ).value as OpenClawConfigWithLegacyRoster; // SAFETY: The ref rewriter preserves config containers and value types.
   copyConfigResolutionFactsThroughRewrite(cfg, rewritten);
   return inheritLegacyDefaultAgentId(cfg, rewritten);
 }
