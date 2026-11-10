@@ -16,6 +16,7 @@ import type {
   FsSafeCopyReply,
   FsSafeCopyWrite,
   FsSafeProvisionCopy,
+  ProvisionCopyDetails,
 } from "./fs-safe-copy-worker-contract.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 
@@ -56,9 +57,21 @@ if (parentPort) {
   configureFsSafeNative(nativeConfig);
   serveWorkerTasks<FsSafeCopyReply, FsSafeCopyRead | FsSafeProvisionCopy>(
     async (command, channel, control) => {
+      let copyDetails: ProvisionCopyDetails | undefined;
       try {
         switch (command.type) {
           case "provision": {
+            copyDetails = {
+              copier: "portable",
+              batchCount: 0,
+              sourceBytes: 0,
+              spawnCount: 0,
+              spawnMs: 0,
+              childMs: 0,
+              authorityChecks: 0,
+              authorityMs: 0,
+            };
+            const details = copyDetails;
             if (!channel) {
               throw new Error("Worktree provisioning requires its live host channel");
             }
@@ -73,24 +86,32 @@ if (parentPort) {
                   command.destination,
                   command.paths,
                   {
+                    copyDetails: details,
                     signal: control.signal,
                     assertCurrent: () => {
-                      control.throwIfCancelled();
-                      Atomics.store(decision, 0, 0);
-                      channel.notify("authority");
-                      while (Atomics.load(decision, 0) === 0) {
-                        // Retirement can suppress notifications. Observe its shared
-                        // cancellation fence even while this callback cannot yield.
-                        Atomics.wait(decision, 0, 0, 1_000);
+                      const started = performance.now();
+                      details.authorityChecks++;
+                      try {
                         control.throwIfCancelled();
-                      }
-                      control.throwIfCancelled();
-                      if (Atomics.load(decision, 0) !== 1) {
-                        throw new Error("Worktree provisioning mutation authority refused");
+                        Atomics.store(decision, 0, 0);
+                        channel.notify("authority");
+                        while (Atomics.load(decision, 0) === 0) {
+                          // Retirement can suppress notifications. Observe its shared
+                          // cancellation fence even while this callback cannot yield.
+                          Atomics.wait(decision, 0, 0, 1_000);
+                          control.throwIfCancelled();
+                        }
+                        control.throwIfCancelled();
+                        if (Atomics.load(decision, 0) !== 1) {
+                          throw new Error("Worktree provisioning mutation authority refused");
+                        }
+                      } finally {
+                        details.authorityMs += performance.now() - started;
                       }
                     },
                   },
                 ),
+                copyDetails: details,
               };
             });
           }
@@ -108,7 +129,7 @@ if (parentPort) {
             throw new Error("Unknown native worktree read operation");
         }
       } catch (error) {
-        return failure(error);
+        return { ...failure(error), ...(copyDetails ? { copyDetails } : {}) };
       }
     },
   );

@@ -4,8 +4,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
+import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import { copyProvisionedPaths } from "./provisioned-copy.js";
 
 const { copiedOptions } = vi.hoisted(() => ({ copiedOptions: vi.fn() }));
@@ -26,7 +32,10 @@ vi.mock("../../infra/fs-safe.js", async (importOriginal) => {
   };
 });
 beforeEach(() => copiedOptions.mockReset());
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 const directories = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture(destinationParent?: string) {
@@ -36,7 +45,33 @@ function fixture(destinationParent?: string) {
   };
 }
 
-it.for(["native", "cross-filesystem", "portable", "revoked", "aborted"])(
+function installCopyExecutable(script: string) {
+  const bin = directories.make("provisioned-copy-bin-");
+  fsSync.writeFileSync(path.join(bin, "cp"), script, { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
+}
+
+function observeCopyDispatch(onDispatch: () => void = () => {}) {
+  const batches = vi.fn(onDispatch);
+  const spawn = childProcess.spawn.bind(childProcess);
+  const children = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+    const child = spawn(...args);
+    if (child.stdin) {
+      const stdin = child.stdin;
+      const write = stdin.write.bind(stdin);
+      vi.spyOn(stdin, "write").mockImplementation((...writeArgs) => {
+        batches();
+        return write(...writeArgs);
+      });
+    } else {
+      batches();
+    }
+    return child;
+  });
+  return { batches, children };
+}
+
+it.for(["native", "cross-filesystem", "portable", "helper-unavailable", "revoked", "aborted"])(
   "preserves copy, skip and authority contracts with %s",
   async (blocked, context) => {
     const crossFilesystem = blocked === "cross-filesystem";
@@ -55,8 +90,16 @@ it.for(["native", "cross-filesystem", "portable", "revoked", "aborted"])(
       }
     }
     if (blocked === "portable") {
-      vi.spyOn(childProcess, "execFileSync").mockImplementationOnce(() => {
-        throw Object.assign(new Error("GNU cp unavailable"), { code: "ENOENT" });
+      installCopyExecutable("#!/bin/sh\nexit 1\n");
+    }
+    if (blocked === "helper-unavailable") {
+      const missing = path.join(directories.make("provisioned-copy-missing-"), "sh");
+      const spawn = childProcess.spawn.bind(childProcess);
+      vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+        if (args[0] === "/bin/sh") {
+          args[0] = missing;
+        }
+        return spawn(...args);
       });
     }
     const controller = new AbortController();
@@ -102,9 +145,20 @@ it.for(["native", "cross-filesystem", "portable", "revoked", "aborted"])(
       }
       return open(...args);
     });
+    const copyDetails: ProvisionCopyDetails = {
+      copier: "portable",
+      batchCount: 0,
+      sourceBytes: 0,
+      spawnCount: 0,
+      spawnMs: 0,
+      childMs: 0,
+      authorityChecks: 0,
+      authorityMs: 0,
+    };
     const pending = copyProvisionedPaths(source, destination, candidates, {
       assertCurrent,
       signal: controller.signal,
+      copyDetails,
     });
     if (blocked === "revoked" || blocked === "aborted") {
       await expect(pending).rejects.toThrow(failure);
@@ -114,6 +168,23 @@ it.for(["native", "cross-filesystem", "portable", "revoked", "aborted"])(
       return;
     }
     await expect(pending).resolves.toEqual(["file", "hardlink"]);
+    const native =
+      process.platform === "linux" && blocked !== "portable" && blocked !== "helper-unavailable";
+    expect(copyDetails).toMatchObject({
+      copier: native ? "linux-batched" : "portable",
+      batchCount: native ? 1 : 0,
+      sourceBytes: 2 * Buffer.byteLength(content),
+      spawnCount: process.platform === "linux" ? 1 : 0,
+    });
+    expect(copyDetails.fallbackReason).toBe(
+      native
+        ? undefined
+        : process.platform !== "linux"
+          ? "platform"
+          : blocked === "helper-unavailable"
+            ? "helper-unavailable"
+            : "gnu-cp-unavailable",
+    );
     if (copiedOptions.mock.calls.length) {
       expect(copiedOptions.mock.calls[0]?.[0]).toMatchObject({
         clone: "auto",
@@ -138,7 +209,7 @@ it.for(["native", "cross-filesystem", "portable", "revoked", "aborted"])(
 );
 
 it.skipIf(process.platform !== "linux")(
-  "admits a directory once and pins source files and directories across symlink swaps",
+  "uses one helper across batches and pins files and directories across symlink swaps",
   async () => {
     const { source, destination } = fixture();
     const outside = directories.make("provisioned-copy-outside-");
@@ -146,15 +217,14 @@ it.skipIf(process.platform !== "linux")(
     await fs.mkdir(path.join(source, "skipped"));
     await fs.writeFile(path.join(outside, "file"), "outside");
     await fs.symlink(path.join(outside, "file"), path.join(source, "skipped", "link"));
-    const names = Array.from({ length: 32 }, (_, index) => `selected/${index}`);
+    const names = Array.from({ length: 256 }, (_, index) => `selected/${index}`);
     const modified = new Map<string, bigint>();
     for (const name of names) {
       await fs.writeFile(path.join(source, name), name);
       modified.set(name, (await fs.stat(path.join(source, name), { bigint: true })).mtimeNs);
     }
-    const spawn = childProcess.spawn.bind(childProcess);
     let swapped = false;
-    vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+    const { children, batches } = observeCopyDispatch(() => {
       if (!swapped) {
         swapped = true;
         fsSync.renameSync(path.join(source, "selected"), path.join(source, "admitted"));
@@ -164,13 +234,14 @@ it.skipIf(process.platform !== "linux")(
         fsSync.renameSync(path.join(destination, "selected"), path.join(destination, "admitted"));
         fsSync.symlinkSync(outside, path.join(destination, "selected"), "dir");
       }
-      return spawn(...args);
     });
     const authority = vi.fn();
     const result = await copyProvisionedPaths(source, destination, [...names, "skipped/link"], {
       assertCurrent: authority,
     });
-    expect(authority.mock.calls.length).toBeLessThanOrEqual(6);
+    expect(authority.mock.calls.length).toBeLessThanOrEqual(10);
+    expect(batches).toHaveBeenCalledTimes(2);
+    expect(children).toHaveBeenCalledTimes(1);
     expect(swapped).toBe(true);
     expect(result).toEqual(names.toSorted());
     expect(await fs.readdir(outside)).toEqual(["file"]);
@@ -183,48 +254,6 @@ it.skipIf(process.platform !== "linux")(
         modified.get(name),
       );
     }
-  },
-);
-
-it.skipIf(process.platform !== "linux")(
-  "settles an accepted child before rejecting cancellation and starts no more batches",
-  async () => {
-    const { source, destination } = fixture();
-    const names = Array.from({ length: 256 }, (_, index) => `${index}`);
-    for (const name of names) {
-      await fs.writeFile(path.join(source, name), name);
-    }
-    const controller = new AbortController();
-    const failure = new Error("source retired");
-    const started = Promise.withResolvers<childProcess.ChildProcessWithoutNullStreams>();
-    const spawn = childProcess.spawn.bind(childProcess);
-    const copies = vi.spyOn(childProcess, "spawn").mockImplementation(() => {
-      // A real child holds the native section until stdin closes, simulating blocked copy IO.
-      const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], { stdio: "pipe" });
-      started.resolve(child);
-      return child;
-    });
-    let settled = false;
-    const pending = copyProvisionedPaths(source, destination, names, { signal: controller.signal });
-    const rejection = expect(pending).rejects.toBe(failure);
-    void pending.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    const child = await started.promise;
-    controller.abort(failure);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(settled).toBe(false);
-    child.stdin.end();
-    await rejection;
-    expect(copies).toHaveBeenCalledTimes(1);
-    expect(await fs.readdir(destination)).toEqual([]);
   },
 );
 
@@ -251,40 +280,95 @@ it.skipIf(process.platform !== "linux")(
   },
 );
 
-it.skipIf(process.platform !== "linux").for(["flat", "directories"])(
-  "refuses publication after authority revocation during a child across %s without aborting",
-  async (layout) => {
+it.skipIf(process.platform !== "linux").for(["authority", "abort", "helper-exit"])(
+  "settles an accepted native copy before rejecting %s without publishing or another batch",
+  async (kind, context) => {
     const { source, destination } = fixture();
-    const names = Array.from({ length: 256 }, (_, index) =>
-      layout === "flat" ? `${index}` : `group-${Math.floor(index / 32)}/${index}`,
+    const names = Array.from(
+      { length: 256 },
+      (_, index) => `group-${Math.floor(index / 32)}/${index}`,
     );
     for (const name of names) {
       await fs.mkdir(path.dirname(path.join(source, name)), { recursive: true });
       await fs.writeFile(path.join(source, name), name);
     }
+    const nativeCp = childProcess
+      .execFileSync("/bin/sh", ["-c", "command -v cp"], { encoding: "utf8" })
+      .trim();
+    const releasePath = path.join(directories.make("provisioned-copy-control-"), "release");
+    childProcess.execFileSync("mkfifo", [releasePath]);
+    const releaseFd = fsSync.openSync(releasePath, fsConstants.O_RDWR | fsConstants.O_NONBLOCK);
+    vi.stubEnv("PROVISION_COPY_REAL_CP", nativeCp);
+    vi.stubEnv("PROVISION_COPY_RELEASE", releasePath);
+    // The real native copy completes into staging, then the accepted cp wrapper retains custody.
+    installCopyExecutable(`#!/bin/sh
+if [ "$1" = --version ]; then exec "$PROVISION_COPY_REAL_CP" "$@"; fi
+"$PROVISION_COPY_REAL_CP" "$@" || exit
+printf 'COPY_HELD\n' >&2
+IFS= read -r release < "$PROVISION_COPY_RELEASE"
+`);
     let current = true;
+    let settled = false;
+    let copies = 0;
     const controller = new AbortController();
     const failure = new Error("copy authority retired");
+    const started = Promise.withResolvers<childProcess.ChildProcess>();
     const spawn = childProcess.spawn.bind(childProcess);
-    const copies = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+    vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
       const child = spawn(...args);
-      child.once("spawn", () => {
-        current = false;
+      let output = "";
+      child.stderr?.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+        if (output.includes("COPY_HELD\n")) {
+          copies++;
+          output = "";
+          started.resolve(child);
+        }
       });
       return child;
     });
-    await expect(
-      copyProvisionedPaths(source, destination, names, {
-        signal: controller.signal,
-        assertCurrent() {
-          if (!current) {
-            throw failure;
-          }
-        },
-      }),
-    ).rejects.toBe(failure);
-    expect(copies).toHaveBeenCalledTimes(1);
-    expect(controller.signal.aborted).toBe(false);
+    const pending = copyProvisionedPaths(source, destination, names, {
+      signal: controller.signal,
+      assertCurrent() {
+        if (!current) {
+          throw failure;
+        }
+      },
+    });
+    const rejection =
+      kind === "helper-exit"
+        ? expect(pending).rejects.toThrow("Provisioning copy failed")
+        : expect(pending).rejects.toBe(failure);
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    try {
+      const child = await withinTest(
+        awaitGateBeforeSettlement(started.promise, pending, "copy never reached its native child"),
+        context.signal,
+      );
+      current = false;
+      if (kind === "abort") {
+        controller.abort(failure);
+      } else if (kind === "helper-exit") {
+        const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+        child.kill("SIGTERM");
+        await withinTest(exited, context.signal);
+      }
+      await nextEventLoopTurn();
+      expect(settled).toBe(false);
+    } finally {
+      fsSync.writeSync(releaseFd, "release\n");
+      fsSync.closeSync(releaseFd);
+      await rejection;
+    }
+    expect(copies).toBe(1);
+    expect(controller.signal.aborted).toBe(kind === "abort");
     const remaining = await listDirectoryTreeStrict(destination);
     expect(
       remaining.every(
@@ -295,9 +379,7 @@ it.skipIf(process.platform !== "linux").for(["flat", "directories"])(
 );
 
 it("rejects an included file replaced by a symlink during portable copy inspection", async () => {
-  vi.spyOn(childProcess, "execFileSync").mockImplementationOnce(() => {
-    throw Object.assign(new Error("GNU cp unavailable"), { code: "ENOENT" });
-  });
+  installCopyExecutable("#!/bin/sh\nexit 1\n");
   const { source: repo, destination } = fixture();
   const source = path.join(repo, "settings.local");
   await fs.writeFile(source, "included bytes\n");
@@ -323,7 +405,7 @@ it("rejects an included file replaced by a symlink during portable copy inspecti
 });
 
 it.skipIf(process.platform !== "linux").for(["abort", "authority"])(
-  "refuses a child when %s is revoked during staging preparation",
+  "refuses a copy batch when %s is revoked during staging preparation",
   async (kind) => {
     const { source, destination } = fixture();
     await fs.writeFile(path.join(source, "file"), "admitted");
@@ -339,7 +421,7 @@ it.skipIf(process.platform !== "linux").for(["abort", "authority"])(
       }
       return stage;
     });
-    const copies = vi.spyOn(childProcess, "spawn");
+    const { batches } = observeCopyDispatch();
     await expect(
       copyProvisionedPaths(source, destination, ["file"], {
         signal: controller.signal,
@@ -350,7 +432,7 @@ it.skipIf(process.platform !== "linux").for(["abort", "authority"])(
         },
       }),
     ).rejects.toBe(failure);
-    expect(copies).not.toHaveBeenCalled();
+    expect(batches).not.toHaveBeenCalled();
     expect(await fs.readdir(destination)).toEqual([]);
   },
 );
