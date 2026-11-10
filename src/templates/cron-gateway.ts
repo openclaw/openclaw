@@ -32,7 +32,10 @@ export function createTemplateCronGateway(
   },
   getConfig: () => OpenClawConfig,
   assertCurrent: () => void,
-  captureCreator?: (job: CronJobCreate, config: OpenClawConfig) => Promise<TemplateCronCreatorCapture>,
+  captureCreator?: (
+    job: CronJobCreate,
+    config: OpenClawConfig,
+  ) => Promise<TemplateCronCreatorCapture>,
 ) {
   return {
     add: async (input, options) => {

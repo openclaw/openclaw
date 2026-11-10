@@ -1,27 +1,33 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { writeConfigFile } from "../../config/io.runtime.js";
 import { registerRuntimeConfigWriteListener } from "../../config/runtime-snapshot.js";
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { acquireCronInferenceAuthorization } from "../../cron/inference-binding.runtime.js";
+import { resolveAuthenticatedDeviceTokenIdentity } from "../../infra/device-pairing-identity.js";
+import { revokeDeviceToken } from "../../infra/device-pairing-tokens.js";
 import { clawHubSecurityResponse } from "../../plugins/clawhub.test-fixtures.js";
 import { createClawHubArchiveFactory } from "../../plugins/clawhub.test-support.js";
 import { ensureCanonicalGatewayOwnerProfile } from "../../state/user-profile-writes.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
+import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "../openclaw-id/tunnel-principal.js";
 import { restoreGatewayOperatorSource } from "../operator-run-recovery.js";
+import { pairedOperator, persistDevices } from "../operator-run-recovery.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { platformId, withFixture } from "./cron.inference-binding.test-support.js";
 import { templatesAddHandlers } from "./templates-add.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
+const greeting = vi.hoisted(() => vi.fn(async () => {}));
 const registry = vi.hoisted(() => ({
   detail: vi.fn(),
   artifact: vi.fn(),
@@ -39,6 +45,11 @@ vi.mock("../../infra/clawhub-packages.js", async (original) => ({
 vi.mock("../../infra/clawhub-artifacts.js", async (original) => ({
   ...(await original<typeof import("../../infra/clawhub-artifacts.js")>()),
   downloadClawHubPackageArchive: registry.download,
+}));
+// mock-isolation: No model runs here; canonical session preparation/finalization is real.
+vi.mock("./agents-onboarding.js", async (original) => ({
+  ...(await original<typeof import("./agents-onboarding.js")>()),
+  startAgentOnboardingConversation: greeting,
 }));
 const createArchive = createClawHubArchiveFactory(afterEach);
 const packageName = "@openclaw/inference-binding-template";
@@ -153,6 +164,26 @@ async function addTemplate(
   client: GatewayClient,
   context = templateContext(fixture, client),
 ) {
+  // Direct handler fixtures represent an admitted socket; real handshakes are covered by Gateway E2E.
+  await ensureCanonicalGatewayOwnerProfile("Synthetic Template owner");
+  client.internal = {
+    authenticatedOperator: true,
+    operatorAccessAuthority: null,
+    ...client.internal,
+  };
+  client.authPolicy ??= captureGatewayAuthPolicy(fixture.getConfig(), {
+    role: "operator",
+    authMethod: "token",
+  });
+  if (!client.authenticatedUserProfile) {
+    client.internal.operatorRoleActor = { kind: "system" };
+    client.usesSharedGatewayAuth = true;
+    client.sharedGatewaySessionGeneration = "template-shared-generation";
+    context.sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
+      current: client.sharedGatewaySessionGeneration,
+      required: null,
+    });
+  }
   const params = { source: { packageName, version } };
   const respond = vi.fn<RespondFn>();
   await templatesAddHandlers["templates.add.apply"]!({
@@ -164,6 +195,12 @@ async function addTemplate(
     hasCurrentClientAuthority: () => !client.invalidated,
     isWebchatConnect: () => false,
   });
+  expect(greeting).toHaveBeenCalledWith(
+    expect.anything(),
+    agentId,
+    `agent:${agentId}:main`,
+    "template",
+  );
   expect(respond).toHaveBeenCalledOnce();
   const [ok, result, error] = respond.mock.calls[0]!;
   expect(ok, JSON.stringify(error)).toBe(true);
@@ -179,22 +216,25 @@ it.each([false, true])(
     await withFixture(async (fixture) => {
       const archive = await remoteTemplate();
       await withTemplateRuntime(fixture, async () => {
-        if (replace) {
-          fixture.replaceAccountBeforeMutation("add");
-        }
+        const replacement = replace ? fixture.replaceAccountBeforeMutation("add") : undefined;
         const client: GatewayClient = {
           connId: "template-inference-owner",
           invalidated: false,
           connect: gatewayConnect(["operator.admin"]),
         };
         const result = await addTemplate(fixture, client);
-        expect(result).toMatchObject({ agentId, status: replace ? "partial" : "complete" });
+        expect(result, JSON.stringify(result)).toMatchObject({
+          agentId,
+          status: replace ? "partial" : "complete",
+        });
         expect(
           createHash("sha256")
             .update(await fs.readFile(archive.archivePath))
             .digest("hex"),
         ).toBe(archive.sha256);
         if (replace) {
+          expect(replacement).toHaveBeenCalledOnce();
+          expect(result).toMatchObject({ error: { code: "add_failed" }, agentRetained: true });
           expect(await fixture.status()).toMatchObject({ jobs: 0 });
           return;
         }
@@ -290,10 +330,12 @@ it.each([
         if (scenario === "foreign-account") {
           expect(result).toMatchObject({
             status: "partial",
+            agentRetained: true,
             error: {
               code: "add_failed",
-              message:
+              message: expect.stringContaining(
                 "This account action requires a current authorized connection; reconnect and try again.",
+              ),
             },
           });
           expect(await fixture.status()).toMatchObject({ jobs: 0 });
@@ -324,7 +366,7 @@ it.each([
 );
 
 it.each([false, true])(
-  "native profile rollback preserves changed ownership (%s)",
+  "native profile later-declaration failure retains the exposed agent and ownership (%s)",
   async (change) => {
     await withFixture(async (fixture) => {
       const personal = await fixture.personalAccount();
@@ -344,8 +386,10 @@ it.each([false, true])(
       await withTemplateRuntime(fixture, async () => {
         const cron = fixture.getCron();
         const add = cron.add.bind(cron);
+        const secondRejected = vi.fn();
         vi.spyOn(cron, "add").mockImplementation(async (input, options) => {
           if (input.name === "second") {
+            secondRejected();
             if (change) {
               const [first] = await cron.list({ includeDisabled: true });
               await cron.update(first!.id, {
@@ -359,79 +403,122 @@ it.each([false, true])(
         const result = await addTemplate(fixture, personal.owner);
         expect(result).toMatchObject({
           status: "partial",
-          error: { code: change ? "add_rollback_incomplete" : "add_failed" },
+          agentRetained: true,
+          error: {
+            code: "add_failed",
+            message: expect.stringContaining("Second schedule rejected before commit"),
+          },
         });
-        expect(await fixture.status()).toMatchObject({ jobs: change ? 1 : 0 });
-        expect(fixture.getConfig().agents?.entries?.[agentId] !== undefined).toBe(change);
-        if (change) {
-          expect(await fixture.reload()).toMatchObject({
-            enabled: false,
-            ownerProfileId: personal.other.authenticatedUserProfile!.profileId,
-          });
-        }
+        expect(secondRejected).toHaveBeenCalledOnce();
+        expect(await fixture.status()).toMatchObject({ jobs: 1 });
+        expect(fixture.getConfig().agents?.entries?.[agentId]).toBeDefined();
+        expect(await fixture.reload()).toMatchObject({
+          agentId,
+          name: "first",
+          declarationKey: `template:${agentId}:first`,
+          enabled: false,
+          ownerProfileId: (change ? personal.other : personal.owner).authenticatedUserProfile!
+            .profileId,
+          payload: { message: "Compare public sources." },
+        });
       });
     });
   },
 );
 
-it("native Template Add retains a source that revocation refuses before a later run", async () => {
-  await withFixture(async (fixture) => {
-    const owner = await ensureCanonicalGatewayOwnerProfile("Synthetic Template owner");
-    const principal: OpenClawIdTunnelPrincipal = {
-      kind: "owner",
-      peerKey: `iroh:${"da".repeat(32)}`,
-      authority: { clawId: "template-claw", rootPub: "template-root", listedSeq: 1 },
-    };
-    setOpenClawIdTunnelPrincipalLookup(() => principal);
-    try {
-      await remoteTemplate();
-      await withTemplateRuntime(fixture, async () => {
-        const client: GatewayClient = {
-          connId: "native-template-source",
-          connect: gatewayConnect(["operator.admin"]),
-          authenticatedUserProfile: gatewayProfile(owner.id),
-        };
-        client.internal = {
-          authenticatedOperator: true,
-          openclawIdPrincipal: principal,
-          // Socket admission classified this source as independent of plugin access grants.
-          operatorAccessAuthority: null,
-        };
-        client.authPolicy = captureGatewayAuthPolicy(fixture.getConfig(), {
-          role: "operator",
-          authMethod: "trusted-proxy",
-        });
-        const context = templateContext(fixture, client);
-        const result = await addTemplate(fixture, client, context);
-        expect(result, JSON.stringify(result)).toMatchObject({ status: "complete" });
-        const stored = await fixture.reload();
-        context.cron = fixture.getCron();
-        expect(stored.operatorSource?.source).toMatchObject({
-          kind: "gateway",
-          agentId,
-          snapshot: {
-            profileId: client.authenticatedUserProfile!.profileId,
-            openclawIdPrincipal: principal,
-          },
-        });
-        const restore = () =>
-          restoreGatewayOperatorSource({
-            snapshot: stored.operatorSource!.source.snapshot,
-            context,
-            assertCurrent: () => {},
+it.each(["ocid", "paired device"])(
+  "native Template Add retains %s source until revocation",
+  async (source) => {
+    await withFixture(async (fixture) => {
+      const owner = await ensureCanonicalGatewayOwnerProfile("Synthetic Template owner");
+      const principal: OpenClawIdTunnelPrincipal = {
+        kind: "owner",
+        peerKey: `iroh:${"da".repeat(32)}`,
+        authority: { clawId: "template-claw", rootPub: "template-root", listedSeq: 1 },
+      };
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      try {
+        await remoteTemplate();
+        await withTemplateRuntime(fixture, async () => {
+          const client: GatewayClient = {
+            connId: "native-template-source",
+            connect: gatewayConnect(["operator.admin"]),
+            authenticatedUserProfile: gatewayProfile(owner.id),
+          };
+          client.internal = {
+            authenticatedOperator: true,
+            ...(source === "ocid" ? { openclawIdPrincipal: principal } : {}),
+            // Socket admission classified this source as independent of plugin access grants.
+            operatorAccessAuthority: null,
+          };
+          client.authPolicy = captureGatewayAuthPolicy(fixture.getConfig(), {
+            role: "operator",
+            authMethod: source === "ocid" ? "trusted-proxy" : "token",
           });
-        const restored = await restore();
-        try {
-          restored.authority.assertCurrent();
-          setOpenClawIdTunnelPrincipalLookup(undefined);
-          expect(() => restored.authority.assertCurrent()).toThrow();
-          await expect(restore()).rejects.toThrow();
-        } finally {
-          restored.release();
-        }
-      });
-    } finally {
-      setOpenClawIdTunnelPrincipalLookup(undefined);
-    }
-  });
-});
+          const device = pairedOperator();
+          const stateDir = process.env.OPENCLAW_STATE_DIR!;
+          if (source === "paired device") {
+            persistDevices(stateDir, [device], "both");
+            client.connect.device = {
+              id: device.deviceId,
+              publicKey: device.publicKey,
+              signature: "fixture-signature",
+              signedAt: 1,
+              nonce: "fixture-nonce",
+            };
+            assert(device.tokens?.operator);
+            client.internal.operatorDeviceTokenIdentity = resolveAuthenticatedDeviceTokenIdentity(
+              device,
+              {
+                role: "operator",
+                publicKey: device.publicKey,
+                token: device.tokens.operator.token,
+                scopes: client.connect.scopes ?? [],
+              },
+            );
+            assert(client.internal.operatorDeviceTokenIdentity);
+          }
+          const context = templateContext(fixture, client);
+          const result = await addTemplate(fixture, client, context);
+          expect(result, JSON.stringify(result)).toMatchObject({ status: "complete" });
+          const stored = await fixture.reload();
+          context.cron = fixture.getCron();
+          expect(stored.operatorSource?.source).toMatchObject({
+            kind: "gateway",
+            agentId,
+            snapshot: {
+              profileId: client.authenticatedUserProfile!.profileId,
+              ...(source === "ocid"
+                ? { openclawIdPrincipal: principal }
+                : { device: { deviceId: device.deviceId } }),
+            },
+          });
+          const restore = () =>
+            restoreGatewayOperatorSource({
+              snapshot: stored.operatorSource!.source.snapshot,
+              context,
+              assertCurrent: () => {},
+            });
+          const restored = await restore();
+          try {
+            restored.authority.assertCurrent();
+            setOpenClawIdTunnelPrincipalLookup(undefined);
+            if (source === "paired device") {
+              expect(
+                await revokeDeviceToken({ deviceId: device.deviceId, role: "operator" }),
+              ).toMatchObject({ ok: true });
+              // Native device RPC also publishes revocation to the retained Gateway source.
+              invalidateGatewayDeviceRevocation(context, device.deviceId, "operator");
+            }
+            expect(() => restored.authority.assertCurrent()).toThrow();
+            await expect(restore()).rejects.toThrow();
+          } finally {
+            restored.release();
+          }
+        });
+      } finally {
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+      }
+    });
+  },
+);

@@ -303,7 +303,13 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
             captureCronCreatorSession(
               job,
               undefined,
-              { client, context, signal, hasCurrentClientAuthority },
+              {
+                client,
+                context,
+                signal,
+                hasCurrentClientAuthority,
+                ...(client ? { captureIndependentOperatorSource: true as const } : {}),
+              },
               cfg,
             ),
         ),
