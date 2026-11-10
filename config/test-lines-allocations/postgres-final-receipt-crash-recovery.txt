@@ -1,4 +1,4 @@
 # Verify cold Gateway recovery of queued output after its receipt, before ACK.
 # Reuse the 20-case safety matrix for SQLite and PostgreSQL instead of duplicating it.
-# Grant only the 287 new test LF bytes; main owns its existing test budget.
-287
+# Grant only the 293 new test LF bytes; main owns its existing test budget.
+293

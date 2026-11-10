@@ -465,10 +465,21 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       await current.writeConfig(config);
       delete instance.env.VITEST;
       delete instance.env.NODE_ENV;
-      // Let a real empty boot record startup migrations before seeding queued output.
-      await instance.startGateway();
-      await instance.stopGateway();
-      await installGatewayDatabaseEngine();
+      // Canonical startup owns migration completion; only delivery and recovery need CLI processes.
+      const snapshot = await bootstrap();
+      await closeOpenClawAgentDatabasesAsync(current.stateDir);
+      await closeStateDatabaseForTest();
+      const bootstrapAnchor = await readAnchor(current);
+      if (!bootstrapAnchor) {
+        throw new Error("Gateway startup did not persist its PostgreSQL anchor");
+      }
+      expect(
+        await queryRows(
+          `SELECT value_json FROM ${quoteIdentifier(bootstrapAnchor.namespace)}.config_machine_state WHERE state_key = $1`,
+          [`webhookListeners:${current.configPath}`],
+        ),
+      ).toEqual([{ value_json: "true" }]);
+      await installGatewayDatabaseEngine(snapshot);
       const sessionKey = "agent:main:final-receipt-crash";
       const target = "provenance-final-receipt-crash";
       const scope = {

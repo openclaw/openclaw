@@ -1266,11 +1266,6 @@ export const single = {
           databaseWorkerCoreTestFiles.filter((file) => file.startsWith("src/gateway/")),
           forwardedArgs,
         ),
-        runPlan(
-          "cli-process",
-          ["src/gateway/server-database-engine.postgres.test.ts"],
-          forwardedArgs,
-        ),
       ]);
     },
   );
