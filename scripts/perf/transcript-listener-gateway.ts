@@ -36,7 +36,7 @@ import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.ts";
-import { stopChild } from "../lib/gateway-bench-child.ts";
+import { stopChild, stopGatewayGracefully } from "../lib/gateway-bench-child.ts";
 import { getFreePort } from "../lib/gateway-bench-probes.ts";
 import {
   buildGatewayBenchChildArgs,
@@ -435,12 +435,16 @@ if (
 writeFileSync(configPath, JSON.stringify(config, null, 2));
 function startGateway() {
   const log = openSync(path.join(output, "gateway.log"), "a");
+  const stopPreload = new URL("../lib/gateway-bench-stop-preload.mjs", import.meta.url);
+  stopPreload.searchParams.set("parentPid", String(process.pid));
+  stopPreload.searchParams.set("entry", path.resolve("scripts/perf/transcript-listener-entry.ts"));
   const child = spawn(
     process.execPath,
     buildGatewayBenchChildArgs("scripts/perf/transcript-listener-entry.ts", port, [
       "--expose-gc",
       "--import",
       "./scripts/tsx.mjs",
+      ...(scenario === "surge" ? ["--import", stopPreload.href] : []),
     ]),
     {
       env: {
@@ -1136,6 +1140,17 @@ try {
   finishStreams = true;
   for (const response of held) {
     response.destroy();
+  }
+  if (scenario === "surge") {
+    try {
+      const shutdown = await stopGatewayGracefully(gateway, 90_000);
+      if (isRecord(surgeResult)) {
+        surgeResult.shutdown = shutdown;
+      }
+    } catch (error) {
+      failure ??=
+        error instanceof Error ? error : new Error("Surge shutdown failed", { cause: error });
+    }
   }
   await stopChild(gateway);
   providerServer.closeAllConnections();
