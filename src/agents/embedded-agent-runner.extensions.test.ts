@@ -342,10 +342,13 @@ describe("buildEmbeddedExtensionFactories", () => {
       const reread = await cachedRead.execute(`call-skill-reread-${label}`, {
         path: skillInstructionPath,
       });
+      const rereadText = reread.content
+        .map((part) => (part.type === "text" ? part.text : ""))
+        .join("");
       if (shortened) {
-        expect(reread.content[0]?.text).toBe(skillInstructionText);
+        expect(rereadText).toBe(skillInstructionText);
       } else {
-        expect(reread.content[0]?.text).toContain("already served whole");
+        expect(rereadText).toContain("already served whole");
       }
     },
   );
