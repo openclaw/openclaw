@@ -175,6 +175,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         const menu = query(".sidebar-session-filter-panel")!;
         await expect.element(menu).toBeVisible();
         await finishAnimations(menu);
+        // A late native entry must settle before measuring unscaled row geometry.
+        await expect.poll(() => getComputedStyle(menu).scale).toBe("1");
         const bounds = menu.getBoundingClientRect();
         expect(bounds.height).toBeGreaterThan(0);
         expect(bounds.height).toBeLessThanOrEqual(innerHeight);

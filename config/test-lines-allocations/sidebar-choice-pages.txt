@@ -1,2 +1,2 @@
-227
+229
 # Production-path sidebar regressions cover short People pages, viewport-capped scrolling, Back/selection focus, unchanged Sessions roots, and compact catalog owners with a long roster. Owning browser cases add WebKit selection and active-child geometry; archive proof emulates native media consistently and records precise failure geometry without changing its natural animation deadline.
