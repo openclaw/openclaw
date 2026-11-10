@@ -1044,10 +1044,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 /* These rows keep their control at the row's end on phones. */
 @media (max-width: 640px) {
   :is(.shell--settings, .shell--embed-settings)
-    :is(
-      .settings-row:has(> .settings-row__text .settings-row__meta),
-      .settings-disclosure > .settings-row
-    ) {
+    .settings-row:has(> .settings-row__text .settings-row__meta) {
     flex-wrap: nowrap;
 
     > .settings-row__control {
