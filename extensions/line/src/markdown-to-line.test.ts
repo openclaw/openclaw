@@ -23,10 +23,11 @@ function cardBody(result: ReturnType<typeof processLineMessage>) {
 const spans = (...cells: object[]) => ({ contents: cells.map((cell) => ({ contents: [cell] })) });
 
 describe("processLineMessage table cards", () => {
-  it("replaces empty cells with placeholders", () => {
-    const result = processLineMessage("| A | B |\n|---|---|\n| | |");
-    expect(result.flexMessages).toHaveLength(1);
-    expect(cardBody(result)[2]).toMatchObject({
+  it("renders empty cells and a mailto link labelled with its address like plain text", () => {
+    const card = (cell: string) =>
+      cardBody(processLineMessage(`| A | B |\n|---|---|\n| | ${cell} |`));
+    expect(card("[b@example.com](mailto:b@example.com)")).toEqual(card("b@example.com"));
+    expect(card("")[2]).toMatchObject({
       contents: [{ contents: [{ text: "-" }, { text: "-" }] }],
     });
   });
@@ -47,16 +48,6 @@ describe("processLineMessage table cards", () => {
       { contents: [{ text: "<u>Literal</u>" }, {}] },
     ]);
     expect(result.text).toBe("");
-  });
-
-  it("renders a mailto link whose label is the address like plain text", () => {
-    const linked = processLineMessage(`| Name | Contact |
-|---|---|
-| Bob | [bob@example.com](mailto:bob@example.com) |`);
-    const plain = processLineMessage(`| Name | Contact |
-|---|---|
-| Bob | bob@example.com |`);
-    expect(cardBody(linked)).toEqual(cardBody(plain));
   });
 });
 
@@ -149,8 +140,6 @@ describe("processLineMessage", () => {
     const processed = processLineMessage("A\n\n```js\nx\n```\n\nB\n\n```\n```\n\nC");
 
     expect(processed.flexMessages).toHaveLength(1);
-    expect(processed.text).toContain("A");
-    expect(processed.text).toContain("B");
-    expect(processed.text).toContain("C");
+    expect(processed.text).toMatch(/A[\s\S]*B[\s\S]*C/);
   });
 });

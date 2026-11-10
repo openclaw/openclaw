@@ -52,8 +52,7 @@ function rangesOverlap(
 /** A link shows its href after the label unless the label already is that address. */
 function linkAddsHref(rawLabel: string, href: string): boolean {
   const label = rawLabel.trim();
-  const comparableHref = href.startsWith("mailto:") ? href.slice("mailto:".length) : href;
-  return Boolean(href && label && label !== href && label !== comparableHref);
+  return Boolean(href && label && label !== href && `mailto:${label}` !== href);
 }
 
 function projectPlainText(
