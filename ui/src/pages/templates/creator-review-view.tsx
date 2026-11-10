@@ -222,9 +222,6 @@ function TemplateReviewDialog(props: {
           </Loading>
         </Show>
         <openclaw-modal-actions>
-          <button type="button" class="btn" onClick={() => props.flow.close()}>
-            {t("templatesDraft.askChanges")}
-          </button>
           <Show when={!state().reviewCurrent && state().busy === null}>
             <button type="button" class="btn" onClick={() => props.flow.retryReview()}>
               {t("templatesDraft.refreshReview")}

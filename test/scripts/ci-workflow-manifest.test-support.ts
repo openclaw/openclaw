@@ -506,6 +506,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     }
     if (options.bundledPlanner) {
       writeScript(
+        "vitest-runtime-selection.mts",
+        reexport("resolveCiVitestWorkerPreset", "scripts/lib/vitest-runtime-selection.mts"),
+      );
+      writeScript(
         "ci-docker-seed-plan.mts",
         options.dockerSeedPlannerSource ??
           reexport(

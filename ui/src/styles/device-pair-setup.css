@@ -47,12 +47,12 @@
 
 .device-pair-setup__access strong {
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .device-pair-setup__access small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.35;
 }
 
@@ -64,15 +64,13 @@
   justify-content: center;
   gap: 10px;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 
 .device-pair-setup__spinner {
   width: 18px;
   height: 18px;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask);
   border-radius: 50%;
   animation: btn-spinner-spin 0.8s linear infinite;
 }
@@ -122,7 +120,7 @@
 .device-pair-setup__qr-unavailable {
   max-width: 220px;
   color: var(--qr-text);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.5;
   text-align: center;
 }
@@ -273,7 +271,7 @@
 .device-pair-setup__state h3 {
   margin: 2px 0 0;
   color: var(--text-strong);
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
   font-weight: 600;
   letter-spacing: -0.015em;
   line-height: 1.3;
@@ -283,7 +281,7 @@
 .device-pair-setup__state p {
   margin: -6px 0 4px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 @media (max-width: 640px) {

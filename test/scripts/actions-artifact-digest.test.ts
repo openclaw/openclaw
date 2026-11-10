@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   downloadExactActionsArtifactArchive,
   verifyExactActionsArtifactDigest,
@@ -52,7 +52,73 @@ function fixture(size = 4, transferredSize = size) {
   return { expected, metadata, fetchImpl, token: "synthetic-test-token", retryAttempts: 1 };
 }
 
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
 describe("exact artifact streaming digest verification", () => {
+  it.each([
+    { archiveTimeoutMs: undefined, delayMs: 70_000, succeeds: false, elapsedMs: 60_000 },
+    { archiveTimeoutMs: 240_000, delayMs: 70_000, succeeds: true, elapsedMs: 70_000 },
+    { archiveTimeoutMs: 240_000, delayMs: 250_000, succeeds: false, elapsedMs: 240_000 },
+  ])("bounds delayed archive bodies: $archiveTimeoutMs / $delayMs", async (scenario) => {
+    vi.useFakeTimers();
+    const timeouts: number[] = [];
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      timeouts.push(ms);
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+      return controller.signal;
+    });
+    const params = fixture();
+    const started = Date.now();
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (!url.endsWith("/zip")) {
+        return Response.json(params.metadata);
+      }
+      const signal = init?.signal;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            const timer = setTimeout(() => {
+              controller.enqueue(Buffer.alloc(4, 7));
+              controller.close();
+            }, scenario.delayMs);
+            signal?.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                controller.error(signal.reason);
+              },
+              { once: true },
+            );
+          },
+        }),
+      );
+    };
+    const verification = verifyExactActionsArtifactDigest({
+      ...params,
+      fetchImpl,
+      archiveTimeoutMs: scenario.archiveTimeoutMs,
+    });
+    const checked = scenario.succeeds
+      ? expect(verification).resolves.toMatchObject({ digest: params.expected.artifactDigest })
+      : expect(verification).rejects.toThrow(/Timed out|deadline exceeded/);
+    await vi.advanceTimersByTimeAsync(scenario.elapsedMs);
+    await checked;
+    expect(Date.now() - started).toBe(scenario.elapsedMs);
+    expect(timeouts).toEqual([60_000, scenario.archiveTimeoutMs ?? 60_000]);
+  });
+
+  it("rejects archive request budgets beyond the existing four-minute ceiling", async () => {
+    await expect(
+      verifyExactActionsArtifactDigest({ ...fixture(), archiveTimeoutMs: 240_001 }),
+    ).rejects.toThrow("no larger than 240000");
+  });
+
   it("hashes the observed 402006833-byte image size without raising buffered ZIP limits", async () => {
     // Reuse one 64 KiB synthetic block: no test or production whole-image allocation.
     const params = fixture(402006833);

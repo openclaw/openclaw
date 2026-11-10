@@ -188,6 +188,31 @@ const readOnlyLoaders = [
 ];
 
 describe("exec approvals SQLite store", () => {
+  it("keeps canonical policy authoritative across reads and writes with conflicting legacy state", async () => {
+    const input = authorizeEcho();
+    const canonical = readExecApprovalsSnapshot();
+    const legacyPath = fixturePath("exec-approvals.json");
+    const legacy = serializeExecApprovals(policy({ security: "full", ask: "off" }));
+    fs.writeFileSync(legacyPath, legacy);
+    execApprovalsStoreTesting.reset();
+
+    expect(readExecApprovalsSnapshot()).toEqual(canonical);
+    for (const { load } of readOnlyLoaders) {
+      expect(await load()).toEqual(canonical.file);
+    }
+    const allowed = await commitExecAuthorizations(input);
+    expect(allowed.readCurrent).not.toThrow();
+    expect(allowed.file.agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe("echo before");
+    await updateExecApprovals({
+      update: { kind: "ensure-agent", agentId: "*", policy: { security: "deny" } },
+    });
+    await expect(commitExecAuthorizations(input)).rejects.toThrow(
+      "Exec approval changed before execution",
+    );
+    expect(loadExecApprovals().agents?.["*"]?.security).toBe("deny");
+    expect(fs.readFileSync(legacyPath, "utf8")).toBe(legacy);
+  });
+
   it.each(readOnlyLoaders)(
     "does not create shared state for a $name read-only load",
     async ({ load }) => {
@@ -650,8 +675,8 @@ describe("exec approvals SQLite store", () => {
     ["source", ""],
     ["Doctor claim", ".doctor-importing"],
   ])(
-    "blocks runtime reads while the retired %s exists, then rechecks after removal",
-    (_, suffix) => {
+    "blocks runtime reads without canonical policy while the retired %s exists, then rechecks after removal",
+    async (_, suffix) => {
       closeOpenClawStateDatabaseForTest();
       const sourcePath = fixturePath("exec-approvals.json");
       const legacyPath = `${sourcePath}${suffix}`;
@@ -663,11 +688,28 @@ describe("exec approvals SQLite store", () => {
           message: `Legacy exec approvals exist at ${sourcePath}. Run \`openclaw doctor --fix\` with OPENCLAW_STATE_DIR set to ${path.dirname(sourcePath)} before using exec approvals.`,
         }),
       );
+      await expect(loadExecApprovalsReadOnlyAsync()).rejects.toBeInstanceOf(
+        ExecApprovalsMigrationRequiredError,
+      );
+      await expect(replacePolicy(policy({ security: "full" }))).rejects.toMatchObject({
+        name: "ExecApprovalsMigrationRequiredError",
+      });
 
       fs.rmSync(legacyPath);
       expect(loadExecApprovals()).toMatchObject({ version: 1, agents: {} });
     },
   );
+
+  it("checks legacy-only policy in the selected read-only state directory", async () => {
+    saveExecApprovals(policy({ security: "deny" }));
+    const selected = tempDirs.make("exec-approvals-selected-");
+    fs.writeFileSync(path.join(selected, "exec-approvals.json"), '{"version":1}');
+    await expect(
+      loadExecApprovalsReadOnlyAsync({ path: path.join(selected, "state", "openclaw.sqlite") }),
+    ).rejects.toBeInstanceOf(ExecApprovalsMigrationRequiredError);
+    expect(fs.existsSync(path.join(selected, "state"))).toBe(false);
+    expect(loadExecApprovals().defaults?.security).toBe("deny");
+  });
 
   it.each([
     [true, false, false],

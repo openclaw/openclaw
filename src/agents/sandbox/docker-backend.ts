@@ -1,3 +1,4 @@
+import { AGENT_GIT_SANDBOX_BIN } from "../../infra/agent-git-shim.js";
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
@@ -105,6 +106,11 @@ async function createContainerSandboxBackend(
       assertCurrent();
       phases.mark("attempt.setup.sandbox.backend.handle");
       const { workdir: defaultWorkdir, env: configuredEnv, image } = params.cfg.docker;
+      const gitBinDir = params.readOnlyResourceMounts?.some(
+        (mount) => mount.containerPath === AGENT_GIT_SANDBOX_BIN,
+      )
+        ? AGENT_GIT_SANDBOX_BIN
+        : undefined;
       const engineTarget =
         podmanTarget ??
         (dockerTarget ? dockerPersistentTargetToEngineTarget(dockerTarget) : undefined);
@@ -167,8 +173,9 @@ async function createContainerSandboxBackend(
               }
             : requestedEnv;
           const { PATH: requestedPath, ...containerEnv } = env;
-          if (requestedPath) {
-            containerEnv.OPENCLAW_PREPEND_PATH = requestedPath;
+          const prependPath = [gitBinDir, requestedPath].filter(Boolean).join(":");
+          if (prependPath) {
+            containerEnv.OPENCLAW_PREPEND_PATH = prependPath;
           }
           const envFile = await createContainerEnvFile(containerEnv);
           try {
@@ -190,7 +197,7 @@ async function createContainerSandboxBackend(
             }
             // Apply the staged prepend only after login profile sourcing; direct PATH
             // injection can break the container engine's initial executable lookup.
-            const pathExport = env.PATH
+            const pathExport = prependPath
               ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
               : "";
             // Use absolute path for sh to avoid dependency on PATH resolution during exec.
@@ -401,7 +408,9 @@ export async function createPodmanSandboxBackend(
 
 function createContainerSandboxBackendManager(
   engine: SandboxContainerEngine,
-): SandboxBackendManager {
+): SandboxBackendManager & {
+  stopRuntime(entry: SandboxRegistryEntry, assertCurrent: () => void): Promise<void>;
+} {
   const resolveTarget = (entry: SandboxRegistryEntry) => {
     if (engine.id !== "podman") {
       return entry.backendTarget;
@@ -423,6 +432,28 @@ function createContainerSandboxBackendManager(
         : bindDockerPersistentTarget(dockerPersistentTargetFromEngineTarget(target))
       : engine;
   return {
+    // The registry owner holds runtime admission, the entry lock, and allocation's lifecycle queue.
+    async stopRuntime(entry, assertCurrent) {
+      const target = resolveTarget(entry);
+      await validateSandboxContainerEngineTarget(engine, target);
+      assertCurrent();
+      const runtimeEngine = bindTarget(target);
+      const state = await containerState(runtimeEngine, entry.containerName, {
+        strict: true,
+        includePaused: true,
+      });
+      assertCurrent();
+      if (state.exists && (state.running || state.paused)) {
+        const signal = AbortSignal.timeout(30_000);
+        if (state.paused) {
+          await execContainer(runtimeEngine, ["unpause", state.id], { assertCurrent, signal });
+        }
+        await execContainer(runtimeEngine, ["stop", "--time", "0", state.id], {
+          assertCurrent,
+          signal,
+        });
+      }
+    },
     async describeRuntime({ entry, config, agentId }) {
       const target = resolveTarget(entry);
       await validateSandboxContainerEngineTarget(engine, target);

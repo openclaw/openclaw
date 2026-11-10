@@ -226,7 +226,13 @@ describe("worker turn execution", () => {
     };
     registry.typedHooks.push(registration);
     initializeGlobalHookRunner(registry);
-    const environments = { ...unusedEnvironments(), get: attachedEnvironment };
+    const tunnel = unusedTunnel({});
+    const environments = {
+      ...unusedEnvironments(),
+      get: attachedEnvironment,
+      acquireTurnCredential: vi.fn(async () => credential()),
+      startTunnel: vi.fn(async () => tunnel),
+    };
     const provider = turnProvider(environments);
     const runLocal = vi.fn();
     const onUserMessagePersisted = vi.fn();
@@ -267,12 +273,7 @@ describe("worker turn execution", () => {
         expect(sql?.queries).toEqual([]);
         sql?.restore();
         expect((await openSessionManager()).getEntries()).toEqual([]);
-        expectNoCalls(
-          onUserMessagePersisted,
-          environments.acquireTurnCredential,
-          environments.startTunnel,
-          runLocal,
-        );
+        expectNoCalls(onUserMessagePersisted, tunnel.launchTurn, runLocal);
         return;
       }
       const result = await execution;
@@ -282,7 +283,7 @@ describe("worker turn execution", () => {
         error: { kind: "hook_block" },
         livenessState: "blocked",
       });
-      expectNoCalls(environments.acquireTurnCredential, environments.startTunnel, runLocal);
+      expectNoCalls(tunnel.launchTurn, runLocal);
       const messages = (await openSessionManager()).buildSessionContext().messages;
       expect(messages).toEqual([
         expect.objectContaining({
@@ -328,7 +329,13 @@ describe("worker turn execution", () => {
     };
     registry.typedHooks.push(registration);
     initializeGlobalHookRunner(registry);
-    const environments = { ...unusedEnvironments(), get: attachedEnvironment };
+    const tunnel = unusedTunnel({});
+    const environments = {
+      ...unusedEnvironments(),
+      get: attachedEnvironment,
+      acquireTurnCredential: vi.fn(async () => credential()),
+      startTunnel: vi.fn(async () => tunnel),
+    };
     const provider = turnProvider(environments);
     let current = true;
     const execution = execute(
@@ -348,7 +355,7 @@ describe("worker turn execution", () => {
       release.resolve();
       expect(await outcome).toMatchObject({ message: "synthetic authority closed" });
       expect((await openSessionManager()).getEntries()).toEqual([]);
-      expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+      expect(tunnel.launchTurn).not.toHaveBeenCalled();
     } finally {
       release.resolve();
       await outcome;
