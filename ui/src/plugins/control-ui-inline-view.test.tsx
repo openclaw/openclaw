@@ -14,7 +14,7 @@ import { createViewRuntime, recordReplacement } from "./control-ui-view.test-sup
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it("uses the latest queued visibility and remounts retained inline views on return", async () => {
+it.each([true, false])("uses the latest queued visibility from presented=%s", async (presented) => {
   const Observer = globalThis.IntersectionObserver;
   vi.stubGlobal(
     "IntersectionObserver",
@@ -80,7 +80,7 @@ it("uses the latest queued visibility and remounts retained inline views on retu
     ],
     {
       applicationContext,
-      presented: true,
+      presented,
       transcriptVisible: { owner: presentation, isPresented: () => visible },
     },
   );
@@ -88,8 +88,16 @@ it("uses the latest queued visibility and remounts retained inline views on retu
   try {
     rerender();
     transcript.start();
+    const initialRow = container.querySelector(".chat-virtual-row");
+    if (!presented) {
+      flush();
+      expect(contexts).toHaveLength(0);
+      props.presented = true;
+      rerender();
+    }
     await waitForSolid(() => expect(contexts).toHaveLength(1));
     const row = container.querySelector(".chat-virtual-row");
+    expect(row).toBe(initialRow);
     const placeholder = container.querySelector(".chat-plugin-inline-view");
     expect(row).not.toBeNull();
     expect(placeholder?.textContent).toContain("Incident detail");

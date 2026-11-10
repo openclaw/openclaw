@@ -737,7 +737,7 @@ function requireExpectedBinding(params) {
   };
 }
 
-function validateArtifactMetadata(artifact, expected) {
+export function validateArtifactMetadata(artifact, expected) {
   if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
     throw new Error("Actions artifact metadata must be an object.");
   }
@@ -1255,7 +1255,16 @@ export async function downloadExactActionsArtifactArchive(params) {
     "GitHub Actions artifact metadata",
   );
   validateArtifactMetadata(artifactMetadata, expected);
-  const archiveBytes = await transfer.archive();
+  const replay = params.immutableReads;
+  replay?.observeArchive(expected.artifactId, artifactMetadata);
+  const archiveBytes = replay
+    ? await replay.bytes(`actions/artifacts/${expected.artifactId}/zip`, () => transfer.archive())
+    : await transfer.archive();
+  // Replay is content-only: metadata above stays live, and the selected tuple
+  // must authenticate the bytes even when the carrier itself was authentic.
+  if (replay) {
+    verifyArchiveBytes(archiveBytes, expected, "GitHub Actions artifact download");
+  }
   return { archiveBytes, artifactMetadata };
 }
 

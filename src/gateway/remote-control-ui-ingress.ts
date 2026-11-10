@@ -3,8 +3,6 @@ import { isDeepStrictEqual } from "node:util";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { isRedactedSecretValue } from "../config/redact-sentinel.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHostAccountName } from "../infra/host-account-name.js";
 import {
   GatewayControlUiIngressError,
@@ -14,7 +12,6 @@ import {
   type GatewayIngressPrincipalBindingV1,
   type GatewayControlUiIngressRequestV1,
   type GatewayControlUiIngressV2,
-  type GatewayIngressPrincipal,
 } from "../plugins/gateway-ingress.types.js";
 import { assertionSucceeds } from "../shared/assertion.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
@@ -24,10 +21,10 @@ import {
   projectUserProfileDisplay,
 } from "../state/user-profile-list.js";
 import { ensureCanonicalGatewayOwnerProfile } from "../state/user-profile-writes.js";
-import type { ResolvedGatewayAuth } from "./auth-resolve.js";
-import { gatewayPersonPrincipalAuthError } from "./auth.js";
+import { gatewayIngressPrincipalAuthError, gatewayPersonPrincipalAuthError } from "./auth.js";
 import { validateRemoteControlUiFrameAncestors } from "./control-ui-csp.js";
 import { filterRemoteControlUiPluginReadCookies } from "./control-ui-plugin-auth-cookie.js";
+import { openclawIdTunnelRolePolicy } from "./openclaw-id/tunnel-principal.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -46,26 +43,6 @@ import type {
   RemoteControlUiIngressContext,
   RemoteIngressPrincipalSnapshot,
 } from "./server/client-identity-types.js";
-
-function remoteControlUiGatewayAuthError(
-  auth: ResolvedGatewayAuth,
-  cfg: OpenClawConfig,
-  principal: GatewayIngressPrincipal,
-): string | undefined {
-  if (principal.kind !== "owner") {
-    return gatewayPersonPrincipalAuthError(auth, cfg);
-  }
-  if (cfg.gateway?.roles) {
-    return "Owner ingress does not support gateway.roles. Use a person-bound grant approved in the Gateway Control UI.";
-  }
-  if (auth.mode !== "token" && auth.mode !== "password") {
-    return "Owner ingress requires gateway.auth.mode token or password without gateway.roles. Trusted-proxy Gateways require a person-bound grant.";
-  }
-  if (isRedactedSecretValue(auth[auth.mode])) {
-    return "Remote Control UI ingress cannot use a redacted Gateway credential. Replace the configured token or password with its real value locally before opening ingress.";
-  }
-  return undefined;
-}
 
 const MAX_HTTP_PER_HANDLE = 16;
 const requestHeaders = new Set([
@@ -241,7 +218,7 @@ export function createGatewayControlUiIngressFactory(params: {
         invalidated.signal.throwIfAborted();
         assertGrant();
         admission?.assertCurrent();
-        const error = remoteControlUiGatewayAuthError(
+        const error = gatewayIngressPrincipalAuthError(
           host.getResolvedAuth(),
           host.getRuntimeConfig(),
           principal,
@@ -290,12 +267,14 @@ export function createGatewayControlUiIngressFactory(params: {
         const initial = initialIdentity.profile;
         const emailBindingIds = prepared.emailBindingIds;
         const readRole = (current: typeof initial) =>
-          resolveOperatorRolePolicyForAssignment(
-            profileId,
-            current.assignedRole,
-            host.getRuntimeConfig(),
-            current.githubLogin ?? null,
-          );
+          admission
+            ? openclawIdTunnelRolePolicy(admission.principal)
+            : resolveOperatorRolePolicyForAssignment(
+                profileId,
+                current.assignedRole,
+                host.getRuntimeConfig(),
+                current.githubLogin ?? null,
+              );
         const role = principal.kind !== "owner" ? structuredClone(readRole(initial)) : undefined;
         const access =
           principal.kind !== "owner"
@@ -319,7 +298,7 @@ export function createGatewayControlUiIngressFactory(params: {
               !isDeepStrictEqual(currentIdentity.aliases, initialIdentity.aliases) ||
               initial.emails.some((email) => !current.emails.includes(email)) ||
               initial.githubAccountIds?.some((id) => !current.githubAccountIds?.includes(id)) ||
-              (principal.kind !== "owner" &&
+              (principal.kind === "person" &&
                 gatewayPersonPrincipalAuthError(
                   host.getResolvedAuth(),
                   host.getRuntimeConfig(),
@@ -349,6 +328,7 @@ export function createGatewayControlUiIngressFactory(params: {
             return {
               bindingId,
               ...(principal.kind === "delegated-person" ? { admission: principal.admission } : {}),
+              ...(admission ? { openclawIdPrincipal: admission.principal } : {}),
               ...(recoverySource ? { recoverySource } : {}),
               authenticatedUserProfile: {
                 profileId,
@@ -426,6 +406,7 @@ export function createGatewayControlUiIngressFactory(params: {
         operatorDeviceTokenIdentity: null,
         operatorRoleActor: principalSnapshot.operatorRoleActor,
         operatorAccessAuthority: principalSnapshot.operatorAccessAuthority,
+        openclawIdPrincipal: principalSnapshot.openclawIdPrincipal,
         pluginRuntimeOwnerId: pluginId,
       };
       const client: GatewayClient = {

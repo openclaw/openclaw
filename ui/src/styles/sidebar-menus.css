@@ -11,7 +11,7 @@
 .people-menu__status {
   padding: 6px 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .people-menu__submenu + .oc-menu {
@@ -100,7 +100,7 @@
 
 .session-menu__snooze-picker p {
   margin: 10px 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .session-menu__snooze-picker [role="alert"] {
@@ -183,8 +183,8 @@
   max-width: 100%;
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(16px * var(--control-ui-text-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -200,7 +200,7 @@
 .session-actions-page h3 {
   margin: 12px 12px 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
@@ -975,7 +975,7 @@
 }
 
 .sidebar-agent-menu__group-count {
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 650;
   line-height: 1;
 }

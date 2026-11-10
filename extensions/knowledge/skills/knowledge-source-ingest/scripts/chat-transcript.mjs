@@ -41,7 +41,8 @@ async function run(argv) {
 
   // Reads all rows in time order. Splits on \n only: message text may contain U+2028, which readline treats as a line break.
   async function readRows(filename) {
-    const rows = (await readFile(filename, "utf8"))
+    const rows = new TextDecoder("utf-8", { fatal: true })
+      .decode(await readFile(filename))
       .split("\n")
       .filter((line) => line.trim())
       .map((line) => JSON.parse(line));
@@ -242,7 +243,7 @@ async function run(argv) {
   const byId = new Map(rows.map((row) => [row.id, row]));
   const days = new Map();
   for (const row of rows) {
-    if (!row.occurred_at?.endsWith("Z")) {
+    if (!row.occurred_at?.endsWith("Z") || !Number.isFinite(Date.parse(row.occurred_at))) {
       throw new Error("Row " + row.id + " needs a UTC occurred_at");
     }
     const day = row.occurred_at.slice(0, 10);

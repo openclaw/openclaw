@@ -111,6 +111,8 @@ export type RunCliAgentParams = Pick<
   requesterModel?: ProviderModelRef;
   /** Native context window resolved by the run owner from its prepared model catalog. */
   modelContextWindow?: number;
+  /** Catalog model a CLI-native alias selects, taken from the CLI's own model menu. */
+  nativeModelId?: string;
   /** Effective context cap resolved by the run owner from its prepared model catalog. */
   modelContextTokens?: number;
   provider: string;

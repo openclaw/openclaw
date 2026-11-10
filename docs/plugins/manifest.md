@@ -543,6 +543,9 @@ See [Configuration reference](/gateway/configuration-reference#plugins) for the 
 - Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
 - `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
+  A live `catalog.run` descriptor supplies runtime discovery for its own provider ID.
+  Full plugin registration still supplies any runtime or refreshable sibling providers
+  that the entry does not cover; a static-only descriptor does not replace live discovery.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory` (default `memory-core`), `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
 - Declare exclusive plugin kind in this manifest. Bundled plugins use manifest kinds without loading their runtime during enablement. Runtime-entry `OpenClawPluginDefinition.kind` was deprecated on 2026-07-25 and remains only as a compatibility fallback for older external plugins; its removal gate is 2026-10-01. See the [compatibility policy](/plugins/sdk-migration/compatibility-policy#compatibility-policy).
 - Env-var metadata in `setup.providers[].envVars` is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.

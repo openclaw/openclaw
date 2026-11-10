@@ -377,6 +377,7 @@ export function createManagedServiceManagerBoundary({
         env: helperEnv,
         options,
       });
+      await interrupted?.prepareStagedRuntime(path.dirname(scriptPath));
       const runningHelper = spawn(resolveTestNodeExecPath(), [scriptPath, paramsPath], {
         env: helperEnv,
         stdio: ["pipe", "pipe", "pipe"],
