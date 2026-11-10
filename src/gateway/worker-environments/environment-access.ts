@@ -102,7 +102,6 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
 type WorkerEnvironmentAccessOptions = {
   readStartStatus: (record: WorkerEnvironmentRecord) => WorkerEnvironmentStartStatus | undefined;
   store: WorkerEnvironmentStore;
-  getCleanupError: (record: WorkerEnvironmentRecord) => string | undefined;
   getConfig: () => OpenClawConfig;
   projectNamespace?: string;
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
@@ -195,7 +194,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const project = (record: WorkerEnvironmentRecord) => {
-    const cleanupError = options.getCleanupError(record);
     const desktopAvailable =
       options.getConfig().cloudWorkers?.desktop === true &&
       ["ready", "idle", "attached"].includes(record.state) &&
@@ -231,7 +229,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),
-      ...(cleanupError ? { error: cleanupError } : {}),
       desktopAvailable,
       desktopApps: desktopAvailable
         ? (record.desktop?.apps?.map((app) => app.id).toSorted() ?? [])
