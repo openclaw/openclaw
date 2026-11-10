@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { build } from "vite";
+import { build, type Rolldown } from "vite";
 import { describe, expect, it } from "vitest";
 import {
   controlUiBootManifestKey,
@@ -26,7 +26,7 @@ function importClosure(importsFor: (file: string) => readonly string[]) {
 function buildFixture(
   entry: string,
   sources: Map<string, string>,
-  codeSplitting = controlUiCodeSplitting,
+  codeSplitting: Rolldown.CodeSplittingOptions = controlUiCodeSplitting,
 ) {
   return build({
     configFile: false,

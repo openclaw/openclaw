@@ -20,6 +20,8 @@ const controlUiBootModules = JSON.parse(
 };
 
 const chatPresentationModules = new Set([
+  "ui/src/pages/chat/components/chat-thread-view.tsx",
+  "ui/src/pages/chat/components/chat-transcript-layout-solid.tsx",
   "ui/src/pages/chat/components/chat-message-group-view.tsx",
   "ui/src/pages/chat/components/chat-divider.tsx",
   "ui/src/pages/chat/components/chat-composer-dom.ts",
