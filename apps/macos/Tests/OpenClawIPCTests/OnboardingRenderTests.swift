@@ -19,17 +19,17 @@ struct OnboardingRenderTests {
             (4, "find"), (5, "reach"), (9, "done-local"),
         ]
         for (page, name) in pages {
-            try Self.capture(
-                view.pageView(for: page, contentHeight: 535),
+            try Self.capturePage(
+                view.pageView(for: page, contentHeight: OnboardingView.contentHeight(for: OnboardingView.windowHeight)),
                 name: name,
-                label: "Native UI · isolated preview state · no live connection",
+                label: "Native page · default window size · navigation omitted · no live connection",
                 output: output)
         }
         state.connectionMode = .unconfigured
-        try Self.capture(
-            view.pageView(for: 9, contentHeight: 535),
+        try Self.capturePage(
+            view.pageView(for: 9, contentHeight: OnboardingView.contentHeight(for: OnboardingView.windowHeight)),
             name: "done-later",
-            label: "Native UI · Set up later · isolated preview state",
+            label: "Native page · Set up later · default window size · navigation omitted",
             output: output)
     }
 
@@ -43,20 +43,42 @@ struct OnboardingRenderTests {
         return output
     }
 
-    static func capture(_ content: some View, name: String, label: String, output: URL) throws {
-        for dark in [false, true] {
-            let hosting = NSHostingView(rootView: VStack(spacing: 0) {
-                Text(label).font(.caption).foregroundStyle(.secondary).padding(10)
-                GlowingOpenClawIcon(size: 110).frame(height: 125)
-                content.frame(width: 630, height: 535)
+    static func capturePage(_ content: some View, name: String, label: String, output: URL) throws {
+        // Match OnboardingView's default content rectangle and mascot metrics.
+        // Leave navigation's space empty rather than fabricate an active route or verified AI state.
+        try Self.capture(
+            VStack(spacing: 0) {
+                GlowingOpenClawIcon(size: 130).offset(y: 10).frame(height: 145)
+                content.frame(
+                    width: OnboardingView.windowWidth,
+                    height: OnboardingView.contentHeight(for: OnboardingView.windowHeight))
                 Spacer(minLength: 0)
             }
-            .frame(width: 630, height: 752)
+            .frame(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight),
+            name: name, label: label, output: output)
+    }
+
+    static func capture(
+        _ content: some View,
+        name: String,
+        label: String,
+        output: URL,
+        width: CGFloat = OnboardingView.windowWidth,
+        dark: Bool? = nil) throws
+    {
+        for dark in dark.map({ [$0] }) ?? [false, true] {
+            let hosting = NSHostingView(rootView: VStack(spacing: 0) {
+                content
+                Divider()
+                Text(label).font(.caption).foregroundStyle(.secondary).padding(10)
+            }
+            .frame(width: width)
+            .fixedSize(horizontal: false, vertical: true)
             .background(Color(nsColor: .windowBackgroundColor))
             .environment(\.locale, Locale(identifier: "en_US"))
             .environment(\.colorScheme, dark ? .dark : .light))
             hosting.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-            hosting.frame = NSRect(x: 0, y: 0, width: 630, height: 752)
+            hosting.setFrameSize(hosting.fittingSize)
             let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = hosting
