@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { assertNoUnmigratedWorkspaceState } from "../../agents/workspace-legacy-state.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -266,6 +268,28 @@ describe("getReplyFromConfig message hooks", () => {
   const sandboxDocumentConfig: OpenClawConfig = {
     agents: { defaults: { sandbox: { mode: "non-main", scope: "agent" } }, entries: { main: {} } },
   };
+
+  it("returns repair guidance when attachment staging finds retained sandbox state", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const sandbox = path.join(state.root, "sandbox");
+      await fs.mkdir(sandbox);
+      await fs.writeFile(path.join(sandbox, "openclaw-workspace-state.json"), "not-json");
+      vi.mocked(stageMedia).mockImplementationOnce(async () => {
+        assertNoUnmigratedWorkspaceState({ workspaceDir: sandbox });
+        throw new Error("Expected retained sandbox state to refuse preparation");
+      });
+      const ctx = buildCtx({ ...sandboxDocumentCtx, media: [{ path: "/tmp/report.docx" }] });
+      mocks.initSessionState.mockResolvedValueOnce(
+        createGetReplySessionState({ sessionCtx: ctx, sessionKey: ctx.SessionKey, isGroup: false }),
+      );
+      mocks.resolveReplyDirectives.mockResolvedValueOnce(continueReply(ctx));
+
+      const result = await reply(ctx, sandboxDocumentConfig);
+      expect(result).toMatchObject({ text: expect.stringContaining("openclaw doctor --fix") });
+      expect(JSON.stringify(result)).not.toContain(sandbox);
+      expect(runReply).not.toHaveBeenCalled();
+    });
+  });
 
   it.each([true, false])(
     "enables sandboxed document self-service only after staging succeeds (%s)",

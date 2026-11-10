@@ -160,6 +160,32 @@ it.for(["off", "all"] as const)(
   },
 );
 
+it("retains a sandbox setup file when attachment preparation refuses", async ({ state }) => {
+  const cfg = attachmentConfig(state, { sandboxRoot: "sandbox" });
+  cfg.agents!.defaults!.sandbox!.scope = "shared";
+  const sandbox = state.path("sandbox");
+  const marker = path.join(sandbox, "openclaw-workspace-state.json");
+  await fs.mkdir(sandbox);
+  await fs.writeFile(marker, "not-json");
+  const { result } = await prepareAttachmentFixture({
+    params: attachmentParams("retained-sandbox-state", "input.txt", "attachment"),
+    session: { cfg },
+  });
+  assert(result.ok, "attachment preparation failed before sandbox staging");
+  const ctx: MsgContext = { media: result.value.mediaPathOffloads };
+  await expect(
+    staging.stageSandboxMedia({
+      ctx,
+      sessionCtx: ctx as TemplateContext,
+      cfg,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      workspaceDir: state.workspaceDir,
+    }),
+  ).rejects.toMatchObject({ kind: "legacy-workspace" });
+  expect(await fs.readFile(marker, "utf8")).toBe("not-json");
+});
+
 it("stages managed session follow-ups in their projection and rejects unrelated workspaces", async ({
   state,
   signal: testSignal,

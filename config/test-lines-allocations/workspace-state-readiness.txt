@@ -1,2 +1,2 @@
-134
-# Covers local marker isolation, container activation, retained attestation admission, and affected-workspace repair guidance.
+184
+# Covers local marker isolation, container activation, retained attestation admission, affected-workspace repair guidance, and attachment preparation.
