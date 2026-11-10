@@ -50,7 +50,7 @@ import type { guardSessionManager } from "../../session-tool-result-guard-wrappe
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
+import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool-shared.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";

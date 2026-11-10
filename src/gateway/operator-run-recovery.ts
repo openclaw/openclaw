@@ -297,6 +297,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       }
       if (
         snapshot.sourceIngress === "principal" &&
+        !principal &&
         snapshot.profileId !== GATEWAY_OWNER_PROFILE_ID
       ) {
         // The transport owns effective auth overrides; headless contexts resolve their config.

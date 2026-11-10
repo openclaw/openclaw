@@ -346,7 +346,9 @@ export type PluginRuntimeCore = {
   };
   system: {
     captureSessionEventTarget: typeof import("./runtime-session-events.js").captureSessionEventTarget;
-    enqueueSessionEvent: typeof import("./runtime-session-events.js").enqueueSessionEvent;
+    enqueueSessionEvent: ReturnType<
+      typeof import("./runtime-session-events.js").createSessionEventEnqueuer
+    >;
     enqueueSystemEvent: typeof import("./system-events.js").enqueueSystemEventFromSdk;
     /** Current generation of a session; a later `postSessionNotice` skips it once reset or replaced. */
     captureSessionGeneration: typeof import("./runtime-session-notice.js").capturePluginSessionGeneration;

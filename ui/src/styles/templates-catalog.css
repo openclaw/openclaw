@@ -66,7 +66,7 @@
     padding-block: var(--space-4);
     border-top: 1px solid var(--border);
     .settings-row__title {
-      line-height: 20px;
+      line-height: calc(20px * var(--control-ui-text-scale));
     }
   }
   /* The route omits settings.css; reserve the existing 18px navigation lane. */
