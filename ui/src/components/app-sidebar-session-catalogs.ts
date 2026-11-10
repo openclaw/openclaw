@@ -17,8 +17,8 @@ import type {
 import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 
-export function catalogSessionRowsByKey(rows: readonly GatewaySessionRow[]) {
-  const byKey = new Map<string, GatewaySessionRow>();
+export function catalogSessionRowsByKey<Row extends { key: string }>(rows: readonly Row[]) {
+  const byKey = new Map<string, Row>();
   for (const row of rows) {
     if (!byKey.has(row.key)) {
       byKey.set(row.key, row);

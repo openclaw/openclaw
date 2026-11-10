@@ -9,9 +9,13 @@ import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import {
   projectSidebarHomeSession,
+  projectSidebarSessionReference,
   type SidebarHomeSession,
 } from "./app-sidebar-agent-session-rows.ts";
-import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
+import {
+  catalogSessionRowsByKey,
+  type SidebarSessionCatalog,
+} from "./app-sidebar-session-catalogs.ts";
 import { findActiveSidebarLineageRow } from "./app-sidebar-session-lookup.ts";
 import {
   buildSidebarSessionNavigationState,
@@ -21,7 +25,10 @@ import type {
   SidebarSessionProjection,
   SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
-import { projectSidebarSnoozeCatalogs } from "./app-sidebar-session-snooze-visibility.ts";
+import {
+  projectSidebarSnoozeCatalogs,
+  sidebarCatalogLiveRows,
+} from "./app-sidebar-session-snooze-visibility.ts";
 import {
   isListedInPinnedSection,
   type SidebarEmptyGroupsMode,
@@ -80,6 +87,7 @@ export type SidebarProjectionHost = {
   knownSessionGroups(): string[];
   knownSectionOrder(): string[];
   visibleSessionCatalogs(): SessionDataOwner["sessionCatalogs"];
+  catalogSessionRows(): SidebarRecentSession[];
 };
 
 export function sidebarNavigationInputs(
@@ -134,6 +142,7 @@ export function memoizedSidebarSections(
   const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
   const groups = context?.navigation.snapshot.personalSessionGroups;
   const references = groups?.length ? host.personalGroupSessionReferences() : [];
+  const catalogRows = host.catalogSessionRows();
   return memo.read(
     () => [
       rows,
@@ -141,6 +150,7 @@ export function memoizedSidebarSections(
       groups?.length ? groups : undefined,
       ...references,
       catalogs,
+      catalogRows,
       roster,
       host.collapsedSessionSections,
       host.effectiveSessionsGrouping(),
@@ -175,7 +185,10 @@ export function memoizedSidebarSections(
       return host.sessionProjection.project({
         rows,
         selectedSessionKey: isSessionRouteId(host.activeRouteId) ? host.getRouteSessionKey() : null,
-        referencedRows: groups?.flatMap((group) => host.personalGroupSessionRows(group, zone)),
+        referencedRows: [
+          ...catalogRows,
+          ...(groups?.flatMap((group) => host.personalGroupSessionRows(group, zone)) ?? []),
+        ],
         sections,
         pinnedKeys,
         grouping,
@@ -254,6 +267,48 @@ export function projectSidebarNavigation(
       current && !rows.some((row) => row.key === current.key) ? [...rows, current] : [...rows];
   }
   return navigation;
+}
+
+/** Converted entries use the same tree and child-read lifecycle as explicit session references. */
+export function memoizedSidebarCatalogRows(
+  memo: SidebarProjectionMemo<SidebarRecentSession[]>,
+  host: SidebarProjectionHost,
+  catalogs: readonly SidebarSessionCatalog[],
+): SidebarRecentSession[] {
+  const navigationState = host.getSessionNavigationState();
+  return memo.read(
+    () => [
+      navigationState,
+      catalogs,
+      host.sessionData.sessionsResult,
+      host.sessionData.sessionResultsByAgent,
+      host.sessionData.loadedChildSessionKeys,
+      host.sessionData.childSessionErrorsByParent,
+    ],
+    () => {
+      const liveRows = catalogSessionRowsByKey(sidebarCatalogLiveRows(host.sessionData));
+      return catalogs.flatMap((catalog) =>
+        catalog.visibleHosts.flatMap((source) =>
+          source.sessions.flatMap((entry) => {
+            const row = entry.sessionKey ? liveRows.get(entry.sessionKey) : undefined;
+            return row
+              ? [
+                  projectSidebarSessionReference({
+                    host,
+                    row,
+                    agentId: host.sessionNavigationAgentId(row),
+                    navigationState,
+                    resolveAttention: host.resolveSessionAttention,
+                    involvingMe: host.sessionInvolvingMeFilterActive,
+                    ownerId: host.sessionOwnerFilterId,
+                  }).session,
+                ]
+              : [];
+          }),
+        ),
+      );
+    },
+  );
 }
 
 export function memoizedSidebarCatalogs(

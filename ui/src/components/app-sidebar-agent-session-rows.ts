@@ -251,14 +251,11 @@ export function projectSidebarAgentSessionRows({
     promotedRows.length > 0 || categorizedChildRows.length > 0
       ? scopedRootRows.toSorted(compareSessions)
       : scopedRootRows;
-  // `adopted` holds only catalog-bound keys (adoptedCatalogSessionKeys), not
-  // fetched child rows: a catalog-adopted promoted child intentionally
-  // renders as its live row inside the Coding catalog, never as a thread.
+  // Build the complete tree before placing adopted roots in their catalog;
+  // dropping a parent first would promote its children into duplicate roots.
   const projected = projectSessionTree({
     mainSessionKeys,
-    roots: orderedRootRows.filter(
-      (row) => !adopted.has(row.key) && (!grouped || visibleRowsByKey.has(row.key)),
-    ),
+    roots: orderedRootRows.filter((row) => !grouped || visibleRowsByKey.has(row.key)),
     rowsByKey: visibleRowsByKey,
     loadingChildKeys: host.sessionData.loadingChildSessionKeys,
     isChildSessionVisible,
@@ -274,7 +271,7 @@ export function projectSidebarAgentSessionRows({
   ) {
     projected.unshift(navigationState.toSidebarSession(selectedFallback));
   }
-  return projected;
+  return projected.filter((row) => !adopted.has(row.key));
 }
 
 export type SidebarHomeSession = SidebarRecentSession & {
@@ -291,6 +288,8 @@ export function projectSidebarSessionReference({
   navigationState,
   resolveAttention,
   mainSessionKeys,
+  involvingMe = false,
+  ownerId,
 }: {
   host: Pick<
     AgentSessionRowsHost,
@@ -302,6 +301,8 @@ export function projectSidebarSessionReference({
   navigationState: SidebarSessionNavigationState;
   resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
   mainSessionKeys?: ReadonlySet<string>;
+  involvingMe?: boolean;
+  ownerId?: string | null;
 }) {
   const visibility = projectSidebarArchiveVisibility({
     sessionData: host.sessionData,
@@ -314,6 +315,7 @@ export function projectSidebarSessionReference({
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });
   const { rows, childSessionRowsByParent, isChildSessionVisible } = visibility;
+  const involvedKeys = involvingMe ? new Set(rows.map((entry) => entry.key)) : null;
   const scopedRow = { ...row, agentId, sidebarRoot: true };
   const own = navigationState.toSidebarSession(scopedRow);
   const projected = projectSessionTree({
@@ -324,12 +326,20 @@ export function projectSidebarSessionReference({
       childRowsByParent: childSessionRowsByParent,
     }),
     loadingChildKeys: host.sessionData.loadingChildSessionKeys,
-    isChildSessionVisible,
+    isChildSessionVisible: (parent, key, child) =>
+      (!involvedKeys || involvedKeys.has(key)) && isChildSessionVisible(parent, key, child),
     resolveAttention,
     toSidebarSession: (session, isChild) =>
       isChild ? navigationState.toSidebarSession(session, true) : own,
   })[0]!;
-  return { session: projected, own, visibility };
+  const session = ownerId
+    ? applySidebarSessionOwnerFilter({
+        projected: [projected],
+        ownerFacet: [],
+        selectedOwnerId: ownerId,
+      }).rows[0]!
+    : projected;
+  return { session, own, visibility };
 }
 
 /** Home is a navigation root even when its persisted lineage points to itself. */

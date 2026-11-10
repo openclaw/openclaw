@@ -448,6 +448,14 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const sections = createMemo(() => host().zonedVisibleSections(visibleSessions()).sections);
     const expandedAgentId = createMemo(() => host().expandedAgentId());
     const catalogs = createMemo(() => host().sidebarSessionCatalogs());
+    const catalogRows = createMemo(
+      () =>
+        new Map(
+          host()
+            .catalogSessionRows()
+            .map((row) => [row.key, row]),
+        ),
+    );
     const catalogRouteSessionKey = createMemo(() => {
       const terminalCatalog =
         host().activeRouteId === "terminal"
@@ -493,7 +501,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             loadingMoreCatalogIds: host().sessionData.loadingMoreSessionCatalogIds,
             projectGrouping: host().catalogProjectGrouping,
             liveRows: host().catalogLiveRows(),
-            toSidebarSession: navigationState().toSidebarSession,
+            projectedRows: catalogRows(),
             catalogOpenTarget: host().catalogOpenTarget,
             terminalAvailable: host().terminalAvailable,
           }}

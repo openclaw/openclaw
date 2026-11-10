@@ -49,7 +49,7 @@ type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 type SidebarProjectionInput = {
   rows: SidebarRecentSession[];
   selectedSessionKey: string | null;
-  /** Personal placements participate in disclosure lifetime, not canonical grouping. */
+  /** Catalog and personal placements share disclosure lifetime, not canonical grouping. */
   referencedRows?: readonly SidebarRecentSession[];
   sections?: SidebarSessionSection<SidebarRecentSession>[];
   /** Personal pins render in the Pinned section above these sections, never twice. */
@@ -114,7 +114,7 @@ type SidebarPresentationHost = Pick<
   };
   pluginNavigation(): readonly ControlUiRegistration<ControlUiNavigationItem>[];
   reconciledSidebarZone(): SidebarPinZone;
-  getSessionNavigationState(): { toSidebarSession(row: GatewaySessionRow): SidebarRecentSession };
+  catalogSessionRows(): SidebarRecentSession[];
   mainSessionRow(agentId: string): GatewaySessionRow | null;
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
   sessionNavigationAgentId(session: Pick<SidebarRecentSession, "key" | "agentId">): string;
@@ -179,7 +179,6 @@ export class SidebarSessionProjection {
     const chip = host.activeChipAgent();
     const replacement =
       sessionsVisible && host.sessionDataContext?.plugins.selectedReplacement("session-list");
-    const navigation = host.getSessionNavigationState();
     const sections = sessionsVisible ? readers.sections() : [];
     const roster =
       sessionsVisible && host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
@@ -262,7 +261,8 @@ export class SidebarSessionProjection {
             catalogs,
             data.sessionsResult,
             data.sessionResultsByAgent,
-            navigation,
+            host.catalogSessionRows(),
+            this.revision,
             context?.sessions.revision,
             this.mountedCatalogRevision,
             areSessionCatalogsSettled(data),
@@ -272,6 +272,7 @@ export class SidebarSessionProjection {
             const catalogRowsByKey = catalogSessionRowsByKey(
               catalogs.length ? readers.catalogRows() : [],
             );
+            const projectedRowsByKey = catalogSessionRowsByKey(host.catalogSessionRows());
             return [
               catalogs.map(({ hosts, ...visible }) => [
                 visible,
@@ -286,8 +287,8 @@ export class SidebarSessionProjection {
                 ),
               ),
               Array.from(this.mountedCatalogRows, ({ key }) => {
-                const row = catalogRowsByKey.get(key);
-                return row ? navigation.toSidebarSession(row) : null;
+                const row = projectedRowsByKey.get(key);
+                return row ? [row, this.children.capture(key)] : null;
               }),
               areSessionCatalogsSettled(data),
               data.visibleSessionLimits,

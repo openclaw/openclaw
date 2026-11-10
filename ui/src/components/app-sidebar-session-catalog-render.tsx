@@ -31,7 +31,7 @@ import {
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
 import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
-import { renderRecentSession as RecentSession } from "./app-sidebar-session-row-render.tsx";
+import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { hasProviderBrandIcon } from "./provider-icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -260,11 +260,11 @@ function renderCatalogHostGroup(
       );
     };
     return (
-      <Show when={adoptedRow()} fallback={<CatalogRow />}>
+      <Show when={params.snapshot.projectedRows.get(key())} fallback={<CatalogRow />}>
         {(liveRow) => (
-          <RecentSession
+          <SessionTree
             host={params.host}
-            session={params.snapshot.toSidebarSession(liveRow())}
+            session={liveRow()}
             display={{
               catalogIdentityKey: identityKey(),
               rowRef,

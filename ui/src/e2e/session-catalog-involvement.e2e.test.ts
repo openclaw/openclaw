@@ -33,10 +33,18 @@ suite.define(() => {
       });
       const native = session("own", "My conversation", 3, viewer);
       // Gateway involvement can include participation beyond the bounded avatar preview.
-      const involved = session("involved", "Collaborative coding", 2);
+      const children = Array.from({ length: 6 }, (_, index) => ({
+        ...session(`child-${index}`, `Shared follow-up ${index + 1}`, 2),
+        parentSessionKey: "agent:main:involved-catalog",
+        ...(index === 5 ? { owner: { actor: viewer } } : {}),
+      }));
+      const involved = {
+        ...session("involved", "Collaborative coding", 2),
+        childSessions: children.map((child) => child.key),
+      };
       const unrelated = session("unrelated", "Another person's coding", 1);
       const response = {
-        ...ownerRoster([native, involved, unrelated], [viewer, other]),
+        ...ownerRoster([native, involved, unrelated, ...children], [viewer, other]),
         hasMore: false,
         nextOffset: null,
       };
@@ -73,7 +81,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         sessionKey: native.key,
         presenceUsers: [{ self: true, id: viewer.id, name: viewer.label }],
-        sessions: [native, involved, unrelated],
+        sessions: [native, involved, unrelated, ...children],
         featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
         historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
         methodResponses: {
@@ -81,7 +89,11 @@ suite.define(() => {
             cases: [
               {
                 match: { involvingMe: true },
-                response: { ...response, count: 2, sessions: [native, involved] },
+                response: {
+                  ...response,
+                  count: 7,
+                  sessions: [native, involved, ...children.slice(0, 5)],
+                },
               },
               { response },
             ],
@@ -118,21 +130,65 @@ suite.define(() => {
         )
         .toBeGreaterThan(0);
       await expectVisible(native.label, involved.label);
+      const catalog = sidebar.locator(`[data-session-section="catalog:codex"]`);
+      const parent = catalog.locator(`[data-session-key="${involved.key}"]`).first();
+      const disclosure = parent.locator("[data-child-session-toggle]");
+      await expectBrowser(disclosure).toHaveText("5");
+      await expectBrowser(text(children[0]!.label)).toHaveCount(0);
+      await disclosure.click();
       const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactParent) {
         const directory = createControlUiE2eArtifactDir("catalog-involvement", artifactParent);
         const frame = await takeControlUiScreenshotFrame(
           page,
           sidebar,
-          [page.locator("#sidebar-session-owner-title"), text(native.label), text(involved.label)],
+          [page.locator("#sidebar-session-owner-title"), parent],
           { animations: "disabled" },
         );
         await writeFile(path.join(directory, "involving-me.png"), frame.png);
       }
+      await expectBrowser(disclosure).toHaveAttribute("aria-expanded", "true");
+      await expectBrowser(catalog.getByText(children[0]!.label, { exact: true })).toBeVisible();
+      await expectBrowser(text(children[0]!.label)).toHaveCount(1);
+      await catalog.locator(`[data-show-more-children="${involved.key}"]`).click();
+      await expectBrowser(catalog.getByText(children[4]!.label, { exact: true })).toBeVisible();
+      await expectBrowser(catalog.getByText(children[5]!.label, { exact: true })).toHaveCount(0);
+      await disclosure.click();
+      await expectBrowser(catalog.getByText(children[0]!.label, { exact: true })).toHaveCount(0);
       await expectBrowser(text("Unlinked conversation")).toHaveCount(0);
       await expectBrowser(text(unrelated.label)).toHaveCount(0);
       await selectAllSidebarSessions(page);
       await expectVisible("Unlinked conversation", unrelated.label);
+      await chooseSidebarOwner(page, `owner:${other.id}`);
+      await disclosure.click();
+      await expectBrowser(catalog.getByText(children[0]!.label, { exact: true })).toBeVisible();
+      await catalog.locator(`[data-show-more-children="${involved.key}"]`).click();
+      await expectBrowser(catalog.getByText(children[4]!.label, { exact: true })).toBeVisible();
+      await expectBrowser(catalog.getByText(children[5]!.label, { exact: true })).toHaveCount(0);
+      await selectAllSidebarSessions(page);
+      if ((await disclosure.getAttribute("aria-expanded")) !== "true") {
+        await disclosure.click();
+      }
+      await catalog.getByText(children[0]!.label, { exact: true }).click();
+      await expect
+        .poll(
+          async () =>
+            (await gateway.getRequests("sessions.messages.subscribe", { key: children[0]!.key }))
+              .length,
+        )
+        .toBeGreaterThan(0);
+      await expectBrowser(text(children[0]!.label)).toHaveCount(1);
+      await disclosure.click();
+      await sidebar.getByText(native.label, { exact: true }).click();
+      await expect
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().sessionKey))
+        .toBe(native.key);
+      await page.goBack();
+      await expect
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().sessionKey))
+        .toBe(children[0]!.key);
+      await expectBrowser(disclosure).toHaveAttribute("aria-expanded", "true");
+      await expectBrowser(catalog.getByText(children[0]!.label, { exact: true })).toBeVisible();
     });
   });
 });

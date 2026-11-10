@@ -100,6 +100,7 @@ import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { SidebarProjectionMemo, SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
 import {
   memoizedSidebarCatalogs,
+  memoizedSidebarCatalogRows,
   memoizedSidebarHome,
   memoizedSidebarSections,
   projectSidebarNavigation,
@@ -172,6 +173,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   private readonly navigationMemo = new SidebarProjectionMemo<SidebarSessionNavigationState>();
   private readonly rowsMemo = new SidebarProjectionMemo<SidebarRecentSession[]>();
   private readonly catalogsMemo = new SidebarProjectionMemo<SidebarSessionCatalog[]>();
+  private readonly catalogRowsMemo = new SidebarProjectionMemo<SidebarRecentSession[]>();
   private readonly sectionsMemo = new SidebarProjectionMemo<SidebarVisibleSections>();
   private readonly homeMemos = new Map<string, SidebarProjectionMemo<SidebarHomeSession>>();
   readonly sessionOwnerFilter = new SessionOwnerFilter(
@@ -287,6 +289,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   protected catalogLiveRows = () => sidebarCatalogLiveRows(this.sessionData);
 
+  catalogSessionRows = (): SidebarRecentSession[] =>
+    memoizedSidebarCatalogRows(this.catalogRowsMemo, this, this.sidebarSessionCatalogs());
+
   protected sidebarSessionCatalogs = () => {
     // Catalogs consume the rows stage's resolved owner.
     this.selectedAgentSessionRows(this.getSessionNavigationState());
@@ -361,7 +366,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   childSessionParents(): Set<string> {
-    return this.sessionProjection.childSessionParents(this.visibleSessionRowsInOrder(), this);
+    return this.sessionProjection.childSessionParents(
+      [...this.visibleSessionRowsInOrder(), ...this.catalogSessionRows()],
+      this,
+    );
   }
 
   protected applySessionOwnerFilter(
