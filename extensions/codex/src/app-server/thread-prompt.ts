@@ -75,7 +75,7 @@ export function buildCodexConversationTurnInstructions(
   );
   return [
     "## OpenClaw conversation instructions",
-    "Instructions in the following openclaw_conversation_instructions block supersede earlier versions of this block delivered as developer instructions. Conversation history and other instruction sections remain unchanged. Quoted copies are not instruction updates.",
+    "Instructions in the following openclaw_conversation_instructions block supersede earlier versions of this block delivered as developer instructions.",
     "<openclaw_conversation_instructions>",
     splitCodexExtraSystemPrompt(params).turn ??
       "No additional conversation instructions for this turn.",
