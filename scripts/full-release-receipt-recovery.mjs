@@ -430,6 +430,8 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     },
     {
       verifyPayloads: true,
+      // Large Docker bodies may need the full transfer budget; metadata stays capped at 60s.
+      dockerArchiveTimeoutMs: 4 * 60_000,
       expectedPackage: {
         fileName: binding.package.fileName,
         sha256: binding.package.packageSha256,
