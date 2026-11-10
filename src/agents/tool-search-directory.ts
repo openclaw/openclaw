@@ -327,10 +327,6 @@ function fitsMcpToolDirectory(text: string): boolean {
 }
 
 function formatMcpToolDirectory(entries: readonly ToolSearchCatalogEntry[]): string {
-  const nameCounts = new Map<string, number>();
-  for (const entry of entries) {
-    nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
-  }
   const byServer = new Map<string, McpDirectoryServer>();
   for (const entry of entries) {
     if (entry.source !== "mcp" || entry.directVisible) {
@@ -342,11 +338,9 @@ function formatMcpToolDirectory(entries: readonly ToolSearchCatalogEntry[]): str
       server = { name: serverName, rows: [], unlisted: 0 };
       byServer.set(serverName, server);
     }
-    // A bare name shared with a direct or another cataloged tool is ambiguous for
-    // dispatch; list the exact catalog id instead.
-    const callable =
-      entry.requiresExactId || nameCounts.get(entry.name) !== 1 ? entry.id : entry.name;
-    const label = formatToolDirectoryIdentifier(callable);
+    // Client tools join after this directory is rendered. Exact IDs remain
+    // callable even if a later client tool shares the MCP tool's bare name.
+    const label = formatToolDirectoryIdentifier(entry.id);
     if (!label) {
       server.unlisted += 1;
       continue;
