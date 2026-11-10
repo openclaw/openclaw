@@ -1,2 +1,2 @@
-164
+162
 # Exact net LF growth for delayed-body/default/deadline proof and recovery-only Docker budget propagation.

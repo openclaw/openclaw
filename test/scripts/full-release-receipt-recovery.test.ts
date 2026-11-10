@@ -20,6 +20,7 @@ import * as candidateReuse from "../../scripts/lib/full-release-candidate-reuse.
 import * as childReuse from "../../scripts/lib/full-release-child-reuse.mjs";
 import { retainedPublicationArtifactSource } from "../../scripts/lib/release-evidence-identity.mjs";
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
+import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 
 const roles = [
@@ -47,17 +48,14 @@ function fixture() {
     repository: old.repository,
     qualificationAdmission: old.admission.descriptor,
     originalParent: { runId: old.runId, runAttempt: 1 },
-    candidateBinding: {
-      request: {
-        targetSha: old.q,
-        toolingSha: old.q,
-        ...baselines,
-        releaseProfile: "beta",
-        releaseSoak: false,
-      },
-      package: { version: old.admission.receipt.baselinePolicy.candidateVersion },
-      producer: { runId: "901", runAttempt: 1 },
-    },
+    candidateBinding: fullReleaseCandidateBindingFixture({
+      targetSha: old.q,
+      toolingSha: old.q,
+      releaseProfile: "beta",
+      releaseSoak: false,
+      upgradeSurvivorBaseline: baselines.upgradeBaseline,
+      upgradeSurvivorBaselines: baselines.upgradeSurvivorBaselines.join(" "),
+    }),
     children: Object.fromEntries(
       roles.map((role, index) => [
         role,
