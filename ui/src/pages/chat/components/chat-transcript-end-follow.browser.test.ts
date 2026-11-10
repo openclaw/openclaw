@@ -628,9 +628,13 @@ it.each([
       await settleFrames();
     }
     const original = thread.scrollTop;
+    let readerDeparted = false;
     let scrollingAtClamp = false;
     let idleAtClamp = false;
     const unsubscribe = subscribeTranscriptScroll(thread, (event) => {
+      if (event.type === "offset" && thread.scrollTop === original - readerMovement) {
+        readerDeparted = true;
+      }
       if (event.type === "offset" && thread.clientHeight === 500) {
         scrollingAtClamp ||= event.scrolling;
         idleAtClamp ||= scrollingAtClamp && !event.scrolling;
@@ -639,6 +643,8 @@ it.each([
     try {
       if (beforeClamp) {
         thread.scrollTop -= readerMovement;
+        // Observe the departure before the browser can coalesce it with the clamp.
+        await expect.poll(() => readerDeparted).toBe(true);
       }
       await resizeViewport(host, thread, 500);
       expect(thread.scrollTop).toBe(original - 100);

@@ -6,7 +6,7 @@ import { TemplatesPage } from "../templates/page.tsx";
 import { createPage, workflowOperator } from "./agents-home-page.test-helpers.ts";
 import { TemplatesCatalogDialog } from "./templates-catalog-dialog.tsx";
 
-export function createDetail(options: Parameters<typeof createPage>[0]) {
+export function createDetail(options: Parameters<typeof createPage>[0], version?: string) {
   const fixture = createPage(options);
   void fixture.context.router.navigate(
     "templates",
@@ -14,13 +14,13 @@ export function createDetail(options: Parameters<typeof createPage>[0]) {
     {},
     {
       pathname: pathForTemplateCatalogEntry(workflowOperator.packageName, ""),
-      search: "",
+      search: version ? new URLSearchParams({ version }).toString() : "",
       hash: "",
     },
   );
   const [location, setLocation] = createSignal({
     pathname: pathForTemplateCatalogEntry(workflowOperator.packageName, ""),
-    search: "",
+    search: version ? new URLSearchParams({ version }).toString() : "",
     hash: "",
   });
   const view = mountSolid(
@@ -40,7 +40,7 @@ export function createDetail(options: Parameters<typeof createPage>[0]) {
     setPackageName: (packageName: string) => {
       const nextLocation = {
         pathname: pathForTemplateCatalogEntry(packageName, ""),
-        search: "",
+        search: version ? new URLSearchParams({ version }).toString() : "",
         hash: "",
       };
       void fixture.context.router.navigate("templates", fixture.context, {}, nextLocation);

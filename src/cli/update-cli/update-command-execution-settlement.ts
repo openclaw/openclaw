@@ -10,15 +10,11 @@ import {
   recordMutableUpdateInterruption,
   runMutableUpdateRecovery,
 } from "./update-command-mutable-signals.js";
-import {
-  recordServiceReconciliationWarning,
-  type MutableUpdateExecutionResult,
-} from "./update-command-result.js";
+import type { MutableUpdateExecutionResult } from "./update-command-result.js";
 
 export async function settleMutableUpdateResult(
   params: MutableUpdateExecutionParams,
   settlement: {
-    originalManagedServiceRuntime?: MutableUpdateExecutionResult["originalManagedServiceRuntime"];
     result: UpdateRunResult;
     failure: MutableUpdateExecutionResult["failure"];
     candidateFailureReason?: string;
@@ -36,14 +32,6 @@ export async function settleMutableUpdateResult(
   const { opts } = params;
   const { databaseBackup, databaseCaptureStep, activationSteps, packageTransaction } = settlement;
   const originalRun = settlement.originalRun;
-  const { originalManagedServiceRuntime } = settlement;
-  if (originalManagedServiceRuntime && !originalManagedServiceRuntime.definition.runtimePin) {
-    recordServiceReconciliationWarning(
-      settlement.result,
-      originalManagedServiceRuntime.service.serviceEnv ?? {},
-      "runtime pins not yet migrated; preserved the current runtime; the post-update Doctor step migrates them",
-    );
-  }
   let result = recordMutableUpdateInterruption(opts, settlement.result);
   if (
     result.status === "ok" &&

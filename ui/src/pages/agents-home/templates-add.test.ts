@@ -20,26 +20,6 @@ beforeEach(setupAgentsHomePageTest);
 afterEach(cleanupAgentsHomePageTest);
 
 describe("Template Add", () => {
-  it("prepares the authoritative review beside contents before Add", async () => {
-    const { find, request } = createDetail({ templatesEnabled: true });
-    await waitForSolid(() =>
-      expect(find("[data-templates-confirm] button")).toHaveProperty("disabled", false),
-    );
-    expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
-      packageName: workflowOperator.packageName,
-      version: workflowOperator.latestVersion,
-    });
-    expect(request).toHaveBeenCalledWith("templates.add.plan", {
-      source: {
-        packageName: workflowOperator.packageName,
-        version: workflowOperator.latestVersion,
-      },
-    });
-    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
-      0,
-    );
-  });
-
   it.each([
     { surface: "detail", outcome: "prepared" },
     { surface: "detail", outcome: "failed" },
@@ -350,20 +330,19 @@ describe("Template Add", () => {
       expect(detail.querySelector(".plugin-capabilities")?.textContent).toContain("AGENTS.md"),
     );
     const selected = detail.querySelector(".plugin-capabilities");
-    const searches = request.mock.calls.filter(([method]) => method === "templates.catalog.search");
+    const details = request.mock.calls.filter(([method]) => method === "templates.catalog.detail");
     setPackageName(workflowOperator.packageName);
     await waitForSolid(() => {
       expect(detail.querySelector(".plugin-capabilities")).toBe(selected);
       expect(
-        request.mock.calls.filter(([method]) => method === "templates.catalog.search"),
-      ).toEqual(searches);
+        request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
+      ).toEqual(details);
     });
     setPackageName("@openclaw/another-template");
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-        query: "@openclaw/another-template",
-        limit: 100,
+      expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
+        packageName: "@openclaw/another-template",
       }),
     );
     await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).toBeNull());

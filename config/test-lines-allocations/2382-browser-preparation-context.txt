@@ -1,0 +1,3 @@
+# Authenticated browser requests must not inherit the completed sandbox-preparation turn.
+# Extends the existing real bridge/auth owner test; red on the base, green with detached listen.
+23

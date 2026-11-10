@@ -225,7 +225,7 @@ export async function commitSetupInferenceActivation(params: {
         }
         if (status !== "applied") {
           throw new Error(
-            `The Gateway did not complete activation (${status}). Resolve the reported problem, then retry the saved sign-in.`,
+            `The Gateway did not complete activation (${typeof status === "object" ? status.status : status}). Resolve the reported problem, then retry the saved sign-in.`,
           );
         }
       } else {

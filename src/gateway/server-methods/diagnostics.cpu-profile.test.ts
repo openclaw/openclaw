@@ -95,9 +95,37 @@ describe("diagnostics.cpuProfile dispatch", () => {
     expect(call.respond).toHaveBeenCalledWith(true, result, undefined);
   });
 
+  it("returns a batch artifact receipt through the existing admin capture owner", async () => {
+    const { profile: _profile, ...measurement } = result;
+    const artifact = {
+      ...measurement,
+      requestedDurationMs: 150_000,
+      path: "/synthetic/state/diagnostics/cpu-timestamp.cpuprofile",
+      sizeBytes: 2_000_000,
+      windowBoundariesMicros: Array.from({ length: 31 }, (_, index) => index * 5_000_000),
+      summary: { nodeCount: 20_000, sampleCount: 15_000 },
+    };
+    capture.mockResolvedValue({ status: "complete", result: artifact });
+    const call = await completedRequest({ params: { windows: 30, windowMs: 5_000 } });
+    expect(capture).toHaveBeenCalledExactlyOnceWith({
+      windows: 30,
+      windowMs: 5_000,
+      signal: expect.any(AbortSignal),
+      hasAuthority: expect.any(Function),
+    });
+    expect(call.respond).toHaveBeenCalledWith(true, artifact, undefined);
+  });
+
   it.each([
     { method: "diagnostics.cpuProfile", params: null },
     { method: "diagnostics.cpuProfile", params: { durationMs: 1 } },
+    { method: "diagnostics.cpuProfile", params: { windows: 0 } },
+    { method: "diagnostics.cpuProfile", params: { windows: 31 } },
+    { method: "diagnostics.cpuProfile", params: { windows: 1.5 } },
+    { method: "diagnostics.cpuProfile", params: { windows: "12" } },
+    { method: "diagnostics.cpuProfile", params: { windowMs: 99 } },
+    { method: "diagnostics.cpuProfile", params: { windowMs: 5_001 } },
+    { method: "diagnostics.cpuProfile", params: { windowMs: null } },
     { method: "diagnostics.heapProfile", params: { filename: "profile" } },
   ] as const)("rejects unsupported $method params $params before capture", async (options) => {
     const call = await completedRequest(options);

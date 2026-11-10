@@ -17,7 +17,6 @@ import {
   readTemplateAddReviewPlan,
   readTemplateDetail,
   readTemplatePreview,
-  searchTemplates,
   type TemplateCatalogDetail,
   type TemplateCatalogEntry,
   type TemplateCatalogSource,
@@ -32,6 +31,7 @@ registerEnglishCatalog(registerTemplatesEnglish);
 type TemplatesDialogProps = {
   onClose?: () => void;
   initialPackageName?: string;
+  initialVersion?: string;
   modal?: boolean;
 };
 
@@ -99,21 +99,26 @@ class TemplatesCatalogModel {
 
   private loadDetail(reviewPlan: TemplateAddReviewPlan | null = null) {
     this.cancelDetailRead();
-    const selected = this.selected;
     const scope = this.gateway.capture();
-    if (!selected || !selected.latestVersion || !scope) {
-      this.presentDetailRequest(Promise.reject(new Error(t("templatesCatalog.noVersion"))));
+    const packageName = this.props.initialPackageName ?? this.selected?.packageName;
+    const version = this.props.initialPackageName
+      ? this.props.initialVersion
+      : this.selected?.latestVersion;
+    if (!packageName || !scope) {
       return;
     }
     const revision = ++this.detailRevision;
     this.detail = null;
     this.installedPluginPackages = new Set();
     this.addError = null;
-    const source = { packageName: selected.packageName, version: selected.latestVersion };
+    const source = { packageName, ...(version ? { version } : {}) };
     this.preparedPlan = reviewPlan;
-    // Read-only review runs beside the detail, never on the Add navigation path.
-    if (!reviewPlan) {
-      void readTemplateAddReviewPlan(scope.client, source).then(
+    // The detail owner resolves an unpinned release; review and Add use that exact version.
+    const prepareReview = (resolvedVersion: string) => {
+      if (reviewPlan) {
+        return;
+      }
+      void readTemplateAddReviewPlan(scope.client, { packageName, version: resolvedVersion }).then(
         (plan) => {
           if (this.gateway.isCurrent(scope) && revision === this.detailRevision && !this.disposed) {
             this.preparedPlan = plan;
@@ -125,6 +130,9 @@ class TemplatesCatalogModel {
           }
         },
       );
+    };
+    if (version) {
+      prepareReview(version);
     }
     this.presentDetailRequest(
       new Promise((resolve, reject) => {
@@ -133,7 +141,11 @@ class TemplatesCatalogModel {
         void readTemplateDetail(scope.client, source).then(
           (detail) => {
             if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
+              this.selected = detail;
               this.detail = detail;
+              if (!version) {
+                prepareReview(detail.version);
+              }
               if (detail.contents.integrations.some((item) => item.kind === "plugin")) {
                 void this.loadInstalledPlugins(revision);
               }
@@ -189,8 +201,7 @@ class TemplatesCatalogModel {
     this.riskAcknowledged = false;
   }
 
-  select(entry: TemplateCatalogEntry) {
-    this.resetSelection(entry);
+  refresh() {
     this.loadDetail();
   }
 
@@ -206,6 +217,9 @@ class TemplatesCatalogModel {
     this.resetSelection();
     this.context.navigate("templates", {
       pathname: pathForTemplateCatalogEntry(entry.packageName, this.context.basePath),
+      search: entry.latestVersion
+        ? `?${new URLSearchParams({ version: entry.latestVersion })}`
+        : "",
     });
   }
 
@@ -332,10 +346,7 @@ class TemplatesCatalogModel {
     }
   }
 
-  view(): Omit<
-    TemplatesCatalogViewProps,
-    "readEntries" | "catalogRequest" | "onRetryCatalog" | "readDetail" | "detailRequest"
-  > {
+  view(): Omit<TemplatesCatalogViewProps, "readDetail" | "detailRequest"> {
     return {
       basePath: this.context.basePath,
       selected: this.selected,
@@ -378,8 +389,6 @@ class TemplatesCatalogModel {
 
 export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
   const context = useApplication();
-  const [catalogRequest, setCatalogRequest] = createSignal<Promise<TemplateCatalogEntry[]>>();
-  let cancelSearch = () => {};
   const [detailRequest, setDetailRequest] = createSignal<Promise<TemplateCatalogDetail | null>>();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const [applying, showApplying] = createOptimistic(false);
@@ -406,56 +415,12 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
     getGateway: () => context.gateway,
     onIdentityChange: () => model.onIdentityChange(),
     invalidateRequests: () => {
-      cancelSearch();
-      setCatalogRequest(undefined);
       model.invalidateRequests();
     },
-    ensureInitialData: () => loadCatalog(),
+    ensureInitialData: () => model.refresh(),
   });
   onSettled(() => () => {
-    cancelSearch();
     model.dispose();
-  });
-  function loadCatalog() {
-    cancelSearch();
-    const scope = model.gateway.capture();
-    if (!scope) {
-      return;
-    }
-    const packageName = props.initialPackageName;
-    if (!packageName) {
-      return;
-    }
-    let cancelled = false;
-    cancelSearch = () => {
-      cancelled = true;
-    };
-    const isCurrent = () => !cancelled && model.gateway.isCurrent(scope);
-    // Admission also refreshes hidden detail pages on reconnect. Keep selection
-    // at request completion, outside the async rendering computation.
-    void setCatalogRequest(
-      (async () => {
-        if (!isCurrent()) {
-          return [];
-        }
-        const entries = await searchTemplates(scope.client, packageName, 100);
-        if (isCurrent()) {
-          const entry = entries.find((candidate) => candidate.packageName === packageName);
-          if (!entry) {
-            throw new Error(t("templatesCatalog.unavailable"));
-          }
-          model.select(entry);
-        }
-        return entries;
-      })(),
-    );
-  }
-  const entries = createMemo(() => {
-    const request = catalogRequest();
-    if (!request && !model.gateway.connected) {
-      throw new Error(t("templatesCatalog.unavailable"));
-    }
-    return request ?? [];
   });
   const detail = createMemo(() => detailRequest() ?? null);
   const view = createMemo(() => {
@@ -504,11 +469,8 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
       {...view()}
       modal={props.modal}
       readPreview={readFile}
-      readEntries={entries}
-      catalogRequest={catalogRequest()}
       readDetail={detail}
       detailRequest={detailRequest()}
-      onRetryCatalog={() => loadCatalog()}
       applying={applying() && view().applying}
       onConfirm={() => mutate(view().onConfirm)}
       onConfirmConsent={() => mutate(view().onConfirmConsent)}

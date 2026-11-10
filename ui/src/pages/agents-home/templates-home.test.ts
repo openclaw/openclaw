@@ -16,7 +16,6 @@ import {
   setupAgentsHomePageTest,
   workflowOperator,
 } from "./agents-home-page.test-helpers.ts";
-import type { TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import { createDetail } from "./templates-catalog.test-helpers.ts";
 
 beforeEach(setupAgentsHomePageTest);
@@ -153,7 +152,7 @@ describe("Templates discovery", () => {
       createRouteLoaderOptions(location, templatesRoute.loaderDeps!(context, location)),
     );
     expect(result).toEqual({ type: "notFound", data: undefined });
-    expect(ensureConfigLoaded).toHaveBeenCalledOnce();
+    expect(ensureConfigLoaded).not.toHaveBeenCalled();
     expect(page.textContent).toContain("Templates is turned off");
     expect(page.querySelector("[data-templates-explore]")).toBeNull();
     expect(page.querySelector("[data-templates-confirm]")).toBeNull();
@@ -181,6 +180,7 @@ describe("Templates discovery", () => {
     page.querySelector<HTMLButtonElement>(".agents-home__template-card-link")?.click();
     expect(navigate).toHaveBeenCalledWith("templates", {
       pathname: "/templates/packages/%40openclaw%2Fworkflow-operator",
+      search: "?version=1.2.0",
     });
     expect(request).toHaveBeenCalledWith("templates.catalog.search", {
       overview: true,
@@ -206,19 +206,14 @@ describe("Templates discovery", () => {
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
   });
 
-  it("retries the selected package's catalog read while retaining its route", async () => {
+  it("retries the selected package's detail read while retaining its route", async () => {
     const { request, setTemplatesEnabled, find } = createDetail({ templatesEnabled: false });
     const original = request.getMockImplementation()!;
-    const pending = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
-    const recovered = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
+    const pending = createDeferredCore<unknown>();
+    const recovered = createDeferredCore<unknown>();
     let attempts = 0;
     request.mockImplementation((method, params, options) => {
-      if (
-        method === "templates.catalog.search" &&
-        params &&
-        typeof params === "object" &&
-        Reflect.get(params, "limit") === 100
-      ) {
+      if (method === "templates.catalog.detail") {
         return ++attempts === 1 ? pending.promise : recovered.promise;
       }
       return original(method, params, options);
@@ -238,26 +233,25 @@ describe("Templates discovery", () => {
     expect(find("[role=alert]")).toBeNull();
     expect(find(".plugin-catalog-detail__back")).toBe(back);
     expect(find("[data-templates-confirm]")).toBeNull();
-    recovered.resolve({ entries: [workflowOperator] });
+    recovered.resolve(await original("templates.catalog.detail", {}));
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
-    expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-      query: workflowOperator.packageName,
-      limit: 100,
+    expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
+      packageName: workflowOperator.packageName,
     });
   });
 
-  it("retires a pending catalog reply when the package route changes", async () => {
+  it("retires a pending detail reply when the package route changes", async () => {
     const { request, setTemplatesEnabled, setPackageName, find } = createDetail({
       templatesEnabled: false,
     });
     const original = request.getMockImplementation()!;
-    const retired = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
+    const retired = createDeferredCore<unknown>();
     request.mockImplementation((method, params, options) => {
       if (
-        method === "templates.catalog.search" &&
+        method === "templates.catalog.detail" &&
         params &&
         typeof params === "object" &&
-        Reflect.get(params, "query") === workflowOperator.packageName
+        Reflect.get(params, "packageName") === workflowOperator.packageName
       ) {
         return retired.promise;
       }
@@ -265,40 +259,33 @@ describe("Templates discovery", () => {
     });
     setTemplatesEnabled(true);
     await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-        query: workflowOperator.packageName,
-        limit: 100,
+      expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
+        packageName: workflowOperator.packageName,
       }),
     );
     setPackageName("@openclaw/missing");
     await waitForSolid(() => expect(find("[role=alert]")).not.toBeNull());
     const error = find("[role=alert]")?.textContent;
-    retired.resolve({ entries: [workflowOperator] });
+    retired.resolve(await original("templates.catalog.detail", {}));
     await retired.promise;
     await nextTurn();
     flush();
     expect(find("[role=alert]")?.textContent).toBe(error);
     expect(find(".plugin-capabilities")).toBeNull();
     expect(find("[data-templates-confirm]")).toBeNull();
-    expect(request.mock.calls.some(([method]) => method === "templates.catalog.detail")).toBe(
-      false,
-    );
+    expect(
+      request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
+    ).toHaveLength(2);
   });
 
-  it("refreshes a selected Template after reconnect and ignores the retired catalog reply", async () => {
+  it("refreshes a selected Template after reconnect and ignores the retired detail reply", async () => {
     const { request, setPhase, find } = createDetail({ templatesEnabled: true });
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
     const original = request.getMockImplementation()!;
-    const stale = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
+    const stale = createDeferredCore<unknown>();
     let searches = 0;
     request.mockImplementation((method, params, options) => {
-      if (
-        method === "templates.catalog.search" &&
-        params &&
-        typeof params === "object" &&
-        Reflect.get(params, "limit") === 100 &&
-        ++searches === 1
-      ) {
+      if (method === "templates.catalog.detail" && ++searches === 1) {
         return stale.promise;
       }
       return original(method, params, options);
@@ -313,18 +300,62 @@ describe("Templates discovery", () => {
     await waitForSolid(() =>
       expect(
         request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
-      ).toHaveLength(2),
+      ).toHaveLength(3),
     );
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
-    stale.resolve({ entries: [{ ...workflowOperator, installs: 0, latestVersion: "9.9.9" }] });
+    const response = (await original("templates.catalog.detail", {})) as {
+      detail: Record<string, unknown>;
+    };
+    stale.resolve({ detail: { ...response.detail, version: "9.9.9" } });
     await stale.promise;
     await nextTurn();
     flush();
     expect(
       request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(find(".plugin-capabilities")).not.toBeNull();
   });
+
+  it.each([undefined, workflowOperator.latestVersion])(
+    "loads contents without search and pins Add to resolved release (version: %s)",
+    async (version) => {
+      const { detail, request, navigate, setTemplatesEnabled } = createDetail(
+        { templatesEnabled: false },
+        version,
+      );
+      const original = request.getMockImplementation()!;
+      const search = createDeferredCore<unknown>();
+      request.mockImplementation((method, params, options) =>
+        method === "templates.catalog.search" ? search.promise : original(method, params, options),
+      );
+      setTemplatesEnabled(true);
+
+      await waitForSolid(() =>
+        expect(detail.querySelector("[data-templates-confirm] button")).toHaveProperty(
+          "disabled",
+          false,
+        ),
+      );
+      expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
+        packageName: workflowOperator.packageName,
+        ...(version ? { version } : {}),
+      });
+      const source = {
+        packageName: workflowOperator.packageName,
+        version: workflowOperator.latestVersion,
+      };
+      expect(request).toHaveBeenCalledWith("templates.add.plan", { source });
+
+      expect(request.mock.calls.some(([method]) => method === "templates.add.apply")).toBe(false);
+      detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
+      await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
+      expect(request).toHaveBeenCalledWith(
+        "templates.add.apply",
+        expect.objectContaining({ source }),
+        expect.objectContaining({ onSent: expect.any(Function) }),
+      );
+    },
+  );
 
   it("retries a failed detail read without replacing the shell or admitting Add early", async () => {
     const { request, setPhase, find } = createDetail({ templatesEnabled: true });

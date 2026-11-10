@@ -1,0 +1,2 @@
+# Existing route fixture covers unchanged runtime/bootstrap publications, false/true enablement, focused draft retention, and live schema replacement. Exact added test LF; no inherited-debt allocation.
+27

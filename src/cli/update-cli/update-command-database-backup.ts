@@ -30,6 +30,7 @@ import {
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import type { PreManagedServiceStop } from "./update-command-service.js";
 
 type Progress = MutableUpdateExecutionParams["progress"];
 
@@ -76,6 +77,30 @@ export async function assertUpdatePostgresCaptureOwnership(params: {
       `Update refused before changing the install: PostgreSQL database backup requires exclusive state ownership (${unavailable}). Stop the Gateway through its service owner, then rerun openclaw update.`,
     );
   }
+}
+
+/**
+ * Candidate validation runs before the managed-service stop and can take minutes. Only a running
+ * service the updater stops (owned or unresolved), or a Gateway a foreground update parks, can
+ * release a live owner before activation; refuse any other held owner before validation. The
+ * probe before activation still covers an owner that starts later.
+ */
+export async function assertUpdatePostgresOwnerReleasable(params: {
+  config: Parameters<typeof resolveDatabaseFamilyEngines>[0];
+  env: NodeJS.ProcessEnv;
+  hasRun: boolean;
+  parksBeforeActivation: boolean;
+  service: Pick<PreManagedServiceStop, "running" | "serviceUpdateVerdict"> | undefined;
+}): Promise<void> {
+  const { hasRun, service } = params;
+  const stopped =
+    service?.running &&
+    (service.serviceUpdateVerdict?.kind === "owned" ||
+      service.serviceUpdateVerdict?.kind === "unresolved");
+  if (!hasRun || params.parksBeforeActivation || stopped) {
+    return;
+  }
+  await assertUpdatePostgresCaptureOwnership({ config: params.config, env: params.env });
 }
 
 export async function captureUpdateDatabases(params: {

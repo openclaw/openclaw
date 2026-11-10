@@ -1,9 +1,11 @@
+import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/presentation.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { MobileSheetScrollFadeConnection } from "./chat-mobile-scroll-fades.ts";
 
 export function createMobileSheetScrollFadeConnection(
   ports: ReadonlySet<HTMLElement>,
   shell: HTMLElement,
+  presentation?: PresentationBinding,
 ): MobileSheetScrollFadeConnection {
   // Scroll boundaries belong to the host. These overlays never mask a scrollbar,
   // header, or the independently positioned action pills.
@@ -13,6 +15,7 @@ export function createMobileSheetScrollFadeConnection(
   shell.append(layer);
   const edges = new Map<HTMLElement, { top: HTMLDivElement; bottom: HTMLDivElement }>();
   let frame = 0;
+  const presented = () => !shell.hidden && presentation?.isPresented() !== false;
   const surface = (port: HTMLElement) => {
     let node: HTMLElement | null = port;
     while (node && node !== shell.parentElement) {
@@ -35,6 +38,9 @@ export function createMobileSheetScrollFadeConnection(
   };
   const paint = () => {
     frame = 0;
+    if (!presented()) {
+      return;
+    }
     const active = [...ports]
       .filter((port) => port.isConnected && shell.contains(port))
       .toSorted((left, right) =>
@@ -89,6 +95,11 @@ export function createMobileSheetScrollFadeConnection(
     }
   };
   const schedule = () => {
+    if (!presented()) {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      return;
+    }
     if (!frame) {
       frame = requestAnimationFrame(paint);
     }
@@ -107,6 +118,9 @@ export function createMobileSheetScrollFadeConnection(
   });
   const stopScroll = listen(shell, "scroll", schedule, { capture: true, passive: true });
   const stopLoad = listen(shell, "load", schedule, true);
+  const stopPresentation = presentation
+    ? listen(presentation.owner, PRESENTATION_CHANGED_EVENT, schedule)
+    : undefined;
   resizeObserver.observe(shell);
   const current = {
     schedule,
@@ -117,6 +131,7 @@ export function createMobileSheetScrollFadeConnection(
       resizeObserver.disconnect();
       stopScroll();
       stopLoad();
+      stopPresentation?.();
       layer.remove();
     },
   };

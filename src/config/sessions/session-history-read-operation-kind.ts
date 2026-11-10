@@ -17,6 +17,7 @@ const historyReadKinds = [
   "transcript-anchors",
   "transcript-raw-delta",
   "transcript-visible-delta",
+  "transcript-replay-groups",
   "transcript-latest-assistant",
   "session-memory-capture",
   "session-pending-input-receipts",

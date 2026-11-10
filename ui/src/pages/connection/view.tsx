@@ -129,11 +129,9 @@ function Ping(props: ConnectionProps) {
         <PingMetric name="p95" value={props.ping?.p95Ms} />
         <PingMetric name="p99" value={props.ping?.p99Ms} />
       </dl>
-      <Show when={props.pingFailed}>
-        <p class="connection-ping__error" role="status">
-          {t("connection.ping.failed")}
-        </p>
-      </Show>
+      <p class="connection-ping__error" role="status">
+        {props.pingFailed ? t("connection.ping.failed") : undefined}
+      </p>
     </div>
   );
 }

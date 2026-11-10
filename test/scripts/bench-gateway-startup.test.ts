@@ -409,6 +409,9 @@ server.listen(port, "127.0.0.1", () => {
   console.log("[gateway] ready (0 plugins, 0.0s)");
   console.log("startup trace: sidecars.model-runtime-build agentCount=" + (10 + sample) + " workspaceGroupCount=" + sample + " workspaceFactsMs=2.5");
   console.log("startup trace: memory.ready rssMb=32.5 heapUsedMb=16.25 externalMb=2");
+  console.log("startup trace: post-ready.startup-maintenance 1.0ms total=1.0ms");
+  const terminalPhase = gatewayConfig.gateway?.controlUi?.enabled === false ? "memory-search" : "plugins";
+  console.log("startup trace: post-ready.gateway-data." + terminalPhase + " 1.0ms total=1.0ms");
   if (teamBoot) console.log("startup trace: plugins.runtime-post-bind 1.0ms total=1.0ms");
 });
 `,
@@ -416,7 +419,9 @@ server.listen(port, "127.0.0.1", () => {
         const result = await runStartup(root, signal, [
           "--entry",
           entry,
-          ..."--case default --runs 2 --warmup 0 --output".split(" "),
+          ..."--case default --runs 2 --warmup 0 --exit-listeners --timeout-ms 5000 --output".split(
+            " ",
+          ),
           reportPath,
         ]);
         expect(result.error).toBeUndefined();
@@ -455,7 +460,7 @@ server.listen(port, "127.0.0.1", () => {
             attempts: 2,
           });
           expect(sample.firstSessionRpc.connectMs).toBeLessThan(sample.firstSessionRpc.ms);
-          expect(sample.startupTraceLines).toHaveLength(2);
+          expect(sample.startupTraceLines).toHaveLength(4);
         }
         expect(report.results[0].summary.startupTrace).toMatchObject({
           "sidecars.model-runtime-build.agentCount": { p50: 11.5, avg: 11.5, min: 11, max: 12 },
@@ -496,7 +501,7 @@ server.listen(port, "127.0.0.1", () => {
             bundledPluginFixturePath,
             "--fixture-root",
             teamRoot,
-            ..."--runs 1 --warmup 0 --output".split(" "),
+            ..."--runs 1 --warmup 0 --exit-listeners --timeout-ms 5000 --output".split(" "),
             reportPath,
           ]);
         for (const shutdownExitCode of [0, 23]) {

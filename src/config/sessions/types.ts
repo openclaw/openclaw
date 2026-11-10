@@ -698,7 +698,18 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Written only by committed graceful shutdown, consumed by the next startup. */
-  resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
+  resumeAfterRestart?: {
+    queuedInputIds: string[];
+    /** Original per-input limits, restored only after current source revalidation. */
+    queuedInputSources?: Record<
+      string,
+      {
+        runId: string;
+        source: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
+      }
+    >;
+    hadBackgroundExec?: true;
+  };
   /**
    * Latest authenticated source per person who sent input here, keyed by profile ID. Restored only
    * through current device, auth, profile and role revalidation; never an executable grant.

@@ -502,7 +502,10 @@ describe("Bedrock prompt cache ownership", () => {
     expect(payload.system).toEqual(
       mode === "none"
         ? [wireText("Stable workspace\nToday: Monday")]
-        : [wireText("Stable workspace"), ...(point ? [point] : []), wireText("Today: Monday")],
+        : [wireText("Stable workspace"), ...(point ? [point] : []), wireText("\nToday: Monday")],
+    );
+    expect(payload.system?.flatMap((block) => (block.text ? [block.text] : [])).join("")).toBe(
+      "Stable workspace\nToday: Monday",
     );
     expect(payload.messages?.[0]?.content).toEqual([wireText("Hello"), ...(point ? [point] : [])]);
     expect(payload.toolConfig?.tools?.map((tool) => tool.toolSpec?.name)).toEqual([

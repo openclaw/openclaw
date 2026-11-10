@@ -642,11 +642,18 @@ it.for([
         queuedInputIds: [],
       });
       for (let boot = 0; boot < 2; boot++) {
+        const warn = vi.fn();
         await resumeMarkedSessions({
           context: createContext([], () => cfg),
           signal: new AbortController().signal,
-          log: { warn() {} },
+          log: { warn },
         });
+        const parked = warn.mock.calls.filter(([message]) => message.includes("(yield-waiting)"));
+        expect(parked).toEqual(
+          ["message", "nested-message", "current-completed"].includes(source)
+            ? [[expect.stringContaining(target.sessionKey)]]
+            : [],
+        );
         const restored = (await readSessionEntryReadOnlyInWorker(target))!;
         expect(restored.resumeAfterRestart).toBeUndefined();
         expect(restored.activeWriterRunId).toBe(runId);
@@ -708,6 +715,12 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
       await persistRunningSessionsForRestart({ cfg: {} });
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
         queuedInputIds: [queued.inputId],
+        queuedInputSources: {
+          [queued.inputId]: {
+            runId: "queued-behind-completed-reply",
+            source: { kind: "unavailable" },
+          },
+        },
       });
     } finally {
       queued?.finish("interrupted");
@@ -786,7 +799,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
     }
   }));
 
-it("settles captured queued sends as failed when the recorded owner's authority is revoked", () =>
+it("settles source-less queued sends even when the recorded owner cannot resume", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       gateway: {

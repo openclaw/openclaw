@@ -25,12 +25,8 @@ import {
   prepareMarkdownMediaSource,
   readMarkdownImageSlots,
 } from "./chat-message-media-markdown.ts";
-import {
-  type AttachmentItem,
-  type ImageBlock,
-  type ImageRenderOptions,
-  projectMessageMedia,
-} from "./chat-message-media.ts";
+import { projectMessageMedia } from "./chat-message-media-projection.ts";
+import type { AttachmentItem, ImageBlock, ImageRenderOptions } from "./chat-message-media.ts";
 import {
   type AssistantMessageDisclosure,
   resolveMessageMarkdownRender,

@@ -2,10 +2,10 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo, onCleanup, refresh } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import "./chat-audio-player.tsx";
 import "./chat-svg-attachment.tsx";
 import "./chat-video-player.tsx";
-import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import {
   isCrossOriginHttpSource,
@@ -29,8 +29,8 @@ import { AssistantAttachmentStatusCard } from "./chat-message-attachment-status-
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 import { isLocalAssistantAttachmentSource } from "./chat-message-local-media.ts";
 import type { MessageMediaAction } from "./chat-message-media-actions.ts";
+import { resolveAttachmentImageKind } from "./chat-message-media-projection.ts";
 import {
-  resolveAttachmentImageKind,
   observeChatMediaResourceSubscriber,
   releaseChatMediaResourceOwner,
   type AttachmentItem,

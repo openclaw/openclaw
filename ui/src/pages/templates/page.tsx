@@ -53,13 +53,23 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
     gateway.revision();
     return context.gateway.snapshot.client ? draftTarget() : null;
   };
-  const packageName = () =>
-    props.routeData
-      ? templateCatalogPackageNameFromPath(
-          props.routeData.location.pathname,
-          props.routeData.basePath,
-        )
-      : null;
+  const source = createMemo(
+    () => {
+      const data = props.routeData;
+      const packageName = data
+        ? templateCatalogPackageNameFromPath(data.location.pathname, data.basePath)
+        : null;
+      if (!packageName) {
+        return null;
+      }
+      const version = new URLSearchParams(data?.location.search).get("version");
+      return { packageName, ...(version ? { version } : {}) };
+    },
+    {
+      equals: (left, right) =>
+        left?.packageName === right?.packageName && left?.version === right?.version,
+    },
+  );
 
   return (
     <Show when={props.routeData && available() !== null} fallback={<TemplatesLoading />}>
@@ -77,10 +87,11 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
           when={connectedDraftTarget()}
           keyed
           fallback={
-            <Show when={packageName()} keyed fallback={<TemplatesCatalogDialog />}>
-              {(selectedPackage) => (
+            <Show when={source()} keyed fallback={<TemplatesCatalogDialog />}>
+              {(selectedSource) => (
                 <TemplatesCatalogDialog
-                  initialPackageName={selectedPackage}
+                  initialPackageName={selectedSource.packageName}
+                  initialVersion={selectedSource.version}
                   onClose={() =>
                     context.navigate("templates", {
                       pathname: pathForRoute("templates", context.basePath),
