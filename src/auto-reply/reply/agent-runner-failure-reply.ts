@@ -57,6 +57,7 @@ import {
   formatErrorMessage,
   readErrorCauses,
 } from "../../infra/errors.js";
+import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { isProviderRefusalNoticeText } from "../../shared/assistant-error-format.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
@@ -226,6 +227,12 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  if (findStartupMaintenanceRequiredError(error)?.kind === "legacy-workspace") {
+    return {
+      text: "⚠️ This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.",
+      isGenericRunnerFailure: false,
+    };
+  }
   const removedCredential = collectErrorGraphCandidates(error, readErrorCauses).find(
     (candidate) => candidate instanceof CliCredentialRemovedError,
   );

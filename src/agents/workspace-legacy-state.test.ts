@@ -158,6 +158,13 @@ describe("legacy workspace reset cleanup", () => {
     expect(() =>
       assertWorkspaceStateMigrationReady({ workspaceDirs, ...options, operation: "doctor" }),
     ).toThrow("restore the retained setup file or claim from a verified backup");
+    const activationOptions = {
+      workspaceDirs,
+      ...options,
+      env: { ...options.env, OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: "/tmp/image-capture" },
+      operation: "doctor" as const,
+    };
+    expect(() => assertWorkspaceStateMigrationReady(activationOptions)).not.toThrow();
     resetLegacyWorkspaceStateCheckForTest();
     for (const dir of workspaceDirs) {
       expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: dir })).toThrow(
@@ -171,6 +178,9 @@ describe("legacy workspace reset cleanup", () => {
     await writeCandidates(stateSources);
     expect(checkReady).toThrow(
       `Run openclaw doctor --fix. Legacy workspace setup state requires migration for ${workspaceDirs.slice(0, 2).join(", ")}.`,
+    );
+    expect(() => assertWorkspaceStateMigrationReady(activationOptions)).toThrow(
+      "restore the retained setup file or claim from a verified backup",
     );
     await Promise.all([...localSources, ...stateSources].map((file) => fs.unlink(file)));
     expect(checkReady).not.toThrow();

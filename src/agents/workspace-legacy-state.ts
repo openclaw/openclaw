@@ -164,7 +164,7 @@ function workspaceMigrationError(
   );
 }
 
-/** Recheck state-directory attestations at lifecycle admission; Doctor checks local sources too. */
+/** Recheck state-directory attestations at lifecycle admission; manual Doctor checks local sources too. */
 export function assertWorkspaceStateMigrationReady(params: {
   workspaceDirs: readonly string[];
   env?: NodeJS.ProcessEnv;
@@ -173,10 +173,14 @@ export function assertWorkspaceStateMigrationReady(params: {
   /** An earlier migration refusal prevented the workspace importer from running. */
   blockedByStepId?: string;
 }): void {
+  // Image activation repairs local sources best-effort; one bad workspace must not stop the Gateway.
+  const includeWorkspacePaths =
+    params.operation === "doctor" &&
+    !(params.env ?? process.env).OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER;
   const blocked = params.workspaceDirs.flatMap((workspaceDir) => {
     const sourcePath = findUnmigratedWorkspaceSource(
       resolveLegacyWorkspaceSourcePaths(workspaceDir, params),
-      params.operation === "doctor",
+      includeWorkspacePaths,
     );
     return sourcePath ? [params.operation === "doctor" ? sourcePath : workspaceDir] : [];
   });

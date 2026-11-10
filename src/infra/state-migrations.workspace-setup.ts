@@ -530,6 +530,7 @@ export async function migrateLegacyWorkspaceState(params: {
     run: async (env) => {
       const changes: string[] = [];
       const warnings: string[] = [];
+      let stateOwnedSourceRefused = false;
       const outsideRootLegacyFileCount = detected.rehearsalInventoryPaths?.length ?? 0;
       const notices: string[] =
         outsideRootLegacyFileCount > 0
@@ -546,11 +547,23 @@ export async function migrateLegacyWorkspaceState(params: {
         });
         changes.push(...result.changes);
         warnings.push(...result.warnings);
+        // Configured setup and sibling sources are rooted at their parent; reserved state is not.
+        if (
+          result.warnings.length > 0 &&
+          (source.workspaceDir === undefined || source.rootDir !== path.dirname(source.sourcePath))
+        ) {
+          stateOwnedSourceRefused = true;
+        }
         notices.push(...(result.notices ?? []));
       }
       return {
         changes,
         warnings,
+        ...(env.OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER &&
+        warnings.length > 0 &&
+        !stateOwnedSourceRefused
+          ? { warningDisposition: "recoverable" as const }
+          : {}),
         ...(notices.length > 0 ? { notices } : {}),
         ...(outsideRootLegacyFileCount > 0 ? { rehearsal: { outsideRootLegacyFileCount } } : {}),
       };

@@ -128,6 +128,30 @@ async function repair(
   });
 }
 
+it("keeps an unreadable local source for manual repair while image activation continues", async () => {
+  const context = setup({ mode: "off" });
+  const source = path.join(context.homeDir, "workspace", MARKER);
+  fs.writeFileSync(source, "not-json");
+  const detected = await detectLegacyWorkspaceState({
+    cfg: context.cfg,
+    stateDir: context.stateDir,
+    env: context.env,
+    homedir: () => context.homeDir,
+    doctorOnlyStateMigrations: true,
+  });
+  const options = { detected, stateDir: context.stateDir };
+  const manual = await migrateLegacyWorkspaceState({ ...options, env: context.env });
+  const activation = await migrateLegacyWorkspaceState({
+    ...options,
+    env: { ...context.env, OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: "/tmp/image-capture" },
+  });
+  expect(manual.warnings).toEqual([expect.stringContaining("invalid JSON")]);
+  expect(manual.warningDisposition).toBeUndefined();
+  expect(activation.warnings).toEqual(manual.warnings);
+  expect(activation.warningDisposition).toBe("recoverable");
+  expect(fs.readFileSync(source, "utf8")).toBe("not-json");
+});
+
 it.each(["discovered workspace", "read failure"] as const)(
   "awaits persisted session keys before reporting readiness: %s",
   async (outcome) => {

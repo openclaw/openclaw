@@ -268,6 +268,7 @@ image entrypoint runs `openclaw doctor --fix --non-interactive` under exclusive
 maintenance ownership before starting the Gateway. This covers the default image
 command and Compose's foreground Gateway command, including its selected profile.
 Routine image upgrades do not require a separate Doctor pass.
+If a workspace-local setup source cannot be imported, activation reports the warning and starts the Gateway; turns using that workspace still need manual repair with `openclaw doctor --fix`.
 
 Keep one Gateway replica per state volume, and stop the old container before
 starting its replacement. The startup repair needs exclusive maintenance

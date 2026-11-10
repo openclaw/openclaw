@@ -4,6 +4,8 @@ import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js
 import { ContextPreparationTimeoutError } from "../../agents/failover/local-preparation-error.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import { toSandboxProvisioningError } from "../../agents/sandbox/provisioning-error.js";
+import { StartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
@@ -46,6 +48,22 @@ it("keeps wrapped skill delivery-limit guidance visible without diagnostics", ()
   expect(
     knownReply(error, { Provider: "webchat", Surface: "webchat", ChatType: "direct" }),
   ).toMatchObject({ text: reply.text, isError: true });
+});
+
+it("guides repair for a sandbox workspace marker without exposing its path", () => {
+  const error = toSandboxProvisioningError(
+    new StartupMaintenanceRequiredError(
+      "legacy-workspace",
+      "Legacy workspace setup state requires migration for /private/sandbox/workspace.",
+    ),
+    "docker",
+  );
+  const reply = knownReply(error);
+  expect(reply).toMatchObject({
+    text: expect.stringContaining("openclaw doctor --fix"),
+    isError: true,
+  });
+  expect(reply?.text).not.toContain("/private/sandbox/workspace");
 });
 
 it.each([
