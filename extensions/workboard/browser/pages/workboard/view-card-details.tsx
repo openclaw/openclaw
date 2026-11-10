@@ -9,7 +9,10 @@ import {
   workboardCardBoardId,
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "../../lib/workboard/board-filter.ts";
-import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
+import {
+  workboardBoardName,
+  workboardColumnPresentation,
+} from "../../lib/workboard/board-presentation.ts";
 import { getWorkboardDependencyState } from "../../lib/workboard/card-state.ts";
 import { getWorkboardLifecycle } from "../../lib/workboard/lifecycle.ts";
 import { addWorkboardCardComment } from "../../lib/workboard/mutations.ts";
@@ -34,7 +37,6 @@ import {
   workboardMutationContext,
   workboardViewState,
   renderPriorityIcon,
-  formatStatusLabel,
   formatUpdatedTime,
   type WorkboardProps,
 } from "./view-helpers.tsx";
@@ -371,7 +373,7 @@ function CardDetailsContent(props: WorkboardProps & { card: WorkboardCard }) {
                       {action().writable && !action().archived && state().statuses.length > 1 ? (
                         <InlineStatus workboard={props} card={card()} disabled={action().busy} />
                       ) : (
-                        <strong>{formatStatusLabel(card().status)}</strong>
+                        <strong>{workboardColumnPresentation(state()).label(card().status)}</strong>
                       )}
                     </div>
                     <div class="workboard-detail__row">

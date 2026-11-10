@@ -6,6 +6,7 @@ import { icons } from "../../components/icons.tsx";
 import { WorkboardErrorToast } from "../../components/toast.tsx";
 import { workboardHost } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
+import { workboardColumnPresentation } from "../../lib/workboard/board-presentation.ts";
 import {
   isActiveWorkboardCard,
   nextWorkboardCardPosition,
@@ -37,7 +38,6 @@ import {
   workboardMutationContext,
   workboardViewState,
   renderPriorityIcon,
-  formatStatusLabel,
   type WorkboardProps,
 } from "./view-helpers.tsx";
 import { liveInputValue } from "./view-input-value.ts";
@@ -260,6 +260,7 @@ export function SelectionActions(input: {
   focusSelectedCard: () => void;
 }) {
   const state = workboardViewState(() => input.workboard);
+  const presentation = createMemo(() => workboardColumnPresentation(state()));
   const cardIds = createMemo(() =>
     state()
       .cards.filter((card) => state().selectedCardIds.has(card.id))
@@ -315,13 +316,13 @@ export function SelectionActions(input: {
               label: t("workboard.bulkMoveLabel"),
               disabled: true,
             },
-            ...state().statuses.map((status) => ({
+            ...presentation().statuses.map((status) => ({
               value: status,
-              label: formatStatusLabel(status),
+              label: presentation().label(status),
             })),
           ],
           onSelect: (value) => {
-            const status = state().statuses.find((entry) => entry === value);
+            const status = presentation().statuses.find((entry) => entry === value);
             if (status) {
               void applySelection(input.workboard, cardIds(), {
                 kind: "move",

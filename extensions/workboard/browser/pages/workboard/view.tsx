@@ -6,6 +6,7 @@ import { WorkboardToast } from "../../components/toast.tsx";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { createElementRefs } from "../../lib/element-refs.ts";
+import { workboardColumnPresentation } from "../../lib/workboard/board-presentation.ts";
 import {
   groupWorkboardCardsByStatus,
   workboardCardMatchesHealthKey,
@@ -23,7 +24,7 @@ import { buildBoardFilterOptions, WORKBOARD_ALL_BOARDS_FILTER } from "./board-fi
 import { getVisibleDetailCard, CardDetailsPanel } from "./view-card-details.tsx";
 import { WorkboardCardMenus } from "./view-card-menu.tsx";
 import { openCreateModal, CardModal, workboardCardModalId } from "./view-card-modal.tsx";
-import { WorkboardColumn } from "./view-column.tsx";
+import { WorkboardColumn, WorkboardOtherStatusesColumn } from "./view-column.tsx";
 import {
   multiFilterLabel,
   ActiveFilters,
@@ -84,6 +85,7 @@ function WorkboardColumns(props: {
   workboard: WorkboardProps;
   statuses: WorkboardStatus[];
   byStatus: Map<WorkboardStatus, WorkboardCard[]>;
+  otherCards: WorkboardCard[];
   cardRefs: ReturnType<typeof createElementRefs<HTMLElement>>;
   menuCardId?: string;
 }) {
@@ -103,7 +105,8 @@ function WorkboardColumns(props: {
           `workboard-board--${state().layout}`,
           {
             "workboard-board--list": state().viewMode === "list",
-            "workboard-board--single-column": props.statuses.length === 1,
+            "workboard-board--single-column":
+              props.statuses.length + (props.otherCards.length ? 1 : 0) === 1,
           },
         ]}
       >
@@ -128,6 +131,14 @@ function WorkboardColumns(props: {
             />
           )}
         </For>
+        {props.otherCards.length ? (
+          <WorkboardOtherStatusesColumn
+            workboard={props.workboard}
+            cards={props.otherCards}
+            cardRefs={props.cardRefs}
+            surface={state().viewMode === "list" ? "list" : "page"}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -182,12 +193,15 @@ export function WorkboardView(
     const filtered = cardsForFilters();
     const visibleError = workboardErrorMessage(current, props.pageError);
     const selectedCards = current.cards.filter((card) => current.selectedCardIds.has(card.id));
+    const presentation = workboardColumnPresentation(current);
     const byStatus = groupWorkboardCardsByStatus(filtered, current.statuses);
-    const visibleStatuses = current.statuses.filter(
+    const visibleStatuses = presentation.statuses.filter(
       (status) =>
         (!current.statusFilter.size || current.statusFilter.has(status)) &&
-        (current.emptyColumnMode !== "hide" || (byStatus.get(status)?.length ?? 0) > 0),
+        (presentation.emptyColumnMode !== "hide" || (byStatus.get(status)?.length ?? 0) > 0),
     );
+    // Cards in statuses the board leaves out stay visible in one trailing lane.
+    const otherCards = presentation.otherStatuses.flatMap((status) => byStatus.get(status) ?? []);
     // Counts ignore their own group so selecting one does not erase alternatives.
     const priorityCards = cardsForFilters("priority");
     const priorityOptions = WORKBOARD_PRIORITIES.map((priority) => ({
@@ -315,6 +329,7 @@ export function WorkboardView(
       selectedCards,
       byStatus,
       visibleStatuses,
+      otherCards,
       priorityOptions,
       attentionOptions,
       agentFilterOptions,
@@ -444,13 +459,17 @@ export function WorkboardView(
                 <SelectionActions
                   workboard={props}
                   focusSelectedCard={() => {
-                    for (const status of view().visibleStatuses) {
-                      for (const card of view().byStatus.get(status) ?? []) {
-                        const element = cardRefs.get(card.id);
-                        if (element && state().selectedCardIds.has(card.id)) {
-                          element.focus({ preventScroll: true });
-                          return;
-                        }
+                    const cards = [
+                      ...view().visibleStatuses.flatMap(
+                        (status) => view().byStatus.get(status) ?? [],
+                      ),
+                      ...view().otherCards,
+                    ];
+                    for (const card of cards) {
+                      const element = cardRefs.get(card.id);
+                      if (element && state().selectedCardIds.has(card.id)) {
+                        element.focus({ preventScroll: true });
+                        return;
                       }
                     }
                   }}
@@ -620,7 +639,7 @@ export function WorkboardView(
               </div>
             ) : null}
             {(view().filtered.length === 0 && view().activeFiltering) ||
-            view().visibleStatuses.length === 0 ? (
+            (view().visibleStatuses.length === 0 && view().otherCards.length === 0) ? (
               <div class="workboard-empty-state" role="status">
                 <strong>{t("workboard.emptyFilteredTitle")}</strong>
                 <span>{t("workboard.emptyFilteredHint")}</span>
@@ -635,6 +654,7 @@ export function WorkboardView(
                 workboard={props}
                 statuses={view().visibleStatuses}
                 byStatus={view().byStatus}
+                otherCards={view().otherCards}
                 cardRefs={cardRefs}
                 menuCardId={selectedMenuCardId()}
               />

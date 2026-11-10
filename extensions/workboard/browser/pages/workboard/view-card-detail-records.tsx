@@ -4,8 +4,9 @@ import { For, Show, createMemo } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatStatusLabel } from "../../lib/workboard/board-presentation.ts";
 import type { WorkboardCard, WorkboardDependencyState } from "../../lib/workboard/types.ts";
-import { formatStatusLabel, formatUpdatedTime } from "./view-helpers.tsx";
+import { formatUpdatedTime } from "./view-helpers.tsx";
 
 export function DependencyDetailList(props: { dependencies: WorkboardDependencyState }) {
   return (

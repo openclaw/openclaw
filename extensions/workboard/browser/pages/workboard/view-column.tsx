@@ -5,6 +5,7 @@ import { icons } from "../../components/icons.tsx";
 import { workboardLocale } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import { createElementRefs } from "../../lib/element-refs.ts";
+import { workboardColumnPresentation } from "../../lib/workboard/board-presentation.ts";
 import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import { moveWorkboardCard } from "../../lib/workboard/mutations.ts";
 import type { WorkboardCard, WorkboardStatus } from "../../lib/workboard/types.ts";
@@ -15,7 +16,6 @@ import { WorkboardCardView, type WorkboardCardSurface } from "./view-card.tsx";
 import { createWorkboardColumnWindow } from "./view-column-window.ts";
 import {
   canMutate,
-  formatStatusLabel,
   workboardMutationContext,
   workboardViewState,
   type WorkboardProps,
@@ -97,7 +97,10 @@ export function WorkboardColumn(input: {
   });
   const collapsible = createMemo(() => surface() !== "widget");
   const canCreate = createMemo(() => surface() !== "widget" && writable());
-  const label = createMemo(() => formatStatusLabel(input.status));
+  const presentation = createMemo(() =>
+    workboardColumnPresentation(state(), input.options?.boardFilter),
+  );
+  const label = createMemo(() => presentation().label(input.status));
   const hasHiddenCards = createMemo(
     () =>
       input.cards.length === 0 &&
@@ -151,7 +154,7 @@ export function WorkboardColumn(input: {
   );
   const autoCollapsed = createMemo(
     () =>
-      state().emptyColumnMode === "collapse" &&
+      presentation().emptyColumnMode === "collapse" &&
       input.cards.length === 0 &&
       !state().expandedEmptyStatuses.has(input.status),
   );
@@ -489,6 +492,60 @@ export function WorkboardColumn(input: {
           )}
         </>
       )}
+    </section>
+  );
+}
+
+/** Cards whose status the board leaves out. Not a drop target: the lane has no single status. */
+export function WorkboardOtherStatusesColumn(input: {
+  workboard: WorkboardProps;
+  cards: WorkboardCard[];
+  cardRefs?: ReturnType<typeof createElementRefs<HTMLElement>>;
+  surface: WorkboardCardSurface;
+}) {
+  const state = workboardViewState(() => input.workboard);
+  const statusLabel = createMemo(() => workboardColumnPresentation(state()).label);
+  const label = () => t("workboard.otherStatuses");
+  return (
+    <section
+      class="workboard-column workboard-column--other"
+      aria-label={`${label()}, ${input.cards.length}`}
+    >
+      <div class="workboard-column__header">
+        <div class="workboard-column__heading">
+          <h2 title={t("workboard.otherStatusesHint")}>{label()}</h2>
+          <span class="workboard-column__count">{input.cards.length}</span>
+        </div>
+      </div>
+      <div
+        class="workboard-column__cards"
+        role={input.surface === "list" ? "list" : undefined}
+        ref={workboardScrollFadeRef()}
+      >
+        <For each={input.cards} keyed={(card) => card.id}>
+          {(card) => (
+            <div
+              class="workboard-column__item"
+              role={input.surface === "list" ? "listitem" : undefined}
+              data-card-id={card().id}
+            >
+              <span class="workboard-column__other-status">
+                <span
+                  class={["workboard-status-dot", `workboard-status-dot--${card().status}`]}
+                  aria-hidden="true"
+                />
+                {statusLabel()(card().status)}
+              </span>
+              <WorkboardCardView
+                workboard={input.workboard}
+                card={card()}
+                cardRefs={input.cardRefs}
+                surface={input.surface}
+              />
+            </div>
+          )}
+        </For>
+      </div>
     </section>
   );
 }

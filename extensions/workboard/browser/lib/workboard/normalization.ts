@@ -20,6 +20,7 @@ import {
   type WorkboardMetadata,
   isValidWorkboardBoardId,
   normalizeWorkboardSessionsBoardSpec,
+  parseWorkboardCardsBoardColumns,
   WORKBOARD_PRIORITIES,
   type WorkboardBoardSummary,
   type WorkboardCard,
@@ -298,6 +299,18 @@ function normalizeCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
 }
 
+function normalizeCardsBoardColumns(value: unknown) {
+  if (value === undefined) {
+    return undefined;
+  }
+  try {
+    return parseWorkboardCardsBoardColumns(value);
+  } catch {
+    // An unreadable presentation falls back to the default columns, so no card disappears.
+    return undefined;
+  }
+}
+
 function normalizeBoardSummary(value: unknown): WorkboardBoardSummary | null {
   if (!isRecord(value)) {
     return null;
@@ -316,11 +329,13 @@ function normalizeBoardSummary(value: unknown): WorkboardBoardSummary | null {
   }
   const automationJobId =
     typeof value.automationJobId === "string" ? value.automationJobId.trim() : "";
+  const columns = value.kind === "sessions" ? undefined : normalizeCardsBoardColumns(value.columns);
   return {
     id,
     ...(value.kind === "sessions"
       ? { kind: "sessions" as const, sessions: normalizeWorkboardSessionsBoardSpec(value.sessions) }
       : {}),
+    ...(columns ? { columns } : {}),
     total: normalizeCount(value.total),
     active: normalizeCount(value.active),
     archived: normalizeCount(value.archived),
