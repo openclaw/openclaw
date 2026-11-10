@@ -18,6 +18,7 @@ export async function proveUnchangedSandboxCommandCheckpoints(
   owner: LocalWorkspaceOwner,
   resumeAfterCapture = false,
   failAcceptance = false,
+  atomicCapture: boolean | "nested" = false,
 ) {
   const { bindLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
   const { createSandboxTestContext } = await import("../../agents/sandbox/test-fixtures.js");
@@ -50,6 +51,27 @@ export async function proveUnchangedSandboxCommandCheckpoints(
   vi.stubEnv("DOCKER_CONTEXT", undefined);
   let paused = false;
   let pauses = 0;
+  if (atomicCapture) {
+    const { nativeWorktreeFilesystem } =
+      await import("../../agents/worktrees/filesystem-native.js");
+    const lstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stats = await lstat(...args);
+      if (args[0] === projection.workspaceDir) {
+        Reflect.set(stats, "ino", 256n);
+      }
+      return stats;
+    });
+    vi.spyOn(nativeWorktreeFilesystem, "probe").mockResolvedValue("btrfs");
+    vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementation(async (source, destination) => {
+      expect(paused).toBe(true);
+      await fs.cp(source, destination, { recursive: true });
+    });
+    vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementation(async (destination) => {
+      expect(paused).toBe(false);
+      await fs.rm(destination, { recursive: true, force: true });
+    });
+  }
   const reconciler = await import("./workspace-reconcile.js");
   const { AcceptedWorkspacePublicationIndeterminateError } =
     await import("./workspace-accepted-publication.js");
@@ -57,13 +79,17 @@ export async function proveUnchangedSandboxCommandCheckpoints(
   const accepting = createDeferred();
   const accept = createDeferred();
   let recovering = false;
+  let firstAcceptance = true;
   if (resumeAfterCapture) {
     vi.spyOn(reconciler, "applyStagedWorkerWorkspace").mockImplementation(async (params) => {
       // Canonical publication consumes captured bytes while the guest keeps running.
       expect(paused).toBe(recovering);
       recovering = false;
-      if (pauses === 1) {
-        await writeText(projection.workspaceDir, "source.txt", "later background edit\n");
+      if (firstAcceptance) {
+        firstAcceptance = false;
+        if (!atomicCapture) {
+          await writeText(projection.workspaceDir, "source.txt", "later background edit\n");
+        }
         accepting.resolve();
         await accept.promise;
         if (failAcceptance) {
@@ -98,6 +124,9 @@ export async function proveUnchangedSandboxCommandCheckpoints(
       pauses++;
     } else if (args[0] === "unpause") {
       paused = false;
+      if (atomicCapture && pauses === 1) {
+        await writeText(projection.workspaceDir, "source.txt", "later background edit\n");
+      }
     }
     return { code: 0, stdout, stderr: "" };
   });
@@ -108,7 +137,13 @@ export async function proveUnchangedSandboxCommandCheckpoints(
         ...store,
         manifest: (row, action) => {
           if (action.kind === "scan") {
-            expect(paused).toBe(true);
+            expect(paused).toBe(atomicCapture === true ? false : !action.capture);
+            if (atomicCapture === "nested" && action.capture) {
+              // The manifest worker reports omitted nested subvolumes before preparing CAS writes.
+              throw Object.assign(new Error("Btrfs snapshot omitted a nested subvolume"), {
+                code: "WORKSPACE_SNAPSHOT_INCOMPLETE",
+              });
+            }
           }
           return store.manifest(row, action);
         },
@@ -174,7 +209,7 @@ export async function proveUnchangedSandboxCommandCheckpoints(
           "source.txt",
           command < 3
             ? "original\n"
-            : resumeAfterCapture && command > 3
+            : resumeAfterCapture && (command > 3 || atomicCapture === "nested")
               ? "later background edit\n"
               : "modified\n",
         );
@@ -182,7 +217,10 @@ export async function proveUnchangedSandboxCommandCheckpoints(
         await expectMissing(owner.worktree.path, "source.txt");
       }
     }
-    expect(pauses).toBe(resumeAfterCapture ? 3 : 2);
+    expect(pauses).toBe(atomicCapture === "nested" ? 4 : resumeAfterCapture ? 3 : 2);
+    if (atomicCapture) {
+      await expectMissing(path.dirname(projection.workspaceDir), "checkpoint-capture");
+    }
   } finally {
     accept.resolve();
     await registry.removeRegistryEntry(containerName);

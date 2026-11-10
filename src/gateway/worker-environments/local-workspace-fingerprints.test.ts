@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import type { LocalWorkspaceCapture } from "./local-workspace-checkpoint.js";
 import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
 import {
   createLocalWorkspaceManifestTree,
@@ -23,7 +24,12 @@ type Baseline = {
   blob: Buffer | null;
 };
 
-async function capture(root: string, baseline?: Baseline, blob = baseline?.blob) {
+async function capture(
+  root: string,
+  baseline?: Baseline,
+  blob = baseline?.blob,
+  source?: LocalWorkspaceCapture,
+) {
   const nodes: LocalWorkspaceManifestNode[] = [];
   const metrics = { contentHashCount: 0, memoHitCount: 0 };
   const scanStartedAtMs = Date.now();
@@ -33,6 +39,7 @@ async function capture(root: string, baseline?: Baseline, blob = baseline?.blob)
     baseline?.treeRoot ?? previous.get("")!.treeRef,
     blob ?? null,
     scanStartedAtMs,
+    source,
   );
   // A new memo on every capture models the loss of all in-process stat identities on restart.
   await withWorkspaceHashMemo(
@@ -116,6 +123,48 @@ it("reuses unchanged file hashes with old identical ctimes after restart", async
   expect(unchanged.treeRoot).toBe(baseline.treeRoot);
   expect(compress).not.toHaveBeenCalled();
   expect(unchanged.blob).toBe(baseline.blob);
+});
+
+it("keeps snapshot fingerprints usable by the live source after changed-file acceptance", async () => {
+  const { root, baseline } = await fixture();
+  const sourceDev = (await fs.stat(root, { bigint: true })).dev;
+  const snapshotDev = sourceDev + 1n;
+  const source = { root, sourceDev, snapshotDev, capturedAtMs: Date.now() };
+  vi.restoreAllMocks();
+  const lstat = fs.lstat.bind(fs);
+  const snapshots = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    const stats = await lstat(...args);
+    Reflect.set(stats, "dev", snapshotDev);
+    Reflect.set(stats, "ctimeNs", 1n);
+    return stats;
+  });
+  const unchanged = await capture(root, baseline, baseline.blob, source);
+  expect(unchanged.metrics.contentHashCount).toBe(0);
+  snapshots.mockRestore();
+  vi.restoreAllMocks();
+  mockFileCtime(1n);
+  await fs.writeFile(path.join(root, "c.txt"), "CCCC");
+  const modified = await capture(root, baseline);
+  // Model the snapshot's dev in both hashed and reused identities; its inodes stay stable.
+  const fingerprints = prepareLocalWorkspaceFingerprints(
+    modified.records,
+    modified.treeRoot,
+    null,
+    Date.now(),
+    source,
+  );
+  for (const { node } of modified.records.values()) {
+    if (node.type !== "file") {
+      continue;
+    }
+    const stats = await fs.lstat(path.join(root, node.path), { bigint: true });
+    fingerprints.observe(
+      node.path,
+      `gateway:${snapshotDev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`,
+    );
+  }
+  const accepted = { ...modified, blob: fingerprints.encode(modified.records, modified.treeRoot) };
+  expect((await capture(root, accepted)).metrics.contentHashCount).toBe(0);
 });
 
 it("re-encodes an unchanged tree when a file identity changes", async () => {

@@ -513,12 +513,23 @@ if (values["agent-db-fixture"] && !resumeOwnerSwitch) {
   );
 }
 const root = fileURLToPath(new URL("../../", import.meta.url));
+const operationOwner = "src/gateway/worker-environments/local-workspace-projection-operation.ts";
+const hasOperationOwner = values.revision
+  ? spawnSync("git", ["cat-file", "-e", `${values.revision}:${operationOwner}`], {
+      cwd: root,
+      stdio: "ignore",
+    }).status === 0
+  : fs.existsSync(path.join(root, operationOwner));
 const owners = [
   "src/gateway/worker-environments/local-workspace-projection.ts",
+  ...(hasOperationOwner ? [operationOwner] : []),
   "src/gateway/worker-environments/local-workspace-state.ts",
   "src/gateway/worker-environments/local-workspace-checkpoint.ts",
   "src/gateway/worker-environments/local-workspace-manifest-scan.ts",
+  "src/gateway/worker-environments/local-workspace-fingerprints.ts",
   "src/gateway/worker-environments/workspace-actual-manifest.ts",
+  "src/agents/worktrees/filesystem-native.ts",
+  "src/infra/fs-safe-copy.worker.ts",
   "src/agents/sandbox/local-workspace.ts",
   "src/agents/sandbox/local-workspace-quiescence.ts",
   "src/gateway/server-methods/sessions-files.ts",
@@ -659,6 +670,7 @@ registerHooks({
     const relative = url.startsWith("file:") ? path.relative(root, fileURLToPath(url)) : "";
     let code = source.get(relative);
     const phaseFunctions: Record<string, string[]> = {
+      "src/agents/worktrees/filesystem-native.ts": ["read", "write"],
       "src/gateway/worker-environments/workspace-manifest-worker.ts": ["computeWorkspaceManifest"],
       "src/gateway/worker-environments/workspace-result-staging.ts": [
         "stageWorkerWorkspaceResult",
@@ -677,9 +689,11 @@ registerHooks({
         assert(sourceText.includes(anchor));
         code = sourceText.replace(anchor, `async function measured_${name}`);
         const phaseName =
-          name === "computeWorkspaceManifest"
-            ? `${JSON.stringify(name + ":")} + args[0].type`
-            : JSON.stringify(name);
+          relative === "src/agents/worktrees/filesystem-native.ts"
+            ? '"nativeWorktreeFilesystem:" + args[0].type'
+            : name === "computeWorkspaceManifest"
+              ? `${JSON.stringify(name + ":")} + args[0].type`
+              : JSON.stringify(name);
         code += `\n${exported ? "export " : ""}async function ${name}(...args) {
           return globalThis.__checkpointPhase(${phaseName}, () => measured_${name}(...args));
         }\n`;
@@ -2062,6 +2076,15 @@ measurement: try {
     }
   });
   observer.observe({ entryTypes: ["gc"] });
+  const readCgroupCpuUs = () => {
+    const usage = /^usage_usec (\d+)$/m.exec(fs.readFileSync("/sys/fs/cgroup/cpu.stat", "utf8"));
+    assert(usage, "cgroup v2 CPU accounting must expose usage_usec");
+    return Number(usage[1]);
+  };
+  const cgroupCpuBefore =
+    nativeTurns && process.platform === "linux" && fs.existsSync("/sys/fs/cgroup/cpu.stat")
+      ? readCgroupCpuUs()
+      : undefined;
   const hostLoad = loadavg(),
     before = process.threadCpuUsage(),
     processBefore = process.cpuUsage(),
@@ -2123,6 +2146,8 @@ measurement: try {
   const elapsedMs = performance.now() - start,
     cpu = process.threadCpuUsage(before),
     processCpu = process.cpuUsage(processBefore);
+  const cgroupCpuMs =
+    cgroupCpuBefore === undefined ? undefined : (readCgroupCpuUs() - cgroupCpuBefore) / 1000;
   await waitForDiagnosticEventsDrained();
   stopLeaseDiagnostics();
   stopRpcDiagnostics();
@@ -2249,6 +2274,16 @@ measurement: try {
     elapsedMs,
     cpuMs: (cpu.user + cpu.system) / 1000,
     processCpuMs: (processCpu.user + processCpu.system) / 1000,
+    cgroupCpuMs,
+    cgroupCpuAccounting:
+      cgroupCpuMs === undefined
+        ? undefined
+        : {
+            scope:
+              "cgroup and descendants: Node workers, native helpers, Git, Podman and guest; requires an exclusively owned rig",
+            membership: fs.readFileSync("/proc/self/cgroup", "utf8").trim(),
+            cpuMax: fs.readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim(),
+          },
     mainThreadCpuPercent: (cpu.user + cpu.system) / (elapsedMs * 10),
     cpuUsPerRequest: (cpu.user + cpu.system) / requests,
     sampledBytesPerRequest: sampledBytes === undefined ? null : sampledBytes / requests,

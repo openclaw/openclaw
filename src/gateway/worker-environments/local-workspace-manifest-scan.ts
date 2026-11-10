@@ -20,6 +20,7 @@ import {
   readLocalWorkspaceSourcePaths,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
+import type { LocalWorkspaceCapture } from "./local-workspace-checkpoint.js";
 import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
 import {
   prepareLocalWorkspaceArchive,
@@ -60,7 +61,12 @@ export type LocalWorkspaceBaselineDocument = {
 };
 
 export type LocalWorkspaceManifestAction =
-  | { kind: "scan" | "probe"; target: "canonical" | "projection"; canonicalRoot: string }
+  | {
+      kind: "scan" | "probe";
+      target: "canonical" | "projection";
+      canonicalRoot: string;
+      capture?: LocalWorkspaceCapture;
+    }
   | { kind: "archive"; canonicalRoot: string; archiveRoot: string; snapshotCommit: string }
   | { kind: "materialize" }
   | { kind: "convert" }
@@ -534,7 +540,9 @@ export async function executeLocalWorkspaceManifestRead(
     assertCurrent: () => undefined,
   });
   const retained = [...buildCacheInputPaths(canonicalPaths)];
-  const root = target === "canonical" ? row.projection_path : action.canonicalRoot;
+  const capture = action.kind === "scan" ? action.capture : undefined;
+  const root =
+    capture?.root ?? (target === "canonical" ? row.projection_path : action.canonicalRoot);
   const gitIgnore = await readLocalWorkspaceGitExclusions(
     action.canonicalRoot,
     root,
@@ -567,12 +575,13 @@ export async function executeLocalWorkspaceManifestRead(
   const previousTreeRoot = row.tree_root_digest
     ? localWorkspaceDigestReference(row.tree_root_digest)
     : null;
-  const scanStartedAtMs = Date.now();
+  const scanStartedAtMs = capture?.capturedAtMs ?? Date.now();
   const fingerprintScan = prepareLocalWorkspaceFingerprints(
     records,
     previousTreeRoot ?? records.get("")!.treeRef,
     previousTreeRoot ? previousFingerprints : null,
     scanStartedAtMs,
+    capture,
   );
   const changedDuringProbe = new Error("Workspace changed during reuse probe");
   try {
@@ -585,6 +594,7 @@ export async function executeLocalWorkspaceManifestRead(
       buildCacheInputs: new Set(retained),
       reuseFile: fingerprintScan.reuseFile,
       unchangedProbe: action.kind === "probe",
+      btrfsSnapshot: capture !== undefined,
       onEntry(node, identity) {
         seen.add(node.path);
         const previous = records.get(node.path);

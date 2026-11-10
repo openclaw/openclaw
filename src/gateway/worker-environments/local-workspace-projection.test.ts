@@ -196,6 +196,14 @@ it.each([false, true])(
   (interrupted) => proveUnchangedSandboxCommandCheckpoints(owner, true, interrupted),
 );
 
+it.each([false, true])(
+  "captures before scanning while preserving post-resume writes (interrupted acceptance: %s)",
+  (interrupted) => proveUnchangedSandboxCommandCheckpoints(owner, true, interrupted, true),
+);
+
+it("re-pauses omitted nested subvolumes under the checkpoint lease before saving their live bytes", () =>
+  proveUnchangedSandboxCommandCheckpoints(owner, true, false, "nested"));
+
 it.each(["canonical", "projection"] as const)(
   "quarantines rejected checkpoints while allowing new agent work: %s",
   (target) => proveRejectedWorkspaceCheckpoint(owner, target),

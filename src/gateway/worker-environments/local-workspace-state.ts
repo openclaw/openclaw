@@ -17,6 +17,7 @@ import {
   selectLocalWorkspaceCheckpoint,
   stageLocalWorkspaceCheckpoint,
   createLocalWorkspaceCheckpointRejection,
+  type LocalWorkspaceCapture,
   type LocalWorkspaceSyncOptions,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
@@ -211,12 +212,16 @@ export function projectionOperations(
     current();
     return snapshot;
   };
-  const scan = async (target: Direction): Promise<LocalWorkspaceManifestCheckpoint> => {
-    await assertLocalWorkspaceDirectory(sourcePath(target));
+  const scan = async (
+    target: Direction,
+    source?: LocalWorkspaceCapture,
+  ): Promise<LocalWorkspaceManifestCheckpoint> => {
+    await assertLocalWorkspaceDirectory(source?.root ?? sourcePath(target));
     const snapshot = await readManifest({
       kind: "scan",
       target,
       canonicalRoot: owner.worktree.path,
+      capture: source,
     });
     current();
     if (snapshot.kind !== "scan") {
@@ -269,19 +274,13 @@ export function projectionOperations(
       ...(selected.tree_root_digest ? { baseline_json: null } : {}),
     });
   };
-  const settle = async (
+  const settle = (...args: Parameters<typeof settlePending>) =>
+    rejection.settle(() => settlePending(...args), args[1]?.currentManifestRef);
+  const settlePending = async (
     retainAccepted = false,
     preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
     afterCapture?: () => Promise<void>,
-  ) =>
-    rejection.settle(
-      () => settlePending(retainAccepted, preparedSnapshot, afterCapture),
-      preparedSnapshot?.currentManifestRef,
-    );
-  const settlePending = async (
-    retainAccepted: boolean,
-    preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
-    afterCapture?: () => Promise<void>,
+    source?: LocalWorkspaceCapture,
   ) => {
     await recover();
     const conversionSource = current();
@@ -357,7 +356,7 @@ export function projectionOperations(
       await stageLocalWorkspaceCheckpoint(
         {
           root: owner.worktree.path,
-          stagingRoot: sourcePath(target),
+          stagingRoot: source?.root ?? sourcePath(target),
           stagedResultRef: selected.pending_ref,
           baseManifestRef: snapshot?.baseManifestRef ?? stagingBase!.manifestRef,
           currentManifestRef: snapshot?.currentManifestRef ?? legacy!.manifestRef,

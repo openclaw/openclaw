@@ -1,5 +1,6 @@
 import type { BigIntStats } from "node:fs";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import type { LocalWorkspaceCapture } from "./local-workspace-checkpoint.js";
 import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
 import { workspaceCtimeIsReusable } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
@@ -26,7 +27,10 @@ export function prepareLocalWorkspaceFingerprints(
   treeRef: string,
   blob: Uint8Array | null,
   scanStartedAtMs: number,
+  capture?: LocalWorkspaceCapture,
 ) {
+  const sourceDevice = (dev: bigint) =>
+    capture && dev === capture.snapshotDev ? capture.sourceDev : dev;
   const storedBlob =
     blob === null || Buffer.isBuffer(blob)
       ? blob
@@ -75,7 +79,7 @@ export function prepareLocalWorkspaceFingerprints(
         return undefined;
       }
       if (
-        stats.dev === device &&
+        sourceDevice(stats.dev) === device &&
         stats.ino === decoded.readBigUInt64LE(offset) &&
         stats.ctimeNs === decoded.readBigInt64LE(offset + 8) &&
         previous.size === Number(stats.size) &&
@@ -151,7 +155,7 @@ export function prepareLocalWorkspaceFingerprints(
           return null;
         }
         const fields = identity.split(":");
-        const statDev = BigInt(fields[1]!);
+        const statDev = sourceDevice(BigInt(fields[1]!));
         dev ??= statDev;
         // One header cannot describe files spanning devices. Those scans stay correct by hashing.
         if (statDev !== dev) {

@@ -320,10 +320,13 @@ are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
 from the live check. Checkpoints after commands and file mutations use the same
 check for the guest workspace: commands that leave accepted files unchanged do
-not pause the sandbox. Changed command checkpoints pause until their captured
-files are stored in an immutable Git result, then resume while those files are
-reconciled into the managed worktree. Command completion still waits for that
-reconciliation, so a read after a completed command sees its saved changes.
+not pause the sandbox. For a private checkout provisioned as a btrfs subvolume,
+changed command checkpoints settle any pending recovery while paused, take a
+filesystem snapshot, then resume while the captured files are scanned and
+reconciled into the managed worktree. Other checkouts pause until their files are stored in an immutable Git
+result. A snapshot that omits nested subvolumes is discarded and captured again
+under pause, preserving their contents. Command completion still waits for
+canonical acceptance, so a read after a completed command sees its saved changes.
 Later background writes remain in the private checkout for the next checkpoint.
 Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,

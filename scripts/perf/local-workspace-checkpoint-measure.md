@@ -36,8 +36,12 @@ the subsequent correctness read is excluded.
 Reports include raw pause and command samples, median/p95/max, main-process CPU,
 main-isolate allocation, source hashes, host load, and owner phases. The manifest
 phase includes worker dispatch; `withStagedWorkerWorkspaceManifest` contains
-`applyStagedWorkerWorkspace`, so those timings overlap. CPU excludes child Git
-and container processes. Allocation requires a runtime exposing V8's
+`applyStagedWorkerWorkspace`, so those timings overlap. Process CPU excludes child
+Git and container processes. Native Linux runs also report the measured-window
+`cpu.stat` usage delta for the rig's cgroup and descendants, including Node
+workers, native helpers, Git, Podman, and the guest. Use an exclusively owned
+cgroup; the report records its namespace membership and CPU limit. Allocation
+excludes workers and children and requires a runtime exposing V8's
 `total_allocated_bytes` counter, such as Node 26.12.1.
 
 Run a separate `--instrument allocation` pass per source for sampled allocation
@@ -46,7 +50,47 @@ instrumented timings against the plain timing arms. Report aggregate process and
 main-thread CPU separately, and retain raw samples so phase overlap and outliers
 remain inspectable.
 
-The driver removes only its named guest and registry entry when it exits. After
+For atomic-capture comparisons, verify that the projection itself is a btrfs
+subvolume (`stat` reports inode 256 and `btrfs subvolume show` succeeds). Merely
+placing the fixture on btrfs leaves an ordinary projection directory. With all
+fixture processes stopped, rename that directory to a task-owned backup, call
+`nativeWorktreeFilesystem.createSource(projection, { commitGuard: () => {} })`
+from a fixture setup script, then populate it with
+`cp -a --reflink=always backup/. projection/`. Retain the backup until proof is
+complete. The normal initialization and warmup refresh fingerprints before
+measurement. Use this same projection sequentially for both sources, two fresh
+A/A controls, and five counterbalanced pairs. Native filesystem phases report
+`copy`, `remove`, and `probe` separately; source-mode helper startup is included.
+
+Source-mode native helpers can spawn an esbuild child. The rig needs a reaping
+init (`docker run --init`) because the production owner requires process-tree
+extinction before accepting a native helper's result. In an existing exclusively
+owned rig whose PID 1 does not reap, run every comparison arm through this small
+Linux subreaper; do not bypass the production extinction guard:
+
+```python
+import ctypes, os, signal, subprocess, sys
+assert ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0
+child = subprocess.Popen(sys.argv[1:], start_new_session=True)
+for signo in (signal.SIGINT, signal.SIGTERM):
+    signal.signal(signo, lambda sig, frame: os.killpg(child.pid, sig))
+result = None
+while True:
+    try:
+        pid, code = os.waitpid(-1, 0)
+    except ChildProcessError:
+        break
+    if pid == child.pid:
+        result = os.waitstatus_to_exitcode(code)
+sys.exit(result if result is not None and result >= 0 else 128 - (result or 0))
+```
+
+Invoke it as `python3 subreaper.py node --expose-gc --import ./scripts/tsx.mjs ...`.
+Keep stalled or aborted arms as failed observations with their last completed
+phase and observed paused interval. Diagnose and record the failure before
+continuing; do not silently replace it with a successful retry.
+
+On normal completion, the driver removes only its named guest and registry entry. After
 retaining reports, remove the task-owned synthetic fixture and its private engine
 storage, unmount the private btrfs filesystem, and remove the rig through its
 owner. Never apply cleanup to a default container store or production state.
