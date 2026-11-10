@@ -248,6 +248,9 @@ it("shares selection revisions with events, ignoring activity", async (f) => {
     [{ label: "Renamed", updatedAt: 2, lastReadAt: 2 }, false],
     [{ authProfileOverride: "openai:shared" }, true],
     [{ modelOverride: "gpt-5.6-luna", providerOverride: "openai" }, true],
+    [{ modelOverrideSource: "default" }, true],
+    [{ modelOverrideSource: "user" }, true],
+    [{ modelOverrideSource: "auto" }, true],
     [{ agentRuntimeOverride: "openclaw" }, true],
     [{ lifecycleRevision: "replacement" }, true],
   ] satisfies Array<[Partial<SessionEntry>, boolean]>) {
