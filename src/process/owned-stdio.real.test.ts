@@ -1,11 +1,18 @@
-import { expect, it, onTestFinished } from "vitest";
+import { Duplex } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { runGatewayCloseSteps } from "../gateway/server-shutdown.js";
+import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   closeOwnedStdioProcess,
   createOwnedStdioProcess,
   type OwnedStdioProcess,
   type OwnedStdioProcessOptions,
 } from "./owned-stdio.js";
+import * as relaySpawn from "./spawn-broker/relay-integration.js";
 import { createChildAdapter } from "./supervisor/adapters/child.js";
+import { readLines } from "./supervisor/service-child-group-anchor.preparation.test-support.js";
 
 const nodeScript = (source: string) => [process.execPath, "-e", source];
 const windows = process.platform === "win32";
@@ -31,6 +38,71 @@ function observe<T extends OwnedStdioProcess>(child: T) {
 async function spawnScript(source: string, options: Omit<OwnedStdioProcessOptions, "argv"> = {}) {
   return observe(await createOwnedStdioProcess({ argv: nodeScript(source), ...options }));
 }
+
+it.skipIf(windows)(
+  "closes Gateway metadata after an exited service loses its stdin-end write",
+  async () => {
+    const spawnRelay = relaySpawn.spawnServiceChildRelay;
+    const cleanupStarted = Promise.withResolvers<Promise<unknown>>();
+    let failedWrites = 0;
+    const spawnSpy = vi.spyOn(relaySpawn, "spawnServiceChildRelay").mockImplementation((params) => {
+      const spawned = spawnRelay(params);
+      const control = spawned.child.stdio[3];
+      if (!(control instanceof Duplex)) {
+        throw new Error("Expected the private service control pipe");
+      }
+      const write = control.write.bind(control);
+      vi.spyOn(control, "write").mockImplementation((chunk, encoding, callback) => {
+        const message: unknown = JSON.parse(chunk.toString());
+        if (isRecord(message) && message.type === "stdin-end") {
+          failedWrites++;
+          callback?.(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+          return false;
+        }
+        return write(chunk, encoding, callback);
+      });
+      // Observe the real root's exit before the host publishes it to consumers.
+      // Only write delivery is faulted; receipt, lineage and OS exit remain native.
+      readLines(control, (line) => {
+        const message: unknown = JSON.parse(line);
+        if (isRecord(message) && message.type === "root-result") {
+          const cleanup = closeOwnedStdioProcess(child);
+          void cleanup.catch(() => {});
+          cleanupStarted.resolve(cleanup);
+        }
+      });
+      return spawned;
+    });
+    onTestFinished(() => spawnSpy.mockRestore());
+    const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
+    const { child } = await spawnScript('process.stdin.once("data", () => process.exit(0));', {
+      terminateOnHostLoss: true,
+    });
+    const shutdownErrors: string[] = [];
+    const closing = runGatewayCloseSteps({
+      owner: {
+        connectionWork: { drain: async () => {} },
+        stopConnectionDependentSidecars() {},
+        stopRegisteredGatewayLifetimeSidecars() {},
+        stopRegisteredPostReadySidecars() {},
+        runClosePrelude() {},
+        sealAndJoinRegisteredSidecarStops() {},
+      },
+      close: async () => {
+        await metadata.close(async () => {
+          await cleanupStarted.promise;
+        });
+      },
+      onError: (message) => shutdownErrors.push(message),
+    });
+    child.stdin!.write("exit\n");
+    await expect(closing).resolves.toBeUndefined();
+    expect(failedWrites).toBe(1);
+    expect(shutdownErrors).toEqual([]);
+    await expect(child.wait()).resolves.toEqual({ code: 0, signal: null });
+    await expect(child.waitForExtinction!()).resolves.toBeUndefined();
+  },
+);
 
 it("drains protocol output and shutdown diagnostics before confirming real stdio cleanup", async () => {
   const diagnostic = "shutdown: 🌊\n".repeat(8192);
