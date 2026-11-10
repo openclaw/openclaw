@@ -488,6 +488,14 @@ With `ci_shape=main` and `test_runtime_policy=node`, the first attempt also rout
 setup; failed-job-only retries stay hosted even when preflight outputs are reused.
 Retire the build and row overrides when the general Boat backend replaces this pilot.
 
+### Scheduled Android CodeQL routing
+
+Android Critical Security uses `boat-xlarge` for scheduled runs on canonical
+`openclaw/openclaw` main when `OPENCLAW_CI_RUNNER_BACKEND=boat`, including retries.
+Manual dispatches, other refs, and other backend modes retain
+`blacksmith-8vcpu-ubuntu-2404`. The CodeQL configuration, security permissions,
+build commands, and 45-minute deadline stay unchanged.
+
 ### RunsOn qualification
 
 The opt-in `runson` profile derives its plan from `hybrid`. It extracts the three
