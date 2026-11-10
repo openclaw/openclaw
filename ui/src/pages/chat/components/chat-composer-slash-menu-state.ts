@@ -14,7 +14,6 @@ import { paneDomId } from "./chat-composer-dom.ts";
 import {
   beginInlineFreeformSlashArguments,
   findDirectInlineSlashArgumentInvocation,
-  draftAfterSlashToken,
   hasActiveInlineSlashArgumentPrefix,
   removeInlineSlashSelection,
   replaceSlashToken,
@@ -294,7 +293,7 @@ export function createSlashMenu() {
     const completion = state.slashMenuCompletion;
     // Prose after a leading command token becomes that command's arguments.
     const leadingArgs =
-      completion && !completion.inline ? draftAfterSlashToken(completion, host).trim() : "";
+      completion && !completion.inline ? host.getDraft().slice(completion.end).trim() : "";
     if (host.activateComposerMode?.(cmd, completion?.inline === true, leadingArgs || undefined)) {
       return;
     }
@@ -343,14 +342,9 @@ export function createSlashMenu() {
       host.runInlineCommand(`/${cmd.name}`);
       return;
     }
-    if (completion?.inline) {
+    if (completion && (completion.inline || leadingArgs)) {
       resetSlashMenuState(state);
-      replaceSlashToken(inlineReplacement, completion, host);
-      return;
-    }
-    if (completion && leadingArgs) {
-      resetSlashMenuState(state);
-      replaceSlashToken(`/${cmd.name}`, completion, host);
+      replaceSlashToken(completion.inline ? inlineReplacement : `/${cmd.name}`, completion, host);
       return;
     }
 

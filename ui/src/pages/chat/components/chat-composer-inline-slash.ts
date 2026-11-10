@@ -47,15 +47,6 @@ export function replaceSlashToken(
   commitDraftWithCaret(host, next, completion.start + replacement.length + separator.length);
 }
 
-/** Draft text after the completed slash token, without the separating whitespace. */
-export function draftAfterSlashToken(
-  completion: InlineSlashCompletion,
-  host: InlineSlashHost,
-): string {
-  const current = host.getTextarea()?.value ?? host.getDraft();
-  return current.slice(completion.end).trimStart();
-}
-
 export function beginInlineFreeformSlashArguments(
   commandName: string,
   state: { slashMenuCompletion: InlineSlashCompletion | null },
