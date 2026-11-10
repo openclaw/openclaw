@@ -196,8 +196,9 @@ async function installTemplatePackagesUnlocked(
     try {
       if (action.details?.source === "bundled") {
         const dependency = bundledDependencyFromAction(action);
-        if (dependency.kind !== "skill")
+        if (dependency.kind !== "skill") {
           throw new Error("Bundled plugin installation is unavailable.");
+        }
         await installBundledTemplateSkill({
           rootDir: plan.template.packageRoot,
           workspace: plan.agent.workspace,

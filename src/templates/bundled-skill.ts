@@ -1,51 +1,18 @@
 import { lstat } from "node:fs/promises";
-import { basename, resolve } from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { evaluateSkillInstallPolicy } from "../plugins/install-security-scan.js";
 import { installExtractedSkillRoot } from "../skills/lifecycle/archive-install.js";
-import {
-  resolveWorkspaceSkillInstallDir,
-  validateRequestedSkillSlug,
-} from "../skills/lifecycle/install-paths.js";
-import { loadSingleSkillDirectory } from "../skills/loading/local-loader.js";
+import { resolveWorkspaceSkillInstallDir } from "../skills/lifecycle/install-paths.js";
+import { inspectTemplateBundledSkill } from "./bundled-skill-metadata.js";
 import {
   snapshotTemplateDependencyDirectory,
   materializeTemplateDependencyDirectory,
   type TemplateDirectorySnapshot,
 } from "./dependency-directory.js";
-import { digestTemplateBytes, digestTemplateValue } from "./digest.js";
+import { digestTemplateValue } from "./digest.js";
 import type { InstallTemplatePackagesOptions } from "./package-install-options.js";
 import type { PlannedTemplateBundledDependency } from "./package-plan-action.js";
-import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 import type { TemplatePackagePreflightResult } from "./types.js";
-
-export function inspectTemplateBundledSkill(
-  rootDir: string,
-  path: string,
-  snapshot: TemplateDirectorySnapshot,
-) {
-  const file = snapshot.files.find((entry) => entry.path === "SKILL.md");
-  if (!file) {
-    throw new Error(`Bundled skill ${path} is missing SKILL.md.`);
-  }
-  const skillDir = resolve(rootDir, path);
-  const loaded = loadSingleSkillDirectory({
-    skillDir,
-    rootRealPath: skillDir,
-    source: "template-bundled",
-    maxBytes: MAX_MANAGED_FILE_BYTES,
-  });
-  if (!loaded || digestTemplateBytes(Buffer.from(loaded.content)) !== file.digest) {
-    throw new Error(`Bundled skill ${path} has invalid or changed SKILL.md.`);
-  }
-  let installId: string;
-  try {
-    installId = validateRequestedSkillSlug(loaded.skill.name);
-  } catch {
-    installId = validateRequestedSkillSlug(basename(path));
-  }
-  return { name: loaded.skill.name, installId };
-}
 
 export async function preflightBundledTemplateSkill(params: {
   rootDir: string;

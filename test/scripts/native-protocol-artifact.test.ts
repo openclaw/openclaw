@@ -17,6 +17,8 @@ describe("native protocol build artifacts", () => {
     assertNativeProtocolContract("swift", output);
     const swift = output["GatewayModels.swift"];
     expect(swift).not.toContain("UserBackgroundAssetId");
+    expect(swift).toContain("public enum TemplateSkillAcknowledgement: Codable, Sendable");
+    expect(swift).toContain("public let acknowledgeskillwarnings: [TemplateSkillAcknowledgement]?");
     expect(swift).toContain(
       "public struct UserBackgroundAsset: Codable, Sendable {\n    public let assetid: String",
     );

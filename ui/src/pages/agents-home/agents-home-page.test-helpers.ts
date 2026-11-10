@@ -218,6 +218,7 @@ export function createPage(options: PageOptions = {}) {
                         digest: `sha256:${"b".repeat(64)}`,
                       }
                     : {
+                        source: "clawhub",
                         ref: "@openclaw/research",
                         version: "1.2.0",
                         integrity: "sha256:reviewed-skill",
