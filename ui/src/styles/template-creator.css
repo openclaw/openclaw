@@ -71,9 +71,7 @@
   overflow-wrap: anywhere;
 }
 
-.template-creator__row details summary,
-.template-creator__archive-file summary,
-.template-creator__summary summary {
+.template-creator summary {
   cursor: var(--cursor-action);
 }
 
