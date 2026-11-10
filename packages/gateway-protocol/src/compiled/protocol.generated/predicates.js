@@ -842,7 +842,7 @@ var External = [
     /(^requestId$)/u,
     IsUuid,
     /(^profile$)/u,
-    /(^id$|^displayName$|^avatarMime$|^mergedInto$|^createdAt$|^updatedAt$|^emails$|^githubIdentity$|^hasAvatar$|^role$|^effectiveRole$|^roleSource$)/u,
+    /(^id$|^displayName$|^avatarMime$|^mergedInto$|^createdAt$|^updatedAt$|^emails$|^githubIdentity$|^gitCoauthorAvailable$|^hasAvatar$|^role$|^effectiveRole$|^roleSource$)/u,
     /(^host$|^login$|^profileUrl$|^avatarUrl$)/u,
     /\S/u,
     /(^email$|^targetProfileId$)/u,
@@ -5678,6 +5678,9 @@ var External = [
     check_7(value.updatedAt) &&
     check_751(value.emails) &&
     check_752(value.githubIdentity) &&
+    (value.gitCoauthorAvailable === void 0 ||
+      !("gitCoauthorAvailable" in value) ||
+      check_181(value.gitCoauthorAvailable)) &&
     check_97(value.hasAvatar) &&
     (value.role === void 0 || !("role" in value) || check_755(value.role)) &&
     (value.effectiveRole === void 0 ||

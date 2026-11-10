@@ -18,6 +18,7 @@ const setCanonicalUserProfileDisplayName = vi.hoisted(() => vi.fn());
 const setUserProfileRole = vi.hoisted(() => vi.fn());
 const invalidateOperatorRolePolicy = vi.hoisted(() => vi.fn());
 const ensureProfileIdForEmail = vi.hoisted(() => vi.fn());
+const prepareUserProfileGitHubAttribution = vi.hoisted(() => vi.fn());
 let disclosedProfile: unknown;
 let authorityCurrent = true;
 const prepareUserProfileRoleAuthority = vi.hoisted(() => vi.fn());
@@ -34,6 +35,11 @@ vi.mock("../../state/user-channel-identity-operations.js", () => ({
 vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
   readResidentUserProfileRevision,
+}));
+
+vi.mock("../../state/user-profile-github-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-github-identity.js")>()),
+  prepareUserProfileGitHubAttribution,
 }));
 
 vi.mock("../../state/user-profile-writes.js", () => ({
@@ -180,6 +186,7 @@ const roleConfig = {
   getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
 };
 const effects = [
+  prepareUserProfileGitHubAttribution,
   ensureProfileIdForEmail,
   prepareUserProfileRoleAuthority,
   linkEmail,
@@ -203,6 +210,10 @@ beforeEach(() => {
   }));
   authorityCurrent = true;
   disclosedProfile = profile;
+  prepareUserProfileGitHubAttribution.mockResolvedValue({
+    identities: new Map(),
+    isCurrent: () => true,
+  });
   readResidentUserProfileRevision.mockReturnValue(residentProfile);
 });
 
@@ -291,7 +302,7 @@ it("keeps unresolved users.self unavailable and retryable when GitHub lookup fai
     details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
   });
   expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(true, {
-    profile,
+    profile: { ...profile, gitCoauthorAvailable: false },
   });
   expect(authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(2);
 });

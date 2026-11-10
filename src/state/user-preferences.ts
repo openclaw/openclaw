@@ -68,9 +68,11 @@ export async function setCanonicalUserPreferences(
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
     assertCurrent?: () => void;
     expectedEntries?: Record<string, unknown>;
+    /** Internal authenticated-proxy import only; never accepted from preference RPC parameters. */
+    trustedProxyGitCoauthor?: true;
   } = {},
 ): Promise<Result<{ profileId: string }, UserPreferenceError> | undefined> {
-  const prepared = prepareUserPreferenceUpdate(entries, options.expectedEntries);
+  const prepared = prepareUserPreferenceUpdate(entries, options.expectedEntries, options);
   if (!prepared.ok) {
     return prepared;
   }

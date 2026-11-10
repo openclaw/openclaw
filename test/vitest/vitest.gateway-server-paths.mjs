@@ -114,6 +114,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-user-identity.authority.test.ts",
   "src/gateway/github-user-identity.enterprise.test.ts",
   "src/gateway/github-user-identity.oidc.test.ts",
+  "src/gateway/trusted-proxy-git-coauthor.admission.test.ts",
   "src/gateway/github-user-identity.test.ts",
   "src/gateway/health/collector.channel-discovery.test.ts",
   "src/gateway/health/collector.deadline.test.ts",

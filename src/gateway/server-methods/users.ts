@@ -33,6 +33,8 @@ import {
   validateUsersGitHubAuthorizeCancelParams,
   validateUsersGitHubDisconnectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-identity.js";
 import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -46,6 +48,7 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
+import { prepareUserProfileGitHubAttribution } from "../../state/user-profile-github-identity.js";
 import { profileCatalogPath } from "../../state/user-profile-identity.read.js";
 import {
   projectUserProfileDisplay,
@@ -430,12 +433,31 @@ export const usersHandlers: GatewayRequestHandlers = {
         respond(false, undefined, authenticatedProfileUnavailableError(syncError));
         return;
       }
-      respond(true, { profile: profile.listItem });
+      const host = resolveConfiguredGitHubHost(options.context.getRuntimeConfig());
+      const availability = await prepareUserProfileGitHubAttribution([profileId], {
+        host,
+        githubAvailability: true,
+      });
+      profile.assertCurrent();
+      options.sessionMutationAuthorization?.assertCurrent();
+      if (
+        !availability.isCurrent() ||
+        resolveConfiguredGitHubHost(options.context.getRuntimeConfig()) !== host
+      ) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
+      respond(true, {
+        profile: {
+          ...profile.listItem,
+          gitCoauthorAvailable: Boolean(availability.identities.get(profileId)),
+        },
+      });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.prefs.get": async ({ client, params, respond, sessionMutationAuthorization }) => {
+  "users.prefs.get": async ({ client, context, params, respond, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateUsersPrefsGetParams, "users.prefs.get", respond)) {
       return;
     }
@@ -457,7 +479,14 @@ export const usersHandlers: GatewayRequestHandlers = {
         respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
-      respond(true, { status: "ok", entries: preferences.entries }, undefined);
+      const entries = preferences.entries;
+      if (Object.hasOwn(entries, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY)) {
+        const auth = context.getRuntimeConfig().gateway?.auth;
+        if (auth?.mode !== "trusted-proxy" || !auth.trustedProxy?.gitCoauthor) {
+          delete entries[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY];
+        }
+      }
+      respond(true, { status: "ok", entries }, undefined);
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;

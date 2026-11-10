@@ -41,7 +41,12 @@ import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.ty
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
+<<<<<<< HEAD
 import { isGatewayDelegationCurrent } from "./trusted-proxy-delegation.js";
+||||||| parent of fc8705ef4e1b23a (feat: let profiles configure Git co-author details)
+=======
+import { syncTrustedProxyGitCoauthor } from "./trusted-proxy-git-coauthor.js";
+>>>>>>> fc8705ef4e1b23a (feat: let profiles configure Git co-author details)
 import { formatForLog } from "./ws-log.js";
 
 const profileLog = createSubsystemLogger("gateway/user-profiles");
@@ -262,7 +267,20 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
               )
             : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
     const profileId = "profileId" in profile ? profile.profileId : profile.id;
+<<<<<<< HEAD
     const prepared = await prepareHttpProfile(
+||||||| parent of fc8705ef4e1b23a (feat: let profiles configure Git co-author details)
+    return await prepareHttpProfile(
+=======
+    await syncTrustedProxyGitCoauthor({
+      authConfig: params.cfg.gateway?.auth,
+      authResult: params.authResult,
+      headers: params.req.headers,
+      profileId,
+      assertCurrent,
+    });
+    return await prepareHttpProfile(
+>>>>>>> fc8705ef4e1b23a (feat: let profiles configure Git co-author details)
       profileId,
       profile.updatedAt,
       assertCurrent,

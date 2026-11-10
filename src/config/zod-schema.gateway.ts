@@ -381,6 +381,7 @@ export const GatewayConfigSchema = z
              * trust boundary and direct Gateway access is otherwise locked down.
              */
             allowLoopback: z.boolean().optional(),
+<<<<<<< HEAD
             /** Revision-scoped delegation from OpenClaw Enterprise's private browser proxy. */
             delegation: z
               .strictObject({
@@ -389,6 +390,20 @@ export const GatewayConfigSchema = z
                   .refine(isAbsolute, "Expected an absolute credential file path"),
               })
               .optional(),
+||||||| parent of fc8705ef4e1b23a (feat: let profiles configure Git co-author details)
+=======
+            /** Optional organization commit credit, supplied only by the authenticated proxy. */
+            gitCoauthor: z
+              .strictObject({
+                nameHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailVerifiedHeader: z
+                  .string()
+                  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)
+                  .optional(),
+              })
+              .optional(),
+>>>>>>> fc8705ef4e1b23a (feat: let profiles configure Git co-author details)
             /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */
             cloudflareAccessOidc: z
               .strictObject({

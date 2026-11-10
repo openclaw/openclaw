@@ -13,6 +13,8 @@ import {
 } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import {
   GIT_COAUTHOR_PREFERENCE_KEY,
+  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
   USER_PREFS_PROFILE_KEY_LIMIT,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import {
@@ -47,9 +49,14 @@ export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
 });
 
 export function updatesGitCoauthorPreference(update: PreparedUserPreferenceUpdate): boolean {
+  const keys = new Set([
+    GIT_COAUTHOR_PREFERENCE_KEY,
+    GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
+    GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+  ]);
   return (
-    update.serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
-    update.deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY)
+    update.serialized.some(({ prefKey }) => keys.has(prefKey)) ||
+    update.deletionKeys.some((key) => keys.has(key))
   );
 }
 

@@ -421,6 +421,71 @@ test("users.prefs.get retains its original scope across the preference read", as
   }, true);
 });
 
+test.each(["removed", "auth-mode"] as const)(
+  "users.prefs.get hides organization credit when proxy configuration is %s during its read",
+  async (change) => {
+    await withPreferenceState(async () => {
+      const owner = ensureProfileForEmail("organization-default-reader@example.test");
+      const organization = { name: "Organization Alice", email: "work@example.test" };
+      await preferences.setCanonicalUserPreferences(
+        owner.id,
+        {
+          "git.coauthor.organization": organization,
+          "ui.theme": "dark",
+        },
+        { trustedProxyGitCoauthor: true },
+      );
+      let configured = true;
+      const context = {
+        getRuntimeConfig: () =>
+          configured
+            ? {
+                gateway: {
+                  auth: {
+                    mode: "trusted-proxy",
+                    trustedProxy: {
+                      userHeader: "x-occ-identity",
+                      gitCoauthor: { nameHeader: "x-name", emailHeader: "x-email" },
+                    },
+                  },
+                },
+              }
+            : change === "auth-mode"
+              ? { gateway: { auth: { mode: "token" } } }
+              : {},
+      };
+      expect(await getPrefs(owner.id, {}, context)).toEqual({
+        ok: true,
+        payload: {
+          status: "ok",
+          entries: {
+            "git.coauthor.organization": organization,
+            "ui.theme": "dark",
+          },
+        },
+        error: undefined,
+      });
+      const original = preferences.getCanonicalUserPreferences;
+      using read = vi
+        .spyOn(preferences, "getCanonicalUserPreferences")
+        .mockImplementationOnce(async (...args) => {
+          const result = await original(...args);
+          configured = false;
+          return result;
+        });
+      expect(await getPrefs(owner.id, {}, context)).toEqual({
+        ok: true,
+        payload: { status: "ok", entries: { "ui.theme": "dark" } },
+        error: undefined,
+      });
+      expect(read).toHaveBeenCalledOnce();
+      expect((await original(owner.id))?.entries["git.coauthor.organization"]).toEqual(
+        organization,
+      );
+    }, true);
+  },
+);
+
 test("users.prefs dispatch saves guest choices only to the authenticated durable profile", async () => {
   return withPreferenceState(async (prepareProfiles) => {
     const ada = ensureProfileForEmail("ada@example.test");

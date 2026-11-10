@@ -27,6 +27,8 @@ export {
 export {
   GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
+  GIT_COAUTHOR_IDENTITY_PREFERENCE_KEY,
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
   PR_ATTRIBUTION_PREFERENCE_KEY,
   PR_ATTRIBUTION_FOOTER,
   isGitCoauthorCreditEnabled,
@@ -70,6 +72,8 @@ export const UserProfileSchema = closedObject({
   emails: Type.Array(NonEmptyString),
   // Display primary only; null does not disable profile-wide consent or host-selected credit.
   githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
+  // users.self only: verified GitHub credit for the configured host, independent of supplied pairs/consent.
+  gitCoauthorAvailable: Type.Optional(Type.Boolean()),
   hasAvatar: Type.Boolean(),
   role: Type.Optional(UserProfileRoleSchema),
   effectiveRole: Type.Optional(UserProfileRoleSchema),

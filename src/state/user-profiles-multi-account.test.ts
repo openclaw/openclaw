@@ -49,6 +49,61 @@ const directoryRow = (id: string, ...logins: string[]) => ({ id, logins });
 const legacyPerson = { displayName: "Saved Person Name", githubIdentity: { login: "legacy" } };
 
 describe("multi-account people", () => {
+  it("retains explicit credit and protected organization defaults under canonical authority", async () => {
+    const profile = ensureProfileForEmail("oidc:explicit-credit", options);
+    const imported = { name: "Organization Alice", email: "work@example.test" };
+    expect(
+      await setPreferences(
+        profile.id,
+        {
+          "git.coauthor.organization": imported,
+        },
+        options,
+      ),
+    ).toEqual({
+      ok: false,
+      error: { code: "invalid-key", key: "git.coauthor.organization" },
+    });
+    expect(
+      await setPreferences(
+        profile.id,
+        {
+          "git.coauthor.organization": imported,
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      ),
+    ).toMatchObject({ ok: true });
+    const unsigned = await prepareAttribution([profile.id], {
+      ...options,
+      organizationDefaults: true,
+    });
+    expect(unsigned.identities.get(profile.id)).toBeNull();
+    await setPreferences(profile.id, { "git.coauthor.enabled": true }, options);
+    expect(unsigned.isCurrent()).toBe(false);
+    expect((await resolveAttribution([profile.id], options)).get(profile.id)).toBeNull();
+    const organization = await prepareAttribution([profile.id], {
+      ...options,
+      organizationDefaults: true,
+    });
+    expect(organization.identities.get(profile.id)).toEqual({
+      ...imported,
+      source: "organization",
+    });
+    await setPreferences(
+      profile.id,
+      {
+        "git.coauthor.identity": { name: "Personal Alice", email: "personal@example.test" },
+      },
+      options,
+    );
+    expect(organization.isCurrent()).toBe(false);
+    expect(await attribution(profile.id)).toEqual({
+      name: "Personal Alice",
+      email: "personal@example.test",
+      source: "explicit",
+    });
+  });
+
   it("bounds the directory while preserving merged-profile filtering and account order", async () => {
     const database = openDatabase(options);
     ensureUserProfilesSchema(options, database);
@@ -216,7 +271,7 @@ describe("multi-account people", () => {
     const preparedCredit = await prepareAttribution([work.id], options);
     const credit = await attribution(work.id);
     expect(credit?.accountId).toBe(primary.binding.accountId);
-    if (credit) {
+    if (credit && "login" in credit) {
       credit.login = "caller-edit";
     }
     expect(await attribution(work.id)).toEqual(identity);

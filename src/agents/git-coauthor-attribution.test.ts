@@ -1,6 +1,10 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
-import { captureRuntimeConfigAsyncReader } from "../config/io.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  getRuntimeConfig,
+  setRuntimeConfigSnapshot,
+} from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -13,7 +17,10 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { resolveGitCoauthorAttribution } from "./git-coauthor-attribution.js";
+import {
+  prepareGitCoauthorAttribution,
+  resolveGitCoauthorAttribution,
+} from "./git-coauthor-attribution.js";
 
 let sharedState: OpenClawTestState;
 
@@ -84,6 +91,174 @@ function expectedCredit(...accounts: [number, string][]) {
     ),
   };
 }
+
+it("credits a non-GitHub participant's explicit pair only after saved consent", async () => {
+  await withSession("explicit-pair", async (scope) => {
+    await upsertSessionEntryCore(scope, { sessionId: "explicit-pair", updatedAt: 1 });
+    const profile = ensureProfileForEmail("oidc:alice-subject", stateOptions());
+    participant(scope, profile, 1);
+    expect(
+      setUserPreferences(
+        profile.id,
+        {
+          "git.coauthor.identity": { name: "Alice Example", email: "alice@example.test" },
+        },
+        stateOptions(),
+      ),
+    ).toMatchObject({ ok: true });
+    expect(await readCredit(scope)).toBeUndefined();
+    setUserPreferences(profile.id, { "git.coauthor.enabled": true }, stateOptions());
+    expect(await readCredit(scope)).toEqual({
+      logins: [],
+      trailers: ["Co-authored-by: Alice Example <alice@example.test>"],
+    });
+    const prepared = await prepareGitCoauthorAttribution({ ...scope, config: {} });
+    expect(prepared.isCurrent()).toBe(true);
+    setUserPreferences(
+      profile.id,
+      {
+        "git.coauthor.identity": { name: "Alice Example", email: "new@example.test" },
+      },
+      stateOptions(),
+    );
+    expect(prepared.isCurrent()).toBe(false);
+    setUserPreferences(profile.id, { "git.coauthor.enabled": false }, stateOptions());
+    expect(await readCredit(scope)).toBeUndefined();
+  });
+});
+
+it("selects explicit, configured organization, then GitHub credit without mixing pairs", async () => {
+  await withSession("credit-precedence", async (scope) => {
+    await upsertSessionEntryCore(scope, { sessionId: "credit-precedence", updatedAt: 1 });
+    const profile = linkedProfile("credit-precedence", 9537);
+    participant(scope, profile, 1);
+    setUserPreferences(
+      profile.id,
+      {
+        "git.coauthor.identity": { name: "Personal Alice", email: "personal@example.test" },
+      },
+      stateOptions(),
+    );
+    expect(await readCredit(scope)).toBeUndefined();
+    setUserPreferences(profile.id, { "git.coauthor.identity": null }, stateOptions());
+    expect(await readCredit(scope)).toEqual(expectedCredit([9537, "credit-precedence"]));
+    const config = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-occ-identity",
+            gitCoauthor: { nameHeader: "x-coauthor-name", emailHeader: "x-coauthor-email" },
+          },
+        },
+      },
+    };
+    setUserPreferences(
+      profile.id,
+      {
+        "git.coauthor.organization": { name: "Organization Alice", email: "work@example.test" },
+      },
+      { ...stateOptions(), trustedProxyGitCoauthor: true },
+    );
+    // Imported addresses never inherit GitHub's default-on consent.
+    expect(await readCredit(scope, { config })).toBeUndefined();
+    setUserPreferences(profile.id, { "git.coauthor.enabled": true }, stateOptions());
+    expect((await readCredit(scope, { config }))?.trailers).toEqual([
+      "Co-authored-by: Organization Alice <work@example.test>",
+    ]);
+    expect(await readCredit(scope)).toEqual(expectedCredit([9537, "credit-precedence"]));
+    setUserPreferences(
+      profile.id,
+      {
+        "git.coauthor.identity": { name: "Personal Alice", email: "personal@example.test" },
+      },
+      stateOptions(),
+    );
+    expect((await readCredit(scope, { config }))?.trailers).toEqual([
+      "Co-authored-by: Personal Alice <personal@example.test>",
+    ]);
+    const prepared = await prepareGitCoauthorAttribution({ ...scope, config });
+    setUserPreferences(
+      profile.id,
+      {
+        "git.coauthor.organization": null,
+        "git.coauthor.identity": null,
+      },
+      { ...stateOptions(), trustedProxyGitCoauthor: true },
+    );
+    expect(prepared.isCurrent()).toBe(false);
+    expect(await readCredit(scope, { config })).toEqual(
+      expectedCredit([9537, "credit-precedence"]),
+    );
+  });
+});
+
+it.each(["removed", "changed", "auth-mode"] as const)(
+  "invalidates prepared organization credit when its proxy mapping is %s",
+  async (change) => {
+    await withSession(`organization-policy-${change}`, async (scope) => {
+      await upsertSessionEntryCore(scope, {
+        sessionId: `organization-policy-${change}`,
+        updatedAt: 1,
+      });
+      const profile = ensureProfileForEmail(`oidc:policy-${change}`, stateOptions());
+      participant(scope, profile, 1);
+      setUserPreferences(
+        profile.id,
+        {
+          "git.coauthor.organization": { name: "Organization Alice", email: "work@example.test" },
+          "git.coauthor.enabled": true,
+        },
+        { ...stateOptions(), trustedProxyGitCoauthor: true },
+      );
+      const config = {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: {
+              userHeader: "x-occ-identity",
+              gitCoauthor: { nameHeader: "x-name", emailHeader: "x-email" },
+            },
+          },
+        },
+      };
+      const original = getRuntimeConfig();
+      try {
+        setRuntimeConfigSnapshot(config);
+        const prepared = await prepareGitCoauthorAttribution({ ...scope, config });
+        expect(prepared.attribution?.trailers).toEqual([
+          "Co-authored-by: Organization Alice <work@example.test>",
+        ]);
+        expect(prepared.isCurrent()).toBe(true);
+        setRuntimeConfigSnapshot(
+          change === "auth-mode"
+            ? { gateway: { auth: { mode: "token" } } }
+            : {
+                gateway: {
+                  auth: {
+                    mode: "trusted-proxy",
+                    trustedProxy: {
+                      userHeader: "x-occ-identity",
+                      ...(change === "changed"
+                        ? {
+                            gitCoauthor: {
+                              nameHeader: "x-new-name",
+                              emailHeader: "x-new-email",
+                            },
+                          }
+                        : {}),
+                    },
+                  },
+                },
+              },
+        );
+        expect(prepared.isCurrent()).toBe(false);
+      } finally {
+        setRuntimeConfigSnapshot(original);
+      }
+    });
+  },
+);
 
 it("does not export unrelated shared-main participants into a Discord task's commit", async () => {
   await withSession("main", async (scope) => {
