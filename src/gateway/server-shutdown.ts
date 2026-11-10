@@ -10,7 +10,6 @@ import {
 import { settlesWithin } from "../shared/settle-within.js";
 import { formatGatewayPendingCloseSteps, measureGatewayCloseStep } from "./restart-trace.js";
 import type { GatewayCloseOptions } from "./server-public.js";
-import type { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const RUNTIME_CLOSE_GRACE_MS = 5_000;
@@ -36,7 +35,7 @@ export function createGatewayCloseSteps(
   const shutdownStep = async (
     name: string,
     fn: () => Promise<void> | void,
-    inspectPending?: Awaited<ReturnType<typeof prepareGatewayRunShutdown>>["inspectPending"],
+    inspectPending?: () => Readonly<Record<string, string | number | boolean | null>>,
   ) => {
     const work = cleanupWork.track(async () => {
       try {
