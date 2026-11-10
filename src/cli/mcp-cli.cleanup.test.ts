@@ -141,3 +141,16 @@ it("preserves the discovery failure when DELETE is unconfirmed", async () => {
   expect(errors()).toContain(CATALOG_ERROR);
   expectCleanup(1);
 });
+
+it("prints a failed add check and the not-saved notice on separate lines", async () => {
+  failCatalog = true;
+  await runCliWithExitFinalization({
+    run: () => run("add", "more", "--url", endpoint, "--transport", "streamable-http"),
+    onError: (error) => {
+      throw error;
+    },
+  });
+  expect(errors()).toMatch(/^MCP check failed for "more" in .*\nConfiguration was not saved\.$/u);
+  expect(errors()).not.toContain("\\n");
+  expect(process.exitCode).toBe(1);
+});

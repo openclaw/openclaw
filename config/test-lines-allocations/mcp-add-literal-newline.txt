@@ -1,0 +1,2 @@
+13
+# mcp add prints a failed check and the not-saved notice on separate lines.
