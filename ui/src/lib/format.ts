@@ -99,19 +99,30 @@ export function formatRelativeTimestamp(
   const diff = timestampMs - Date.now();
   const isPast = diff <= 0;
   const { value, unit } = bucketRelativeTimeMs(Math.abs(diff));
-  if (options.suffix === false) {
-    return formatUnit({ value, unit });
+  if (unit === "second") {
+    if (options.suffix === false) {
+      return formatUnit({ value, unit });
+    }
+    return isPast ? t("common.justNow") : formatRelative(value, unit);
   }
-  return unit === "second" && isPast
-    ? t("common.justNow")
-    : formatRelative(isPast ? -value : value, unit);
+
+  const signedValue = isPast ? -value : value;
+  return options.suffix === false ? formatUnit({ value, unit }) : formatRelative(signedValue, unit);
 }
 
 export function formatUnknownText(value: unknown): string {
   if (value == null) {
     return "";
   }
-  if (typeof value !== "object" && typeof value !== "function") {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol"
+  ) {
     return String(value);
   }
   try {
