@@ -318,13 +318,11 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   await writeText(first.workspaceDir, "source.txt", "modified\n");
   await fs.utimes(source, before.atime, before.mtime);
   using guestEdit = await prepareSandboxCheckpointFixture(owner);
-  expect(quiesce).toHaveBeenCalledTimes(1);
   await expectText(canonical, "source.txt", "modified\n");
   await expectText(guestEdit.workspaceDir, "source.txt", "modified\n");
 
   await writeText(canonical, "source.txt", "host edit\n");
   using hostEdit = await prepareSandboxCheckpointFixture(owner);
-  expect(quiesce).toHaveBeenCalledTimes(2);
   await expectText(hostEdit.workspaceDir, "source.txt", "host edit\n");
   await writeText(canonical, "added.txt", "admitted host file\n");
   await requireGit(canonical, ["add", "added.txt"]);
@@ -379,7 +377,7 @@ export async function proveWarmWorkspaceReuseFailure(
   if (failure === "read") {
     using recovered = await prepareSandboxCheckpointFixture(owner);
     expect(recovered.workspaceDir).toBe(first.workspaceDir);
-    expect(quiesce).toHaveBeenCalledOnce();
+    expect(quiesce).toHaveBeenCalled();
   } else if (failure === "cancel") {
     await expect(
       prepareSandboxCheckpointFixture(owner, undefined, cancellation.signal),

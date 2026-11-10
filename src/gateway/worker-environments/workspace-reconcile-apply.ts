@@ -48,6 +48,9 @@ export async function applyStagedWorkerWorkspace(params: {
   additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
+  /** Holds every target writer through acceptance or rollback. */
+  freezeTarget?: () => Promise<void>;
+  onPhase?: (phase: "preflight" | "patch" | "capture" | "verification" | "apply") => void;
   acceptance:
     | {
         kind: "reconcile";
@@ -133,12 +136,16 @@ export async function applyStagedWorkerWorkspace(params: {
       preparedPaths && params.additionalPaths?.size
         ? new Set([...preparedPaths, ...params.additionalPaths])
         : preparedPaths;
-    const inspectPaths = () => preflightWorkspaceApply({ root, ...preflightInput });
+    const inspectPaths = () => {
+      params.onPhase?.("preflight");
+      return preflightWorkspaceApply({ root, ...preflightInput });
+    };
     const preflight = await inspectPaths();
     const acceptReconciled = async (
       reconcile: Extract<typeof acceptance, { kind: "reconcile" }>,
       preparedPreflight?: Awaited<ReturnType<typeof inspectPaths>>,
     ) => {
+      params.onPhase?.("capture");
       const actual = await captureWorkspaceManifest({
         root,
         baseCommit: params.current.baseCommit,
@@ -155,7 +162,12 @@ export async function applyStagedWorkerWorkspace(params: {
         includePaths,
         buildCacheInputs,
       });
-      await verifyLocalStable();
+      // A frozen target cannot change between capture and acceptance. Unfenced
+      // host callers still verify, and the returned verifier protects later use.
+      if (!params.freezeTarget) {
+        params.onPhase?.("verification");
+        await verifyLocalStable();
+      }
       const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
       params.assertCurrent?.();
       await reconcile.publish?.({ ...actual, conflictPaths });
@@ -168,6 +180,7 @@ export async function applyStagedWorkerWorkspace(params: {
       };
     };
     if (changed.size === 0) {
+      await params.freezeTarget?.();
       return acceptance.kind === "exact-target"
         ? await acceptExactTarget(acceptance.verify)
         : await acceptReconciled(acceptance, preflight);
@@ -192,12 +205,15 @@ export async function applyStagedWorkerWorkspace(params: {
     const appliedDirectories = [...preflight.applyPaths]
       .filter((entryPath) => currentNodes.get(entryPath)?.type === "directory")
       .toSorted();
+    params.onPhase?.("patch");
     const snapshot = await prepareWorkspacePatch({
       root,
       stagingRoot: params.stagingRoot,
       baseEntries,
       appliedEntries,
     });
+    // Preparation may run beside guest writes; fence them before confirming the plan.
+    await params.freezeTarget?.();
     const confirmedPreflight = await inspectPaths();
     if (!isDeepStrictEqual(confirmedPreflight, preflight)) {
       throw new ConcurrentWorkspacePathError(
@@ -222,6 +238,7 @@ export async function applyStagedWorkerWorkspace(params: {
     params.assertCurrent?.();
     await params.journal.begin(journal);
     try {
+      params.onPhase?.("apply");
       const staged = createStagedInputPathMatcher(await openFsSafeRoot(root));
       await prepareNonDirectoryTargets(
         root,

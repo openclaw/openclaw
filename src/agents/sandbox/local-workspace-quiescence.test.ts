@@ -130,8 +130,50 @@ it.each(["true", "false"])("recovers only owned pauses (Running=%s)", async (run
   const { resume } = await quiesce({ retained: [{ name: "owned", id }] });
   await resume();
   expect(commands("pause")).toHaveLength(0);
-  expect(mocks.pauseLog).not.toHaveBeenCalled();
+  expect(mocks.pauseLog).toHaveBeenCalledExactlyOnceWith(
+    expect.stringMatching(
+      /^Local workspace unpause: reason=reconcile durationMs=\d+ dominantPhase=\w+ dominantPhaseMs=\d+ durationScope=observed outcome=resumed$/u,
+    ),
+    { engine: "docker", runtime: "container" },
+  );
   expect(commands("unpause").length).toBeGreaterThan(0);
+});
+
+it("logs the completed pause and its dominant cumulative phase once, before receipt cleanup", async () => {
+  let elapsed = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  mockEngine({ owned: id }, ({ action }) => {
+    if (action === "pause") {
+      elapsed = 4;
+    } else if (action === "unpause") {
+      elapsed = 55;
+    }
+  });
+  try {
+    const control = await quiesce();
+    elapsed = 10;
+    control.markPhase("scan");
+    elapsed = 14;
+    control.markPhase("staging");
+    elapsed = 40;
+    control.markPhase("scan");
+    elapsed = 42;
+    control.markPhase("staging");
+    elapsed = 50;
+    persist.mockImplementationOnce(() => {
+      elapsed = 1_000;
+      retained = [];
+    });
+    await control.resume();
+    await control.resume();
+    expect(mocks.pauseLog).toHaveBeenLastCalledWith(
+      "Local workspace unpause: reason=reconcile durationMs=55 dominantPhase=staging dominantPhaseMs=34 durationScope=owner outcome=resumed",
+      { engine: "docker", runtime: "container" },
+    );
+    expect(mocks.pauseLog).toHaveBeenCalledTimes(2);
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 it("persists exact container and browser custody before pausing and resumes only those IDs", async () => {
@@ -214,6 +256,9 @@ it("records each released generation before a later resume failure and re-fences
   });
   const { resume } = await quiesce();
   await expect(resume()).rejects.toThrow("resume failed");
+  expect(
+    mocks.pauseLog.mock.calls.filter(([message]) => message.includes(" unpause:")),
+  ).toHaveLength(1);
   expect(retained).toEqual([{ name: "owned", id }]);
   failFirst = false;
   const { resume: recovered } = await quiesce();

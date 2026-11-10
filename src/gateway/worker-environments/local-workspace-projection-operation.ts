@@ -49,7 +49,32 @@ export async function runLocalWorkspaceProjection<T>(
       owner.workerAuthority,
     );
   }
-  const operations = projectionOperations(owner, store, previous);
+  const reconcile =
+    !options.provision &&
+    (options.reason === undefined ||
+      options.reason === "reconcile" ||
+      options.reason === "preparation");
+  let captured = false;
+  const operations = projectionOperations(
+    owner,
+    store,
+    previous,
+    reconcile
+      ? {
+          pause: () => pause(),
+          resume: () => resume(),
+          capture: async (consume) => {
+            await pause();
+            quiescence?.markPhase("capture");
+            const selected = capture;
+            capture = undefined;
+            captured ||= Boolean(selected);
+            await (selected ? selected(consume) : consume());
+          },
+          markPhase: (phase) => quiescence?.markPhase(phase),
+        }
+      : undefined,
+  );
   if (previous) {
     operations.current();
   }
@@ -61,16 +86,21 @@ export async function runLocalWorkspaceProjection<T>(
     commitGuard: () => void operations.current(),
   };
   let quiescence: Awaited<ReturnType<typeof quiesceLocalWorkspace>> | undefined;
+  let paused = false;
   const diagnostics: LocalWorkspaceCaptureDiagnostics = { reason: "adaptive-direct" };
   const resume = async () => {
     const started = performance.now();
     try {
-      await quiescence!.resume();
+      await quiescence?.resume();
+      paused = false;
     } finally {
       diagnostics.resumeMs = (diagnostics.resumeMs ?? 0) + performance.now() - started;
     }
   };
   const pause = async () => {
+    if (paused) {
+      return;
+    }
     quiescence =
       previous && !options.provision
         ? await timeWorktreePreparationPhase("runtimeQuiesce", () =>
@@ -87,10 +117,12 @@ export async function runLocalWorkspaceProjection<T>(
             }),
           )
         : undefined;
+    paused = Boolean(quiescence);
     diagnostics.pausedAt = performance.now();
   };
-  const capture =
-    previous && options.reason === "checkpoint" && options.snapshotCapture
+  const useCapture = reconcile || (options.reason === "checkpoint" && options.snapshotCapture);
+  let capture =
+    previous?.baseline_ref && useCapture
       ? await prepareLocalWorkspaceCheckpointCapture(
           previous.projection_path,
           filesystemOptions,
@@ -110,6 +142,7 @@ export async function runLocalWorkspaceProjection<T>(
         },
         retire: () => quiescence!.retire(),
         resume,
+        markPhase: (phase) => quiescence!.markPhase(phase),
       },
       capture,
     );
@@ -139,7 +172,7 @@ export async function runLocalWorkspaceProjection<T>(
           await timeWorktreePreparationPhase("runtimeResume", resume);
         }
       }
-      if (previous && options.reason === "checkpoint") {
+      if (previous && (options.reason === "checkpoint" || captured)) {
         if (accepted) {
           await retireLocalWorkspaceCheckpointCapture(previous.projection_path, filesystemOptions);
         } else {

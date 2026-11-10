@@ -1,5 +1,44 @@
 # Native checkpoint pause comparison
 
+## Ordinary reconciliation
+
+Use `--mode reconcile --reconcile-target canonical` to export guest changes through
+`withLocalWorkspaceProjection(... synchronize("canonical"))`. Select `projection`
+to import host changes. Each request changes existing files, invokes that real
+owner once, verifies all changed bytes on both sides and checks a subsequent native
+guest read. The native guest uses the host workspace owner's UID/GID, so private
+imported files remain readable without adding DAC capabilities or changing file
+permissions. `--reconcile-changed-files 20000` exercises a substantial admitted delta
+inside a 62,000-file/1.1 GB workspace; its files retain their original size. The
+synthetic repeated text is compressible and is not an incident-content replay.
+
+The native engine, isolated fixture, source freezing, cleanup accounting and
+profiling instructions below apply unchanged. For example, after fixture seeding
+and subvolume qualification:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/local-workspace-checkpoint-measure.ts \
+  --mode reconcile --reconcile-target canonical --reconcile-changed-files 20000 \
+  --native-turns --sandbox-backend podman \
+  --guest-image docker.io/library/node:24.22.1-trixie \
+  --output /owned-btrfs/reconcile --reuse-fixture --files 62000 --file-bytes 17742 \
+  --transcript-mib 12288 --requests 1 --burst 1 --report export-A1.json
+```
+
+Freeze the entire baseline and candidate source with `--freeze-source`, then run
+the same driver using `--source-root`; this includes the worker implementation.
+Measure export and import separately, with two fresh-process baseline controls
+followed by five counterbalanced pairs. The acceptance rule is identical accepted
+bytes, no remaining pause during staging/patch preparation, reduced paused time,
+and no unexplained 20% regression in total owner time, CPU or allocation. The
+`finalizationDistributionMs` field is the synchronization owner time; the command
+field additionally includes synthetic fixture mutation. Phase durations overlap.
+Compare `operationPauseDistributionMs` (all frozen intervals summed per owner call)
+and `operationMaxPauseDistributionMs` (the longest continuous interval per call).
+Each raw finalization records both. Per-interval percentiles alone are misleading
+when the two revisions pause a different number of times.
+An engine seam run qualifies owner ordering only, not native freeze latency.
+
 `local-workspace-checkpoint-measure.ts --mode turn-loop --native-turns` runs the
 real checkpoint owner against a native Podman guest. Use a disposable Linux rig,
 a task-private Podman store, and a local Node guest image. Put the output on btrfs
