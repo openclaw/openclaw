@@ -53,6 +53,10 @@ backup.
 
 ## Update implementation contract
 
+Doctor reports launcher-override repair guidance even when a split installation
+prevents maintenance admission. Reinstalling the managed base cannot change an
+operator-owned launcher override; inspect and update that override first.
+
 Candidate Doctor recovers interrupted legacy heartbeat runs through cron's startup
 recovery owner before converting them to automations, while holding offline
 maintenance custody. Live or unproved runtime ownership leaves the conversion and
