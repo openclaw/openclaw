@@ -3,6 +3,10 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 
 export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions & {
   updaterStopped?: "native" | "legacy";
+  recoveryInterruption?: {
+    effect: "stop-retired" | "lease-replaced";
+    at: "inspection" | "bootstrap-retry" | "kickstart";
+  };
   interruptedUpdate?:
     | "before"
     | "prepared"

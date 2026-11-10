@@ -383,7 +383,7 @@ async function parkGatewayService() {
   });
 }
 
-async function restoreGatewayService(reason, decision = params.recovery, childStatus, previousGeneration = false, updaterStopped = false) {
+async function restoreGatewayService(reason, decision = params.recovery, childStatus, previousGeneration = false, updaterStopped = false, beforeStart = () => {}) {
   if (managedUpdateLease?.action.kind !== "update" || !ownsManagedUpdateLease()) return false;
   let expectedRevision;
   const record = (restored) => recordUpdateHandoffOutcome(
@@ -435,6 +435,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
       !ownsRecovery()) {
       return refuse("recovery refused: parked systemd service identity changed or stop is incomplete");
     }
+    beforeStart();
     const started = childStatus
       ? await restart()
       : await runOwned("systemctl", ["--user", "start", recovery.unit]);
@@ -462,6 +463,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
     } else if (!isLaunchdNotLoaded(before)) {
       return refuse();
     }
+    beforeStart();
     if (childStatus) {
       const restarted = await restart();
       // The guarded CLI owns its restart deadline; identity inspection gets a fresh probe budget.
@@ -491,8 +493,10 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
         }
         if (kickstarted) break;
         kickstarted = true;
+        beforeStart();
         inspection = await run(["kickstart", target]);
       } else if (isLaunchdNotLoaded(inspection)) {
+        beforeStart();
         inspection = await run(["bootstrap", "gui/" + recovery.uid, recovery.plistPath]);
       } else break;
       if (inspection.code === 0) continue;
@@ -506,6 +510,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
     serviceRunning = restored;
     }
   } else if (recovery?.kind === "schtasks") {
+    beforeStart();
     restored = (await runOwned("schtasks.exe", ["/Run", "/TN", recovery.taskName])).code === 0;
   }
   // Manager liveness survives a failed readiness probe, but version facts require

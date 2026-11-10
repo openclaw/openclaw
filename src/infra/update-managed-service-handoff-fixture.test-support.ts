@@ -70,8 +70,10 @@ export function useManagedServiceHandoffLifecycleFixture(nativeCoordinator = fal
   const managedProcessCleanups = new Set<() => Promise<void>>();
   const mockedHandoffLeaseCleanups = new Set<() => void>();
   const mockedHandoffs = new Map<string, { handoffId: string }>();
+  let expectedCancellation: "restored-in-process" | false = "restored-in-process";
 
   beforeEach(async () => {
+    expectedCancellation = "restored-in-process";
     // Helpers in one fixture share a coordinator without touching the operator's database.
     const coordinatorDir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
@@ -130,7 +132,7 @@ export function useManagedServiceHandoffLifecycleFixture(nativeCoordinator = fal
               installRoot,
               handoffId,
             }),
-          ).resolves.toBe("restored-in-process");
+          ).resolves.toBe(expectedCancellation);
         }
       }
     } finally {
@@ -152,10 +154,17 @@ export function useManagedServiceHandoffLifecycleFixture(nativeCoordinator = fal
     }
   });
 
-  const runManagedServiceManagerBoundary = createManagedServiceManagerBoundary({
+  const runBoundary = createManagedServiceManagerBoundary({
     spawnMock,
     tempDirs,
     cleanups: managedProcessCleanups,
   });
+  const runManagedServiceManagerBoundary = (...args: Parameters<typeof runBoundary>) => {
+    // An intentionally replaced lease also prevents cleanup from reclaiming the old handoff.
+    if (args[1]?.recoveryInterruption?.effect === "lease-replaced") {
+      expectedCancellation = false;
+    }
+    return runBoundary(...args);
+  };
   return { forceKillChildProcessTreeMock, spawnMock, tempDirs, runManagedServiceManagerBoundary };
 }

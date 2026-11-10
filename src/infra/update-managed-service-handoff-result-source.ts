@@ -308,11 +308,15 @@ async function recoverInterruptedUpdater() {
     const assertCurrent = () => {
       if (!ownsManagedUpdateLease()) throw new Error("managed update recovery ownership was lost");
     };
+    const assertPendingStop = () => {
+      assertCurrent();
+      const stop = readGatewayStop();
+      // A completed start retires this stop even if the helper originally parked it.
+      if (stop?.runId !== params.runId || stop.started)
+        throw new Error("Gateway stop intent was superseded by a later running service");
+    };
     const updaterStopped = !restorationArmed;
-    const stop = readGatewayStop();
-    // A completed start retires this stop even if the helper originally parked it.
-    if ((stop?.runId === params.runId && stop?.started) || (updaterStopped && stop?.runId !== params.runId))
-      throw new Error("Gateway stop intent was superseded by a later running service");
+    assertPendingStop();
     const recovered = await recoverInterruptedManagedUpdate({
       root: params.updateLeaseKey, runId: params.runId, owner: params.updateLeaseOwner,
       databaseIdentity: params.updateLeaseDatabaseIdentity, original: params.recovery,
@@ -341,7 +345,7 @@ async function recoverInterruptedUpdater() {
     const restored = await restoreGatewayService(
       recovered.status === "rolled-back" ? "managed-service-handoff-cancelled" : reason,
       recovered.recovery, updaterStopped || recovered.status === "succeeded" ? "error" : undefined,
-      false, updaterStopped,
+      false, updaterStopped, assertPendingStop,
     );
     if (!restored) throw new Error("Recovered runtime could not restore Gateway readiness and identity");
     runOutcome = { status: recovered.status, reason: recovered.status === "succeeded"

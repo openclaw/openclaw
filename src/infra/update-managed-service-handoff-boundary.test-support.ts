@@ -18,6 +18,7 @@ import * as handoffArtifacts from "./update-managed-service-handoff-artifacts.te
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import {
   awaitEmulatedRecoveryHandoffExit,
+  isManagedServiceInspectionCommand,
   createManagedServiceCommandFixture,
   LAUNCHD_GATEWAY_IDENTITY_ENV,
   waitForHandoffResponse,
@@ -27,11 +28,10 @@ import {
   createManagedServiceLaunchdClockPreload,
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
-  isManagedServiceInspectionCommand,
   type ManagedServiceCommandTiming,
   type ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
-import { prepareManagedServiceParentPreloads } from "./update-managed-service-handoff-parent.test-support.js";
+import { prepareManagedServiceHelperPreloads } from "./update-managed-service-handoff-parent.test-support.js";
 import {
   createManagedServiceBoundaryCleanup,
   createManagedServiceBoundaryParent,
@@ -389,7 +389,7 @@ export function createManagedServiceManagerBoundary({
         );
         helperEnv = { ...helperEnv, NODE_OPTIONS: `--require ${preloadPath}` };
       }
-      helperEnv = await prepareManagedServiceParentPreloads({
+      helperEnv = await prepareManagedServiceHelperPreloads({
         root,
         scriptPath,
         statePath,
@@ -398,6 +398,7 @@ export function createManagedServiceManagerBoundary({
         logPath: String(generated.logPath),
         parentExitTimeoutMs: Number(generated.parentExitTimeoutMs),
         stopSettlementPath,
+        recovery: { paramsPath, updaterPath, ledgerRuntimeImport },
         env: helperEnv,
         options,
       });

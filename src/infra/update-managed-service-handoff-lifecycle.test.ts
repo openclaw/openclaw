@@ -29,10 +29,8 @@ import {
   cleanupStaleManagedServiceUpdateHandoffs,
   MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX,
 } from "./update-managed-service-handoff-cleanup.js";
-import {
-  isManagedServiceInspectionCommand,
-  registerManagedHandoffOwnerTests,
-} from "./update-managed-service-handoff-lifecycle.test-support.js";
+import { isManagedServiceInspectionCommand } from "./update-managed-service-handoff-command.test-support.js";
+import { registerManagedHandoffOwnerTests } from "./update-managed-service-handoff-lifecycle.test-support.js";
 import { pathExists } from "./update-managed-service-native.test-support.js";
 import { recordUpdateRunStep } from "./update-run-ledger.js";
 
