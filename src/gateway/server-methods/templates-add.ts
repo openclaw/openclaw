@@ -212,7 +212,13 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
               creatorOptions = await captureCronCreatorSession(
                 normalized,
                 undefined,
-                { client, context, signal, hasCurrentClientAuthority },
+                {
+                  client,
+                  context,
+                  signal,
+                  hasCurrentClientAuthority,
+                  ...(client ? { captureIndependentOperatorSource: true as const } : {}),
+                },
                 cfg,
               );
               await assertValidCronCreateDelivery(
