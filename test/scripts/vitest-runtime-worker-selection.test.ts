@@ -17,8 +17,31 @@ const local = "src/tui/tui-pty-local.e2e.test.ts";
 const built = { OPENCLAW_TUI_PTY_USE_BUILT_CLI: "1" };
 const reply = "test/vitest/vitest.auto-reply.config.ts";
 const delivery = "src/auto-reply/reply/dispatch-from-config.delivery.test.ts";
+const commands = "test/vitest/vitest.commands.config.ts";
+const doctorCommandFiles = [
+  "src/commands/doctor-config-preflight.container-upgrade.test.ts",
+  "src/commands/doctor-maintenance.schema-preflight.test.ts",
+  "src/commands/doctor-maintenance.stopped-systemd.test.ts",
+  "src/commands/doctor-plugin-package-consent.test.ts",
+];
 
 it.each([
+  { name: "Doctor commands", config: commands, files: doctorCommandFiles, env: {}, runtime: true },
+  {
+    name: "Doctor update schema",
+    config: "test/vitest/vitest.infra.config.ts",
+    files: ["src/flows/doctor-health.update-schema.test.ts"],
+    env: {},
+    runtime: true,
+  },
+  { name: "broad Doctor commands", config: commands, files: [], env: {}, runtime: false },
+  {
+    name: "mixed Doctor commands",
+    config: commands,
+    files: [...doctorCommandFiles, "src/commands/unknown.test.ts"],
+    env: {},
+    runtime: false,
+  },
   {
     name: "Doctor setup and runtime registry",
     config: "test/vitest/vitest.plugins.config.ts",
