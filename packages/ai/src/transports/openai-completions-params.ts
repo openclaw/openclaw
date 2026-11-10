@@ -441,7 +441,7 @@ export function buildOpenAICompletionsRequest(
               simpleReasoning,
             )) ??
         (usesBinaryOpenRouterThinking ? undefined : "high"));
-  // Keep raw selection separate from the managed effort fallback.
+  // Keep the raw selection separate from the managed effort fallback.
   const thinkingExplicit =
     options?.openclawThinkingExplicit ??
     (options?.reasoningEffort !== undefined || options?.reasoning !== undefined);
