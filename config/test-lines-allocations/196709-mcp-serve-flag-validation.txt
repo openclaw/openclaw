@@ -1,0 +1,5 @@
+# PR #196709: exact net test-line growth for mcp serve flag-error regressions
+# (invalid --claude-channel-mode, unreadable --token-file, --token/--token-file
+# conflict) and a single period before the Gateway startup hint. Shared scalar
+# unchanged.
+39
