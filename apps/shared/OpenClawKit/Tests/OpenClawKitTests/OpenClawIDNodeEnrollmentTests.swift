@@ -489,9 +489,10 @@ struct OpenClawIDNodeEnrollmentTests {
         let next = try rebound.verdict.get().state
         #expect(next.bindingSequence == 2 && next.snapshotSequence == 1 && next.snapshotBindingSequence == 2)
         try OpenClawIDNodeTrust.validateCommit(next, replacing: state)
-        // The retired binding is refused and does not move the marker back.
-        let retired = try assess(binding: 1, gateway: oldGateway, seq: 8, claims: 1, previous: next, at: fixture.now + 3)
-        #expect(throws: OpenClawIDNodeEnrollmentError.rollback) { try retired.verdict.get() }
+        // The retired binding is refused before any of its evidence is considered.
+        #expect(throws: OpenClawIDNodeEnrollmentError.rollback) {
+            try assess(binding: 1, gateway: oldGateway, seq: 8, claims: 1, previous: next, at: fixture.now + 3)
+        }
     }
 
     @Test func nativeStoreLoadsAKeylessRowCappedAtThePinWithoutOrder() async throws {
