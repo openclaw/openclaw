@@ -103,8 +103,8 @@ vi.mock("./telegram-ingress-drain.js", async (importOriginal) => {
     ) =>
       actual.createTelegramIngressMonitor({
         ...params,
-        dispatch: (update, lifecycle) =>
-          params.dispatch(update, {
+        dispatch: (nativeUpdate, lifecycle) =>
+          params.dispatch(nativeUpdate, {
             ...lifecycle,
             onCancelled: async () => {
               hooks.cancelled();
