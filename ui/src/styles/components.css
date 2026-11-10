@@ -23,7 +23,7 @@ openclaw-session-progress-hovercard-provider {
 .connect-splash__status {
   margin-top: 16px;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 
 .loading-skeleton {
@@ -351,11 +351,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 /* Keep artwork at its resting size inside a consistent 24px circular ring.
    Owner pairs retain their fitted trace below rather than shrinking their faces. */
 .session-glyph__ring {
+  --spinner-art: var(--spinner-mask-avatar);
   position: absolute;
   inset: -2px;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask-avatar);
   border-radius: var(--radius-full);
   pointer-events: none;
 }
@@ -363,8 +362,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 /* With no artwork to wrap, the ring collapses to the 12px spinner the trailing
    slot used to draw; a full-size empty circle reads as a missing icon. */
 .session-glyph--bare .session-glyph__ring {
+  --spinner-art: initial;
   inset: 4px;
-  mask: var(--spinner-mask);
 }
 
 /* Two identities share one run: the arc traces the union outline of the owner
@@ -438,6 +437,12 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   text-decoration: underline;
 }
 
+.report-issue-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .card {
   border: 1px solid var(--border);
   background: var(--card);
@@ -455,7 +460,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .card-title {
-  font-size: 15px;
+  font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--text-strong);
@@ -463,7 +468,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .card-sub {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   margin-top: 6px;
   line-height: 1.5;
 }
@@ -499,7 +504,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .stat-value {
-  font-size: 24px;
+  font-size: calc(24px * var(--control-ui-text-scale));
   font-weight: 700;
   margin-top: 6px;
   letter-spacing: -0.03em;
@@ -508,7 +513,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
 }
 
@@ -539,8 +544,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  background: currentColor;
-  mask: var(--spinner-mask);
   border-radius: var(--radius-full);
   animation: btn-spinner-spin 0.7s linear infinite;
 }
@@ -567,7 +570,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   background: var(--btn-bg, var(--bg-elevated));
   padding: 8px 14px;
   border-radius: var(--radius-md);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   letter-spacing: -0.01em;
   /* Labels never break mid-text; tight clusters wrap whole buttons instead
@@ -652,12 +655,12 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .btn--sm {
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .btn--xs {
   padding: 4px 6px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1;
 }
 
@@ -873,6 +876,12 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
 /* On a phone both lanes share one column at the top: the center lane, then
  * arrivals. Each toast spans the screen between the gutters. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Touch has no hover: keep dismissal visible, including the renderer fallback. */
+  .app-toast > .app-toast__dismiss {
+    opacity: 1;
+    scale: 1;
+  }
+
   .shell--session {
     --app-toast-shell-top: calc(
       var(--safe-area-top) + var(--shell-topbar-height) + var(--chat-mobile-pane-header-height) +
@@ -983,7 +992,7 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
 .login-gate__form .field label,
 .field span {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
 }
 
@@ -1062,7 +1071,7 @@ select.input {
   padding: 0 12px;
   color: var(--text);
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   letter-spacing: 0.08em;
   line-height: 1;
   pointer-events: none;
@@ -1177,7 +1186,7 @@ select.settings-select:not([multiple]) {
         margin: 0;
         padding: 0;
         background: var(--text-tertiary);
-        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+        mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>")
           center / contain no-repeat;
         transition: none;
       }
@@ -1401,7 +1410,7 @@ openclaw-tooltip:last-child > .refresh-button {
   border-radius: var(--radius-md);
   background: var(--secondary);
   border: 1px solid var(--border);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
   position: relative;
   user-select: text;
@@ -1569,7 +1578,7 @@ openclaw-tooltip:last-child > .refresh-button {
 
 .lazy-element-loading__header h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: 600;
 }
 
@@ -1578,7 +1587,7 @@ openclaw-tooltip:last-child > .refresh-button {
   align-items: center;
   gap: 10px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .agent-startup-state {
@@ -1588,7 +1597,7 @@ openclaw-tooltip:last-child > .refresh-button {
   gap: 8px;
   padding: 32px 24px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
   text-align: center;
 }
@@ -1629,14 +1638,14 @@ openclaw-tooltip:last-child > .refresh-button {
 }
 
 .lazy-view-error__title {
-  font-size: 15px;
+  font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: 650;
   color: var(--text-strong);
 }
 
 .lazy-view-error__subtitle {
   max-width: 40ch;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
   color: var(--muted);
 }
@@ -1656,20 +1665,111 @@ openclaw-tooltip:last-child > .refresh-button {
   color: var(--muted);
 }
 
+.lazy-view-error__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin-block-start: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
+  font: 500 calc(13px * var(--control-ui-text-scale)) / 20px var(--font-body);
+  list-style: none;
+  cursor: var(--cursor-action);
+  user-select: none;
+}
+
+.lazy-view-error__summary:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text-strong);
+}
+
+.lazy-view-error__summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.lazy-view-error__summary::-webkit-details-marker {
+  display: none;
+}
+
+.lazy-view-error__chevron {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  transition: rotate 150ms var(--ease-out);
+}
+
+.lazy-view-error__details[open] .lazy-view-error__chevron {
+  rotate: 180deg;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lazy-view-error__chevron {
+    transition: none;
+  }
+}
+
+/* Match the transcript's diagnostic well, with Copy in its own top-right cell. */
+.lazy-view-error__well {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-block-start: 8px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
 .lazy-view-error__detail {
   display: block;
-  margin-top: 8px;
+  flex: 1;
+  min-width: 0;
   max-width: 100%;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 1.5;
+  max-height: min(16rem, 35dvh);
+  margin: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--text);
+  font: calc(12px * var(--control-ui-text-scale)) / 1.65 var(--mono);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.lazy-view-error__action {
+  display: inline-flex;
+  flex: none;
+}
+
+.lazy-view-error__action .chat-copy-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: var(--cursor-action);
+}
+
+.lazy-view-error__action .chat-copy-btn:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text-strong);
+}
+
+@media (hover: none) {
+  .lazy-view-error__action .chat-copy-btn {
+    width: 32px;
+    height: 32px;
+  }
 }
 
 .code-block {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
   background: var(--secondary);
   padding: 12px;
@@ -1827,7 +1927,7 @@ openclaw-tooltip:last-child > .refresh-button {
   min-height: 36px;
   padding: 8px 8px 4px 14px;
   background: transparent;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1;
 }
 
@@ -1922,7 +2022,7 @@ openclaw-tooltip:last-child > .refresh-button {
 .code-block-lang {
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   text-transform: lowercase;
   user-select: none;
 }
@@ -1963,7 +2063,7 @@ openclaw-tooltip:last-child > .refresh-button {
   overscroll-behavior: contain;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.7;
   white-space: nowrap;
 }
@@ -2052,13 +2152,13 @@ openclaw-tooltip:last-child > .refresh-button {
   width: 16px;
   height: 16px;
   background: currentColor;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E")
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect width='14' height='14' x='8' y='8' rx='2'/><path d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/></svg>")
     center / contain no-repeat;
 }
 
 .code-block-copy__done {
   background: currentColor;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E")
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m20 6-11 11-5-5'/></svg>")
     center / contain no-repeat;
 }
 
@@ -2110,7 +2210,7 @@ openclaw-tooltip:last-child > .refresh-button {
 }
 
 .chip {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
@@ -2186,7 +2286,7 @@ openclaw-tooltip:last-child > .refresh-button {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .data-table th {
@@ -2196,7 +2296,7 @@ openclaw-tooltip:last-child > .refresh-button {
   padding: 10px 12px;
   text-align: left;
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
@@ -2358,7 +2458,7 @@ td.data-table-key-col {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--accent-subtle);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   color: var(--text);
 }
@@ -2371,7 +2471,7 @@ td.data-table-key-col {
   padding: 10px 12px;
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   color: var(--muted);
 }
 
@@ -2383,9 +2483,9 @@ td.data-table-key-col {
 
 .data-table-pagination__controls button {
   padding: 4px 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--field-radius);
   background: var(--card);
   color: var(--text);
   transition:
@@ -2466,7 +2566,7 @@ select.data-table-pagination__size {
 
 .exec-approval-sub {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   margin-top: 4px;
 }
 
@@ -2481,12 +2581,12 @@ select.data-table-pagination__size {
   word-break: break-word;
   white-space: pre-wrap;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .exec-approval-error {
   margin-top: 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   color: var(--danger);
 }
 
@@ -2506,7 +2606,7 @@ select.data-table-pagination__size {
 .exec-approval-skip {
   margin-top: 12px;
   column-gap: 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   cursor: var(--cursor-action);
 }
 
@@ -2538,11 +2638,9 @@ select.data-table-pagination__size {
 }
 
 .agent-scope-control .agent-select__trigger {
-  min-height: 34px;
   border-color: var(--border);
-  border-radius: var(--radius-full);
   background: var(--bg-elevated);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
@@ -2625,7 +2723,7 @@ select.data-table-pagination__size {
   border-radius: var(--radius-full);
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
 }
 
@@ -2686,7 +2784,7 @@ select.data-table-pagination__size {
 .agent-select__option {
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .agent-select__option > .oc-menu-item__check {
@@ -2722,7 +2820,7 @@ select.data-table-pagination__size {
 .agent-select__option-description {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
   line-height: 1.3;
   text-overflow: ellipsis;
@@ -2784,8 +2882,8 @@ select.data-table-pagination__size {
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
   font-family: inherit;
-  font-size: 15px;
-  line-height: 22px;
+  font-size: calc(15px * var(--control-ui-text-scale));
+  line-height: calc(22px * var(--control-ui-text-scale));
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -2843,7 +2941,7 @@ select.data-table-pagination__size {
   flex: 0 0 auto;
   padding: 8px 18px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 @media (max-width: 768px) {
@@ -2861,7 +2959,7 @@ select.data-table-pagination__size {
   }
 
   .exec-approval-command {
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     padding: 8px 10px;
     max-height: 40dvh;
   }
@@ -3013,7 +3111,7 @@ select.data-table-pagination__size {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
@@ -3155,14 +3253,39 @@ select.data-table-pagination__size {
   fill: currentColor;
 }
 
+/* Spinners rotate an unmasked host around a static masked child. In the
+   Control UI, WebKit does per-frame work while a masked element rotates;
+   keeping the mask on a static child avoids it. The art fills its host in
+   flow, so hosts need no positioning. Hosts pick their art with
+   --spinner-art. Keep in sync with the forced-colors spinner list below. */
+.btn__spinner::before,
+.session-run-spinner::before,
+.session-glyph__ring::before,
+.activity-pill__spinner::before,
+.chat-details-processes__spinner::before,
+.chat-details-subagents__spinner::before,
+.session-worker-stop__spinner::before,
+.approval-page__spinner::before,
+.custodian__history-spinner::before,
+.device-pair-setup__spinner::before,
+.desktop-spinner::before,
+.wizard-sign-in__ring::before,
+.wizard-step__spinner::before {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+  mask: var(--spinner-art, var(--spinner-mask));
+}
+
 .session-run-spinner {
   display: inline-block;
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask);
   border-radius: var(--radius-full);
 }
 
@@ -3547,7 +3670,6 @@ select.data-table-pagination__size {
 :where(.usage-query-input),
 :where(.sessions-sort) :where(select),
 :where(.dashboards-search) :where(input),
-:where(.dashboards-select) :where(select),
 :where(.data-table-search) :where(input),
 :where(.cron-search-box) :where(input),
 :where(.input) {
@@ -3565,7 +3687,6 @@ select.data-table-pagination__size {
 :where(.usage-query-input)::placeholder,
 :where(.sessions-sort) :where(select)::placeholder,
 :where(.dashboards-search) :where(input)::placeholder,
-:where(.dashboards-select) :where(select)::placeholder,
 :where(.data-table-search) :where(input)::placeholder,
 :where(.cron-search-box) :where(input)::placeholder,
 :where(.input)::placeholder {
@@ -3582,7 +3703,6 @@ select.data-table-pagination__size {
 :where(.usage-query-input):focus-visible:focus-visible,
 :where(.sessions-sort) :where(select):focus-visible:focus-visible,
 :where(.dashboards-search) :where(input):focus-visible:focus-visible,
-:where(.dashboards-select) :where(select):focus-visible:focus-visible,
 :where(.data-table-search) :where(input):focus-visible:focus-visible,
 :where(.cron-search-box) :where(input):focus-visible:focus-visible,
 :where(.input):focus-visible:focus-visible,
@@ -3597,7 +3717,6 @@ select.data-table-pagination__size {
 :where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
 :where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
 :where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
-:where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
 :where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
 :where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
 :where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
@@ -3616,7 +3735,6 @@ select.data-table-pagination__size {
   :where(.usage-query-input):focus-visible:focus-visible,
   :where(.sessions-sort) :where(select):focus-visible:focus-visible,
   :where(.dashboards-search) :where(input):focus-visible:focus-visible,
-  :where(.dashboards-select) :where(select):focus-visible:focus-visible,
   :where(.data-table-search) :where(input):focus-visible:focus-visible,
   :where(.cron-search-box) :where(input):focus-visible:focus-visible,
   :where(.input):focus-visible:focus-visible,
@@ -3631,7 +3749,6 @@ select.data-table-pagination__size {
   :where(.usage-query-input)[aria-expanded="true"]:not(.oc-menu-item),
   :where(.sessions-sort) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
   :where(.dashboards-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
-  :where(.dashboards-select) :where(select)[aria-expanded="true"]:not(.oc-menu-item),
   :where(.data-table-search) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
   :where(.cron-search-box) :where(input)[aria-expanded="true"]:not(.oc-menu-item),
   :where(.input)[aria-expanded="true"]:not(.oc-menu-item) {
@@ -3720,14 +3837,6 @@ select.data-table-pagination__size {
       [aria-expanded="true"],
       [data-disabled]
     ),
-  :where(.dashboards-select)
-    :where(select):hover:not(
-      :disabled,
-      :focus-visible,
-      :focus-within,
-      [aria-expanded="true"],
-      [data-disabled]
-    ),
   :where(.data-table-search)
     :where(input):hover:not(
       :disabled,
@@ -3765,7 +3874,6 @@ select.data-table-pagination__size {
 :where(.usage-query-input):disabled,
 :where(.sessions-sort) :where(select):disabled,
 :where(.dashboards-search) :where(input):disabled,
-:where(.dashboards-select) :where(select):disabled,
 :where(.data-table-search) :where(input):disabled,
 :where(.cron-search-box) :where(input):disabled,
 :where(.input):disabled {

@@ -2,9 +2,11 @@ import type { JSX } from "@solidjs/web";
 import {
   createSignal,
   createUniqueId,
+  Errored,
   For,
   isPending,
   latest,
+  lazy,
   Loading,
   onSettled,
   Show,
@@ -25,7 +27,6 @@ import { SettingsToggleRow } from "../../../components/solid/settings-ui.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerSessionPeopleEnglish } from "../../../i18n/locales/en-session-people.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { ChatSessionPublicQr } from "./chat-session-public-qr.tsx";
 import "../../../styles/settings.css";
 import "../../../styles/chat/sharing-mobile.css";
 import {
@@ -37,6 +38,11 @@ import {
 registerEnglishCatalog(registerChatSessionSharingEnglish);
 
 registerEnglishCatalog(registerSessionPeopleEnglish);
+
+// Loaded only once a public link is shown, so the encoder stays out of the sharing chunk.
+const ChatSessionPublicQr = lazy(() => import("./chat-session-public-qr.tsx"), {
+  export: "ChatSessionPublicQr",
+});
 
 export type ChatSessionSharingMobileLabels = {
   sessionAccess: string;
@@ -184,7 +190,14 @@ export function ChatSessionSharingMobile(props: ChatSessionSharingMobileProps) {
                   </button>
                 </Show>
                 <Show when={link().enabled && link().url}>
-                  {(url) => <ChatSessionPublicQr url={url()} />}
+                  {(url) => (
+                    // A failed load or an unencodable URL drops the code; copy still works.
+                    <Errored fallback={null}>
+                      <Loading>
+                        <ChatSessionPublicQr url={url()} />
+                      </Loading>
+                    </Errored>
+                  )}
                 </Show>
               </SharingDisclosure>
             </div>

@@ -18,7 +18,8 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".agent-chat__composer-combobox > textarea").waitFor();
       await page.keyboard.press("ControlOrMeta+K");
-      const input = page.locator(".cmd-palette__input");
+      // The cold loading field is replaced when the full palette mounts.
+      const input = page.locator("openclaw-command-palette .cmd-palette__input");
       await input.fill("a".repeat(1000));
       await input.press("Control+Home");
       await expect.poll(() => input.evaluate((element) => element.clientHeight)).toBe(66);
@@ -36,16 +37,24 @@ suite.define(() => {
       expect(await input.evaluate((element) => getComputedStyle(element).scrollbarWidth)).toBe(
         "auto",
       );
-      const scrollbar = await input.evaluate((element) => ({
-        track: getComputedStyle(element, "::-webkit-scrollbar-track").backgroundColor,
-        thumb: getComputedStyle(element, "::-webkit-scrollbar-thumb").backgroundColor,
-        inset: getComputedStyle(element, "::-webkit-scrollbar-thumb").borderLeftWidth,
-        defaultInset: getComputedStyle(document.body, "::-webkit-scrollbar-thumb").borderLeftWidth,
-      }));
-      expect(scrollbar.track).toBe("rgba(0, 0, 0, 0)");
-      expect(scrollbar.thumb).not.toBe("rgba(0, 0, 0, 0)");
-      expect(scrollbar.inset).toBe("2px");
-      expect(scrollbar.defaultInset).toBe("3px");
+      await expect
+        .poll(() =>
+          input.evaluate((element) => ({
+            overflow: getComputedStyle(element).overflowY,
+            track: getComputedStyle(element, "::-webkit-scrollbar-track").backgroundColor,
+            thumb: getComputedStyle(element, "::-webkit-scrollbar-thumb").backgroundColor,
+            inset: getComputedStyle(element, "::-webkit-scrollbar-thumb").borderLeftWidth,
+            defaultInset: getComputedStyle(document.body, "::-webkit-scrollbar-thumb")
+              .borderLeftWidth,
+          })),
+        )
+        .toEqual({
+          overflow: "auto",
+          track: "rgba(0, 0, 0, 0)",
+          thumb: expect.stringMatching(/^(?!rgba\(0, 0, 0, 0\)$).+/),
+          inset: "2px",
+          defaultInset: "3px",
+        });
       await input.evaluate((element) =>
         element.style.setProperty("--scrollbar-thumb-inset", "1px"),
       );

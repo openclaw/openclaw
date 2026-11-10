@@ -192,7 +192,7 @@
   color: var(--text);
   background: var(--panel);
   box-shadow: var(--shadow-md);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.35;
   transform: translateY(-50%);
 }
@@ -205,7 +205,7 @@
 
 .chat-position-rail__preview-label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -766,7 +766,7 @@
     text-overflow: clip;
     white-space: normal;
     overflow-wrap: anywhere;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     line-height: 1.4;
   }
 }
@@ -833,7 +833,7 @@
   flex: none;
   margin: 0 0.35em;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.2;
 }
 
@@ -848,14 +848,14 @@
 .chat-assistant-attachment-card__title {
   flex: 1;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
 }
 
 .chat-assistant-attachment-card__meta {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -935,7 +935,7 @@
   width: auto;
   padding: 0 12px;
   border: 1px solid var(--chat-attachment-border, var(--border-strong));
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
@@ -968,7 +968,7 @@
   position: relative;
   padding-inline: 38px 0;
   height: var(--chat-attachment-action-size);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
@@ -1000,7 +1000,7 @@
 
 .chat-assistant-attachment-card__reason {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
 }
 
@@ -1086,7 +1086,7 @@
   width: fit-content;
   max-width: 100%;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   padding: 3px 8px;
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);

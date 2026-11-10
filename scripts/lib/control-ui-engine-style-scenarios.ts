@@ -86,6 +86,42 @@ export function createEngineStyleScenarios(): readonly EngineScenario[] {
       },
     },
     {
+      ...typing,
+      id: "session-icon-first-custom-input",
+      explicitOnly: true,
+      viewports: ["desktop"],
+      expected: "The first custom emoji input enables Set without applying an appearance change.",
+      prepare: async (page, gateway) => {
+        await typing.prepare(page, gateway);
+        const trigger = page.locator(".chat-header-session-menu__trigger");
+        await trigger.focus();
+        await trigger.press("Enter");
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).hover();
+        await page.getByRole("menuitem", { name: "Icon & color", exact: true }).hover();
+        await page.locator(".session-menu__icon-choice--custom:visible").click();
+        await page.locator(".session-menu__icon-custom-input:visible").waitFor();
+        await page.waitForFunction(() => {
+          const input = document.activeElement;
+          return (
+            input instanceof HTMLTextAreaElement &&
+            input.matches(".session-menu__icon-custom-input") &&
+            input.value === ""
+          );
+        });
+        await frames(page);
+      },
+      run: async (page) => {
+        const input = page.locator(".session-menu__icon-custom-input:visible");
+        await input.fill("🦞");
+        await page.locator(".session-menu__icon-set:enabled").waitFor();
+        await frames(page);
+        if ((await input.inputValue()) !== "🦞") {
+          throw new Error("Custom icon input lost the emoji draft");
+        }
+        return { customIconAccepted: true };
+      },
+    },
+    {
       id: "workboard-style-cycles",
       explicitOnly: true,
       route: workboardResourceRoute,

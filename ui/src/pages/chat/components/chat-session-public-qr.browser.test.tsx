@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { createMenuControls } from "../../../components/solid/menu.tsx";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatSessionPublicQr } from "./chat-session-public-qr.tsx";
@@ -9,34 +10,32 @@ afterEach(() => {
   mounted?.container.remove();
 });
 
-it("opens on demand, offers a plain-code fallback, and updates the encoded URL", async () => {
-  mounted = mountSolid(ChatSessionPublicQr, { url: "https://example.com/chat/openclaw/demo" });
-  document.body.append(mounted.container);
-  const container = mounted.container;
-  expect(container.querySelector("img")).toBeNull();
-  container.querySelector("summary")!.click();
-  await waitForSolid(() =>
-    expect(container.querySelector("img")?.getAttribute("src")).toMatch(/^data:/),
-  );
-  const image = container.querySelector("img")!;
-  expect(image.alt).toBe("QR code for this public session link");
-  const halftone = image.src;
-  const download = container.querySelector<HTMLAnchorElement>("a[download]")!;
-  expect(download.href).toBe(halftone);
-  expect(download.download).toBe("openclaw-public-link-qr.png");
-  const toggle = container.querySelector("button")!;
-  toggle.click();
-  await waitForSolid(() => expect(toggle.textContent).toBe("Use OpenClaw QR"));
-  expect(image.src).not.toBe(halftone);
-  expect(download.href).toBe(image.src);
-  toggle.click();
-  await waitForSolid(() => expect(image.src).toBe(halftone));
-  mounted.update({ url: "https://example.com/chat/openclaw/another-demo" });
-  await waitForSolid(() => {
-    const next = container.querySelector("img")?.getAttribute("src");
-    expect(next).toMatch(/^data:/);
-    expect(next).not.toBe(halftone);
+it("keeps the plain fallback, retires artwork on URL changes, and registers every menu control", async () => {
+  const controls = createMenuControls();
+  mounted = mountSolid(ChatSessionPublicQr, {
+    url: "https://example.com/chat/openclaw/demo",
+    controls,
   });
-  container.querySelector("summary")!.click();
-  await waitForSolid(() => expect(container.querySelector("img")).toBeNull());
+  document.body.append(mounted.container);
+  const root = mounted.container;
+  const toggle = root.querySelector("button")!;
+  expect(root.querySelector(".qr-code")).not.toBeNull();
+  expect(root.querySelector("img")).toBeNull();
+  expect(controls.elements.has(toggle)).toBe(true);
+  toggle.click();
+  await waitForSolid(() =>
+    expect(root.querySelector("img")?.getAttribute("src")).toMatch(/^data:/),
+  );
+  const image = root.querySelector("img")!;
+  const download = root.querySelector<HTMLAnchorElement>("a[download]")!;
+  expect(download.href).toBe(image.src);
+  expect(controls.elements.has(download)).toBe(true);
+  toggle.click();
+  await waitForSolid(() => expect(root.querySelector(".qr-code")).not.toBeNull());
+  expect(controls.elements.has(download)).toBe(false);
+  toggle.click();
+  await waitForSolid(() => expect(root.querySelector("img")).not.toBeNull());
+  mounted.update({ url: "https://example.com/chat/openclaw/another-demo" });
+  await waitForSolid(() => expect(root.querySelector("img")).toBeNull());
+  expect(root.querySelector(".qr-code")).not.toBeNull();
 });

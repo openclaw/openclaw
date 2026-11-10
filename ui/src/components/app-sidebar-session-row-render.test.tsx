@@ -133,6 +133,7 @@ it("keeps named glyphs visible and updates their kind without replacing the lead
 
 it("restores only active dashboards in saved order after alphabetized built-in Pages", async () => {
   const { host, context, dom } = await createCachedHost();
+  host.sidebarAgentsMode = "roster";
   const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
@@ -172,7 +173,7 @@ it("restores only active dashboards in saved order after alphabetized built-in P
 
 it("paints the restored roster and workspace before live data arrives", async () => {
   const { host, dom } = await createCachedHost();
-  host.sidebarAgentsMode = "chip";
+  host.sidebarAgentsMode = "roster";
   host.sidebarLiveActivity = false;
 
   host.restoreSidebarSnapshot({

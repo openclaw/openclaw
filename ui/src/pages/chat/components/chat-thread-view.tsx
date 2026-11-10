@@ -27,6 +27,7 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
+import { createTimeout } from "../../../lib/reactive/timers.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import {
   getExpandedToolCards,
@@ -35,6 +36,7 @@ import {
   subscribeExpansionState,
 } from "../chat-thread.ts";
 import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
+import { splitChatConstruction, yieldChatTask } from "../yield-chat-task.ts";
 import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
@@ -96,20 +98,41 @@ type ChatThreadInput = {
 };
 
 export function ChatThread(input: ChatThreadInput) {
-  // Restored snapshots join the header and composer in their first visible frame.
-  const initialReady = Boolean(input.props.restoring);
+  // Use the existing warm-frame hold to split pane and transcript construction.
+  // Cached route handoffs still render immediately.
+  const initialRestoring = Boolean(input.props.restoring);
+  const heldWarmBoot =
+    initialRestoring &&
+    document.documentElement.getAttribute("data-openclaw-warm-frame") === "holding";
+  const initialReady = initialRestoring && !heldWarmBoot;
   const [ready, setReady] = createSignal(initialReady);
   const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
+  const reveal = createTimeout(() => {
+    if (isPresented()) {
+      setReady(true);
+    }
+  });
   return (
     <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
       <Show when={ready() || isPresented()}>
         {(_presented) => {
           onSettled(() => {
-            // Paint the pane and composer before preparing the initial transcript range.
-            scheduleLayout(setReady, () => () => {
-              scheduleLayout(setReady, () => () => setReady(true));
-            });
-            return () => cancelLayout(setReady);
+            let active = true;
+            if (heldWarmBoot) {
+              void yieldChatTask().then(() => {
+                if (active && isPresented()) {
+                  setReady(true);
+                }
+              });
+            } else {
+              // Let this frame paint the composer before preparing the transcript in a task.
+              scheduleLayout(reveal, () => () => reveal.schedule());
+            }
+            return () => {
+              active = false;
+              cancelLayout(reveal);
+              reveal.cancel();
+            };
           });
           return (
             <>
@@ -123,7 +146,7 @@ export function ChatThread(input: ChatThreadInput) {
                   ]}
                   ref={[elementRef(input.bindViewport)]}
                 >
-                  <ChatConversationLoading route />
+                  {!heldWarmBoot && <ChatConversationLoading route />}
                 </div>
               )}
             </>
@@ -214,6 +237,8 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
       return typeof visible === "object" ? visible.isPresented() : visible;
     },
   );
+  const splitColdRows = !input.props.restoring && splitChatConstruction;
+  const started = splitColdRows ? performance.now() : 0;
   const current = createMemo(() => {
     const searchState = search().read();
     const { session } = presentation();
@@ -227,6 +252,18 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
       );
     }
     return { session, projection };
+  });
+  // Sample once before choosing the first row frame; cheap preparations need no placeholder.
+  if (splitColdRows) {
+    current();
+  }
+  const [renderReady, setRenderReady] = createSignal(
+    !splitColdRows || performance.now() - started <= 15,
+  );
+  onSettled(() => {
+    if (!renderReady()) {
+      void yieldChatTask().then(() => setRenderReady(true));
+    }
   });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
   const isEmpty = createMemo(() => current().projection.isEmpty);
@@ -258,6 +295,9 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   );
   const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
+    if (!renderReady()) {
+      return <ChatConversationLoading route />;
+    }
     // Native range changes redraw this island without preparing the whole pane.
     geometry().read();
     if (routeLoading() && mobile()) {

@@ -12,13 +12,19 @@ import {
   composeReleaseAttemptJobs,
   validateReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { RELEASE_VALIDATION_WAIVERS } from "../../scripts/lib/release-validation-waivers.mjs";
+import {
+  RELEASE_VALIDATION_WAIVERS,
+  releaseQualificationExemptions,
+} from "../../scripts/lib/release-validation-waivers.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
   verifyNpmPreflightPublicationLineage,
 } from "../../scripts/npm-preflight-tooling-identity.mjs";
-import { validateReleaseRunEvidence } from "../../scripts/release-ci-summary.mjs";
+import {
+  validateParentManifest,
+  validateReleaseRunEvidence,
+} from "../../scripts/release-ci-summary.mjs";
 import { verifyQualificationAdmission } from "../../scripts/release-qualification-admission.mjs";
 import { authenticateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -73,6 +79,26 @@ function verifier(f: ReturnType<typeof candidatePublicationFixture>) {
   };
 }
 
+function publicationEvidenceOptions(f: ReturnType<typeof candidatePublicationFixture>) {
+  return {
+    run: f.parent,
+    manifest: f.manifest,
+    expectedRepository: f.repository,
+    expectedRunId: f.runId,
+    expectedRunAttempt: 1,
+    expectedTargetSha: f.q,
+    expectedReleaseTag: "v2026.8.28-beta.1",
+    expectedTrustedWorkflowFullRef: f.publisherFullRef,
+    expectedTrustedWorkflowSha: f.p,
+    expectedCoreNpmPublication: { npmDistTag: "beta" },
+    verifierSourceSha: f.p,
+    verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
+    isTrustedMainAncestor: () => {
+      throw new Error("Q must not require main ancestry");
+    },
+  };
+}
+
 function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
   return verifyNpmPreflightProducer({
     manifest: f.npmManifest,
@@ -91,6 +117,37 @@ function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
 }
 
 describe("candidate-owned publish consumer chain", () => {
+  it.each([false, true])(
+    "rejects a candidate-invented not-run exemption at both strict consumers (recorded=%s)",
+    async (recorded) => {
+      const f = candidatePublicationFixture();
+      const [exemption] = releaseQualificationExemptions("2026.9.37", "stable");
+      Object.assign(f.manifest.qualificationCoverage, { exemptions: [exemption] });
+      if (recorded) {
+        Object.assign(f.manifest.childRuns, {
+          productPerformance: {
+            disposition: "waived-not-run",
+            runId: "",
+            supportingEvidence: exemption!.supportingEvidence,
+          },
+        });
+      }
+      if (recorded) {
+        expect(() => validateParentManifest(f.manifest, { runId: f.runId })).not.toThrow();
+        Object.assign(f.manifest.childEvidence, { productPerformance: {} });
+        expect(() => validateParentManifest(f.manifest, { runId: f.runId })).toThrow(
+          /not candidate evidence/,
+        );
+        delete f.manifest.childEvidence.productPerformance;
+      } else {
+        expect(() => validateParentManifest(f.manifest, { runId: f.runId })).toThrow(
+          /must be recorded/,
+        );
+      }
+      await expect(consumers(f).npm()).rejects.toThrow();
+      await expect(consumers(f).docker()).rejects.toThrow();
+    },
+  );
   it.each([
     { scenario: "matching grant", parentConclusion: "success" },
     { scenario: "failed parent", parentConclusion: "failure" },
@@ -99,6 +156,8 @@ describe("candidate-owned publish consumer chain", () => {
     { scenario: "different version", parentConclusion: "success" },
     { scenario: "different role", parentConclusion: "success" },
     { scenario: "different job", parentConclusion: "success" },
+    { scenario: "different run", parentConclusion: "success" },
+    { scenario: "different attempt", parentConclusion: "success" },
     { scenario: "tooling revoked after verification", parentConclusion: "success" },
   ])(
     "authenticates waived FRV at npm and Docker admission: $scenario",
@@ -115,6 +174,7 @@ describe("candidate-owned publish consumer chain", () => {
         jobName:
           "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenAI)",
         reason: "Synthetic checked-in provider outage grant.",
+        evidence: { runId: planned.runId, runAttempt: 1 },
       };
       if (scenario !== "missing grant") {
         RELEASE_VALIDATION_WAIVERS.push({
@@ -122,6 +182,12 @@ describe("candidate-owned publish consumer chain", () => {
           ...(scenario === "different version" ? { targetVersion: "2026.8.29-beta.1" } : {}),
           ...(scenario === "different role" ? { childRole: "releaseChecksCandidate" } : {}),
           ...(scenario === "different job" ? { jobName: `${grant.jobName} extra` } : {}),
+          ...(scenario === "different run"
+            ? { evidence: { ...grant.evidence, runId: "999" } }
+            : {}),
+          ...(scenario === "different attempt"
+            ? { evidence: { ...grant.evidence, runAttempt: 2 } }
+            : {}),
         });
       }
       const [aggregate] = await f.client.getRunAttemptJobs(planned.runId);
@@ -550,28 +616,41 @@ describe("candidate-owned publish consumer chain", () => {
   it("authenticates P admission, strict FRV, and both original artifact producers without Q ancestry", async () => {
     const f = candidatePublicationFixture();
     const before = JSON.stringify(f.manifest);
+    let manifestReads = 0;
+    let authorityRefreshes = 0;
     const qualified = await authenticateFullReleaseValidationEvidence(
       {
-        run: f.parent,
-        manifest: f.manifest,
-        expectedRepository: f.repository,
-        expectedRunId: f.runId,
-        expectedRunAttempt: 1,
-        expectedTargetSha: f.q,
-        expectedReleaseTag: "v2026.8.28-beta.1",
-        expectedTrustedWorkflowFullRef: f.publisherFullRef,
-        expectedTrustedWorkflowSha: f.p,
-        expectedCoreNpmPublication: { npmDistTag: "beta" },
-        verifierSourceSha: f.p,
-        verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
-        isTrustedMainAncestor: () => {
-          throw new Error("Q must not require main ancestry");
+        ...publicationEvidenceOptions(f),
+        npmPreflightLineage: {
+          qualificationSha: f.q,
+          producerRunId: f.runId,
+          producerRunAttempt: "1",
         },
       },
-      f.client,
+      {
+        ...f.client,
+        verifyRetainedPublicationArtifacts() {
+          throw new Error("Qualification fixture does not recover publication artifacts");
+        },
+        downloadArtifactArchive() {
+          throw new Error("Qualification fixture does not download artifact archives");
+        },
+        getRunArtifacts() {
+          throw new Error("Qualification fixture does not list run artifacts");
+        },
+        loadManifest: () => {
+          manifestReads += 1;
+          return f.client.loadManifest();
+        },
+        revalidateQualificationAdmissionAuthority: (authority) => {
+          authorityRefreshes += 1;
+          return f.client.revalidateQualificationAdmissionAuthority(authority);
+        },
+      },
     );
     expect(qualified.source).toBe("candidate-owned-admission-v1");
-    await expect(consumers(f).npm()).resolves.toEqual(f.npmQualified);
+    expect(manifestReads).toBe(1);
+    expect(authorityRefreshes).toBe(2);
     expect(npmProducer(f).provenance).toBe("immutable-manifest");
     const outputDir = join(tempDirs.make("candidate-npm-consumption-"), "qualified");
     await downloadFullReleaseNpmPreflight({
@@ -609,6 +688,63 @@ describe("candidate-owned publish consumer chain", () => {
     expect(JSON.stringify(f.manifest)).toBe(before);
     expect(f.admission.calls.some((call) => call.includes("compare/" + f.q))).toBe(false);
   });
+
+  it.each(["producer run", "producer attempt", "qualification", "revoked after wait"])(
+    "rejects %s in the single-authentication npm handoff",
+    async (failure) => {
+      const f = candidatePublicationFixture();
+      let manifestReads = 0;
+      let authorityRefreshes = 0;
+      const operation = authenticateFullReleaseValidationEvidence(
+        {
+          ...publicationEvidenceOptions(f),
+          npmPreflightLineage: {
+            qualificationSha: failure === "qualification" ? f.p : f.q,
+            producerRunId: failure === "producer run" ? "99999" : f.runId,
+            producerRunAttempt: failure === "producer attempt" ? "2" : "1",
+          },
+        },
+        {
+          ...f.client,
+          verifyRetainedPublicationArtifacts() {
+            throw new Error("Qualification fixture does not recover publication artifacts");
+          },
+          downloadArtifactArchive() {
+            throw new Error("Qualification fixture does not download artifact archives");
+          },
+          getRunArtifacts() {
+            throw new Error("Qualification fixture does not list run artifacts");
+          },
+          loadManifest: () => {
+            manifestReads += 1;
+            return f.client.loadManifest();
+          },
+          revalidateQualificationAdmissionAuthority: (authority) => {
+            authorityRefreshes += 1;
+            const result = f.client.revalidateQualificationAdmissionAuthority(authority);
+            if (failure === "revoked after wait" && authorityRefreshes === 1) {
+              // The import/consumer handoff yields after the initial refresh.
+              queueMicrotask(() => {
+                f.admission.authority.permission = "read";
+              });
+            }
+            return result;
+          },
+        },
+      );
+      await expect(operation).rejects.toThrow(
+        failure === "revoked after wait"
+          ? /qualification authority/
+          : failure === "qualification"
+            ? /source and qualification SHA differ/
+            : /Npm producer differs/,
+      );
+      expect(manifestReads).toBe(1);
+      if (failure === "revoked after wait") {
+        expect(authorityRefreshes).toBe(2);
+      }
+    },
+  );
 
   it.each([
     "P attempt",

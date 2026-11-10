@@ -40,6 +40,7 @@ const excludedHandles = new Set([
   "clawsweeper",
   "claude",
   "codex",
+  "copilot",
   "hugin-bot",
   "roboclaw-bot",
   "tideclaw-bot",

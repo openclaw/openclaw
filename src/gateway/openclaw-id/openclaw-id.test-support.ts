@@ -144,6 +144,8 @@ export function serviceFor(
     ),
     cancelRuns: vi.fn(async (connections: readonly string[]) => connections.length),
     closeConnections: vi.fn(),
+    removeNodePairings: vi.fn(async () => {}),
+    reconcileNodePairings: vi.fn(async () => {}),
     revokeDeviceTokens: vi.fn(async (tokens) => [...tokens]),
     describeActivity: vi.fn((keys: readonly string[]) =>
       Object.fromEntries(
@@ -202,7 +204,7 @@ export async function redemptionMail(params: {
   proofKey: Uint8Array;
   accountId: string;
   email: string;
-}): Promise<{ message: MailboxMessage; peerKey: IrohEndpointKey }> {
+}) {
   const signer = await generateEd25519Signer();
   const peerKey = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
   const parts = {
@@ -238,6 +240,6 @@ export async function redemptionMail(params: {
       payload: { kind: "invite_redemption", redemption },
       received_at: nowSeconds(),
       expires_at: nowSeconds() + 86400,
-    },
+    } satisfies MailboxMessage,
   };
 }

@@ -16,7 +16,7 @@
   backdrop-filter: var(--menu-backdrop);
   corner-shape: superellipse(1.5);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .skill-file-hovercard__header {
@@ -44,7 +44,7 @@
 }
 
 .skill-file-hovercard__header strong {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
@@ -94,7 +94,7 @@
   display: flex;
   align-items: baseline;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.7;
 }
 
@@ -127,7 +127,7 @@
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   white-space: nowrap;
 }
 

@@ -379,7 +379,16 @@ describe("release-note verification", () => {
   it("credits human maintainers but excludes automation identities", () => {
     expect(isEligibleHandle("human-contributor")).toBe(true);
     expect(isEligibleHandle("steipete")).toBe(true);
-    for (const handle of ["steipete-oai", "hugin-bot", "roboclaw-bot", "tideclaw-bot"]) {
+    expect(isEligibleHandle("copilot-contributor")).toBe(true);
+    for (const handle of [
+      "steipete-oai",
+      "hugin-bot",
+      "roboclaw-bot",
+      "tideclaw-bot",
+      "Copilot",
+      "copilot",
+      "COPILOT",
+    ]) {
       expect(isEligibleHandle(handle)).toBe(false);
     }
   });
@@ -1172,7 +1181,7 @@ validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => 
   it("credits the original PR, not its backport, and rejects stale generated thanks", () => {
     const { cwd, base, changelog } = seedRepository("openclaw-release-credit-", "main");
     const originalMessage =
-      "fix: preserve playback errors (#21)\n\nFixes #20\nCo-authored-by: Helper <helper@example.invalid>";
+      "fix: preserve playback errors (#21)\n\nFixes #20\nCo-authored-by: Helper <helper@example.invalid>\nCo-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>";
     writeFileSync(join(cwd, "playback.txt"), "fixed\n");
     const original = commitAll(cwd, originalMessage);
     git(cwd, ["checkout", "-qb", "release", base]);
@@ -1199,7 +1208,7 @@ const data = {};
 for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
   data[alias] = { object: {
     associatedPullRequests: { nodes: hash === original ? [{ number: 21, mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: original } }] : [], pageInfo: { hasNextPage: false } },
-    authors: { nodes: [{ email: "helper@example.invalid", user: { login: "original-helper" } }, ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : [])] },
+    authors: { nodes: [{ email: "helper@example.invalid", user: { login: "original-helper" } }, { email: "223556219+Copilot@users.noreply.github.com", user: { login: "Copilot" } }, ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : [])] },
     author: { user: { login: "release-operator" } }
   } };
 }
@@ -1237,6 +1246,7 @@ console.log(JSON.stringify({ data }));
     expect(section).toContain(
       "(#21) Authored by @steipete. Thanks @original-helper and @reporter.",
     );
+    expect(section).not.toContain("@Copilot");
     expect(section).not.toContain("@RomneyDa");
     expect(section).not.toContain("@release-operator");
     const checked = run(false);

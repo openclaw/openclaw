@@ -399,7 +399,14 @@ export async function mutateChatPendingInput(
       );
     }
   } catch (error) {
-    if (current()) {
+    if (!current()) {
+      return;
+    }
+    if (action.kind === "steer") {
+      // A refused Send now is not a user-facing error: the steer stays queued and
+      // still reaches the next model turn. Refresh so its row shows current state.
+      void requestPendingInputPage(state, view.before, "refresh");
+    } else {
       view.error = formatUiError(error);
     }
   } finally {
@@ -412,12 +419,50 @@ export async function mutateChatPendingInput(
   }
 }
 
+type PendingInput = ChatPendingInputsPage["items"][number];
+/**
+ * Steers waiting on one run drain together, so one row speaks for all of them:
+ * Send now on the newest sendable steer, otherwise Steering… on the newest.
+ */
+type SteerRow = { newest?: true; sendNow?: true; deferToSendNow?: true };
+export type PendingSteer = PendingInput & SteerRow;
+// Stable copies keep transcript memo dependencies unchanged until a row moves.
+const markedSteers = new WeakMap<PendingInput, PendingSteer>();
+
+function markSteer(input: PendingInput, row: SteerRow): PendingSteer {
+  const cached = markedSteers.get(input);
+  if (
+    cached &&
+    cached.newest === row.newest &&
+    cached.sendNow === row.sendNow &&
+    cached.deferToSendNow === row.deferToSendNow
+  ) {
+    return cached;
+  }
+  const steer = { ...input, ...row };
+  markedSteers.set(input, steer);
+  return steer;
+}
+
 export function createPendingSteerLookup(inputs: ChatPendingInputsPage["items"] | undefined) {
-  const pendingSteers = new Map<string, ChatPendingInputsPage["items"][number]>();
-  for (const input of inputs ?? []) {
-    if (input.steerNow && input.runId) {
-      pendingSteers.set(input.runId, input);
-      pendingSteers.set(`${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${input.id}`, input);
+  const pendingSteers = new Map<string, PendingSteer>();
+  const steers = (inputs ?? []).filter((input) => input.steerNow && input.runId);
+  const newer = (a: PendingInput | undefined, b: PendingInput) =>
+    !a || b.acceptedAt >= a.acceptedAt ? b : a;
+  const newest = steers.reduce<PendingInput | undefined>(newer, undefined);
+  const sendable = steers
+    .filter((input) => input.steerNow?.status === "available")
+    .reduce<PendingInput | undefined>(newer, undefined);
+  for (const input of steers) {
+    const row: SteerRow = {
+      ...(input === newest ? { newest: true } : {}),
+      ...(input === sendable ? { sendNow: true } : {}),
+      ...(input === newest && sendable && sendable !== input ? { deferToSendNow: true } : {}),
+    };
+    const steer = row.newest || row.sendNow ? markSteer(input, row) : input;
+    pendingSteers.set(`${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${input.id}`, steer);
+    if (input.runId) {
+      pendingSteers.set(input.runId, steer);
     }
   }
   if (!pendingSteers.size) {

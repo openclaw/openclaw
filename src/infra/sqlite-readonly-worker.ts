@@ -327,6 +327,7 @@ export function runSqliteReadOnlyWorker(
 ): Promise<SqliteReadOnlyWorkerValue> {
   const options: SqliteReadOnlyWorkerOptions =
     (inputOptions.mode === "auth-profile-rows" || inputOptions.mode === "operation") &&
+    inputOptions.source === "canonical" &&
     isArtifactPreservingStateRead("agent", pathname)
       ? { ...inputOptions, artifactPreserving: true }
       : inputOptions;
@@ -508,6 +509,11 @@ export function runOneShotSqliteInspection<T>(params: {
 export function runSqliteReadOnlyWorkerSync(
   pathname: string,
   stagingRoot: undefined,
+  mode: "state-sqlite-populated",
+): boolean;
+export function runSqliteReadOnlyWorkerSync(
+  pathname: string,
+  stagingRoot: undefined,
   mode: "backup-engine" | "backup-engine-preserving",
 ): BackupEngine;
 export function runSqliteReadOnlyWorkerSync(
@@ -525,9 +531,10 @@ export function runSqliteReadOnlyWorkerSync(
     | "file-generation"
     | "update-generation"
     | "backup-engine-preserving"
+    | "state-sqlite-populated"
     | "backup-engine" = "sync",
   expectedSourceIdentity?: DatabaseFileIdentity,
-): string | BackupEngine {
+): string | BackupEngine | boolean {
   assertChildRuntimeAvailable();
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const result = spawnSync(
@@ -574,6 +581,9 @@ export function runSqliteReadOnlyWorkerSync(
             : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`,
       };
   if (mode === "backup-engine" || mode === "backup-engine-preserving") {
+    return readSqliteReadOnlyWorkerValue(output, mode);
+  }
+  if (mode === "state-sqlite-populated") {
     return readSqliteReadOnlyWorkerValue(output, mode);
   }
   return readSqliteReadOnlyWorkerValue(output, mode);

@@ -1,15 +1,69 @@
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
 } from "../../config/resolution-facts.js";
 import { captureRuntimeConfigWithSource } from "../../config/runtime-config-capture-state.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { captureScheduledSessionEventConfigPolicy } from "./session-event-policy.js";
+import {
+  captureSessionEventConfigRelevance,
+  captureSessionEventConfigPolicy,
+} from "./session-event-policy.js";
+import { getSessionEventRuntimeConfig } from "./session-event-target.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
+
+it.each([
+  ["another agent's entry", { other: {} }, true],
+  ["its own agent's entry", { main: { tools: { deny: ["exec"] } } }, false],
+] satisfies Array<[string, NonNullable<OpenClawConfig["agents"]>["entries"], boolean]>)(
+  "keeps an unscheduled event across a publication of %s",
+  (_change, entries, retained) => {
+    const before: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+    setRuntimeConfigSnapshot(before);
+    const policy = captureSessionEventConfigPolicy(getSessionEventRuntimeConfig(), "main");
+    setRuntimeConfigSnapshot({
+      ...before,
+      agents: { ...before.agents, entries: { ...before.agents?.entries, ...entries } },
+    });
+    const check = () => policy.assertCurrent(getSessionEventRuntimeConfig(), ["telegram"]);
+    if (retained) {
+      expect(check).not.toThrow();
+    } else {
+      expect(check).toThrow("Session event configuration changed");
+    }
+  },
+);
+
+it.each([
+  ["another agent's", "other", true],
+  ["its own agent's", "main", false],
+] as const)("keeps an unscheduled event across %s env secret reference", (_owner, id, retained) => {
+  const before: OpenClawConfig = { agents: { entries: { main: {}, other: {} } } };
+  const after = structuredClone(before);
+  setConfigResolutionFacts(before, createConfigResolutionFacts([]));
+  setConfigResolutionFacts(
+    after,
+    createConfigResolutionFacts(
+      [],
+      new Map([[`agents.entries.${id}.tts.providers.voice.apiKey`, "SYNTHETIC_TTS_KEY"]]),
+    ),
+  );
+  const check = captureSessionEventConfigRelevance(
+    captureRuntimeConfigWithSource(before, before),
+    "main",
+    undefined,
+  );
+  expect(check(captureRuntimeConfigWithSource(after, after), [])).toBe(retained);
+});
 
 it.each([
   ["openclaw", false, true],
@@ -32,7 +86,7 @@ it.each([
         new Map([["mcp.servers.sentry.env.TOKEN", "SYNTHETIC_MCP_TOKEN"]]),
       ),
     );
-    const check = captureScheduledSessionEventConfigPolicy(
+    const check = captureSessionEventConfigRelevance(
       captureRuntimeConfigWithSource(before, config("${BEFORE_COMMAND}")),
       "main",
       makeCronJob({}),
@@ -120,7 +174,7 @@ it.each([
   withPluginMetadataSnapshotScope(
     metadata,
     () => {
-      const check = captureScheduledSessionEventConfigPolicy(captured, "main", makeCronJob({}), {
+      const check = captureSessionEventConfigRelevance(captured, "main", makeCronJob({}), {
         provider: scenario === "auth source expression" ? "upstream" : "route",
         model: "model",
       });

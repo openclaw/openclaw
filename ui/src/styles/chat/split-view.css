@@ -65,13 +65,16 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   color: var(--text);
 }
 
+/* Cached panes keep their mounted state without participating in rendering. */
 .chat-pane-cache__pane {
   opacity: 0;
+  content-visibility: hidden;
   grid-area: 1 / 1;
 }
 
 .chat-pane-cache__pane--visible {
   opacity: 1;
+  content-visibility: visible;
   z-index: 1;
 }
 
@@ -104,7 +107,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   border-radius: 999px;
   background: var(--panel);
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
   white-space: nowrap;
   pointer-events: none;
@@ -153,7 +156,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   padding: 3px 5px;
   margin-inline: -5px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   text-align: left;
 }
@@ -175,7 +178,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   cursor: var(--cursor-action);
 }
 
@@ -210,7 +213,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   background: var(--panel);
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   outline: none;
   user-select: text;
   -webkit-user-select: text;
@@ -277,7 +280,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   cursor: var(--cursor-action);
 }
 
@@ -290,7 +293,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 .chat-pane__placement-state {
   padding: 6px 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
 }
 
@@ -298,7 +301,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   margin: 0 0 4px;
   padding: 6px 8px 10px;
   border-bottom: 1px solid var(--overlay-border);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .chat-pane__placement-heading {
@@ -306,7 +309,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   align-items: baseline;
   gap: 8px;
   padding: 8px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-pane__placement-heading strong {
@@ -318,7 +321,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 .chat-pane__placement-heading > span {
   flex: none;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .chat-pane__placement-fact {
@@ -368,7 +371,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   border-radius: var(--radius-sm);
   background: var(--warn-subtle);
   color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.3;
 }
 
@@ -395,8 +398,8 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   min-height: 56px;
   padding: 8px;
   border-radius: var(--menu-item-radius);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 /* Current is a readable selection, not an unavailable action. */
@@ -420,8 +423,8 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 
 .chat-pane__branch-meta {
   color: var(--muted);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: var(--control-ui-text-xs);
+  line-height: var(--control-ui-text-lg);
   font-variant-numeric: tabular-nums;
 }
 
@@ -521,7 +524,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--warn) 12%, var(--panel));
   color: var(--warn);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 650;
   line-height: 1;
 }
@@ -542,7 +545,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 .chat-pane__sharing-title,
 .chat-pane__sharing-status {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
 }
 
@@ -570,7 +573,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 }
 
 .chat-pane__sharing-owner {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-pane__sharing-member-skeleton-icon {
@@ -594,7 +597,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 
 .chat-pane__sharing-member {
   gap: 10px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-pane__sharing-member-icon {
@@ -612,7 +615,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 }
 
 .chat-pane__draft-indicator {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .chat-pane__draft-indicator svg {
@@ -694,7 +697,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   border-radius: calc(8px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   background: transparent;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
 
@@ -760,9 +763,9 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   & .chat-pane__sharing-section-label {
     padding: 0 8px 4px;
     color: var(--muted);
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
     font-weight: 400;
-    line-height: 18px;
+    line-height: calc(18px * var(--control-ui-text-scale));
   }
 
   & .chat-pane__sharing-access-trigger,
@@ -794,15 +797,15 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
     flex: 1;
     flex-direction: column;
     gap: 1px;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     font-weight: 400;
-    line-height: 18px;
+    line-height: calc(18px * var(--control-ui-text-scale));
   }
 
   & .chat-pane__sharing-description {
     color: var(--muted);
-    font-size: 11px;
-    line-height: 16px;
+    font-size: var(--control-ui-text-xs);
+    line-height: var(--control-ui-text-lg);
   }
 
   & .chat-pane__sharing-access-trigger > .oc-menu-item__label,
@@ -831,8 +834,8 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
     padding: 4px 8px;
     gap: 8px;
     border-radius: var(--menu-item-radius);
-    font-size: 12px;
-    line-height: 18px;
+    font-size: var(--control-ui-text-sm);
+    line-height: calc(18px * var(--control-ui-text-scale));
   }
 
   & .chat-pane__sharing-back > .oc-menu-item__icon {
@@ -859,7 +862,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
     padding: 5px 8px 0;
     background: transparent;
     color: var(--text);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     text-align: start;
     cursor: default;
   }
@@ -903,7 +906,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   & .chat-pane__sharing-link-description {
     margin: 0 32px 6px 36px;
     color: var(--muted);
-    font-size: 11px;
+    font-size: var(--control-ui-text-xs);
   }
 
   & .chat-pane__sharing-url {
@@ -918,7 +921,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
     padding: 5px 8px;
     background: var(--bg-hover);
     color: var(--text);
-    font-size: 11px;
+    font-size: var(--control-ui-text-xs);
     cursor: default;
   }
 
@@ -977,7 +980,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
     border-radius: var(--radius-sm);
     background: var(--bg);
     color: var(--text);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   & .chat-pane__sharing-roster {
@@ -1001,7 +1004,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
     padding: 4px 8px;
     background: transparent;
     color: var(--text);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     text-align: start;
     cursor: default;
   }
@@ -1026,7 +1029,7 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-permission {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-permission-control {
@@ -1051,13 +1054,13 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   padding: 8px;
   background: var(--bg-hover);
   color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(18px * var(--control-ui-text-scale));
   text-align: center;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-empty > span:where(:not(:first-child)) {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1098,49 +1101,5 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   &:has([data-at-start="false"])::before,
   &:has([data-at-end="false"])::after {
     opacity: 1;
-  }
-}
-.public-share-qr {
-  min-width: 0;
-  margin-top: 10px;
-  font-size: 12px;
-
-  & > summary {
-    width: fit-content;
-    color: var(--text);
-    cursor: default;
-  }
-}
-
-.public-share-qr__preview {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  padding-top: 10px;
-
-  & > p {
-    margin: 0;
-    text-align: center;
-    font-size: 11px;
-  }
-}
-
-.public-share-qr__frame {
-  display: grid;
-  width: 240px;
-  max-width: 100%;
-  min-height: 240px;
-  place-items: center;
-  margin: 10px auto 0;
-  border-radius: var(--radius-md);
-  /* A white quiet zone is part of the code, including in dark mode. */
-  background: rgb(255 255 255);
-  color: rgb(0 0 0);
-
-  & > img {
-    display: block;
-    width: 100%;
-    height: auto;
-    image-rendering: pixelated;
   }
 }

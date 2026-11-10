@@ -2,8 +2,10 @@ import type { JSX } from "@solidjs/web";
 import {
   createMemo,
   createSignal,
+  Errored,
   isPending,
   latest,
+  lazy,
   Loading,
   mapArray,
   merge,
@@ -27,7 +29,6 @@ import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { ChatSessionPublicQr } from "./chat-session-public-qr.tsx";
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
@@ -41,6 +42,11 @@ import {
 import type { ChatSessionSharingContentProps } from "./chat-session-sharing.solid.tsx";
 
 registerEnglishCatalog(registerChatSessionSharingEnglish);
+
+// Loaded only once a public link is shown, so the encoder stays out of the menu chunk.
+const ChatSessionPublicQr = lazy(() => import("./chat-session-public-qr.tsx"), {
+  export: "ChatSessionPublicQr",
+});
 
 function SharingModeContent(props: { visibility: SessionVisibility }) {
   return (
@@ -533,9 +539,6 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                   </span>
                   <Icon name={copied() ? "check" : "copy"} />
                 </button>
-                <Show when={result()?.publicShare && props.state?.publicUrl}>
-                  {(url) => <ChatSessionPublicQr url={url()} />}
-                </Show>
                 <ChatSessionSharingError
                   completion={copyCompletion()}
                   pending={presentation.busy()}
@@ -546,6 +549,16 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                     </div>
                   )}
                 </ChatSessionSharingError>
+                <Show when={result()?.publicShare && props.state?.publicUrl}>
+                  {(url) => (
+                    // A failed load or an unencodable URL drops the code; copy still works.
+                    <Errored fallback={null}>
+                      <Loading>
+                        <ChatSessionPublicQr url={url()} compact controls={controls} />
+                      </Loading>
+                    </Errored>
+                  )}
+                </Show>
               </div>
             </div>
           </section>

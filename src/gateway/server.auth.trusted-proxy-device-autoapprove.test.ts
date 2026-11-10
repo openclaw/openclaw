@@ -17,6 +17,7 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import {
   getPairedDevice,
   listDevicePairing,
@@ -489,6 +490,20 @@ describe("trusted-proxy operator device auto-approval", () => {
     expect(
       warnings.filter((message) => /device access upgrade requested|auto-approved/.test(message)),
     ).toEqual([]);
+  });
+
+  // OCF-495 restores revoked access only on the OpenClaw ID lane.
+  test("keeps a revoked token's same-access reconnect on the owner approval path", async () => {
+    const { identityPath, identity } = await prepareAutoApproval(READ_WRITE);
+    await expectConnected(connectSharedUi(identityPath, { scopes: READ_WRITE }));
+    expect(
+      await revokeDeviceToken({ deviceId: identity.deviceId, role: "operator" }),
+    ).toMatchObject({ ok: true });
+
+    expect((await connectSharedUi(identityPath, { scopes: READ_WRITE })).ok).toBe(false);
+    expect(await pendingFor(identity.deviceId)).toEqual([
+      expect.objectContaining({ role: "operator", isRepair: true }),
+    ]);
   });
 
   test("rejects a foreign-key connect for an already-paired deviceId", async () => {

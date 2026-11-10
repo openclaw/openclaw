@@ -92,7 +92,7 @@
   inset: -1px;
   padding: 1px;
   border-radius: inherit;
-  corner-shape: superellipse(1.5);
+  corner-shape: inherit;
   /* Comet, not a ring: a long fading tail behind a bright head, dark again
      right in front of it, so the light reads as travelling, not as a ring. */
   background: conic-gradient(
@@ -283,7 +283,7 @@
 .agent-chat__attach-menu-option,
 .agent-chat__capability-menu-item,
 .chat-controls__permission-option {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .agent-chat__attach-menu-option svg,
@@ -386,7 +386,7 @@
   align-items: center;
   justify-content: center;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
   line-height: 1.3;
   white-space: normal;
@@ -396,7 +396,7 @@
   min-height: 36px;
   gap: 10px;
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 400;
   flex-shrink: 0;
   color: var(--text);
@@ -450,7 +450,7 @@
 .agent-chat__capability-menu-state {
   color: var(--muted);
   font-weight: 400;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
 }
 
@@ -460,7 +460,7 @@
   justify-content: space-between;
   min-height: 28px;
   padding: 5px 10px 5px 40px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .agent-chat__capability-menu-state {
@@ -528,14 +528,14 @@
 }
 .agent-chat__capability-menu-accent {
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .agent-chat__capability-menu-tools-heading > .oc-menu-item__label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .agent-chat__capability-menu-tools-heading > .oc-menu-item__details {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .agent-chat__capability-menu-skeleton {
   display: grid;
@@ -564,7 +564,7 @@
 .chat-talk-input-picker__label,
 .chat-controls__permission-option-title {
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
 }
 .chat-talk-input-picker__option-icon,
@@ -606,11 +606,6 @@
 .chat-controls__target-icon svg {
   width: 100%;
   height: 100%;
-}
-
-.agent-chat__talk-status-text {
-  min-width: 0;
-  flex: 1;
 }
 
 /* Bars-only meter; the stop-voice pill button supplies the chrome around it. */
@@ -679,7 +674,7 @@
   align-items: center;
   width: 100%;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .agent-chat__dictation-phase,
@@ -930,7 +925,7 @@
 
 .chat-talk-input-picker__item {
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .chat-talk-input-picker__option-icon,
@@ -970,7 +965,7 @@
 .chat-talk-input-picker__hint {
   padding: 5px 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.35;
 }
 
@@ -991,7 +986,7 @@
 .chat-talk-input-picker__empty {
   padding: 4px 8px 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
   text-wrap: pretty;
 }
@@ -1444,34 +1439,37 @@
   overscroll-behavior-inline: contain;
   scrollbar-width: none;
 
-  .chat-selection-annotations__chip.chat-attachment-thumb {
-    height: 56px;
-    min-width: 0;
-    max-width: min(216px, 100%);
-    border-color: var(--border);
-  }
+  .chat-comment-preview {
+    .chat-selection-annotations__chip.chat-attachment-thumb {
+      --chat-attachment-radius: calc(var(--radius-md) * var(--openclaw-corner-radius-scale));
 
-  .chat-selection-annotations__chip .chat-attachment-file {
-    gap: 10px;
-    padding: 7px 13px 7px 7px;
-  }
+      height: 30px;
+      max-width: min(216px, 100%);
+    }
 
-  .chat-attachment-preview-icon {
-    display: grid;
-    place-items: center;
-    flex: 0 0 40px;
-    width: 40px;
-    height: 40px;
-    border-radius: max(0px, calc(var(--chat-attachment-radius) - 8px));
-    corner-shape: inherit;
-    background: color-mix(in srgb, var(--text) 4%, transparent);
-    color: var(--muted);
-  }
+    .chat-attachment-file {
+      gap: 6px;
+      padding: 6px 8px;
+    }
 
-  .chat-attachment-preview-icon svg {
-    width: 16px;
-    height: 16px;
-    stroke-width: 1.75px;
+    .chat-attachment-preview-icon {
+      display: grid;
+      place-items: center;
+      flex: 0 0 16px;
+      width: 16px;
+      height: 16px;
+      color: var(--muted);
+    }
+
+    .chat-attachment-preview-icon svg {
+      stroke-width: 1.75px;
+    }
+
+    .chat-comment-count-gap {
+      display: inline-block;
+      width: 4px;
+      font-size: 0;
+    }
   }
 
   &[data-disabled="true"] {
@@ -1533,10 +1531,10 @@
   flex: 0 0 auto;
   width: 56px;
   height: 56px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--chat-attachment-radius);
   corner-shape: superellipse(1.5);
-  background: var(--chat-composer-surface, var(--popover));
+  background: var(--card-highlight);
 }
 
 .chat-attachment-file {
@@ -1550,7 +1548,7 @@
   overflow: hidden;
   color: var(--text);
   background: transparent;
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--control-ui-text-scale));
   border-radius: calc(var(--chat-attachment-radius) - 1px);
   corner-shape: inherit;
 }
@@ -1701,7 +1699,7 @@
   padding: 0;
   border-radius: max(0px, calc(var(--chat-attachment-radius) - 8px));
   corner-shape: inherit;
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  background: transparent;
   color: var(--muted);
 }
 
@@ -1713,17 +1711,22 @@
 
 .chat-attachments-preview :is(.chat-attachment-file__name, .chat-selection-annotations__label) {
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
-  line-height: 16px;
+  line-height: var(--control-ui-text-lg);
+}
+
+.chat-attachments-preview .chat-attachment-file__type,
+.chat-attachments-preview .chat-browser-annotation-card__meta {
+  color: var(--text);
 }
 
 .chat-attachment-file__type,
 .chat-browser-annotation-card__meta,
 .chat-attachment-text-action {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
-  line-height: 14px;
+  line-height: var(--control-ui-text-md);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1816,12 +1819,16 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   corner-shape: round;
-  background: var(--chat-composer-surface, var(--popover));
+  background:
+    linear-gradient(var(--card-highlight), var(--card-highlight)),
+    var(--chat-composer-surface, var(--popover));
   box-shadow: var(--shadow-sm);
 }
 
 .chat-attachment-remove:hover:not(:disabled)::before {
-  background: color-mix(in srgb, var(--text) 6%, var(--chat-composer-surface, var(--popover)));
+  background:
+    linear-gradient(var(--surface-hover), var(--surface-hover)),
+    var(--chat-composer-surface, var(--popover));
 }
 
 .chat-attachment-remove:disabled {
@@ -1988,17 +1995,15 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   gap: var(--chat-composer-chip-gap, 6px);
   width: 100%;
   height: var(--chat-composer-chip-height, 30px);
-  min-height: var(--chat-composer-chip-height, 30px);
   /* Symmetric on purpose: this trigger carries a label and an optional leading
      icon, never a trailing one, so the old 6px trailing inset was unmatched
      asymmetry that made the chip look narrower on its right than its siblings. */
-  padding-block: 0;
-  padding-inline: var(--chat-composer-chip-padding-inline, 8px);
+  padding: 0 var(--chat-composer-chip-padding-inline, 8px);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
-  font-size: var(--chat-composer-chip-text, 13px);
+  font-size: var(--chat-composer-chip-text, calc(13px * var(--control-ui-text-scale)));
   /* Button triggers otherwise take the UA's normal tracking; summary triggers
      already inherit the app's, so every chip label sets the same way. */
   letter-spacing: inherit;
@@ -2008,7 +2013,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .agent-chat__input .chat-controls__inline-select-trigger {
+  /* The chip fills the action row's box (see --chat-composer-chip-height) and
+     paints its pill one step inside it, on the same 30px tier as the primary
+     action's painted disc. */
+  border-block: 1px solid transparent;
   border-radius: var(--radius-full);
+  background-clip: padding-box;
 }
 
 .agent-chat__composer-lead .chat-controls__permission-trigger {
@@ -2076,7 +2086,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
 }
 
@@ -2112,7 +2122,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__model-menu {
   box-shadow: none;
   min-height: 0;
-  width: min(340px, calc(100vw - 24px));
+  width: min(440px, calc(100vw - 24px));
   max-height: min(400px, var(--auto-size-available-height, calc(100vh - 96px)));
 }
 
@@ -2288,7 +2298,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   border-radius: 4px;
   background: var(--bg-hover);
   color: var(--muted);
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
   font-weight: 500;
   line-height: 1;
 }
@@ -2306,11 +2316,11 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 @media (max-width: 640px) {
   .chat-controls__permission-option-title {
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
 
   .chat-controls__permission-option-description {
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 }
 
@@ -2342,7 +2352,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   border-radius: var(--radius-sm);
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-controls__model-search {
@@ -2355,7 +2365,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-controls__locked-model {
@@ -2371,7 +2381,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   overflow: hidden;
   flex: 1 1 auto;
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2383,7 +2393,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-full);
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -2403,7 +2413,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   gap: var(--chat-composer-menu-row-gap);
   padding: 8px 10px 3px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 700;
 }
 
@@ -2448,7 +2458,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 400;
   white-space: nowrap;
 }
@@ -2584,7 +2594,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   contain-intrinsic-block-size: auto 0px;
   justify-content: flex-start;
   /* Grid-item min-width:auto would size the provider group's track to the
-     row's full content width (long name + meta), overflowing the 340px menu. */
+     row's full content width (long name + meta), overflowing the menu. */
   min-width: 0;
 }
 
@@ -2600,7 +2610,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   justify-content: flex-start;
   min-width: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   cursor: var(--cursor-action);
 }
@@ -2659,7 +2669,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   min-height: 80px;
   padding: 24px 12px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-align: center;
 }
 
@@ -2679,10 +2689,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   align-items: center;
   gap: 0;
   /* Flex min-width:auto would let a long model name + badges push the row
-     wider than the 340px menu and hand the popover a horizontal scrollbar. */
+     wider than the menu and hand the popover a horizontal scrollbar. */
   min-width: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 600;
 }
 
@@ -2691,7 +2701,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
-  font-size: 9px;
+  font-size: calc(9px * var(--control-ui-text-scale));
   font-weight: 700;
   line-height: 1;
 }
@@ -2708,7 +2718,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   min-width: 0;
   flex: 0 1 auto;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 450;
 }
 
@@ -2719,7 +2729,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   min-width: 0;
   flex: 0 1 auto;
   color: var(--warn);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   font-weight: 550;
 }
 
@@ -2786,7 +2796,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__account-error {
   padding: 4px 10px;
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-controls__model-catalog-state {
@@ -2798,7 +2808,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   padding: 6px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-controls__model-catalog-state--empty {
@@ -2835,7 +2845,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
@@ -2848,7 +2858,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__fast-mode-title {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
 }
 
@@ -3059,7 +3069,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 600;
 }
 
@@ -3173,7 +3183,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__fast-mode-description {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3213,7 +3223,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: color-mix(in srgb, var(--card) 74%, transparent);
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1;
 }
 
@@ -3438,7 +3448,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .agent-chat__welcome h2 {
-  font-size: 24px;
+  font-size: calc(24px * var(--control-ui-text-scale));
   font-weight: 600;
   margin: 0;
   color: var(--text);
@@ -3501,7 +3511,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   }
 
   .agent-chat__welcome h2 {
-    font-size: 20px;
+    font-size: calc(20px * var(--control-ui-text-scale));
   }
 
   .agent-chat__welcome-avatar {
@@ -3584,7 +3594,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .agent-chat__recents-title {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -3602,7 +3612,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-align: left;
   transition: background 0.15s;
 }
@@ -3626,7 +3636,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .agent-chat__recent-sub {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .agent-chat__recent-time {
@@ -3635,14 +3645,14 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   flex: none;
   margin-left: auto;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
   text-align: end;
   white-space: nowrap;
 }
 
 .agent-chat__hint {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   color: var(--muted);
   margin: 0;
 }
@@ -3657,7 +3667,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .agent-chat__suggestion {
   min-height: 40px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.4;
   padding: 10px 16px;
   border-radius: var(--radius-md);
@@ -3823,7 +3833,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
   text-align: start;
 }

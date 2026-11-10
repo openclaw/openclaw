@@ -3,6 +3,40 @@ import { expect, it } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { FileDisclosure } from "./file-disclosure.tsx";
 
+it.each(["folder", "review"] as const)(
+  "keeps a closed %s disclosure hidden through equal source invalidations",
+  (variant) => {
+    const [revision, setRevision] = createSignal(0);
+    const view = mountSolid(() =>
+      FileDisclosure({
+        variant,
+        open: false,
+        active: true,
+        get instant() {
+          revision();
+          return false;
+        },
+        children: <div style={{ height: "160px" }} />,
+      }),
+    );
+    const shell = view.container.querySelector<HTMLDivElement>(
+      ".workspace-desktop__disclosure, .session-diff__disclosure",
+    )!;
+    const observer = new MutationObserver(() => {});
+    observer.observe(shell, { attributes: true, attributeFilter: ["hidden"] });
+    try {
+      for (let nextRevision = 1; nextRevision <= 20; nextRevision++) {
+        setRevision(nextRevision);
+        flush();
+      }
+      expect(observer.takeRecords()).toHaveLength(0);
+      expect(shell.hidden).toBe(true);
+    } finally {
+      observer.disconnect();
+    }
+  },
+);
+
 it.each([
   { name: "Files", variant: "folder" as const, duration: 200 },
   { name: "Review", variant: "review" as const, duration: 240 },

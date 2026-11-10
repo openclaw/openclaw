@@ -13,7 +13,7 @@ import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plu
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
 import { readCodexConfigValue } from "./config-layer-policy.js";
-import { joinPresentSections } from "./developer-instruction-sections.js";
+import { joinPresentSections, renderCodexThreadPolicy } from "./developer-instruction-sections.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
@@ -139,7 +139,7 @@ function buildCodexBaseInstructions(
 }
 
 // Neither key has a Codex default, so a string in the effective config is authored.
-function hasAuthoredCodexBaseInstructions(
+export function hasAuthoredCodexBaseInstructions(
   options: Pick<CodexThreadConfigurationOptions, "config" | "nativeConfig">,
 ): boolean {
   return ["model_instructions_file", "instructions"].some((key) =>
@@ -189,13 +189,18 @@ export function placeCodexBaseInstructions(
   ringZero: { baseInstructions?: string },
 ): { baseInstructions?: string; developerInstructions: string } {
   if (isCodexRingZeroThread(params, options.hostSystemAgentActive)) {
-    return { ...ringZero, developerInstructions };
+    return { ...ringZero, developerInstructions: renderCodexThreadPolicy(developerInstructions) };
   }
   const baseInstructions = resolveCodexOpenClawBaseInstructions(params, options);
   if (hasAuthoredCodexBaseInstructions(options)) {
-    return { developerInstructions: joinPresentSections(baseInstructions, developerInstructions) };
+    return {
+      developerInstructions: renderCodexThreadPolicy(baseInstructions, developerInstructions),
+    };
   }
-  return { baseInstructions: baseInstructions ?? "", developerInstructions };
+  return {
+    baseInstructions: baseInstructions ?? "",
+    developerInstructions: renderCodexThreadPolicy(developerInstructions),
+  };
 }
 
 /** Move only the exact section annotated by its producer; later policy additions survive. */

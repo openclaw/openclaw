@@ -174,7 +174,7 @@
   min-width: 0;
   overflow: hidden;
   color: color-mix(in srgb, var(--muted) 80%, var(--text));
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-ui-text-scale));
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: normal;
@@ -312,7 +312,7 @@ openclaw-select-picker {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: var(--control-ui-font-weight-semibold);
   font-variant-numeric: tabular-nums;
   text-align: start;
@@ -577,21 +577,6 @@ openclaw-select-picker {
 .picker-select__menu--phone-sheet .picker-select__options {
   flex: 1 1 auto;
   overscroll-behavior: contain;
-}
-
-.picker-select__menu--phone-sheet:has(.agent-select__menu-title) > .picker-select__page-header {
-  display: none;
-}
-
-.picker-select__menu--phone-sheet .agent-select__menu-title {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 36px 0 0;
-  color: var(--text);
-  font-size: inherit;
-  letter-spacing: 0;
-  text-transform: none;
 }
 
 @keyframes picker-sheet-in {

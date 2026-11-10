@@ -17,7 +17,7 @@ openclaw-desktop-panel {
     background: transparent;
     color: var(--muted);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     white-space: nowrap;
   }
   .desktop-app-button {
@@ -171,7 +171,7 @@ openclaw-desktop-panel {
     min-width: 0;
     align-items: center;
     gap: 8px;
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
   .desktop-rail__dot {
     width: 6px;
@@ -201,7 +201,7 @@ openclaw-desktop-panel {
   }
   .desktop-rail__host {
     color: var(--muted);
-    font-size: 10px;
+    font-size: calc(10px * var(--control-ui-text-scale));
   }
   .desktop-connection-rail[data-presentation="desktop"] .desktop-rail__machine {
     flex-direction: row;
@@ -217,7 +217,7 @@ openclaw-desktop-panel {
   }
   .desktop-connection-rail[data-presentation="desktop"] .desktop-rail__host {
     flex: none;
-    line-height: 12px;
+    line-height: var(--control-ui-text-sm);
   }
   .desktop-rail__actions,
   .desktop-rail__window,
@@ -329,8 +329,8 @@ openclaw-desktop-panel {
     min-height: 36px;
     padding: 8px 10px;
     border-radius: var(--menu-item-radius);
-    font-size: 13px;
-    line-height: 18px;
+    font-size: calc(13px * var(--control-ui-text-scale));
+    line-height: calc(18px * var(--control-ui-text-scale));
     gap: 10px;
     color: var(--text);
     white-space: normal;
@@ -412,7 +412,7 @@ openclaw-desktop-panel {
     background: transparent;
     color: var(--text);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
   .desktop-presentation--desktop .desktop-picker:has(> openclaw-panel-empty-state),
   .desktop-presentation--mobile .desktop-picker:has(> openclaw-panel-empty-state) {
@@ -432,7 +432,7 @@ openclaw-desktop-panel {
   }
   .desktop-status-surface > strong {
     color: var(--text);
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
     font-weight: 500;
   }
   .desktop-presentation--desktop .desktop-content > .desktop-status-surface {
@@ -441,7 +441,7 @@ openclaw-desktop-panel {
   .desktop-status-surface > p {
     max-width: 360px;
     margin: 6px 0 0;
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
     line-height: 1.5;
     overflow-wrap: anywhere;
   }
@@ -474,7 +474,7 @@ openclaw-desktop-panel {
     align-items: center;
     gap: 6px;
     padding: 6px 10px;
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
   .desktop-status-surface__action svg {
     width: 14px;
@@ -512,7 +512,7 @@ openclaw-desktop-panel {
     border: 0;
     border-radius: var(--radius-full);
     background: var(--bg-hover);
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
   .desktop-status-surface--anchored .desktop-button > svg {
     width: 14px;
@@ -536,7 +536,7 @@ openclaw-desktop-panel {
     gap: 8px;
     background: var(--overlay-palette-backdrop);
     color: var(--text);
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
     pointer-events: none;
   }
   .desktop-control-transition > svg {
@@ -560,8 +560,8 @@ openclaw-desktop-panel {
     top: 6px;
     left: 12px;
     color: var(--muted);
-    font-size: 11px;
-    line-height: 16px;
+    font-size: var(--control-ui-text-xs);
+    line-height: var(--control-ui-text-lg);
     pointer-events: none;
     opacity: 0;
   }
@@ -579,7 +579,7 @@ openclaw-desktop-panel {
     border-radius: var(--radius-sm);
     background: var(--bg);
     color: var(--text);
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
     box-shadow: var(--overlay-shadow);
   }
   .desktop-takeover {
@@ -587,8 +587,8 @@ openclaw-desktop-panel {
     padding: 9px 12px;
     background: color-mix(in srgb, var(--warn) 12%, var(--bg));
     color: var(--warn);
-    font-size: 12px;
-    line-height: 18px;
+    font-size: var(--control-ui-text-sm);
+    line-height: calc(18px * var(--control-ui-text-scale));
   }
   .desktop-takeover--fullscreen {
     position: absolute;
@@ -616,8 +616,8 @@ openclaw-desktop-panel {
   }
   .desktop-credentials__title {
     color: var(--text);
-    font-size: 18px;
-    line-height: 24px;
+    font-size: calc(18px * var(--control-ui-text-scale));
+    line-height: calc(24px * var(--control-ui-text-scale));
   }
   .desktop-credentials__icon {
     width: 24px;
@@ -643,7 +643,7 @@ openclaw-desktop-panel {
     min-height: 40px;
     padding: 0 8px;
     gap: 4px;
-    font-size: 14px;
+    font-size: var(--control-ui-text-md);
   }
   .desktop-presentation--mobile .desktop-toolbar button {
     display: inline-flex;
@@ -716,7 +716,7 @@ openclaw-desktop-panel {
     max-width: 100%;
     color: var(--muted);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 11px;
+    font-size: var(--control-ui-text-xs);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -724,7 +724,7 @@ openclaw-desktop-panel {
     padding: 7px 12px;
     border-bottom: 1px solid var(--border);
     color: var(--muted);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
   .desktop-note--error {
     color: var(--danger);
@@ -758,7 +758,7 @@ openclaw-desktop-panel {
     flex-direction: column;
     gap: 5px;
     color: var(--text);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
   .desktop-credentials__input {
     border: 1px solid var(--border);
@@ -787,7 +787,7 @@ openclaw-desktop-panel {
     overflow: hidden;
     color: var(--text);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -798,7 +798,7 @@ openclaw-desktop-panel {
     align-items: center;
     gap: 5px;
     color: var(--muted);
-    font-size: 11px;
+    font-size: var(--control-ui-text-xs);
   }
   .desktop-stage {
     position: relative;
@@ -876,7 +876,7 @@ openclaw-desktop-panel {
     background: transparent;
     color: var(--text);
     font: inherit;
-    font-size: 11px;
+    font-size: var(--control-ui-text-xs);
   }
   .desktop-touch-action[aria-pressed="true"] {
     color: var(--accent);
