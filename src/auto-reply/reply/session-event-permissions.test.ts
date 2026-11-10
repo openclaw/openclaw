@@ -248,6 +248,10 @@ it.for([
   "retained-overrides-downgrade",
   "retained-database-replacement",
   "retained-config-downgrade",
+  "retained-channel-config-downgrade",
+  "unrelated-agent-config",
+  "unrelated-provider-auth",
+  "retained-provider-auth",
   "remapped-workspace",
   "remapped-guarded",
   "remapped-default",
@@ -261,8 +265,12 @@ it.for([
       skip("Windows cannot replace an open database file");
     }
     await runEventFixture("session-event-permissions", onTestFinished, async (state) => {
+      const channelDowngrade = change === "retained-channel-config-downgrade";
       const config = await configureEventState(state, {
         tools: { profile: "coding", codeMode: false, toolSearch: false },
+        ...(channelDowngrade
+          ? { channels: { discord: { enabled: true, actions: { stickers: true } } } }
+          : {}),
       });
       await fs.mkdir(state.workspaceDir, { recursive: true });
       const filePath = path.join(state.workspaceDir, "completion.txt");
@@ -285,6 +293,7 @@ it.for([
       }
       const remapped = change.startsWith("remapped-");
       const toolOnly = change === "tool-only-delivery";
+      const unrelatedConfig = change.startsWith("unrelated-");
       const producerMode = toolOnly
         ? "full"
         : change === "remapped-workspace"
@@ -329,6 +338,21 @@ it.for([
               "read tool",
             );
             await read.execute("read-completion", { path: filePath });
+            if (unrelatedConfig) {
+              setRuntimeConfigSnapshot({
+                ...config,
+                ...(change === "unrelated-agent-config"
+                  ? {
+                      agents: {
+                        ...config.agents,
+                        entries: { ...config.agents?.entries, other: {} },
+                      },
+                    }
+                  : {
+                      auth: { profiles: { unrelated: { provider: "unrelated", mode: "api_key" } } },
+                    }),
+              });
+            }
             const write = tools.find((tool) => tool.name === "write");
             if (retainedDowngrade) {
               expect(write).toBeDefined();
@@ -357,6 +381,23 @@ it.for([
                   fsSync.renameSync(database.path, foreignPath);
                   fsSync.renameSync(originalPath, database.path);
                 };
+              } else if (channelDowngrade) {
+                setRuntimeConfigSnapshot({
+                  ...config,
+                  channels: { discord: { enabled: true, actions: { stickers: false } } },
+                });
+              } else if (change === "retained-provider-auth") {
+                setRuntimeConfigSnapshot({
+                  ...config,
+                  auth: {
+                    profiles: {
+                      selected: {
+                        provider: expectDefined(params.provider, "selected provider"),
+                        mode: "api_key",
+                      },
+                    },
+                  },
+                });
               } else {
                 config.tools = { ...config.tools, deny: ["write"] };
                 setRuntimeConfigSnapshot(config);
@@ -383,6 +424,9 @@ it.for([
                 }
                 expect(String(error)).toMatch(/authority|permission|active|configuration changed/i);
                 retainedWriteRejected = true;
+                if (change === "retained-provider-auth") {
+                  throw error;
+                }
               }
             }
             return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
@@ -505,7 +549,9 @@ it.for([
       expect(accepted).toEqual({ ok: true });
       const evidence = JSON.stringify(outcome);
       expect(await fs.readFile(filePath, "utf8"), evidence).toBe(
-        change === "new-session" || remapped || toolOnly ? "completed\n" : "original\n",
+        change === "new-session" || remapped || toolOnly || unrelatedConfig
+          ? "completed\n"
+          : "original\n",
       );
       expect(runEmbeddedAgentMock, evidence).toHaveBeenCalledOnce();
       expect(observedMode, evidence).toBe(
@@ -520,7 +566,7 @@ it.for([
                 : "full",
       );
       expect(attempted, evidence).toBe(
-        change === "new-session" || retainedDowngrade || remapped || toolOnly,
+        change === "new-session" || retainedDowngrade || remapped || toolOnly || unrelatedConfig,
       );
       expect(retainedWriteRejected).toBe(retainedDowngrade);
       if (change === "new-session") {
@@ -533,6 +579,14 @@ it.for([
           change === "retained-tool-downgrade" ? "read-only" : "full",
         );
         expect(outcome.executionStarted).toBe(true);
+        if (change === "retained-provider-auth") {
+          expect(outcome).toMatchObject({
+            status: "failed",
+            terminalOutcome: {
+              error: "agent harness host capability is no longer active",
+            },
+          });
+        }
       } else {
         expect(outcome.status, outcome.error).toBe("completed");
       }

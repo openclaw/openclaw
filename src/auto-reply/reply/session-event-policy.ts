@@ -20,6 +20,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronJobToolPolicyContext } from "../../cron/execution-context-admission.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import type { CronStoredJob } from "../../cron/types.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseConcreteConfigPathTokens } from "../../shared/dot-path.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
@@ -49,30 +50,28 @@ export function captureSessionEventConfigPolicy(
   agentId: string,
   job?: CronStoredJob,
 ) {
-  const captured = job ? captureRuntimeConfig(config) : config;
+  const captured = captureRuntimeConfig(config);
   const publication = getRuntimeConfigSnapshotMetadata();
   let checkedConfig = config;
   let checkedPublication = publication;
   let changed = false;
-  let matches = job ? captureScheduledSessionEventConfigPolicy(captured, agentId, job) : undefined;
+  let matches = captureSessionEventConfigRelevance(captured, agentId, job);
   return {
     get changed() {
       return changed;
     },
     selectModel(selection: PolicySelection) {
-      if (job) {
-        matches = captureScheduledSessionEventConfigPolicy(captured, agentId, job, selection);
-        // A fallback may consume auth that an earlier provider did not need.
-        checkedConfig = config;
-        checkedPublication = publication;
-      }
+      matches = captureSessionEventConfigRelevance(captured, agentId, job, selection);
+      // A fallback may consume auth that an earlier provider did not need.
+      checkedConfig = config;
+      checkedPublication = publication;
     },
     assertCurrent(current: OpenClawConfig, routeChannels: Array<string | undefined>) {
       const currentPublication = getRuntimeConfigSnapshotMetadata();
       if (current === checkedConfig && currentPublication === checkedPublication) {
         return;
       }
-      if (!matches?.(current, routeChannels)) {
+      if (!matches(current, routeChannels)) {
         // Only this recorded refusal permits the handoff owner to re-admit unstarted work.
         changed = true;
         throw new Error("Session event configuration changed; inspect the run before retrying");
@@ -84,19 +83,23 @@ export function captureSessionEventConfigPolicy(
 }
 
 /** Scheduled message actions re-admit their destination policy at each invocation. The
- * turn still owns its creator's channel ceilings and its automatic delivery route. */
-export function captureScheduledSessionEventConfigPolicy(
+ * turn still owns its creator's channel ceilings and its automatic delivery route.
+ * Unscheduled events use the same facts without a creator, so a publication that only
+ * changes another agent does not refuse this agent's event. */
+export function captureSessionEventConfigRelevance(
   config: OpenClawConfig,
   agentId: string,
-  job: CronStoredJob,
+  job: CronStoredJob | undefined,
   selection?: PolicySelection,
 ) {
   const captured = captureRuntimeConfig(config);
   const runtimeOwnsMcpServers =
     selection?.agentRuntime === "openclaw" && selection.cliExecution === false;
-  const creatorChannel = resolveScheduledToolCallerContext({
-    scheduledToolPolicy: resolveCronJobToolPolicyContext(job, resolveCronRunToolsAllow(job)),
-  }).channel;
+  const creatorChannel =
+    job &&
+    resolveScheduledToolCallerContext({
+      scheduledToolPolicy: resolveCronJobToolPolicyContext(job, resolveCronRunToolsAllow(job)),
+    }).channel;
   const authProvider =
     selection &&
     resolveProviderIdForAuth(selection.provider, {
@@ -198,14 +201,18 @@ export function captureScheduledSessionEventConfigPolicy(
           modelPolicy: selection ? undefined : resolveAgentEntry({ agents }, agentId)?.modelPolicy,
         },
       },
-      channels: {
-        defaults: channelConfig?.defaults,
-        selected: channels.map((id) => [
-          id,
-          channelConfig?.[id],
-          channelConfig?.modelByChannel?.[id],
-        ]),
-      },
+      // Only scheduled message invocations re-admit off-route channel policy.
+      // Unscheduled tools retain config, so every channel remains authority-bearing.
+      channels: job
+        ? {
+            defaults: channelConfig?.defaults,
+            selected: channels.map((id) => [
+              id,
+              channelConfig?.[id],
+              channelConfig?.modelByChannel?.[id],
+            ]),
+          }
+        : channelConfig,
       activation: resolveChannelConfigActivationFacts({ channels: channelConfig }),
     });
     const relevantPath = (path: string, profiles: ReadonlySet<string>) => {
@@ -228,7 +235,12 @@ export function captureScheduledSessionEventConfigPolicy(
             : tokens[1] !== "order" || relevantAuthProvider(key))
         );
       }
+      if (tokens?.[0] === "agents" && tokens[1] === "entries" && typeof tokens[2] === "string") {
+        // Matches the projection, which keeps only this agent's entry.
+        return normalizeAgentId(tokens[2]) === normalizeAgentId(agentId);
+      }
       return (
+        !job ||
         tokens?.[0] !== "channels" ||
         typeof tokens[1] !== "string" ||
         tokens[1] === "defaults" ||
