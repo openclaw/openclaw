@@ -20,6 +20,7 @@ const runLimitedFs = pLimit(COPY_TREE_FS_CONCURRENCY);
 async function reconcileMirrorPath(params: {
   sourcePath?: string;
   targetPath: string;
+  relativePath: string;
   replace: boolean;
   excludeDirs?: readonly string[];
 }): Promise<PreservedEntry> {
@@ -42,13 +43,14 @@ async function reconcileMirrorPath(params: {
     const preservedEntries = await reconcileMirrorDirectory({
       sourceDir,
       targetDir: params.targetPath,
+      relativePath: params.relativePath,
       replace: params.replace,
       excludeDirs: params.excludeDirs,
     });
     // A remote file cannot replace a directory containing preserved host entries.
     if (sourceFile && preservedEntries === "metadata") {
       throw new Error(
-        `OpenShell mirror cannot replace ${JSON.stringify(path.basename(params.targetPath))}: the host directory contains repository metadata; download the sandbox file directly with the OpenShell CLI before another mirrored command discards it.`,
+        `OpenShell mirror cannot replace ${JSON.stringify(params.relativePath)}: the host directory contains repository metadata; download the sandbox file directly with the OpenShell CLI before another mirrored command discards it.`,
       );
     }
     if (sourceDir || preservedEntries !== "none") {
@@ -69,6 +71,7 @@ async function reconcileMirrorPath(params: {
 async function reconcileMirrorDirectory(params: {
   sourceDir?: string;
   targetDir: string;
+  relativePath: string;
   replace: boolean;
   excludeDirs?: readonly string[];
 }): Promise<PreservedEntry> {
@@ -92,19 +95,31 @@ async function reconcileMirrorDirectory(params: {
           sourcePath:
             sourceDir && sourceEntries.has(entry) ? path.join(sourceDir, entry) : undefined,
           targetPath: path.join(params.targetDir, entry),
+          relativePath: params.relativePath ? `${params.relativePath}/${entry}` : entry,
           replace: params.replace,
           excludeDirs: nestedExcludeDirs,
         }),
       ),
   );
   let preservedEntries: PreservedEntry = targetEntries.some(isExcluded) ? "metadata" : "none";
+  const errors: unknown[] = [];
   for (const result of results) {
     if (result.status === "rejected") {
-      throw result.reason;
+      errors.push(result.reason);
+      continue;
     }
     if (result.value === "metadata" || preservedEntries === "none") {
       preservedEntries = result.value;
     }
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(
+      errors,
+      errors.map((error) => (error instanceof Error ? error.message : String(error))).join("; "),
+    );
+  }
+  if (errors.length === 1) {
+    throw errors[0];
   }
   return preservedEntries;
 }
@@ -115,7 +130,7 @@ export async function replaceDirectoryContents(params: {
   /** Root names to exclude; .git stays excluded at every depth when listed. */
   excludeDirs?: readonly string[];
 }): Promise<void> {
-  await reconcileMirrorDirectory({ ...params, replace: true });
+  await reconcileMirrorDirectory({ ...params, relativePath: "", replace: true });
 }
 
 export async function stageDirectoryContents(params: {
@@ -124,5 +139,5 @@ export async function stageDirectoryContents(params: {
   /** Root names to exclude; .git stays excluded at every depth when listed. */
   excludeDirs?: readonly string[];
 }): Promise<void> {
-  await reconcileMirrorDirectory({ ...params, replace: false });
+  await reconcileMirrorDirectory({ ...params, relativePath: "", replace: false });
 }

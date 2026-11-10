@@ -181,6 +181,27 @@ describe("replaceDirectoryContents", () => {
     },
   );
 
+  it("reports every colliding sandbox file by its workspace path", async () => {
+    await writeFiles(target, {
+      "a/repo/.git/config": "host a",
+      "b/repo/sub/.git/config": "host b",
+    });
+    await writeFiles(source, { "a/repo": "sandbox a", "b/repo": "sandbox b" });
+
+    let failure: unknown;
+    try {
+      await replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS);
+    } catch (error) {
+      failure = error;
+    }
+    expect(String(failure)).toContain('"a/repo"');
+    expect(String(failure)).toContain('"b/repo"');
+    await expectFiles(target, {
+      "a/repo/.git/config": "host a",
+      "b/repo/sub/.git/config": "host b",
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "preserves target-only special files and their ancestor directories",
     async () => {

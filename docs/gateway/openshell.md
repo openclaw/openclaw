@@ -431,8 +431,8 @@ its `.git` metadata before the next command; use `remote` mode for Git workflows
 that must persist inside the sandbox. Remote-mode seeding also omits `.git` at
 every depth, so initialize or clone repositories inside that sandbox.
 If a sandbox file would replace a host directory containing repository metadata,
-synchronization reports the conflict. Download the file directly with the OpenShell
-CLI before another mirrored command discards it.
+synchronization reports each conflict by workspace-relative path. Download the files
+directly with the OpenShell CLI before another mirrored command discards them.
 
 Mirror synchronization never copies entries it cannot represent, such as
 symlinks, FIFOs, or Unix sockets, into either workspace. Existing host entries
