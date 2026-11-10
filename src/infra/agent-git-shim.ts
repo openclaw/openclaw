@@ -123,9 +123,9 @@ revision_roots() {
       checkout:-b|checkout:-B|switch:-c|switch:-C|merge:-m|merge:-F|cherry-pick:-m|revert:-m|log:-n|show:-n|rev-list:-n)
         [ "$#" -gt 0 ] && shift; continue ;;
       cat-file:blob|cat-file:tree|cat-file:commit|cat-file:tag) continue ;;
-      archive:--remote|archive:--remote=*) revisions=; return ;;
+      diff:--no-index|archive:--remote|archive:--remote=*) revisions=; return ;;
       archive:--format|ls-tree:--format|format-patch:-o|format-patch:--cc) [ "$#" -gt 0 ] && shift; continue ;;
-      merge:-S|rebase:-S|cherry-pick:-S|revert:-S) continue ;;
+      restore:-S|merge:-S|rebase:-S|cherry-pick:-S|revert:-S) continue ;;
     esac
     case $arg in
       --) break ;;

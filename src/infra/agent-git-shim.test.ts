@@ -80,6 +80,7 @@ it.skipIf(process.platform === "win32")(
         ["format-patch", "-1", "--stdout", missing],
         ["cat-file", "-p", missing],
         ["restore", `--source=${missing}`, "--", "file.txt"],
+        ["restore", "-W", "-S", `--source=${missing}`, "--", "file.txt"],
         ["restore", "--source", missing, "--", "file.txt"],
         ["checkout", "--detach", missing],
         ["cherry-pick", "--no-commit", "-s", missing],
@@ -130,7 +131,9 @@ it.skipIf(process.platform === "win32")(
           env: { ...env, GIT_TRACE_PACKET: packet },
           encoding: "utf8",
         });
+      await fs.writeFile(path.join(linked, missing), "literal filename\n");
       for (const args of [
+        ["diff", "--no-index", missing, missing],
         ["log", "-1", `--format=format:${missing}`, "HEAD"],
         ["log", "-1", "--grep", missing, "HEAD"],
         ["log", "--find-object", "a".repeat(40), "HEAD"],
