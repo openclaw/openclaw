@@ -12,8 +12,12 @@ import { resolveMinimaxMediaRequestConfig } from "./media-provider-runtime.js";
 const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
 const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
 const DEFAULT_MODEL = "image-01";
+const H3_MODEL = "MiniMax-H3-Image";
 const DEFAULT_OUTPUT_MIME = "image/png";
+const H3_OUTPUT_MIME = "image/jpeg";
 const MINIMAX_MAX_IMAGE_RESULTS = 9;
+const H3_MAX_INPUT_IMAGES = 16;
+const H3_TIMEOUT_MS = 610_000;
 const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
   "1:1",
   "16:9",
@@ -61,7 +65,7 @@ export function buildMinimaxImageGenerationProvider(
     id: providerId,
     label: "MiniMax",
     defaultModel: DEFAULT_MODEL,
-    models: [DEFAULT_MODEL],
+    models: [DEFAULT_MODEL, H3_MODEL],
     isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
@@ -74,12 +78,14 @@ export function buildMinimaxImageGenerationProvider(
         enabled: true,
         maxCount: MINIMAX_MAX_IMAGE_RESULTS,
         maxInputImages: 1,
+        maxInputImagesByModel: { [H3_MODEL]: H3_MAX_INPUT_IMAGES },
         supportsSize: false,
         supportsAspectRatio: true,
         supportsResolution: false,
       },
       geometry: {
         aspectRatios: [...MINIMAX_SUPPORTED_ASPECT_RATIOS],
+        aspectRatiosByModel: { [H3_MODEL]: [] },
       },
     },
     async generateImage(req) {
@@ -98,10 +104,12 @@ export function buildMinimaxImageGenerationProvider(
         capability: "image",
       });
 
+      const model = req.model || DEFAULT_MODEL;
+      const isH3 = model === H3_MODEL;
       const body: Record<string, unknown> = {
-        model: req.model || DEFAULT_MODEL,
+        model,
         prompt: req.prompt,
-        response_format: "base64",
+        response_format: isH3 ? "b64_json" : "base64",
         n: req.count ?? 1,
       };
 
@@ -109,16 +117,28 @@ export function buildMinimaxImageGenerationProvider(
         body.aspect_ratio = req.aspectRatio.trim();
       }
 
-      const ref = req.inputImages?.at(0);
-      if (ref) {
-        const mime = ref.mimeType || "image/jpeg";
-        const dataUrl = `data:${mime};base64,${ref.buffer.toString("base64")}`;
-        body.subject_reference = [{ type: "character", image_file: dataUrl }];
+      if (isH3) {
+        if (req.inputImages?.length) {
+          body.images = req.inputImages.map((ref) => {
+            const mime = ref.mimeType || "image/jpeg";
+            return { image_url: `data:${mime};base64,${ref.buffer.toString("base64")}` };
+          });
+        }
+      } else {
+        const ref = req.inputImages?.at(0);
+        if (ref) {
+          const mime = ref.mimeType || "image/jpeg";
+          const dataUrl = `data:${mime};base64,${ref.buffer.toString("base64")}`;
+          body.subject_reference = [{ type: "character", image_file: dataUrl }];
+        }
       }
+      const path = isH3
+        ? req.inputImages?.length
+          ? "/v1/images/edits"
+          : "/v1/images/generations"
+        : "/v1/image_generation";
       const data = await postJsonResponse<{
-        data?: {
-          image_base64?: string[];
-        };
+        data?: { image_base64?: string[] } | Array<{ b64_json?: string }>;
         metadata?: {
           success_count?: number;
           failed_count?: number;
@@ -129,10 +149,10 @@ export function buildMinimaxImageGenerationProvider(
           status_msg?: string;
         };
       }>({
-        url: `${resolvedBaseUrl}/v1/image_generation`,
+        url: `${resolvedBaseUrl}${path}`,
         headers,
         body,
-        timeoutMs: req.timeoutMs,
+        timeoutMs: req.timeoutMs ?? (isH3 ? H3_TIMEOUT_MS : undefined),
         fetchFn: fetch,
         allowPrivateNetwork,
         ssrfPolicy: req.ssrfPolicy,
@@ -153,7 +173,10 @@ export function buildMinimaxImageGenerationProvider(
         throw new Error(`MiniMax image generation API error (${baseResp.status_code}): ${msg}`);
       }
 
-      const base64Images = data.data?.image_base64 ?? [];
+      const rawData = data.data;
+      const base64Images = Array.isArray(rawData)
+        ? rawData.flatMap((item) => (item.b64_json ? [item.b64_json] : []))
+        : (rawData?.image_base64 ?? []);
       const failedCount = data.metadata?.failed_count ?? 0;
 
       if (base64Images.length === 0) {
@@ -162,6 +185,8 @@ export function buildMinimaxImageGenerationProvider(
         throw new Error(`MiniMax image generation returned no images: ${reason}`);
       }
 
+      const mimeType = isH3 ? H3_OUTPUT_MIME : DEFAULT_OUTPUT_MIME;
+      const extension = isH3 ? "jpg" : "png";
       const images = base64Images
         .map((b64, index) => {
           if (!b64) {
@@ -173,15 +198,15 @@ export function buildMinimaxImageGenerationProvider(
           }
           return {
             buffer: Buffer.from(canonicalBase64, "base64"),
-            mimeType: DEFAULT_OUTPUT_MIME,
-            fileName: `image-${index + 1}.png`,
+            mimeType,
+            fileName: `image-${index + 1}.${extension}`,
           };
         })
         .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 
       return {
         images,
-        model: req.model || DEFAULT_MODEL,
+        model,
       };
     },
   };
