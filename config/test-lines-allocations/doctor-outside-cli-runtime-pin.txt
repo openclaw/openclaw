@@ -1,0 +1,3 @@
+# Doctor legacy CLI ref migration: channel, hook and tool model overrides keep their CLI runtime,
+# and an outside ref beside a direct selection of the same model is retained (two regression tests).
+29
