@@ -163,6 +163,7 @@ it.each([
     state.scrollCommand = null;
   });
   const onReaderScroll = vi.fn();
+  const onRequestEnd = vi.fn();
   const order: string[] = [];
   const recordedEnd: boolean[] = [];
   const paneRecordedEnd: boolean[] = [];
@@ -191,6 +192,7 @@ it.each([
         invalidate: vi.fn(),
         onOffset,
         onReaderScroll,
+        onRequestEnd,
         onComposerLayout: () => order.push("composer"),
         onNativeScroll,
       },
@@ -211,6 +213,13 @@ it.each([
   expect(recordedEnd).toEqual([true]);
   expect(paneRecordedEnd).toEqual([true]);
   expect(geometryReads).toEqual([false, false]);
+  // Earlier PageUp motion can arrive while a newer Latest prepares its destination.
+  state.scrollCommand = { target: "end", behavior: "smooth" };
+  element.scrollTop = 12;
+  element.dispatchEvent(new Event("scroll"));
+  expect(state.scrollCommand?.target).toBe("end");
+  expect(cancelScroll).not.toHaveBeenCalled();
+  state.scrollCommand = null;
   expect(onReaderScroll).toHaveBeenCalledExactlyOnceWith(true);
   onReaderScroll.mockClear();
   const nested = document.createElement("div");
@@ -218,15 +227,54 @@ it.each([
   order.length = 0;
   nested.dispatchEvent(new Event("scroll"));
   expect(order).toEqual(["composer"]);
-  expect(onNativeScroll).toHaveBeenCalledOnce();
+  expect(onNativeScroll).toHaveBeenCalledTimes(2);
   nested.addEventListener("wheel", (event) => event.preventDefault(), { once: true });
   nested.dispatchEvent(new WheelEvent("wheel", { deltaY: -240, bubbles: true, cancelable: true }));
   expect(cancelScroll).not.toHaveBeenCalled();
   expect(onReaderScroll).not.toHaveBeenCalled();
+  nested.addEventListener("keydown", (event) => event.preventDefault(), { once: true });
+  nested.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true }),
+  );
+  expect(onRequestEnd).not.toHaveBeenCalled();
+  const end = new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true });
+  element.dispatchEvent(end);
+  expect(end.defaultPrevented).toBe(true);
+  expect(onRequestEnd).toHaveBeenCalledOnce();
+  expect(onReaderScroll).not.toHaveBeenCalled();
+  for (const tag of ["div", "textarea", "input"]) {
+    const target = element.appendChild(document.createElement(tag));
+    target.tabIndex = 0;
+    const nestedEnd = new KeyboardEvent("keydown", {
+      key: "End",
+      bubbles: true,
+      cancelable: true,
+    });
+    target.dispatchEvent(nestedEnd);
+    expect(nestedEnd.defaultPrevented).toBe(false);
+    expect(onRequestEnd).toHaveBeenCalledOnce();
+  }
+  const modifiedEnd = new KeyboardEvent("keydown", {
+    key: "End",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  element.dispatchEvent(modifiedEnd);
+  expect(modifiedEnd.defaultPrevented).toBe(false);
+  expect(onRequestEnd).toHaveBeenCalledOnce();
+  cancelScroll.mockClear();
+  onReaderScroll.mockClear();
   element.scrollTop = 12;
   element.dispatchEvent(new Event("scroll"));
   onOffset.mockClear();
   state.scrollCommand = { target: "end", behavior: "smooth", offset: 20 };
+  // Native smooth settling can move backward without new reader input.
+  element.scrollTop = 10;
+  element.dispatchEvent(new Event("scroll"));
+  expect(cancelScroll).not.toHaveBeenCalled();
+  expect(state.scrollCommand?.target).toBe("end");
+  onOffset.mockClear();
   element.scrollTop = 19;
   expect(isTranscriptProgrammaticScroll(state, element)).toBe(false);
   element.dispatchEvent(new Event("scroll"));

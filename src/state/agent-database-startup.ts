@@ -47,6 +47,7 @@ import type {
   PendingAgentDatabaseInspection as PendingInspection,
   AgentDatabaseStartupActivation as Activation,
   AgentDatabaseStartupPreparationPhase as PreparationPhase,
+  AgentRestartInputRecovery,
   PendingAgentDatabaseRecovery as PendingRecovery,
 } from "./agent-database-startup.types.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
@@ -79,6 +80,7 @@ class AgentDatabaseStartupAdmission {
   constructor(private readonly deferInspections = true) {}
 
   private readonly controller = new AbortController();
+  readonly signal = this.controller.signal;
   private readonly activation = createDeferredCore<Activation | undefined>();
   private readonly work = new Set<Promise<unknown>>();
   private readonly pending = new Map<string, PendingRecovery>();
@@ -96,10 +98,6 @@ class AgentDatabaseStartupAdmission {
   // Readiness releases the whole fleet; leave room for other shared-state readers.
   private readonly journalReads = createPermitPool(8);
   private preparedSchemaHeaders?: PreparedSchemaHeaders;
-
-  get signal(): AbortSignal {
-    return this.controller.signal;
-  }
 
   get isStopped(): boolean {
     return this.stopped;
@@ -123,11 +121,6 @@ class AgentDatabaseStartupAdmission {
     this.progressTimer.unref();
   }
 
-  private clearProgress(): void {
-    clearInterval(this.progressTimer);
-    this.progressTimer = undefined;
-  }
-
   /** Bootstrap reuses this startup's compatibility headers; writable opens retain admission. */
   prepareSchemaHeaders(env: NodeJS.ProcessEnv) {
     const prepared: PreparedSchemaHeaders = {
@@ -135,8 +128,8 @@ class AgentDatabaseStartupAdmission {
       headers: new Map(),
     };
     this.preparedSchemaHeaders = prepared;
-    return (pathname: string) => {
-      return ({ version, writerAppVersion, agentSchemaMeta }: PreparedSchemaHeader) => {
+    return (pathname: string) =>
+      ({ version, writerAppVersion, agentSchemaMeta }: PreparedSchemaHeader) => {
         if (
           !this.stopped &&
           this.preparedSchemaHeaders === prepared &&
@@ -145,7 +138,6 @@ class AgentDatabaseStartupAdmission {
           prepared.headers.set(pathname, { version, writerAppVersion, agentSchemaMeta });
         }
       };
-    };
   }
 
   takePreparedSchemaHeaders(env: NodeJS.ProcessEnv) {
@@ -210,20 +202,12 @@ class AgentDatabaseStartupAdmission {
     return this.work.size > 0 ? Promise.allSettled(this.work) : undefined;
   }
 
-  get hasPendingAgents(): boolean {
-    return this.pending.size > 0;
-  }
-
-  readonly waitForAgentPreparation = this.observation.waitForAgentPreparation.bind(
-    this.observation,
-  );
+  readonly waitForAgentPreparation = this.observation.waitForAgentPreparation;
 
   track(work: Promise<unknown>): void {
     this.work.add(work);
-    void work.then(
-      () => this.work.delete(work),
-      () => this.work.delete(work),
-    );
+    const settled = () => this.work.delete(work);
+    void work.then(settled, settled);
   }
 
   scheduling(
@@ -339,7 +323,8 @@ class AgentDatabaseStartupAdmission {
           this.pending.delete(agentId);
         }
         if (this.pending.size === 0) {
-          this.clearProgress();
+          clearInterval(this.progressTimer);
+          this.progressTimer = undefined;
         }
       };
       const phase = (name: PreparationPhase) => {
@@ -366,7 +351,7 @@ class AgentDatabaseStartupAdmission {
       const work = runInDetachedAsyncContext(async () => {
         const preparation: {
           maintenance?: () => Promise<void>;
-          recoverInputs?: () => Promise<void>;
+          recoverInputs?: AgentRestartInputRecovery;
           withdraw?: () => void;
         } = {};
         let revokeReadAdmission: (() => void) | undefined;
@@ -600,9 +585,12 @@ class AgentDatabaseStartupAdmission {
                     preparation.maintenance = migrated ? migrated.maintain : undefined;
                     preparation.recoverInputs = migrated ? migrated.recoverInputs : undefined;
                     // Install input readiness before native write admission is published.
-                    recovery.inputReady = preparation.recoverInputs
-                      ? inputReady.promise
-                      : undefined;
+                    if (preparation.recoverInputs) {
+                      this.observation.registerInputRecovery(agentId, {
+                        sessions: preparation.recoverInputs.sessions,
+                        completion: inputReady.promise,
+                      });
+                    }
                   } finally {
                     releaseMigration?.();
                   }
@@ -663,7 +651,7 @@ class AgentDatabaseStartupAdmission {
           if (!readAgentDatabaseAdmissionRefusal(agentId, { env }) && !this.stopped) {
             if (preparation.recoverInputs) {
               phase("input-recovery");
-              await preparation.recoverInputs();
+              await preparation.recoverInputs.run();
             }
           }
         } catch (error) {
@@ -721,7 +709,7 @@ class AgentDatabaseStartupAdmission {
   stop(): Promise<void> {
     return (this.stopping ??= (async () => {
       this.stopped = true;
-      this.clearProgress();
+      clearInterval(this.progressTimer);
       this.preparedSchemaHeaders = undefined;
       this.controller.abort(new Error("Gateway stopped during agent database inspection"));
       this.activation.resolve(undefined);

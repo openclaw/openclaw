@@ -176,8 +176,11 @@
      chip restating its own. They are peers describing the next turn, and a
      reader should not be able to tell which feature shipped which one. Consumers
      outside the composer keep the same values as fallbacks; the mobile block
-     raises the whole family to touch size by rewriting these four. */
-  --chat-composer-chip-height: 30px;
+     raises the whole family to touch size by rewriting these four.
+     The chip box is the icon buttons' box, so every control in the action row
+     shares one height and one centre line; the trigger rule paints the pill
+     one step inside it, on the primary action's 30px painted tier. */
+  --chat-composer-chip-height: var(--chat-composer-send-size);
   --chat-composer-chip-gap: 4px;
   --chat-composer-chip-padding-inline: 8px;
   --chat-composer-chip-text: calc(13px * var(--control-ui-text-scale));
@@ -790,14 +793,6 @@
   );
 }
 
-.agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach {
-  width: var(--chat-composer-send-size);
-  min-width: var(--chat-composer-send-size);
-  height: var(--chat-composer-send-size);
-  padding: calc((var(--chat-composer-send-size) - var(--chat-composer-primary-surface-size)) / 2);
-  background-clip: content-box;
-}
-
 /* Icon-only triggers center the glyph, not the generic flex-growing text label. */
 .agent-chat__input-btn--attach > .oc-menu-item__label,
 .chat-talk-input-picker__trigger > .oc-menu-item__label {
@@ -1055,6 +1050,7 @@
 }
 
 /* Keep the painted primary surface independent of the target, including hover. */
+.agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach,
 .agent-chat__input.agent-chat__input--chat
   :is(.chat-mobile-primary-action, .chat-desktop-primary-action)
   .chat-send-btn,

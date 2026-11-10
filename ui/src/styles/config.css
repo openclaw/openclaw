@@ -644,7 +644,9 @@
 
 .settings-theme-import__head,
 .settings-theme-import__meta,
-.settings-theme-import__field {
+.settings-theme-import__field,
+.mcp-server-row__note,
+.mcp-command {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1080,14 +1082,6 @@
   display: none;
 }
 
-.mcp-server-row__note {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
 .mcp-server-row__note .mcp-server-row__note-error {
   color: var(--danger);
 }
@@ -1151,14 +1145,6 @@
 /* A ghost button's label lines up with the text above it. */
 .mcp-server-row__footer > .btn--ghost {
   margin-inline-start: calc(var(--space-3) * -1);
-}
-
-.mcp-command {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-width: 0;
 }
 
 .mcp-page .settings-page {

@@ -606,12 +606,6 @@ openclaw-pending-session-create {
   overflow-clip-margin: 10px;
 }
 
-/* Message jumps need real mounted-row sizes before their target settles. */
-.chat-thread-inner[data-measuring-rows] .chat-virtual-row:not([data-prepared-row]) {
-  content-visibility: visible;
-  contain: none;
-}
-
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   /* Revealed 44px footer targets can overhang the compact row by half their
      height. Widen the paint clip instead of changing containment on hover.
