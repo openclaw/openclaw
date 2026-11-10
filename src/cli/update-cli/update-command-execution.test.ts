@@ -548,7 +548,7 @@ describe("mutable update execution", () => {
           serviceUpdateVerdict:
             verdict === "absent"
               ? { kind: "absent" }
-              : { kind: verdict, root, fingerprint: "fixture" },
+              : { kind: verdict, root, fingerprint: "fixture", refreshDefinition: false },
         }));
         const acquire = gatewayLock.acquireGatewayLock;
         vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) =>
