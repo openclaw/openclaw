@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { assertHarnessCompletionSourceAdmission } from "../../agents/agent-harness-completion-scope.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -262,11 +265,26 @@ export async function prepareAgentRunUserTurn(params: {
         params.request.expectedExistingSessionId !== params.admittedSessionId ||
         !params.runId.startsWith("announce:") ||
         params.inputProvenance?.kind !== "inter_session" ||
-        !["subagent_announce", "subagent_settle"].includes(params.inputProvenance.sourceTool ?? ""))
+        !["subagent_announce", "subagent_settle", "agent_harness_completion"].includes(
+          params.inputProvenance.sourceTool ?? "",
+        ))
     ) {
       throw new Error(
         "Private completion requires an exact internal requester turn with delivery disabled",
       );
+    }
+    if (
+      params.privateCompletion &&
+      params.inputProvenance?.sourceTool === "agent_harness_completion"
+    ) {
+      assertHarnessCompletionSourceAdmission({
+        requesterSessionKey: params.resolvedSessionKey ?? "",
+        requesterAgentId: params.activeSessionAgentId,
+        requesterSessionId: params.admittedSessionId,
+        requesterLifecycleRevision: params.sessionEntry?.lifecycleRevision,
+        sourceSessionKey: params.inputProvenance.sourceSessionKey ?? "",
+        sourceRunId: params.runId,
+      });
     }
     const trackRequesterCompletion = params.privateCompletion || settleWakeReplay !== undefined;
     const suppressPromptPersistence =
@@ -380,6 +398,12 @@ export async function prepareAgentRunUserTurn(params: {
       });
       recorder = createUserTurnTranscriptRecorder({
         trackInputCompletion: trackRequesterCompletion || peerDelivery !== undefined,
+        // Native result facts stay runtime-only but must bind the durable replay identity.
+        pendingInputRequestFingerprint:
+          params.privateCompletion &&
+          params.inputProvenance?.sourceTool === "agent_harness_completion"
+            ? sha256Hex(stableStringify(params.request.internalEvents))
+            : undefined,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
         target: params.privateCompletion
