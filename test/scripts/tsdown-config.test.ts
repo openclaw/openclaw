@@ -66,7 +66,7 @@ it("keeps retirement reads outside the Doctor restoration graph", async () => {
     hasWorkerEntry(
       config,
       "config/sessions/session-transcript.worker",
-      "src/config/sessions/session-transcript.worker.ts",
+      path.resolve("src/config/sessions/session-transcript.worker.ts"),
     ),
   );
   if (!selected) {
