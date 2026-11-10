@@ -21,7 +21,9 @@ is_probe() {
   no_lazy_fetch=
   filter_fetch=
   projection_fetch=
+  multiple_fetch=
   explicit_filter=
+  unfiltered_fetch=
   fetch_filter=
   fetch_depth=
   shallow_change=
@@ -37,30 +39,42 @@ is_probe() {
       fetch|pull)
         command=$1
         shift
+        fetch_remote=
+        all_fetch=
+        skip_value=
+        literal=
         for arg do
+          if [ "$skip_value" = 1 ]; then skip_value=; continue; fi
+          if [ "$literal" = 1 ]; then
+            [ -n "$fetch_remote" ] || fetch_remote=$arg
+            break
+          fi
           case $arg in
-            --) break ;;
+            --) literal=1; continue ;;
+            -j|-o|-s|-X) skip_value=1; continue ;;
+            -m) multiple_fetch=1; continue ;;
             --?*)
               name=\${arg%%=*}
               for option in --depth --deepen --shallow-since --shallow-exclude --unshallow --update-shallow; do
                 case $option in "$name"*) shallow_change=1 ;; esac
+              done
+              case --filter in "$name"*) explicit_filter=1; unfiltered_fetch= ;; esac
+              case --no-filter in "$name"*) explicit_filter=1; unfiltered_fetch=1 ;; esac
+              case --all in "$name"*) all_fetch=1 ;; esac
+              case --no-all in "$name"*) all_fetch= ;; esac
+              case --multiple in "$name"*) multiple_fetch=1 ;; esac
+              case --no-multiple in "$name"*) multiple_fetch= ;; esac
+              case $arg in *=*) continue ;; esac
+              for option in --upload-pack --jobs --depth --shallow-since --shallow-exclude --deepen --submodule-prefix --recurse-submodules-default --refmap --server-option --negotiation-tip --filter --strategy --strategy-option --cleanup; do
+                case $option in "$name"*) skip_value=1 ;; esac
               done ;;
+            -*) ;;
+            *) [ -n "$fetch_remote" ] || fetch_remote=$arg ;;
           esac
         done
-        [ "$command" = fetch ] || return 1
-        for arg do
-          case $arg in
-            --) break ;;
-            --all|--multiple) return 1 ;;
-            --filter|--filter=*|--no-filter) explicit_filter=1 ;;
-          esac
-        done
+        [ "$all_fetch" = 1 ] && multiple_fetch=1
         projection_fetch=1
-        for arg do
-          case $arg in
-            https://github.com/*|git@github.com:*|ssh://git@github.com/*) filter_fetch=1 ;;
-          esac
-        done
+        case $fetch_remote in https://github.com/*|git@github.com:*|ssh://git@github.com/*) filter_fetch=1 ;; esac
         return 1 ;;
       cat-file)
         prepare_history=1
@@ -108,7 +122,49 @@ query_repository() {
         if [ -f "$linked" ]; then return 0; fi
       done
       return 1 ;;
-    blobless) git "$@" config --get-regexp '^remote\\..*\\.partialclonefilter$' '^blob:none$' >/dev/null 2>&1 ;;
+    blobless)
+      remote_settings=$(git "$@" config --get-regexp '^remote\\..*\\.(promisor|partialclonefilter)$' 2>/dev/null) || return 1
+      remote_settings="
+$remote_settings
+"
+      case $remote_settings in *'.partialclonefilter blob:none
+'*) ;; *) return 1 ;; esac ;;
+    register_remotes)
+      remotes=$(git "$@" remote) || return 1
+      if [ -n "$fetch_remote" ] && [ "$multiple_fetch" != 1 ]; then
+        case "
+$remotes
+" in *"
+$fetch_remote
+"*) ;;
+          *)
+            if ! git "$@" config --get-all "remotes.$fetch_remote" >/dev/null 2>&1; then
+              remotes="$remotes
+$fetch_remote"
+            fi ;;
+        esac
+      fi
+      while IFS= read -r remote; do
+        [ -n "$remote" ] || continue
+        # Native multi/group selection rejects --filter; keep each remote's promises usable later.
+        for setting in promisor:true partialclonefilter:blob:none; do
+          key=remote.$remote.\${setting%%:*}
+          value=\${setting#*:}
+          case $remote_settings in *"
+$key "*)
+            # Last config value wins, including command-local overrides.
+            actual=\${remote_settings##*"
+$key "}
+            actual=\${actual%%"
+"*}
+            [ "$actual" = "$value" ] && continue ;;
+          esac
+          git "$@" config --local "$key" "$value" || return 1
+        done
+      done <<EOF
+$remotes
+EOF
+      ;;
     objects) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec git "$@" cat-file --batch-check='%(objectname) %(objecttype)' 2>/dev/null ;;
     resolve) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec git "$@" rev-parse --verify --end-of-options "$revision" 2>/dev/null ;;
     revisions)
@@ -260,7 +316,16 @@ check_shared_shallow() {
   fi
 }
 fetch_defaults() {
-  if [ "$(query_repository projection "$@")" = true ]; then
+  if query_repository blobless "$@" && query_repository shared "$@"; then
+    if [ "$unfiltered_fetch" = 1 ]; then
+      echo 'OpenClaw: unfiltered fetch would add ordinary packs to the shared partial clone; command not run. Fetch with --filter=blob:none instead.' >&2
+      return 1
+    fi
+    query_repository register_remotes "$@" || return 1
+  elif [ "$command" = pull ]; then
+    return 0
+  elif [ "$(query_repository projection "$@")" = true ]; then
+    [ "$multiple_fetch" = 1 ] && return 0
     [ "$shallow_change" = 1 ] || fetch_depth=64
     [ "$explicit_filter" = 1 ] || fetch_filter=blob:none
   elif [ "$filter_fetch" = 1 ] && [ "$explicit_filter" != 1 ] && query_repository blobless "$@"; then
@@ -269,7 +334,7 @@ fetch_defaults() {
 }
 if ! is_probe "$@"; then
   if [ "$prepare_history" = 1 ]; then prepare_commits "$@" || exit 2; fi
-  if [ "$projection_fetch" = 1 ]; then fetch_defaults "$@"; fi
+  if [ "$projection_fetch" = 1 ]; then fetch_defaults "$@" || exit 2; fi
   if [ "$shallow_change" = 1 ] || [ -n "$fetch_depth" ]; then
     check_shared_shallow "$@" || exit 2
   fi

@@ -193,8 +193,9 @@ export async function requireGitHubPublicationCommit(
           "--recurse-submodules=no",
           // Match managed base refresh: omit unrelated session histories from negotiation.
           ...tips.map((tip) => `--negotiation-tip=${tip}`),
-          // Keep ancestry and tree metadata; callers request file contents below.
-          ...(missing ? ["--refetch", "--stdin"] : ["--filter=blob:none"]),
+          // Explicit blob wants still hydrate; retain promisor packs for both fetch paths.
+          "--filter=blob:none",
+          ...(missing ? ["--refetch", "--stdin"] : []),
           "--",
           githubRepositoryUrl(repository, host),
           ...(missing ? [] : [sha]),

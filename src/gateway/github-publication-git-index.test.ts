@@ -156,7 +156,7 @@ async function interruptAcceptedUpdate() {
 }
 
 describe("GitHub publication index update", () => {
-  it.each(["full", "shallow", "uncached", "unregistered"])(
+  it.each(["full", "shallow", "uncached", "unregistered", "contents"])(
     "reuses commits and isolates cached-base fetches (%s)",
     async (mode) => {
       const shallow = mode === "shallow";
@@ -171,7 +171,7 @@ describe("GitHub publication index update", () => {
         url,
         ".",
       ]);
-      if (mode !== "unregistered") {
+      if (mode !== "unregistered" && mode !== "contents") {
         await git(clone, ["config", `remote.${url}.promisor`, "true"]);
       }
       if (mode !== "full") {
@@ -220,7 +220,7 @@ describe("GitHub publication index update", () => {
           },
         );
       };
-      const prepare = (sha: string) =>
+      const prepare = (sha: string, contents = false) =>
         requireGitHubPublicationCommit(
           run,
           "example/project",
@@ -229,7 +229,7 @@ describe("GitHub publication index update", () => {
           workspace,
           process.env,
           "Publication commit unavailable",
-          { baseBranch: "main" },
+          { baseBranch: "main", contents },
         );
       const missing = await git(clone, ["rev-list", "--objects", "--missing=print", local]);
       if (mode !== "unregistered") {
@@ -238,6 +238,23 @@ describe("GitHub publication index update", () => {
       await prepare(local);
       expect(fetches).toBe(0);
       expect(await git(clone, ["rev-list", "--objects", "--missing=print", local])).toBe(missing);
+
+      if (mode === "contents") {
+        await git(clone, ["config", "fetch.unpackLimit", "1"]);
+        const packDirectory = path.join(clone, ".git/objects/pack");
+        const previousPacks = new Set(await fs.readdir(packDirectory));
+        allowFetch = true;
+        await prepare(f.previousHead, true);
+        expect(await git(clone, ["show", `${f.previousHead}:artifact.txt`])).toBe("base");
+        const packs = (await fs.readdir(packDirectory)).filter(
+          (file) => file.endsWith(".pack") && !previousPacks.has(file),
+        );
+        expect(packs).toHaveLength(1);
+        await expect(
+          fs.access(path.join(packDirectory, packs[0]!.replace(/\.pack$/u, ".promisor"))),
+        ).resolves.toBeUndefined();
+        return;
+      }
 
       // The source already owns this unadvertised commit, but the clone does not.
       await f.git("update-ref", "refs/heads/publication", f.headCommit);

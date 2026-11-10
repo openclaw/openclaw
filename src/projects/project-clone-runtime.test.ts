@@ -170,6 +170,9 @@ it.each(["probe", "fetch", "repair", "uncertain", "auth"] as const)(
       if (phase === "uncertain") {
         throw failure;
       }
+      if (argv.includes("config")) {
+        return { ...successfulGit, code: 1 };
+      }
       if (phase === "auth") {
         return { ...failedClone, stderr: "Authentication failed" };
       }

@@ -433,6 +433,72 @@ it.skipIf(process.platform === "win32")(
       const shallow = path.join(shared, ".git/shallow");
       const boundary = await fs.readFile(shallow, "utf8");
       const sharedPacks = await fs.readdir(path.join(shared, ".git/objects/pack"));
+      const uploadPack = path.join(git(root, "--exec-path"), "git-upload-pack");
+      git(fork, "fetch", "origin", "main");
+      const pullHead = git(
+        fork,
+        "commit-tree",
+        `${forkHead}^{tree}`,
+        "-p",
+        projectionBase,
+        "-m",
+        "pull",
+      );
+      git(fork, "branch", "pull-tip", pullHead);
+      // Each peer fetch must preserve usable promises, including tips absent from origin.
+      for (const [index, args] of [
+        [pathToFileURL(fork).href, "contributor-pr"],
+        ["peer", "contributor-pr"],
+        ["--all"],
+        ["--multiple", "origin", "peer"],
+        ["both"],
+        [],
+        ["peer-local", "contributor-pr"],
+        ["--all", "--upload-pack", uploadPack],
+        ["pull", "--ff-only", pathToFileURL(fork).href, "pull-tip"],
+        ["pull", "--ff-only", "peer", "pull-tip"],
+      ].entries()) {
+        const base = path.join(root, `shared-fetch-${index}`);
+        await fs.cp(shared, base, { recursive: true });
+        await fs.symlink(fork, path.join(base, "peer-local"), "dir");
+        git(base, "remote", "add", "peer", pathToFileURL(fork).href);
+        git(base, "config", "remotes.both", "origin peer");
+        if (args.length === 0) {
+          git(base, "config", "fetch.all", "true");
+        }
+        git(base, "config", "fetch.unpackLimit", "1");
+        const packDir = path.join(base, ".git/objects/pack");
+        const before = await fs.readdir(packDir);
+        const blobCount = () =>
+          git(base, "cat-file", "--batch-all-objects", "--batch-check=%(objecttype)")
+            .split("\n")
+            .filter((type) => type === "blob").length;
+        const beforeBlobs = blobCount();
+        const pulling = args[0] === "pull";
+        const fetched = await command(pulling ? args : ["fetch", ...args], base);
+        expect(fetched.exitCode, fetched.aggregated).toBe(0);
+        const after = await fs.readdir(packDir);
+        const added = after.filter((name) => name.endsWith(".pack") && !before.includes(name));
+        expect(added.length, args.join(" ")).toBeGreaterThan(0);
+        for (const pack of added) {
+          expect(after, args.join(" ")).toContain(pack.replace(/\.pack$/, ".promisor"));
+        }
+        expect(blobCount(), args.join(" ")).toBe(beforeBlobs + (pulling ? 1 : 0));
+        expect(await fs.readFile(path.join(base, ".git/shallow"), "utf8")).toBe(boundary);
+        const hydrated = await command(["show", `${pulling ? pullHead : forkHead}:fork.txt`], base);
+        expect(hydrated.exitCode, hydrated.aggregated).toBe(0);
+        expect(hydrated.aggregated).toContain("current fork content");
+        if (pulling) {
+          expect(await fs.readFile(path.join(base, "fork.txt"), "utf8")).toBe(
+            "current fork content",
+          );
+        }
+        if (index === 0) {
+          const rejected = await command(["fetch", "--no-filter", "peer", "contributor-pr"], base);
+          expect(rejected.exitCode, rejected.aggregated).toBe(2);
+          expect(rejected.aggregated).toContain("OpenClaw:");
+        }
+      }
       const shallowFlags = [
         ["--depth=2"],
         ["--deepen", "2"],
