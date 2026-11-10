@@ -110,19 +110,7 @@ describe("tool output inspection", () => {
     ['[{"type":"input_text","text":"caption"},{"type":"input_image","omitted":true}]'],
     ['{"output":"data","state":"before","state":"after"}'],
   ])("does not unwrap non-text envelopes: %s", (outputText) => {
-    const shown = toolOutputFormatting.formatToolOutput(outputCard({ outputText }))!;
-    expect(shown.replace(/\s/gu, "")).toBe(outputText);
-  });
-
-  it("indents compact JSON tool results for display only", () => {
-    const outputText = '{"ok":true,"id":9007199254740993,"items":[{"name":"a b"}]}';
-    expect(
-      toolOutputFormatting.formatToolOutput(
-        outputCard({ name: "sessions_list", args: {}, toolOutput: undefined, outputText }),
-      ),
-    ).toBe(
-      '{\n  "ok": true,\n  "id": 9007199254740993,\n  "items": [\n    {\n      "name": "a b"\n    }\n  ]\n}',
-    );
+    expect(toolOutputFormatting.formatToolOutput(outputCard({ outputText }))).toBe(outputText);
   });
 
   it.each([{ session_id: 321, exit_code: undefined }, { extra: "keep this field" }])(

@@ -70,13 +70,6 @@ describe("ToolExecutionComponent", () => {
     }
   });
 
-  it("renders compact JSON tool results literally", () => {
-    const text = JSON.stringify({ value: "**stars** _under_ `tick`", path: "a\\b" });
-    const { component } = renderToolOutput(text, 1_024);
-    component.setExpanded(true);
-    expectText(render(component, 1_024), [text]);
-  });
-
   it("keeps Code Mode literal output bounded and terminal-safe through expansion", () => {
     const attack = "\x1b]52;c;SYNTHETIC_CLIPBOARD_PAYLOAD\x07";
     const text = `START_LITERAL ${attack}\u202eمرحبا\u202c\r\n${"**literal**".repeat(2_048)} END_LITERAL`;
@@ -110,9 +103,11 @@ describe("ToolExecutionComponent", () => {
     expect(render(component)).toContain("raw result");
   });
 
-  it("preserves indented quoted source in tool output", () => {
+  it("preserves indented quoted source and literal JSON in tool output", () => {
     const { lines } = renderToolOutput("    > quoted source\n    next line", 80);
     expectText(plain(lines), ["```", "> quoted source"]);
+    const json = JSON.stringify({ value: "**stars** _under_ `tick`", path: "a\\b" });
+    expectText(render(renderToolOutput(json, 1_024).component, 1_024), [json]);
   });
 
   it("keeps whitespace-only final output empty across activity transitions", () => {
