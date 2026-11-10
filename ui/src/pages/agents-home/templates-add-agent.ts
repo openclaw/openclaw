@@ -126,7 +126,9 @@ export async function addTemplateAgent(
       applying ||
       !isCurrent() ||
       creation.admitted ||
-      (durable && (!composer.canDisplay() || context.chatSubmissions.creation !== creation))
+      (durable &&
+        (!composer.canDisplay() ||
+          context.chatSubmissions.creationFor(creation.sessionKey) !== creation))
     ) {
       return;
     }
