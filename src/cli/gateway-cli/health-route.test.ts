@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { createNonExitingRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
 import { runGatewayHealthJsonRoute } from "./health-route.js";
 
@@ -81,3 +82,39 @@ it("rethrows unknown failures without emitting a replacement", async () => {
   expect(runtime.writeJson).not.toHaveBeenCalled();
   expect(runtime.exit).not.toHaveBeenCalled();
 });
+
+it.each(["precanceled", "request", "late-success", "failure"] as const)(
+  "keeps routed health cancellation distinct from failures (%s)",
+  async (phase) => {
+    const controller = new AbortController();
+    const error = new Error("Synthetic unrelated failure");
+    if (phase === "precanceled") {
+      controller.abort();
+    } else {
+      mocks.callGateway.mockImplementationOnce(async () => {
+        controller.abort();
+        if (phase === "failure") {
+          throw error;
+        }
+        if (phase === "request") {
+          throw createAbortError("Synthetic canceled health request");
+        }
+        return { ok: true };
+      });
+    }
+    const result = runGatewayHealthJsonRoute(
+      { rpc: { json: true }, signal: controller.signal },
+      runtime,
+    );
+    if (phase === "failure") {
+      await expect(result).rejects.toBe(error);
+    } else {
+      await expect(result).resolves.toBeUndefined();
+    }
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    if (phase === "precanceled") {
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    }
+  },
+);

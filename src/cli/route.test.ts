@@ -1,11 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { captureEnv } from "../test-utils/env.js";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
-const runRouteMock = vi.hoisted(() => vi.fn(async () => true));
+const runRouteMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
 const statusDefaults = { json: false, deep: false, all: false, usage: false, verbose: false };
 const healthDefaults = {
   url: undefined,
@@ -94,6 +95,16 @@ describe("tryRouteCli", () => {
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   }
+
+  it.each(["health --json", "gateway health --json"])(
+    "passes the invocation lifetime to %s",
+    async (command) => {
+      const scope = new AsyncWorkScope();
+      await scope.run(() => tryRouteCli(["node", "openclaw", ...command.split(" ")]));
+      expect(runRouteMock.mock.calls[0]?.[0]).toMatchObject({ signal: scope.signal });
+      await scope.drain();
+    },
+  );
 
   it.each<[string, object, boolean?]>([
     ["health --json --timeout 5000", { json: true, verbose: false, timeoutMs: 5000 }],

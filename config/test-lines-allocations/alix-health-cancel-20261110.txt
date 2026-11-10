@@ -1,0 +1,3 @@
+# Health CLI lifetime regressions: 206 own net test LF.
+# Reconciles separately verified inherited main debt: 70 LF; no extra headroom.
+276

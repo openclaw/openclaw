@@ -1,3 +1,4 @@
+import { isAbortError } from "../../infra/abort-signal.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 /** Run the successful JSON path without loading text presentation modules. */
@@ -5,9 +6,13 @@ export async function runGatewayHealthJsonRoute(
   args: {
     rpc: Parameters<typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport>[1];
     localPortOverride?: number;
+    signal?: AbortSignal;
   },
   runtime: RuntimeEnv,
 ): Promise<void> {
+  if (args.signal?.aborted) {
+    return;
+  }
   let rpc = args.rpc;
   if (args.localPortOverride !== undefined) {
     const { readNonObservingHealthConfig } = await import("../../commands/health.js");
@@ -27,14 +32,18 @@ export async function runGatewayHealthJsonRoute(
   }
   try {
     const { callGatewayFromCliWithTransport } = await import("../gateway-rpc.js");
-    writeRuntimeJson(
-      runtime,
-      await callGatewayFromCliWithTransport("health", rpc, undefined, {
-        defaultTimeoutMs: 10_000,
-        sharedStateMode: "read-only",
-      }),
-    );
+    const result = await callGatewayFromCliWithTransport("health", rpc, undefined, {
+      defaultTimeoutMs: 10_000,
+      sharedStateMode: "read-only",
+      ...(args.signal ? { signal: args.signal } : {}),
+    });
+    if (!args.signal?.aborted) {
+      writeRuntimeJson(runtime, result);
+    }
   } catch (error) {
+    if (args.signal?.aborted && (error === args.signal.reason || isAbortError(error))) {
+      return;
+    }
     const {
       emitReachableGatewayAuthDiagnostic,
       emitGatewayHealthErrorJson,
@@ -49,6 +58,7 @@ export async function runGatewayHealthJsonRoute(
       password: rpc.password,
       localPortOverride: rpc.localPortOverride,
       json: true,
+      ...(args.signal ? { signal: args.signal } : {}),
     });
     if (handled) {
       return;

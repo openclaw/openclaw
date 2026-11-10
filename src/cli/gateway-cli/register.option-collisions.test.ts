@@ -1,13 +1,19 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerGatewayCli } from "./register.js";
 import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 
 const mocks = await vi.hoisted(async () => ({
   callGatewayCli: vi.fn(
-    async (method: string, _opts: unknown, _params?: unknown): Promise<unknown> => {
+    async (
+      method: string,
+      _opts: unknown,
+      _params?: unknown,
+      _extra?: Parameters<typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport>[3],
+    ): Promise<unknown> => {
       if (method === "gateway.suspend.prepare") {
         return {
           status: "ready",
@@ -288,6 +294,36 @@ describe("gateway register option collisions", () => {
       json: true,
     });
   });
+
+  it.each([
+    { args: ["health"], result: { ok: true }, publishes: false },
+    { args: ["call", "health"], result: { ok: true }, publishes: true },
+    {
+      args: ["suspend", "--request-id", "synthetic-host-operation"],
+      result: { status: "ready", suspensionId: "synthetic-lease", expiresAtMs: 1_800_000_000_000 },
+      publishes: true,
+    },
+    { args: ["resume", "synthetic-lease"], result: { ok: true, resumed: true }, publishes: true },
+  ])(
+    "retains nonhealth receipts after interruption: $args",
+    async ({ args, result, publishes }) => {
+      const scope = new AsyncWorkScope();
+      callGatewayCli.mockImplementationOnce(async () => {
+        scope.beginClose(new Error("Synthetic CLI interruption"));
+        return result;
+      });
+      await scope.run(() => parse(...args, "--json"));
+      expect(callGatewayCli.mock.calls[0]?.[3]?.signal).toBe(
+        args[0] === "health" ? scope.signal : undefined,
+      );
+      if (publishes) {
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining(result));
+      } else {
+        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+      }
+      await scope.drain();
+    },
+  );
 
   it("loads health presentation only for text output", async () => {
     const loadGatewayHealthModule = vi.fn(async () => ({

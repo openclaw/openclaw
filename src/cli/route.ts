@@ -3,6 +3,7 @@ import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { type LogLevel, tryParseLogLevel } from "../logging/levels.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
   getCommandPositionalsWithRootOptions,
@@ -436,8 +437,9 @@ function defineRoutedCommand<TArgs>(
 
 const routedCommandDefinitions = {
   health: defineRoutedCommand(parseHealthRouteArgs, async (args) => {
+    const signal = getAsyncWorkSignal();
     const { healthCommand } = await import("../commands/health.js");
-    await healthCommand(args, defaultRuntime);
+    await healthCommand({ ...args, ...(signal ? { signal } : {}) }, defaultRuntime);
   }),
   status: defineRoutedCommand(parseStatusRouteArgs, async (args) => {
     if (args.json) {
@@ -462,8 +464,9 @@ const routedCommandDefinitions = {
     await runDaemonStatus(args);
   }),
   "gateway-health": defineRoutedCommand(parseGatewayHealthRouteArgs, async (args) => {
+    const signal = getAsyncWorkSignal();
     const { runGatewayHealthJsonRoute } = await import("./gateway-cli/health-route.js");
-    await runGatewayHealthJsonRoute(args, defaultRuntime);
+    await runGatewayHealthJsonRoute({ ...args, ...(signal ? { signal } : {}) }, defaultRuntime);
   }),
   sessions: defineRoutedCommand(parseSessionsRouteArgs, async (args) => {
     const { sessionsCommand } = await import("../commands/sessions.js");
