@@ -19,6 +19,7 @@ import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js"
 import {
   createAttempt,
   createBindingStore as migrationStore,
+  createCompletedSessionFactory,
   mockClient,
   registerHarness,
   reopenState,
@@ -27,7 +28,7 @@ import {
   withNativeFixture,
   withPersistenceFixture,
 } from "./agentsapi-persistence-fixture.test-support.js";
-import { createHostedSession, createTurn } from "./agentsapi.test-support.js";
+import { createHostedSession } from "./agentsapi.test-support.js";
 
 const { createSession, fetchWithSsrFGuardMock, resolveProviderAuth } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
@@ -70,25 +71,7 @@ beforeEach(() => {
   // Keep harness deadlines virtual, but share real clocks and heartbeats with SQLite lease workers.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
-  createSession.mockImplementation((options) => {
-    const turn = createTurn({ id: `turn-${options.sessionId}`, session_id: options.sessionId });
-    return {
-      isAvailable: () => false,
-      isSettled: () => true,
-      wasSubmitted: () => true,
-      queueMessage: async () => {},
-      readUsageTurns: async () => [],
-      run: async (prompt, persistInput, onSubmitted) => {
-        await persistInput();
-        await options.client.message(options.sessionId, prompt, options.signal);
-        onSubmitted();
-        options.onSettled?.();
-        return { turn, cancelled: false, terminatedByTool: false };
-      },
-      close: async () => {},
-      reconcileAfterClose: async () => turn,
-    };
-  });
+  createSession.mockImplementation(createCompletedSessionFactory());
 });
 
 const nativeTools = ["exec", "process", "read", "write", "edit", "apply_patch", "web_search"];

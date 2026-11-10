@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   agentHarnessAttemptTerminal,
+  AgentHarnessPreflightError,
   clearActiveEmbeddedRun,
   embeddedAgentLog,
   formatErrorMessage,
@@ -100,6 +101,10 @@ export async function runAgentsApiAttempt(
       }
     : params;
   let timeout: AgentHarnessAttemptTimeout | undefined;
+  let firstProgressDeadline:
+    | ReturnType<typeof createAgentHarnessAttemptDeadlineController>
+    | undefined;
+  let firstProgressError: Error | undefined;
   let settling = false;
   let settlementDeadlineAtMs: number | undefined;
   const deadlines = createAgentHarnessAttemptDeadlineController({
@@ -122,6 +127,7 @@ export async function runAgentsApiAttempt(
     },
   });
   const beginSettlement = () => {
+    firstProgressDeadline?.dispose();
     settling = true;
     deadlines.beginSettlement(Date.now());
   };
@@ -138,6 +144,12 @@ export async function runAgentsApiAttempt(
   const hooks = createAgentsApiAttemptHooks(params, target.agentId, startedAtMs);
   let native: ReturnType<typeof createAgentsApiSession> | undefined;
   let remoteSessionId = binding?.sessionId;
+  const logNativeSession = (message: string) =>
+    embeddedAgentLog.info(message, {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      nativeSessionId: remoteSessionId?.slice(0, 128),
+    });
   const logFailure = (message: string, error: unknown) =>
     embeddedAgentLog.warn(message, {
       error: formatErrorMessage(error),
@@ -147,6 +159,7 @@ export async function runAgentsApiAttempt(
     });
   const saveBinding = async (next: AgentsApiBinding) => {
     await bind(next);
+    logNativeSession("Agents API native session bound");
     prepareNativeCleanup?.(next, params.resolvedApiKey!);
   };
   let terminal: ReturnType<typeof agentHarnessAttemptTerminal.normalize> = { kind: "ok" };
@@ -217,6 +230,7 @@ export async function runAgentsApiAttempt(
       params.agentId,
     );
     assertCurrent();
+    logNativeSession("Agents API attempt started");
     if (binding) {
       // Even rejected configuration changes must leave authenticated cleanup available.
       prepareNativeCleanup?.(binding, params.resolvedApiKey!);
@@ -317,6 +331,22 @@ export async function runAgentsApiAttempt(
       },
     });
     assertCurrent();
+    // Match the cloud first-event window without shortening active native tool work.
+    // HTTP acknowledgements and SSE keepalives do not establish turn progress.
+    firstProgressDeadline = createAgentHarnessAttemptDeadlineController({
+      startedAtMs: Date.now(),
+      startedAtMonotonicMs: performance.now(),
+      timeoutMs: 120_000,
+      settlementTimeoutMs: 30_000,
+      signal: controller.signal,
+      onTimeout: () => {
+        const message =
+          "Agents API startup stalled for 120 seconds without a native event. Inspect the native session or use /reset to settle it before starting fresh; if reset fails, resolve the native service failure and retry reset. OpenClaw will not replace the native session automatically.";
+        firstProgressError = new AgentHarnessPreflightError(message, { userMessage: message });
+        // Retire native work, but keep the host turn alive to deliver the failure.
+        controller.abort(firstProgressError);
+      },
+    });
     if (!remoteSessionId) {
       // System hook contributions share the native session's immutable instruction snapshot.
       remoteSessionId = await client.create(
@@ -438,6 +468,7 @@ export async function runAgentsApiAttempt(
       onEvent: async (event) => {
         await projection!.observe(event);
         assertCurrent();
+        firstProgressDeadline?.dispose();
         params.onRunProgress?.({
           reason: event.type,
           provider: "openai",
@@ -498,13 +529,15 @@ export async function runAgentsApiAttempt(
       }
     }
   } catch (error) {
-    terminal = timeout
-      ? { kind: "timeout", phase: "prompt", source: "runtime", aborted: true }
-      : params.abortSignal?.aborted
-        ? { kind: "aborted", source: "external" }
-        : cancellationState.explicitCancellationObserved
-          ? { kind: "aborted", source: "runtime" }
-          : { kind: "failed", source: "prompt", error };
+    terminal = firstProgressError
+      ? { kind: "failed", source: "prompt", error: firstProgressError }
+      : timeout
+        ? { kind: "timeout", phase: "prompt", source: "runtime", aborted: true }
+        : params.abortSignal?.aborted
+          ? { kind: "aborted", source: "external" }
+          : cancellationState.explicitCancellationObserved
+            ? { kind: "aborted", source: "runtime" }
+            : { kind: "failed", source: "prompt", error };
     if (terminal.kind === "failed") {
       logFailure("Agents API session failed", error);
     }
@@ -568,7 +601,9 @@ export async function runAgentsApiAttempt(
       }
     }
     projectionClosed = true;
-    if (timeout) {
+    if (firstProgressError) {
+      terminal = { kind: "failed", source: "prompt", error: firstProgressError };
+    } else if (timeout) {
       terminal = { kind: "timeout", phase: "prompt", source: "runtime", aborted: true };
     } else if (terminal.kind === "ok" && controller.signal.aborted) {
       terminal = { kind: "aborted", source: params.abortSignal?.aborted ? "external" : "runtime" };
