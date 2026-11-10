@@ -131,8 +131,8 @@
   }
 }
 
-/* Desktop hosts share the main row proportions and the native dock surface.
-   The close button overlays reserved space, so the border encloses one pill. */
+/* Desktop tabs use surface contrast for selection; keep the close target
+   inside its reserved space without adding a separate outline. */
 .tabstrip.tabstrip--desktop {
   display: flex;
   min-width: 0;
@@ -164,15 +164,16 @@
   }
 
   /* The close action is a sibling overlaid inside this same tab. */
-  .tabstrip-tab:is(:hover, [active]),
+  .tabstrip-tab:hover,
   .tabstrip-tab:has(+ .tabstrip-tab__close:hover) {
-    border-radius: var(--radius-md);
     color: var(--text);
-    background: var(--bg-hover);
+    background: color-mix(in srgb, var(--text) 5%, transparent);
   }
 
   .tabstrip-tab[active] {
-    box-shadow: inset 0 0 0 1px var(--border-strong);
+    color: var(--text);
+    background: var(--bg-elevated);
+    box-shadow: none;
   }
 
   .tabstrip-tab__icon {
