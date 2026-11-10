@@ -113,22 +113,41 @@ const BOAT_NODE_TEST_CAPACITY: Record<string, { runner: string; cpuBudget: numbe
   "blacksmith-32vcpu-ubuntu-2404": { runner: "boat-xlarge", cpuBudget: 8 },
 };
 
-export function resolveBoatNodeTestCapacity(runner: string, checkName?: string) {
+export function resolveBoatNodeTestCapacity(
+  runner: string,
+  checkName?: string,
+  minTotalMemoryBytes = 0,
+) {
   // These rows already receive the 16-class physical runner in the workflow.
   const promotedRunner =
     runner === DEFAULT_NODE_TEST_RUNNER &&
     (checkName === "checks-node-compact-large-9" || checkName === "checks-node-compact-large-5")
       ? "blacksmith-16vcpu-ubuntu-2404"
       : runner;
-  return BOAT_NODE_TEST_CAPACITY[promotedRunner];
+  const capacity = BOAT_NODE_TEST_CAPACITY[promotedRunner];
+  if (!capacity) {
+    return undefined;
+  }
+  // Physical memory can grow without widening the logical test concurrency.
+  if (minTotalMemoryBytes > 16 * 1024 ** 3) {
+    return { ...capacity, runner: "boat-xlarge" };
+  }
+  if (minTotalMemoryBytes > 8 * 1024 ** 3 && capacity.runner === "boat") {
+    return { ...capacity, runner: "boat-large" };
+  }
+  return capacity;
 }
 
 // Map only final jobs: group runners remain logical placement/timing identities.
-export function routeBoatNodeTestJobs<T extends Pick<NodeTestShard, "runner" | "checkName">>(
-  jobs: T[],
-): T[] {
+export function routeBoatNodeTestJobs<
+  T extends Pick<NodeTestShard, "runner" | "checkName" | "groups">,
+>(jobs: T[]): T[] {
   return jobs.map((job) => {
-    const capacity = resolveBoatNodeTestCapacity(job.runner, job.checkName);
+    const capacity = resolveBoatNodeTestCapacity(
+      job.runner,
+      job.checkName,
+      Math.max(0, ...(job.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
+    );
     return capacity ? { ...job, ...capacity } : job;
   });
 }

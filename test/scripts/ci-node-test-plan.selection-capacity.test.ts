@@ -105,6 +105,22 @@ it.each(["checks-node-compact-large-9", "checks-node-compact-large-5"])(
   },
 );
 
+it("retains the selected board-store memory floor without widening its CPU budget", () => {
+  const targets = ["src/gateway/board-store.test.ts"];
+  const hybrid = expectDefined(
+    createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
+    "hybrid board-store selection",
+  );
+  const boat = expectDefined(
+    createSelectedNodeTestShardBundles(targets, { runnerBackend: "boat" }),
+    "Boat board-store selection",
+  );
+  expect(hybrid).toHaveLength(1);
+  expect(hybrid[0]?.runner).toBe("blacksmith-16vcpu-ubuntu-2404");
+  expect(boat).toEqual([{ ...hybrid[0], runner: "boat-xlarge", cpuBudget: 4 }]);
+  expect(boat[0]?.groups[0]?.minTotalMemoryBytes).toBe(28 * 1024 ** 3);
+});
+
 it("shares selected serial setup within the shortest contributing timeout", () => {
   const serialTargets = [
     "src/gateway/server-methods/plugins.decisions.test.ts",

@@ -1428,6 +1428,10 @@ const nodeTestShards = targetNodeTestShards
       (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0),
   )
   .map((shard) => {
+    const minTotalMemoryBytes = Math.max(
+      0,
+      ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0),
+    );
     const groups =
       shard.groups?.map(projectNodeTestGroup) ??
       (nodeTestGroupsCodec && shard.configs?.length && !shard.targets?.length
@@ -1445,7 +1449,7 @@ const nodeTestShards = targetNodeTestShards
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
     const capacity =
       process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
-        ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName)
+        ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName, minTotalMemoryBytes)
         : undefined;
     const row = {
       check_name: shard.checkName,
@@ -1472,10 +1476,7 @@ const nodeTestShards = targetNodeTestShards
       git_commits: resolveTestGitCommits(shard),
       requires_dist: shard.requiresDist,
       runner: capacity?.runner ?? shard.runner,
-      runner_label: capacity?.runner ?? blacksmithRunnerLabel(
-        shard.runner,
-        Math.max(0, ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0)),
-      ),
+      runner_label: capacity?.runner ?? blacksmithRunnerLabel(shard.runner, minTotalMemoryBytes),
       timeout_minutes:
         !shard.requiresDist && testRuntimeMode === "dual-all"
           ? 2 * (shard.timeoutMinutes ?? 60)

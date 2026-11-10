@@ -29,7 +29,10 @@ import {
   decodeNodeTestGroups,
   encodeNodeTestGroups,
 } from "../../scripts/lib/ci-node-test-groups-codec.mts";
-import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  createNodeTestShardBundles,
+  createSelectedNodeTestShardBundles,
+} from "../../scripts/lib/ci-node-test-plan.mts";
 import { NODE_WORKER_E2E_TEST_FILES } from "../../scripts/lib/ci-node-worker-e2e-inventory.mts";
 import { createWindowsTestShards } from "../../scripts/lib/ci-windows-test-plan.mts";
 import {
@@ -5954,6 +5957,35 @@ describe("ci workflow guards", () => {
       }
     },
   );
+
+  it("preserves selected board-store memory through the packed Boat manifest", () => {
+    const selected = expectDefined(
+      createSelectedNodeTestShardBundles(["src/gateway/board-store.test.ts"], {
+        runnerBackend: "hybrid",
+      }),
+      "selected board-store plan",
+    );
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "push",
+      runnerBackend: "hybrid",
+      nodeRunnerBackend: "hybrid",
+      nodeTestShards: selected,
+      scopeEnv: { OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND: "boat" },
+    });
+    expect(result.status, result.output).toBe(0);
+    const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      runner: "boat-xlarge",
+      runner_label: "boat-xlarge",
+      cpu_budget: 4,
+    });
+    expect(decodeNodeTestGroups(rows[0].groups_gzip_base64)).toMatchObject([
+      { minTotalMemoryBytes: 28 * 1024 ** 3 },
+    ]);
+  });
 
   it("keeps the Boat failure reporter hosted when preflight emits no backend outputs", () => {
     const reporter = readCiWorkflow().jobs["pr-failure-report"];
