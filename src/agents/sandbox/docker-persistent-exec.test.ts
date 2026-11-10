@@ -538,6 +538,8 @@ it("treats guest control-looking bytes as output and settles them before reporti
   const received: string[] = [];
   vi.stubEnv("DOCKER_HOST", "unix:///replacement/docker.sock");
   vi.stubEnv("DOCKER_CONTEXT", "replacement");
+  vi.stubEnv("LD_PRELOAD", "/synthetic/libjemalloc.so.2");
+  vi.stubEnv("MALLOC_CONF", "background_thread:true");
   const prepared = await f.prepare({
     onOutput: async (_stream, chunk) => {
       await output.wait();
@@ -568,6 +570,9 @@ it("treats guest control-looking bytes as output and settles them before reporti
   ]);
   expect(mocks.spawn.mock.calls[0]?.[1].baseEnv.DOCKER_CONTEXT).toBeUndefined();
   expect(mocks.spawn.mock.calls[0]?.[1].baseEnv.DOCKER_HOST).toBeUndefined();
+  expect(mocks.spawn.mock.calls[0]?.[1].baseEnv.LD_PRELOAD).toBeUndefined();
+  expect(mocks.spawn.mock.calls[0]?.[1].baseEnv.MALLOC_CONF).toBeUndefined();
+  expect(process.env.MALLOC_CONF).toBe("background_thread:true");
 });
 
 it("retains uncertainty after transport loss until Docker confirms removal, then retries cleanup", async () => {

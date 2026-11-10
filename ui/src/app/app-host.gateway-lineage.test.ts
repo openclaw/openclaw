@@ -341,7 +341,7 @@ describe("Control UI Gateway target lineage", () => {
     },
   );
 
-  it("returns to the login gate when a newly selected Gateway's first attempt fails", async () => {
+  it("shows the shell while a newly selected Gateway's first attempt retries", async () => {
     const { gateway, hello, close } = createGatewayHarness();
     gateway.start();
     hello();
@@ -349,14 +349,16 @@ describe("Control UI Gateway target lineage", () => {
     close(1, "remote refused");
 
     const { container } = await createGatewaySurface(gateway);
-    expect(container.innerHTML).toContain("<openclaw-login-gate");
-    expect(container.innerHTML).not.toContain("<openclaw-app-shell");
+    await vi.waitFor(() => {
+      expect(container.innerHTML).toContain("<openclaw-app-shell");
+      expect(container.innerHTML).not.toContain("<openclaw-login-gate");
+    });
   });
 
   it("re-scopes credentials when the login draft changes Gateway", async () => {
     const { gateway, clients, close } = createGatewayHarness();
     gateway.connect({ token: "old-token", password: "old-password" });
-    close();
+    close(0, "login required", false);
     const { container } = await createGatewaySurface(gateway);
     const login = container.querySelector<LoginGateElement>("openclaw-login-gate")!;
 
@@ -370,10 +372,10 @@ describe("Control UI Gateway target lineage", () => {
     ]);
   });
 
-  it("shows startup progress after a manual connection attempt", async () => {
+  it("shows the shell during startup after a manual connection attempt", async () => {
     const { gateway, hello, close, starting } = createGatewayHarness();
     gateway.start();
-    close(0, "manual connection required");
+    close(0, "manual connection required", false);
     const { container, draw } = await createGatewaySurface(gateway);
     const login = container.querySelector<LoginGateElement>("openclaw-login-gate")!;
 
@@ -381,8 +383,10 @@ describe("Control UI Gateway target lineage", () => {
     starting(1);
     await draw();
 
-    expect(container.innerHTML).toContain("Gateway starting…");
-    expect(container.innerHTML).not.toContain("<openclaw-login-gate");
+    await vi.waitFor(() => {
+      expect(container.innerHTML).toContain("<openclaw-app-shell");
+      expect(container.innerHTML).not.toContain("<openclaw-login-gate");
+    });
 
     hello(1);
     await draw();

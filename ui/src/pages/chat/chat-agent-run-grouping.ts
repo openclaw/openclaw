@@ -1,6 +1,6 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
 import {
   assistantMessageCanOwnTurnActions,
   assistantMessageIsInterrupted,
@@ -39,6 +39,16 @@ export type AgentRunFrameRenderItem = {
     | { kind: "interrupted" }
     | { kind: "failed" };
   parts: AgentRunFramePart[];
+  /** Completed runs share one identity/footer across independently virtualized rows. */
+  fragment?: {
+    source: AgentRunFrameRenderItem;
+    first: boolean;
+    last: boolean;
+    firstAssistant: MessageGroup | undefined;
+    representative: MessageGroup | undefined;
+    firstBubbleKey: string | null;
+    work: WorkGroupRenderItem | undefined;
+  };
   /** This run's groups held by an earlier rollup that no visible reply owns. */
   detachedGroups?: MessageGroup[];
 };
@@ -46,7 +56,7 @@ export type AgentRunFrameRenderItem = {
 type AgentRunFrameInput = CompletedTurnRenderItem | ActivityRunRenderItem;
 
 export function chatItemGroups(
-  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup,
+  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup | ChatItem,
 ): MessageGroup[] {
   if (item.kind === "agent-run-frame") {
     return item.parts.flatMap(chatItemGroups);

@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { canDeleteAgent, deleteAgent } from "../../lib/agents/delete-agent.ts";
 import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
@@ -524,6 +525,7 @@ export function createAgentsPageState(
     const configState = context.runtimeConfig.state;
     const selectedAgentId = state.agentsSelectedId;
     const access = {
+      canDeleteAgent: Boolean(selectedAgentId && canDeleteAgent(context, selectedAgentId)),
       canCreateAgent: canCall("openclaw.chat", "operator.admin"),
       canPatchConfig: canCall("config.patch", "operator.admin"),
       canUpdateConfig: canCall("config.set", "operator.admin"),
@@ -603,6 +605,15 @@ export function createAgentsPageState(
         ...configActions.tools,
       },
       pinnedAgentIds: navigation.read().pinnedAgentIds,
+      onDeleteAgent: (agentId: string) => {
+        const isSelected = () => active && state.agentsSelectedId === agentId;
+        const agent = context.agents.state.agentsList?.agents.find((entry) => entry.id === agentId);
+        if (!agent || !isSelected()) {
+          return;
+        }
+        const name = agent.identity?.name ?? agent.name ?? agent.id;
+        void deleteAgent(context, { id: agent.id, name }, isSelected);
+      },
       onTogglePinnedAgent: (agentId: string) => togglePinnedAgent(context.navigation, agentId),
       // Refresh is this page's one way to pick up edits made outside it, config included.
       onRefresh: () => {

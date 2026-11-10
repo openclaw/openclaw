@@ -51,9 +51,6 @@ const catalog = {
       renderedMarkdownHint: "Sanitized rich-text preview for quick reading.",
       noPreviewableMarkdown: "No Markdown preview available.",
       noContent: "No content available",
-      fullContentOversized: "This message is too large to load in full.",
-      fullContentNotVisible: "Full content isn’t available in this session.",
-      fullContentUnavailable: "Full content is no longer available for this message.",
       copyContents: "Copy file contents",
       fileChanged: "File changed on disk since it was loaded.",
       renderPreview: "Render preview",
@@ -75,7 +72,6 @@ const catalog = {
         copyFailed: "Couldn’t copy the edits. Select the text or download the draft instead.",
       },
       overwriteLoadFailed: "Couldn’t load the latest file. Try overwriting again.",
-      fullContentLoadFailed: "Couldn’t load the full content. Try again. {error}",
     },
   },
   filePreview: {

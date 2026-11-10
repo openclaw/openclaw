@@ -17,16 +17,15 @@ import {
   setupAgentsHomePageTest,
   workflowOperator,
 } from "./agents-home-page.test-helpers.ts";
-import type { TemplateCatalogEntry } from "./templates-catalog-client.ts";
 
 beforeEach(setupAgentsHomePageTest);
 afterEach(cleanupAgentsHomePageTest);
 
-function createDetail(options: Parameters<typeof createPage>[0]) {
+function createDetail(options: Parameters<typeof createPage>[0], version?: string) {
   const fixture = createPage(options);
   const [location, setLocation] = createSignal({
     pathname: pathForTemplateCatalogEntry(workflowOperator.packageName, ""),
-    search: "",
+    search: version ? `?${new URLSearchParams({ version })}` : "",
     hash: "",
   });
   const view = mountSolid(
@@ -52,23 +51,38 @@ describe("Templates discovery", () => {
   it.each([
     {
       names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
-      ordered: ["SOUL.md", "AGENTS.md", "USER.md", "notes/context.md"],
+      ordered: ["SOUL.md", "AGENTS.md", "USER.md", "View all"],
     },
-    { names: ["USER.md", "notes/context.md"], ordered: ["USER.md", "notes/context.md"] },
+    { names: ["USER.md", "notes/context.md"], ordered: ["USER.md", "View all"] },
+    { names: ["templates/AGENTS.md", "fixtures/request.json"], ordered: ["View all"] },
     { names: ["IDENTITY.md"], ordered: ["IDENTITY.md"] },
-  ])("lists every release file inline for $names", async ({ names, ordered }) => {
-    const { detail } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
-    await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
-    const section = detail.querySelector(".plugin-capabilities")!;
-    const titles = [...section.querySelectorAll(".settings-row__title")].map(
-      (node) => node.textContent,
-    );
-    expect(titles).toEqual(ordered);
-    expect(section.querySelectorAll(".templates-workspace-file__info")).toHaveLength(names.length);
-  });
+  ])(
+    "lists only root agent documents and a View all row for $names",
+    async ({ names, ordered }) => {
+      const { detail } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
+      await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
+      const section = detail.querySelector(".plugin-capabilities")!;
+      const titles = [...section.querySelectorAll(".settings-row__title")].map(
+        (node) => node.textContent,
+      );
+      expect(titles).toEqual(ordered);
+      expect(section.querySelectorAll(".templates-workspace-file__info")).toHaveLength(
+        ordered.filter((name) => name !== "View all").length,
+      );
+    },
+  );
 
-  it("opens every release file inline without treating help as navigation", async () => {
-    const names = ["AGENTS.md", "SOUL.md", "USER.md", "BOOTSTRAP.md", "notes/context.md"];
+  it("opens named files and View all in the shared complete-file preview without navigating from help", async () => {
+    const names = [
+      "AGENTS.md",
+      "SOUL.md",
+      "USER.md",
+      "BOOTSTRAP.md",
+      "templates/AGENTS.md",
+      "fixtures/request.json",
+      "schemas/report.json",
+      "avatars/agent.svg",
+    ];
     const { detail, request } = createDetail({ templatesEnabled: true, workspaceFileNames: names });
     await vi.waitFor(() =>
       expect(detail.querySelector(".templates-workspace-file__info")).not.toBeNull(),
@@ -87,9 +101,21 @@ describe("Templates discovery", () => {
     );
     const preview = detail.querySelector("openclaw-file-preview-modal")!;
     expect(preview.files.map((file) => file.path)).toEqual(names);
-    expect(section.querySelectorAll(".templates-workspace-file__open")).toHaveLength(names.length);
+    expect(section.querySelectorAll(".templates-workspace-file__open")).toHaveLength(5);
+    preview.dispatchEvent(new CustomEvent("file-preview-close", { bubbles: true }));
+    await waitForSolid(() =>
+      expect(detail.querySelector("openclaw-file-preview-modal")).toBeNull(),
+    );
+    [...section.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "View all")!
+      .click();
+    await waitForSolid(() =>
+      expect(detail.querySelector("openclaw-file-preview-modal")).not.toBeNull(),
+    );
+    const allFilesPreview = detail.querySelector("openclaw-file-preview-modal")!;
+    expect(allFilesPreview.files.map((file) => file.path)).toEqual(names);
     for (const name of names) {
-      preview.dispatchEvent(
+      allFilesPreview.dispatchEvent(
         new CustomEvent("file-preview-select", { detail: name, bubbles: true }),
       );
       await vi.waitFor(() =>
@@ -152,7 +178,7 @@ describe("Templates discovery", () => {
       createRouteLoaderOptions(location, templatesRoute.loaderDeps!(context, location)),
     );
     expect(result).toEqual({ type: "notFound", data: undefined });
-    expect(ensureConfigLoaded).toHaveBeenCalledOnce();
+    expect(ensureConfigLoaded).not.toHaveBeenCalled();
     expect(page.textContent).toContain("Templates is turned off");
     expect(page.querySelector("[data-templates-explore]")).toBeNull();
     expect(page.querySelector("[data-templates-confirm]")).toBeNull();
@@ -180,6 +206,7 @@ describe("Templates discovery", () => {
     page.querySelector<HTMLButtonElement>(".agents-home__template-card-link")?.click();
     expect(navigate).toHaveBeenCalledWith("templates", {
       pathname: "/templates/packages/%40openclaw%2Fworkflow-operator",
+      search: "?version=1.2.0",
     });
     expect(request).toHaveBeenCalledWith("templates.catalog.search", {
       overview: true,
@@ -205,19 +232,14 @@ describe("Templates discovery", () => {
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
   });
 
-  it("retries the selected package's catalog read while retaining its route", async () => {
+  it("retries the selected package's detail read while retaining its route", async () => {
     const { request, setTemplatesEnabled, find } = createDetail({ templatesEnabled: false });
     const original = request.getMockImplementation()!;
-    const pending = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
-    const recovered = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
+    const pending = createDeferredCore<unknown>();
+    const recovered = createDeferredCore<unknown>();
     let attempts = 0;
     request.mockImplementation((method, params, options) => {
-      if (
-        method === "templates.catalog.search" &&
-        params &&
-        typeof params === "object" &&
-        Reflect.get(params, "limit") === 100
-      ) {
+      if (method === "templates.catalog.detail") {
         return ++attempts === 1 ? pending.promise : recovered.promise;
       }
       return original(method, params, options);
@@ -237,26 +259,25 @@ describe("Templates discovery", () => {
     expect(find("[role=alert]")).toBeNull();
     expect(find(".plugin-catalog-detail__back")).toBe(back);
     expect(find("[data-templates-confirm]")).toBeNull();
-    recovered.resolve({ entries: [workflowOperator] });
+    recovered.resolve(await original("templates.catalog.detail", {}));
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
-    expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-      query: workflowOperator.packageName,
-      limit: 100,
+    expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
+      packageName: workflowOperator.packageName,
     });
   });
 
-  it("retires a pending catalog reply when the package route changes", async () => {
+  it("retires a pending detail reply when the package route changes", async () => {
     const { request, setTemplatesEnabled, setPackageName, find } = createDetail({
       templatesEnabled: false,
     });
     const original = request.getMockImplementation()!;
-    const retired = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
+    const retired = createDeferredCore<unknown>();
     request.mockImplementation((method, params, options) => {
       if (
-        method === "templates.catalog.search" &&
+        method === "templates.catalog.detail" &&
         params &&
         typeof params === "object" &&
-        Reflect.get(params, "query") === workflowOperator.packageName
+        Reflect.get(params, "packageName") === workflowOperator.packageName
       ) {
         return retired.promise;
       }
@@ -264,40 +285,33 @@ describe("Templates discovery", () => {
     });
     setTemplatesEnabled(true);
     await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-        query: workflowOperator.packageName,
-        limit: 100,
+      expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
+        packageName: workflowOperator.packageName,
       }),
     );
     setPackageName("@openclaw/missing");
     await waitForSolid(() => expect(find("[role=alert]")).not.toBeNull());
     const error = find("[role=alert]")?.textContent;
-    retired.resolve({ entries: [workflowOperator] });
+    retired.resolve(await original("templates.catalog.detail", {}));
     await retired.promise;
     await nextTurn();
     flush();
     expect(find("[role=alert]")?.textContent).toBe(error);
     expect(find(".plugin-capabilities")).toBeNull();
     expect(find("[data-templates-confirm]")).toBeNull();
-    expect(request.mock.calls.some(([method]) => method === "templates.catalog.detail")).toBe(
-      false,
-    );
+    expect(
+      request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
+    ).toHaveLength(2);
   });
 
-  it("refreshes a selected Template after reconnect and ignores the retired catalog reply", async () => {
+  it("refreshes a selected Template after reconnect and ignores the retired detail reply", async () => {
     const { request, setPhase, find } = createDetail({ templatesEnabled: true });
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
     const original = request.getMockImplementation()!;
-    const stale = createDeferredCore<{ entries: TemplateCatalogEntry[] }>();
+    const stale = createDeferredCore<unknown>();
     let searches = 0;
     request.mockImplementation((method, params, options) => {
-      if (
-        method === "templates.catalog.search" &&
-        params &&
-        typeof params === "object" &&
-        Reflect.get(params, "limit") === 100 &&
-        ++searches === 1
-      ) {
+      if (method === "templates.catalog.detail" && ++searches === 1) {
         return stale.promise;
       }
       return original(method, params, options);
@@ -312,16 +326,19 @@ describe("Templates discovery", () => {
     await waitForSolid(() =>
       expect(
         request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
-      ).toHaveLength(2),
+      ).toHaveLength(3),
     );
     await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
-    stale.resolve({ entries: [{ ...workflowOperator, installs: 0, latestVersion: "9.9.9" }] });
+    const response = (await original("templates.catalog.detail", {})) as {
+      detail: Record<string, unknown>;
+    };
+    stale.resolve({ detail: { ...response.detail, version: "9.9.9" } });
     await stale.promise;
     await nextTurn();
     flush();
     expect(
       request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(find(".plugin-capabilities")).not.toBeNull();
   });
 
@@ -541,8 +558,17 @@ describe("Templates discovery", () => {
     expect(page.querySelector("[data-templates-explore] [role=alert]")).toBeNull();
   });
 
-  it("reads contents before Add and opens the newly added agent chat", async () => {
-    const { detail, request, navigate } = createDetail({ templatesEnabled: true });
+  it("loads complete contents independently of search and pins Add to that release", async () => {
+    const { detail, request, navigate, setTemplatesEnabled } = createDetail(
+      { templatesEnabled: false },
+      workflowOperator.latestVersion,
+    );
+    const original = request.getMockImplementation()!;
+    const search = createDeferredCore<unknown>();
+    request.mockImplementation((method, params, options) =>
+      method === "templates.catalog.search" ? search.promise : original(method, params, options),
+    );
+    setTemplatesEnabled(true);
 
     await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).not.toBeNull());
     expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
@@ -725,20 +751,19 @@ describe("Templates discovery", () => {
       expect(detail.querySelector(".plugin-capabilities")?.textContent).toContain("AGENTS.md"),
     );
     const selected = detail.querySelector(".plugin-capabilities");
-    const searches = request.mock.calls.filter(([method]) => method === "templates.catalog.search");
+    const searches = request.mock.calls.filter(([method]) => method === "templates.catalog.detail");
     setPackageName(workflowOperator.packageName);
     await waitForSolid(() => {
       expect(detail.querySelector(".plugin-capabilities")).toBe(selected);
       expect(
-        request.mock.calls.filter(([method]) => method === "templates.catalog.search"),
+        request.mock.calls.filter(([method]) => method === "templates.catalog.detail"),
       ).toEqual(searches);
     });
     setPackageName("@openclaw/another-template");
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-        query: "@openclaw/another-template",
-        limit: 100,
+      expect(request).toHaveBeenCalledWith("templates.catalog.detail", {
+        packageName: "@openclaw/another-template",
       }),
     );
     await vi.waitFor(() => expect(detail.querySelector(".plugin-capabilities")).toBeNull());

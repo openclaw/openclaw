@@ -90,11 +90,10 @@ Use local evidence if access is unavailable; ledger synchronization does not
 hold up the release. A hotfix opportunity is not inclusion approval. Follow
 the approved selection scope; obtain the categorized-set approval required by
 backport discovery unless that decision was already explicitly delegated.
-Fix a shared defect once on main through the maintainer workflow, then backport
-with provenance; reuse an already-merged fix. Respect each track's mutation
-route, including extended-stable staging PRs. Preserve the documented exception
-for a blocker that must be fixed/proven on the release branch, and track its
-forward-port for closeout.
+Follow [backports and new fixes](../SKILL.md#backports-and-new-fixes) on every
+track: reuse merged main fixes through individual direct backports, never
+release-branch PRs. Prefer individual main PRs for new fixes; urgent release-first
+fixes go directly to the branch with an owned post-release forward-port.
 
 Make intake explicit:
 
@@ -131,6 +130,15 @@ all known non-flake fixes affecting that run rather than fixing one per cycle;
 this is not a demand to rule out undiscovered failures. Keep useful surviving
 diagnostics running while repairs proceed.
 
+While a long lane or operator decision is pending, keep either the active FRV
+or a named blocker/proof lane in flight. Pre-stage the next eligible FRV inputs
+and run independent proofs, but do not dispatch a duplicate parent. If an
+approved port is expected to land within about 15 minutes, wait for it before
+dispatching so the run can qualify the resulting candidate. Ask decisions in a
+non-blocking update with a recommended reversible default while independent
+work continues. If the question remains unanswered, send one notification;
+do not re-arm a watcher that has no new transition or work.
+
 Apply the existing blocker/flake policy: diagnose first, repair the owner,
 retry the affected surface within its budget, and retain successful exact-input
 evidence where allowed. P-only, credential, or infrastructure recovery does not
@@ -156,7 +164,8 @@ track's scope: extended-stable excludes native apps and ClawHub. Native
 publication does not hold the priority npm/GitHub/main-closeout path; pending
 platform work still needs an owner and an accurate status.
 
-Finish `$verify-release`, required platform work, applicable
+Finish the [hotfix ledger integrity check](hotfix-ledger-management.md#final-closeout-integrity-check),
+`$verify-release`, required platform work, applicable
 [main closeout](stable-main-closeout.md), and
 [retrospective](retrospective.md), including its shared issue ledger. Keep
 findings and operator corrections from the start, not only the final context

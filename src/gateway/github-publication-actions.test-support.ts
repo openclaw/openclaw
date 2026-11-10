@@ -6,11 +6,16 @@ import {
   SESSION_KEY,
 } from "./github-publication.test-support.js";
 import { randomUUID } from "node:crypto";
-import { assert, expect, vi } from "vitest";
+import { assert, expect, onTestFinished, vi } from "vitest";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { prepareGitHubPublicationTaskRequester } from "./github-publication-requester.js";
 import {
   createGitHubPublicationRequesterFixture,
   createRequesterPublicationFixture,
@@ -45,17 +50,48 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", async (import
     >();
   return {
     ...actual,
-    withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
+    withSessionRepositoryPublicationCheckpoint: (...args: unknown[]) => checkpoint(...args),
   };
 });
 
-export async function createPublicationActionFixture(backend: "local" | "repository" = "local") {
+export async function createPublicationActionFixture(
+  backend: "local" | "repository" = "local",
+  publicationParent?: string,
+) {
   const f = await createRequesterPublicationFixture(checkpoint, backend, {
     sessionId: SESSION_ID,
     sessionKey: SESSION_KEY,
   });
+  let requester = f.guest;
+  if (publicationParent) {
+    const parent = { agentId: "main", sessionKey: publicationParent };
+    const sourceEntry = loadSessionEntryReadOnly(f.guestSource.session)!;
+    const origin = { ...parent, sessionId: randomUUID(), lifecycleRevision: randomUUID() };
+    await upsertSessionEntryCore(parent, {
+      sessionId: origin.sessionId,
+      lifecycleRevision: origin.lifecycleRevision,
+      createdActor: sourceEntry.createdActor,
+      sandbox: sourceEntry.sandbox,
+      updatedAt: 1,
+    });
+    mocks.persistedSessionKeys.add(publicationParent);
+    await upsertSessionEntryCore(f.guestSource.session, { parentSessionKey: publicationParent });
+    const original = await createGitHubPublicationRequesterFixture({
+      ...parent,
+      profileId: f.guestProfile,
+      scopes: f.guest.snapshot.scopes,
+    });
+    const transferred = await prepareGitHubPublicationTaskRequester(
+      original.requester,
+      f.guestSource.session,
+      origin,
+      original.context.getCommittedRuntimeConfig,
+    );
+    onTestFinished(transferred.release);
+    requester = transferred.requester;
+  }
   const publication = await f.coordinator.requestForSessionV2(
-    f.request(randomUUID(), f.guest, "Publish session work"),
+    f.request(randomUUID(), requester, "Publish session work"),
   );
   assert(publication.status === "published", "Publication fixture did not publish");
   const writerSource =

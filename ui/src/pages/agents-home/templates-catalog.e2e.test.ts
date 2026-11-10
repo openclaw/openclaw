@@ -2,7 +2,9 @@ import { writeFile } from "node:fs/promises";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
@@ -45,6 +47,8 @@ const researchTemplate = {
   displayName: "Release Scout",
 };
 const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
+const skillExcerpt =
+  "Research trips and compare destinations against the approved itinerary. ".repeat(24);
 const config = { gateway: { controlUi: { experimental: { templates: true } } } };
 const agentsList = makeBootRoster({ agents: [{ id: "main", name: "Main" }] });
 
@@ -75,6 +79,17 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     onTestFinished(() => context.close());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Try [Workflow Operator](/templates/packages/%40openclaw%2Fworkflow-operator) or [another reference](/templates/packages/%40openclaw%2Fworkflow-operator).",
+            },
+          ],
+        },
+      ],
       heldMethods: loading ? ["templates.catalog.search"] : [],
       featureMethods: [
         "openclaw.chat",
@@ -85,16 +100,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         "plugins.list",
       ],
       methodResponses: {
-        "config.get": {
-          config,
-          sourceConfig: config,
-          resolved: config,
-          raw: JSON.stringify(config),
-          hash: "templates-e2e-config",
-          path: "/tmp/openclaw-templates-e2e.json",
-          valid: true,
-          issues: [],
-        },
+        "config.get": sourceConfigSnapshot(config),
         "agents.list": agentsList,
         "templates.catalog.search": {
           entries: [entry],
@@ -111,7 +117,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
                 { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
                 { name: "AGENTS.md", source: "workspace/AGENTS.md" },
               ],
-              skills: [{ name: "Trip research", excerpt: "Research trips." }],
+              skills: [{ name: "Trip research", excerpt: skillExcerpt }],
               integrations: [
                 { name: "@openclaw/workflow-tools", kind: "plugin", version: "1.2.0" },
               ],
@@ -216,8 +222,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         scrollHeight: element.scrollHeight,
       };
     });
-    expect(layout.clamp).toBe("2");
-    expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
+    expect(layout.clamp).toBe("1");
+    expect(layout.height).toBeLessThanOrEqual(layout.lineHeight + 1);
     expect(layout.scrollHeight).toBeGreaterThan(layout.height);
   }
 
@@ -292,7 +298,9 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await card.waitFor();
       expect(await card.textContent()).toContain("@openclaw");
       const detail = await openDetail(page);
-      await page.waitForURL(/\/templates\/packages\/%40openclaw%2Fworkflow-operator$/u);
+      await page.waitForURL(
+        /\/templates\/packages\/%40openclaw%2Fworkflow-operator\?version=1\.2\.0$/u,
+      );
       if (viewport.name === "desktop") {
         await capture(
           page,
@@ -319,8 +327,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       const fileDescriptions = workspace.locator(".settings-row__desc");
       expect(await fileDescriptions.allTextContents()).toEqual([soulExcerpt]);
       await expectClamped(fileDescriptions.first());
-      expect(await detail.getByText("Research trips.", { exact: true }).count()).toBe(1);
-      expect(await detail.getByRole("heading", { name: "Integrations" }).count()).toBe(1);
+      await expectClamped(detail.getByText(skillExcerpt, { exact: true }));
+      expect(await detail.getByRole("heading", { name: "Plugins" }).count()).toBe(1);
       expect(await detail.getByRole("heading", { name: "Automations" }).count()).toBe(0);
       await detail.getByText("Installed", { exact: true }).waitFor();
       expect(await detail.locator(".plugin-connection-status svg").count()).toBe(1);
@@ -341,6 +349,59 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     },
   );
 
+  it("keeps the inline preview shell stable through category and file navigation", async () => {
+    const { page, gateway } = await fixture();
+    await gateway.setMethodResponse("templates.catalog.preview", {
+      preview: {
+        content: "Long file content. ".repeat(2000) + "\n\n[Agent instructions](AGENTS.md)",
+      },
+    });
+    await page.goto(`${server.baseUrl}chat/main`);
+    const references = page.locator("a.markdown-template-link");
+    await references.first().hover();
+    await page.locator(".template-reference-card").waitFor();
+    await references.nth(1).hover();
+    await page.waitForTimeout(250); // The first anchor’s 180 ms dismissal must not close the second.
+    expect(await page.locator(".template-reference-card").isVisible()).toBe(true);
+    await references.nth(1).click();
+    const modal = page.getByRole("dialog", { name: "Template details", exact: true });
+    const shell = modal.locator(".template-preview");
+    await shell.getByRole("button", { name: /Workspace files/ }).waitFor();
+    await expect.poll(async () => (await shell.boundingBox())?.width).toBe(960);
+    const bounds = await shell.boundingBox();
+    expect(bounds?.width).toBe(960);
+    expect(bounds?.height).toBe(680);
+    const header = await shell.locator("header").boundingBox();
+    const footer = await shell.locator("footer").boundingBox();
+    await shell.getByRole("button", { name: /Workspace files/ }).click();
+    await shell.getByRole("button", { name: "SOUL.md", exact: true }).click();
+    await shell.getByText("Long file content.", { exact: false }).first().waitFor();
+    expect(await page.getByRole("dialog").count()).toBe(1);
+    expect(await shell.boundingBox()).toEqual(bounds);
+    await shell.locator(".template-preview__body").evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    expect(await shell.locator("header").boundingBox()).toEqual(header);
+    expect(await shell.locator("footer").boundingBox()).toEqual(footer);
+    await shell.getByRole("link", { name: "Agent instructions", exact: true }).click();
+    await shell.getByRole("heading", { name: "AGENTS.md", exact: true }).waitFor();
+    expect(await page.getByRole("dialog").count()).toBe(1);
+    const back = shell.getByRole("button", { name: "Back to Workspace files", exact: true });
+    expect(await back.textContent()).toBe("");
+    await back.click();
+    await shell.getByRole("button", { name: "Back to template", exact: true }).click();
+    await shell.getByRole("button", { name: /Plugins/ }).waitFor();
+    expect(await shell.boundingBox()).toEqual(bounds);
+    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
+    await evaluateControlUiContext(page, (app) => app.navigateAndWait("templates"));
+    await modal.waitFor({ state: "hidden" });
+    await evaluateControlUiContext(page, (app) =>
+      app.navigateAndWait("chat", { pathname: "/chat/main" }),
+    );
+    await page.locator("a.markdown-template-link:visible").first().waitFor();
+    expect(await modal.count()).toBe(0);
+  });
+
   it("distinguishes an empty catalog from no matching templates", async () => {
     const { page, gateway } = await fixture();
     await page.locator("[data-templates-featured] [data-templates-entry]").first().waitFor();
@@ -352,7 +413,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await page.getByText("No templates yet.", { exact: true }).waitFor();
   });
 
-  it("uses the accepted publisher to add a personal Template and start chat despite pending setup", async () => {
+  it("uses the accepted publisher to add a personal Template and open its main session despite pending setup", async () => {
     const community = {
       ...workflowOperator,
       packageName: "@maker/workflow-operator",
@@ -374,11 +435,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     });
     await page.locator("[data-templates-confirm] button").click();
     await page.waitForURL(/\/chat\/workflow-operator$/u);
-    const send = await gateway.waitForRequest("chat.send");
-    expect(send.params).toMatchObject({
-      sessionKey: "agent:workflow-operator:main",
-      message: "Workflow Operator, what can you do?",
-    });
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(1);
     expect((await gateway.waitForRequest("templates.add.apply")).params).toMatchObject({
       source: { packageName: community.packageName, version: "1.2.0" },
     });

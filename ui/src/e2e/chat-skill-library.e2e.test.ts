@@ -109,6 +109,7 @@ suite.define(() => {
           source: "skill",
           scope: "both",
           acceptsArgs: true,
+          skillReferenceable: true,
           skillModelVisible: true,
           textAliases: [`/${alice.entry.name}`],
         },

@@ -52,3 +52,49 @@ export function usageState(
   };
   return { base, usage, setFilters, setDisplay, onChange, onDatesChange };
 }
+
+/** Open a Usage menu through its real trigger and optional field submenu. */
+function openUsageMenu(
+  root: Pick<ParentNode, "querySelector">,
+  name: "filter" | "display",
+  field?: string,
+) {
+  const mainTrigger = root.querySelector<HTMLButtonElement>(`.usage-${name}-menu__trigger`)!;
+  const menu = root.querySelector<HTMLElement>(`.usage-${name}-menu`)!;
+  const open = (trigger: HTMLButtonElement) => {
+    if (trigger.getAttribute("aria-expanded") === "true") {
+      return;
+    }
+    menu.addEventListener(
+      "overlay-show",
+      () => {
+        // JSDOM has no scrolling layout; exercise real Menu opening and selection.
+        for (const item of menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')) {
+          item.scrollIntoView = vi.fn();
+        }
+      },
+      { once: true },
+    );
+    trigger.click();
+    flush();
+  };
+  open(mainTrigger);
+  const trigger = field
+    ? menu.querySelector<HTMLButtonElement>(`[role="menuitem"][aria-label="${field}"]`)!
+    : mainTrigger;
+  if (field) {
+    open(trigger);
+  }
+  const surface = root.querySelector<HTMLElement>(
+    `[id="${trigger.getAttribute("aria-controls")}"]`,
+  )!;
+  return { menu, trigger, surface };
+}
+
+export function openUsageFilter(root: Pick<ParentNode, "querySelector">, field?: string) {
+  return openUsageMenu(root, "filter", field);
+}
+
+export function openUsageDisplay(root: Pick<ParentNode, "querySelector">, field?: string) {
+  return openUsageMenu(root, "display", field);
+}

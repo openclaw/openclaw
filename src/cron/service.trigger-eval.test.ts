@@ -456,7 +456,7 @@ describe("cron trigger evaluation", () => {
       failureNotificationDetail: { kind: "script-failure", source: "trigger", code: "timeout" },
     });
     expect(h.events[1]).not.toHaveProperty("failureNotificationDetail");
-    expect(h.events.map((event) => event.action)).toEqual(["started", "finished", "scheduled"]);
+    expect(h.events.map((event) => event.action)).toEqual(["started", "finished"]);
     const history = readHistory(h.storePath, job.id);
     expect(history).toHaveLength(1);
     for (const result of [h.events[1], history[0]]) {
@@ -469,7 +469,7 @@ describe("cron trigger evaluation", () => {
       expect(result?.deliveryError).toBeUndefined();
     }
     const persisted = await readStoredJob(h.storePath, job.id);
-    expectScheduled(h, job.id, persisted?.state.nextRunAtMs);
+    expect(h.events[1]?.job?.state.nextRunAtMs).toBe(persisted?.state.nextRunAtMs);
   });
 
   it("keeps a once trigger armed after malformed evaluator output", async () => {

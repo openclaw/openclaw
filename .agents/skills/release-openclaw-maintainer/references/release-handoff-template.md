@@ -132,9 +132,11 @@ reference for commands rather than redispatching the release parent.
   Code SHA evidence after `split-changelog-release-v1` delta proof
 - source fix after a pushed beta tag: use the next beta number; never move the
   old tag or rerun fresh candidate acceptance against it
-- extended-stable branch change: land the approved product/changelog change or
-  smallest frozen-target repair by PR, record its source/invariant, and replace
-  all exact-head evidence
+- extended-stable branch change: apply approved backports and release metadata
+  directly to the canonical branch, not through a release-branch PR. New fixes
+  follow [backports and new fixes](../SKILL.md#backports-and-new-fixes), with
+  urgent release-first forward-ports owned in the handoff. Record the
+  source/invariant and replace all exact-head evidence
 - qualification harness/contract failure: deliberately repair the candidate, freeze
   a new C/Q, and replace affected evidence; never substitute newer main checks
 - P-only admission/verifier/publisher failure: keep C/Q and original artifacts,

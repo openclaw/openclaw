@@ -217,8 +217,12 @@ suite.define(() => {
     const failedAlert = page.getByRole("alert").filter({ hasText: renderedDiagnostic });
     await failedAlert.waitFor();
     await failedAlert
-      .locator("summary strong")
-      .getByText("Couldn't finish this reply. Check the conversation before trying again.")
+      .locator(".app-toast__message")
+      .getByText("Couldn't finish this reply.", { exact: true })
+      .waitFor();
+    await failedAlert
+      .locator(".app-toast__description")
+      .getByText("Check the conversation before trying again.", { exact: true })
       .waitFor();
     expect(await failedAlert.locator("details").getAttribute("open")).toBeNull();
     await failedAlert.locator("summary").click();
@@ -692,6 +696,29 @@ suite.define(() => {
             match: readMatch,
           });
           await page.getByRole("alert").filter({ hasText: diagnostic }).waitFor();
+          // Home stays a navigation button; the shared row owns terminal attention.
+          await expect
+            .poll(() =>
+              evaluateControlUiContext(page, (application) => {
+                const row = application.sessions.state.result?.sessions.find(
+                  (entry) => entry.key === "agent:main:main",
+                );
+                return {
+                  status: row?.status,
+                  hasActiveRun: row?.hasActiveRun,
+                  activeRunIds: row?.activeRunIds,
+                  lastRunError: row?.lastRunError,
+                  unreadFailure: row?.endedAt != null && row.endedAt > (row.lastReadAt ?? 0),
+                };
+              }),
+            )
+            .toMatchObject({
+              status: "failed",
+              hasActiveRun: false,
+              activeRunIds: [],
+              lastRunError: expect.stringContaining(diagnostic),
+              unreadFailure: true,
+            });
           expect(await stopButton(page).count()).toBe(0);
           await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
         } finally {

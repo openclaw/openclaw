@@ -78,10 +78,11 @@ Use **Retry setup** after a failed bundled setup. If the bundled runtime is
 missing or incompatible, reinstall OpenClaw.app. Installing a global CLI does
 not repair the app's runtime.
 
-If the runtime crashes with an illegal instruction (`SIGILL`), the app stops
-automatic restarts and saves the crash output in the Gateway log. Update or
-reinstall the app; include the log if the failure continues. The app does not
-automatically switch to Node.
+The app automatically restarts a crashed Gateway, including an illegal instruction
+(`SIGILL`), after 1, 2, 4, then 8 seconds. It stops after five fast failures and
+preserves the crash output in the Gateway log. A minute of healthy operation resets
+that limit. Update or reinstall the app if failures persist, and include the log
+when reporting them. The app does not automatically switch to Node.
 
 For an app-managed Gateway with an exact-version policy, **Retry setup** updates
 an older package through its installed CLI before starting it. Failed updates

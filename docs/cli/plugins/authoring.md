@@ -86,6 +86,13 @@ entry paths are rewritten to the compiled files included in the archive.
 See [Feature plugins](/plugins/feature-plugins) for activation approval, reload,
 view lifecycle, and recovery.
 
+Validation refusals, such as a missing plugin manifest or an unsupported archive
+extension, print their specific reason and exit with status `1`.
+If the compiler is missing, the CLI asks you to install `esbuild` in the plugin's
+`devDependencies`, then run `plugins build` again.
+Bundling refusals also report unsupported imports or module-relative resources
+with their existing recovery guidance; rejected builds still exit with status `1`.
+
 ### Provider scaffold
 
 ```bash
