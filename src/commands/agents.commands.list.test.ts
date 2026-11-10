@@ -139,6 +139,15 @@ describe("agentsListCommand", () => {
       { id: "orphan" },
     ]);
   });
+  it("marks picker-hidden agents in text output while keeping them in JSON", async () => {
+    setEntries({ main: {}, worker: { picker: { hidden: true } } }, telegramBinding);
+
+    expect((await list({ json: false })).text).toContain("- worker (hidden)");
+    expect((await list({ json: true })).json).toMatchObject([
+      { id: "main" },
+      { id: "worker", hidden: true },
+    ]);
+  });
   it("lists configured, inherited, and local avatar identities without changing the workspace", async () => {
     await withTestDir({ prefix: "openclaw-agent-identity-list-" }, async (workspace) => {
       const identityPath = path.join(workspace, "IDENTITY.md");

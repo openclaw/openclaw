@@ -317,13 +317,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       return;
     }
-    const selectableAgents = state.agents.filter((agent) => agent.kind !== "system");
-    if (selectableAgents.length === 0) {
+    // Picker-hidden agents stay spawnable and resolvable, but are not chat targets.
+    const selectable = state.agents.filter((agent) => agent.kind !== "system" && !agent.hidden);
+    if (selectable.length === 0) {
       chatLog.addSystem("no agents found");
       tui.requestRender();
       return;
     }
-    const items = selectableAgents.map((agent: AgentSummary) => ({
+    const items = selectable.map((agent: AgentSummary) => ({
       value: agent.id,
       label: agent.name ? `${agent.id} (${agent.name})` : agent.id,
       description: agent.id === state.agentDefaultId ? "default" : "",

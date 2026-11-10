@@ -144,3 +144,29 @@ describe("agent GitHub sandbox identity", () => {
     }
   });
 });
+
+describe("agent picker visibility", () => {
+  it("defaults to visible when picker is omitted", () => {
+    const parsed = AgentsSchema.safeParse({
+      ownership: "explicit",
+      entries: { main: {}, worker: { picker: { hidden: true } } },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data && parsed.data.entries) {
+      expect(parsed.data.entries.main?.picker).toBeUndefined();
+      expect(parsed.data.entries.worker?.picker?.hidden).toBe(true);
+    }
+  });
+
+  it("rejects unknown picker keys", () => {
+    expect(
+      AgentsSchema.safeParse({ entries: { main: { picker: { visible: false } } } }).success,
+    ).toBe(false);
+  });
+
+  it("rejects non-boolean hidden values", () => {
+    expect(
+      AgentsSchema.safeParse({ entries: { main: { picker: { hidden: "yes" } } } }).success,
+    ).toBe(false);
+  });
+});

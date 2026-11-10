@@ -12,7 +12,7 @@ import type {
   SessionListSnapshot,
   SessionListScope,
 } from "../sessions/session-capability.ts";
-import { selectableAgentsList } from "./display.ts";
+import { chatAgentsList } from "./display.ts";
 import { agentRosterCards } from "./roster-activity.ts";
 
 type RosterContext = Pick<ApplicationContext, "gateway" | "agents" | "agentIdentity" | "sessions">;
@@ -271,9 +271,7 @@ class RosterActivityStore {
           if (!raw) {
             throw new Error(this.context.agents.state.agentsError ?? t("agentsHome.loadFailed"));
           }
-          await this.context.agentIdentity.ensure(
-            selectableAgentsList(raw).agents.map(({ id }) => id),
-          );
+          await this.context.agentIdentity.ensure(chatAgentsList(raw).agents.map(({ id }) => id));
         } catch (error) {
           if (this.isCurrent(binding)) {
             binding.metadataError = formatUiError(error, t("agentsHome.loadFailed"));

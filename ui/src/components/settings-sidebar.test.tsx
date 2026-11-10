@@ -718,6 +718,30 @@ describe("Settings agent selector", () => {
     },
   );
 
+  it("keeps picker-hidden agents selectable for administration", async () => {
+    const props = renderSidebar({
+      agents: [
+        { id: "main", name: "Main" },
+        { id: "worker", name: "Worker", hidden: true },
+      ],
+    });
+    const selector = container.querySelector<AgentSelectElement>("openclaw-agent-select")!;
+    await selector.updateComplete;
+    expect(selector.options.some((option) => option.value === "worker")).toBe(true);
+
+    const trigger = selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
+    trigger.click();
+    await waitForSolid(() => {
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+      expect(requestedIdentityIds(props.agentIdentity.ensure)).toEqual(["main", "worker"]);
+    });
+    const worker = selector.querySelector<HTMLElement>('[aria-label="Worker"]')!;
+    worker.click();
+    await waitForSolid(() =>
+      expect(props.settingsAgentSelection.set).toHaveBeenCalledWith("worker"),
+    );
+  });
+
   it("preserves creator grouping without hiding dangling or cyclic agents", async () => {
     renderSidebar({
       agents: [

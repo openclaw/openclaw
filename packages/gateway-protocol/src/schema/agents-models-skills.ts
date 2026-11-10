@@ -105,6 +105,8 @@ export const AgentSummarySchema = closedObject({
   defaultPermissionMode: Type.Optional(SessionPermissionModeSchema),
   /** Explicit default for new attended sessions; existing-session Default keeps tool policy. */
   newSessionPermissionMode: Type.Optional(SessionPermissionModeSchema),
+  /** Hidden from user-facing pickers; the agent stays spawnable and listed by openclaw agents list. */
+  hidden: Type.Optional(Type.Boolean()),
 });
 
 export const AgentsListResultSchema = closedObject({
