@@ -222,6 +222,7 @@ describe("yielded run settlement", () => {
     "settles a restored yield only when its continuation is gone ($requesterState, completion=$expectsCompletionMessage)",
     async ({ requesterState, expectsCompletionMessage }) => {
       const live = requesterState === "live" || requesterState === "live-notice";
+      const continuable = live || requesterState === "done";
       const runId = "restored-message-wait";
       const childSessionKey = `agent:main:subagent:${runId}`;
       const requesterSessionKey = "agent:main:message-wait-requester";
@@ -257,7 +258,7 @@ describe("yielded run settlement", () => {
         requesterAgentId: "main",
         requesterDisplayKey: "message-wait-requester",
         task: "Wait for a continuation from the requester",
-        cleanup: live ? "delete" : "keep",
+        cleanup: continuable ? "delete" : "keep",
         expectsCompletionMessage,
         gatewayContextResolver,
       });
@@ -313,7 +314,7 @@ describe("yielded run settlement", () => {
       const result = persisted(runId);
       const session = loadSessionEntry(child);
       expect(session?.activeWriterRunId).toBe(runId);
-      if (live) {
+      if (continuable) {
         expect(gatewayRequest).not.toHaveBeenCalled();
         expect(result?.archiveAtMs).toBeUndefined();
         expect(result?.pauseReason).toBe("sessions_yield");
