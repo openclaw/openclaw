@@ -26,8 +26,14 @@ struct RemoteGatewayAdvanceDecision: Equatable {
 @MainActor
 @Observable
 final class OnboardingFinishState {
+    enum ConnectionCompletion {
+        case browser(String)
+        case node(String)
+    }
+
     var didFinish = false
-    var savedBrowserGatewayName: String?
+    /// A completed setup outcome, not authority for an ongoing connection.
+    var connectionCompletion: ConnectionCompletion?
 }
 
 /// Dashboard surface opened when onboarding finishes with working inference.
@@ -667,12 +673,15 @@ struct OnboardingView: View {
     @State var showRemoteChoices = false
     @State var remoteSetupSelected = false
     var savedBrowserGatewayName: String? {
-        get { self.finishState.savedBrowserGatewayName }
-        nonmutating set { self.finishState.savedBrowserGatewayName = newValue }
+        get {
+            guard case let .browser(name) = self.finishState.connectionCompletion else { return nil }
+            return name
+        }
+        nonmutating set { self.finishState.connectionCompletion = newValue.map { .browser($0) } }
     }
 
     @State var showOpenClawID = false
-    @State var openClawID = OnboardingOpenClawIDModel(service: UnavailableOnboardingOpenClawIDService())
+    @State var openClawID: OnboardingOpenClawIDModel
     @State var showBrowserGateway = false
     @State var showConnectionEditor = false
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
@@ -681,7 +690,7 @@ struct OnboardingView: View {
     @State var remoteAuthIssue: RemoteGatewayAuthIssue?
     @State var suppressRemoteProbeReset = false
     @State var gatewayDiscovery: GatewayDiscoveryModel
-    @State var finishState = OnboardingFinishState()
+    @State var finishState: OnboardingFinishState
     @State var aiSetup = OnboardingAISetupModel()
     @State var configuredGatewayProbe = OnboardingConfiguredGatewayProbe()
     @State var localGatewayProbe: LocalGatewayProbe?
@@ -741,7 +750,7 @@ struct OnboardingView: View {
     }
 
     var pageOrder: [Int] {
-        if self.savedBrowserGatewayName != nil { return [0, 1, 4, 9] }
+        if self.finishState.connectionCompletion != nil { return [0, 1, 4, 9] }
         return Self.pageOrder(
             for: self.selectedConnectionMode,
             requiresCLIInstall: self.requiresLocalCLI && !self.cliInstalled)
@@ -819,10 +828,26 @@ struct OnboardingView: View {
         return currentPage >= aiPageCursor
     }
 
+    var canAdvanceFromFind: Bool {
+        self.state.connectionMode == .remote || self.finishState.connectionCompletion != nil
+    }
+
     var canAdvance: Bool {
         !self.isCLIBlocking && !self.isAISetupBlocking && !self.updatingGatewayHosting &&
-            (self.activePageIndex != self.findPageIndex || self.state.connectionMode == .remote ||
-                self.savedBrowserGatewayName != nil)
+            (self.activePageIndex != self.findPageIndex || self.canAdvanceFromFind)
+    }
+
+    var findPageAdvanceDecision: RemoteGatewayAdvanceDecision {
+        if self.finishState.connectionCompletion != nil {
+            return RemoteGatewayAdvanceDecision(canAdvance: true, shouldProbe: false)
+        }
+        return Self.remoteGatewayAdvanceDecision(
+            connectionMode: self.state.connectionMode,
+            activePageIndex: self.findPageIndex,
+            connectionPageIndex: self.findPageIndex,
+            authIssue: self.remoteAuthIssue,
+            probeState: self.remoteProbeState,
+            input: self.remoteGatewayProbeInput)
     }
 
     static func remoteGatewayAdvanceDecision(
@@ -880,6 +905,7 @@ struct OnboardingView: View {
         initialPage: OnboardingFirstRun.Page = .welcome,
         initialError: String? = nil,
         state: AppState = AppStateStore.shared,
+        openClawIDService: any OnboardingOpenClawIDService = OnboardingNodeInvitationService(),
         discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel(
             localDisplayName: InstanceIdentity.displayName,
             filterLocalGateways: false),
@@ -898,6 +924,11 @@ struct OnboardingView: View {
         self.initialPage = initialPage
         self.initialError = initialError
         self.state = state
+        let finishState = OnboardingFinishState()
+        _finishState = State(initialValue: finishState)
+        _openClawID = State(initialValue: OnboardingOpenClawIDModel(
+            service: openClawIDService,
+            onNodeConnected: { finishState.connectionCompletion = .node($0) }))
         self.systemAgentDefaults = systemAgentDefaults
         let routeIdentityProvider = aiSetupRouteIdentityProvider ?? {
             OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: state)

@@ -6,15 +6,23 @@ import Observation
 @MainActor
 protocol OnboardingOpenClawIDService {
     var unavailableReason: String? { get }
+    var accountUnavailableReason: String? { get }
     func start(_ intent: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep
     func perform(_ action: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep
     func cancel()
 }
 
-enum OnboardingOpenClawIDIntent { case makeReachable, connect }
+extension OnboardingOpenClawIDService {
+    var accountUnavailableReason: String? {
+        self.unavailableReason
+    }
+}
+
+enum OnboardingOpenClawIDIntent { case makeReachable, connect, joinNode }
 
 enum OnboardingOpenClawIDAction {
     case signIn, selectClaw(String), saveRecoveryKit, confirmRecoveryKit, requestNode, checkApproval, requestChat
+    case pasteNodeInvitation(discoveryOrigin: String)
 }
 
 struct OnboardingClaw: Identifiable, Equatable {
@@ -26,6 +34,8 @@ struct OnboardingClaw: Identifiable, Equatable {
 
 enum OnboardingOpenClawIDStep: Equatable {
     case signIn
+    case nodeInvitation
+    case nodeConnection(claw: String, connected: Bool)
     case claws(account: String, claws: [OnboardingClaw])
     // Recovery secrets stay in the service's custody, not in view state or diagnostics.
     case recoveryKit(hostname: String, saved: Bool)
@@ -59,18 +69,25 @@ final class OnboardingOpenClawIDModel {
     private(set) var busy = false
     private(set) var error: String?
     let unavailableReason: String?
+    let accountUnavailableReason: String?
     @ObservationIgnored private let service: any OnboardingOpenClawIDService
+    @ObservationIgnored private let onNodeConnected: (String) -> Void
     @ObservationIgnored private var task: Task<Void, Never>?
 
-    init(service: any OnboardingOpenClawIDService) {
+    init(
+        service: any OnboardingOpenClawIDService,
+        onNodeConnected: @escaping (String) -> Void = { _ in })
+    {
         self.service = service
+        self.onNodeConnected = onNodeConnected
         self.unavailableReason = service.unavailableReason
+        self.accountUnavailableReason = service.accountUnavailableReason
     }
 
     @discardableResult
     func begin(_ intent: OnboardingOpenClawIDIntent) -> Task<Void, Never>? {
         self.cancel()
-        self.step = .signIn
+        self.step = intent == .joinNode ? .nodeInvitation : .signIn
         guard self.unavailableReason == nil else { return nil }
         return self.run { try await self.service.start(intent) }
     }
@@ -100,6 +117,7 @@ final class OnboardingOpenClawIDModel {
                 let step = try await operation()
                 guard !Task.isCancelled else { return }
                 self.step = step
+                if case let .nodeConnection(claw, true) = step { self.onNodeConnected(claw) }
             } catch {
                 guard !Task.isCancelled else { return }
                 // Service errors can carry sensitive response bodies; do not render them verbatim.

@@ -3,6 +3,14 @@ import OpenClawDiscovery
 import SwiftUI
 
 extension OnboardingView {
+    @discardableResult
+    func beginNodeInvitation() -> Task<Void, Never>? {
+        let task = self.openClawID.begin(.joinNode)
+        if task != nil { self.finishState.connectionCompletion = nil }
+        self.showOpenClawID = true
+        return task
+    }
+
     func selectLocalGateway() {
         if state.connectionMode != .local {
             resetGatewayBoundAIState()
@@ -51,14 +59,8 @@ extension OnboardingView {
 
     func handleNext() {
         guard canAdvance else { return }
-        let remoteDecision = Self.remoteGatewayAdvanceDecision(
-            connectionMode: state.connectionMode,
-            activePageIndex: activePageIndex,
-            connectionPageIndex: findPageIndex,
-            authIssue: remoteAuthIssue,
-            probeState: remoteProbeState,
-            input: remoteGatewayProbeInput)
-        guard remoteDecision.canAdvance else {
+        let remoteDecision = self.findPageAdvanceDecision
+        guard self.activePageIndex != self.findPageIndex || remoteDecision.canAdvance else {
             if remoteDecision.shouldProbe {
                 Task { await self.probeRemoteConnection(advanceOnSuccess: true) }
             }
@@ -97,7 +99,7 @@ extension OnboardingView {
         aiSetup.clearCompletedHandoffIfOwned()
         OnboardingController.markComplete()
         OnboardingController.shared.close()
-        guard openPrimaryDashboard, savedBrowserGatewayName == nil,
+        guard openPrimaryDashboard, finishState.connectionCompletion == nil,
               state.connectionMode != .unconfigured else { return true }
         // Fresh activation hands off to the dashboard's custodian onboarding, which
         // owns the remaining first-run steps (memory import, channels, permissions,

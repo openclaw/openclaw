@@ -29,6 +29,7 @@ struct ConnectionAttempt {
     let endpoint: GatewayConnection.EndpointSnapshot
     let options: GatewayConnectOptions
     let sessionBox: WebSocketSessionBox?
+    let workerTransportURL: String?
     let fallbackMainSessionKey: String
 }
 
@@ -98,6 +99,16 @@ final class MacNodeModeCoordinator: NSObject {
     private var nodeHostWorkerConfigurationGeneration: UInt64 = 0
     private var nodeHostWorkerRetryTaskGeneration: UInt64 = 0
     private var pendingEndpoint: GatewayConnection.EndpointSnapshot?
+    private let openClawIDSelectionStore: MacNodeOpenClawIDSelectionStore?
+    private var openClawIDSelection: Result<MacNodeOpenClawIDTarget?, Error>
+    private var usesOperatorEndpoint: Bool {
+        if case .success(nil) = self.openClawIDSelection { return true }
+        return false
+    }
+
+    private var openClawIDRoute: (
+        authority: MacNodeOpenClawIDRouteAuthority,
+        task: Task<MacNodeOpenClawIDTransport, Error>)?
     private var activeNodeHostWorkerInput: MacNodeHostWorkerLaunch?
     private var lastNodeHostWorkerStartFailure: (reason: String, diagnostic: String?)?
     private(set) var desktopSharingEnabled: Bool? {
@@ -143,6 +154,7 @@ final class MacNodeModeCoordinator: NSObject {
                 refreshCanvasSurfaceUrl: { observedURL in
                     await session.refreshCanvasHostUrl(replacing: observedURL)
                 }),
+            selectionStore: .shared,
             nodeHostWorker: nodeHostWorker,
             presenceReporter: MacNodePresenceReporter(),
             workerHostingEnabled: { await nodeHostWorker.isWorkerHostingEnabled() },
@@ -154,6 +166,7 @@ final class MacNodeModeCoordinator: NSObject {
     init(
         session: GatewayNodeSession,
         runtime: MacNodeRuntime,
+        selectionStore: MacNodeOpenClawIDSelectionStore? = nil,
         endpointProvider: @escaping @Sendable () async throws -> GatewayConnection.EndpointSnapshot = {
             try await GatewayEndpointStore.shared.requireEndpoint()
         },
@@ -174,6 +187,8 @@ final class MacNodeModeCoordinator: NSObject {
     {
         let refreshEvents = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         self.session = session
+        self.openClawIDSelectionStore = selectionStore
+        self.openClawIDSelection = Result { try selectionStore?.load() }
         self.endpointProvider = endpointProvider
         self.runtime = runtime
         self.nodeHostWorker = nodeHostWorker
@@ -253,7 +268,7 @@ final class MacNodeModeCoordinator: NSObject {
                 let endpointChanged = previousState.map {
                     Self.endpointTransitionRequiresDisconnect(from: $0, to: state)
                 } ?? false
-                if initialStateMissedAttempt || endpointChanged {
+                if self.usesOperatorEndpoint, initialStateMissedAttempt || endpointChanged {
                     // Endpoint loss and replacement are ownership changes. Tear down the
                     // old route (including held input) before waking the connect loop.
                     self.enqueueRouteInvalidation(mode: .reconnectRefresh)
@@ -389,6 +404,10 @@ final class MacNodeModeCoordinator: NSObject {
             break
         }
         self.revokeRouteAuthority()
+        let nativeRoute = self.openClawIDRoute
+        self.openClawIDRoute = nil
+        nativeRoute?.authority.revoke()
+        nativeRoute?.task.cancel()
         let invalidationGeneration = self.endpointAttemptGeneration
         let invalidatedRouteAuthorityGeneration = self.routeAuthorityGeneration
         let previous = self.routeInvalidationTask
@@ -404,6 +423,9 @@ final class MacNodeModeCoordinator: NSObject {
                 nodeHostWorker: nodeHostWorker,
                 runtime: runtime,
                 authorityGeneration: invalidatedRouteAuthorityGeneration)
+            if let nativeRoute, let transport = try? await nativeRoute.task.value {
+                await transport.shutdown()
+            }
             let yieldRefresh: Bool
             switch mode {
             case .ordinaryDisconnect:
@@ -481,7 +503,7 @@ final class MacNodeModeCoordinator: NSObject {
             do {
                 let endpointAttemptGeneration = self.endpointAttemptGeneration
                 let routeAuthorityGeneration = self.routeAuthorityGeneration
-                let endpoint = try await self.endpointProvider()
+                let endpoint = try await self.prepareNodeEndpoint()
                 self.pendingEndpoint = endpoint
                 guard endpointAttemptGeneration == self.endpointAttemptGeneration,
                       self.routeAuthorityAllowsInvoke(routeAuthorityGeneration, isPaused: false)
@@ -531,11 +553,12 @@ final class MacNodeModeCoordinator: NSObject {
         let provider = ComputerControlProvider.current()
         let workerConfigurationGeneration = self.nodeHostWorkerConfigurationGeneration
         let (workerManifest, workerUnavailable) =
-            try await self.resolveWorkerManifestForConnection(provider: provider)
+            try await self.resolveWorkerManifestForConnection(
+                provider: provider, supportsDesktopStreaming: self.usesOperatorEndpoint)
         let computerControlEnabled = isComputerControlEnabled()
-        let nativeCaps = Self.resolvedCaps(
-            computerControlProvider: provider,
-            connectionMode: AppStateStore.shared.connectionMode,
+        let (caps, commands) = self.advertisedSurface(
+            provider: provider,
+            workerManifest: workerManifest,
             codexThreadCatalogEnabled: codexThreadCatalogEnabled)
         // If Computer Control was turned off, release any button the
         // computer.act service is still holding rather than waiting for
@@ -543,18 +566,15 @@ final class MacNodeModeCoordinator: NSObject {
         if !computerControlEnabled {
             await self.runtime.releaseHeldComputerInput()
         }
-        let caps = Self.mergingUnique(nativeCaps, workerManifest?.caps ?? [])
-        let commands = Self.mergingUnique(
-            Self.resolvedCommands(caps: nativeCaps, computerControlProvider: provider),
-            workerManifest?.commands ?? [])
         let permissions = await Self.advertisedPermissions(PermissionManager.authorizationStatus())
         // TCC queries suspend. An endpoint loss/replacement during that
         // hop must not let this stale continuation install old credentials.
         guard endpointGeneration == self.endpointAttemptGeneration,
               self.routeAuthorityAllowsInvoke(routeAuthorityGeneration, isPaused: false)
         else { return nil }
-        // Node credentials belong to the selected endpoint, matching the operator route.
-        // A missing owner must not unlock legacy role-global token storage.
+        let nativeTransport = try await self.openClawIDRoute?.task.value
+        // Direct routes retain their endpoint-scoped device credentials. Native node
+        // admission comes from W; it must never select operator pairing identity or tokens.
         let deviceAuth = Self.nodeDeviceAuthBinding(for: endpoint)
         let options = GatewayConnectOptions(
             role: "node",
@@ -570,15 +590,18 @@ final class MacNodeModeCoordinator: NSObject {
             clientId: "openclaw-macos",
             clientMode: "node",
             clientDisplayName: InstanceIdentity.displayName,
-            deviceIdentityProfile: Self.nodeIdentityProfile,
-            allowStoredDeviceAuth: deviceAuth.allowStoredDeviceAuth,
+            deviceIdentityProfile: nativeTransport == nil ? Self.nodeIdentityProfile : .node,
+            allowStoredDeviceAuth: nativeTransport == nil && deviceAuth.allowStoredDeviceAuth,
             deviceAuthGatewayID: deviceAuth.gatewayID)
-        let sessionBox = self.buildSessionBox(url: config.url, tls: endpoint.tls)
+        let sessionBox = nativeTransport?.sessionBox ?? self.buildSessionBox(url: config.url, tls: endpoint.tls)
 
-        // Resolve compatibility fallback before node admission. Operator recovery
-        // here cannot block the node lifecycle callback or its successor cleanup.
-        let fallbackMainSessionKey = await GatewayConnection.shared.refreshMainSessionKey()
-        let currentEndpoint = try await self.endpointProvider()
+        // Native node admission cannot recover or authenticate an operator connection.
+        let fallbackMainSessionKey = if nativeTransport != nil {
+            "main"
+        } else {
+            await GatewayConnection.shared.refreshMainSessionKey()
+        }
+        let currentEndpoint = try await self.currentNodeEndpoint()
         guard workerConfigurationGeneration == self.nodeHostWorkerConfigurationGeneration,
               Self.endpointAttemptCanConnect(
                   capturedGeneration: endpointGeneration,
@@ -601,6 +624,7 @@ final class MacNodeModeCoordinator: NSObject {
             endpoint: endpoint,
             options: options,
             sessionBox: sessionBox,
+            workerTransportURL: nativeTransport?.workerGatewayURL,
             fallbackMainSessionKey: fallbackMainSessionKey)
     }
 
@@ -612,6 +636,7 @@ final class MacNodeModeCoordinator: NSObject {
                 password: attempt.endpoint.config.password),
             connectOptions: attempt.options,
             sessionBox: attempt.sessionBox,
+            workerTransportURL: attempt.workerTransportURL,
             onConnected: { [weak self] in
                 guard let self else { return }
                 guard await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration) else { return }
@@ -737,14 +762,18 @@ final class MacNodeModeCoordinator: NSObject {
                 await self.nodeHostWorker?.cancel(invokeId: invokeId)
             },
             onRouteInvalidated: { [weak self] in
+                await self?.recordConnectedNodeId(nil, authorityGeneration: attempt.routeAuthorityGeneration)
                 await self?.retireDesktopRoute(
                     ifAuthorityGeneration: attempt.routeAuthorityGeneration, reason: "gateway-route-invalidated")
                 await self?.invalidateRuntimeRoute(authorityGeneration: attempt.routeAuthorityGeneration)
             })
     }
 
-    private func validatePostConnect(_ attempt: ConnectionAttempt) async throws -> Bool {
-        let postConnectEndpoint = try await self.endpointProvider()
+    func validatePostConnect(_ attempt: ConnectionAttempt) async throws -> Bool {
+        guard !Task.isCancelled,
+              attempt.routeAuthorityGeneration == self.routeAuthorityGeneration
+        else { return false }
+        let postConnectEndpoint = try await self.currentNodeEndpoint()
         guard Self.endpointAttemptCanConnect(
             capturedGeneration: attempt.endpointGeneration,
             currentGeneration: self.endpointAttemptGeneration,
@@ -856,8 +885,8 @@ extension MacNodeModeCoordinator {
             try await self.connect(attempt)
             return true
         } catch let error as GatewayTLSValidationError {
-            let currentEndpoint = try await self.endpointProvider()
-            guard !Task.isCancelled,
+            let currentEndpoint = try await self.currentNodeEndpoint()
+            guard attempt.workerTransportURL == nil, !Task.isCancelled,
                   attempt.endpointGeneration == self.endpointAttemptGeneration,
                   self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration, isPaused: self.lastObservedPaused),
                   Self.sameEndpoint(attempt.endpoint, currentEndpoint, allowLearnedPinRenewal: true)
@@ -879,13 +908,15 @@ extension MacNodeModeCoordinator {
     /// retries shortly); every other worker failure connects this Mac with
     /// native capabilities only and surfaces the reason to the operator.
     func resolveWorkerManifestForConnection(
-        provider: ComputerControlProvider) async throws
+        provider: ComputerControlProvider,
+        supportsDesktopStreaming: Bool = true) async throws
         -> (manifest: MacNodeHostManifest?, unavailable: (reason: String, diagnostic: String?)?)
     {
         do {
             let manifest = try await Self.workerManifest(
                 self.startNodeHostWorkerIfConfigured(provider: provider),
-                for: provider)
+                for: provider,
+                supportsDesktopStreaming: supportsDesktopStreaming)
             return (manifest, nil)
         } catch let backoff as MacNodeHostWorkerRetryPolicy.RetryBackoffPending {
             throw backoff
@@ -1216,19 +1247,23 @@ extension MacNodeModeCoordinator {
 
     nonisolated static func workerManifest(
         _ manifest: MacNodeHostManifest?,
-        for provider: ComputerControlProvider) -> MacNodeHostManifest?
+        for provider: ComputerControlProvider,
+        supportsDesktopStreaming: Bool = true) -> MacNodeHostManifest?
     {
         guard let manifest else { return nil }
-        guard provider == .peekaboo else { return manifest }
+        guard provider == .peekaboo || !supportsDesktopStreaming else { return manifest }
         let providerCommands = Set([
             OpenClawScreenCommand.snapshot.rawValue,
             OpenClawComputerCommand.act.rawValue,
         ])
         return MacNodeHostManifest(
             version: manifest.version,
-            caps: manifest.caps.filter { $0 != OpenClawCapability.computer.rawValue },
-            commands: manifest.commands.filter { !providerCommands.contains($0) },
-            computerUse: nil,
+            caps: manifest.caps.filter { provider != .peekaboo || $0 != OpenClawCapability.computer.rawValue },
+            commands: manifest.commands.filter {
+                (provider != .peekaboo || !providerCommands.contains($0)) &&
+                    (supportsDesktopStreaming || $0 != "desktop.stream")
+            },
+            computerUse: provider == .peekaboo ? nil : manifest.computerUse,
             pathEnv: manifest.pathEnv)
     }
 
@@ -1311,5 +1346,94 @@ extension MacNodeModeCoordinator {
             guard let self, let route = self.desktopRoute else { return }
             await self.installDesktopRoute(route, authorityGeneration: self.routeAuthorityGeneration)
         }
+    }
+}
+
+extension MacNodeModeCoordinator {
+    /// Selects only the node lane. Operator endpoints, credentials and chat remain unchanged.
+    func selectOpenClawIDTarget(_ target: MacNodeOpenClawIDTarget?) {
+        self.openClawIDSelectionStore?.save(target)
+        self.openClawIDSelection = .success(target)
+        self.enqueueRouteInvalidation(mode: .reconnectRefresh)
+    }
+
+    func isOpenClawIDTargetConnected(_ target: MacNodeOpenClawIDTarget) -> Bool {
+        guard let selected = try? self.openClawIDSelection.get(),
+              selected.enrollmentID == target.enrollmentID,
+              selected.hostname == target.hostname,
+              self.connectedNodeId != nil, let route = self.openClawIDRoute else { return false }
+        return (try? route.authority.check()) != nil
+    }
+
+    func openClawIDEnrollmentDescription() async throws -> OpenClawIDNodeEnrollmentDescription {
+        let provider = ComputerControlProvider.current()
+        let (manifest, _) = try await self.resolveWorkerManifestForConnection(
+            provider: provider, supportsDesktopStreaming: false)
+        let surface = self.advertisedSurface(
+            provider: provider,
+            workerManifest: manifest,
+            codexThreadCatalogEnabled: MacNodeCodexThreadCatalog.shouldAdvertise())
+        return try OpenClawIDNodeEnrollmentDescription(
+            displayName: InstanceIdentity.displayName,
+            platform: "macos",
+            commands: surface.commands,
+            caps: surface.caps)
+    }
+
+    private func advertisedSurface(
+        provider: ComputerControlProvider,
+        workerManifest: MacNodeHostManifest?,
+        codexThreadCatalogEnabled: Bool) -> (caps: [String], commands: [String])
+    {
+        let nativeCaps = Self.resolvedCaps(
+            computerControlProvider: provider,
+            connectionMode: AppStateStore.shared.connectionMode,
+            codexThreadCatalogEnabled: codexThreadCatalogEnabled)
+        return (
+            Self.mergingUnique(nativeCaps, workerManifest?.caps ?? []),
+            Self.mergingUnique(
+                Self.resolvedCommands(caps: nativeCaps, computerControlProvider: provider),
+                workerManifest?.commands ?? []))
+    }
+
+    private func prepareNodeEndpoint() async throws -> GatewayConnection.EndpointSnapshot {
+        try Task.checkCancellation()
+        if let target = try self.openClawIDSelection.get(), self.openClawIDRoute == nil {
+            let authority = MacNodeOpenClawIDRouteAuthority()
+            let task = Task { [weak self] in
+                try await MacNodeOpenClawIDTransport.prepare(
+                    selection: target,
+                    authority: authority,
+                    onInvalidated: { [weak self] in
+                        Task { @MainActor [weak self] in
+                            guard let self, self.openClawIDRoute?.authority === authority else { return }
+                            self.enqueueRouteInvalidation(mode: .reconnectRefresh)
+                        }
+                    })
+            }
+            self.openClawIDRoute = (authority, task)
+        }
+        return try await self.currentNodeEndpoint()
+    }
+
+    private func currentNodeEndpoint() async throws -> GatewayConnection.EndpointSnapshot {
+        try Task.checkCancellation()
+        guard try self.openClawIDSelection.get() != nil else { return try await self.endpointProvider() }
+        guard let route = self.openClawIDRoute else { throw CancellationError() }
+        let transport: MacNodeOpenClawIDTransport
+        do {
+            transport = try await route.task.value
+        } catch {
+            if self.openClawIDRoute?.authority === route.authority {
+                route.authority.revoke()
+                self.openClawIDRoute = nil
+            }
+            throw error
+        }
+        try route.authority.check()
+        return GatewayConnection.EndpointSnapshot(
+            config: (transport.logicalOrigin, nil, nil),
+            routeAuthority: self.routeAuthorityGeneration,
+            deviceAuthGatewayID: "openclaw-id:\(transport.clawID)")
     }
 }

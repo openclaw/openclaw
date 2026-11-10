@@ -39,9 +39,10 @@ struct OnboardingOpenClawIDView: View {
         VStack(spacing: 20) {
             OnboardingOpenClawIDContent(
                 step: self.model.step,
-                unavailableReason: self.model.unavailableReason,
+                unavailableReason: self.model.step == .signIn
+                    ? self.model.accountUnavailableReason : self.model.unavailableReason,
                 action: { self.model.perform($0) })
-                .disabled(self.model.busy)
+                .disabled(self.model.busy || self.model.unavailableReason != nil)
             if self.model.busy { ProgressView("Working…") }
             if let error = self.model.error {
                 Text(error).foregroundStyle(.orange).font(.callout)
@@ -59,6 +60,7 @@ struct OnboardingOpenClawIDContent: View {
     let step: OnboardingOpenClawIDStep
     let unavailableReason: String?
     let action: (OnboardingOpenClawIDAction) -> Void
+    @State private var discoveryOrigin = ""
 
     var body: some View {
         VStack(spacing: 18) {
@@ -71,6 +73,35 @@ struct OnboardingOpenClawIDContent: View {
     @ViewBuilder
     private var content: some View {
         switch self.step {
+        case .nodeInvitation:
+            self.heading("Use a node invitation", subtitle: "Ask the owner for a private node invitation.")
+            if let unavailableReason { Text(unavailableReason).foregroundStyle(.secondary) }
+            Text("""
+            Copy the private invitation, and enter the Discovery origin supplied by the owner. \
+            Neither account sign-in nor a Gateway token is needed.
+            """)
+            .foregroundStyle(.secondary)
+            TextField("Discovery origin (https://…)", text: self.$discoveryOrigin)
+                .textFieldStyle(.roundedBorder)
+            Button("Paste node invitation") {
+                self.action(.pasteNodeInvitation(discoveryOrigin: self.discoveryOrigin))
+            }
+            .buttonStyle(.borderedProminent).disabled(self.discoveryOrigin.isEmpty)
+            Text("""
+            The private invitation is read only when you choose Paste. \
+            It is not shown here or saved in preferences.
+            """)
+            .font(.caption).foregroundStyle(.secondary)
+        case let .nodeConnection(claw, connected):
+            self.heading(connected ? "Node connected" : "Node approved; connecting…", subtitle: claw)
+            self.row(
+                connected ? "Node connection verified" : "Waiting for the node connection",
+                detail: connected ? "The Gateway completed this Mac’s node handshake." :
+                    "Approval alone does not prove connectivity. Check again after the Mac connects.",
+                icon: connected ? "checkmark.circle" : "hourglass")
+            Text("Chat and account access are not configured by this invitation.")
+                .foregroundStyle(.secondary)
+            Button("Check connection") { self.action(.checkApproval) }
         case .signIn:
             self.heading("Sign in with OpenClaw ID", subtitle: "Choose an account to find your OpenClaw.")
             Image(systemName: "person.crop.circle").font(.system(size: 56)).foregroundStyle(.tint)
@@ -106,14 +137,17 @@ struct OnboardingOpenClawIDContent: View {
             Button("I’ve saved it") { self.action(.confirmRecoveryKit) }
                 .buttonStyle(.borderedProminent).disabled(!saved)
         case let .addMac(claw, device, capabilities):
-            self.heading("Add this Mac to \(claw)", subtitle: "Two separate approvals. You stay in control of each.")
+            self.heading("Add this Mac to \(claw)", subtitle: "Review this Mac’s requested node capabilities.")
             self.row(device, detail: "macOS · this device", icon: "laptopcomputer")
-            self.row("1. Add this Mac as a node", detail: capabilities, icon: "wrench.and.screwdriver")
+            ScrollView {
+                self.row("Node capabilities", detail: capabilities, icon: "wrench.and.screwdriver")
+            }
+            .frame(maxHeight: 160)
             self.row(
-                "2. Approve your chat access",
+                "Chat access stays separate",
                 detail: """
-                A separate account and identity for chat, Talk and permitted approvals. \
-                Not Gateway administration.
+                This node invitation does not sign you in, approve chat access, \
+                or grant Gateway administration.
                 """,
                 icon: "bubble.left.and.bubble.right")
             Button("Request node access") { self.action(.requestNode) }.buttonStyle(.borderedProminent)
@@ -122,7 +156,7 @@ struct OnboardingOpenClawIDContent: View {
             Text(code).font(.system(size: 42, weight: .semibold, design: .monospaced)).textSelection(.enabled)
             Text("Approve node access only if the six digits match. This code does not approve chat access.")
                 .foregroundStyle(.secondary)
-            self.row("Waiting for node approval", detail: "Chat access is a separate next step.", icon: "hourglass")
+            self.row("Waiting for node approval", detail: "Account and chat setup remain separate.", icon: "hourglass")
             self.browserApproval(approvalURL)
             Button("Check approval") { self.action(.checkApproval) }
         case let .chatAccess(claw, approvalURL):

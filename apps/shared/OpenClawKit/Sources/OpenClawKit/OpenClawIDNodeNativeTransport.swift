@@ -6,6 +6,7 @@ import OpenClawIroh
 /// In-process W owner. The caller must await shutdown when retiring its enrolled route.
 /// Discovery, pins and membership remain the enrollment/tunnel owners' responsibility.
 public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendable {
+    public static let isPackaged = true
     private let native: OpenClawIroh.Endpoint
     private let relayState = OpenClawIDNodeNativeRelayState()
     private let relayWatcher: Task<Void, Never>
@@ -220,6 +221,7 @@ private struct OpenClawIDNodeNativeStream: OpenClawIDNodeStream {
 // periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// The default app build does not package the experimental native transport.
 public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendable {
+    public static let isPackaged = false
     private init() {}
 
     public static func bind(identity: OpenClawIDNodeIdentity, relayURL: URL) async throws -> Self {

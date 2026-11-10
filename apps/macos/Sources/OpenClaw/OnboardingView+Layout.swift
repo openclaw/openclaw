@@ -321,13 +321,7 @@ extension OnboardingView {
         let findLockIndex = pageOrder.firstIndex(of: findPageIndex)
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
         let aiLockIndex = pageOrder.firstIndex(of: aiPageIndex)
-        let remoteGatewayDecision = Self.remoteGatewayAdvanceDecision(
-            connectionMode: state.connectionMode,
-            activePageIndex: findPageIndex,
-            connectionPageIndex: findPageIndex,
-            authIssue: remoteAuthIssue,
-            probeState: remoteProbeState,
-            input: remoteGatewayProbeInput)
+        let remoteGatewayDecision = self.findPageAdvanceDecision
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Color.clear
@@ -365,8 +359,8 @@ extension OnboardingView {
                         self.state.connectionMode != .unconfigured &&
                         !self.aiSetup.connected &&
                         index > (aiLockIndex ?? 0)
-                    let isFindLocked = findLockIndex != nil && self.savedBrowserGatewayName == nil &&
-                        (self.state.connectionMode != .remote || !remoteGatewayDecision.canAdvance) &&
+                    let isFindLocked = findLockIndex != nil &&
+                        (!self.canAdvanceFromFind || !remoteGatewayDecision.canAdvance) &&
                         index > (findLockIndex ?? 0)
                     let isLocked = isInstallLocked || isConnectionLocked || isFindLocked || isCLILocked || isAILocked
                     Button {
