@@ -56,6 +56,7 @@ export function withActivatedPluginIds(params: {
   const entries = {
     ...params.config?.plugins?.entries,
   };
+  const effectiveEntries = normalizePluginsConfig(params.config?.plugins).entries;
   let entryChanged = false;
   for (const pluginId of params.pluginIds) {
     const normalized = normalizePluginId(pluginId.trim());
@@ -66,13 +67,11 @@ export function withActivatedPluginIds(params: {
       continue;
     }
     allow.add(normalized);
-    const existingEntry =
-      entries[normalized] ??
-      Object.entries(entries).find(([key]) => normalizePluginId(key) === normalized)?.[1];
-    const enabled = existingEntry?.enabled !== false;
+    const enabled = effectiveEntries[normalized]?.enabled !== false;
     entryChanged ||= entries[normalized]?.enabled !== enabled;
     entries[normalized] = {
-      ...existingEntry,
+      // Keep raw policy fields in place; copying an alias would change merge precedence.
+      ...entries[normalized],
       enabled,
     };
   }

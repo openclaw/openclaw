@@ -4,6 +4,7 @@ import {
   makeRegistry,
 } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizePluginId } from "../../plugins/config-state.js";
 import { createInstalledPluginIndexFixture } from "../../plugins/gateway-startup.test-helpers.js";
 import * as installedManifests from "../../plugins/manifest-registry-installed.js";
 import { restorePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
@@ -384,7 +385,7 @@ describe("harness runtime plugins", () => {
       basePluginIds: [],
     });
     expect(plan.pluginIds).toEqual([pluginId]);
-    expect(plan.config?.plugins?.entries?.[pluginId]).toEqual({ enabled: true });
+    expect(plan.config?.plugins?.entries?.[normalizePluginId(pluginId)]).toEqual({ enabled: true });
   });
 
   it.each<[OpenClawConfig["plugins"], string[]]>([

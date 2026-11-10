@@ -4,6 +4,7 @@ import {
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -57,31 +58,40 @@ it.each<[string[], NonNullable<OpenClawConfig["plugins"]>]>([
   expect(withActivatedPluginIds({ config, pluginIds })).toEqual(expected);
   expect(config).toEqual(expected);
 });
-it("activates a canonical plugin when the allowlist differs only by case", () => {
-  const config = configWithAllow("Google");
-  expect(
-    withActivatedPluginIds({ config, pluginIds: ["google"] })?.plugins?.entries?.google?.enabled,
-  ).toBe(true);
-});
-
-it("activates a canonical plugin when the allowlist only names its alias", () => {
-  const config = configWithAllow("google-gemini-cli");
+it.each(["Google", "google-gemini-cli"])("activates an owner allowed as %s", (allowed) => {
+  const config = configWithAllow(allowed);
   const activated = withActivatedPluginIds({ config, pluginIds: ["google"] });
   expect(activated?.plugins?.entries?.google?.enabled).toBe(true);
   expect(activated?.plugins?.allow).toContain("google");
   expect(config.plugins?.entries?.google).toBeUndefined();
 });
 
-it("keeps an explicit alias disable when activating the canonical plugin id", () => {
+it.each([true, false])("preserves merged alias policy with effective enabled=%s", (enabled) => {
   const config: OpenClawConfig = {
     plugins: {
       allow: ["google-gemini-cli"],
-      entries: { "google-gemini-cli": { enabled: false } },
+      entries: {
+        Google: { enabled: true, hooks: { allowPromptModification: true } },
+        "google-gemini-cli": {
+          enabled,
+          hooks: { allowPromptModification: false },
+          subagent: { allowedModels: [] },
+          llm: { allowedCompletionModels: [] },
+          config: { retained: true },
+        },
+      },
     },
   };
   const activated = withActivatedPluginIds({ config, pluginIds: ["google"] });
-  expect(activated?.plugins?.entries?.google?.enabled).toBe(false);
-  expect(activated?.plugins?.entries?.["google-gemini-cli"]?.enabled).toBe(false);
+  expect(normalizePluginsConfig(activated?.plugins).entries.google).toEqual({
+    enabled,
+    hooks: { allowPromptModification: false },
+    subagent: { hasAllowedModelsConfig: true },
+    llm: { hasAllowedCompletionModelsConfig: true },
+    config: { retained: true },
+  });
+  expect(activated?.plugins?.entries?.google).toEqual({ enabled });
+  expect(config.plugins?.entries?.google).toBeUndefined();
 });
 
 it("passes the current manifest registry into activation auto-enable", () => {
