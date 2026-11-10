@@ -1,0 +1,4 @@
+# Regression coverage for PR fixing #196350: doctor reports the operator-owned
+# systemd drop-in guidance when installation drift is locked by a drop-in.
+# Exact net test-line growth for this change.
+56
