@@ -173,19 +173,14 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   const warmComposer = warm.getByRole("textbox");
   expect(warm.container.querySelector('.chat-thread[role="log"]')).toBeNull();
   expect(warm.container.querySelector(".chat-conversation-loading")).toBeNull();
-  warm.update({
-    chat: {
-      ...warm.chat,
-      messages: [{ role: "assistant", content: "Admitted warm history", timestamp: 2 }],
-    },
-  });
+  warm.update({ chat: { ...warm.chat, messages: latest.messages } });
   warmYield.resolve();
   await warmYield.promise;
   flush();
   expect(warm.getByRole("textbox")).toBe(warmComposer);
   expect(warm.container.querySelector('.chat-thread[role="log"]')).not.toBeNull();
   await settlePaints();
-  expect(warm.container.textContent).toContain("Admitted warm history");
+  expect(warm.container.textContent).toContain("Latest history");
   expect(warm.container.textContent).not.toContain("Initial history");
   warm.unmount();
 
