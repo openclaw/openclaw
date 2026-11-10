@@ -1,5 +1,6 @@
 import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
@@ -185,6 +186,57 @@ describe("inbound dispatch", () => {
       await owner.dispose();
     }
   });
+
+  it.each(["success", "refused", "failed"] as const)(
+    "retains the queued consumer until its cancellation borrow is returned (%s)",
+    async (outcome) => {
+      const { owner, dispatch } = createOwnedInboundFixture();
+      const gate = createDeferred<boolean>();
+      const failure = new Error("native cancellation failure");
+      const nativeCancel = vi.fn((assertCurrent: () => void) => {
+        assertCurrent();
+        return gate.promise;
+      });
+      let cancel: ((assertCurrent: () => void) => Promise<boolean>) | undefined;
+      let settle: (() => void | Promise<void>) | undefined;
+      let pending: Promise<boolean> | undefined;
+      dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
+        const lifecycle = turn.turnAdoptionLifecycle ?? turn.replyOptions?.turnAdoptionLifecycle;
+        lifecycle?.onDeferred?.();
+        settle = lifecycle?.onSettled;
+        turn.replyOptions?.onReplySourceCancellation?.(nativeCancel);
+        return { status: "handled" };
+      });
+      try {
+        await dispatch({
+          turnAdoptionLifecycle: { onAdopted() {} },
+          onReplySourceCancellation: (handle) => {
+            cancel = handle;
+          },
+        });
+        pending = cancel!(() => {});
+        void pending.catch(() => {});
+        await settle?.();
+        settle = undefined;
+        expect(owner.hasRetainedConsumers).toBe(true);
+        if (outcome === "failed") {
+          gate.reject(failure);
+          await expect(pending).rejects.toBe(failure);
+        } else {
+          gate.resolve(outcome === "success");
+          await expect(pending).resolves.toBe(outcome === "success");
+        }
+        expect(owner.hasRetainedConsumers).toBe(false);
+        expect(() => cancel!(() => {})).toThrow("consumer is closed");
+        expect(nativeCancel).toHaveBeenCalledOnce();
+      } finally {
+        gate.resolve(false);
+        await Promise.allSettled([pending]);
+        await settle?.();
+        await owner.dispose();
+      }
+    },
+  );
 
   it.each([false, true])(
     "preserves prepared lifecycle identity (mismatch=%s)",

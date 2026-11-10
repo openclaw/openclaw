@@ -152,6 +152,9 @@ export async function dispatchA2aInbound(params: {
     // starts a separate outbound message without that task correlation.
     replyOptions: {
       sourceReplyDeliveryMode: "automatic",
+      // Separate tasks must not share a collected run's cancellation ownership.
+      turnAdoptionLifecycle: { admission: "exclusive", onAdopted() {} },
+      onReplySourceCancellation: (cancel) => params.store.bindCancellation(params.taskId, cancel),
       onQueuedFollowupReplyBatch: deliverQueuedReply,
       onAgentRunTerminalOutcome: (outcome) => {
         runCompleted = outcome === "completed";

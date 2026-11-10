@@ -833,16 +833,103 @@ describe("A2A JSON-RPC protocol boundary", () => {
     });
   });
 
-  it("refuses cancellation instead of reporting a terminal state it cannot enforce", async () => {
+  it("refuses cancellation when the native source has not offered control", async () => {
     const harness = await startHttpHarness({ onDispatch: async () => {} });
     const id = await workingTask(harness);
 
-    // A dispatched agent run has no plugin-facing abort seam, so acknowledging
-    // cancellation would report a terminal state while the run kept going.
-    await expectReply(harness.post(taskRequest(id, "cancel", "tasks/cancel")), rpcError(-32004));
+    await expectReply(harness.post(taskRequest(id, "cancel", "tasks/cancel")), rpcError(-32002));
     await expectReply(harness.post(taskRequest(id, "after")), {
       result: { status: { state: "TASK_STATE_WORKING" } },
     });
+  });
+
+  it("persists cancellation only after owner settlement, with peer isolation and replay", async () => {
+    const terminalStore = createTerminalStoreFixture();
+    const writing = createDeferred<void>();
+    const committed = createDeferred<void>();
+    const register = terminalStore.register;
+    terminalStore.register = async (...args) => {
+      writing.resolve();
+      await committed.promise;
+      return register(...args);
+    };
+    const settled = createDeferred<boolean>();
+    const cancel = vi.fn(() => settled.promise);
+    const harness = await startHttpHarness({
+      terminalStore,
+      onDispatch: async ({ store, taskId }) => store.bindCancellation(taskId, cancel),
+    });
+    const cancelRequests = vi.spyOn(harness.taskStore, "cancel");
+    const request = sendRequest({ messageId: "cancel-replay", returnImmediately: true });
+    const { result } = (await (await harness.post(request)).json()) as {
+      result: { task: { id: string } };
+    };
+    const id = result.task.id;
+    await expectReply(
+      harness.post(taskRequest(id, "foreign", "CancelTask"), "beta-secret"),
+      rpcError(-32001),
+    );
+    expect(cancel).not.toHaveBeenCalled();
+    const first = harness.post(taskRequest(id, "cancel-1", "CancelTask"));
+    const replay = harness.post(taskRequest(id, "cancel-2", "tasks/cancel"));
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+    // Producer callbacks settle before the cancellation receipt; neither may win early.
+    await harness.taskStore.complete(id, undefined);
+    await harness.taskStore.fail(id, "Agent run failed");
+    await expectReply(harness.post(taskRequest(id)), {
+      result: { status: { state: "TASK_STATE_WORKING" } },
+    });
+    settled.resolve(true);
+    await writing.promise;
+    const duringWrite = harness.post(taskRequest(id, "cancel-3", "CancelTask"));
+    await vi.waitFor(() => expect(cancelRequests).toHaveBeenCalledTimes(3));
+    committed.resolve();
+    const canceled = { id, status: { state: "TASK_STATE_CANCELED" } };
+    await expectReply(first, { result: canceled });
+    await expectReply(replay, { result: canceled });
+    await expectReply(duringWrite, { result: canceled });
+    await harness.taskStore.complete(id, "late response");
+    await expectReply(harness.post(request), taskResult({ ...canceled, artifacts: [] }));
+    expect(harness.onDispatch).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+    await harness.stop();
+    const reopened = await startHttpHarness({ terminalStore });
+    await expectReply(reopened.post(taskRequest(id, "retry", "CancelTask")), { result: canceled });
+    await expectReply(reopened.post(request), taskResult(canceled));
+    expect(reopened.onDispatch).not.toHaveBeenCalled();
+  });
+
+  it("retains confirmed cancellation when authority is revoked before disclosure", async () => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const effect = vi.fn();
+    const harness = await startHttpHarness({
+      onDispatch: async ({ store, taskId }) =>
+        store.bindCancellation(taskId, async (assertCurrent) => {
+          assertCurrent();
+          effect();
+          entered.resolve();
+          await release.promise;
+          return true;
+        }),
+    });
+    const id = await workingTask(harness);
+    const canceled = harness.post(taskRequest(id, "cancel", "CancelTask"));
+    await entered.promise;
+    const candidate = structuredClone(harness.runtime.config.current({ clone: true }));
+    candidate.channels!.a2a!.peers!.alpha!.token = "replacement-secret";
+    vi.mocked(harness.runtime.config.current).mockReturnValue(candidate);
+    release.resolve();
+    const response = await canceled;
+    expect(response.status).toBe(401);
+    expect(await response.text()).not.toContain(id);
+    await expectReply(harness.post(taskRequest(id), "replacement-secret"), {
+      result: { id, status: { state: "TASK_STATE_CANCELED" } },
+    });
+    await expectReply(harness.post(taskRequest(id, "replay", "CancelTask"), "replacement-secret"), {
+      result: { id, status: { state: "TASK_STATE_CANCELED" } },
+    });
+    expect(effect).toHaveBeenCalledOnce();
   });
 
   it("transitions the task to FAILED when inbound dispatch throws", async () => {

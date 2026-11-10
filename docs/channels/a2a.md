@@ -118,9 +118,22 @@ curl http://127.0.0.1:18789/a2a/v1 \
   }'
 ```
 
-The task transitions from `TASK_STATE_WORKING` to `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, or `TASK_STATE_REJECTED`. Older clients can use `tasks/get` as a compatibility alias.
+The task transitions from `TASK_STATE_WORKING` to `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, `TASK_STATE_CANCELED`, or `TASK_STATE_REJECTED`. Older clients can use `tasks/get` as a compatibility alias.
 
-`CancelTask` is refused with JSON-RPC error `-32004` rather than acknowledged. A dispatched agent run has no plugin API for stopping it, so reporting `TASK_STATE_CANCELED` would tell the peer the work stopped while the run kept using tools. Refusing keeps the reported state honest.
+## Cancel a task
+
+Send `CancelTask` (or `tasks/cancel`) with the same `{ "id": "<task-id>" }` params
+and the owning peer's credentials. The Gateway withdraws that task's queued input
+or stops its independently owned active turn. It returns `TASK_STATE_CANCELED`
+only after the execution owner confirms cancellation and its cleanup settles.
+Other tasks in the same context keep their queue order and are not canceled.
+
+Unknown, expired, and other peers' task IDs return `-32001`. Tasks without an
+independent live cancellation source, including completed tasks and inputs already
+injected into a shared run, return `-32002` (`TaskNotCancelableError`). Repeating a
+successful cancellation returns the retained canceled task. Replaying its original
+message ID also returns that task without another execution. Cancellation does not
+undo tool calls or external effects that already happened.
 
 ## Configure outbound peers
 
@@ -149,8 +162,9 @@ Agent replies, including queued followups, deliver only terminal reply content t
 Host status notices, including metadata-only diagnostics, and run-failure messages are not
 forwarded as new peer messages or task artifacts. A failed agent run instead marks its
 originating task `TASK_STATE_FAILED` with the reason `Agent run failed`, including when the
-run was queued. If collect mode combines requests, a failed run marks every originating
-task failed. This does not change error reporting on human-facing channels.
+run was queued. A2A tasks retain separate adoption identities even in collect mode,
+so each task owns its execution and cancellation. This does not change collection
+or error reporting on human-facing channels.
 
 ## Configuration reference
 
@@ -198,7 +212,7 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 
 ## A2A 1.0 limitations
 
-The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
+The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task listing, extended Agent Cards, and multi-tenant routing are not supported.
 
 The Agent Card advertises `pushNotifications: false`. Push notification configuration methods return JSON-RPC error `-32003` (`PushNotificationNotSupportedError`), as required by the [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/#334-capability-validation). Other recognized unsupported methods return `-32004`; unknown method names return `-32601`.
 

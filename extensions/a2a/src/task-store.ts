@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
-import type { A2aMessageRecord, A2aTaskRecord } from "./protocol.js";
+import { A2aProtocolError, type A2aMessageRecord, type A2aTaskRecord } from "./protocol.js";
 
 const A2A_TERMINAL_MAX_TASKS = 500;
 const A2A_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -51,6 +52,11 @@ function isDefiniteStorageRefusal(
 }
 
 type A2aTaskWaiter = (task: A2aTaskRecord) => void;
+type CancelSource = Parameters<NonNullable<GetReplyOptions["onReplySourceCancellation"]>>[0];
+type PendingCancellation = {
+  result: Promise<A2aTaskRecord>;
+  terminal?: A2aTaskRecord;
+};
 
 function isTerminalTask(task: A2aTaskRecord): boolean {
   return [
@@ -80,6 +86,8 @@ export class A2aTaskStore {
 
   readonly #writes = new Map<string, Promise<A2aTaskRecord | undefined>>();
   readonly #starts = new Map<string, Promise<void>>();
+  readonly #cancelSources = new Map<string, CancelSource>();
+  readonly #cancellations = new Map<string, PendingCancellation>();
 
   #lastFinishKey = 0;
   #stopped = false;
@@ -165,6 +173,55 @@ export class A2aTaskStore {
     return this.#tasks.get(taskId);
   }
 
+  bindCancellation(taskId: string, cancel: CancelSource): void {
+    const task = this.#tasks.get(taskId);
+    if (!this.#stopped && task && !isTerminalTask(task) && !this.#writes.has(taskId)) {
+      this.#cancelSources.set(taskId, cancel);
+    }
+  }
+
+  cancel(taskId: string, ownerPeer: string, assertCurrent: () => void): Promise<A2aTaskRecord> {
+    const task = this.get(taskId, ownerPeer);
+    if (!task) {
+      throw new A2aProtocolError(-32001, "Task not found");
+    }
+    if (task.status.state === "TASK_STATE_CANCELED") {
+      return Promise.resolve(task);
+    }
+    const existing = this.#cancellations.get(taskId);
+    if (existing) {
+      return existing.result;
+    }
+    const cancel = this.#cancelSources.get(taskId);
+    if (this.#stopped || isTerminalTask(task) || this.#writes.has(taskId) || !cancel) {
+      throw new A2aProtocolError(-32002, "Task is not cancelable");
+    }
+    const pending: PendingCancellation = {
+      result: Promise.resolve().then(async () => {
+        let cancelled = false;
+        try {
+          assertCurrent();
+          cancelled = await cancel(assertCurrent);
+          if (!cancelled) {
+            throw new A2aProtocolError(-32002, "Task is not cancelable");
+          }
+          await this.#finishWithMessage(taskId, "TASK_STATE_CANCELED", "Task canceled by its peer");
+          this.#cancellations.delete(taskId);
+          return task;
+        } catch (error) {
+          this.#cancellations.delete(taskId);
+          // A refused/failed cancellation cannot replace the original producer's result.
+          if (!cancelled && pending.terminal) {
+            await this.#finishTask(task, pending.terminal);
+          }
+          throw error;
+        }
+      }),
+    };
+    this.#cancellations.set(taskId, pending);
+    return pending.result;
+  }
+
   async start(taskId: string): Promise<A2aTaskRecord | undefined> {
     const existing = this.#starts.get(taskId);
     if (existing) {
@@ -244,6 +301,7 @@ export class A2aTaskStore {
 
   async stop(): Promise<void> {
     this.#stopped = true;
+    await Promise.allSettled([...this.#cancellations.values()].map(({ result }) => result));
     const results = await Promise.allSettled(
       [...this.#tasks.values()].map((task) =>
         this.fail(task.id, "A2A channel stopped before completing the task"),
@@ -255,6 +313,7 @@ export class A2aTaskStore {
     }
     this.#writes.clear();
     this.#starts.clear();
+    this.#cancelSources.clear();
     this.#messageTasks.clear();
     this.#taskMessageKeys.clear();
     this.#terminalTasks.clear();
@@ -264,7 +323,7 @@ export class A2aTaskStore {
 
   async #finishWithMessage(
     taskId: string,
-    state: "TASK_STATE_FAILED" | "TASK_STATE_REJECTED",
+    state: "TASK_STATE_FAILED" | "TASK_STATE_REJECTED" | "TASK_STATE_CANCELED",
     reason: string,
   ): Promise<A2aTaskRecord | undefined> {
     const task = this.#tasks.get(taskId);
@@ -281,10 +340,18 @@ export class A2aTaskStore {
   }
 
   #finishTask(task: A2aTaskRecord, terminal: A2aTaskRecord): Promise<A2aTaskRecord | undefined> {
+    const cancellation = this.#cancellations.get(task.id);
+    if (cancellation && terminal.status.state !== "TASK_STATE_CANCELED") {
+      // Aborted-run callbacks participate in owner settlement. Do not deadlock
+      // that settlement on this request or publish them before its receipt.
+      cancellation.terminal ??= terminal;
+      return Promise.resolve(task);
+    }
     const existing = this.#writes.get(task.id);
     if (existing) {
       return existing;
     }
+    this.#cancelSources.delete(task.id);
     const finishedAt = Date.now();
     // The keyed owner breaks same-millisecond eviction ties by key. Keep those
     // keys in finish order without changing the original completion time.
@@ -358,6 +425,7 @@ export class A2aTaskStore {
       this.#taskMessageKeys.delete(taskId);
     }
     this.#starts.delete(taskId);
+    this.#cancelSources.delete(taskId);
     this.#writes.delete(taskId);
     this.#terminalTasks.delete(taskId);
     this.#taskOwners.delete(taskId);

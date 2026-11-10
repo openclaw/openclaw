@@ -12,6 +12,7 @@ import {
   retireSessionControllerInput,
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
+import { cancelSessionControllerSource } from "../../sessions/session-controller.stop.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
 import type { MsgContext } from "../templating.js";
@@ -26,6 +27,13 @@ type ReplySourcePreparationRetry = <T>(work: () => Promise<T>) => Promise<T>;
 type SourceWithPreparationRetry = SessionControllerInput & {
   [sourcePreparationRetry]?: ReplySourcePreparationRetry;
 };
+
+/** Hand out only this source's cancellation; retained handles cannot select successors. */
+function offerSourceCancellation(options: InternalGetReplyOptions, input: SessionControllerInput) {
+  const notify = options.onReplySourceCancellation;
+  delete options.onReplySourceCancellation;
+  notify?.((assertCurrent) => cancelSessionControllerSource(input, assertCurrent));
+}
 
 /** Gateway-owned retry policy follows its exact source without expanding public option types. */
 export function bindReplySourcePreparationRetry(
@@ -77,6 +85,7 @@ export async function prepareReplySourceInput(
   const sessionKey = ctx.SessionKey?.trim() || ctx.CommandTargetSessionKey?.trim();
   const existing = readReplySourceInput(prepared);
   if (existing) {
+    offerSourceCancellation(prepared, existing);
     const signal = existing.claim?.operation?.abortSignal ?? existing.abortSignal;
     prepared.abortSignal =
       prepared.abortSignal && prepared.abortSignal !== signal
@@ -122,6 +131,12 @@ export async function prepareReplySourceInput(
       authority: options?.operatorAuthority,
     },
   });
+  try {
+    offerSourceCancellation(prepared, input);
+  } catch (error) {
+    retireSessionControllerInput(input);
+    throw error;
+  }
   prepared.abortSignal = input.abortSignal;
   return { options: bindReplySourceInput(prepared, input), input, created: true };
 }

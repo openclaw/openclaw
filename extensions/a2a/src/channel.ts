@@ -353,7 +353,7 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
               if (method === "unsupported") {
                 throw new A2aProtocolError(
                   -32004,
-                  "Unsupported operation; supported methods are SendMessage and GetTask",
+                  "Unsupported operation; supported methods are SendMessage, GetTask and CancelTask",
                 );
               }
 
@@ -449,7 +449,10 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                 if (!task) {
                   throw new A2aProtocolError(-32001, "Task not found");
                 }
-                result = task;
+                result =
+                  method === "CancelTask"
+                    ? await store.cancel(task.id, peerName, authorization.assertCurrent)
+                    : task;
               }
             } catch (error) {
               if (notification) {

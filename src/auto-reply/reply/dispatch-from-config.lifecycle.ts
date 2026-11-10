@@ -191,11 +191,15 @@ export function createDispatchReplyOperationCoordinator(
       ? preDispatchLifecycleAdmission.run(runAsSource)
       : Promise.resolve().then(runAsSource);
     if (input) {
-      // The abort race is cancellation; raw resolver failures have their own receipt.
+      // The abort race and this source's exact native abort are cancellation;
+      // unrelated raw resolver failures retain their cleanup receipt.
       trackSessionControllerSourceWork(
         input,
         work.catch((error: unknown) => {
-          if (!isDispatchReplyOperationAbortedError(error)) {
+          if (
+            !isDispatchReplyOperationAbortedError(error) &&
+            (!input.abortSignal.aborted || error !== input.abortSignal.reason)
+          ) {
             throw error;
           }
         }),
