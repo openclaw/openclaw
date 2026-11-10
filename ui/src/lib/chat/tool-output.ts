@@ -1,7 +1,6 @@
 import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { applyEdits, format } from "jsonc-parser";
-import { parseMarkdownJson } from "../../components/markdown-json.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard } from "./chat-types.ts";
@@ -33,18 +32,27 @@ export function toolOutputSourceLabel(card: ToolCard): string {
   );
 }
 
+// Whitespace-only edits preserve duplicate members and exact number/string lexemes.
+function formatJsonText(text: string): string {
+  return /^\s*[[{]/u.test(text) && safeParseJson(text) !== undefined
+    ? applyEdits(text, format(text, undefined, { insertSpaces: true, tabSize: 2 }))
+    : text;
+}
+
 /** Format for display while preserving the captured bytes for Raw/Copy/Download. */
 export function formatToolOutput(card: ToolCard): string | undefined {
   const text = card.outputText;
+  if (text === undefined || card.preview) {
+    return text;
+  }
+  // Tool results reach the model as compact JSON; indent them only for display.
   if (
-    text === undefined ||
-    card.preview ||
     card.toolOutput?.source !== "provider-response" ||
     card.name !== "exec" ||
     !isRecord(card.args) ||
     typeof card.args.input !== "string"
   ) {
-    return text;
+    return formatJsonText(text);
   }
   const parts = safeParseJson(text);
   if (
@@ -54,7 +62,7 @@ export function formatToolOutput(card: ToolCard): string | undefined {
       (part) => isRecord(part) && part.type === "input_text" && typeof part.text === "string",
     )
   ) {
-    return text;
+    return formatJsonText(text);
   }
   return parts
     .filter(
@@ -77,11 +85,7 @@ export function formatToolOutput(card: ToolCard): string | undefined {
         )
           ? { text: value.output, exitCode: value.exit_code }
           : undefined;
-      const output = execution?.text ?? responseText;
-      // Whitespace-only edits preserve duplicate members and exact number/string lexemes.
-      const formatted = parseMarkdownJson(output)?.root
-        ? applyEdits(output, format(output, undefined, { insertSpaces: true, tabSize: 2 }))
-        : output;
+      const formatted = formatJsonText(execution?.text ?? responseText);
       return execution && execution.exitCode !== 0
         ? `${t("chat.toolCards.exitCode", { code: String(execution.exitCode) })}\n${formatted}`
         : formatted;

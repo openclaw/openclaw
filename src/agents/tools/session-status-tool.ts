@@ -684,7 +684,7 @@ export function createSessionStatusTool(opts?: {
           const routeContextText = Object.keys(routeDetails).length
             ? `Route context:
 \`\`\`json
-${JSON.stringify(routeDetails, null, 2)}
+${JSON.stringify(routeDetails)}
 \`\`\``
             : undefined;
           const stateVersion = await getSessionStateVersion(scopedResolved.key, agentId);

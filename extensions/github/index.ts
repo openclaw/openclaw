@@ -56,7 +56,7 @@ async function wrappedGitHubResult(
   context.assertInvocationCurrent();
   signal?.throwIfAborted();
   return textResult(
-    wrapExternalContent(JSON.stringify(result, null, 2), { source: "api", includeWarning: false }),
+    wrapExternalContent(JSON.stringify(result), { source: "api", includeWarning: false }),
     result,
   );
 }

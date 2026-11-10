@@ -70,6 +70,13 @@ describe("ToolExecutionComponent", () => {
     }
   });
 
+  it("renders compact JSON tool results literally", () => {
+    const text = JSON.stringify({ value: "**stars** _under_ `tick`", path: "a\\b" });
+    const { component } = renderToolOutput(text, 1_024);
+    component.setExpanded(true);
+    expectText(render(component, 1_024), [text]);
+  });
+
   it("keeps Code Mode literal output bounded and terminal-safe through expansion", () => {
     const attack = "\x1b]52;c;SYNTHETIC_CLIPBOARD_PAYLOAD\x07";
     const text = `START_LITERAL ${attack}\u202eمرحبا\u202c\r\n${"**literal**".repeat(2_048)} END_LITERAL`;
