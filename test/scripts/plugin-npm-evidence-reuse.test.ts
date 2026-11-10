@@ -274,6 +274,51 @@ it.each([false, true])(
   },
 );
 
+it("replays completed attempts and SHA lineage through the real evidence client", () => {
+  const base = "a".repeat(40);
+  const head = "b".repeat(40);
+  const run = { id: 40, run_attempt: 1, status: "completed", conclusion: "success" };
+  transport.read = vi.fn(() => JSON.stringify(run));
+  const writer = createReleaseEvidenceReplay({});
+  const client = createReleaseEvidenceClient("openclaw/openclaw", { immutableReads: writer });
+  const read = (owner: ReturnType<typeof createReleaseEvidenceClient>) => [
+    owner.getRunAttempt(40, 1),
+    owner.compareCommitLineage(base, head),
+    owner.compareCommits(base, head),
+  ];
+  const expected = read(client);
+  expect(transport.read).toHaveBeenCalledTimes(3);
+  transport.read = vi.fn(() => {
+    throw new Error("immutable evidence reacquired");
+  });
+  const replay = createReleaseEvidenceReplay({}, JSON.parse(writer.serialize()));
+  expect(
+    read(createReleaseEvidenceClient("openclaw/openclaw", { immutableReads: replay })),
+  ).toEqual(expected);
+  expect(transport.read).not.toHaveBeenCalled();
+  transport.read = vi.fn(() => JSON.stringify({ status: "ahead" }));
+  client.compareCommitLineage(base, "main");
+  createReleaseEvidenceClient("openclaw/openclaw", { immutableReads: replay }).compareCommitLineage(
+    base,
+    "main",
+  );
+  expect(transport.read).toHaveBeenCalledTimes(2);
+});
+
+it("keeps nonterminal exact attempts live and rejects them in retained payloads", () => {
+  const route = "actions/runs/40/attempts/1";
+  const raw = JSON.stringify({ status: "in_progress" });
+  const writer = createReleaseEvidenceReplay({});
+  expect(writer.text(route, () => raw)).toBe(raw);
+  const payload = JSON.parse(writer.serialize());
+  expect(payload.entries).toEqual([]);
+  const fresh = vi.fn(() => raw);
+  expect(createReleaseEvidenceReplay({}, payload).text(route, fresh)).toBe(raw);
+  expect(fresh).toHaveBeenCalledOnce();
+  payload.entries.push([route, { kind: "text", data: raw, sha256: digest(raw) }]);
+  expect(() => createReleaseEvidenceReplay({}, payload)).toThrow(/Only completed exact-attempt/);
+});
+
 it("keeps nonterminal historical job pages live without serializing their status", async () => {
   const route = "actions/runs/101/attempts/1/jobs?per_page=100&page=1";
   const raw = JSON.stringify({ total_count: 1, jobs: [{ id: 123, status: "queued" }] });
@@ -591,16 +636,18 @@ it("preserves the public return-time gate but removes exactly one CLI combined g
   // Compare the real final callback with the eliminated identical boundary.
   // The raw fixture graph is smaller than the saved production trace.
   expect(removed).toBe(finalGateCalls.length);
-  // The completed admission job page now replays; the 17 live reads still run.
+  // The completed admission attempt and job page replay; its current run and
+  // permissions remain live. The exact-attempt read removes one of the 17 reads.
   expect(finalGateCalls).not.toContain("actions/runs/40/attempts/1/jobs?per_page=100");
+  expect(finalGateCalls).not.toContain("actions/runs/40/attempts/1");
   expect(finalGateCalls).toEqual(
     expect.arrayContaining([
       "actions/artifacts/70",
-      "actions/runs/40/attempts/1",
+      "actions/runs/40",
       "collaborators/release-operator/permission",
     ]),
   );
-  expect(removed).toBe(17);
+  expect(removed).toBe(16);
   expect(f.calls.length).toBe(publicFetchCalls);
   expect(f.source.calls.filter((route) => route === "actions/runs/800")).toHaveLength(2);
   console.log(
