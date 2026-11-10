@@ -3,7 +3,7 @@
 // others. Revoking also removes the devices the revoked one approved; the dialog
 // names them first. Device keys are per claw, so a removal applies to this claw.
 import "./owner-devices-dialog.css";
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
 import {
   displayFingerprint,
   fingerprint,
@@ -27,6 +27,7 @@ import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { IconButton } from "../solid/icon-button.tsx";
+import { Icon } from "../solid/icon.tsx";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { showOwnerApprovalDialog } from "./owner-approval-dialog.tsx";
 
@@ -59,13 +60,18 @@ function DeviceRow(props: {
   canRevoke: boolean;
   busy: boolean;
   confirming: boolean;
+  registerElement: (element: HTMLDivElement) => () => void;
   onConfirm: (confirming: boolean) => void;
   onRevoke: () => void;
 }) {
+  let rowElement: HTMLDivElement | undefined;
+  onSettled(() => props.registerElement(rowElement!));
   return (
     <div
+      ref={(element) => {
+        rowElement = element;
+      }}
       role="listitem"
-      data-device-pub={props.device.devicePub}
       class={[
         "row openclaw-id-devices__row",
         { "openclaw-id-devices__row--confirming": props.confirming },
@@ -76,9 +82,6 @@ function DeviceRow(props: {
           <span class="openclaw-id-devices__name" title={props.device.label}>
             {props.device.label}
           </span>
-          <Show when={props.isThisBrowser}>
-            <span class="chip">{t("openclawId.thisBrowser")}</span>
-          </Show>
         </strong>
         <div class="muted openclaw-id-devices__hint">
           {props.device.peerKeys.length > 0
@@ -92,13 +95,16 @@ function DeviceRow(props: {
               : t("openclawId.approvedByRemoved")}
         </div>
       </div>
+      <Show when={props.isThisBrowser}>
+        <span class="chip">{t("openclawId.thisBrowser")}</span>
+      </Show>
       <Show when={props.canRevoke && !props.isThisBrowser}>
         <Show
           when={props.confirming}
           fallback={
             <button
               type="button"
-              class="btn btn--sm openclaw-id-devices__revoke"
+              class="openclaw-id-devices__revoke"
               disabled={props.busy}
               onClick={() => props.onConfirm(true)}
             >
@@ -155,8 +161,10 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
       const [localOperator, setLocalOperator] = createSignal(false);
       const [busy, setBusy] = createSignal(false);
       const [confirming, setConfirming] = createSignal<string | null>(null);
+      const [securityOpen, setSecurityOpen] = createSignal(false);
+      const securityId = createUniqueId();
       const [error, setError] = createSignal<OpenClawIdUiError | null>(null);
-      let listElement: HTMLDivElement | undefined;
+      const rowElements = new Map<string, HTMLDivElement>();
       let revocationPending = false;
       const refresh = async () => {
         try {
@@ -175,9 +183,9 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
           ) {
             const remaining = new Set(next.ownerDevices?.map((device) => device.devicePub));
             await Promise.all(
-              Array.from(listElement?.querySelectorAll<HTMLElement>("[data-device-pub]") ?? [])
-                .filter((row) => !remaining.has(row.dataset.devicePub!))
-                .map((row) =>
+              [...rowElements]
+                .filter(([key]) => !remaining.has(key))
+                .map(([, row]) =>
                   row
                     .animate([{ opacity: 1 }, { opacity: 0 }], { duration: 180, fill: "forwards" })
                     .finished.catch(() => {}),
@@ -222,7 +230,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
       });
       return (
         <openclaw-modal-dialog
-          class="openclaw-id-owner-dialog"
+          class="openclaw-id-owner-dialog openclaw-id-owner-dialog--devices"
           label={t("openclawId.yourDevices")}
           description={t("openclawId.yourDevicesBody")}
           onModal-cancel={() => modal.finish(undefined)}
@@ -246,19 +254,11 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                 </div>
               )}
             </Show>
-            <Show when={link() && !ownPub()}>
-              <div class="callout info" role="note">
-                {localOperator()
-                  ? t("openclawId.approvalRequiresKey")
-                  : t("openclawId.notOwnerDevice")}
-              </div>
-            </Show>
             <div
-              ref={(element) => {
-                listElement = element;
-              }}
               class="list openclaw-id-devices__list"
               role="list"
+              tabindex={0}
+              aria-label={t("openclawId.yourDevices")}
             >
               <For each={devices()} keyed={(device) => device.devicePub}>
                 {(device) => (
@@ -274,25 +274,45 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                     canRevoke={Boolean(ownPub())}
                     busy={busy()}
                     confirming={confirming() === device().devicePub}
+                    registerElement={(element) => {
+                      // The keyed row owns this registration until it unmounts.
+                      const initialDevicePub = device().devicePub;
+                      rowElements.set(initialDevicePub, element);
+                      return () => {
+                        rowElements.delete(initialDevicePub);
+                      };
+                    }}
                     onConfirm={(value) => setConfirming(value ? device().devicePub : null)}
                     onRevoke={() => void revoke(device())}
                   />
                 )}
               </For>
             </div>
-            <div class="openclaw-id-devices__footer">
+            <div id={securityId} class="openclaw-id-devices__kit" hidden={!securityOpen()}>
               <Show when={ownerFp()}>
                 {(fp) => (
-                  <div class="muted openclaw-id-devices__kit">
+                  <>
+                    <dl>
+                      <dt>{t("openclawId.kitOwnerFingerprint")}</dt>
+                      <dd>{fp()}</dd>
+                    </dl>
                     <p>{t("openclawId.recoveryKitLine")}</p>
-                    <details>
-                      <summary>{t("openclawId.securityDetails")}</summary>
-                      <div>
-                        {t("openclawId.kitOwnerFingerprint")}: {fp()}
-                      </div>
-                    </details>
-                  </div>
+                  </>
                 )}
+              </Show>
+            </div>
+            <div class="openclaw-id-devices__footer">
+              <Show when={ownerFp()}>
+                <button
+                  type="button"
+                  class="openclaw-id-devices__security"
+                  aria-expanded={securityOpen() ? "true" : "false"}
+                  aria-controls={securityId}
+                  onClick={() => setSecurityOpen((open) => !open)}
+                >
+                  {t("openclawId.securityDetails")}
+                  <Icon name="chevronDown" />
+                </button>
               </Show>
               <Show when={localOperator() && ownPub()}>
                 <openclaw-modal-actions>

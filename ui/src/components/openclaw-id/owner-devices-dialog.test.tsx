@@ -15,29 +15,43 @@ beforeEach(() => {
 });
 afterEach(() => endFeature());
 
-// Empty owner-device state avoids keys and exercises the production dialog gate.
 describe("Your devices actions", () => {
   afterEach(() => {
     cleanupSolid();
   });
   it.each(["local_operator", "tunnel", null])(
-    "offers no owner reset on any channel (%s)",
+    "shows devices and security details without management controls when keyless (%s)",
     async (channel) => {
       const request = vi.fn(async (method: string) =>
-        method === "openclawId.people" ? { link: { linked: true, ownerDevices: [] } } : { channel },
+        method === "openclawId.people"
+          ? {
+              link: {
+                linked: true,
+                rootPub: `ed25519:${"11".repeat(32)}`,
+                ownerDevices: [
+                  { devicePub: "ed25519:other", label: "Laptop", peerKeys: [], approvedBy: "root" },
+                ],
+              },
+            }
+          : { channel },
       );
       const done = showOwnerDevicesDialog({
         client: { request } as unknown as GatewayBrowserClient,
       });
       await vi.waitFor(() => expect(document.body.textContent).toContain("Your devices"));
       await vi.waitFor(() => expect(request).toHaveBeenCalledWith("openclawId.status", {}));
-      await vi.waitFor(() =>
-        expect(document.body.textContent).toContain(
-          channel === "local_operator"
-            ? "Use your recovery kit or another approved owner browser"
-            : "This browser",
-        ),
-      );
+      const security = () => document.querySelector<HTMLButtonElement>("button[aria-expanded]");
+      await vi.waitFor(() => expect(security()).not.toBeNull());
+      expect(document.querySelector<HTMLElement>('[role="list"]')?.tabIndex).toBe(0);
+      expect(document.querySelector('[role="listitem"]')?.textContent).toContain("Laptop");
+      expect(document.querySelector('[role="note"]')).toBeNull();
+      expect(document.body.textContent).not.toContain("Remove access");
+      const details = document.getElementById(security()!.getAttribute("aria-controls")!)!;
+      expect(details.hidden).toBe(true);
+      security()!.click();
+      await vi.waitFor(() => expect(details.hidden).toBe(false));
+      expect(details.textContent).toContain("Recovery kit ID");
+      expect(details.querySelector("dd")?.textContent).toMatch(/\S+/);
       expect(
         Array.from(document.querySelectorAll("button")).some(
           (button) => button.textContent?.trim() === "Approve a new device",
@@ -73,10 +87,10 @@ describe("approved by", () => {
     });
     const phonePub = `ed25519:${"11".repeat(32)}`;
     let ownerDevices = [
-      device("Laptop", "root", own),
       device("Phone", "fp:Laptop", phonePub),
       device("Tablet", "fp:Phone"),
       device("Watch", "fp:gone"),
+      device("Laptop", "root", own),
     ];
     const submission = Promise.withResolvers<void>();
     const request = vi.fn(async (method: string) => {
@@ -104,9 +118,17 @@ describe("approved by", () => {
           (candidate.getAttribute("aria-label") ?? candidate.textContent?.trim()) === name,
       );
     await vi.waitFor(() => expect(button(phone(), "Remove access")).toBeDefined());
+    expect(document.querySelector('[role="listitem"]')?.textContent).toContain("Laptop");
     expect(document.body.textContent).toContain("Approved with the recovery kit");
     expect(document.body.textContent).toContain("Approved by Laptop");
     expect(document.body.textContent).toContain("Approved by a device that was removed");
+    button(phone(), "Remove access")?.click();
+    const watch = Array.from(document.querySelectorAll('[role="listitem"]')).find((row) =>
+      row.textContent?.startsWith("Watch"),
+    );
+    button(watch, "Remove access")?.click();
+    await vi.waitFor(() => expect(button(watch, "Cancel")).toBeDefined());
+    expect(button(phone(), "Cancel")).toBeUndefined();
     button(phone(), "Remove access")?.click();
     await vi.waitFor(() =>
       expect(phone()?.querySelector('[role="note"]')?.textContent).toBe(
