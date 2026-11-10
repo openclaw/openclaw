@@ -124,6 +124,7 @@ export const usersChannelIdentityHandlers: GatewayRequestHandlers = {
         const session = createProviderBrowserAuthSession({
           signal: action.signal,
           browserOrigin: client?.browserOrigin,
+          authPolicy: client?.authPolicy,
           browserBinding: {
             cookieName: "openclaw-channel-link-" + params.browserNonce,
             cookieValue: params.browserNonce,

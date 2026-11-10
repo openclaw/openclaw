@@ -282,7 +282,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(chrome.stop).not.toHaveBeenCalled();
   });
 
-  it("cools down repeated managed Chrome launch failures across route contexts", async () => {
+  it("cools down managed Chrome launch failures across contexts and clock jumps", async () => {
     const { freshProfile } = setupEnsureBrowserAvailableHarness();
     chrome.launch.mockRejectedValue(new Error("Failed to start Chrome CDP"));
 
@@ -296,10 +296,10 @@ describe("browser server-context ensureBrowserAvailable", () => {
     await expect(cooledDown.ensureBrowserAvailable()).rejects.toThrow(
       'Browser launch for profile "openclaw" is cooling down after 3 consecutive managed Chrome launch failures.',
     );
+    vi.setSystemTime(Date.now() + 3_600_000);
     await expect(cooledDown.ensureBrowserAvailable()).rejects.toThrow(
       "set browser.enabled=false if the browser tool is not needed",
     );
-
     expect(chrome.launch).toHaveBeenCalledTimes(3);
     expect(chrome.stop).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30_000);

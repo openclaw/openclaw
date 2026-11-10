@@ -93,8 +93,11 @@ describe("createMantleAnthropicStreamFn", () => {
       expect(JSON.stringify(request)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
       expect(request.system).toEqual([
         { type: "text", text: "Stable", cache_control: { type: "ephemeral", ttl: "1h" } },
-        { type: "text", text: suffix },
+        { type: "text", text: `\n${suffix}` },
       ]);
+      expect((request.system as Array<{ text: string }>).map((block) => block.text).join("")).toBe(
+        `Stable\n${suffix}`,
+      );
       expect(JSON.stringify(request).match(/"cache_control"/g)?.length).toBeLessThanOrEqual(4);
     }
   });

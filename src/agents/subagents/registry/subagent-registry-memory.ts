@@ -483,7 +483,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         !record ||
         !isSameSubagentRunOwner(this.get(entry.runId), entry) ||
         record.generation !== entry.generation ||
-        (!record.requesterTurnRunId &&
+        ((!record.requesterTurnRunId || record.expectsCompletionMessage === false) &&
           !record.requesterSettleWake &&
           record.pauseReason !== "sessions_yield" &&
           (record.cleanupCompletedAt !== undefined ||

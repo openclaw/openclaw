@@ -263,6 +263,31 @@ Preflight compaction also uses that chain when the primary auth profile is alrea
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain when no earlier summary can be reused. A summary deadline or an HTTP 408 or 504 instead uses the automatic timeout fallback (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
 
+### Summary size
+
+Client-side compaction keeps at most 16,000 characters in its persisted summary
+by default, including preserved recent turns and other summary sections. Set
+`agents.defaults.compaction.maxSummaryChars` to change that ceiling, or
+`agents.entries.<id>.compaction.maxSummaryChars` to override it for one agent:
+
+```json5
+{
+  agents: {
+    defaults: { compaction: { maxSummaryChars: 48000 } },
+    entries: {
+      research: { compaction: { maxSummaryChars: 64000 } },
+    },
+  },
+}
+```
+
+Both settings accept integers from 1,000 to 200,000. An omitted per-agent setting
+inherits the default. This is a ceiling, not a target: the summary still has to
+fit the active model's token budget beside instructions, tools, and retained
+history. Larger summaries increase context usage and replay cost on subsequent
+requests. They do not increase the summarizer's input or output allowance, recover
+facts already lost from earlier summaries, or change provider-native compaction.
+
 ### Identifier preservation
 
 Compaction summarization requests exact opaque identifier retention by default (`agents.defaults.compaction.identifierPolicy: "strict"`). Degraded summaries may omit identifiers that cannot fit. Set `agents.defaults.compaction.identifierPolicy: "off"` to disable the retention guidance. Custom guidance belongs in a compaction provider's `summarize()` implementation.

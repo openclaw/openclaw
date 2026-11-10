@@ -1271,7 +1271,7 @@ const enSettings = {
         "Uses the selected model's thinking policy instead of saving a global thinking override.",
       fastModeHelpLabel: "About speed defaults",
       fastModeHelp:
-        "Sets the global default for new sessions. Auto starts fast and returns to standard after the model's configured interval. On requests fast mode, Off requests standard, and Ultrafast requests the Ultrafast service tier when available. Saved preferences remain unchanged when capabilities change.",
+        "Sets the global default for new sessions. Auto starts fast and returns to standard after the model's configured interval. Fast requests fast mode, Off requests standard, and Ultrafast requests the Ultrafast service tier when available. Saved preferences remain unchanged when capabilities change.",
       fastModeDefaultHelp:
         "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
     },
@@ -2048,6 +2048,7 @@ const enSettings = {
     autoSavePaused: registerSettingsSidebarEnglish.catalog.configView.autoSavePaused,
     saveNow: registerSettingsSidebarEnglish.catalog.configView.saveNow,
     autoSaveFailed: registerSettingsSidebarEnglish.catalog.configView.autoSaveFailed,
+    autoSaveDeferred: registerSettingsSidebarEnglish.catalog.configView.autoSaveDeferred,
     autoSaveRejected: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejected,
     discardChanges: registerSettingsSidebarEnglish.catalog.configView.discardChanges,
     discardChangesTitle: registerSettingsSidebarEnglish.catalog.configView.discardChangesTitle,

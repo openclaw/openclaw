@@ -60,7 +60,12 @@ async function expand(page: Page) {
   await frames(page);
 }
 
-async function scroll(page: Page, direction: "top" | "bottom", messageCount: number) {
+async function scroll(
+  page: Page,
+  direction: "top" | "bottom",
+  messageCount: number,
+  geometryProbe: boolean,
+) {
   const thread = page.locator(threadSelector);
   const bounds = await thread.boundingBox();
   if (!bounds) {
@@ -73,11 +78,13 @@ async function scroll(page: Page, direction: "top" | "bottom", messageCount: num
     direction,
     trajectory: true,
     count: 61,
+    geometry: geometryProbe,
   });
   let endpoint = await thread.evaluate(sampleTranscriptScrollFrames, {
     direction,
     trajectory: false,
     count: 2,
+    geometry: geometryProbe,
   });
   let endpointCorrection = false;
   if (endpoint.distancePx > 2) {
@@ -90,14 +97,19 @@ async function scroll(page: Page, direction: "top" | "bottom", messageCount: num
       direction,
       trajectory: false,
       count: 2,
+      geometry: geometryProbe,
     });
   }
   const frameGaps = trajectory.frames.map((frame) => frame.intervalMs).toSorted((a, b) => a - b);
   const evidence = {
     endpointDistancePx: endpoint.distancePx,
     endpointCorrection,
-    blankFrames: trajectory.frames.filter((frame) => frame.coverage === 0).length,
-    minCoverage: Math.min(...trajectory.frames.map((frame) => frame.coverage)),
+    ...(geometryProbe
+      ? {
+          blankFrames: trajectory.frames.filter((frame) => frame.coverage === 0).length,
+          minCoverage: Math.min(...trajectory.frames.map((frame) => frame.coverage!)),
+        }
+      : {}),
     maxMountedRows: Math.max(...trajectory.frames.map((frame) => frame.rows)),
     frameGapsOver50Ms: trajectory.frames.filter((frame) => frame.intervalMs > 50).length,
     frameGapP95Ms: frameGaps[Math.ceil(frameGaps.length * 0.95) - 1]!,
@@ -123,7 +135,7 @@ type WheelFrame = {
   sampledAtMs: number;
   intervalMs: number;
   scrollTop: number;
-  coverage: number;
+  coverage: number | undefined;
   rows: number;
   settling: boolean;
 };
@@ -136,8 +148,12 @@ type WheelCapture = {
 };
 type WheelProbe = { finish: () => Promise<WheelCapture>; dispose: () => void };
 
-/** Browser-local geometry only: rAF observations cannot prove compositor paint. */
-function installWheelProbe(element: HTMLElement | SVGElement, direction: "top" | "bottom") {
+/** Geometry is optional for timing; rAF observations cannot prove compositor paint. */
+function installWheelProbe(
+  element: HTMLElement | SVGElement,
+  options: { direction: "top" | "bottom"; geometry: boolean },
+) {
+  const { direction } = options;
   if (!(element instanceof HTMLElement)) {
     throw new Error("Completed-run wheel target is not an HTML scroll element");
   }
@@ -168,30 +184,34 @@ function installWheelProbe(element: HTMLElement | SVGElement, direction: "top" |
     const sampledAtMs = performance.now();
     const top = element.scrollTop;
     if (wheelEvents.length > 0) {
-      const viewport = element.getBoundingClientRect();
       const rows = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")];
-      // Match the old trajectory's coverage scope; never lay out preparation descendants.
-      const segments = rows
-        .filter((row) => row.dataset.preparedRow !== "true")
-        .map((row) => row.getBoundingClientRect())
-        .map(
-          (rect) =>
-            [Math.max(viewport.top, rect.top), Math.min(viewport.bottom, rect.bottom)] as const,
-        )
-        .filter(([start, end]) => end > start)
-        .toSorted((a, b) => a[0] - b[0]);
-      let covered = 0;
-      let end = viewport.top;
-      for (const [start, bottom] of segments) {
-        covered += Math.max(0, bottom - Math.max(start, end));
-        end = Math.max(end, bottom);
+      let coverage: number | undefined;
+      if (options.geometry) {
+        const viewport = element.getBoundingClientRect();
+        // Match the old trajectory's coverage scope; never lay out preparation descendants.
+        const segments = rows
+          .filter((row) => row.dataset.preparedRow !== "true")
+          .map((row) => row.getBoundingClientRect())
+          .map(
+            (rect) =>
+              [Math.max(viewport.top, rect.top), Math.min(viewport.bottom, rect.bottom)] as const,
+          )
+          .filter(([start, end]) => end > start)
+          .toSorted((a, b) => a[0] - b[0]);
+        let covered = 0;
+        let end = viewport.top;
+        for (const [start, bottom] of segments) {
+          covered += Math.max(0, bottom - Math.max(start, end));
+          end = Math.max(end, bottom);
+        }
+        coverage = covered / viewport.height;
       }
       sampledFrames.push({
         atMs,
         sampledAtMs,
         intervalMs: atMs - (previousAt || wheelEvents[0]!.atMs),
         scrollTop: top,
-        coverage: covered / viewport.height,
+        coverage,
         rows: rows.length,
         settling: finishAt !== undefined,
       });
@@ -234,7 +254,7 @@ function installWheelProbe(element: HTMLElement | SVGElement, direction: "top" |
   frame = requestAnimationFrame(sample);
 }
 
-async function wheelScroll(page: Page, direction: "top" | "bottom") {
+async function wheelScroll(page: Page, direction: "top" | "bottom", geometryProbe: boolean) {
   const thread = page.locator(threadSelector);
   const bounds = await thread.boundingBox();
   if (!bounds) {
@@ -243,7 +263,7 @@ async function wheelScroll(page: Page, direction: "top" | "bottom") {
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
   const deltaY =
     (direction === "top" ? -1 : 1) * (await thread.evaluate((el) => el.clientHeight)) * 0.75;
-  await thread.evaluate(installWheelProbe, direction);
+  await thread.evaluate(installWheelProbe, { direction, geometry: geometryProbe });
   const samples = 90;
   const intervalMs = 1_000 / 60;
   const intervals: number[] = [];
@@ -342,19 +362,23 @@ async function wheelScroll(page: Page, direction: "top" | "bottom") {
       startScrollTop: capture.startTop,
       endScrollTop: capture.endTop,
       observedFrames: activeFrames.length,
-      zeroGeometryCoverageFrames: activeFrames.filter((entry) => entry.coverage === 0).length,
-      partialGeometryCoverageFrames: activeFrames.filter(
-        (entry) => entry.coverage > 0 && entry.coverage < 0.99,
-      ).length,
+      ...(geometryProbe
+        ? {
+            zeroGeometryCoverageFrames: activeFrames.filter((entry) => entry.coverage === 0).length,
+            partialGeometryCoverageFrames: activeFrames.filter(
+              (entry) => entry.coverage! > 0 && entry.coverage! < 0.99,
+            ).length,
+            stationaryTailZeroGeometryCoverageFrames: stationaryTail.filter(
+              (entry) => entry.coverage === 0,
+            ).length,
+            stationaryTailPartialGeometryCoverageFrames: stationaryTail.filter(
+              (entry) => entry.coverage! > 0 && entry.coverage! < 0.99,
+            ).length,
+            finalGeometryCoverage: capture.frames.at(-1)!.coverage!,
+            minGeometryCoverage: Math.min(...activeFrames.map((entry) => entry.coverage!)),
+          }
+        : {}),
       stationaryTailFrames: stationaryTail.length,
-      stationaryTailZeroGeometryCoverageFrames: stationaryTail.filter(
-        (entry) => entry.coverage === 0,
-      ).length,
-      stationaryTailPartialGeometryCoverageFrames: stationaryTail.filter(
-        (entry) => entry.coverage > 0 && entry.coverage < 0.99,
-      ).length,
-      finalGeometryCoverage: capture.frames.at(-1)!.coverage,
-      minGeometryCoverage: Math.min(...activeFrames.map((entry) => entry.coverage)),
       maxMountedRows: Math.max(...activeFrames.map((entry) => entry.rows)),
       frameGapsOver50Ms: gaps.filter((gap) => gap > 50).length,
       frameGapP95Ms: gaps[Math.ceil(gaps.length * 0.95) - 1]!,
@@ -377,7 +401,10 @@ async function wheelScroll(page: Page, direction: "top" | "bottom") {
 }
 
 /** Same giant-run fixture and scroll protocol as the CDP-only long-session probe. */
-export function createEngineCompletedRunScenarios(baseUrl: string): readonly EngineScenario[] {
+export function createEngineCompletedRunScenarios(
+  baseUrl: string,
+  geometryProbe = true,
+): readonly EngineScenario[] {
   return [400, 2_000].flatMap((messageCount) =>
     (["direct-run", "single-run"] as const).flatMap((kind) => {
       const sessionKey = kind === "direct-run" ? directKey : dashboardKey;
@@ -434,12 +461,12 @@ export function createEngineCompletedRunScenarios(baseUrl: string): readonly Eng
       const sweep: EngineScenario = {
         ...shared,
         id: `${id}-scroll`,
-        expected: `Scroll the ${messageCount}-message ${kind} to both endpoints without blank frames.`,
+        expected: `Scroll the ${messageCount}-message ${kind} to both endpoints${geometryProbe ? " without geometric coverage gaps" : "; row geometry is checked in a separate diagnostic run"}.`,
         prepare,
         run: async (page) => ({
           messageCount,
-          ...(await scroll(page, "top", messageCount)),
-          ...(await scroll(page, "bottom", messageCount)),
+          ...(await scroll(page, "top", messageCount, geometryProbe)),
+          ...(await scroll(page, "bottom", messageCount, geometryProbe)),
           ...(await geometry(page)),
         }),
       };
@@ -454,8 +481,8 @@ export function createEngineCompletedRunScenarios(baseUrl: string): readonly Eng
               prepare,
               run: async (page) => ({
                 messageCount,
-                ...(await wheelScroll(page, "top")),
-                ...(await wheelScroll(page, "bottom")),
+                ...(await wheelScroll(page, "top", geometryProbe)),
+                ...(await wheelScroll(page, "bottom", geometryProbe)),
                 ...(await geometry(page)),
               }),
             },
