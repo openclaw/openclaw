@@ -86,8 +86,11 @@ function fixture() {
       pluginNpm: { runId: "902", runAttempt: 1 },
     },
   };
-  const { executionPlanSha256: _plan, qualificationCoverage: _coverage, ...originalManifest } =
-    old.manifest;
+  const {
+    executionPlanSha256: _plan,
+    qualificationCoverage: _coverage,
+    ...originalManifest
+  } = old.manifest;
   const manifest = {
     ...originalManifest,
     runId: producer.runId,
@@ -361,7 +364,10 @@ describe("receipt-backed aggregate recovery", () => {
       getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
       getRunAttemptJobs: async () => parentJobs,
       getJobLog: async (id: number) => {
-        const child = expectDefined(dispatches.find((entry) => entry.id === id), "dispatch job");
+        const child = expectDefined(
+          dispatches.find((entry) => entry.id === id),
+          "dispatch job",
+        );
         return `TARGET_SHA: ${old.q}\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
       },
     };
@@ -388,9 +394,10 @@ describe("receipt-backed aggregate recovery", () => {
       },
       payloads: [],
     }));
-    vi.spyOn(qualificationAuthority, "revalidateQualificationAdmissionAuthority").mockImplementation(
-      vi.fn(),
-    );
+    vi.spyOn(
+      qualificationAuthority,
+      "revalidateQualificationAdmissionAuthority",
+    ).mockImplementation(vi.fn());
     vi.stubEnv("GH_TOKEN", "fixture-token");
     const pluginProducer = {
       repository: old.repository,

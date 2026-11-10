@@ -298,12 +298,12 @@ export function hasRegisteredSessionPendingInputOwner(
 }
 
 /** Durable queued text is visible only while its ordinary input owner is live. */
-export function listLiveSessionPendingInputIds(
+export function listLiveSessionPendingInputs(
   databasePath: string,
   sessionKey: string,
   sessionId: string,
   queuedOnly = false,
-): string[] {
+): Pick<SessionPendingInputOwner, "inputId" | "runId" | "recoverySource">[] {
   return [...owners.live.values()]
     .filter(
       (owner) =>
@@ -313,7 +313,11 @@ export function listLiveSessionPendingInputIds(
         (!queuedOnly || (!owner.consumed && !owner.settling)) &&
         (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)),
     )
-    .map((owner) => owner.inputId);
+    .map((owner) => ({
+      inputId: owner.inputId,
+      runId: owner.runId,
+      recoverySource: owner.recoverySource,
+    }));
 }
 
 /** Called after the exact IDs commit in the session marker, before shutdown cancellation. */

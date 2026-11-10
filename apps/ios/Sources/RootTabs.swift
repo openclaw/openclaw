@@ -141,6 +141,9 @@ struct RootTabs: View {
             .overlay(alignment: .topLeading) {
                 self.uiTestReadinessMarker
             }
+            .task(id: self.appModel.agentAvatarRequest) {
+                await self.appModel.refreshAgentAvatars(self.appModel.agentAvatarRequest)
+            }
             .task(id: self.chatOwnerTaskIdentity) {
                 await self.appModel.restoreChatSessionRoutingIdentityIfNeeded()
                 guard !Task.isCancelled else { return }

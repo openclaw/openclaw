@@ -209,7 +209,8 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   const shell: MessageGroupData = {
     key: frame.key,
     kind: "group",
-    role: "assistant",
+    // A completed tool-only continuation owns activity, not an empty agent reply.
+    role: firstAssistant || streamRun || frame.outcome.kind !== "completed" ? "assistant" : "tool",
     senderLabel: firstAssistant?.senderLabel,
     replyToSender: firstAssistant?.replyToSender ?? streamRun?.replyToSender,
     replyToMessage: firstAssistant?.replyToMessage ?? streamRun?.replyToMessage,

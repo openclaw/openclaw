@@ -235,13 +235,13 @@ suite.define(() => {
         await page.getByText("The release overview is ready.", { exact: false }).waitFor();
         expect(await panels.getAttribute("aria-expanded")).toBe("true");
         expect(await input.isVisible()).toBe(true);
-        // Allow the card inset, but not a fixed-height row when opening Chat.
-        const pageHeight = await regionSize(
-          page.locator('[data-region="main"]:not([hidden])'),
+        // Allow the card inset within the canvas below host controls, not a fixed-height row.
+        const canvasHeight = await regionSize(
+          page.locator(".board-session-surface__board"),
           "height",
         );
         expect(await regionSize(page.locator(".board-widget__frame"), "height")).toBeGreaterThan(
-          pageHeight - 32,
+          canvasHeight - 32,
         );
         await panels.click();
         await composer.waitFor({ state: "hidden" });
