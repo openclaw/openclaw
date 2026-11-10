@@ -498,9 +498,11 @@ export async function verifyRetainedPublicationArtifacts(root, env, options = {}
     let archiveBytes;
     let archiveSha256;
     if (digestOnly) {
-      archiveSha256 = (await verifyExactActionsArtifactDigest(params)).digest.slice(
-        "sha256:".length,
-      );
+      const verified = await verifyExactActionsArtifactDigest({
+        ...params,
+        archiveTimeoutMs: options.dockerArchiveTimeoutMs,
+      });
+      archiveSha256 = verified.digest.slice("sha256:".length);
     } else {
       archiveBytes = (await downloadExactActionsArtifactArchive(params)).archiveBytes;
       archiveSha256 = createHash("sha256").update(archiveBytes).digest("hex");

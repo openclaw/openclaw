@@ -65,6 +65,8 @@
  * snapshot bytes. Physical SQLite read accounting is Linux-only; unavailable is null.
  * --agent-storage-dir puts only the fixture's agent database on another volume;
  * canonical and projected workspaces remain under --output. Report that topology.
+ * --agent-db-fixture clones a closed, checkpointed synthetic session database before
+ * preparation. Reuse one seed across fresh A/B workspaces; never pass production data.
  * --acceleration --sandbox-backend podman --sandbox-image <local-image> exercises
  * real dependency-template preparation on a supported filesystem. The image must
  * already exist; its offline pnpm install may fail and exercise source-only fallback.
@@ -84,6 +86,10 @@
  * Run separate fresh processes in A/A then ABAB order, at least five per arm.
  * Retirement is nested inside template.build; never add those durations together.
  * --owner-switch checks that another session at the same commit reuses the template.
+ * --restart-stage prepare|resume splits owner-switch proof across two actual processes.
+ * Run prepare to build the original template and close its owners; resume reuses that
+ * fixture and times other-first with empty process caches. Both use identical arguments.
+ *
  * --head-advance cold|prewarm advances HEAD with identical source before that second
  * session. The prewarm arm runs the existing background preparation owner first;
  * its cost is reported separately. Compare two cold controls then five interleaved
@@ -108,7 +114,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
@@ -141,6 +147,7 @@ const { values } = parseArgs({
     "fixture-source": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
     "owner-switch": { type: "boolean", default: false },
+    "restart-stage": { type: "string" },
     "creation-contender": { type: "boolean", default: false },
     "head-advance": { type: "string" },
     "head-change": { type: "string" },
@@ -165,6 +172,7 @@ const { values } = parseArgs({
     "file-bytes": { type: "string", default: "0" },
     "transcript-mib": { type: "string", default: "0" },
     "agent-storage-dir": { type: "string" },
+    "agent-db-fixture": { type: "string" },
     "reuse-fixture": { type: "boolean", default: false },
     report: { type: "string", default: "report.json" },
     port: { type: "string", default: "44984" },
@@ -175,6 +183,7 @@ const { values } = parseArgs({
     "retention-ms": { type: "string", default: "0" },
   },
 });
+const processInstance = randomUUID();
 const harnessSha256 = createHash("sha256")
   .update(fs.readFileSync(fileURLToPath(import.meta.url)))
   .digest("hex");
@@ -379,7 +388,16 @@ assert(
 const siblingWorktrees = Number(values["sibling-worktrees"]);
 assert(Number.isSafeInteger(siblingWorktrees) && siblingWorktrees >= 0);
 assert(!siblingWorktrees || serialTurns);
-const reuseFixture = values["reuse-fixture"];
+const resumeOwnerSwitch = values["restart-stage"] === "resume";
+assert(
+  !values["restart-stage"] ||
+    (["prepare", "resume"].includes(values["restart-stage"]) &&
+      serialTurns &&
+      values["owner-switch"] &&
+      values["fresh-only"] &&
+      values.acceleration),
+);
+const reuseFixture = values["reuse-fixture"] || resumeOwnerSwitch;
 assert(!reuseFixture || values.mode === "preparation" || fileReads || turnLoop);
 const requests = Number(values.requests),
   burst = Number(values.burst),
@@ -390,6 +408,7 @@ const fileBytes = Number(values["file-bytes"]);
 assert(Number.isSafeInteger(fileBytes) && fileBytes >= 0);
 const transcriptMiB = Number(values["transcript-mib"]);
 assert(Number.isSafeInteger(transcriptMiB) && transcriptMiB >= 0);
+assert(!values["agent-db-fixture"] || (serialTurns && !transcriptMiB));
 assert(!transcriptMiB || values.mode === "preparation" || fileReads || turnLoop);
 for (const value of [requests, burst, files, port, worktrees]) {
   assert(Number.isSafeInteger(value) && value > 0);
@@ -399,9 +418,15 @@ assert(["timing", "allocation", "retention"].includes(values.instrument!));
 const retentionMs = Number(values["retention-ms"]);
 assert(Number.isSafeInteger(retentionMs) && retentionMs >= 0);
 const workers = new Set<Worker>();
+let workerStarts = 0,
+  workerExits = 0;
 const observeWorker = (worker: Worker) => {
+  workerStarts++;
   workers.add(worker);
-  worker.once("exit", () => workers.delete(worker));
+  worker.once("exit", () => {
+    workerExits++;
+    workers.delete(worker);
+  });
 };
 if (values.instrument === "retention" || serialTurns) {
   if (values.instrument === "retention") {
@@ -409,6 +434,22 @@ if (values.instrument === "retention" || serialTurns) {
   }
   process.on("worker", observeWorker);
 }
+const sampleWorkerAllocation = async () => {
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    return await Promise.all(
+      [...workers].map(async (worker) => ({
+        threadId: worker.threadId,
+        bytes: await worker.getHeapStatistics().then(
+          (stats) => stats.total_allocated_bytes,
+          () => null,
+        ),
+      })),
+    );
+  } finally {
+    clearInterval(keepAlive);
+  }
+};
 const collectRetainedMemory = async () => {
   assert(globalThis.gc, "Retention samples require --expose-gc");
   // Worker inspection promises do not retain the event loop after these pools unref their workers.
@@ -439,6 +480,25 @@ if (values["agent-storage-dir"] && !reuseFixture) {
   fs.mkdirSync(agentStorage);
   fs.mkdirSync(path.join(output, "state"), { recursive: true });
   fs.symlinkSync(agentStorage, path.join(output, "state", "agents"), "dir");
+}
+if (values["agent-db-fixture"] && !resumeOwnerSwitch) {
+  const destination = path.join(
+    output,
+    "state",
+    "agents",
+    "main",
+    "agent",
+    "openclaw-agent.sqlite",
+  );
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  const { prepareSqliteDatabaseDirectory } =
+    await import("../../src/infra/sqlite-wal-filesystem.js");
+  prepareSqliteDatabaseDirectory(destination);
+  fs.copyFileSync(
+    path.resolve(values["agent-db-fixture"]),
+    destination,
+    fs.constants.COPYFILE_FICLONE,
+  );
 }
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const owners = [
@@ -661,13 +721,13 @@ const git = (...args: string[]) =>
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-if (reuseFixture) {
+if (reuseFixture && !resumeOwnerSwitch) {
   assert.equal(
     fs.readdirSync(repo).length - 1,
     files,
     "Reused fixture must have the requested file count",
   );
-} else {
+} else if (!resumeOwnerSwitch) {
   git("init", "--quiet", "-b", "main");
   git("config", "user.name", "Synthetic fixture");
   git("config", "user.email", "fixture@example.invalid");
@@ -742,7 +802,7 @@ if (reuseFixture) {
     );
   }
 }
-if (reuseFixture) {
+if (reuseFixture && !resumeOwnerSwitch) {
   fs.writeFileSync(path.join(canonical, "file-0.txt"), "synthetic 0\n".padEnd(fileBytes, "."));
 }
 if (gatewayMode && !reuseFixture) {
@@ -936,7 +996,7 @@ measurement: try {
       await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
     agent.runOpenClawAgentWriteTransaction(
       (writer) => {
-        for (let i = 0; i < (transcriptMiB ? 0 : 10_000); i++) {
+        for (let i = 0; i < (transcriptMiB || values["agent-db-fixture"] ? 0 : 10_000); i++) {
           writeSessionEntry(writer, `agent:main:subagent:fixture-${i}`, {
             sessionId: `fixture-${i}`,
             updatedAt: 1,
@@ -1254,6 +1314,17 @@ measurement: try {
     const measureTurn = async (phase: string, prepare = prepareWorkspace) => {
       acquisitions = scans = probes = 0;
       manifestReads.length = 0;
+      const workerStartsBefore = workerStarts,
+        workerExitsBefore = workerExits;
+      const workerAllocationBefore =
+        values.instrument === "allocation" ? await sampleWorkerAllocation() : undefined;
+      const gitOperations: Record<string, number> = {};
+      const gitDiagnostics = channel("openclaw.git.operation");
+      const observeGitOperation = (message: unknown) => {
+        const { operation } = message as { operation: string };
+        gitOperations[operation] = (gitOperations[operation] ?? 0) + 1;
+      };
+      gitDiagnostics.subscribe(observeGitOperation);
       const physicalBefore = snapshotSqliteReaderMetrics();
       const spans: Record<string, { count: number; totalMs: number }> = {};
       const loop = monitorEventLoopDelay({ resolution: 1 });
@@ -1291,6 +1362,7 @@ measurement: try {
         },
         () => withWorktreePreparationTiming("sandbox", prepare),
       ).catch(async (error: unknown) => {
+        gitDiagnostics.unsubscribe(observeGitOperation);
         if (contenderStarted) {
           await Promise.allSettled([contender]);
         }
@@ -1304,6 +1376,7 @@ measurement: try {
         total = process.cpuUsage(totalBefore);
       const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
       loop.disable();
+      gitDiagnostics.unsubscribe(observeGitOperation);
       const readMetrics = snapshotSqliteReaderMetrics().map((metric) => {
         const previous = physicalBefore.find((entry) => entry.operation === metric.operation);
         return {
@@ -1312,6 +1385,9 @@ measurement: try {
           readBytes: metric.readBytes - (previous?.readBytes ?? 0),
         };
       });
+      const workerAllocationAfter = workerAllocationBefore
+        ? await sampleWorkerAllocation()
+        : undefined;
       const result = {
         phase,
         elapsedMs,
@@ -1319,6 +1395,27 @@ measurement: try {
         mainCpuMs: (cpu.user + cpu.system) / 1000,
         processCpuMs: (total.user + total.system) / 1000,
         allocatedBytes,
+        gitOperations,
+        workerAllocation:
+          workerAllocationBefore && workerAllocationAfter
+            ? {
+                before: workerAllocationBefore,
+                after: workerAllocationAfter,
+                started: workerStarts - workerStartsBefore,
+                exited: workerExits - workerExitsBefore,
+                matchedAllocatedBytes: workerAllocationAfter.reduce((sum, after) => {
+                  const before = workerAllocationBefore.find(
+                    (entry) => entry.threadId === after.threadId,
+                  );
+                  return (
+                    sum +
+                    (before?.bytes != null && after.bytes != null ? after.bytes - before.bytes : 0)
+                  );
+                }, 0),
+                accounting:
+                  "Delta covers only workers sampled at both boundaries; new-worker values are lifetime totals. Exited or unavailable workers are unmeasured.",
+              }
+            : undefined,
         eventLoopP99Ms: loop.percentile(99) / 1e6,
         eventLoopMaxMs: loop.max / 1e6,
         eventLoopSamples: loop.count,
@@ -1376,7 +1473,11 @@ measurement: try {
       }
       return measuredWorkspace;
     };
-    await measureTurn("first");
+    if (resumeOwnerSwitch) {
+      workspace = fs.readFileSync(path.join(output, "restart-projection.txt"), "utf8");
+    } else {
+      await measureTurn("first");
+    }
     if (values["crash-builder"]) {
       const interruptedPids = await fakeBuilderEngine!.interruptRemoval();
       const crash = { turns, interruptedPids, engine: fakeBuilderEngine!.snapshot() };
@@ -1384,7 +1485,7 @@ measurement: try {
       console.log(JSON.stringify({ builderCrash: crash }));
       process.exit(0);
     }
-    for (let i = 0; i < requests; i++) {
+    for (let i = 0; i < (resumeOwnerSwitch ? 0 : requests); i++) {
       await measureTurn(`unchanged-${i + 1}`);
     }
     const modify = (entry: string, content: string | null) => {
@@ -1427,6 +1528,14 @@ measurement: try {
       assert.deepEqual(readFixtureEntry(workspace!, entry), expected);
       fingerprint.update(entry).update(expected.kind).update(expected.content);
     }
+    if (values["restart-stage"] === "prepare") {
+      fs.writeFileSync(path.join(output, "restart-projection.txt"), workspace!);
+      fs.writeFileSync(
+        path.join(output, "restart-preparation.json"),
+        JSON.stringify({ processInstance, turns }),
+      );
+      break measurement;
+    }
     const ownerSwitch: Array<{
       owner: string;
       snapshotBytes: number;
@@ -1467,32 +1576,39 @@ measurement: try {
           });
         }
       }
-      const otherKey = `${sessionKey}:other`;
-      const otherCanonical = path.join(output, "other-canonical");
-      git("worktree", "add", "--quiet", "-b", "other", otherCanonical);
-      const otherWorktree = {
-        ...owner.worktree,
-        id: "22222222-2222-4222-8222-222222222222",
-        path: otherCanonical,
-        branch: "other",
-        ownerId: otherKey,
+      const registerFreshOwner = async (name: string, id: string) => {
+        const otherKey = `${sessionKey}:${name}`;
+        const otherCanonical = path.join(output, `${name}-canonical`);
+        git("worktree", "add", "--quiet", "-b", name, otherCanonical);
+        const otherWorktree = {
+          ...owner.worktree,
+          id,
+          path: otherCanonical,
+          branch: name,
+          ownerId: otherKey,
+        };
+        await (
+          await import("../../src/agents/worktrees/registry.js")
+        ).insertRegistryWorktree(process.env, otherWorktree);
+        const { writeSessionEntry } =
+          await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
+        const database = agent.openOpenClawAgentDatabase({ agentId: "main" });
+        agent.runOpenClawAgentWriteTransaction(
+          (writer) => {
+            writeSessionEntry(writer, otherKey, {
+              sessionId: `checkpoint-${name}`,
+              updatedAt: 1,
+              spawnedCwd: otherCanonical,
+              worktree: { id: otherWorktree.id, branch: name, repoRoot: repo },
+            });
+          },
+          { agentId: "main", path: database.path },
+        );
+        return { sessionKey: otherKey, canonical: otherCanonical };
       };
-      await (
-        await import("../../src/agents/worktrees/registry.js")
-      ).insertRegistryWorktree(process.env, otherWorktree);
-      const { writeSessionEntry } =
-        await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
-      const database = agent.openOpenClawAgentDatabase({ agentId: "main" });
-      agent.runOpenClawAgentWriteTransaction(
-        (writer) => {
-          writeSessionEntry(writer, otherKey, {
-            sessionId: "checkpoint-other",
-            updatedAt: 1,
-            spawnedCwd: otherCanonical,
-            worktree: { id: otherWorktree.id, branch: "other", repoRoot: repo },
-          });
-        },
-        { agentId: "main", path: database.path },
+      const { sessionKey: otherKey, canonical: otherCanonical } = await registerFreshOwner(
+        "other",
+        "22222222-2222-4222-8222-222222222222",
       );
       let otherProjection: string | undefined;
       for (const selected of [
@@ -1533,20 +1649,46 @@ measurement: try {
           reads: [...manifestReads],
         });
       }
-      assert(otherProjection);
-      assert.equal(
-        execFileSync("git", ["-C", otherProjection, "rev-parse", "HEAD"], {
-          encoding: "utf8",
-        }).trim(),
-        git("rev-parse", "HEAD").trim(),
-        "Fresh projection must retain the selected checkout commit",
-      );
-      for (const entry of inventory) {
-        assert.deepEqual(
-          readFixtureEntry(otherProjection, entry),
-          readFixtureEntry(repo, entry),
-          `Fresh template projection differs from its committed source: ${entry}`,
+      let postRestartProjection: string | undefined;
+      if (resumeOwnerSwitch) {
+        const fresh = await registerFreshOwner(
+          "post-restart",
+          "33333333-3333-4333-8333-333333333333",
         );
+        postRestartProjection = await measureTurn("post-restart-warm", async () => {
+          using prepared = await prepareLocalSandboxWorkspace({
+            cfg: config,
+            agentId: "main",
+            sessionKey: fresh.sessionKey,
+            workspaceDir: fresh.canonical,
+            sandbox,
+          });
+          assert(prepared);
+          return prepared.workspaceDir;
+        });
+      }
+      assert(otherProjection);
+      for (const checkedProjection of [otherProjection, postRestartProjection].filter(
+        (entry): entry is string => Boolean(entry),
+      )) {
+        assert(
+          !fs.existsSync(path.join(checkedProjection, sentinel)),
+          "Ignored host file entered fresh projection",
+        );
+        assert.equal(
+          execFileSync("git", ["-C", checkedProjection, "rev-parse", "HEAD"], {
+            encoding: "utf8",
+          }).trim(),
+          git("rev-parse", "HEAD").trim(),
+          "Fresh projection must retain the selected checkout commit",
+        );
+        for (const entry of inventory) {
+          assert.deepEqual(
+            readFixtureEntry(checkedProjection, entry),
+            readFixtureEntry(repo, entry),
+            `Fresh template projection differs from its committed source: ${entry}`,
+          );
+        }
       }
       advancedTree = git("rev-parse", "HEAD^{tree}").trim();
       advancedCommit = git("rev-parse", "HEAD").trim();
@@ -1611,9 +1753,12 @@ measurement: try {
         files: inventory.length,
         bytes: initialBytes,
         source: values["fixture-source"] ?? null,
+        agentDatabase: values["agent-db-fixture"] ?? null,
         siblingWorktrees,
         acceleration: values.acceleration,
         headAdvance: values["head-advance"] ?? null,
+        restartStage: values["restart-stage"] ?? null,
+        processInstance,
         headChange: values["head-change"] ?? null,
         partialClone: values["partial-clone"],
         sourceDependentInstall: values["source-dependent-install"],

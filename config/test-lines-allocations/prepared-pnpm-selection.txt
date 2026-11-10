@@ -1,0 +1,2 @@
+# Prepared pnpm wins over a Node-directory shim; retain frozen policy and Node-only fallback.
+15

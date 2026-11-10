@@ -125,6 +125,17 @@ back and forth. Every build still passes disk admission. Live clone and installe
 readers can temporarily retain additional generations; cleanup never removes
 their files before those readers settle.
 
+The template registry keeps compressed content manifests in a process-local LRU
+bounded to 64 MiB, keyed by generation, selected commit and build-cache path policy.
+A matching preparation uses that manifest instead of hashing the cloned source again. Commit refreshes reuse
+unchanged file hashes from the previous generation using Git's source delta;
+metadata discovery still records empty directories and changed input markers.
+Missing manifests or changed checkout attributes use a full capture. Canonical
+workspace edits are reconciled separately, so cached template contents never
+replace authored changes. Retirement deletes the cached manifest. After a Gateway
+restart or cache eviction, the first preparation rebuilds it; the template registry
+does not persist manifests.
+
 Older runtime identities become eligible for cleanup after six unused hours.
 The most recently used identity keeps the ordinary idle retention window, subject
 to the four-generation limit. Hourly maintenance shares the existing deletion
@@ -594,6 +605,17 @@ OpenClaw exposes these tools only to operator sessions with an actionable Gatewa
 The resulting managed worktree is owned by the session, and every agent run in that session uses its checkout. When the workspace is a repository subdirectory, the worktree is anchored at the repository root and the session runs from the matching subdirectory inside it. Session worktree creation uses the method's `operator.write` scope. Repository checkout/ref hooks and filesystem monitors are always disabled. The `.openclaw/worktree-setup.sh` step runs only for an `operator.admin` caller; retries evaluate the current caller's scope rather than retaining the original caller's permission. `.worktreeinclude` provisioning still applies to every caller. Deleting the session attempts to snapshot and remove its managed worktree, including dirty worktrees and branches with unpushed commits. Hourly cleanup also snapshots session worktrees after 7 idle days, treating recent session activity as worktree activity. Removed worktrees remain restorable from their snapshots as described below.
 
 Reply commands `/new` and `/reset`, and automatic idle resets, start a fresh conversation context while keeping the session's managed worktree, project, and working directory. Plain **New Chat** in the Control UI deliberately leaves the previous worktree through the normal cleanup flow.
+
+If an earlier local publication adopted a conversation into a managed worktree,
+create a linked ordinary conversation to continue in its original workspace.
+Call `sessions.create` with the old conversation's key as `parentSessionKey`, the
+absolute original workspace as `cwd`, `worktree: false`, and
+`emitCommandHooks: false`; leave `key` unset. Continue using the returned key.
+The new conversation starts fresh at that folder under the normal workspace-path
+permissions. The old conversation keeps its history, file links, managed checkout,
+and publication receipts. Recover any pending publication there using its original
+request identity. This also keeps each conversation's historical file references
+associated with the source that produced them.
 
 Archiving a session returns after its archive state and publication are committed, preserving the conversation and worktree binding. After sending the response, the Gateway wakes background maintenance to snapshot and remove the checkout. The response does not wait for Git or the worktree allocation lease. A failed metadata write leaves the checkout untouched. If cleanup cannot finish safely, the session stays archived and its files remain available for a later cleanup pass. Hourly garbage collection also picks up automatically archived sessions. Cleanup holds the session lifecycle mutation only while admitting its registry claim and publishing the removed checkout. Git runs outside that mutation. Unarchiving before cleanup starts keeps the existing checkout; during cleanup, unarchive reports that removal is in progress and asks you to retry after it settles. An incomplete deletion requires recovery of its preserved snapshot before unarchive.
 

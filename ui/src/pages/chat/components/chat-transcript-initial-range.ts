@@ -1,6 +1,7 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
 import type { MarkdownPrewarmMode } from "../../../components/markdown.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import { createTranscriptEndSettlement } from "./chat-transcript-end-anchor.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
 // A few viewports avoid repeat mounts without making every scroll restyle a
@@ -17,6 +18,9 @@ const INITIAL_PREWARM_ROW_LIMIT = 128;
 export class TranscriptInitialRange {
   pending = true;
   preparingEnd = false;
+  private endWork?: () => (() => void) | void;
+  private readonly queueEndWork = () =>
+    this.endWork && scheduleLayout(this, () => this.endWork?.());
   private tailRows: number;
   private rows: readonly TranscriptRow[] = [];
   private hasIdleDomRows = false;
@@ -273,16 +277,36 @@ export class TranscriptInitialRange {
         this.invalidate();
         // A measurement can mount another row. Let the browser present before
         // its next pass instead of draining every correction in one task.
-        this.afterCommit(() => scheduleLayout(this, () => begin));
+        this.afterCommit(this.queueEndWork);
         return;
       }
-      this.finishEnd();
+      this.endWork = undefined;
       ready();
     };
+    this.endWork = () => begin;
     this.afterCommit(begin);
   };
 
+  // Keep the destination in flow until its real size and native endpoint agree.
+  readonly finishEndWhenSettled = (): void => {
+    if (!this.preparingEnd) {
+      this.preparingEnd = true;
+      this.refresh();
+      this.invalidate();
+    }
+    const endWork = createTranscriptEndSettlement(
+      this.virtualizer(),
+      () => this.canPrepare() && this.endWork === endWork,
+      this.rowsMeasured,
+      this.queueEndWork,
+      () => this.finishEnd(),
+    );
+    this.endWork = endWork;
+    this.queueEndWork();
+  };
+
   finishEnd(): void {
+    this.endWork = undefined;
     cancelLayout(this);
     if (this.preparingEnd) {
       this.preparingEnd = false;
@@ -370,6 +394,10 @@ export class TranscriptInitialRange {
   }
 
   didCommit(): void {
+    // Revealing a parked pane resumes its current end stage without hidden polling.
+    if (this.endWork && this.canPrepare()) {
+      this.queueEndWork();
+    }
     if (this.preparationIsIdle && this.isReaderMoving()) {
       this.cancelPreparation?.();
       this.cancelPreparation = undefined;
@@ -389,6 +417,7 @@ export class TranscriptInitialRange {
       velocity: previous.time ? Math.abs(delta) / Math.max(16, now - previous.time) : 0,
       direction: Math.sign(delta),
     };
+    this.finishEnd();
     this.finish();
   }
 
@@ -716,10 +745,7 @@ export class TranscriptInitialRange {
         return;
       }
       this.prepareStarted = performance.now();
-      virtualizer.setOptions({
-        ...virtualizer.options,
-        rangeExtractor: (next) => this.extract(next),
-      });
+      this.refresh();
       this.invalidate();
       // Markdown can keep warming while the single admitted DOM row is measured.
       queueNext();
@@ -765,6 +791,7 @@ export class TranscriptInitialRange {
   }
 
   disconnect(): void {
+    this.endWork = undefined;
     cancelLayout(this);
     this.cancelPreparation?.();
     this.cancelPreparation = undefined;

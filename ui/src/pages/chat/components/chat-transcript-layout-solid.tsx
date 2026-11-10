@@ -365,7 +365,6 @@ export class ChatTranscriptRenderer {
         // Keep layout measurable, but do not paint the initial estimated range
         // before the session owner has placed it at the correct reading edge.
         this.syncInitialPosition();
-        this.element.toggleAttribute("data-measuring-rows", current.measureRows);
         current.layout.commitRange(
           this.element,
           current.virtualizer.getTotalSize() + current.headerHeight,
