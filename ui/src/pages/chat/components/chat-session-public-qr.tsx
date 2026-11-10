@@ -40,8 +40,8 @@ export function ChatSessionPublicQr(props: {
           />
         }
       >
-        <Loading fallback={<span role="status">{t("chat.publicQr.loading")}</span>}>
-          <LobsterQr url={props.url} controls={props.controls} />
+        <Loading fallback={<span role="status">{t("chat.publicQr.loadingClaw")}</span>}>
+          <ClawQr url={props.url} controls={props.controls} />
         </Loading>
       </Show>
       <button
@@ -51,14 +51,14 @@ export function ChatSessionPublicQr(props: {
         class="btn btn--sm"
         onClick={() => setArtwork((value) => !value)}
       >
-        {t(artwork() ? "chat.publicQr.standard" : "chat.publicQr.lobster")}
+        {t(artwork() ? "chat.publicQr.standard" : "chat.publicQr.claw")}
       </button>
       <span>{t("chat.publicQr.scan")}</span>
     </div>
   );
 }
 
-function LobsterQr(props: { url: string; controls?: MenuControls }) {
+function ClawQr(props: { url: string; controls?: MenuControls }) {
   const code = createMemo(() => createPublicShareQr(props.url));
   return (
     <Show
@@ -66,7 +66,7 @@ function LobsterQr(props: { url: string; controls?: MenuControls }) {
       fallback={
         <>
           <QrCode value={props.url} label={t("chat.publicQr.label")} size="232px" />
-          <span role="status">{t("chat.publicQr.unavailable")}</span>
+          <span role="status">{t("chat.publicQr.clawUnavailable")}</span>
         </>
       }
     >
@@ -74,7 +74,7 @@ function LobsterQr(props: { url: string; controls?: MenuControls }) {
         <>
           <img
             src={qr().halftone}
-            alt={t("chat.publicQr.lobsterLabel")}
+            alt={t("chat.publicQr.clawLabel")}
             width={240}
             height={240}
             style={{
@@ -92,7 +92,7 @@ function LobsterQr(props: { url: string; controls?: MenuControls }) {
             href={qr().halftone}
             download="openclaw-public-link-qr.png"
           >
-            {t("chat.publicQr.download")}
+            {t("chat.publicQr.downloadClaw")}
           </a>
         </>
       )}
