@@ -142,8 +142,8 @@ describe("Full Access delegated chat", () => {
         });
         await tool.execute("propose-config", {
           action: "config_set",
-          path: source === "repair" ? "gateway.port" : "logging.level",
-          value: source === "repair" ? "18789" : "debug",
+          path: "logging.level",
+          value: "debug",
         });
         return { text: "Change proposed." };
       },
@@ -229,6 +229,33 @@ describe("Full Access delegated chat", () => {
   }
 
   it.each([
+    "config set mcp.servers.demo.command node",
+    'config set mcp {"servers":{"demo":{"command":"node"}}}',
+    'config set logging.level {"$include":"/tmp/level.json"}',
+  ])("asks before a Full Access delegated write: %s", async (message) => {
+    const fixture = await createDelegatedChatFixture(createTestGatewayScheduler());
+    const call = fixture.callChat(message, { fullPermission: true });
+    try {
+      expect(
+        await Promise.race([
+          fixture.requested.promise.then(() => "approval"),
+          call.then(() => "applied"),
+        ]),
+      ).toBe("approval");
+      expect(fixture.runConfigSet).not.toHaveBeenCalled();
+      const record = expectDefined((await fixture.manager.listPendingRecords())[0], "approval");
+      expect(await fixture.manager.resolve(record.id, "deny", "operator")).toBe(true);
+      expectReplyParts((await call).payload, "Denied");
+      expect(fixture.runConfigSet).not.toHaveBeenCalled();
+    } finally {
+      for (const record of await fixture.manager.listPendingRecords()) {
+        await fixture.manager.resolve(record.id, "deny", "cleanup");
+      }
+      await call;
+    }
+  });
+
+  it.each([
     "apply",
     "closed-before",
     "closed-after",
@@ -238,9 +265,7 @@ describe("Full Access delegated chat", () => {
   ] as const)("settles a separately approved correction with outcome %s", async (outcome) => {
     const fixture = await createDelegatedChatFixture(createTestGatewayScheduler(), "repair");
     fixture.runConfigSet.mockRejectedValueOnce(
-      new Error(
-        "Config validation failed: gateway.port: Invalid input: expected number, received string",
-      ),
+      new Error("Config validation failed: logging.level: Invalid input: expected a log level"),
     );
     if (outcome === "failed-correction") {
       fixture.runConfigSet.mockRejectedValue(new Error("fixture correction failed"));
@@ -258,7 +283,7 @@ describe("Full Access delegated chat", () => {
     const controller = new AbortController();
     let settled = false;
     const pending = fixture
-      .callChat("config set gateway.port banana", {
+      .callChat("config set logging.level banana", {
         approvalSignals: [controller.signal],
       })
       .then((reply) => {
@@ -325,15 +350,15 @@ describe("Full Access delegated chat", () => {
       }
       expect(await fixture.manager.resolve(correction.id, "allow-once", "operator")).toBe(true);
       const result = await pending;
-      expectReplyParts(result.payload, "gateway.port: Invalid input");
+      expectReplyParts(result.payload, "logging.level: Invalid input");
       if (outcome === "failed-correction") {
         expectReplyParts(result.payload, "stopped after one corrective attempt");
         fixture.expectRequests(2);
       }
       expect(fixture.runConfigSet).toHaveBeenCalledTimes(2);
       expect(fixture.runConfigSet).toHaveBeenLastCalledWith({
-        path: "gateway.port",
-        value: "18789",
+        path: "logging.level",
+        value: "debug",
         cliOptions: {},
         beforePersistentApply: expect.any(Function),
         runtime: expect.objectContaining({ log: expect.any(Function) }),
@@ -358,7 +383,7 @@ describe("Full Access delegated chat", () => {
       if (fails) {
         fixture.runConfigSet.mockRejectedValue(new Error("fixture correction failed"));
       }
-      const reply = await fixture.callChat("config set gateway.port banana", {
+      const reply = await fixture.callChat("config set logging.level banana", {
         fullPermission: true,
       });
       expect(fixture.runConfigSet).toHaveBeenCalledTimes(2);

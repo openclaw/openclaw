@@ -1,2 +1,2 @@
-242
-# Covers delegated policy cases and a spawned Gateway approval and config-write flow.
+292
+# Covers delegated policy, spawned Gateway approval, fixture support, and owner-grant persistence after approval.

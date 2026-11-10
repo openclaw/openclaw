@@ -1,6 +1,7 @@
 // Owns delegated system-agent authorization and exact-proposal completion.
 import { randomUUID } from "node:crypto";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { parseConfigSetValue } from "../../cli/config-cli-path.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
@@ -15,6 +16,7 @@ import {
 } from "../../infra/system-agent-approvals.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import { SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES } from "../../system-agent/operator-approval.js";
 import { createSystemAgentTranscriptStore } from "../../system-agent/transcript-store.js";
@@ -30,6 +32,29 @@ import type { GatewaySystemAgentSession } from "./shared-types.js";
 import { persistSystemAgentEngineHistory } from "./system-agent-chat-turn.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import type { GatewayRequestContext } from "./types.js";
+
+// Exact closed-enum leaves only; parent and plugin-defined writes can activate commands.
+const AUTO_APPLY_CONFIG_PATHS = new Set([
+  "logging.level",
+  "logging.consoleLevel",
+  "logging.consoleStyle",
+  "ui.prefs.theme",
+  "ui.prefs.themeMode",
+]);
+
+function canAutoApplyDelegatedOperation(operation: SystemAgentOperation): boolean {
+  if (operation.kind === "config-unset") {
+    return AUTO_APPLY_CONFIG_PATHS.has(operation.path);
+  }
+  if (operation.kind !== "config-set" || !AUTO_APPLY_CONFIG_PATHS.has(operation.path)) {
+    return false;
+  }
+  try {
+    return typeof parseConfigSetValue(operation.value, false) === "string";
+  } catch {
+    return false;
+  }
+}
 
 function sameApprovalAuthority(
   left: AgentRuntimeDelegatedAuthority,
@@ -245,7 +270,10 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       };
       // Only a fresh proposal belongs to this input. An existing operator request
       // stays bound to its original decision, even if this caller has Full Access.
-      if (callerIdentity?.fullPermission === true) {
+      if (
+        callerIdentity?.fullPermission === true &&
+        canAutoApplyDelegatedOperation(proposal.operation)
+      ) {
         const reply = await applyDecision("allow-once");
         if (!reply) {
           throw new Error("OpenClaw change is no longer pending. Retry the request.");

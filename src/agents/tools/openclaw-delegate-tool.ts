@@ -7,7 +7,6 @@ import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
 import type { ResolvedExecDefaults } from "../exec-defaults.js";
 import { resolveExecDefaultsLegacy } from "../exec-defaults.legacy.js";
 import { withPreparedExecDefaults } from "../exec-defaults.preparation.js";
-import { isGatewayToolAllowedWithoutAction } from "../gateway-tool-policy.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedToolConstruction } from "../tool-construction-preparation.js";
@@ -51,7 +50,6 @@ type DelegateToolOptions = Pick<
   | "config"
   | "execSession"
   | "execOverrides"
-  | "execToolAllowed"
   | "fsPolicy"
 > & { sessionAgentId: string };
 
@@ -91,10 +89,8 @@ export function createOpenClawDelegateToolsForRun(
   const defaultSessionId = stableDelegationSessionId(sessionKey, options.sessionAgentId);
   const execPolicy = preparedExecDefaults ?? resolveExecDefaultsLegacy(execDefaultsParams(options));
   const fullPermission =
-    options.execToolAllowed === true &&
-    isGatewayToolAllowedWithoutAction("exec", options.config) &&
     options.fsPolicy?.workspaceOnly !== true &&
-    execPolicy.effectiveHost === "gateway" &&
+    execPolicy.effectiveHost !== "sandbox" &&
     execPolicy.security === "full" &&
     execPolicy.ask === "off";
   const turnSourceTo =

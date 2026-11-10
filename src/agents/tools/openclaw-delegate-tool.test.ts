@@ -32,7 +32,6 @@ function delegate(options: Options = {}) {
   const [tool] = createTools({
     sessionAgentId: "main",
     runSessionKey,
-    execToolAllowed: true,
     ...options,
   });
   return tool ?? expect.fail("expected OpenClaw delegation tool");
@@ -135,13 +134,12 @@ it.each<[string, Options, boolean]>([
     false,
   ],
   ["filesystem-restricted", { fsPolicy: { workspaceOnly: true } }, false],
-  ["remote-node exec", { execOverrides: { host: "node" } }, false],
-  ["tool-policy denied exec", { execToolAllowed: false }, false],
-  ["missing tool-policy fact", { execToolAllowed: undefined }, false],
+  ["remote-node exec", { execOverrides: { host: "node" } }, true],
+  ["tool-policy denied exec", { config: { tools: { deny: ["exec"] } } }, true],
   [
     "deployment-policy denied exec",
     { config: { tools: { gatewayPolicy: { allow: ["openclaw"] } } } },
-    false,
+    true,
   ],
 ])("carries %s authority privately, not in RPC data", async (_name, options, full) => {
   const runController = new AbortController();
@@ -178,7 +176,7 @@ it("keeps setup self-delegation unavailable even when the configured user agent 
   expect(callGateway).not.toHaveBeenCalled();
 });
 
-it("requires approval when the requesting agent cannot use exec", async () => {
+it("retains Full Access for harmless changes when the requesting agent cannot use exec", async () => {
   let observedFullPermission: boolean | undefined;
   callGateway.mockImplementation(async () => {
     observedFullPermission = callerScope.getGatewayToolCallerIdentity()?.fullPermission;
@@ -203,8 +201,8 @@ it("requires approval when the requesting agent cannot use exec", async () => {
     },
   });
   const tool = tools.find((entry) => entry.name === "openclaw") ?? expect.fail("missing tool");
-  await tool.execute("deny-exec", { message: "Change config." });
-  expect(observedFullPermission).toBe(false);
+  await tool.execute("deny-exec", { message: "Change logging level." });
+  expect(observedFullPermission).toBe(true);
   expect(callGateway).toHaveBeenCalledOnce();
   expect(tool.description).toContain("other changes wait for user approval");
 });

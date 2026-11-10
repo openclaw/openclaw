@@ -58,10 +58,10 @@ When a session uses **Agent default**, the Control UI permission picker shows th
 
 When a regular agent delegates a persistent change through its `openclaw` tool,
 the host applies the requesting run's effective permission policy to the exact
-proposed operation. Full Access applies it automatically without an approval
-prompt, including when Full Access comes from the configured default rather than
-an explicit session mode, if the run's tool policy permits Gateway `exec`.
-Otherwise, changes wait for approval. Restricted runs from messaging channels ask the
+proposed operation. Full Access applies log level, console style, and theme selection
+changes automatically, including when Full Access comes from the configured
+default. Other persistent changes wait for approval, even when the run can use
+`exec`. Restricted runs from messaging channels ask the
 requesting chat for approval: native approval cards where the channel supports
 them, otherwise a `/approve <id> allow-once|deny` reply. Webchat and terminal runs
 decide in the Control UI or apps, which can also decide any chat's approval.

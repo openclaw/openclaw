@@ -137,7 +137,6 @@ it.each([
     });
 
     expect(toolNames(tools)).toEqual(expectedTools);
-    expect(lastArgs()?.execToolAllowed).toBe(agentId === "direct");
   },
 );
 

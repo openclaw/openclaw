@@ -39,7 +39,6 @@ function construct(assertCurrent?: () => void) {
           config: shared.config,
           sessionAgentId: "main",
           runSessionKey: "agent:main:delegate-preparation",
-          execToolAllowed: true,
         },
         shared,
       ),

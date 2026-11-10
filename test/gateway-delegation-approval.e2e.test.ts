@@ -40,7 +40,11 @@ it.each([false, true])(
               response,
               "delegate-entry",
               "openclaw",
-              { message: "config set logging.level debug" },
+              {
+                message: allowExec
+                  ? "config set mcp.servers.demo.command node"
+                  : "config set logging.level debug",
+              },
               current,
             );
             return;
@@ -94,12 +98,14 @@ it.each([false, true])(
           "chat.send",
           {
             sessionKey: `agent:main:delegation-entry-${allowExec}`,
-            message: "DELEGATED_CONFIG_ENTRY: Set the log level to debug.",
+            message: allowExec
+              ? "DELEGATED_CONFIG_ENTRY: Add a local MCP server command."
+              : "DELEGATED_CONFIG_ENTRY: Set the log level to debug.",
             idempotencyKey: `delegation-entry-${allowExec}`,
           },
           { expectFinal: false },
         );
-        if (allowExec) {
+        if (!allowExec) {
           await race(
             vi.waitFor(
               async () => {
@@ -118,7 +124,7 @@ it.each([false, true])(
               async () => {
                 expect(issued).toBe(true);
                 const pendingConfig = JSON.parse(await readFile(instance.configPath, "utf8"));
-                expect(pendingConfig.logging?.level).toBeUndefined();
+                expect(pendingConfig.mcp?.servers?.demo).toBeUndefined();
                 const approvals = await client!.request<Array<{ id: string }>>(
                   "openclaw.approval.list",
                   {},

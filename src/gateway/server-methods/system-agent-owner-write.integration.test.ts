@@ -22,7 +22,9 @@ import type { OpenClawConfig } from "../../config/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import type { SystemAgentTurnRunner } from "../../system-agent/agent-turn.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
@@ -31,6 +33,7 @@ import {
   createSystemAgentVerifiedInferenceTestFixture,
 } from "../../system-agent/system-agent.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import { systemAgentHandlers } from "./system-agent.js";
 
@@ -39,7 +42,7 @@ afterEach(() => vi.restoreAllMocks());
 // Synthetic inference chooses an operation; dispatch, approval, validation and persistence are real.
 it.for(["active", "revoked", "non-owner"] as const)(
   "preserves the %s source grant through delegated role persistence after a network read",
-  (state, { signal }) =>
+  (state, testContext) =>
     withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
       const config: OpenClawConfig = {
         agents: {
@@ -110,6 +113,20 @@ it.for(["active", "revoked", "non-owner"] as const)(
           [["openclaw.chat", "operator.admin", "system-agent", handler]],
           () => config,
         );
+        const requested = createDeferred();
+        const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(testContext, {
+          approvalKind: "system-agent",
+          resolveAllowedDecisions: (request) => request.allowedDecisions,
+          validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
+        });
+        context.systemAgentApprovalManager = manager;
+        context.broadcast = vi.fn((event) => {
+          if (event === "openclaw.approval.requested") {
+            requested.resolve();
+          }
+        });
+        context.broadcastToConnIds = vi.fn();
+        context.hasExecApprovalClients = () => true;
         context.resolveGatewayContext = () => context;
         context.systemAgentSessions = new Map([
           [
@@ -186,11 +203,24 @@ it.for(["active", "revoked", "non-owner"] as const)(
                     try {
                       await withinTest(
                         awaitGateBeforeSettlement(
+                          requested.promise,
+                          pending,
+                          "delegated role approval was not requested",
+                        ),
+                        testContext.signal,
+                      );
+                      const approval = (await manager.listPendingRecords())[0];
+                      assert(approval);
+                      expect(await manager.resolve(approval.id, "allow-once", "operator")).toBe(
+                        true,
+                      );
+                      await withinTest(
+                        awaitGateBeforeSettlement(
                           prepared.promise,
                           pending,
                           "delegated config validation was not reached",
                         ),
-                        signal,
+                        testContext.signal,
                       );
                       expect(handler).toHaveBeenCalledOnce();
                       expect(validation).toHaveBeenCalledOnce();
