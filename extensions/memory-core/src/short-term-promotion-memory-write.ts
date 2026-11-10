@@ -127,13 +127,21 @@ export async function writeExistingMemoryInPlace(params: {
   } catch {
     return false;
   }
+  // The authority check runs before any mutation. If it throws, no write has
+  // started, so the recovery path below must not run: a rejected request must
+  // leave the file untouched, with no restore writes either.
+  let mutationStarted = false;
   try {
     params.assertBeforeMutation?.();
+    mutationStarted = true;
     await handle.writeFile(params.content, { encoding: "utf-8" });
     await handle.truncate(Buffer.byteLength(params.content));
     await handle.sync();
     return true;
   } catch (error) {
+    if (!mutationStarted) {
+      throw error;
+    }
     const original = Buffer.from(currentContent, "utf-8");
     try {
       await writeFileWindowFully(handle, original, 0);

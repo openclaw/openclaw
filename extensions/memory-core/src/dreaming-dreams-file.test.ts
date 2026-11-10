@@ -253,7 +253,9 @@ describe("dreams file publication on an unwritable parent", () => {
     await writeDreamsFileAtomic(dreamsPath, shorter);
 
     expect(await readDiary()).toBe(shorter);
-    expect((await fs.stat(dreamsPath)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(dreamsPath)).mode & 0o777).toBe(0o600);
+    }
     await expect(fs.readdir(workspaceDir)).resolves.toEqual(["DREAMS.md"]);
   });
 
@@ -306,6 +308,7 @@ describe("dreams file publication on an unwritable parent", () => {
     await fs.writeFile(dreamsPath, "# Dream Diary\n\nAn existing entry.\n", "utf8");
     const owner = revocableOwner();
     const realOpen = fs.open.bind(fs);
+    const mutationCalls: string[] = [];
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const [file] = args;
       if (
@@ -319,6 +322,18 @@ describe("dreams file publication on an unwritable parent", () => {
         // Revocation lands while the fallback awaits the open, after the
         // pre-fallback authority check and immediately before the write.
         owner.setCurrent(false);
+        // Record every mutation the rejected request attempts: restoring
+        // identical bytes would leave the content unchanged, so content
+        // alone cannot prove the rejection performed no write.
+        for (const method of ["write", "writeFile", "truncate"] as const) {
+          const original = handle[method].bind(handle);
+          Object.defineProperty(handle, method, {
+            value: (...callArgs: never[]) => {
+              mutationCalls.push(method);
+              return original(...callArgs);
+            },
+          });
+        }
       }
       return handle;
     });
@@ -330,6 +345,7 @@ describe("dreams file publication on an unwritable parent", () => {
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).message).toBe("fixture owner revoked");
     expect(await readDiary()).toBe("# Dream Diary\n\nAn existing entry.\n");
+    expect(mutationCalls).toEqual([]);
   });
 
   it("restores the original diary byte-for-byte when the in-place write fails partway", async () => {
