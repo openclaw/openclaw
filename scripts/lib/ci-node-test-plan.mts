@@ -1837,13 +1837,8 @@ function resolveAgentCoreShardName(file: string): string {
 }
 
 function createAgentCoreSplitShards(): NodeTestSplitShard[] {
-  const excludedTests = new Set(agentVitestProjectOwners.core.exclude);
   const groups = new Map<string, string[]>();
-  for (const file of listTrackedTestFiles("src/agents")) {
-    const name = relative("src/agents", file).replaceAll("\\", "/");
-    if (name.includes("/") || excludedTests.has(file)) {
-      continue;
-    }
+  for (const file of listScopedOwnerTestFiles(agentVitestProjectOwners.core)) {
     const shardName = resolveAgentCoreShardName(file);
     groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
   }
