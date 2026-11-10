@@ -1,6 +1,7 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
 import type { MarkdownPrewarmMode } from "../../../components/markdown.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import { createTranscriptEndSettlement } from "./chat-transcript-end-anchor.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
 // A few viewports avoid repeat mounts without making every scroll restyle a
@@ -17,6 +18,9 @@ const INITIAL_PREWARM_ROW_LIMIT = 128;
 export class TranscriptInitialRange {
   pending = true;
   preparingEnd = false;
+  private endWork?: () => (() => void) | void;
+  private readonly queueEndWork = () =>
+    this.endWork && scheduleLayout(this, () => this.endWork?.());
   private tailRows: number;
   private rows: readonly TranscriptRow[] = [];
   private hasIdleDomRows = false;
@@ -150,10 +154,31 @@ export class TranscriptInitialRange {
       }
     }
     this.retainViewportRows();
+    const active = this.activeIndexes();
+    const virtualizer = this.virtualizer();
+    const first = active[0];
+    // Ordinary rows would pay another commit on every wheel step. Retained fragments
+    // need preparation before their cold, estimated height can enter the flow.
+    const predecessor =
+      !this.pending &&
+      !this.preparingEnd &&
+      first !== undefined &&
+      rows[first]?.retainDom &&
+      first === (virtualizer.range?.startIndex ?? 0) - 1 &&
+      !this.cachedRowSize(first) &&
+      !virtualizer.itemSizeCache.has(virtualizer.options.getItemKey(first)) &&
+      !this.rowsMeasured([first])
+        ? active.shift()
+        : undefined;
+    if (predecessor !== undefined && this.preparingRowKey !== rows[predecessor]!.key) {
+      // Incoming overscan takes priority over speculative background preparation.
+      this.preparingRowKey = rows[predecessor]!.key;
+      this.prepareStarted = performance.now();
+      // A resumed reader can have a cached moving range without this predecessor.
+      this.refresh();
+    }
     return {
-      activeRowKeys: new Set(
-        [...this.activeIndexes(), ...this.endIndexes()].map((index) => rows[index]!.key),
-      ),
+      activeRowKeys: new Set([...active, ...this.endIndexes()].map((index) => rows[index]!.key)),
       preparingRowKey: this.preparingRowKey,
     };
   }
@@ -252,16 +277,36 @@ export class TranscriptInitialRange {
         this.invalidate();
         // A measurement can mount another row. Let the browser present before
         // its next pass instead of draining every correction in one task.
-        this.afterCommit(() => scheduleLayout(this, () => begin));
+        this.afterCommit(this.queueEndWork);
         return;
       }
-      this.finishEnd();
+      this.endWork = undefined;
       ready();
     };
+    this.endWork = () => begin;
     this.afterCommit(begin);
   };
 
+  // Keep the destination in flow until its real size and native endpoint agree.
+  readonly finishEndWhenSettled = (): void => {
+    if (!this.preparingEnd) {
+      this.preparingEnd = true;
+      this.refresh();
+      this.invalidate();
+    }
+    const endWork = createTranscriptEndSettlement(
+      this.virtualizer(),
+      () => this.canPrepare() && this.endWork === endWork,
+      this.rowsMeasured,
+      this.queueEndWork,
+      () => this.finishEnd(),
+    );
+    this.endWork = endWork;
+    this.queueEndWork();
+  };
+
   finishEnd(): void {
+    this.endWork = undefined;
     cancelLayout(this);
     if (this.preparingEnd) {
       this.preparingEnd = false;
@@ -349,6 +394,10 @@ export class TranscriptInitialRange {
   }
 
   didCommit(): void {
+    // Revealing a parked pane resumes its current end stage without hidden polling.
+    if (this.endWork && this.canPrepare()) {
+      this.queueEndWork();
+    }
     if (this.preparationIsIdle && this.isReaderMoving()) {
       this.cancelPreparation?.();
       this.cancelPreparation = undefined;
@@ -368,6 +417,7 @@ export class TranscriptInitialRange {
       velocity: previous.time ? Math.abs(delta) / Math.max(16, now - previous.time) : 0,
       direction: Math.sign(delta),
     };
+    this.finishEnd();
     this.finish();
   }
 
@@ -695,10 +745,7 @@ export class TranscriptInitialRange {
         return;
       }
       this.prepareStarted = performance.now();
-      virtualizer.setOptions({
-        ...virtualizer.options,
-        rangeExtractor: (next) => this.extract(next),
-      });
+      this.refresh();
       this.invalidate();
       // Markdown can keep warming while the single admitted DOM row is measured.
       queueNext();
@@ -744,6 +791,7 @@ export class TranscriptInitialRange {
   }
 
   disconnect(): void {
+    this.endWork = undefined;
     cancelLayout(this);
     this.cancelPreparation?.();
     this.cancelPreparation = undefined;

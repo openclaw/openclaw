@@ -66,8 +66,8 @@ additive change. v1-draft accepts only `ed25519`.
 - There is no certificate chain. A statement signed by an owner device is checked against
   the claw's **current owner devices** (its allowlist), which only the Gateway holds.
 - `sig` is unpadded base64url. Unknown envelope or body fields are rejected (an envelope
-  that still carries a `chain` member is malformed); a new signed field needs a new envelope
-  version.
+  that still carries a `chain` member is malformed); after release, a new signed field needs a new envelope
+  version (the unshipped draft is revised in place).
 - `v` selects the schema and the signing domain. A well-formed `v` this build does not
   implement is refused as `unsupported_version`, not `malformed` (versioning.md).
 - Timestamps are unix **seconds** (integers).
@@ -139,7 +139,7 @@ for the caps below.
 
 ## The allowlist model
 
-Each claw's Gateway keeps an **allowlist**: the owner devices and members it has added, and
+Each claw's Gateway keeps an **allowlist**: the owner devices, members and nodes it has added, and
 nothing else. There are no certificate chains and no list of revoked keys.
 
 - **Approval.** A new owner device needs a certificate signed by R (the recovery kit) or by a
@@ -270,6 +270,12 @@ Discovery's snapshot (`getSnapshot`, untrusted):
 4. Not fresh: `enforce` refuses with `freshness_unavailable` (no socket, no credential); `report`
    dials and records the gap. Rule 2 applies under both policies.
 
+Retained state keeps two independent high-water facts from verified snapshots: the newest
+`(seq, issued_at)` and the highest `binding_seq`. Keep both even when refusing a refresh;
+a later signed snapshot with a newer membership order must not erase earlier evidence
+that a server binding was retired. This local marker is not a signed snapshot and never
+supplies membership or protocol authorization.
+
 A snapshot from the future is never stored. The Gateway re-signs at least every
 `SNAPSHOT_REPUBLISH_SECONDS` (1 h), so an honest claw's snapshot is always well inside the 3 h
 window. A K_srv rotation must publish the new binding and a snapshot with its binding_seq together.
@@ -327,3 +333,36 @@ node --import ./scripts/tsx.mjs -e 'const { buildStatementVectors } = await impo
   (process-model.md).
 - New statement type `RootReset`, signed by K_gw: owner reset on the machine replaces the
   spec's root rotation (enrollment.md, "Owner reset").
+
+## Node-only statements and membership
+
+All of these are additions to the unshipped **v1-draft**, not new version markers.
+Unknown signed fields remain rejected. See [enrollment.md](enrollment.md#headless-node-enrollment)
+for the proof and join-link bytes and [discovery.md](discovery.md#accountless-node-authentication)
+for request authentication.
+
+| Type             | Body                                                           | Signer / authority                                                |
+| ---------------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `NodeInviteCap`  | claw_id, invite_id, label, created_at, expires_at, secret_hash | R or current owner device with `invite`; direct registration only |
+| `NodeRedemption` | claw_id, invite_id, peer_key, description, proof, requested_at | the named W, represented as ed25519: in signer; pending only      |
+
+`MembershipTarget` adds `add_node { peer_key, label, invite_id }` and
+`remove_node { peer_key }`; both require R or a current owner with `manage_members`.
+`deny_invite` and peer-key revocations cover nodes too. `MembershipSnapshotBody` requires
+`node_peer_keys: IrohEndpointKey[]` (empty when none), separate from `owner_peer_keys` and
+`members`. Existing snapshots must be re-signed by K_gw when consumers update this draft;
+never insert a field into an already signed envelope.
+
+Node W is an Ed25519 iroh endpoint key, held only by the node. It grants neither member
+nor owner authority. `verifyNodeRedemptionSignature` checks that the signature is by exactly
+that W. Nodes are not in `ownerLookup`; signing a membership change with W never authorizes it.
+A claw admits at most `MAX_NODES` (256), so node snapshots fit the existing 256-entry list
+bound (about 19 KiB additional JSON at capacity). Every node records its listing seq;
+replaying an old revocation cannot remove a node approved anew at a later seq.
+
+The deterministic fixture also includes NodeInviteCap, NodeRedemption, add/remove operations,
+a snapshot with node keys, wrong-signer cases, and `node_invite` proof-key/HMAC/link/code vectors.
+`NodeRedemption.description` is the strict bounded `NodeDescription` described in enrollment.md,
+signed by W and retained with pending and approved nodes. Its reported commands/caps confer
+no authority without explicit owner approval. Node invites default to ten minutes and are
+bounded to one hour; member-invite limits are unchanged.

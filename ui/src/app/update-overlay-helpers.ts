@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
 import {
   isAcknowledgedAbandonedUpdateRun,
@@ -175,7 +176,7 @@ function lastLogLine(tail: string | null | undefined): string | null {
     .map((line) => line.trim())
     .filter(Boolean);
   const last = lines.at(-1);
-  return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
+  return last ? truncateUtf16Safe(last, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
 }
 
 export type UpdateRunResponse = {

@@ -146,6 +146,7 @@ reconcile_position=restored
 reconcile_evidence=""
 reconcile_stopped=0
 repair_operation=""
+repair_config_hash=""
 repair_journal_hash=""
 repair_journal=""
 repair_context=""
@@ -2749,6 +2750,7 @@ recover_journal() {
 			fi
 			return 1
 		fi
+		verified_markers record "$current_sha" || return 1
 		proof recovery-finish "$journal_file" "$evidence" "$serving_root" "$recovery_position" >/dev/null || return 1
 		if [[ -n "$reconcile_evidence" ]]; then
 			printf 'RECOVERY_CONFIG_RECONCILED config_sha256=%s journal_sha256=%s original-journal=retired-without-rewrite\n' "$reconcile_config_hash" "$reconcile_journal_hash"
@@ -2789,14 +2791,16 @@ prepare_retained_repair() {
 		[[ ("$enabled" == disabled || "$enabled" == not-found) && "$active" == inactive ]] ||
 			fail 'retained repair preparation requires disabled inactive deployment timers'
 	done
-	binding="$("$node_bin" -e 'const [operation,target,current,pid,generation,journalSha256]=process.argv.slice(1);process.stdout.write(JSON.stringify({operation,target,current,pid:Number(pid),generation,journalSha256}));' \
-		"$repair_operation" "$requested_sha" "$operator_expected_sha" "$operator_expected_pid" "$operator_expected_generation" "$repair_journal_hash")"
+	# Freeze once under the deployment lock before selecting the new intent's target.
+	freeze_origin_main
+	binding="$("$node_bin" -e 'const [operation,target,current,pid,generation,journalSha256,configSha256,frozenMain]=process.argv.slice(1);process.stdout.write(JSON.stringify({operation,target,current,pid:Number(pid),generation,journalSha256,...(configSha256?{configSha256}:{}),...(target==="main"?{frozenMain}:{})}));' \
+		"$repair_operation" "$requested_sha" "$operator_expected_sha" "$operator_expected_pid" "$operator_expected_generation" "$repair_journal_hash" "${repair_config_hash:-}" "$frozen_main")"
 	request="$(printf '%s' "$binding" | proof retained-repair-build request "$serving_root" @stdin)"
+	requested_sha="$(printf '%s' "$request" | "$node_bin" -e 'let s="";process.stdin.on("data",v=>s+=v).on("end",()=>process.stdout.write(JSON.parse(s).target.sha));')"
 	printf '%s' "$request" | proof retained-repair-build begin "$serving_root" @stdin >/dev/null
 	operation="$("$node_bin" -e 'process.stdout.write(JSON.stringify({operation:process.argv[1]}));' "$repair_operation")"
 	# Never waive the ordinary pending-journal gate: this separate owner binds it.
-	# Existing fetch/build/prewarm/seal owners run in ordinary errexit context.
-	freeze_origin_main
+	# Existing build/prewarm/seal owners run in ordinary errexit context.
 	printf '%s' "$operation" | proof retained-repair-build origin "$serving_root" @stdin >/dev/null
 	# A replay may see newer official main. The original exact C remains pinned.
 	frozen_main="$requested_sha"
@@ -3271,7 +3275,7 @@ repair_load_context() {
 	candidate_info="$(repair_value snapshot.target.release)" || return 1
 	previous_release="$releases_root/$(repair_value snapshot.evidence.record.candidate.sha)"
 	candidate_release="$releases_root/$(repair_value snapshot.request.target.sha)"
-	protected_identity="$(repair_value snapshot.evidence.record.protectedPaths)" || return 1
+	protected_identity="$(repair_value protectedPaths)" || return 1
 	policy_identity="$(repair_value snapshot.policy)" || return 1
 	session_witness="$(repair_value snapshot.currentWitness)" || return 1
 	# Terminal failures may precede binding or lease acquisition. Never invent those facts.
@@ -4185,15 +4189,19 @@ while (($#)); do
 		mode=handoff-source; operator_expected_sha="$2"; operator_expected_pid="$3"; operator_expected_generation="$4"
 		handoff_peer="$5"; handoff_target_sha="$6"; shift 5
 		;;
-	--activate-retained-repair | --resume-retained-repair)
+	--activate-retained-repair | --resume-retained-repair | --retire-retained-repair)
 		[[ "$mode" == deploy && $# == 3 && "$2" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ && "$3" =~ ^[a-f0-9]{64}$ && -z "$requested_sha" ]] || fail 'retained repair requires only OPERATION and exact receipt or journal SHA256'
 		if [[ "$1" == --activate-retained-repair ]]; then repair_entry=begin; else repair_entry=resume; fi
-		mode=retained-repair; repair_operation="$2"; repair_journal_hash="$3"; shift 2
+		mode=retained-repair; repair_operation="$2"; repair_journal_hash="$3"
+		[[ "$1" != --retire-retained-repair ]] || mode=retire-retained-repair
+		[[ "$mode" != retire-retained-repair || "$waive_terminal_persistence" == 0 ]] || fail 'retirement does not accept a persistence waiver'
+		shift 2
 		;;
 	--prepare-retained-repair)
-		[[ "$mode" == deploy && $# -ge 7 && -z "$requested_sha" ]] || fail 'retained repair preparation requires OPERATION TARGET CURRENT PID START JOURNAL_SHA256'
+		[[ "$mode" == deploy && $# -ge 7 && -z "$requested_sha" ]] || fail 'retained repair preparation requires OPERATION TARGET CURRENT PID START JOURNAL_SHA256 [CONFIG_SHA256]'
 		mode=prepare-retained-repair; repair_operation="$2"; requested_sha="$3"; operator_expected_sha="$4"
 		operator_expected_pid="$5"; operator_expected_generation="$6"; repair_journal_hash="$7"; shift 6
+		if [[ "${2:-}" =~ ^[a-f0-9]{64}$ ]]; then repair_config_hash="$2"; shift; fi
 		;;
 	--prepare-release)
 		[[ "$mode" == deploy && $# -ge 2 && -z "$requested_sha" && "$2" =~ ^[a-f0-9]{40}$ ]] || fail 'release preparation requires one exact official SHA'
@@ -4284,16 +4292,16 @@ while (($#)); do
 		# only meaningful with --interrupt-after-drain; receipted as TERMINAL_PERSISTENCE_WAIVED.
 		waive_terminal_persistence=1
 		;;
-	*) fail 'usage: openclaw-release-deploy [--continue-frozen-release TARGET_SHA MANIFEST_SHA256 CURRENT_SHA PID START|--prepare-retained-repair OPERATION TARGET CURRENT PID START JOURNAL_SHA256|--prepare-release OFFICIAL_SHA|--switch-runtime node|bun BINARY SHA256|--migrate|--recover|--cleanup] [--reconcile-config SHA PID START CONFIG_SHA256 JOURNAL_SHA256|--reconcile-stopped-predecessor SHA CONFIG_SHA256 JOURNAL_SHA256] [--repair-worker-bootstrap SHA PID START CONFIG_SHA256 OLD_SETUP_SHA256] [--sha OFFICIAL_MAIN_SHA] [--interrupt-after-drain] [--offline-doctor-repair] [--allow-cpu-degraded] [--capture-startup-profile|--arm-steady-profile] [--capture-steady-profile OPERATION SHA PID START]' ;;
+	*) fail 'usage: openclaw-release-deploy [--retire-retained-repair OPERATION COMPLETED_JOURNAL_SHA256|--continue-frozen-release TARGET_SHA MANIFEST_SHA256 CURRENT_SHA PID START|--prepare-retained-repair OPERATION TARGET CURRENT PID START JOURNAL_SHA256 [CONFIG_SHA256]|--prepare-release OFFICIAL_SHA|--switch-runtime node|bun BINARY SHA256|--migrate|--recover|--cleanup] [--reconcile-config SHA PID START CONFIG_SHA256 JOURNAL_SHA256|--reconcile-stopped-predecessor SHA CONFIG_SHA256 JOURNAL_SHA256] [--repair-worker-bootstrap SHA PID START CONFIG_SHA256 OLD_SETUP_SHA256] [--sha OFFICIAL_MAIN_SHA] [--interrupt-after-drain] [--offline-doctor-repair] [--allow-cpu-degraded] [--capture-startup-profile|--arm-steady-profile] [--capture-steady-profile OPERATION SHA PID START]' ;;
 	esac
 	shift
 done
 
-if [[ "$mode" == retained-repair ]]; then operator_check_lock before; fi
+if [[ "$mode" == retained-repair || "$mode" == retire-retained-repair ]]; then operator_check_lock before; fi
 
 if [[ "$mode" == prepare-retained-repair ]]; then
 	[[ "$repair_operation" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ &&
-		"$requested_sha" =~ ^[a-f0-9]{40}$ && "$operator_expected_sha" =~ ^[a-f0-9]{40}$ &&
+		( "$requested_sha" == main || "$requested_sha" =~ ^[a-f0-9]{40}$ ) && "$operator_expected_sha" =~ ^[a-f0-9]{40}$ &&
 		"$requested_sha" != "$operator_expected_sha" && "$operator_expected_pid" =~ ^[1-9][0-9]*$ &&
 		"$operator_expected_generation" =~ ^[1-9][0-9]*$ && "$repair_journal_hash" =~ ^[a-f0-9]{64}$ &&
 		-z "$reconcile_config_hash" && "$start_stopped_current" == 0 ]] || fail 'invalid retained repair incident binding'
@@ -4377,7 +4385,7 @@ flock -n 9 || {
 			printf 'DEPLOY_LOCK_UNAVAILABLE exit=%s; retry after the current owner finishes\n' "$lock_exit" >&2
 			exit "$lock_exit"
 		}
-	elif [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == prepare-retained-repair || "$mode" == retained-repair || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
+	elif [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == prepare-retained-repair || "$mode" == retained-repair || "$mode" == retire-retained-repair || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
 		fail 'bound maintenance action refused: canonical deployment lock is busy'
 		exit 1
 	else
@@ -4390,6 +4398,10 @@ proof controller-adoption-gate "$serving_root" "$(readlink -f "${BASH_SOURCE[0]}
 	"$controller_script_device" "$controller_script_inode"
 proof maintenance-idle "$ancestor_boundary" >/dev/null ||
 	fail 'scheduled maintenance has not settled; deployment admission refused'
+if [[ "$mode" == retire-retained-repair ]]; then
+	proof retained-repair-retire "$serving_root" "$repair_operation" "$repair_journal_hash"
+	exit 0
+fi
 if [[ -n "$reconcile_config_hash" ]]; then operator_check_lock held; fi
 if [[ "$mode" != retained-repair && "$mode" != handoff-* && ( -e "$journal_file" || -L "$journal_file" ) ]]; then
 	handoff_pending="$(proof host-handoff status "$serving_root")"

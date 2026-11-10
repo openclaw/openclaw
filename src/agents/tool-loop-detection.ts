@@ -327,6 +327,12 @@ function hashToolOutcome(
   if (details.status === "blocked" && details.deniedReason === "tool-loop") {
     return { outcomeKind: "tool-loop-veto" };
   }
+  if (toolName === "exec" || toolName === "wait") {
+    const resultHash = getCodeModeToolOutcome(result);
+    if (resultHash !== undefined) {
+      return { resultHash };
+    }
+  }
   if (isError) {
     return { resultHash: digestToolOutcome(result) };
   }
@@ -341,12 +347,6 @@ function hashToolOutcome(
       toolName === "computer" ? getComputerToolOutcome(result) : getProgressCardToolOutcome(result);
     if (outcome !== undefined) {
       return { resultHash: digestToolOutcome(outcome) };
-    }
-  }
-  if (toolName === "exec" || toolName === "wait") {
-    const resultHash = getCodeModeToolOutcome(result);
-    if (resultHash !== undefined) {
-      return { resultHash };
     }
   }
   if (toolName === "exec") {

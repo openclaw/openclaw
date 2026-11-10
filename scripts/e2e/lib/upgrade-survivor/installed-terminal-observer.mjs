@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL, URLSearchParams } from "node:url";
 import { types } from "node:util";
 import workerThreads from "node:worker_threads";
 import { gzipSync } from "node:zlib";
@@ -15,8 +15,164 @@ import {
   openInstalledRecoveryEvidence,
   writeInstalledRecoveryEvidence,
 } from "./installed-recovery-observations.mjs";
+import {
+  assertInstalledTerminalDependencyTree,
+  readInstalledTerminalMetadata,
+} from "./installed-terminal-contracts.mjs";
+import {
+  assertWorkerCellPackageIdentity,
+  readWorkerCellPackageIdentity,
+} from "./worker-cell-package.mjs";
+
 const specPath = process.env.OPENCLAW_INSTALLED_TERMINAL_OBSERVER;
+// Published 2026.10.9 uses this exact builtin-only inline package hash worker.
+// Its empty environment intentionally prevents all ambient preloads.
+const historicalHasherSha256 = "27908b03b67e1b9a820228dd69a1938eef0a1444f1d5ad2d4239010fb140b3c7";
+const hasherRelativePath = "dist/infra/package-update-integrity-hasher.worker.js";
+const heartbeatRelativePath = "dist/state/openclaw-state-lease-heartbeat.worker.js";
+const closedEntryPaths = {
+  "sqlite-session": "dist/infra/sqlite-readonly-location.worker.js",
+  "finalizer-check": "dist/infra/update-migrated-finalize.worker.js",
+};
+const currentProbeSha256 = "8700a6c51bb2bd0040ec85d263d81ab1fd34057fa290290d568187ed945da1dc";
+// Fixed 2026.10.9/SRI fixture: runtime-paths-CNOx8gw6 + node-sqlite-C2ThNhQ8
+// emit this exact Node -e script. Its no-op selector and memory probe join locally.
+const publishedProbeSha256 = "954fe0502bbd8beb9de99ca78dced72c87b9a8ebd6110dd62fc25ee19eeb61ce";
+// These root modules are outside the dist inventory. Bind their complete published
+// bytes separately; the same-named current helpers have different contracts.
+const publishedWorkerRoots = {
+  "published-sqlite-probe": {
+    relativePath: "node-sqlite.mjs",
+    sha256: "3f5dafe79cbd8d4b601a48ed8c0248ee7d15ee3f96800269617cd7e24fc39087",
+  },
+  "published-compile-cache": {
+    relativePath: "node-compile-cache.mjs",
+    sha256: "4b8842b79af6812f2e895ef458777db43591e96048859e3412717c28462fa9f7",
+  },
+};
+const publishedSqliteWorkerSha256 =
+  "59e299b2d4e33c5cc0aef06eb87fc986906d69cae24d2f72daa0f179da75a322";
+const publishedProgressSha256 = "3f74e8b47c704a23722b1d6d444bfc189b15b36c88314a7e92d1943bcbc284c0";
+const reviewedRevision = "7ef902d3b4126b2f1f5d58aaad3d1340b1e0315d";
+const publishedRevision = "8b18b5578f66eab1501cba4cef2310d88bfb9a41";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const workerUrlDescriptors = Object.getOwnPropertyDescriptors(URL.prototype);
+const workerSearchParamsDescriptors = Object.getOwnPropertyDescriptors(URLSearchParams.prototype);
+const nativeArraySpecies = Object.getOwnPropertyDescriptor(Array, Symbol.species);
+const messagePortPrototype = workerThreads.MessagePort.prototype;
+const nativeMessagePortHasRef = Object.getOwnPropertyDescriptor(messagePortPrototype, "hasRef");
+const sqliteEngineFamilies = [
+  "state",
+  "agent",
+  "workboard",
+  "logbook",
+  "team-reports",
+  "quarantine",
+  "managed-update",
+  "package-activation",
+];
+
+function nativePrototypeMatches(prototype, expected) {
+  const actual = Object.getOwnPropertyDescriptors(prototype);
+  return (
+    Object.getPrototypeOf(prototype) === Object.prototype &&
+    Reflect.ownKeys(actual).length === Reflect.ownKeys(expected).length &&
+    Reflect.ownKeys(expected).every((key) =>
+      ["get", "set", "value", "writable", "enumerable", "configurable"].every(
+        (field) => actual[key]?.[field] === expected[key][field],
+      ),
+    )
+  );
+}
+
+function inertNativeSlots(value) {
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  return Reflect.ownKeys(descriptors).every(
+    (key) =>
+      typeof key === "symbol" &&
+      ![Symbol.toPrimitive, Symbol.toStringTag, Symbol.for("nodejs.util.inspect.custom")].includes(
+        key,
+      ) &&
+      "value" in descriptors[key] &&
+      typeof descriptors[key].value === "number",
+  );
+}
+
+function workerEntrySnapshot(entry) {
+  // Native URL detection reads inherited properties before consuming execArgv.
+  // Only inert built-in URL inputs can bind a pre-construction launch snapshot.
+  const hooks = ["href", "protocol", "auth", "path", Symbol.toPrimitive];
+  if (
+    hooks.some(
+      (key) => Object.hasOwn(Object.prototype, key) || Object.hasOwn(String.prototype, key),
+    )
+  ) {
+    return undefined;
+  }
+  if (typeof entry === "string") {
+    return entry;
+  }
+  if (
+    !entry ||
+    types.isProxy(entry) ||
+    Object.getPrototypeOf(entry) !== URL.prototype ||
+    !nativePrototypeMatches(URL.prototype, workerUrlDescriptors) ||
+    !inertNativeSlots(entry)
+  ) {
+    return undefined;
+  }
+  try {
+    // URL serialization can consult the exposed searchParams object when dirty.
+    // Inspect its descriptors before allowing native serialization to touch it.
+    const params = Reflect.apply(workerUrlDescriptors.searchParams.get, entry, []);
+    if (
+      Object.getPrototypeOf(params) !== URLSearchParams.prototype ||
+      !inertNativeSlots(params) ||
+      !nativePrototypeMatches(URLSearchParams.prototype, workerSearchParamsDescriptors)
+    ) {
+      return undefined;
+    }
+    return Reflect.apply(workerUrlDescriptors.toString.value, entry, []);
+  } catch {
+    return undefined;
+  }
+}
+
+// Snapshot metadata without invoking getters or Proxy traps. Unsupported shapes
+// remain ordinary unqualified launches with their original native arguments.
+// Child-process normalization spreads options, ignoring non-enumerable fields;
+// Worker options retain their separate own-data contract.
+function plainData(value, enumerableOnly = false) {
+  if (!value || typeof value !== "object" || types.isProxy(value)) {
+    return undefined;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== null && prototype !== Object.prototype) {
+    return undefined;
+  }
+  if (
+    prototype &&
+    Object.values(Object.getOwnPropertyDescriptors(prototype)).some((entry) => entry.enumerable)
+  ) {
+    return undefined;
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (
+    Reflect.ownKeys(descriptors).some(
+      (key) => typeof key !== "string" || !("value" in descriptors[key]),
+    )
+  ) {
+    return undefined;
+  }
+  return Object.setPrototypeOf(
+    Object.fromEntries(
+      Object.entries(descriptors)
+        .filter(([, entry]) => !enumerableOnly || entry.enumerable)
+        .map(([key, entry]) => [key, entry.value]),
+    ),
+    null,
+  );
+}
 
 function plainArguments(value) {
   if (!Array.isArray(value) || types.isProxy(value) || value.length > 128) {
@@ -29,6 +185,405 @@ function plainArguments(value) {
     : null;
 }
 
+function workerOptionsData(options) {
+  const data = plainData(options);
+  if (!data) {
+    return undefined;
+  }
+  // Worker reads these properties directly, including non-enumerable inherited
+  // values. Refuse hooks that could change argv before native initialization.
+  const prototype = Object.getPrototypeOf(options);
+  const nativeKeys = [
+    "execArgv",
+    "argv",
+    "eval",
+    "env",
+    "name",
+    "resourceLimits",
+    "trackUnmanagedFds",
+    "stdin",
+    "stdout",
+    "stderr",
+    "transferList",
+    "workerData",
+  ];
+  if (prototype && nativeKeys.some((key) => Object.hasOwn(prototype, key))) {
+    return undefined;
+  }
+  return data;
+}
+
+function isolatedWorkerLaunch(data) {
+  if (!data) {
+    return undefined;
+  }
+  const env = plainData(data.env);
+  const execArgv = plainArguments(data.execArgv);
+  const keys = Object.keys(data).toSorted();
+  if (
+    !env ||
+    Object.keys(env).length !== 0 ||
+    !execArgv ||
+    execArgv.length !== 0 ||
+    (data.eval !== undefined && typeof data.eval !== "boolean") ||
+    [data.stdout, data.stderr].some((value) => value !== undefined && typeof value !== "boolean") ||
+    keys.some(
+      (key) =>
+        !["eval", "env", "execArgv", "workerData", "transferList", "stdout", "stderr"].includes(
+          key,
+        ),
+    )
+  ) {
+    return undefined;
+  }
+  return { environment: "empty", execArgv, eval: data.eval === true, keys };
+}
+
+function publishedWorkerOptions(data) {
+  if (!data) {
+    return undefined;
+  }
+  const env = plainData(data.env);
+  const execArgv = plainArguments(data.execArgv);
+  const workerData = data.workerData === undefined ? undefined : plainData(data.workerData);
+  return env && execArgv && (data.workerData === undefined || workerData)
+    ? { ...data, env, execArgv, workerData }
+    : undefined;
+}
+
+function isolatedWorkerRole(launch, role) {
+  const allowed = new Set(
+    role === "heartbeat"
+      ? ["eval", "env", "execArgv", "workerData", "transferList", "stdout", "stderr"]
+      : ["eval", "env", "execArgv", "workerData"],
+  );
+  return (
+    launch?.environment === "empty" &&
+    Array.isArray(launch.execArgv) &&
+    launch.execArgv.length === 0 &&
+    launch.eval === (role === "published-inline") &&
+    Array.isArray(launch.keys) &&
+    launch.keys.includes("env") &&
+    launch.keys.includes("execArgv") &&
+    launch.keys.every((key) => allowed.has(key))
+  );
+}
+
+function sqliteHeartbeatLaunch(fact) {
+  return (
+    fact?.kind === "sqlite-finite-clone-v1" &&
+    fact.effectiveEngines &&
+    Object.keys(fact.effectiveEngines).length === sqliteEngineFamilies.length &&
+    sqliteEngineFamilies.every((family) => fact.effectiveEngines[family] === "sqlite")
+  );
+}
+
+function heartbeatWorkerData(options) {
+  // V8 clones enumerable own values in order. A nested getter could change the
+  // engine selection before it is cloned, despite an earlier shallow snapshot.
+  const fields = (value, allowed) => {
+    const data = plainData(value, true);
+    return data && Object.keys(data).every((key) => allowed.includes(key)) ? data : undefined;
+  };
+  const data = fields(options.workerData, [
+    "databaseEngineSelection",
+    "databaseAdmissionPort",
+    "lossPort",
+    "postgresPool",
+    "path",
+    "expectedIdentity",
+    "deferActivation",
+    "identity",
+    "leaseMs",
+    "acquiredAt",
+    "heartbeatMs",
+    "processOwner",
+    "shared",
+    "renewalProgress",
+  ]);
+  const selection = fields(data?.databaseEngineSelection, ["effectiveEngines", "postgres"]);
+  const engines = fields(selection?.effectiveEngines, sqliteEngineFamilies);
+  const identity = fields(data?.identity, ["scope", "key", "owner"]);
+  const fact = { kind: "sqlite-finite-clone-v1", effectiveEngines: engines };
+  if (
+    !data ||
+    !selection ||
+    !identity ||
+    !sqliteHeartbeatLaunch(fact) ||
+    selection.postgres !== undefined ||
+    data.postgresPool !== undefined ||
+    typeof data.path !== "string" ||
+    typeof data.expectedIdentity !== "string" ||
+    ![identity.scope, identity.key, identity.owner].every((value) => typeof value === "string") ||
+    ![data.leaseMs, data.acquiredAt, data.heartbeatMs].every(Number.isFinite) ||
+    (data.deferActivation !== undefined && data.deferActivation !== true)
+  ) {
+    return undefined;
+  }
+  if (data.processOwner !== undefined) {
+    const owner = fields(data.processOwner, ["identity", "env"]);
+    const processIdentity = fields(owner?.identity, [
+      "pid",
+      "host",
+      "startedAt",
+      "processNamespace",
+      "machineIdentity",
+    ]);
+    const env = plainData(owner?.env, true);
+    if (
+      !owner ||
+      !processIdentity ||
+      !env ||
+      !Number.isFinite(processIdentity.pid) ||
+      typeof processIdentity.host !== "string" ||
+      (processIdentity.startedAt !== null && !Number.isFinite(processIdentity.startedAt)) ||
+      (processIdentity.machineIdentity != null &&
+        typeof processIdentity.machineIdentity !== "string") ||
+      !Object.values(env).every((value) => value === undefined || typeof value === "string")
+    ) {
+      return undefined;
+    }
+    if (processIdentity.processNamespace != null) {
+      const namespace = fields(processIdentity.processNamespace, [
+        "platform",
+        "identity",
+        "host",
+        "pidNsInode",
+      ]);
+      if (
+        !namespace ||
+        typeof namespace.platform !== "string" ||
+        typeof namespace.host !== "string" ||
+        ![namespace.identity, namespace.pidNsInode].every(
+          (value) => value === undefined || typeof value === "string",
+        )
+      ) {
+        return undefined;
+      }
+    }
+  }
+  const nativePort = (value) => {
+    if (!value || types.isProxy(value) || Object.getPrototypeOf(value) !== messagePortPrototype) {
+      return false;
+    }
+    try {
+      Reflect.apply(nativeMessagePortHasRef.value, value, []);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (
+    !nativePort(data.databaseAdmissionPort) ||
+    !nativePort(data.lossPort) ||
+    data.databaseAdmissionPort === data.lossPort ||
+    !types.isSharedArrayBuffer(data.shared) ||
+    !types.isSharedArrayBuffer(data.renewalProgress) ||
+    !Array.isArray(options.transferList) ||
+    types.isProxy(options.transferList) ||
+    Object.getPrototypeOf(options.transferList) !== Array.prototype
+  ) {
+    return undefined;
+  }
+  // Node's SafeArrayIterator bypasses public iterator hooks, but still consumes
+  // the original array's length and indices before serializing workerData.
+  const transfers = Object.getOwnPropertyDescriptors(options.transferList);
+  if (
+    Reflect.ownKeys(transfers).length !== 3 ||
+    transfers.length?.value !== 2 ||
+    transfers[0]?.value !== data.databaseAdmissionPort ||
+    transfers[1]?.value !== data.lossPort
+  ) {
+    return undefined;
+  }
+  // Retain mode/clone facts only; process identity and environment values are private.
+  return fact;
+}
+
+function childLaunchSnapshot(argv, options, synchronous = false) {
+  try {
+    const values = argv === undefined ? [] : plainArguments(argv);
+    const safeArguments =
+      values &&
+      (argv === undefined ||
+        (Object.getPrototypeOf(argv) === Array.prototype &&
+          !Object.hasOwn(argv, "constructor") &&
+          Object.getOwnPropertyDescriptor(Array.prototype, "constructor")?.value === Array &&
+          Object.getOwnPropertyDescriptor(Array, Symbol.species)?.get === nativeArraySpecies?.get));
+    const data = plainData(options, true);
+    const env = data && plainData(data.env);
+    // Node slices argv, spreads options, then coerces cwd before reading env.
+    // Copy inert launch facts now; getters must never become safe after consumption.
+    const scalarKeys = [
+      "cwd",
+      "argv0",
+      "detached",
+      "uid",
+      "gid",
+      "shell",
+      "windowsHide",
+      "windowsVerbatimArguments",
+      "timeout",
+      "killSignal",
+      "encoding",
+      "serialization",
+    ];
+    // Async spawn ignores maxBuffer; Execa retains a per-stream array here.
+    // Only spawnSync consumes it, so do not inspect async nested values.
+    if (synchronous) {
+      scalarKeys.push("maxBuffer");
+    }
+    const safeOptions =
+      safeArguments &&
+      data &&
+      env &&
+      Object.values(env).every((value) => value === undefined || typeof value === "string") &&
+      scalarKeys.every(
+        (key) => data[key] == null || ["string", "number", "boolean"].includes(typeof data[key]),
+      ) &&
+      (data.stdio == null || typeof data.stdio === "string" || plainArguments(data.stdio)) &&
+      data.signal == null &&
+      (data.input == null || typeof data.input === "string");
+    return {
+      argv: safeArguments ? values : null,
+      options: safeOptions ? { ...data, env } : undefined,
+    };
+  } catch {
+    return { argv: null, options: undefined };
+  }
+}
+
+function closedLaunchEnvironment(data, role) {
+  if (!data || (data.shell !== undefined && data.shell !== false)) {
+    return false;
+  }
+  const env = data.env;
+  if (
+    !env ||
+    Object.values(env).some((value) => typeof value !== "string" && value !== undefined)
+  ) {
+    return false;
+  }
+  const keys = Object.keys(env).filter((key) => env[key] !== undefined);
+  if (role === "finalizer-check") {
+    return keys.length === 1 && keys[0] === "OPENCLAW_CLI" && env.OPENCLAW_CLI === "1";
+  }
+  const allowed =
+    role === "sqlite-session"
+      ? [
+          "OPENCLAW_STATE_DIR",
+          "OPENCLAW_SUPERVISOR_MODE",
+          "NODE_COMPILE_CACHE",
+          "NODE_DISABLE_COMPILE_CACHE",
+        ]
+      : [
+          "PATH",
+          "SystemRoot",
+          "SYSTEMROOT",
+          "WINDIR",
+          "TEMP",
+          "TMP",
+          "TMPDIR",
+          "HOMEBREW_PREFIX",
+          "OPENCLAW_SQLITE_LIBRARY",
+          "OPENCLAW_CLI",
+        ];
+  return keys.every((key) => allowed.includes(key));
+}
+function containsPath(root, target) {
+  const relative = path.relative(root, target);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+  );
+}
+
+function physicalAncestors(target) {
+  if (typeof target !== "string" || !path.isAbsolute(target) || path.resolve(target) !== target) {
+    return false;
+  }
+  // Reject an external hop even if a later symlink returns inside the cache.
+  // Missing descendants may be created by the published maintenance owner.
+  for (let current = target; ; current = path.dirname(current)) {
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink() || fs.realpathSync(current) !== current) {
+        return false;
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        return false;
+      }
+    }
+    if (current === path.dirname(current)) {
+      return true;
+    }
+  }
+}
+
+function publishedCacheScope(directory, spec) {
+  const base = spec.compileCacheBase;
+  if (!physicalAncestors(base) || !physicalAncestors(directory) || !containsPath(base, directory)) {
+    return undefined;
+  }
+  for (const file of [spec.stateDatabase, spec.agentDatabase, spec.journal]) {
+    if (
+      !physicalAncestors(file) ||
+      containsPath(base, path.dirname(file)) ||
+      containsPath(path.dirname(file), base)
+    ) {
+      return undefined;
+    }
+  }
+  return { base, directory, ancestorsPhysical: true, stateDisjoint: true };
+}
+
+function publishedEnvironment(options, spec, progress = false) {
+  const env = plainData(options.env);
+  if (
+    !env ||
+    Object.values(env).some((value) => typeof value !== "string" && value !== undefined)
+  ) {
+    return undefined;
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (!value) {
+      continue;
+    }
+    if (key.toUpperCase() === "NODE_OPTIONS") {
+      if (
+        !progress ||
+        key !== "NODE_OPTIONS" ||
+        value !== `--import=${fileURLToPath(import.meta.url)}` ||
+        env.OPENCLAW_INSTALLED_TERMINAL_OBSERVER !== specPath
+      ) {
+        return undefined;
+      }
+    } else if (
+      /^(BUN_OPTIONS|NODE_V8_COVERAGE|NODE_REDIRECT_WARNINGS)$/iu.test(key) ||
+      (progress && /^(LD_|OPENSSL_CONF$|OPENSSL_MODULES$)/iu.test(key))
+    ) {
+      return undefined;
+    }
+  }
+  const cache =
+    env.NODE_COMPILE_CACHE === undefined ? null : publishedCacheScope(env.NODE_COMPILE_CACHE, spec);
+  return cache === undefined ? undefined : { environmentQualified: true, inheritedCache: cache };
+}
+
+function isHeartbeatPackageRoot(root, spec) {
+  // prepareStagedPackageInstall owns this npm prefix beneath the task's global
+  // root. A foreign identical entry is not an admitted source of shared chunks.
+  return (
+    typeof root === "string" &&
+    typeof spec.root === "string" &&
+    path.resolve(root) === root &&
+    (root === spec.root ||
+      /^\.openclaw\.update-stage-[^/]+\/lib\/node_modules\/openclaw$/u.test(
+        path.relative(path.dirname(spec.root), root),
+      ))
+  );
+}
 if (specPath) {
   try {
     install(JSON.parse(fs.readFileSync(specPath, "utf8")));
@@ -57,7 +612,17 @@ function install(spec) {
   };
   const maxBytes = 4 * 1024 * 1024;
   const thread = workerThreads.threadId;
-  assert(path.isAbsolute(spec.directory) && path.resolve(spec.directory) === spec.directory);
+  for (const key of [
+    "directory",
+    "root",
+    "bin",
+    "journal",
+    "stateDatabase",
+    "agentDatabase",
+    "escrow",
+  ]) {
+    assert(path.isAbsolute(spec[key]) && path.resolve(spec[key]) === spec[key]);
+  }
   const filename = path.join(spec.directory, `${process.pid}-${thread}.jsonl`);
   const fd = openInstalledRecoveryEvidence(filename);
   let bytes = 0;
@@ -280,23 +845,291 @@ function install(spec) {
     );
     return result;
   };
-  workerThreads.Worker = new Proxy(original.Worker, {
+  const heartbeatFacts = (root) => {
+    assert(isHeartbeatPackageRoot(root, spec), "Heartbeat package root is outside task custody");
+    assert.equal(fs.realpathSync(root), root);
+    const manifest = path.join(root, "package.json");
+    const stat = fs.lstatSync(manifest);
+    assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 1024 * 1024);
+    return {
+      rootIdentity: fileIdentity(root),
+      manifestIdentity: fileIdentity(manifest),
+      manifestSha256: digest(fs.readFileSync(manifest)),
+    };
+  };
+  const heartbeatReceipt = (facts) =>
+    path.join(spec.directory, `heartbeat-${digest(JSON.stringify(facts))}.json`);
+  const readHeartbeatReceipt = (root, facts) => {
+    const file = heartbeatReceipt(facts);
+    const stat = fs.lstatSync(file);
+    assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 8192);
+    const receipt = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.deepEqual(heartbeatFacts(root), facts);
+    assert.deepEqual(
+      {
+        rootIdentity: receipt.rootIdentity,
+        manifestIdentity: receipt.manifestIdentity,
+        manifestSha256: receipt.manifestSha256,
+      },
+      facts,
+    );
+    assert(isHeartbeatPackageRoot(receipt.qualifiedRoot, spec));
+    assert(
+      spec.heartbeatWorkers.some(
+        (contract) =>
+          contract.sha256 === receipt.sha256 &&
+          contract.inventorySha256 === receipt.inventorySha256 &&
+          contract.sourceCommit === receipt.sourceCommit &&
+          contract.dependencies.sha256 === receipt.dependencySha256 &&
+          contract.dependencyReferenceSha256 === receipt.dependencyReferenceSha256,
+      ),
+    );
+    assert.equal(fileIdentity(path.join(root, "node_modules")), receipt.dependencyIdentity);
+    return receipt;
+  };
+  let qualifiedApplication;
+  const qualifyHeartbeatPackage = () => {
+    if (!spec.heartbeatWorkers || !workerThreads.isMainThread || !process.argv[1]) {
+      return;
+    }
+    let entry = path.resolve(process.argv[1]);
+    if (entry === spec.bin) {
+      // The installed CLI enters through this one journal-bound npm launcher.
+      entry = fs.realpathSync(entry);
+      assert.equal(
+        entry,
+        path.join(spec.root, "openclaw.mjs"),
+        "Installed launcher does not select the admitted package",
+      );
+    }
+    let root = path.dirname(entry);
+    while (root !== path.dirname(root) && !isHeartbeatPackageRoot(root, spec)) {
+      root = path.dirname(root);
+    }
+    if (!isHeartbeatPackageRoot(root, spec)) {
+      return;
+    }
+    // npm lifecycle children inherit this preload, including extensionless
+    // entries. Only application mains can qualify the inventoried package.
+    const relativeEntry = path.relative(root, entry);
+    if (relativeEntry !== "openclaw.mjs" && !relativeEntry.startsWith(`dist${path.sep}`)) {
+      return;
+    }
+    assert.equal(fs.realpathSync(entry), entry);
+    const facts = heartbeatFacts(root);
+    const file = heartbeatReceipt(facts);
+    if (!fs.existsSync(file)) {
+      // Qualify before any product code or Worker starts. Activation renames
+      // the same physical package; its receipt follows identity, not a path.
+      const actual = readWorkerCellPackageIdentity(root);
+      const inventorySha256 = digest(JSON.stringify(actual.files));
+      const contract = spec.heartbeatWorkers.find(
+        (item) => item.inventorySha256 === inventorySha256,
+      );
+      assert(contract, "Unqualified heartbeat package root");
+      const inventoryStat = fs.lstatSync(contract.inventory.path);
+      assert(
+        inventoryStat.isFile() &&
+          !inventoryStat.isSymbolicLink() &&
+          inventoryStat.size <= 4 * 1024 * 1024,
+      );
+      const inventory = fs.readFileSync(contract.inventory.path);
+      assert.equal(digest(inventory), contract.inventory.sha256);
+      assertWorkerCellPackageIdentity(actual, JSON.parse(inventory));
+      const dependencies = assertInstalledTerminalDependencyTree(root, contract.dependencies);
+      const metadata = readInstalledTerminalMetadata(root, actual);
+      assert.deepEqual(heartbeatFacts(root), facts);
+      const receipt = {
+        qualifiedRoot: root,
+        ...facts,
+        sha256: contract.sha256,
+        inventorySha256,
+        sourceCommit: contract.sourceCommit,
+        dependencyIdentity: dependencies.identity,
+        dependencySha256: dependencies.sha256,
+        dependencyReferenceSha256: contract.dependencyReferenceSha256,
+        metadata,
+      };
+      const temporary = `${file}.${process.pid}-${thread}.tmp`;
+      const receiptFd = openInstalledRecoveryEvidence(temporary);
+      try {
+        fs.writeFileSync(receiptFd, JSON.stringify(receipt));
+      } finally {
+        fs.closeSync(receiptFd);
+      }
+      try {
+        // A hard link publishes only completed bytes. A racing preload reads
+        // and validates the completed same-identity receipt; it never overwrites.
+        try {
+          fs.linkSync(temporary, file);
+        } catch (error) {
+          if (error.code !== "EEXIST") {
+            throw error;
+          }
+        }
+      } finally {
+        fs.unlinkSync(temporary);
+      }
+    }
+    qualifiedApplication = { root, ...readHeartbeatReceipt(root, facts) };
+    report("heartbeat-package", qualifiedApplication);
+  };
+  const publishedWorker = (entry, options) => {
+    if (!spec.historical || qualifiedApplication?.sourceCommit !== publishedRevision) {
+      return undefined;
+    }
+    const data = plainData(options);
+    const execArgv = data && plainArguments(data.execArgv);
+    if (
+      !data ||
+      !execArgv ||
+      Object.keys(data).some((key) => !["eval", "env", "execArgv", "workerData"].includes(key))
+    ) {
+      return undefined;
+    }
+    const environment = publishedEnvironment(data, spec);
+    if (!environment) {
+      return undefined;
+    }
+    let role;
+    let cache;
+    if (
+      data.eval === true &&
+      data.workerData === undefined &&
+      digest(entry) === publishedSqliteWorkerSha256 &&
+      (execArgv.length === 0 || (execArgv.length === 1 && execArgv[0] === "--experimental-sqlite"))
+    ) {
+      role = "published-sqlite-probe";
+    } else if (
+      (data.eval === undefined || data.eval === false) &&
+      execArgv.length === 0 &&
+      locationOf(entry) === path.join(qualifiedApplication.root, "node-compile-cache.mjs")
+    ) {
+      const workerData = plainData(data.workerData);
+      if (!workerData || Object.keys(workerData).length !== 1) {
+        return undefined;
+      }
+      cache = publishedCacheScope(workerData.openclawCompileCacheDirectory, spec);
+      if (
+        !cache ||
+        path.dirname(path.dirname(cache.directory)) !== path.join(cache.base, "openclaw") ||
+        !/^[A-Za-z0-9._-]+$/u.test(path.basename(path.dirname(cache.directory))) ||
+        !/^(?:[a-f0-9]{16}|\d+-\d+|no-package-json|build-[A-Za-z0-9._-]+)$/u.test(
+          path.basename(cache.directory),
+        )
+      ) {
+        return undefined;
+      }
+      role = "published-compile-cache";
+    } else {
+      return undefined;
+    }
+    const expected = publishedWorkerRoots[role];
+    const helperFile = path.join(qualifiedApplication.root, expected.relativePath);
+    const stat = fs.lstatSync(helperFile);
+    assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 16 * 1024);
+    assert.equal(fs.realpathSync(helperFile), helperFile);
+    const source = fs.readFileSync(helperFile, "utf8");
+    assert.equal(digest(source), expected.sha256, "Published root helper changed");
+    return {
+      ...qualifiedApplication,
+      role,
+      ...environment,
+      cache,
+      launch: { eval: data.eval ?? false, execArgv, workerDataDirectory: cache?.directory ?? null },
+      rootEntry: { ...expected, identity: fileIdentity(helperFile), source },
+    };
+  };
+  const observedWorker = new Proxy(original.Worker, {
     construct(target, args, newTarget) {
+      // Native construction can invoke workerData clone getters after consuming
+      // loader flags. Capture inert descriptors first; forward original inputs.
+      const entry = workerEntrySnapshot(args[0]);
+      const options = workerOptionsData(args[1]);
+      const launch = entry === undefined ? undefined : isolatedWorkerLaunch(options);
+      const publishedOptions = entry === undefined ? undefined : publishedWorkerOptions(options);
+      const sqliteLaunch =
+        newTarget === observedWorker && isolatedWorkerRole(launch, "heartbeat")
+          ? heartbeatWorkerData(options)
+          : undefined;
       const child = Reflect.construct(target, args, newTarget);
       observe("thread", () => {
         const childThread = child.threadId;
-        const entry = String(args[0]);
+        let packageHasher;
+        if (
+          isolatedWorkerRole(launch, "installed-file") &&
+          spec.hashWorker &&
+          locationOf(entry) === spec.hashWorker.path
+        ) {
+          const workerBytes = fs.readFileSync(spec.hashWorker.path);
+          assert(workerBytes.length <= 64 * 1024);
+          packageHasher = { kind: "installed-file", sha256: digest(workerBytes), launch };
+        } else if (
+          isolatedWorkerRole(launch, "published-inline") &&
+          spec.historical &&
+          digest(entry) === historicalHasherSha256
+        ) {
+          packageHasher = { kind: "published-inline", sha256: historicalHasherSha256, launch };
+        }
+        let packageHeartbeat;
+        if (
+          isolatedWorkerRole(launch, "heartbeat") &&
+          spec.heartbeatWorkers &&
+          locationOf(entry).endsWith(`/${heartbeatRelativePath}`)
+        ) {
+          const file = locationOf(entry);
+          const stat = fs.lstatSync(file);
+          assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 4 * 1024 * 1024);
+          assert.equal(fs.realpathSync(file), file);
+          const sha256 = digest(fs.readFileSync(file));
+          const root = file.slice(0, -heartbeatRelativePath.length - 1);
+          assert(
+            isHeartbeatPackageRoot(root, spec),
+            "Heartbeat package root is outside task custody",
+          );
+          const facts = heartbeatFacts(root);
+          const receipt = readHeartbeatReceipt(root, facts);
+          assert.equal(sha256, receipt.sha256);
+          if (receipt.sourceCommit === publishedRevision || sqliteLaunch) {
+            packageHeartbeat = {
+              root,
+              ...receipt,
+              launch,
+              ...(receipt.sourceCommit === publishedRevision ? {} : { sqliteLaunch }),
+            };
+          }
+        }
         report("thread", {
           childThread,
-          entry,
+          entry: entry ?? "unknown",
+          packageHasher,
+          packageHeartbeat,
+          packageEntry: entry === undefined ? undefined : publishedWorker(entry, publishedOptions),
         });
         child.once("exit", (code) => report("thread-exit", { childThread, code }));
       });
       return child;
     },
   });
+  workerThreads.Worker = observedWorker;
   let spawnId = 0;
+  const nativeOperation = (command, argv, data) => {
+    const env = data?.env;
+    // Node's sole --version operation returns in native initialization, before
+    // JS or preloads. An explicit empty environment excludes native loaders too.
+    return !process.versions.bun &&
+      command === process.execPath &&
+      argv?.length === 1 &&
+      argv[0] === "--version" &&
+      data &&
+      (data.shell === undefined || data.shell === false) &&
+      env &&
+      Object.keys(env).length === 0
+      ? { kind: "node-version", executable: process.execPath, version: process.version }
+      : undefined;
+  };
   childProcess.spawnSync = function (...args) {
+    const launch = childLaunchSnapshot(args[1], args[2], true);
     const startedAt = String(process.hrtime.bigint());
     let result;
     try {
@@ -313,7 +1146,7 @@ function install(spec) {
       const child = result.pid || null;
       const command = args[0];
       assert.equal(typeof command, "string");
-      const argv = args[1] === undefined ? [] : plainArguments(args[1]);
+      const { argv } = launch;
       // The PID becomes available only on return. This timestamp records the
       // invocation bound, not an invented native start/async exit event.
       report("spawn", {
@@ -324,6 +1157,7 @@ function install(spec) {
         command,
         argv,
         nodeChild: command === process.execPath || path.basename(command) === "node",
+        nativeOperation: nativeOperation(command, argv, launch.options),
       });
       report("spawn-sync-return", {
         spawnId: id,
@@ -336,7 +1170,122 @@ function install(spec) {
     });
     return result;
   };
+  const closedEntry = (argv, options) => {
+    if (!spec.heartbeatWorkers || !Array.isArray(argv) || types.isProxy(argv)) {
+      return undefined;
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(argv);
+    if (
+      argv.length > 3 ||
+      !Array.from({ length: argv.length }, (_, index) => descriptors[index]).every(
+        (entry) => entry && "value" in entry && typeof entry.value === "string",
+      )
+    ) {
+      return undefined;
+    }
+    const values = Array.from({ length: argv.length }, (_, index) => descriptors[index].value);
+    if (
+      spec.historical &&
+      qualifiedApplication?.sourceCommit === publishedRevision &&
+      values.length === 2 &&
+      values[0] === "-e" &&
+      Buffer.byteLength(values[1]) <= 64 * 1024 &&
+      digest(values[1]) === publishedProbeSha256
+    ) {
+      return {
+        ...qualifiedApplication,
+        role: "published-node-probe",
+        sha256: publishedProbeSha256,
+        environmentQualified: closedLaunchEnvironment(options, "published-node-probe"),
+      };
+    }
+    if (
+      spec.historical &&
+      qualifiedApplication?.sourceCommit === publishedRevision &&
+      values.length === 3 &&
+      values[0] === "--input-type=commonjs" &&
+      values[1] === "--eval" &&
+      digest(values[2]) === publishedProgressSha256
+    ) {
+      const data = options;
+      const environment =
+        data &&
+        (data.shell === undefined || data.shell === false) &&
+        publishedEnvironment(data, spec, true);
+      return environment
+        ? {
+            ...qualifiedApplication,
+            role: "published-copy-progress",
+            sha256: publishedProgressSha256,
+            ...environment,
+          }
+        : undefined;
+    }
+    if (
+      values.length === 3 &&
+      values[1] === "node" &&
+      values[2] === "" &&
+      path.basename(values[0]) === "daemon-runtime-probe.mjs"
+    ) {
+      const stat = fs.lstatSync(values[0]);
+      assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 64 * 1024);
+      assert.equal(fs.realpathSync(values[0]), values[0]);
+      const probeBytes = fs.readFileSync(values[0]);
+      const source = probeBytes.toString("utf8");
+      assert(probeBytes.equals(Buffer.from(source)));
+      return {
+        role: "node-runtime-probe",
+        sha256: digest(probeBytes),
+        source,
+        environmentQualified: closedLaunchEnvironment(options, "node-runtime-probe"),
+      };
+    }
+    const role =
+      values.length === 3 &&
+      values[1] === "--openclaw-sqlite-readonly-child" &&
+      values[2] === "session"
+        ? "sqlite-session"
+        : values.length === 2 && values[1] === "--check"
+          ? "finalizer-check"
+          : undefined;
+    const relativePath = closedEntryPaths[role];
+    if (!relativePath || !values[0].endsWith(`/${relativePath}`)) {
+      return undefined;
+    }
+    const root = values[0].slice(0, -relativePath.length - 1);
+    // Snapshot children retain ordinary startup/lifetime coverage. Only an
+    // admitted installed root may supply the missing-startup qualification.
+    if (!isHeartbeatPackageRoot(root, spec)) {
+      return undefined;
+    }
+    const receipt = readHeartbeatReceipt(root, heartbeatFacts(root));
+    const contract = spec.heartbeatWorkers
+      .find(
+        (item) =>
+          item.inventorySha256 === receipt.inventorySha256 &&
+          item.sourceCommit === receipt.sourceCommit,
+      )
+      ?.closedEntries?.find((item) => item.role === role);
+    if (!contract) {
+      return undefined;
+    }
+    const stat = fs.lstatSync(values[0]);
+    assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 4 * 1024 * 1024);
+    assert.equal(fs.realpathSync(values[0]), values[0]);
+    const entrySha256 = digest(fs.readFileSync(values[0]));
+    assert.equal(entrySha256, contract.sha256);
+    return {
+      root,
+      ...receipt,
+      role,
+      relativePath,
+      entrySha256,
+      contractRevision: contract.contractRevision,
+      environmentQualified: closedLaunchEnvironment(options, role),
+    };
+  };
   childProcess.spawn = function (...args) {
+    const launch = childLaunchSnapshot(args[1], args[2]);
     const child = Reflect.apply(original.spawn, this, args);
     observe("spawn", () => {
       const id = spawnId++;
@@ -347,14 +1296,18 @@ function install(spec) {
       child.once("spawn", () => {
         spawned = true;
       });
-      const argv = plainArguments(args[1]);
+      const { argv } = launch;
       const nodeChild = args[0] === process.execPath || path.basename(args[0]) === "node";
+      const packageEntry =
+        args[0] === process.execPath ? closedEntry(argv, launch.options) : undefined;
       report("spawn", {
         spawnId: id,
         child: pid,
         nodeChild,
         command: args[0],
         argv,
+        packageEntry,
+        nativeOperation: nativeOperation(args[0], argv, launch.options),
       });
       // Native exit owns process lifetime. Parent-side IPC disconnect can omit
       // aggregate close; selected finalizer output still requires close and EOF.
@@ -387,6 +1340,7 @@ function install(spec) {
     node: process.version,
     entry: process.argv[1],
   });
+  observe("heartbeat-package", qualifyHeartbeatPackage);
   process.once("exit", (code) => {
     report("exit", { code });
     persistFailure();
@@ -398,8 +1352,93 @@ function install(spec) {
   });
 }
 
+// A single source-qualified builtin leaf may lack the ambient preload. Reject
+// unexpected emitted edges before any installed cell; never follow a new graph.
+export function readInstalledTerminalHasher(root, identity, capture) {
+  const file = path.join(root, hasherRelativePath);
+  const stat = fs.lstatSync(file);
+  assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 64 * 1024);
+  assert.equal(fs.realpathSync(file), file);
+  const bytes = fs.readFileSync(file);
+  const sha256 = digest(bytes);
+  assert.equal(sha256, identity.files[hasherRelativePath]?.sha256);
+  const source = bytes.toString("utf8");
+  const contract = { path: file, sha256, source };
+  capture?.(contract);
+  const imports = [];
+  const body = source
+    .replace(/\bimport\s*([^;"']+?)\s*from\s*["']([^"']+)["']\s*;?/gu, (whole, clause, name) => {
+      imports.push(name);
+      return "";
+    })
+    // The emitted worker ends with this inert ESM marker, not a loader edge.
+    .replace(/\nexport \{\};\n$/u, "\n");
+  assert.deepEqual(
+    imports.toSorted((a, b) => a.localeCompare(b)),
+    ["node:crypto", "node:fs", "node:worker_threads"],
+  );
+  assert(
+    !/\b(?:import|export|require|eval|Function|process|globalThis)\b/u.test(body),
+    "Package hash worker has an unqualified emitted edge",
+  );
+  return contract;
+}
+
 export function readInstalledTerminalEvents(directory, spec = {}) {
   return readObservation(directory, spec).rows;
+}
+
+// This state-capable worker deliberately has no ambient preload. Its selected
+// Linux/Node SQLite closure has no escaping subprocess; native exit joins any
+// nested Workers. Package bytes alone never exempt an in-window predecessor.
+export function readInstalledTerminalHeartbeat(root, identity) {
+  const file = path.join(root, heartbeatRelativePath);
+  const stat = fs.lstatSync(file);
+  assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 4 * 1024 * 1024);
+  assert.equal(fs.realpathSync(file), file);
+  const bytes = fs.readFileSync(file);
+  assert.equal(bytes.length, stat.size);
+  const sha256 = digest(bytes);
+  assert.equal(sha256, identity.files[heartbeatRelativePath]?.sha256);
+  const source = bytes.toString("utf8");
+  assert(bytes.equals(Buffer.from(source)), "Heartbeat entry is not complete UTF-8 source");
+  return {
+    relativePath: heartbeatRelativePath,
+    sha256,
+    source,
+    sourceCommit: identity.buildInfo.commit,
+    inventorySha256: digest(JSON.stringify(identity.files)),
+  };
+}
+
+// These are reviewed Linux/Node owners, not a filename permitlist. SQLite's
+// finite session handlers join synchronous snapshot descendants; current --check
+// initializes only bookkeeping/lazy owners, including the empty disk-budget pool.
+export function readInstalledTerminalClosedEntries(root, identity, historical = false) {
+  if (historical) {
+    assert.equal(identity.buildInfo.commit, publishedRevision);
+  }
+  return Object.entries(closedEntryPaths)
+    .filter(([role]) => !historical || role === "sqlite-session")
+    .map(([role, relativePath]) => {
+      const file = path.join(root, relativePath);
+      const stat = fs.lstatSync(file);
+      assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 4 * 1024 * 1024);
+      assert.equal(fs.realpathSync(file), file);
+      const bytes = fs.readFileSync(file);
+      const sha256 = digest(bytes);
+      assert.equal(bytes.length, stat.size);
+      assert.equal(sha256, identity.files[relativePath]?.sha256);
+      const source = bytes.toString("utf8");
+      assert(bytes.equals(Buffer.from(source)));
+      return {
+        role,
+        relativePath,
+        sha256,
+        source,
+        contractRevision: historical ? publishedRevision : reviewedRevision,
+      };
+    });
 }
 
 function readIsolates(directory) {
@@ -527,6 +1566,7 @@ function readObservation(directory, spec = {}) {
     });
   }
   const candidate = handoff ? installedTerminalDescendants(rows, handoff.child) : new Set();
+  const heartbeatCoverage = new Map();
   const lifetimeBounds = new Map();
   const fullTraceProcesses = new Set();
   const ownerExit = (owner) =>
@@ -709,6 +1749,55 @@ function readObservation(directory, spec = {}) {
     threadEnds.set(created, end);
     return end;
   }
+  const qualifiedPackageEntry = (entry, row, own = false) => {
+    const packageContract = spec.heartbeatWorkers?.find(
+      (item) =>
+        entry &&
+        item.inventorySha256 === entry.inventorySha256 &&
+        item.sourceCommit === entry.sourceCommit,
+    );
+    return (
+      entry &&
+      /^[a-f0-9]{64}$/u.test(entry.dependencySha256) &&
+      /^[a-f0-9]{64}$/u.test(entry.dependencyReferenceSha256) &&
+      /^\d+:\d+$/u.test(entry.dependencyIdentity) &&
+      packageContract?.dependencies?.sha256 === entry.dependencySha256 &&
+      packageContract?.dependencyReferenceSha256 === entry.dependencyReferenceSha256 &&
+      isHeartbeatPackageRoot(entry.root, spec) &&
+      /^\d+:\d+$/u.test(entry.rootIdentity) &&
+      rows.some(
+        (qualified) =>
+          qualified.event === "heartbeat-package" &&
+          (!own || (qualified.pid === row.pid && qualified.thread === row.thread)) &&
+          BigInt(qualified.time) < BigInt(row.time) &&
+          [
+            "qualifiedRoot",
+            "rootIdentity",
+            "manifestIdentity",
+            "manifestSha256",
+            "inventorySha256",
+            "sourceCommit",
+            "dependencyIdentity",
+            "dependencySha256",
+            "dependencyReferenceSha256",
+          ].every((key) => qualified[key] === entry[key]),
+      )
+    );
+  };
+  const recordedCache = (cache) =>
+    cache === null ||
+    (cache &&
+      cache.base === spec.compileCacheBase &&
+      typeof cache.directory === "string" &&
+      cache.ancestorsPhysical === true &&
+      cache.stateDisjoint === true &&
+      containsPath(cache.base, cache.directory));
+  const publishedParent = (entry, row) =>
+    spec.historical === true &&
+    entry?.sourceCommit === publishedRevision &&
+    entry.environmentQualified === true &&
+    recordedCache(entry.inheritedCache) &&
+    qualifiedPackageEntry(entry, row, true);
   for (const row of rows) {
     let nativeExit;
     if (row.event === "spawn") {
@@ -754,11 +1843,146 @@ function readObservation(directory, spec = {}) {
     }
     if (row.event === "spawn" && row.nodeChild && row.child !== null) {
       assert(row.argv !== null, "Node child argv observation is unqualified");
+      const ownerStarts = startups.filter(
+        (start) => start.pid === row.pid && start.thread === row.thread,
+      );
+      const operation = row.nativeOperation;
+      if (
+        operation?.kind === "node-version" &&
+        ownerStarts.length === 1 &&
+        operation.executable === ownerStarts[0].argv[0] &&
+        operation.version === ownerStarts[0].node &&
+        row.command === operation.executable &&
+        row.argv?.length === 1 &&
+        row.argv[0] === "--version" &&
+        nativeExit?.code === 0 &&
+        nativeExit.signal === null &&
+        (row.api !== "spawnSync" || nativeExit.errorCode === null) &&
+        !lifetimeBounds.has(row) &&
+        handoff &&
+        BigInt(nativeExit.time) < BigInt(handoff.time) &&
+        rows.filter((event) => event.event === "spawn" && event.child === row.child).length === 1 &&
+        rows.every((event) => event.pid !== row.child)
+      ) {
+        heartbeatCoverage.set(row, { role: "node-version", reason: "native-before-js" });
+      }
+      const entry = row.packageEntry;
+      const packageContract = spec.heartbeatWorkers?.find(
+        (item) =>
+          entry &&
+          item.inventorySha256 === entry.inventorySha256 &&
+          item.sourceCommit === entry.sourceCommit,
+      );
+      const contract = packageContract?.closedEntries?.find((item) => item.role === entry.role);
+      const mode =
+        entry?.role === "sqlite-session"
+          ? ["--openclaw-sqlite-readonly-child", "session"]
+          : ["--check"];
+      const qualifiedPackage = qualifiedPackageEntry(entry, row);
+      const boundPackageEntry =
+        contract &&
+        entry.environmentQualified === true &&
+        contract.relativePath === closedEntryPaths[entry.role] &&
+        contract.contractRevision === entry.contractRevision &&
+        (entry.contractRevision === reviewedRevision ||
+          (entry.role === "sqlite-session" &&
+            entry.contractRevision === publishedRevision &&
+            entry.sourceCommit === publishedRevision)) &&
+        entry.entrySha256 === contract.sha256 &&
+        qualifiedPackage &&
+        row.argv?.length === mode.length + 1 &&
+        row.argv[0] === path.join(entry.root, contract.relativePath) &&
+        mode.every((value, index) => row.argv[index + 1] === value);
+      const boundProbe =
+        entry?.role === "node-runtime-probe" &&
+        entry.environmentQualified === true &&
+        typeof entry.source === "string" &&
+        Buffer.byteLength(entry.source) <= 64 * 1024 &&
+        entry.sha256 === currentProbeSha256 &&
+        digest(entry.source) === currentProbeSha256 &&
+        row.argv?.length === 3 &&
+        path.basename(row.argv[0]) === "daemon-runtime-probe.mjs" &&
+        row.argv[1] === "node" &&
+        row.argv[2] === "";
+      const boundPublishedProbe =
+        spec.historical === true &&
+        qualifiedPackage &&
+        entry.role === "published-node-probe" &&
+        entry.environmentQualified === true &&
+        entry.sourceCommit === publishedRevision &&
+        entry.sha256 === publishedProbeSha256 &&
+        rows.some(
+          (qualified) =>
+            qualified.event === "heartbeat-package" &&
+            qualified.pid === row.pid &&
+            qualified.thread === row.thread &&
+            qualified.sourceCommit === publishedRevision &&
+            qualified.inventorySha256 === entry.inventorySha256 &&
+            BigInt(qualified.time) < BigInt(row.time),
+        ) &&
+        spec.heartbeatWorkers?.some(
+          (item) =>
+            item.sourceCommit === publishedRevision &&
+            item.inventorySha256 === entry.inventorySha256,
+        ) &&
+        row.argv?.length === 2 &&
+        row.argv[0] === "-e" &&
+        typeof row.argv[1] === "string" &&
+        Buffer.byteLength(row.argv[1]) <= 64 * 1024 &&
+        digest(row.argv[1]) === publishedProbeSha256;
+      // The published I/O monitor reads directory metadata only and joins its
+      // cancellation. SIGKILL bounds that exact script, not a successful result
+      // or a general missing-preload child.
+      const boundProgress =
+        publishedParent(entry, row) &&
+        entry.role === "published-copy-progress" &&
+        entry.sha256 === publishedProgressSha256 &&
+        row.argv?.length === 3 &&
+        row.argv[0] === "--input-type=commonjs" &&
+        row.argv[1] === "--eval" &&
+        digest(row.argv[2]) === publishedProgressSha256;
+      const closes = rows.filter(
+        (event) =>
+          event.event === "spawn-close" &&
+          event.pid === row.pid &&
+          event.thread === row.thread &&
+          event.spawnId === row.spawnId,
+      );
+      const close = closes[0];
+      const settledBefore =
+        handoff &&
+        nativeExit?.event === "spawn-exit" &&
+        ((nativeExit.code === 0 && nativeExit.signal === null) ||
+          (boundProgress && nativeExit.code === null && nativeExit.signal === "SIGKILL")) &&
+        nativeExit.spawned === true &&
+        closes.length === 1 &&
+        close.child === row.child &&
+        close.spawned === true &&
+        close.code === nativeExit.code &&
+        close.signal === nativeExit.signal &&
+        BigInt(close.time) >= BigInt(nativeExit.time) &&
+        BigInt(close.time) < BigInt(handoff.time) &&
+        BigInt(close.time) < BigInt(ownerExit(row).time);
+      if (
+        !startups.some((start) => start.pid === row.child) &&
+        (boundPackageEntry || boundProbe || boundPublishedProbe || boundProgress) &&
+        settledBefore
+      ) {
+        heartbeatCoverage.set(row, {
+          role: entry.role,
+          reason: "settled-before-handoff",
+          contractRevision:
+            entry.contractRevision ??
+            (boundPublishedProbe || boundProgress ? publishedRevision : reviewedRevision),
+          sourceCommit: entry.sourceCommit,
+          sha256: entry.entrySha256 ?? entry.sha256,
+        });
+      }
       assert(
-        startups.some((start) => start.pid === row.child),
+        startups.some((start) => start.pid === row.child) || heartbeatCoverage.has(row),
         "Missing Node child preload coverage",
       );
-      if (row.api === "spawnSync") {
+      if (row.api === "spawnSync" && !heartbeatCoverage.has(row)) {
         const started = startups.filter((start) => start.pid === row.child && start.thread === 0);
         assert(
           rows.filter((event) => event.event === "spawn" && event.child === row.child).length ===
@@ -779,7 +2003,109 @@ function readObservation(directory, spec = {}) {
     ) {
       continue;
     }
-    assert.fail("Missing worker-thread preload coverage");
+    const admittedFile =
+      isolatedWorkerRole(row.packageHasher?.launch, "installed-file") &&
+      row.packageHasher?.kind === "installed-file" &&
+      spec.hashWorker &&
+      locationFromEntry(row.entry) === spec.hashWorker.path &&
+      row.packageHasher.sha256 === spec.hashWorker.sha256;
+    const admittedInline =
+      isolatedWorkerRole(row.packageHasher?.launch, "published-inline") &&
+      spec.historical === true &&
+      row.packageHasher?.kind === "published-inline" &&
+      row.packageHasher.sha256 === historicalHasherSha256 &&
+      digest(row.entry) === historicalHasherSha256;
+    const heartbeat = spec.heartbeatWorkers?.find(
+      (contract) =>
+        isolatedWorkerRole(row.packageHeartbeat?.launch, "heartbeat") &&
+        (contract.sourceCommit === publishedRevision ||
+          sqliteHeartbeatLaunch(row.packageHeartbeat?.sqliteLaunch)) &&
+        contract.relativePath === heartbeatRelativePath &&
+        row.packageHeartbeat &&
+        /^[a-f0-9]{64}$/u.test(row.packageHeartbeat.dependencySha256) &&
+        /^[a-f0-9]{64}$/u.test(row.packageHeartbeat.dependencyReferenceSha256) &&
+        /^\d+:\d+$/u.test(row.packageHeartbeat.dependencyIdentity) &&
+        isHeartbeatPackageRoot(row.packageHeartbeat.root, spec) &&
+        /^\d+:\d+$/u.test(row.packageHeartbeat.rootIdentity) &&
+        locationFromEntry(row.entry) ===
+          path.join(row.packageHeartbeat.root, heartbeatRelativePath) &&
+        row.packageHeartbeat.sha256 === contract.sha256 &&
+        row.packageHeartbeat.inventorySha256 === contract.inventorySha256 &&
+        row.packageHeartbeat.dependencySha256 === contract.dependencies?.sha256 &&
+        row.packageHeartbeat.dependencyReferenceSha256 === contract.dependencyReferenceSha256 &&
+        row.packageHeartbeat.sourceCommit === contract.sourceCommit &&
+        rows.some(
+          (qualified) =>
+            qualified.event === "heartbeat-package" &&
+            BigInt(qualified.time) < BigInt(row.time) &&
+            [
+              "qualifiedRoot",
+              "rootIdentity",
+              "manifestIdentity",
+              "manifestSha256",
+              "sha256",
+              "inventorySha256",
+              "sourceCommit",
+              "dependencyIdentity",
+              "dependencySha256",
+              "dependencyReferenceSha256",
+            ].every((key) => qualified[key] === row.packageHeartbeat[key]),
+        ),
+    );
+    const entry = row.packageEntry;
+    const rootEntry = entry?.rootEntry;
+    const expectedRoot = publishedWorkerRoots[entry?.role];
+    const publishedWorker =
+      publishedParent(entry, row) &&
+      expectedRoot &&
+      rootEntry?.relativePath === expectedRoot.relativePath &&
+      rootEntry.sha256 === expectedRoot.sha256 &&
+      typeof rootEntry.source === "string" &&
+      Buffer.byteLength(rootEntry.source) <= 16 * 1024 &&
+      digest(rootEntry.source) === expectedRoot.sha256 &&
+      /^\d+:\d+$/u.test(rootEntry.identity) &&
+      ((entry.role === "published-sqlite-probe" &&
+        digest(row.entry) === publishedSqliteWorkerSha256 &&
+        entry.launch?.eval === true &&
+        entry.launch.workerDataDirectory === null &&
+        Array.isArray(entry.launch.execArgv) &&
+        (entry.launch.execArgv.length === 0 ||
+          (entry.launch.execArgv.length === 1 &&
+            entry.launch.execArgv[0] === "--experimental-sqlite"))) ||
+        (entry.role === "published-compile-cache" &&
+          entry.launch?.eval === false &&
+          Array.isArray(entry.launch.execArgv) &&
+          entry.launch.execArgv.length === 0 &&
+          entry.launch.workerDataDirectory === entry.cache?.directory &&
+          locationFromEntry(row.entry) === path.join(entry.root, expectedRoot.relativePath) &&
+          entry.cache &&
+          recordedCache(entry.cache) &&
+          path.dirname(path.dirname(entry.cache.directory)) ===
+            path.join(entry.cache.base, "openclaw")));
+    const before = handoff && BigInt(nativeExit.time) < BigInt(handoff.time);
+    if (
+      publishedWorker &&
+      before &&
+      nativeExit.event === "thread-exit" &&
+      nativeExit.code === 0 &&
+      !lifetimeBounds.has(row)
+    ) {
+      heartbeatCoverage.set(row, {
+        role: entry.role,
+        reason: "settled-before-handoff",
+        sourceCommit: publishedRevision,
+        sha256: rootEntry.sha256,
+      });
+    } else if (heartbeat && (before || candidate.has(row.pid))) {
+      heartbeatCoverage.set(row, {
+        role: "state-lease-heartbeat",
+        reason: before ? "settled-before-handoff" : "candidate-subtree",
+        sourceCommit: heartbeat.sourceCommit,
+        sha256: heartbeat.sha256,
+      });
+    } else {
+      assert(admittedFile || admittedInline, "Missing worker-thread preload coverage");
+    }
   }
   for (const isolate of isolates) {
     if (isolate.at(-1).event === "exit") {
@@ -848,9 +2174,10 @@ function readObservation(directory, spec = {}) {
     excluded,
     rows: rows
       .map((row) =>
-        lifetimeBounds.has(row)
+        heartbeatCoverage.has(row) || lifetimeBounds.has(row)
           ? Object.assign({}, row, {
-              lifetimeBound: lifetimeBounds.get(row),
+              ...(heartbeatCoverage.has(row) ? { coverage: heartbeatCoverage.get(row) } : {}),
+              ...(lifetimeBounds.has(row) ? { lifetimeBound: lifetimeBounds.get(row) } : {}),
             })
           : row,
       )
@@ -858,6 +2185,10 @@ function readObservation(directory, spec = {}) {
         BigInt(a.time) < BigInt(b.time) ? -1 : BigInt(a.time) > BigInt(b.time) ? 1 : 0,
       ),
   };
+}
+
+function locationFromEntry(entry) {
+  return entry.startsWith("file:") ? fileURLToPath(new URL(entry)) : path.resolve(entry);
 }
 
 // This bounded header census diagnoses rejected traces; it never substitutes

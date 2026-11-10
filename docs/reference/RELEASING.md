@@ -147,6 +147,22 @@ approval-status read is reported as unknown, not as no pending approval, and doe
 not stop validation monitoring. Public release evidence can still use its existing
 anonymous rate-limit fallback; caller-specific approval reads cannot.
 
+### Resume activation while ClawHub recovery is independent
+
+For an already-published core, the hosted publisher accepts `defer_clawhub=true`
+with `openclaw_npm_resume_run_id=<original-successful-run>` and
+`wait_for_clawhub=false`. This recovery-only input requires direct core
+publication (`publish_openclaw_npm=true`, no `prepared_plugins`). The publisher
+still authenticates the original core's exact registry bytes and provenance,
+and retains all npm, source, artifact, approval, and finalization gates. It
+neither republishes core nor plans or dispatches new ClawHub work.
+
+The default remains normal ClawHub publication. A deferred run records
+`clawHubDeferred` in its authenticated dispatch receipt and explicit incomplete
+ClawHub proof. GitHub, Docker, and platform activation may continue, but the
+full release remains incomplete until independent ClawHub recovery verifies the
+original artifacts. Deferral does not authorize repacking or replacing them.
+
 ### Watch publication
 
 After the stable orchestrator has dispatched publication, keep its read-only
@@ -256,11 +272,15 @@ and remain recoverable. New publish qualification requires admitted Q=C.
 
 Evidence reuse preserves both the original producer identity and the current
 consumer identity, inputs, coverage, and artifact provenance. It cannot relabel
-an old run as candidate-owned. Reconciliation is read-only; explicit resume is
-limited to a candidate request before any qualification-ref mutation or FRV
-dispatch. An uncertain write never authorizes another dispatch. All publication
-gates, stable soak, blocking performance, environment approvals, and exact-byte
-checks remain unchanged.
+an old run as candidate-owned. Reconciliation is read-only. Before the first FRV
+workflow POST, explicit resume may continue an admitted candidate request whose
+qualification ref is still intended, or reuse its existing uncertain ref after
+verifying the exact Q commit and a complete empty workflow inventory. Recovery
+revalidates admission and signer authority, then verifies the exact ref again
+before recording the first workflow attempt. An attempted or uncertain workflow
+POST remains observation-only and never authorizes another dispatch. All
+publication gates, stable soak, blocking performance, environment approvals, and
+exact-byte checks remain unchanged.
 
 Local contract tests can prove input binding, refusal, and recovery behavior.
 They do not prove hosted workflow admission, environment access, OIDC, signing,

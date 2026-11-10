@@ -18,6 +18,8 @@ In **Search settings**, Escape clears the search before leaving Settings. While 
 
 Use **Search settings** to find pages and configuration fields. Search for **Typography**, **font**, or **Chat prose** to jump to the Interface and Chat prose font controls in Appearance. Authored schema tags remain searchable with `tag:<name>` but are not displayed as field badges. Tags are not inferred from setting names, sensitivity, or complexity. For a field authored with a `storage` tag, combine it with text such as `Log tag:storage File`. Multiple tags require a field to match every tag.
 
+Page-name matches remain available while configuration-field search loads. **Loading…** means field search is still incomplete. If it fails, page navigation remains available; choose **Retry** to load field results again.
+
 Configuration field text and `tag:` comparisons ignore case and match canonically equivalent composed and decomposed Unicode text. Search normalizes only comparison copies; field values, labels, and stored tags keep their original text.
 
 People search in **Session access**, the **New Session → Where** picker, and provider
@@ -305,6 +307,8 @@ The **Plugins** hub at `/plugins` browses the catalog. Its **Skills** and
 **Skill workshop** tabs open the per-agent skill manager at `/skills` and Skill
 Workshop at `/skills/workshop`. **Settings → Plugins** at `/settings/plugins`
 shows the searchable local inventory. Select a plugin to open its overview.
+Catalog browsing and search load independently of that inventory. Installation
+stays disabled until the Gateway confirms the current inventory and permissions.
 
 Opening a plugin shows its description, publisher when available, skills, tools,
 MCP servers, and full README on one overview. Select a tool to read its full
@@ -350,6 +354,8 @@ Copy controls. Reading a bundle requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
+filter remains available while the installed inventory loads; inventory status
+and installation wait for the inventory and destination checks to finish. The
 **Skill workshop** tab shows [learned skills](/tools/skill-workshop) with their
 use counts and recent changes with **Undo**. **Learn from past conversations** opens
 a normal session with the selected agent's configured model and permitted tools.
@@ -650,8 +656,11 @@ Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 ## Templates (Labs)
 
 Enable **Settings → Labs → Templates** to browse official Template packages from
-ClawHub on the **Agents** page. Search the catalog, review the files and
+ClawHub on the **Templates** page. Search the catalog, review the files and
 capabilities a Template will install, then select **Add** to create its agent.
+Opening a catalog entry keeps the selected published version in its detail link,
+so the files you review and the agent you add use the same release. A detail link
+without a version opens the latest published release.
 Add creates an ordinary agent and opens its chat. It does not create a separate
 installed Template to update or remove. Delete the agent through normal agent
 controls; shared plugins and MCP servers remain installed. See

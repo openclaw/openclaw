@@ -190,6 +190,7 @@ describe("production lint suppressions", () => {
         "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|5",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
+        "scripts/lib/usage-bench-observer.mjs|typescript/unbound-method|1",
         // The frame census retains native methods and supplies their original receivers through .call.
         "scripts/perf/agent-event-frame-census-preload.mjs|typescript/unbound-method|3",
         // The copy-count probe restores the native method after measurement.
@@ -205,6 +206,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/command-capture-pool-retention.ts|typescript/unbound-method|2",
         // The diagnostics probe restores Session.post and invokes it with its live receiver.
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
+        // The heap probe forwards saved SQLite methods with their original native receivers.
+        "scripts/perf/doctor-transcript-heap-probe.cjs|typescript/unbound-method|3",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/gateway-runtime-exit-listeners-preload.mjs|unicorn/require-post-message-target-origin|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
@@ -252,6 +255,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/tools-catalog-copy-measure.ts|no-extend-native|2",
         // The SQLite probe restores both native methods and forwards their original receivers.
         "scripts/perf/trajectory-runtime-append.ts|typescript/unbound-method|2",
+        // The untimed SQL census preserves native statement receivers and restores all methods.
+        "scripts/perf/transcript-maintenance-measure.worker.ts|typescript/unbound-method|1",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
         // The pager probe forwards native prepare with its original receiver and restores it.
@@ -433,6 +438,8 @@ describe("production lint suppressions", () => {
         "ui/src/components/solid/sanitized-html.tsx|solid/no-innerhtml|1",
         // JSON materializes the bounded preview; structuredClone retains sliced string backing storage.
         "ui/src/pages/activity/tool-activity.ts|unicorn/prefer-structured-clone|1",
+        // A fresh one-shot MessageChannel port uses onmessage to start delivery and closes both ports.
+        "ui/src/pages/chat/yield-chat-task.ts|unicorn/prefer-add-event-listener|1",
         // PanelRefreshStatus keeps its shared className prop across rendering callers.
         "ui/src/pages/custodian/custodian-surface.tsx|solid/no-react-specific-props|1",
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",

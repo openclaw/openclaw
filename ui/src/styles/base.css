@@ -61,7 +61,6 @@
     var(--text) 50%,
     var(--chat-composer-surface)
   );
-  --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
 
   --panel: #0e1015;
   --panel-strong: #191c24;
@@ -247,7 +246,6 @@
    * --bg-muted, --panel-hover or --input: include the actual host in validation.
    */
   --ok: #22c55e;
-  --ok-muted: rgba(34, 197, 94, 0.75);
   --ok-subtle: rgba(34, 197, 94, 0.08);
   --destructive: #ef4444;
   --destructive-hover: var(--destructive);
@@ -675,7 +673,6 @@
   --card-highlight: rgba(60, 42, 24, 0.03);
   --popover: #ffffff;
   --popover-foreground: #211e1a;
-  --session-hovercard-surface: var(--card);
 
   --panel: #faf9f7;
   --panel-strong: #f4f1ec;
@@ -708,12 +705,10 @@
   --accent-foreground: #ffffff;
   --accent-glow: rgba(189, 69, 49, 0.12);
   --primary: #bd4531;
-  --primary-foreground: #ffffff;
 
   /* Original lobster artwork reads well on light surfaces. */
   --lobster-icon-body: #ff4d4d;
   --lobster-icon-shade: #991b1b;
-  --lobster-icon-eye: #050810;
 
   --secondary: #f4f1ec;
   --secondary-foreground: #403c35;
@@ -745,10 +740,8 @@
   /* Semantic status follows the base pairing rule. Validate label contrast on
      the actual host surface, including neutral interaction layers. */
   --ok: #166534;
-  --ok-muted: rgba(22, 101, 52, 0.75);
   --ok-subtle: rgba(22, 101, 52, 0.08);
   --destructive: #dc2626;
-  --destructive-foreground: #fafafa;
   --warn: #92400e;
   --warn-subtle: rgba(146, 64, 14, 0.08);
   --danger: #b91c1c;
@@ -785,7 +778,6 @@
   --shadow-md: 0 4px 12px rgba(60, 42, 24, 0.07);
   --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
   --shadow-xl: 0 24px 48px rgba(60, 42, 24, 0.11);
-  --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
   --overlay-shadow: 0 1px 2px rgb(60 42 24 / 0.035), 0 8px 24px rgb(60 42 24 / 0.065);
   --overlay-modal-backdrop: color-mix(in oklab, #101219 50%, transparent);
 
@@ -1091,7 +1083,6 @@ a:where(
     [class=""],
     .activity-entry__run-link,
     .settings-row__value,
-    .memory-page__link,
     .portals-preview__notice-url,
     .transcripts-back,
     .chat-text a,

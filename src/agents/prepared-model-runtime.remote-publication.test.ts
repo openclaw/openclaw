@@ -80,7 +80,7 @@ function bundle(generatedAt: number) {
     }),
   };
 }
-async function setup(options: { allowGatewaySubagentBinding?: true } = {}) {
+async function setup(options: { allowGatewaySubagentBinding?: true } = {}, runtimeConfig = config) {
   stored.mockReturnValue(bundle(200));
   setRemoteModelCatalogOverlaySourcesForTest({
     bundledGeneratedAt: () => 100,
@@ -99,7 +99,7 @@ async function setup(options: { allowGatewaySubagentBinding?: true } = {}) {
     );
     return { entries, routeVariants: entries };
   });
-  await refresh(config, {
+  await refresh(runtimeConfig, {
     ...options,
     gatewayLifecycle: true,
     catalogMode: "static",
@@ -141,6 +141,57 @@ async function listModels(
   return respond.mock.calls[0]?.[success ? 1 : 2];
 }
 afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
+
+it("keeps headless catalog adoption lazy until inventory is requested", async () => {
+  const headless: OpenClawConfig = {
+    ...config,
+    gateway: { controlUi: { enabled: false } },
+  };
+  await setup({}, headless);
+  expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+
+  expect(await applyRemoteModelCatalogUpdate(() => headless)).toBe("published");
+  expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+  const input = fixture.agentInput("default", headless);
+  await using run = await acquireRun(input, { catalogMode: "static" });
+  expect(run.pluginGeneration.remoteCatalog?.generatedAt).toBe(300);
+  expect(run.snapshot.modelCatalog.entries.map((row) => row.id)).toContain("remote-200");
+
+  const discovering = createDeferred();
+  const release = createDeferred();
+  mocks.runPreparedModelCatalogWorker.mockImplementationOnce(async () => {
+    discovering.resolve();
+    await release.promise;
+    return { entries: [], routeVariants: [] };
+  });
+  const first = readSnapshot(input)!.loadFullModelCatalog!({ refresh: true, wait: true });
+  void first.catch(() => undefined);
+  await discovering.promise;
+  const { preparing, commit, pricingSpy } = holdPricing();
+  stored.mockReturnValue(bundle(400));
+  const adoption = applyRemoteModelCatalogUpdate(() => headless);
+  try {
+    await preparing.promise;
+    commit.resolve();
+    // Let adoption reach the held acquisition before releasing its first request.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    release.resolve();
+    await first;
+    expect(await adoption).toBe("published");
+  } finally {
+    commit.resolve();
+    release.resolve();
+    await Promise.allSettled([first, adoption]);
+    pricingSpy.mockRestore();
+  }
+  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
+  expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(400);
+  stored.mockReturnValue(bundle(500));
+  expect(await applyRemoteModelCatalogUpdate(() => headless)).toBe("published");
+  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);
+});
 
 it("models.list reads the replacement after remote publication retires its catalog", async () => {
   await setup();

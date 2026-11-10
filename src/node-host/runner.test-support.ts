@@ -142,8 +142,10 @@ vi.mock("../infra/executable-path.js", () => ({
 // mock-isolation: Keep host PATH mutation outside the isolated runner fixture.
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
 
+// mock-isolation: runner suites drive config through fixtures; SQLite persistence has its own suite.
 vi.mock("./config.js", () => ({
   configureNodeHost: mocks.configureNodeHost,
+  refreshNodeHostOpenClawIdTarget: vi.fn(),
   loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
 
@@ -271,7 +273,7 @@ export { loadResumableNodeHostGateway, mocks, runNodeHost, startNodeHostMcpManag
 
 export async function withReadyNodeHost(
   runTest: (host: {
-    running: Promise<void>;
+    running: ReturnType<typeof runNodeHost>;
     stop: () => (() => void) | undefined;
     client: (typeof mocks.capturedGatewayClients)[number];
     options: GatewayClientOptions;

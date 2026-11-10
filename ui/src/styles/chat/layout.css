@@ -42,7 +42,7 @@ openclaw-pending-session-create {
 
 /* The long discard label would squeeze the message into a sliver on phones. */
 @media (max-width: 560px) {
-  .chat-error .app-toast__content > .chat-error__discard {
+  .chat-error .app-toast__content > .chat-error__actions:has(> .chat-error__discard) {
     grid-row: auto;
     grid-column: 1 / -1;
     justify-self: start;
@@ -606,12 +606,6 @@ openclaw-pending-session-create {
   overflow-clip-margin: 10px;
 }
 
-/* Message jumps need real mounted-row sizes before their target settles. */
-.chat-thread-inner[data-measuring-rows] .chat-virtual-row:not([data-prepared-row]) {
-  content-visibility: visible;
-  contain: none;
-}
-
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   /* Revealed 44px footer targets can overhang the compact row by half their
      height. Widen the paint clip instead of changing containment on hover.
@@ -804,7 +798,12 @@ openclaw-pending-session-create {
 
 .chat-scroll-to-bottom {
   position: absolute;
-  bottom: calc(var(--chat-scroll-to-bottom-gap) + var(--chat-scroll-to-bottom-clearance, 0px));
+  /* Activity clearance is measured from the transcript's bottom edge, which
+     already lies below the composer's overlapping top. */
+  bottom: calc(
+    var(--chat-scroll-to-bottom-gap) +
+      max(var(--chat-composer-overlap, 0px), var(--chat-scroll-to-bottom-clearance, 0px))
+  );
   left: 50%;
   display: inline-flex;
   align-items: center;
