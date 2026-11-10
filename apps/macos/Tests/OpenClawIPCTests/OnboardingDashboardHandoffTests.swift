@@ -120,14 +120,15 @@ private func transientVerificationErrorResponse(id: String) -> Data {
 struct OnboardingDashboardHandoffTests {
     @Test(
         .enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil),
-        arguments: [false, true])
-    func `browser completion does not offer primary Gateway actions`(browserCompletion: Bool) async throws {
+        arguments: ["primary", "browser", "node"])
+    func `node and browser completion do not offer primary Gateway actions`(completion: String) async throws {
         let output = try OnboardingRenderTests.outputDirectory()
         let state = AppState(preview: true)
         state.connectionMode = .local
         state.isPaused = true
         let view = OnboardingView(state: state)
-        if browserCompletion { view.savedBrowserGatewayName = "Fixture browser Gateway" }
+        if completion == "browser" { view.savedBrowserGatewayName = "Fixture browser Gateway" }
+        if completion == "node" { view.finishState.connectionCompletion = .node("Fixture node Gateway") }
         _ = AppKitTestSupport.application
         let hosting = NSHostingView(rootView: view.readyPage()
             .frame(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight)
@@ -145,17 +146,18 @@ struct OnboardingDashboardHandoffTests {
         let names = elements.flatMap { element -> [String] in
             let value: Any? = element.accessibilityValue?()
             return [element.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: element), value as? String]
-                .compactMap { $0 }
+                .compactMap(\.self)
         }
         try #require(names.contains("You’re all set!"))
-        #expect(names.contains("Gateway added") == browserCompletion)
-        #expect(names.contains("Open Dashboard → Settings → Channels") == !browserCompletion)
-        #expect(names.contains("Open Dashboard → Skills") == !browserCompletion)
-        if browserCompletion {
+        #expect(names.contains("Gateway added") == (completion == "browser"))
+        #expect(names.contains("Node setup complete") == (completion == "node"))
+        #expect(names.contains("Open Dashboard → Settings → Channels") == (completion == "primary"))
+        #expect(names.contains("Open Dashboard → Skills") == (completion == "primary"))
+        if completion != "primary" {
             try OnboardingRenderTests.capturePage(
                 view.readyPage(),
-                name: "done-browser",
-                label: "Native page · browser profile fixture · navigation omitted",
+                name: "done-\(completion)",
+                label: "Native page · \(completion) completion fixture · navigation omitted",
                 output: output)
         }
     }

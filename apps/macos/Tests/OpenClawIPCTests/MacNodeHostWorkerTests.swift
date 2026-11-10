@@ -492,6 +492,26 @@ struct MacNodeHostWorkerTests {
             workerManifest: cua) == descriptor)
     }
 
+    @Test(arguments: [ComputerControlProvider.peekaboo, .cua])
+    func `bounded native bridge omits desktop attachment without changing provider ownership`(
+        provider: ComputerControlProvider) throws
+    {
+        let manifest = MacNodeHostManifest(
+            version: "test",
+            caps: ["screen", "computer", "system"],
+            commands: ["desktop.stream", "screen.snapshot", "computer.act", "system.run"],
+            computerUse: OpenClawProtocol.AnyCodable(["contractVersion": 2]),
+            pathEnv: "/usr/bin:/bin")
+        let direct = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: provider))
+        let native = try #require(MacNodeModeCoordinator.workerManifest(
+            manifest, for: provider, supportsDesktopStreaming: false))
+        #expect(direct.commands.contains("desktop.stream"))
+        #expect(native.commands == direct.commands.filter { $0 != "desktop.stream" })
+        #expect(native.caps == direct.caps)
+        #expect(native.computerUse == direct.computerUse)
+        #expect(native.pathEnv == direct.pathEnv)
+    }
+
     @Test func `elevation host never advertises a persisted CUA provider`() throws {
         let suiteName = "MacNodeElevationHostProviderTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

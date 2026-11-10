@@ -143,6 +143,14 @@ extension OnboardingView {
                     self.showOpenClawID = true
                 }
                 self.connectionChoiceButton(
+                    title: "Use a node invitation",
+                    subtitle: "Add this Mac using an owner-created invitation. Chat access stays separate.",
+                    systemImage: "envelope",
+                    selected: false)
+                {
+                    self.beginNodeInvitation()
+                }
+                self.connectionChoiceButton(
                     title: "Nearby",
                     subtitle: Self.remoteChoiceSubtitle(
                         discoveredGatewayCount: self.gatewayDiscovery.gateways.count),
@@ -154,10 +162,7 @@ extension OnboardingView {
                 if self.showRemoteChoices { self.gatewayDiscoverySection() }
                 self.connectionChoiceButton(
                     title: "Enter an address or invite link",
-                    subtitle: """
-                    Use a Gateway address or browser sign-in link. \
-                    OpenClaw ID invites aren’t supported yet.
-                    """,
+                    subtitle: "Use a Gateway address or browser sign-in link.",
                     systemImage: "link",
                     selected: false)
                 {
@@ -194,7 +199,7 @@ extension OnboardingView {
 
     func reachabilityPage() -> some View {
         onboardingPage {
-            OnboardingReachabilityContent(unavailableReason: self.openClawID.unavailableReason) {
+            OnboardingReachabilityContent(unavailableReason: self.openClawID.accountUnavailableReason) {
                 self.openClawID.begin(.makeReachable)
                 self.showOpenClawID = true
             }
@@ -791,7 +796,12 @@ extension OnboardingView {
             Text("You’re all set!")
                 .font(.largeTitle.weight(.semibold))
             self.onboardingCard {
-                if let name = self.savedBrowserGatewayName {
+                if case let .node(name) = self.finishState.connectionCompletion {
+                    self.featureRow(
+                        title: "Node setup complete",
+                        subtitle: "This Mac is configured for \(name). Chat and account access remain separate.",
+                        systemImage: "checkmark.circle")
+                } else if let name = self.savedBrowserGatewayName {
                     self.featureRow(title: "Gateway added", subtitle: name, systemImage: "checkmark.circle")
                 } else if self.selectedConnectionMode == .unconfigured {
                     self.featureRow(
@@ -813,7 +823,7 @@ extension OnboardingView {
                         subtitle: "Your remote connection is ready.",
                         systemImage: "checkmark.circle")
                 }
-                if self.savedBrowserGatewayName == nil {
+                if self.finishState.connectionCompletion == nil {
                     Divider()
                         .padding(.vertical, 6)
                     self.featureRow(
