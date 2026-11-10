@@ -164,7 +164,9 @@ public protocol WebSocketSessioning: AnyObject {
 }
 
 extension WebSocketSessioning {
-    public var requiredGatewayRole: String? { nil }
+    public var requiredGatewayRole: String? {
+        nil
+    }
 
     /// Compatibility path for existing session conformers. URLSession and pinning sessions
     /// override this requirement so operator headers remain attached to the upgrade request.

@@ -8,8 +8,10 @@ let nativeIrohEnabled = ProcessInfo.processInfo.environment["OPENCLAW_IROH_NATIV
 let nativePackages: [Package.Dependency] = nativeIrohEnabled
     ? [.package(path: "../../../crates/openclaw-iroh-ffi")] : []
 let nativeDependencies: [Target.Dependency] = nativeIrohEnabled
-    ? [.product(name: "OpenClawIroh", package: "openclaw-iroh-ffi",
-                condition: .when(platforms: [.iOS, .macOS]))] : []
+    ? [.product(
+        name: "OpenClawIroh",
+        package: "openclaw-iroh-ffi",
+        condition: .when(platforms: [.iOS, .macOS]))] : []
 let nativeSettings: [SwiftSetting] = nativeIrohEnabled
     ? [.define("OPENCLAW_IROH_NATIVE", .when(platforms: [.iOS, .macOS]))] : []
 

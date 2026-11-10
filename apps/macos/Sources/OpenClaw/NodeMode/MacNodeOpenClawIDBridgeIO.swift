@@ -21,10 +21,18 @@ final class MacNodeOpenClawIDBridgeIO: Sendable {
     init(handle: FileHandle) throws {
         self.descriptor = handle.fileDescriptor
         var timeout = timeval(tv_sec: 120, tv_usec: 0)
-        guard setsockopt(self.descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-                        socklen_t(MemoryLayout<timeval>.size)) == 0,
-              setsockopt(self.descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout,
-                         socklen_t(MemoryLayout<timeval>.size)) == 0
+        guard setsockopt(
+            self.descriptor,
+            SOL_SOCKET,
+            SO_RCVTIMEO,
+            &timeout,
+            socklen_t(MemoryLayout<timeval>.size)) == 0,
+            setsockopt(
+                self.descriptor,
+                SOL_SOCKET,
+                SO_SNDTIMEO,
+                &timeout,
+                socklen_t(MemoryLayout<timeval>.size)) == 0
         else { throw MacNodeOpenClawIDBridgeError.unavailable }
     }
 
@@ -35,7 +43,10 @@ final class MacNodeOpenClawIDBridgeIO: Sendable {
             self.readQueue.async {
                 var bytes = [UInt8](repeating: 0, count: Self.blockBytes)
                 var count: Int
-                repeat { count = Darwin.recv(self.descriptor, &bytes, Self.blockBytes, 0) } while count < 0 && errno == EINTR
+                repeat {
+                    count = Darwin.recv(self.descriptor, &bytes, Self.blockBytes, 0)
+                } while count < 0 && errno ==
+                    EINTR
                 guard count > 0 else {
                     continuation.resume(throwing: MacNodeOpenClawIDBridgeError.closed)
                     return
@@ -53,7 +64,11 @@ final class MacNodeOpenClawIDBridgeIO: Sendable {
                 let succeeded = bytes.withUnsafeBytes { raw in
                     var offset = 0
                     while offset < raw.count {
-                        let count = Darwin.send(self.descriptor, raw.baseAddress!.advanced(by: offset), raw.count - offset, 0)
+                        let count = Darwin.send(
+                            self.descriptor,
+                            raw.baseAddress!.advanced(by: offset),
+                            raw.count - offset,
+                            0)
                         if count < 0, errno == EINTR { continue }
                         guard count > 0 else { return false }
                         offset += count
@@ -68,7 +83,9 @@ final class MacNodeOpenClawIDBridgeIO: Sendable {
     }
 
     /// Must run while LocalSocketServer still owns the descriptor.
-    func interrupt() { _ = Darwin.shutdown(self.descriptor, SHUT_RDWR) }
+    func interrupt() {
+        _ = Darwin.shutdown(self.descriptor, SHUT_RDWR)
+    }
 }
 
 /// Single-consumer buffered reader shared by HTTP framing and the upgraded WebSocket.
@@ -76,7 +93,9 @@ actor MacNodeOpenClawIDBridgeReader {
     private let io: MacNodeOpenClawIDBridgeIO
     private var buffer = Data()
 
-    init(io: MacNodeOpenClawIDBridgeIO) { self.io = io }
+    init(io: MacNodeOpenClawIDBridgeIO) {
+        self.io = io
+    }
 
     /// Consumes through a delimiter without accepting an unbounded header or chunk line.
     func through(_ delimiter: Data, limit: Int) async throws -> Data {
@@ -89,7 +108,7 @@ actor MacNodeOpenClawIDBridgeReader {
                 return result
             }
             guard self.buffer.count < limit else { throw MacNodeOpenClawIDBridgeError.limitExceeded }
-            self.buffer.append(try await self.io.read())
+            try await self.buffer.append(self.io.read())
         }
     }
 
@@ -106,7 +125,9 @@ actor MacNodeOpenClawIDBridgeReader {
     /// Used only after validating a fixed-width field or bounded WS payload length.
     func exactly(_ count: Int) async throws -> Data {
         var result = Data()
-        while result.count < count { result.append(try await self.portion(count - result.count)) }
+        while result.count < count {
+            try await result.append(self.portion(count - result.count))
+        }
         return result
     }
 }

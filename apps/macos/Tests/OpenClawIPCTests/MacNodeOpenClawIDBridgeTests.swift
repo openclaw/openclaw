@@ -46,21 +46,40 @@ private actor BridgeTestStream: OpenClawIDNodeStream {
         if self.webSocket, self.writeSizes.count == 2 { self.finished.continuation.finish() }
     }
 
-    func finish() { self.finished.continuation.finish() }
-    func reset(code _: Int64) { self.canceled = true; self.finished.continuation.finish() }
-    func stop(code _: Int64) { self.canceled = true; self.finished.continuation.finish() }
-    func snapshot() -> (Data, [Int]) { (self.written, self.writeSizes) }
+    func finish() {
+        self.finished.continuation.finish()
+    }
+
+    func reset(code _: Int64) {
+        self.canceled = true
+        self.finished.continuation.finish()
+    }
+
+    func stop(code _: Int64) {
+        self.canceled = true
+        self.finished.continuation.finish()
+    }
+
+    func snapshot() -> (Data, [Int]) {
+        (self.written, self.writeSizes)
+    }
 }
 
 private struct BridgeTestConnection: OpenClawIDNodeConnection {
     let stream: BridgeTestStream
-    func openBi() async throws -> any OpenClawIDNodeStream { self.stream }
+    func openBi() async throws -> any OpenClawIDNodeStream {
+        self.stream
+    }
+
     func closed() async throws -> OpenClawIDNodeClose {
         // The production admission race cancels this wait, not a real network.
         try await Task.sleep(for: .seconds(3600))
         throw CancellationError()
     }
-    func close(code: Int64) async { await self.stream.reset(code: code) }
+
+    func close(code: Int64) async {
+        await self.stream.reset(code: code)
+    }
 }
 
 private struct BridgeTestEndpoint: OpenClawIDNodeEndpoint {
@@ -68,8 +87,14 @@ private struct BridgeTestEndpoint: OpenClawIDNodeEndpoint {
     func connect(serverKey _: String, relayURL _: URL, alpn _: Data) async throws -> any OpenClawIDNodeConnection {
         BridgeTestConnection(stream: self.stream)
     }
-    func relayStatus() async -> [OpenClawIDNodeRelayStatus] { [] }
-    func shutdown() async { await self.stream.stop(code: 0) }
+
+    func relayStatus() async -> [OpenClawIDNodeRelayStatus] {
+        []
+    }
+
+    func shutdown() async {
+        await self.stream.stop(code: 0)
+    }
 }
 
 struct MacNodeOpenClawIDBridgeTests {
@@ -77,7 +102,7 @@ struct MacNodeOpenClawIDBridgeTests {
         Data("\(method) /__openclaw__/worker-transfer/v1/test HTTP/1.1\r\nHost: localhost\r\n\(extra)\r\n".utf8)
     }
 
-    @Test func rejectsAmbiguousAndInjectedRequestFraming() throws {
+    @Test func `rejects ambiguous and injected request framing`() throws {
         for extra in [
             "Content-Length: 2\r\nContent-Length: 2\r\n",
             "Content-Length: 2\r\nTransfer-Encoding: chunked\r\n",
@@ -91,16 +116,19 @@ struct MacNodeOpenClawIDBridgeTests {
             try MacNodeOpenClawIDBridgeRequest.parse(Data(repeating: 65, count: 65537))
         }
         let parsed = try MacNodeOpenClawIDBridgeRequest.parse(self.request(
-            "Transfer-Encoding: chunked\r\nConnection: keep-alive, X-Hop\r\nX-Hop: removed\r\nAuthorization: Bearer synthetic\r\n"))
+            "Transfer-Encoding: chunked\r\nConnection: keep-alive, X-Hop\r\n" +
+                "X-Hop: removed\r\nAuthorization: Bearer synthetic\r\n"))
         #expect(parsed.body == .chunked)
         #expect(parsed.isWorkerHTTP)
         #expect(parsed.forwardedHeaders == [["host", "localhost"], ["authorization", "Bearer synthetic"]])
     }
 
-    @Test func workerHTTPNamespacesIncludeBootstrapWithoutPrefixConfusion() throws {
-        for path in ["/__openclaw__/worker-bundle/v1/bundles/test",
-                     "/__openclaw__/worker-transfer/v1/environments/test?part=1",
-                     "/__openclaw__/worker-bootstrap/artifacts/test"] {
+    @Test func `worker HTTP namespaces include bootstrap without prefix confusion`() throws {
+        for path in [
+            "/__openclaw__/worker-bundle/v1/bundles/test",
+            "/__openclaw__/worker-transfer/v1/environments/test?part=1",
+            "/__openclaw__/worker-bootstrap/artifacts/test",
+        ] {
             let request = try MacNodeOpenClawIDBridgeRequest.parse(
                 Data("GET \(path) HTTP/1.1\r\nHost: localhost\r\n\r\n".utf8))
             #expect(request.isWorkerHTTP)
@@ -112,17 +140,22 @@ struct MacNodeOpenClawIDBridgeTests {
         }
     }
 
-    @Test func responseCannotInjectHeadersOrReuseRemoteFraming() throws {
+    @Test func `response cannot inject headers or reuse remote framing`() throws {
         #expect(throws: (any Error).self) {
-            try MacNodeOpenClawIDBridgeHTTP.responseHead(status: 200, headers: [["x-test", "ok\r\nInjected: bad"]], method: "GET")
+            try MacNodeOpenClawIDBridgeHTTP.responseHead(
+                status: 200,
+                headers: [["x-test", "ok\r\nInjected: bad"]],
+                method: "GET")
         }
         let head = try MacNodeOpenClawIDBridgeHTTP.responseHead(
-            status: 200, headers: [["Content-Length", "500"], ["Connection", "X-Hop"], ["X-Hop", "removed"]], method: "GET")
+            status: 200,
+            headers: [["Content-Length", "500"], ["Connection", "X-Hop"], ["X-Hop", "removed"]],
+            method: "GET")
         #expect(String(decoding: head.bytes, as: UTF8.self) ==
             "HTTP/1.1 200 Tunnel Response\r\nConnection: close\r\nContent-Length: 500\r\n\r\n")
     }
 
-    @Test func responseLengthIsUnambiguousAndNoBodyMetadataIsPreserved() throws {
+    @Test func `response length is unambiguous and no body metadata is preserved`() throws {
         for headers in [
             [["Content-Length", "2"], ["content-length", "2"]],
             [["Content-Length", "-1"]], [["Content-Length", ""]],
@@ -146,23 +179,29 @@ struct MacNodeOpenClawIDBridgeTests {
     }
 
     @Test(arguments: [200, 206])
-    func workerBundleDownloadPreservesLengthAndRange(status: Int) async throws {
+    func `worker bundle download preserves length and range`(status: Int) async throws {
         let body = Data("bundle payload".utf8)
         var headers = [["Content-Length", String(body.count)], ["Accept-Ranges", "bytes"]]
         if status == 206 { headers.append(["Content-Range", "bytes 10-23/24"]) }
         let head = try JSONSerialization.data(withJSONObject: ["status": status, "headers": headers])
-        let stream = BridgeTestStream(response: try OpenClawIDNodeTunnelCodec.frame(head) + OpenClawIDNodeTunnelCodec.frame(body))
+        let stream = try BridgeTestStream(response: OpenClawIDNodeTunnelCodec.frame(head) + OpenClawIDNodeTunnelCodec
+            .frame(body))
         let tunnel = self.tunnel(stream)
         let bridge = try await MacNodeOpenClawIDBridge.start(
-            tunnel: tunnel, logicalOrigin: URL(string: "wss://claw.invalid")!, onUnexpectedStop: {})
+            tunnel: tunnel, logicalOrigin: #require(URL(string: "wss://claw.invalid")), onUnexpectedStop: {})
         do {
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
             let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
             let reader = MacNodeOpenClawIDBridgeReader(io: io)
             let range = status == 206 ? "Range: bytes=10-\r\n" : ""
-            try await io.write(Data("GET /__openclaw__/worker-bundle/v1/bundles/test HTTP/1.1\r\nHost: localhost\r\n\(range)\r\n".utf8))
-            let response = String(decoding: try await reader.through(Data([13, 10, 13, 10]), limit: 1024), as: UTF8.self)
+            try await io
+                .write(
+                    Data("GET /__openclaw__/worker-bundle/v1/bundles/test HTTP/1.1\r\nHost: localhost\r\n\(range)\r\n"
+                        .utf8))
+            let response = try await String(
+                decoding: reader.through(Data([13, 10, 13, 10]), limit: 1024),
+                as: UTF8.self)
             #expect(response.contains("Content-Length: \(body.count)\r\n"))
             #expect(!response.lowercased().contains("transfer-encoding:"))
             #expect(response.contains("Accept-Ranges: bytes\r\n"))
@@ -170,7 +209,8 @@ struct MacNodeOpenClawIDBridgeTests {
             #expect(try await reader.exactly(body.count) == body)
             let written = await stream.snapshot().0
             let size = written.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
-            let forwarded = try #require(JSONSerialization.jsonObject(with: Data(written.dropFirst(4).prefix(size))) as? [String: Any])
+            let forwarded = try #require(JSONSerialization
+                .jsonObject(with: Data(written.dropFirst(4).prefix(size))) as? [String: Any])
             let requestHeaders = try #require(forwarded["headers"] as? [[String]])
             if status == 206 { #expect(requestHeaders.contains(["range", "bytes=10-"])) }
         } catch {
@@ -182,11 +222,11 @@ struct MacNodeOpenClawIDBridgeTests {
         await tunnel.shutdown()
     }
 
-    @Test func privatePermissionsAndInvalidWorkerUpgradeCleanUp() async throws {
+    @Test func `private permissions and invalid worker upgrade clean up`() async throws {
         let stream = BridgeTestStream(response: Data())
         let tunnel = self.tunnel(stream)
         let bridge = try await MacNodeOpenClawIDBridge.start(
-            tunnel: tunnel, logicalOrigin: URL(string: "wss://claw.invalid")!, onUnexpectedStop: {})
+            tunnel: tunnel, logicalOrigin: #require(URL(string: "wss://claw.invalid")), onUnexpectedStop: {})
         let directory = URL(fileURLWithPath: bridge.socketPath).deletingLastPathComponent().path
         do {
             var metadata = stat()
@@ -198,7 +238,8 @@ struct MacNodeOpenClawIDBridgeTests {
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
             let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
-            try await io.write(Data("GET /__openclaw__/worker HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\r\n".utf8))
+            try await io
+                .write(Data("GET /__openclaw__/worker HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\r\n".utf8))
             let response = try await MacNodeOpenClawIDBridgeReader(io: io).through(Data([13, 10, 13, 10]), limit: 1024)
             #expect(String(decoding: response, as: UTF8.self).hasPrefix("HTTP/1.1 400 "))
             #expect(await stream.snapshot().0.isEmpty)
@@ -213,11 +254,12 @@ struct MacNodeOpenClawIDBridgeTests {
         #expect(!FileManager.default.fileExists(atPath: directory))
     }
 
-    @Test func shutdownInterruptsAndDrainsAcceptedHandler() async throws {
+    @Test func `shutdown interrupts and drains accepted handler`() async throws {
         let entered = AsyncStream<Void>.makeStream()
         let tunnel = self.tunnel(BridgeTestStream(response: Data()))
         let bridge = try await MacNodeOpenClawIDBridge.start(
-            tunnel: tunnel, logicalOrigin: URL(string: "wss://claw.invalid")!,
+            tunnel: tunnel,
+            logicalOrigin: #require(URL(string: "wss://claw.invalid")),
             workerWebSocket: { _, reader, _ in
                 entered.continuation.yield(())
                 entered.continuation.finish()
@@ -227,7 +269,8 @@ struct MacNodeOpenClawIDBridgeTests {
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
             let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
-            try await io.write(Data("GET /__openclaw__/worker HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\r\n".utf8))
+            try await io
+                .write(Data("GET /__openclaw__/worker HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\r\n".utf8))
             var iterator = entered.stream.makeAsyncIterator()
             _ = await iterator.next()
             await bridge.shutdown()
@@ -240,18 +283,21 @@ struct MacNodeOpenClawIDBridgeTests {
         await tunnel.shutdown()
     }
 
-    @Test func privateListenerLeavesConcurrentAdmissionToTunnelOwner() async throws {
+    @Test func `private listener leaves concurrent admission to tunnel owner`() async throws {
         let entered = AsyncStream<Void>.makeStream()
         let tunnel = self.tunnel(BridgeTestStream(response: Data()))
         let bridge = try await MacNodeOpenClawIDBridge.start(
-            tunnel: tunnel, logicalOrigin: URL(string: "wss://claw.invalid")!,
+            tunnel: tunnel,
+            logicalOrigin: #require(URL(string: "wss://claw.invalid")),
             workerWebSocket: { _, reader, io in
                 try await io.write(Data([1]))
                 entered.continuation.yield(())
                 _ = try await reader.exactly(1)
             }, onUnexpectedStop: {})
         var handles: [FileHandle] = []
-        defer { for handle in handles { try? handle.close() } }
+        defer { for handle in handles {
+            try? handle.close()
+        } }
         do {
             var admissions = entered.stream.makeAsyncIterator()
             // Keep all earlier handlers blocked to exercise admission beyond the
@@ -261,7 +307,7 @@ struct MacNodeOpenClawIDBridgeTests {
                 handles.append(handle)
                 let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
                 try await io.write(Data(("GET /__openclaw__/worker HTTP/1.1\r\n" +
-                    "Host: localhost\r\nUpgrade: websocket\r\n\r\n").utf8))
+                        "Host: localhost\r\nUpgrade: websocket\r\n\r\n").utf8))
                 #expect(try await MacNodeOpenClawIDBridgeReader(io: io).exactly(1) == Data([1]))
                 _ = await admissions.next()
             }
@@ -276,22 +322,22 @@ struct MacNodeOpenClawIDBridgeTests {
         #expect(!FileManager.default.fileExists(atPath: bridge.socketPath))
     }
 
-    @Test func streamsChunkedUploadAndResponseOverUnixSocket() async throws {
+    @Test func `streams chunked upload and response over unix socket`() async throws {
         let head = try OpenClawIDNodeTunnelCodec.frame(Data("{\"status\":200,\"headers\":[]}".utf8))
         let download = Data(repeating: 121, count: 2 * 1024 * 1024 + 17)
         var response = head
         var expected = Data(("HTTP/1.1 200 Tunnel Response\r\nConnection: close\r\n" +
-            "Transfer-Encoding: chunked\r\n\r\n").utf8)
+                "Transfer-Encoding: chunked\r\n\r\n").utf8)
         for start in stride(from: 0, to: download.count, by: 1024 * 1024) {
             let chunk = Data(download.dropFirst(start).prefix(1024 * 1024))
-            response.append(try OpenClawIDNodeTunnelCodec.frame(chunk))
+            try response.append(OpenClawIDNodeTunnelCodec.frame(chunk))
             expected.append(Data("\(String(chunk.count, radix: 16))\r\n".utf8) + chunk + Data([13, 10]))
         }
         expected.append(Data("0\r\n\r\n".utf8))
         let stream = BridgeTestStream(response: response, readChunkBytes: 65536)
         let tunnel = self.tunnel(stream)
         let bridge = try await MacNodeOpenClawIDBridge.start(
-            tunnel: tunnel, logicalOrigin: URL(string: "wss://claw.invalid")!, onUnexpectedStop: {})
+            tunnel: tunnel, logicalOrigin: #require(URL(string: "wss://claw.invalid")), onUnexpectedStop: {})
         do {
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
@@ -310,7 +356,8 @@ struct MacNodeOpenClawIDBridgeTests {
                 let length = frames.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
                 frames.removeFirst(4)
                 if first {
-                    let object = try #require(JSONSerialization.jsonObject(with: Data(frames.prefix(length))) as? [String: Any])
+                    let object = try #require(JSONSerialization
+                        .jsonObject(with: Data(frames.prefix(length))) as? [String: Any])
                     #expect(object["kind"] as? String == "http")
                     #expect(object["path"] as? String == "/__openclaw__/worker-transfer/v1/test")
                     first = false
@@ -327,26 +374,26 @@ struct MacNodeOpenClawIDBridgeTests {
         await tunnel.shutdown()
     }
 
-    @Test func defaultWorkerHandlerUsesDedicatedRoleAndTunnelPath() async throws {
+    @Test func `default worker handler uses dedicated role and tunnel path`() async throws {
         let head = try OpenClawIDNodeTunnelCodec.frame(Data("{\"status\":101}".utf8))
-        let stream = BridgeTestStream(
-            response: head + (try OpenClawIDNodeTunnelCodec.message(.text("hello"))),
+        let stream = try BridgeTestStream(
+            response: head + (OpenClawIDNodeTunnelCodec.message(.text("hello"))),
             webSocketResponseHeadBytes: head.count)
         let tunnel = self.tunnel(stream)
         let bridge = try await MacNodeOpenClawIDBridge.start(
-            tunnel: tunnel, logicalOrigin: URL(string: "wss://claw.invalid")!, onUnexpectedStop: {})
+            tunnel: tunnel, logicalOrigin: #require(URL(string: "wss://claw.invalid")), onUnexpectedStop: {})
         do {
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
             let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
             let reader = MacNodeOpenClawIDBridgeReader(io: io)
             try await io.write(Data(("GET /__openclaw__/worker HTTP/1.1\r\nHost: localhost\r\n" +
-                "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
-                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").utf8))
+                    "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
+                    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").utf8))
             let response = try await reader.through(Data([13, 10, 13, 10]), limit: 1024)
             #expect(String(decoding: response, as: UTF8.self).hasPrefix("HTTP/1.1 101 "))
             let connect = Data(("{\"type\":\"req\",\"method\":\"connect\",\"params\":{\"role\":\"worker\"," +
-                "\"admission\":{\"credential\":\"synthetic\"}}}").utf8)
+                    "\"admission\":{\"credential\":\"synthetic\"}}}").utf8)
             try #require(connect.count < 126)
             let key: [UInt8] = [1, 2, 3, 4]
             try await io.write(Data([0x81, 0x80 | UInt8(connect.count)] + key) +
@@ -354,7 +401,8 @@ struct MacNodeOpenClawIDBridgeTests {
             #expect(try await reader.exactly(7) == Data([0x81, 5]) + Data("hello".utf8))
             let (written, _) = await stream.snapshot()
             let headLength = written.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
-            let request = try #require(JSONSerialization.jsonObject(with: Data(written.dropFirst(4).prefix(headLength))) as? [String: Any])
+            let request = try #require(JSONSerialization
+                .jsonObject(with: Data(written.dropFirst(4).prefix(headLength))) as? [String: Any])
             #expect(request["kind"] as? String == "ws")
             #expect(request["path"] as? String == "/__openclaw__/worker")
             let frame = written.dropFirst(4 + headLength)
@@ -371,7 +419,8 @@ struct MacNodeOpenClawIDBridgeTests {
 
     private func tunnel(_ stream: BridgeTestStream) -> OpenClawIDNodeTunnel {
         OpenClawIDNodeTunnel(
-            endpoint: BridgeTestEndpoint(stream: stream), verifiedServerKey: "synthetic",
+            endpoint: BridgeTestEndpoint(stream: stream),
+            verifiedServerKey: "synthetic",
             relayURL: URL(string: "https://relay.invalid")!)
     }
 
@@ -391,7 +440,9 @@ struct MacNodeOpenClawIDBridgeTests {
                 Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard result == 0 else { Darwin.close(fd); throw MacNodeOpenClawIDBridgeError.unavailable }
+        guard result == 0 else { Darwin.close(fd)
+            throw MacNodeOpenClawIDBridgeError.unavailable
+        }
         var enabled: Int32 = 1
         _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
         return FileHandle(fileDescriptor: fd, closeOnDealloc: true)

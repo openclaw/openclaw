@@ -14,7 +14,10 @@ public enum OpenClawIDNodeTunnelCodec {
         case close(UInt16?, String)
     }
 
-    public static func frame(_ payload: Data, limit: Int = OpenClawIDNodeTunnelProtocol.maximumFrameBytes) throws -> Data {
+    public static func frame(
+        _ payload: Data,
+        limit: Int = OpenClawIDNodeTunnelProtocol.maximumFrameBytes) throws -> Data
+    {
         guard payload.count <= limit, payload.count <= Int(UInt32.max) else {
             throw OpenClawIDNodeTransportError.oversizedFrame
         }
@@ -49,7 +52,7 @@ public enum OpenClawIDNodeTunnelCodec {
 
     public static func responseHead(_ bytes: Data) throws -> ResponseHead {
         guard bytes.count <= OpenClawIDNodeTunnelProtocol.maximumHeadBytes,
-              String(data: bytes, encoding: .utf8) != nil,
+              String(bytes: bytes, encoding: .utf8) != nil,
               let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
               let number = object["status"] as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID(),
@@ -95,7 +98,7 @@ public enum OpenClawIDNodeTunnelCodec {
         let bytes = payload.dropFirst()
         switch opcode {
         case 1:
-            guard let text = String(data: bytes, encoding: .utf8) else {
+            guard let text = String(bytes: bytes, encoding: .utf8) else {
                 throw OpenClawIDNodeTransportError.malformedFrame
             }
             return .text(text)
@@ -116,7 +119,9 @@ actor OpenClawIDNodeFrameReader {
     let stream: any OpenClawIDNodeStream
     private var reading = false
 
-    init(stream: any OpenClawIDNodeStream) { self.stream = stream }
+    init(stream: any OpenClawIDNodeStream) {
+        self.stream = stream
+    }
 
     func next(limit: Int) async throws -> Data? {
         guard !self.reading else { throw OpenClawIDNodeTransportError.malformedFrame }
@@ -138,7 +143,10 @@ actor OpenClawIDNodeFrameReader {
         var bytes = Data()
         while bytes.count < count {
             try Task.checkCancellation()
-            guard let next = try await self.stream.read(maxBytes: min(count - bytes.count, OpenClawIDNodeTunnelProtocol.maximumHTTPDataBytes)) else {
+            guard let next = try await self.stream.read(maxBytes: min(
+                count - bytes.count,
+                OpenClawIDNodeTunnelProtocol.maximumHTTPDataBytes))
+            else {
                 if bytes.isEmpty, allowEOF { return nil }
                 throw OpenClawIDNodeTransportError.truncatedFrame
             }

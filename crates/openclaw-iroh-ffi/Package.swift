@@ -2,8 +2,8 @@
 
 import PackageDescription
 
-// Build scripts/build-apple.sh first. The binary is intentionally not checked in;
-// a missing artifact is a build prerequisite, never a transport fallback.
+/// Build scripts/build-apple.sh first. The binary is intentionally not checked in;
+/// a missing artifact is a build prerequisite, never a transport fallback.
 let package = Package(
     name: "OpenClawIroh",
     platforms: [.macOS(.v15), .iOS(.v18)],

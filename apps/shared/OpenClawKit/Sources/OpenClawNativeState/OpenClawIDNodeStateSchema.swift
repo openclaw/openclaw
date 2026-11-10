@@ -59,7 +59,8 @@ public enum OpenClawIDNodeStateSchema {
         for definition in definitions {
             guard try query.step() == .row,
                   try query.requiredText(at: 0, field: "node schema") == definition
-            else { throw OpenClawNativeStateError("Incompatible node enrollment schema; use a compatible OpenClaw app") }
+            else { throw OpenClawNativeStateError("Incompatible node enrollment schema; use a compatible OpenClaw app")
+            }
         }
         guard try query.step() == .done else {
             throw OpenClawNativeStateError("Incompatible node enrollment schema; use a compatible OpenClaw app")

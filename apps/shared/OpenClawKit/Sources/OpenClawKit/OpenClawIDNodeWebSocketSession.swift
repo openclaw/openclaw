@@ -37,7 +37,9 @@ public final class OpenClawIDNodeWebSocketSession: WebSocketSessioning, Sendable
         return WebSocketTaskBox(task: task)
     }
 
-    public func shutdown() async { await self.tunnel.shutdown() }
+    public func shutdown() async {
+        await self.tunnel.shutdown()
+    }
 }
 
 actor OpenClawIDNodeWebSocketIO {
@@ -64,10 +66,10 @@ actor OpenClawIDNodeWebSocketIO {
         if let reader = self.reader { return reader }
         if let opening = self.opening { return try await self.waitForOpen(opening) }
         guard let url = self.request.url,
-              (url.scheme == "wss" || url.scheme == "ws"),
+              url.scheme == "wss" || url.scheme == "ws",
               url.host == self.origin.host, url.port == self.origin.port,
               url.user == nil, url.password == nil, url.fragment == nil,
-              (self.role == "worker" ? url.path == "/__openclaw__/worker" : (url.path.isEmpty || url.path == "/")),
+              self.role == "worker" ? url.path == "/__openclaw__/worker" : (url.path.isEmpty || url.path == "/"),
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         else { throw OpenClawIDNodeTransportError.wrongRoute }
         let path = (components.percentEncodedPath.isEmpty ? "/" : components.percentEncodedPath) +
@@ -136,23 +138,28 @@ actor OpenClawIDNodeWebSocketIO {
         }
     }
 
-    func enqueue(_ message: URLSessionWebSocketTask.Message,
-                 lifetime: WebSocketRequestLifetime? = nil) throws -> Task<Void, Error> {
+    func enqueue(
+        _ message: URLSessionWebSocketTask.Message,
+        lifetime: WebSocketRequestLifetime? = nil) throws -> Task<Void, Error>
+    {
         if self.stopped { throw OpenClawIDNodeTransportError.closed }
         let payload: OpenClawIDNodeTunnelCodec.Message
         let data: Data
         switch message {
-        case let .string(text): data = Data(text.utf8); payload = .text(text)
-        case let .data(bytes): data = bytes; payload = .binary(bytes)
+        case let .string(text): data = Data(text.utf8)
+            payload = .text(text)
+        case let .data(bytes): data = bytes
+            payload = .binary(bytes)
         @unknown default: throw OpenClawIDNodeTransportError.unsupportedOpcode
         }
         // GatewayChannel sends JSON as binary; worker clients may send text. Both
         // forms must prove the route-specific role before using W.
         if !self.connectSent {
-            guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], object["type"] as? String == "req", object["method"] as? String == "connect",
+            guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  object["type"] as? String == "req", object["method"] as? String == "connect",
                   let params = object["params"] as? [String: Any], params["role"] as? String == self.role,
                   self.role != "worker" || params["admission"] is [String: Any],
-                  (params["scopes"] == nil || (params["scopes"] as? [String]) == [])
+                  params["scopes"] == nil || (params["scopes"] as? [String]) == []
             else { throw OpenClawIDNodeTransportError.nodeRoleRequired }
             self.connectSent = true
         }
@@ -257,7 +264,9 @@ private final class OpenClawIDNodeWebSocketTask: WebSocketRequestSending, Sendab
         self.io = OpenClawIDNodeWebSocketIO(tunnel: tunnel, origin: origin, request: request, role: role)
     }
 
-    var state: URLSessionTask.State { self.taskState.withLock { $0 } }
+    var state: URLSessionTask.State {
+        self.taskState.withLock { $0 }
+    }
 
     func prepare() async throws {
         do {
@@ -297,7 +306,9 @@ private final class OpenClawIDNodeWebSocketTask: WebSocketRequestSending, Sendab
         }
     }
 
-    func send(_ message: URLSessionWebSocketTask.Message) async throws { try await self.io.send(message) }
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+        try await self.io.send(message)
+    }
 
     func sendRequest(_ message: URLSessionWebSocketTask.Message, lifetime: WebSocketRequestLifetime) async throws {
         try await self.io.send(message, lifetime: lifetime)
@@ -305,15 +316,19 @@ private final class OpenClawIDNodeWebSocketTask: WebSocketRequestSending, Sendab
 
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
         Task {
-            do { try await self.io.ping(); pongReceiveHandler(nil) } catch { pongReceiveHandler(error) }
+            do { try await self.io.ping()
+                pongReceiveHandler(nil)
+            } catch { pongReceiveHandler(error) }
         }
     }
 
-    func receive() async throws -> URLSessionWebSocketTask.Message { try await self.io.receive() }
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        try await self.io.receive()
+    }
 
     func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void) {
         Task {
-            do { completionHandler(.success(try await self.receive())) } catch { completionHandler(.failure(error)) }
+            do { try await completionHandler(.success(self.receive())) } catch { completionHandler(.failure(error)) }
         }
     }
 }

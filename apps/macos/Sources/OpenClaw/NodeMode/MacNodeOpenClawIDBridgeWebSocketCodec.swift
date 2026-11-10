@@ -12,7 +12,7 @@ struct MacNodeOpenClawIDBridgeWebSocketError: Error {
 
 /// Local RFC 6455 framing is separate from the tunnel's length-prefixed messages.
 enum MacNodeOpenClawIDBridgeWebSocketCodec {
-    // The tunnel adds one opcode byte to each message payload.
+    /// The tunnel adds one opcode byte to each message payload.
     static let maximumMessageBytes = OpenClawIDNodeTunnelProtocol.maximumFrameBytes - 1
 
     struct Header: Sendable, Equatable {
@@ -78,12 +78,14 @@ enum MacNodeOpenClawIDBridgeWebSocketCodec {
             default:
                 let opcode = self.opcode ?? header.opcode
                 self.pending.append(payload)
-                if !header.final { self.opcode = opcode; return nil }
+                if !header.final { self.opcode = opcode
+                    return nil
+                }
                 let bytes = self.pending
                 self.pending = Data()
                 self.opcode = nil
                 if opcode == 2 { return .binary(bytes) }
-                guard let text = String(data: bytes, encoding: .utf8) else {
+                guard let text = String(bytes: bytes, encoding: .utf8) else {
                     throw MacNodeOpenClawIDBridgeWebSocketError.encoding
                 }
                 return .text(text)
@@ -107,7 +109,7 @@ enum MacNodeOpenClawIDBridgeWebSocketCodec {
         let digest = Insecure.SHA1.hash(data: Data((keys[0] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").utf8))
         let accept = Data(digest).base64EncodedString()
         return Data(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n" +
-            "Connection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n").utf8)
+                "Connection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n").utf8)
     }
 
     /// Server frames are unmasked, final and minimally length-encoded.
@@ -115,8 +117,8 @@ enum MacNodeOpenClawIDBridgeWebSocketCodec {
         guard [1, 2, 8, 9, 10].contains(opcode), opcode < 8 || payload.count <= 125 else {
             throw MacNodeOpenClawIDBridgeWebSocketError.framing
         }
-        guard payload.count <= Self.maximumMessageBytes else { throw MacNodeOpenClawIDBridgeWebSocketError.tooLarge }
-        if opcode == 8 { try Self.validateClose(payload) }
+        guard payload.count <= self.maximumMessageBytes else { throw MacNodeOpenClawIDBridgeWebSocketError.tooLarge }
+        if opcode == 8 { try self.validateClose(payload) }
         var result = Data([0x80 | opcode])
         if payload.count < 126 { result.append(UInt8(payload.count)) } else {
             let width = payload.count <= 65535 ? 2 : 8
@@ -134,7 +136,9 @@ enum MacNodeOpenClawIDBridgeWebSocketCodec {
         let key = [UInt8](key)
         var result = payload
         result.withUnsafeMutableBytes { (bytes: UnsafeMutableRawBufferPointer) in
-            for index in bytes.indices { bytes[index] ^= key[index % 4] }
+            for index in bytes.indices {
+                bytes[index] ^= key[index % 4]
+            }
         }
         return result
     }
@@ -147,7 +151,7 @@ enum MacNodeOpenClawIDBridgeWebSocketCodec {
         guard (1000...1003).contains(code) || (1007...1014).contains(code) || (3000...4999).contains(code) else {
             throw MacNodeOpenClawIDBridgeWebSocketError.framing
         }
-        guard String(data: payload.dropFirst(2), encoding: .utf8) != nil else {
+        guard String(bytes: payload.dropFirst(2), encoding: .utf8) != nil else {
             throw MacNodeOpenClawIDBridgeWebSocketError.encoding
         }
     }

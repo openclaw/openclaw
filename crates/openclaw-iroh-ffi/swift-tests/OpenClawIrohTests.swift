@@ -2,17 +2,27 @@ import Foundation
 import OpenClawIroh
 import Testing
 
-@Suite struct OpenClawIrohTests {
+struct OpenClawIrohTests {
     /// Real SwiftPM link and UniFFI calls, using synthetic keys and loopback-only routing.
-    @Test func loopbackStreamsAndTypedClose() async throws {
+    @Test func `loopback streams and typed close`() async throws {
         let alpn = Data("openclaw/tunnel/1".utf8)
         let server = try await bind(
-            secretKey: Data(repeating: 1, count: 32), relayUrl: nil,
-            alpns: [alpn], ipTransports: true, keepAliveMs: 1000)
+            secretKey: Data(
+                repeating: 1,
+                count: 32),
+            relayUrl: nil,
+            alpns: [alpn],
+            ipTransports: true,
+            keepAliveMs: 1000)
         do {
             let client = try await bind(
-                secretKey: Data(repeating: 2, count: 32), relayUrl: nil,
-                alpns: [], ipTransports: true, keepAliveMs: 1000)
+                secretKey: Data(
+                    repeating: 2,
+                    count: 32),
+                relayUrl: nil,
+                alpns: [],
+                ipTransports: true,
+                keepAliveMs: 1000)
             do {
                 let addresses = try server.boundSockets().map { socket in
                     let port = try #require(socket.split(separator: ":").last)
@@ -20,8 +30,11 @@ import Testing
                 }
                 async let accepting = server.accept()
                 let outgoing = try await client.connect(
-                    endpointId: server.id(), alpn: alpn, relayUrl: nil,
-                    directAddrs: addresses, cancel: CancelToken())
+                    endpointId: server.id(),
+                    alpn: alpn,
+                    relayUrl: nil,
+                    directAddrs: addresses,
+                    cancel: CancelToken())
                 let accepted = try await accepting
                 let incoming = try #require(accepted)
                 #expect(outgoing.remoteId() == server.id())
@@ -52,13 +65,19 @@ import Testing
                 canceled.cancel()
                 await #expect(throws: IrohError.Cancelled) {
                     _ = try await client.connect(
-                        endpointId: server.id(), alpn: alpn, relayUrl: nil,
-                        directAddrs: addresses, cancel: canceled)
+                        endpointId: server.id(),
+                        alpn: alpn,
+                        relayUrl: nil,
+                        directAddrs: addresses,
+                        cancel: canceled)
                 }
                 async let acceptingAgain = server.accept()
                 let again = try await client.connect(
-                    endpointId: server.id(), alpn: alpn, relayUrl: nil,
-                    directAddrs: addresses, cancel: CancelToken())
+                    endpointId: server.id(),
+                    alpn: alpn,
+                    relayUrl: nil,
+                    directAddrs: addresses,
+                    cancel: CancelToken())
                 let next = try await acceptingAgain
                 let acceptedAgain = try #require(next)
                 try again.close(code: 0, reason: Data())

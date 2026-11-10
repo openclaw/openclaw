@@ -17,8 +17,8 @@ struct MacNodeOpenClawIDBridgeRequest: Sendable {
 
     /// Parses before opening an authenticated stream, rejecting request smuggling shapes.
     static func parse(_ bytes: Data) throws -> Self {
-        guard bytes.count <= Self.maximumHeadBytes, bytes.suffix(4) == Data([13, 10, 13, 10]),
-              let text = String(data: bytes.dropLast(4), encoding: .utf8)
+        guard bytes.count <= self.maximumHeadBytes, bytes.suffix(4) == Data([13, 10, 13, 10]),
+              let text = String(bytes: bytes.dropLast(4), encoding: .utf8)
         else { throw MacNodeOpenClawIDBridgeError.malformedRequest }
         // HTTP delimiters are bytes; Swift treats each CRLF as one grapheme cluster.
         let lines = text.components(separatedBy: "\r\n")
@@ -35,7 +35,9 @@ struct MacNodeOpenClawIDBridgeRequest: Sendable {
             guard Self.validHeader(name, value) else { throw MacNodeOpenClawIDBridgeError.malformedRequest }
             headers.append([name.lowercased(), value])
         }
-        func values(_ name: String) -> [String] { headers.filter { $0[0] == name }.map { $0[1] } }
+        func values(_ name: String) -> [String] {
+            headers.filter { $0[0] == name }.map { $0[1] }
+        }
         let lengths = values("content-length")
         let encodings = values("transfer-encoding")
         guard values("host").count == 1, !values("host")[0].isEmpty,
@@ -55,20 +57,29 @@ struct MacNodeOpenClawIDBridgeRequest: Sendable {
         return Self(method: start[0], path: start[1], headers: headers, body: body)
     }
 
-    func values(_ name: String) -> [String] { self.headers.filter { $0[0] == name }.map { $0[1] } }
+    func values(_ name: String) -> [String] {
+        self.headers.filter { $0[0] == name }.map { $0[1] }
+    }
 
-    var isWebSocket: Bool { !self.values("upgrade").isEmpty }
+    var isWebSocket: Bool {
+        !self.values("upgrade").isEmpty
+    }
 
     /// Only worker ingress and transfer resources are exposed, not the native node socket.
     var isWorkerHTTP: Bool {
         let path = self.path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? ""
-        return ["/__openclaw__/worker-bundle/v1", "/__openclaw__/worker-transfer/v1",
-                "/__openclaw__/worker-bootstrap"].contains {
+        return [
+            "/__openclaw__/worker-bundle/v1",
+            "/__openclaw__/worker-transfer/v1",
+            "/__openclaw__/worker-bootstrap",
+        ].contains {
             path == $0 || path.hasPrefix($0 + "/")
         }
     }
 
-    var forwardedHeaders: [[String]] { Self.endToEndHeaders(self.headers).filter { $0[0] != "expect" } }
+    var forwardedHeaders: [[String]] {
+        Self.endToEndHeaders(self.headers).filter { $0[0] != "expect" }
+    }
 
     /// Removes nominated hop-by-hop fields as well as the standard hop header names.
     static func endToEndHeaders(_ headers: [[String]]) -> [[String]] {
@@ -87,15 +98,17 @@ struct MacNodeOpenClawIDBridgeRequest: Sendable {
     }
 
     static func validHeader(_ name: String, _ value: String) -> Bool {
-        Self.token(name) && value.utf8.allSatisfy { $0 == 9 || ($0 >= 32 && $0 != 127) }
+        self.token(name) && value.utf8.allSatisfy { $0 == 9 || ($0 >= 32 && $0 != 127) }
     }
 }
 
 /// Streams both directions concurrently: a Gateway may reject an upload before its FIN.
 enum MacNodeOpenClawIDBridgeHTTP {
     static func serve(
-        request: MacNodeOpenClawIDBridgeRequest, reader: MacNodeOpenClawIDBridgeReader,
-        io: MacNodeOpenClawIDBridgeIO, tunnel: OpenClawIDNodeTunnel) async throws
+        request: MacNodeOpenClawIDBridgeRequest,
+        reader: MacNodeOpenClawIDBridgeReader,
+        io: MacNodeOpenClawIDBridgeIO,
+        tunnel: OpenClawIDNodeTunnel) async throws
     {
         guard request.isWorkerHTTP, ["GET", "POST", "HEAD"].contains(request.method) else {
             try await io.write(Data("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".utf8))
@@ -119,10 +132,14 @@ enum MacNodeOpenClawIDBridgeHTTP {
                         return true
                     }
                     // A completed response owns shutdown even when the request body is incomplete.
-                    defer { group.cancelAll(); io.interrupt() }
+                    defer { group.cancelAll()
+                        io.interrupt()
+                    }
                     do {
                         while let responseFinished = try await group.next() {
-                            if responseFinished { await stream.cancel(); return }
+                            if responseFinished { await stream.cancel()
+                                return
+                            }
                         }
                     } catch {
                         // Cancel the stream before the task-group scope waits for its
@@ -143,7 +160,8 @@ enum MacNodeOpenClawIDBridgeHTTP {
     }
 
     private static func upload(
-        _ body: MacNodeOpenClawIDBridgeRequest.Body, reader: MacNodeOpenClawIDBridgeReader,
+        _ body: MacNodeOpenClawIDBridgeRequest.Body,
+        reader: MacNodeOpenClawIDBridgeReader,
         stream: OpenClawIDNodeHTTPStream) async throws
     {
         switch body {
@@ -235,7 +253,9 @@ enum MacNodeOpenClawIDBridgeHTTP {
             length = nil
         }
         var text = "HTTP/1.1 \(status) Tunnel Response\r\nConnection: close\r\n"
-        for pair in forwarded { text += "\(pair[0]): \(pair[1])\r\n" }
+        for pair in forwarded {
+            text += "\(pair[0]): \(pair[1])\r\n"
+        }
         if !noBody, length == nil { text += "Transfer-Encoding: chunked\r\n" }
         text += "\r\n"
         guard text.utf8.count <= MacNodeOpenClawIDBridgeRequest.maximumHeadBytes else {

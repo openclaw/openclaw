@@ -56,7 +56,9 @@ public actor OpenClawIDNodeTunnel {
         self.lastReceived = clock.now()
     }
 
-    public func received() { self.lastReceived = self.clock.now() }
+    public func received() {
+        self.lastReceived = self.clock.now()
+    }
 
     private func checkActive() throws {
         if self.removed { throw OpenClawIDNodeTransportError.removed }
@@ -87,9 +89,11 @@ public actor OpenClawIDNodeTunnel {
                 // QUIC establishment precedes the server's membership check.
                 let close = try await withThrowingTaskGroup(of: OpenClawIDNodeClose?.self) { group in
                     group.addTask { try await connection.closed() }
-                    group.addTask { try await clock.sleep(.milliseconds(500)); return nil }
+                    group.addTask { try await clock.sleep(.milliseconds(500))
+                        return nil
+                    }
                     defer { group.cancelAll() }
-                    return try await group.next() ?? nil
+                    return try await group.next().flatMap(\.self)
                 }
                 if let close {
                     if close.requiresReenrollment {
@@ -108,7 +112,7 @@ public actor OpenClawIDNodeTunnel {
             }
         } catch {
             if !self.stopped, !self.removed,
-               await endpoint.relayStatus().contains(where: { $0.admissionDenied })
+               await endpoint.relayStatus().contains(where: \.admissionDenied)
             {
                 self.nextDial = self.clock.now() + self.denialBackoff
                 self.denialBackoff = min(120, self.denialBackoff * 2)

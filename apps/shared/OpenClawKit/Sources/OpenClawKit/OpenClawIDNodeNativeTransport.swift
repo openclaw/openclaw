@@ -14,8 +14,11 @@ public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendabl
         try Task.checkCancellation()
         let native = try await identity.withNativeSeed { seed in
             try await OpenClawIroh.bind(
-                secretKey: seed, relayUrl: relayURL.absoluteString, alpns: [],
-                ipTransports: true, keepAliveMs: OpenClawIDNodeTunnelProtocol.keepAliveMilliseconds)
+                secretKey: seed,
+                relayUrl: relayURL.absoluteString,
+                alpns: [],
+                ipTransports: true,
+                keepAliveMs: OpenClawIDNodeTunnelProtocol.keepAliveMilliseconds)
         }
         if Task.isCancelled {
             await native.shutdown()
@@ -49,8 +52,11 @@ public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendabl
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             let connection = try await self.native.connect(
-                endpointId: String(serverKey.dropFirst(5)), alpn: alpn,
-                relayUrl: relayURL.absoluteString, directAddrs: [], cancel: token)
+                endpointId: String(serverKey.dropFirst(5)),
+                alpn: alpn,
+                relayUrl: relayURL.absoluteString,
+                directAddrs: [],
+                cancel: token)
             if Task.isCancelled {
                 try? connection.close(code: 10, reason: Data())
                 throw CancellationError()
@@ -63,7 +69,9 @@ public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendabl
         }
     }
 
-    public func relayStatus() async -> [OpenClawIDNodeRelayStatus] { await self.relayState.statuses }
+    public func relayStatus() async -> [OpenClawIDNodeRelayStatus] {
+        await self.relayState.statuses
+    }
 
     public func shutdown() async {
         await self.native.shutdown()
@@ -73,7 +81,9 @@ public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendabl
 
 private actor OpenClawIDNodeNativeRelayState {
     var statuses: [OpenClawIDNodeRelayStatus] = []
-    func update(_ statuses: [OpenClawIDNodeRelayStatus]) { self.statuses = statuses }
+    func update(_ statuses: [OpenClawIDNodeRelayStatus]) {
+        self.statuses = statuses
+    }
 }
 
 final class OpenClawIDNodeNativeConnection: OpenClawIDNodeConnection, Sendable {
@@ -88,13 +98,12 @@ final class OpenClawIDNodeNativeConnection: OpenClawIDNodeConnection, Sendable {
         // admission timers and close watchers subscribe through cancellable Swift waits.
         self.monitor = Task {
             let info = await native.closed()
-            let kind: OpenClawIDNodeClose.Kind
-            switch info.kind {
-            case .application: kind = .application
-            case .locallyClosed: kind = .local
-            case .timedOut: kind = .timedOut
-            case .reset: kind = .reset
-            case .transport: kind = .transport
+            let kind: OpenClawIDNodeClose.Kind = switch info.kind {
+            case .application: .application
+            case .locallyClosed: .local
+            case .timedOut: .timedOut
+            case .reset: .reset
+            case .transport: .transport
             }
             await closure.complete(.init(code: info.code, kind: kind))
         }
@@ -122,8 +131,13 @@ final class OpenClawIDNodeNativeConnection: OpenClawIDNodeConnection, Sendable {
         }
     }
 
-    func closed() async throws -> OpenClawIDNodeClose { try await self.closure.wait() }
-    func close(code: Int64) async { try? self.native.close(code: code, reason: Data()) }
+    func closed() async throws -> OpenClawIDNodeClose {
+        try await self.closure.wait()
+    }
+
+    func close(code: Int64) async {
+        try? self.native.close(code: code, reason: Data())
+    }
 }
 
 /// Cancellation removes just the subscriber, not the connection-lifetime observation.
@@ -147,7 +161,9 @@ actor OpenClawIDNodeNativeClosure {
         self.result = result
         let waiters = self.waiters.values
         self.waiters.removeAll()
-        for waiter in waiters { waiter.resume(returning: result) }
+        for waiter in waiters {
+            waiter.resume(returning: result)
+        }
     }
 
     private func cancel(_ id: UUID) {
@@ -157,7 +173,7 @@ actor OpenClawIDNodeNativeClosure {
 
 private struct OpenClawIDNodeNativeStream: OpenClawIDNodeStream {
     let native: OpenClawIroh.BiStream
-    // Keep the connection owner alive even if a caller retains only a stream.
+    /// Keep the connection owner alive even if a caller retains only a stream.
     let connection: OpenClawIDNodeNativeConnection
 
     func read(maxBytes: Int) async throws -> Data? {
@@ -192,8 +208,13 @@ private struct OpenClawIDNodeNativeStream: OpenClawIDNodeStream {
         }
     }
 
-    func reset(code: Int64) async { try? await self.native.send.reset(code: code) }
-    func stop(code: Int64) async { try? await self.native.recv.stop(code: code) }
+    func reset(code: Int64) async {
+        try? await self.native.send.reset(code: code)
+    }
+
+    func stop(code: Int64) async {
+        try? await self.native.recv.stop(code: code)
+    }
 }
 #else
 /// The default app build does not package the experimental native transport.
@@ -208,7 +229,10 @@ public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendabl
         throw OpenClawIDNodeNativePackagingError.notPackaged
     }
 
-    public func relayStatus() async -> [OpenClawIDNodeRelayStatus] { [] }
+    public func relayStatus() async -> [OpenClawIDNodeRelayStatus] {
+        []
+    }
+
     public func shutdown() async {}
 }
 
