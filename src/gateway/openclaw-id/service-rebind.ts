@@ -12,12 +12,20 @@
 //    a crash anywhere after the commit finishes the move on the next start.
 // 4. Remote access restarts on the new keys and the publication owner publishes the new
 //    descriptor with its snapshot; until Discovery has it, the publication stays pending.
+//
+// The steps run one at a time (staging, commit and cancel touch the same key files), and a
+// re-bind starts only once the claw's registration at Discovery is settled: a registration
+// whose receipt was lost can be recovered only with the K_gw Discovery registered.
 import fs from "node:fs";
 import type { Channel } from "../../../packages/openclaw-id-protocol/src/index.js";
+import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import type { AuthorityRefusal } from "./authority-result.js";
 import type { OpenClawIdAuthority } from "./authority.js";
+import { createDiscoveryClient } from "./discovery-client.js";
 import { gatewayKeyPath, stageGatewayKey } from "./gateway-key.js";
 import type { RebindPreparation } from "./rebind-operations.js";
+import { reconcileRegistration } from "./registration-recovery.js";
+import type { createServiceGatewayKey } from "./service-gateway-key.js";
 import { ed25519PublicKeyHex, loadKeyFile, stagedKeyPath } from "./tunnel-child/keyfile.js";
 import { discardStagedEndpointKey, stageEndpointKey } from "./tunnel-runtime.js";
 
@@ -31,71 +39,124 @@ async function stageKeys(stateDir: string) {
   return { kGw: stageGatewayKey(stateDir), kSrv: await stageEndpointKey(stateDir) };
 }
 
-export function createServiceRebind(deps: {
+type Deps = {
   getStateDir: () => string;
+  getConfig: () => GatewayOpenClawIdConfig | undefined;
   getAuthority: () => Promise<OpenClawIdAuthority>;
+  gatewayKey: ReturnType<typeof createServiceGatewayKey>;
   /** Restarts remote access, so the tunnel child and K_gw follow the stored binding. */
   restartRemoteAccess: () => Promise<void>;
   log: { info: (message: string) => void };
-}) {
+};
+
+export function createServiceRebind(deps: Deps) {
+  // Settles a registration whose receipt is missing, with the K_gw Discovery knows. A claw
+  // Discovery never registered (`not_found`) re-binds freely: it registers later with a code.
+  const settledRegistration = async (
+    owner: OpenClawIdAuthority,
+  ): Promise<AuthorityRefusal | undefined> => {
+    if (owner.current()?.discovery.owner_account_id) {
+      return undefined;
+    }
+    const unsettled = refusal(
+      "registration_unsettled",
+      "Discovery may already have this claw: publish it first (openclaw id publish), then move it to new keys",
+    );
+    const discoveryUrl = deps.getConfig()?.discoveryUrl;
+    const key = await deps.gatewayKey.tryLoad();
+    if (!discoveryUrl || !key.ok) {
+      return unsettled;
+    }
+    const client = createDiscoveryClient({ baseUrl: discoveryUrl, signer: key.signer });
+    return (await reconcileRegistration(owner, client)) ? unsettled : undefined;
+  };
+
+  const linkedOwner = async (channel: Channel | undefined) => {
+    if (channel !== "local_operator") {
+      return notLocal();
+    }
+    const owner = await deps.getAuthority();
+    if (!owner.current()?.binding) {
+      return refusal("not_linked", "this claw is not linked");
+    }
+    return owner;
+  };
+
+  // Stages the next keys and returns the binding R must sign. Local only.
+  const prepare = async (
+    channel: Channel | undefined,
+  ): Promise<RebindPreparation | AuthorityRefusal> => {
+    const owner = await linkedOwner(channel);
+    if ("ok" in owner) {
+      return owner;
+    }
+    const unsettled = await settledRegistration(owner);
+    if (unsettled) {
+      return unsettled;
+    }
+    return await owner.prepareRebind(await stageKeys(deps.getStateDir()));
+  };
+
+  // Stores the R-signed binding for the staged keys, then moves remote access to them.
+  const commit = async (
+    channel: Channel | undefined,
+    binding: unknown,
+  ): Promise<{ ok: true; bindingSeq: number } | AuthorityRefusal> => {
+    const owner = await linkedOwner(channel);
+    if ("ok" in owner) {
+      return owner;
+    }
+    const unsettled = await settledRegistration(owner);
+    if (unsettled) {
+      return unsettled;
+    }
+    const result = await owner.commitRebind(binding, channel, await stageKeys(deps.getStateDir()));
+    if (!result.ok) {
+      return result;
+    }
+    deps.log.info(`openclaw-id: moved to new keys (binding ${result.bindingSeq})`);
+    // Durable before the restart: if publishing does not finish now, it runs at the next start.
+    await owner.recordDiscovery({ publish_pending: true });
+    await deps.restartRemoteAccess();
+    return { ok: true, bindingSeq: result.bindingSeq };
+  };
+
+  // Deletes the staged keys of a re-bind that was not committed. A staged key the stored
+  // binding names (committed, not promoted yet) stays. Local only.
+  const cancel = async (channel: Channel | undefined): Promise<{ ok: true } | AuthorityRefusal> => {
+    const owner = await linkedOwner(channel);
+    if ("ok" in owner) {
+      return owner;
+    }
+    const bound = owner.current()?.binding?.body;
+    const stateDir = deps.getStateDir();
+    const stagedGateway = stagedKeyPath(gatewayKeyPath(stateDir));
+    const gatewayKey = loadKeyFile(stagedGateway);
+    if (gatewayKey && `ed25519:${ed25519PublicKeyHex(gatewayKey)}` !== bound?.k_gw) {
+      fs.rmSync(stagedGateway, { force: true });
+    }
+    gatewayKey?.fill(0);
+    await discardStagedEndpointKey(stateDir, bound?.k_srv ?? "");
+    return { ok: true };
+  };
+
+  let lane: Promise<unknown> = Promise.resolve();
   return {
-    /** Stages the next keys and returns the binding R must sign. Local only. */
-    async prepare(channel: Channel | undefined): Promise<RebindPreparation | AuthorityRefusal> {
-      if (channel !== "local_operator") {
-        return notLocal();
-      }
-      const owner = await deps.getAuthority();
-      if (!owner.current()?.binding) {
-        return refusal("not_linked", "this claw is not linked");
-      }
-      return await owner.prepareRebind(await stageKeys(deps.getStateDir()));
-    },
-
-    /** Stores the R-signed binding for the staged keys, then moves remote access to them. */
-    async commit(
-      channel: Channel | undefined,
-      binding: unknown,
-    ): Promise<{ ok: true; bindingSeq: number } | AuthorityRefusal> {
-      if (channel !== "local_operator") {
-        return notLocal();
-      }
-      const owner = await deps.getAuthority();
-      if (!owner.current()?.binding) {
-        return refusal("not_linked", "this claw is not linked");
-      }
-      const result = await owner.commitRebind(
-        binding,
-        channel,
-        await stageKeys(deps.getStateDir()),
-      );
-      if (!result.ok) {
-        return result;
-      }
-      deps.log.info(`openclaw-id: moved to new keys (binding ${result.bindingSeq})`);
-      // Durable before the restart: if publishing does not finish now, it runs at the next start.
-      await owner.recordDiscovery({ publish_pending: true });
-      await deps.restartRemoteAccess();
-      return { ok: true, bindingSeq: result.bindingSeq };
-    },
-
-    /**
-     * Deletes the staged keys of a re-bind that was not committed. A staged key the stored
-     * binding names (committed, not promoted yet) stays. Local only.
-     */
-    async cancel(channel: Channel | undefined): Promise<{ ok: true } | AuthorityRefusal> {
-      if (channel !== "local_operator") {
-        return notLocal();
-      }
-      const bound = (await deps.getAuthority()).current()?.binding?.body;
-      const stateDir = deps.getStateDir();
-      const stagedGateway = stagedKeyPath(gatewayKeyPath(stateDir));
-      const gatewayKey = loadKeyFile(stagedGateway);
-      if (gatewayKey && `ed25519:${ed25519PublicKeyHex(gatewayKey)}` !== bound?.k_gw) {
-        fs.rmSync(stagedGateway, { force: true });
-      }
-      gatewayKey?.fill(0);
-      await discardStagedEndpointKey(stateDir, bound?.k_srv ?? "");
-      return { ok: true };
+    /** Runs one re-bind step after the previous one finished. */
+    run(action: "prepare" | "commit" | "cancel", channel: Channel | undefined, binding?: unknown) {
+      const step = (): Promise<
+        RebindPreparation | AuthorityRefusal | { ok: true; bindingSeq?: number }
+      > =>
+        action === "prepare"
+          ? prepare(channel)
+          : action === "commit"
+            ? commit(channel, binding)
+            : cancel(channel);
+      const result = lane.then(step, step);
+      lane = result.catch(() => {});
+      return result;
     },
   };
 }
+
+export type ServiceRebind = ReturnType<typeof createServiceRebind>;
