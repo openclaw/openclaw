@@ -371,11 +371,18 @@ instead of asking you to paste one.
 
 - The Gateway supervises one **tunnel child** process. The child owns the iroh
   endpoint key (`<state dir>/openclaw-id/endpoint.key`, mode 0600, created on
-  first start and never regenerated; a new key re-links every device). It runs
+  first start). It runs
   at a lower CPU priority, restarts with a 1 to 30 second backoff, is restarted
   gracefully above 512 MB RSS, and stops with SIGTERM then SIGKILL after 2
   seconds. If the iroh binding cannot load on this platform, the Gateway reports
   remote access unavailable and keeps running.
+- Once a claw is linked, its server binding names the endpoint key and the
+  Gateway key (`<state dir>/openclaw-id/gateway.key`), and neither is ever
+  created again. If either file is missing or holds another key, for example
+  after a restore that skipped the key files, remote access is off and status
+  reports `keys_missing` or `key_mismatch`. Nothing is published or dialed with
+  another key. The Gateway itself keeps running, so everything on this computer
+  works as before. To bring remote access back, restore the original key files.
 - The child admits a device only if the Gateway's membership lists the
   device's endpoint key, and checks that before accepting any stream. Until a
   claw is linked, nobody is admitted.
