@@ -1,0 +1,2 @@
+82
+# Covers local marker isolation, retained attestation admission, and affected-workspace repair guidance.

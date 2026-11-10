@@ -7,6 +7,7 @@ import {
   WorkspaceAliasRepointedError,
   WorkspaceVanishedError,
 } from "../../agents/workspace-state-identity.js";
+import { StartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildGetReplyCtx, registerGetReplyRuntimeOverrides } from "./get-reply.test-fixtures.js";
 import "./get-reply.test-runtime-mocks.js";
@@ -41,11 +42,18 @@ afterEach(() => vi.unstubAllEnvs());
 it.each([
   [aliasError, "openclaw doctor"],
   [new WorkspaceVanishedError({ workspaceDir: "/home/user/clawd" }), "workspace is missing"],
+  [
+    new StartupMaintenanceRequiredError(
+      "legacy-workspace",
+      "Run openclaw doctor --fix. Legacy workspace setup state requires migration for /home/user/clawd.",
+    ),
+    "openclaw doctor --fix",
+  ],
 ] as const)("reports %s without exposing workspace paths", async (error, notice) => {
   vi.mocked(ensureAgentWorkspace).mockRejectedValueOnce(error);
   const reply = await getReplyFromConfig(buildGetReplyCtx(), undefined, {});
   expect(reply).toMatchObject({ text: expect.stringContaining(notice) });
-  if (error === aliasError) {
+  if (error === aliasError || error instanceof StartupMaintenanceRequiredError) {
     const text = [reply].flat()[0]?.text;
     expect(text).toContain("⚠️");
     expect(text).not.toMatch(/\/home\/user|\/srv\/data|(^|[\s(])\/[A-Za-z0-9_.-]+\//u);

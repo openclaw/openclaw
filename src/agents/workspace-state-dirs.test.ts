@@ -11,6 +11,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./sandbox/shared.js";
+import { resolveLegacyWorkspaceSourcePaths } from "./workspace-legacy-state.js";
 import { assertConfiguredWorkspaceStateReady } from "./workspace-state-dirs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -61,6 +62,13 @@ function setup(mode: "all" | "non-main" = "all") {
       });
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, "openclaw-workspace-state.json"), '{"version":1}');
+      const attestation = resolveLegacyWorkspaceSourcePaths(dir, { env })
+        .stateDirAttestationPaths[0]!;
+      fs.mkdirSync(path.dirname(attestation), { recursive: true });
+      fs.writeFileSync(
+        attestation,
+        "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
+      );
       return dir;
     },
   };

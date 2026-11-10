@@ -136,23 +136,43 @@ describe("legacy workspace reset cleanup", () => {
     );
   });
 
-  it("rechecks every workspace at lifecycle boundaries after runtime cached absence", async () => {
-    const workspaceDirs = [workspaceDir, path.join(homeDir, "secondary")];
+  it("rechecks state-dir attestations without trusting workspace-writable markers", async () => {
+    const workspaceDirs = [
+      workspaceDir,
+      ...["second", "third", "fourth"].map((name) => path.join(homeDir, name)),
+    ];
     const checkReady = () => assertWorkspaceStateMigrationReady({ workspaceDirs, ...options });
     for (const dir of workspaceDirs) {
       await fs.mkdir(dir, { recursive: true });
       assertNoUnmigratedWorkspaceState({ workspaceDir: dir });
-      await fs.writeFile(path.join(dir, "openclaw-workspace-state.json"), '{"version":1}');
     }
-    expect(checkReady).toThrow(
-      `Run openclaw doctor --fix. Legacy workspace setup state requires migration for ${workspaceDirs.join(", ")}.`,
-    );
+    const sources = workspaceDirs.map((dir) => resolveLegacyWorkspaceSourcePaths(dir, options));
+    const localSources = [
+      sources[0]!.setupStatePaths[0]!,
+      `${sources[1]!.setupStatePaths[0]!}.doctor-importing`,
+      sources[2]!.siblingAttestationPaths[0]!,
+      `${sources[3]!.siblingAttestationPaths[0]!}.doctor-importing`,
+    ];
+    await writeCandidates(localSources);
+    expect(checkReady).not.toThrow();
     expect(() =>
       assertWorkspaceStateMigrationReady({ workspaceDirs, ...options, operation: "doctor" }),
     ).toThrow("restore the retained setup file or claim from a verified backup");
+    resetLegacyWorkspaceStateCheckForTest();
     for (const dir of workspaceDirs) {
-      await fs.unlink(path.join(dir, "openclaw-workspace-state.json"));
+      expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: dir })).toThrow(
+        "Run openclaw doctor --fix",
+      );
     }
+    const stateSources = [
+      sources[0]!.stateDirAttestationPaths[0]!,
+      `${sources[1]!.stateDirAttestationPaths[0]!}.doctor-importing`,
+    ];
+    await writeCandidates(stateSources);
+    expect(checkReady).toThrow(
+      `Run openclaw doctor --fix. Legacy workspace setup state requires migration for ${workspaceDirs.slice(0, 2).join(", ")}.`,
+    );
+    await Promise.all([...localSources, ...stateSources].map((file) => fs.unlink(file)));
     expect(checkReady).not.toThrow();
   });
 

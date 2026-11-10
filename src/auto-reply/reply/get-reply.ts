@@ -24,6 +24,7 @@ import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import { StartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
@@ -355,7 +356,11 @@ async function resolveReplyFromConfig(
       );
     } catch (error) {
       if (
-        !(error instanceof WorkspaceAliasRepointedError || error instanceof WorkspaceVanishedError)
+        !(
+          error instanceof WorkspaceAliasRepointedError ||
+          error instanceof WorkspaceVanishedError ||
+          (error instanceof StartupMaintenanceRequiredError && error.kind === "legacy-workspace")
+        )
       ) {
         throw error;
       }
@@ -366,7 +371,9 @@ async function resolveReplyFromConfig(
       const text =
         error instanceof WorkspaceAliasRepointedError
           ? "⚠️ This agent's workspace state needs repair: the configured workspace path no longer matches its stored identity. Ask the gateway operator to run `openclaw doctor --fix` and confirm the move only if the same workspace moved."
-          : "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore the workspace from backup and run `openclaw doctor`.";
+          : error instanceof WorkspaceVanishedError
+            ? "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore the workspace from backup and run `openclaw doctor`."
+            : "⚠️ This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.";
       return markReplyPayloadForSourceSuppressionDelivery({ text });
     }
     const workspaceDir = preparedWorkspaceDir ?? workspace.dir;

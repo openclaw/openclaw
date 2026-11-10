@@ -6,6 +6,7 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { removeRegistryEntry, updateRegistry } from "../agents/sandbox/registry.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
+import { resolveLegacyWorkspaceSourcePaths } from "../agents/workspace-legacy-state.js";
 import { assertConfiguredWorkspaceStateReady } from "../agents/workspace-state-dirs.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import {
@@ -155,7 +156,11 @@ it.each(["discovered workspace", "read failure"] as const)(
       await withTestTimeout(entered.promise, 5_000, "Session-key discovery was not reached");
       expect(settled).not.toHaveBeenCalled();
       await register(sessionKey);
-      writeMarkers(legacyPath);
+      writeMarkers(
+        legacyPath,
+        resolveLegacyWorkspaceSourcePaths(path.dirname(legacyPath), { env: context.env })
+          .stateDirAttestationPaths[0]!,
+      );
       release.resolve();
       if (outcome === "read failure") {
         await expect(readiness).rejects.toBe(unavailable);

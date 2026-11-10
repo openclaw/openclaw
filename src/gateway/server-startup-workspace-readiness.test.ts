@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
+import { resolveLegacyWorkspaceSourcePaths } from "../agents/workspace-legacy-state.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRuntimeConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../config/io.js";
@@ -67,6 +68,13 @@ async function writeLegacyWorkspace(dir: string, bytes = legacyBytes) {
   return sourcePath;
 }
 
+async function attestLegacyWorkspace(dir: string) {
+  const attestation = resolveLegacyWorkspaceSourcePaths(dir, { env: state.env })
+    .stateDirAttestationPaths[0]!;
+  await fs.mkdir(path.dirname(attestation), { recursive: true });
+  await fs.writeFile(attestation, "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n");
+}
+
 async function migrate(cfg: OpenClawConfig) {
   const stateDir = state.stateDir;
   const detected = await detectLegacyWorkspaceState({
@@ -97,6 +105,26 @@ const start = async (port: number, startupConfigSnapshotRead?: ConfigSnapshot) =
   return server;
 };
 
+it("starts with a workspace-local setup file in a writable sandbox copy", async () => {
+  const sandbox = {
+    mode: "all",
+    scope: "shared",
+    workspaceAccess: "none",
+    workspaceRoot: state.path("sandboxes"),
+  } as const;
+  await state.writeConfig(config({ main: { workspace: state.workspaceDir, sandbox } }));
+  const sourcePath = await writeLegacyWorkspace(sandbox.workspaceRoot);
+  const port = await getFreePort();
+
+  server = await start(port);
+  await server.startupSettled;
+  expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
+  await expect(ensureAgentWorkspace({ dir: sandbox.workspaceRoot })).rejects.toThrow(
+    "openclaw doctor --fix",
+  );
+  await expect(fs.stat(sourcePath)).resolves.toBeDefined();
+});
+
 it("refuses every owned session workspace without reading its store on the main thread", async () => {
   const storePath = state.statePath("shared.sqlite");
   const sandbox = {
@@ -125,6 +153,7 @@ it("refuses every owned session workspace without reading its store on the main 
       workspaceDir: agent.workspace,
     });
     await writeLegacyWorkspace(sandboxWorkspaceDir, JSON.stringify({ version: 1 }));
+    await attestLegacyWorkspace(sandboxWorkspaceDir);
     return sandboxWorkspaceDir;
   };
   const workspaces: string[] = [];
@@ -173,6 +202,7 @@ it("refuses a secondary workspace from the supplied snapshot even after disk con
   });
   await writeConfigFile(cfg);
   const sourcePath = await writeLegacyWorkspace(workspaceDir);
+  await attestLegacyWorkspace(workspaceDir);
   const snapshot = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
   await writeConfigFile(
     config({
@@ -204,6 +234,7 @@ it.for(["managed write", "file watcher"])(
     };
     await state.writeConfig(cfg);
     const sourcePath = await writeLegacyWorkspace(nextWorkspace);
+    await attestLegacyWorkspace(nextWorkspace);
     const personaPath = path.join(nextWorkspace, "SOUL.md");
     const persona = "Retained workspace persona.\n";
     await fs.writeFile(personaPath, persona);

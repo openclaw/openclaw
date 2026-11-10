@@ -113,7 +113,7 @@ export async function listWorkspaceStateDirs(params: {
   return [...dirs];
 }
 
-/** Refuse completion before channels accept work that a workspace cannot execute. */
+/** Check state-directory workspace attestations before Gateway lifecycle admission. */
 export async function assertConfiguredWorkspaceStateReady(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

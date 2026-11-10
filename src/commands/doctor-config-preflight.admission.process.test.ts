@@ -236,6 +236,15 @@ it.each<[string, AdmissionCase]>([
           bootstrapSeededAt: "2026-07-02T00:00:00.000Z",
           setupCompletedAt: "2026-07-02T00:00:00.000Z",
         });
+        const attestationDir = path.join(stateDir, "workspace-attestations");
+        fs.mkdirSync(attestationDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(
+            attestationDir,
+            `${createHash("sha256").update(path.resolve(workspaceDir)).digest("hex")}.attested`,
+          ),
+          "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
+        );
       }
       const identityPath = identityFile ? path.join(stateDir, "identity", identityFile) : null;
       const legacyIdentityRaw = '{"retiredIdentity":"leave for Doctor"}\n';

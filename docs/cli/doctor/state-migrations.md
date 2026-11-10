@@ -448,7 +448,7 @@ Doctor no longer scans, imports, or removes the older
 through OpenClaw `2026.9.7` and run `openclaw doctor --fix` there before updating
 to migrate that layout. See the [migration retention policy](/gateway/doctor/config-migrations#retention-policy).
 
-Repair exits nonzero while retained legacy state still blocks agent turns, even if its data already reached SQLite. Gateway startup and live config candidates check readiness only for the workspaces they would use, not an unused default root. An unready live candidate is rejected and the last-good runtime stays active. Stop OpenClaw processes, save the intended workspace path if the live write was rejected before persistence, and keep the retained files in place. Run `openclaw doctor --fix` before restarting. Readiness checks never import or delete legacy state.
+Repair exits nonzero while retained legacy state still blocks agent turns, even if its data already reached SQLite. Gateway startup and live config candidates check state-directory workspace attestations and their migration claims only for the workspaces they would use, not an unused default root. A setup file inside a workspace or a sibling attestation is checked during workspace preparation and remains a Doctor import source. An unready live candidate is rejected and the last-good runtime stays active. Stop OpenClaw processes, save the intended workspace path if the live write was rejected before persistence, and keep the retained files in place. Run `openclaw doctor --fix` before restarting. Readiness checks never import or delete legacy state.
 
 ## Pending plugin migrations
 

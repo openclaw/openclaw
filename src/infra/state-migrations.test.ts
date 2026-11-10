@@ -327,6 +327,7 @@ describe("state migrations", () => {
       native.assertWorkspaceStateMigrationReady({
         workspaceDirs: [workspaceDir],
         env,
+        operation: "doctor",
       });
 
     await autoMigrateLegacyState({ cfg, env, homedir: () => root });

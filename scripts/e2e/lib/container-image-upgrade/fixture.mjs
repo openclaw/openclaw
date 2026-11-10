@@ -85,7 +85,9 @@ function backups(file) {
     .map((name) => path.join(path.dirname(file), name));
 }
 function verifyBackup(file, expected) {
-  const matches = backups(file);
+  const matches = backups(file).filter(
+    (candidate) => logicalSnapshot(candidate).version === expected.version,
+  );
   assert.equal(matches.length, 1, `Expected exactly one retained-schema backup: ${file}`);
   assert.deepEqual(logicalSnapshot(matches[0]), expected, "Backup changed retained rows/schema");
   const backupId = path
@@ -115,7 +117,7 @@ function verifyWorkspace(required) {
   });
   return { archive: archives[0] };
 }
-function seed(unsafe) {
+function seed(mode) {
   assert(!fs.existsSync(sharedPath) && !fs.existsSync(agentPath));
   // This pair was produced by the released writers, including the deletion journal
   // and registry. Do not manufacture a journal for an unrelated older shared DB.
@@ -137,7 +139,7 @@ function seed(unsafe) {
     ...session,
     events: readSession(agentPath, session),
   }));
-  if (unsafe) {
+  if (mode === "unsafe") {
     const db = new DatabaseSync(agentPath);
     try {
       db.prepare("UPDATE schema_meta SET schema_version=18 WHERE meta_key='primary'").run();
@@ -147,6 +149,14 @@ function seed(unsafe) {
   }
   fs.mkdirSync(workspace, { recursive: true });
   fs.writeFileSync(path.join(workspace, "openclaw-workspace-state.json"), JSON.stringify(setup));
+  if (mode === "old-shape") {
+    const attestationDir = path.join(state, "workspace-attestations");
+    fs.mkdirSync(attestationDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(attestationDir, `${sha(workspace)}.attested`),
+      "openclaw-workspace-attestation:v1\n2026-07-02T00:00:00.000Z\n",
+    );
+  }
   const config = readJson(path.join(state, "openclaw.json"));
   assert.equal(config.agents.defaults.workspace, "/home/fixture/workspace");
   assert.equal(config.agents.entries.main.workspace, "/home/fixture/workspace");
@@ -161,7 +171,7 @@ function seed(unsafe) {
   config.plugins = { enabled: false };
   fs.writeFileSync(path.join(state, "openclaw.json"), JSON.stringify(config, null, 2));
   const record = {
-    unsafe,
+    unsafe: mode === "unsafe",
     corpus: { release: manifest.release, source: manifest.source, hashes: corpusHashes },
     sessions,
     agentSha256: sha(fs.readFileSync(agentPath)),
@@ -275,7 +285,7 @@ function rpc(method, params) {
 }
 const [action, mode] = process.argv.slice(2);
 if (action === "seed") {
-  seed(mode === "unsafe");
+  seed(mode);
 } else if (action === "verify") {
   verify(mode);
 } else if (action === "ready") {
