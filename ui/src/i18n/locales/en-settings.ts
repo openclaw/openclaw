@@ -2048,6 +2048,7 @@ const enSettings = {
     autoSavePaused: registerSettingsSidebarEnglish.catalog.configView.autoSavePaused,
     saveNow: registerSettingsSidebarEnglish.catalog.configView.saveNow,
     autoSaveFailed: registerSettingsSidebarEnglish.catalog.configView.autoSaveFailed,
+    autoSaveDeferred: registerSettingsSidebarEnglish.catalog.configView.autoSaveDeferred,
     autoSaveRejected: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejected,
     discardChanges: registerSettingsSidebarEnglish.catalog.configView.discardChanges,
     discardChangesTitle: registerSettingsSidebarEnglish.catalog.configView.discardChangesTitle,
