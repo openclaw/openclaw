@@ -34,6 +34,32 @@ describe("formatByteSize", () => {
       }),
     ).toBe("99 MB");
   });
+
+  it.each([
+    [1_048_575, "kilo", 0, "1024 KiB"],
+    [1_048_575, "tera", 0, "1 MiB"],
+    [1_048_575, "tera", 1, "1.0 MiB"],
+    [1_073_741_000, "tera", 1, "1.0 GiB"],
+  ] as const)(
+    "formats %s bytes up to %s with %s digits as %s",
+    (bytes, maxUnit, fractionDigits, expected) => {
+      expect(formatByteSize(bytes, { style: "iec", maxUnit, separator: " ", fractionDigits })).toBe(
+        expected,
+      );
+    },
+  );
+
+  it("keeps floored values in their unit", () => {
+    expect(
+      formatByteSize(1_073_741_000, {
+        style: "legacy-binary",
+        maxUnit: "giga",
+        separator: " ",
+        fractionDigits: 0,
+        floorUnits: ["mega"],
+      }),
+    ).toBe("1023 MB");
+  });
 });
 
 describe("formatCompactTokenCount", () => {

@@ -49,19 +49,27 @@ export function formatByteSize(bytes: number, options: ByteSizeFormatOptions): s
     unitIndex += 1;
   }
 
-  const unit = expectDefined(BYTE_SIZE_UNITS[unitIndex], "byte-size unit");
-  const label = expectDefined(labels[unitIndex], "byte-size label");
-  const fractionDigits =
-    typeof options.fractionDigits === "function"
-      ? options.fractionDigits(value, unit)
-      : options.fractionDigits;
-  if (fractionDigits === null) {
-    return `${value}${options.separator}${label}`;
+  for (;;) {
+    const unit = expectDefined(BYTE_SIZE_UNITS[unitIndex], "byte-size unit");
+    const label = expectDefined(labels[unitIndex], "byte-size label");
+    const fractionDigits =
+      typeof options.fractionDigits === "function"
+        ? options.fractionDigits(value, unit)
+        : options.fractionDigits;
+    if (fractionDigits === null) {
+      return `${value}${options.separator}${label}`;
+    }
+    const shown = options.floorUnits?.includes(unit)
+      ? Math.floor(value * 10 ** fractionDigits) / 10 ** fractionDigits
+      : value;
+    // Rounding can reach the next unit ("1024 MiB"); show it in that unit instead.
+    if (unitIndex < maxUnitIndex && Number(shown.toFixed(fractionDigits)) >= base) {
+      value /= base;
+      unitIndex += 1;
+      continue;
+    }
+    return `${shown.toFixed(fractionDigits)}${options.separator}${label}`;
   }
-  if (options.floorUnits?.includes(unit)) {
-    value = Math.floor(value * 10 ** fractionDigits) / 10 ** fractionDigits;
-  }
-  return `${value.toFixed(fractionDigits)}${options.separator}${label}`;
 }
 
 /** Formats token units while callers retain input validation and whole-token rounding. */
