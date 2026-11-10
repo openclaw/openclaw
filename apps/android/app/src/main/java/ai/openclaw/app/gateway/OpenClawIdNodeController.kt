@@ -136,15 +136,11 @@ internal class OpenClawIdNodeController(
         seed.fill(0)
       }
     signer.use {
-      val response =
-        try {
-          discovery.call(target.discoveryOrigin, target.descriptorPath, signer)
-        } catch (error: OpenClawIdDiscoveryFailure) {
-          if (error.status == 403) throw OpenClawIdRemovedException()
-          throw error
-        }
+      // Discovery's unsigned failures (including 403) stay retryable. Only verified membership
+      // evidence may report removal, after the store has durably retained its rollback facts.
+      val response = discovery.call(target.discoveryOrigin, target.descriptorPath, signer)
       coroutineContext.ensureActive()
-      val (_, assessment) = store.assess(stableId, response, System.currentTimeMillis() / 1_000)
+      val assessment = store.assess(stableId, response, System.currentTimeMillis() / 1_000).second
       return assessment.target ?: if (assessment.failure == "node_not_admitted") throw OpenClawIdRemovedException() else error("node_evidence_refused")
     }
   }
