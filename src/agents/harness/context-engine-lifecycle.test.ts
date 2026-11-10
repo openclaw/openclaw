@@ -317,6 +317,7 @@ describe("harness context engine lifecycle", () => {
       warn: vi.fn(),
     });
     expect(bounded.messages).toEqual(messages.slice(2));
+    expect(bounded.contextBounded).toBe(true);
     expect(bounded.systemPrompt).toContain("Required system instructions");
     expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(1024);
     expect(JSON.stringify(messages)).toBe(original);
@@ -325,6 +326,41 @@ describe("harness context engine lifecycle", () => {
     expect(first?.contextProjection?.mode).toBe("thread_bootstrap");
     expect(first?.contextProjection).toEqual(second?.contextProjection);
     expect(first?.systemPromptAddition).toBe("Required engine instructions");
+  });
+
+  it("reports a fitting custom-engine assembly as unbounded", async () => {
+    const lease = await configuredEngineLease(async ({ messages: input }) => ({
+      messages: input,
+      estimatedTokens: 10,
+    }));
+    const prepared = await prepareHarnessContextEnginePrompt({
+      ...promptDefaults,
+      contextEngine: lease.engine,
+      messages: [textMessage("user", "recent ask", 1)],
+      warn: vi.fn(),
+    });
+    // The stored transcript may be oversized, but this assembly fits the
+    // byte budget, so no history was omitted for this turn (#196475).
+    expect(prepared.contextBounded).toBe(false);
+    expect(prepared.messages).toHaveLength(1);
+  });
+
+  it("reports a truncated fallback assembly as bounded when the engine fails", async () => {
+    const messages = [
+      textMessage("user", "old history ".repeat(500), 1),
+      textMessage("user", "recent ask", 2),
+    ];
+    const lease = await configuredEngineLease(async () => {
+      throw new Error("fixture assembly failure");
+    });
+    const prepared = await prepareHarnessContextEnginePrompt({
+      ...promptDefaults,
+      contextEngine: lease.engine,
+      messages,
+      warn: vi.fn(),
+    });
+    expect(prepared.contextBounded).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(prepared.messages))).toBeLessThanOrEqual(1024);
   });
 
   it("isolates prepared memory tools across sandboxed non-legacy turns", async () => {
