@@ -562,6 +562,7 @@ export function validateFullReleaseValidationEvidence({
  *   manifestPath?: string,
  *   verifierSourceSha?: string,
  *   verifierSourceContent?: string | Uint8Array,
+ *   npmPreflightLineage?: { qualificationSha: string, producerRunId: string, producerRunAttempt: string },
  * }} options
  * @param {ReturnType<typeof createReleaseEvidenceClient>} [client]
  */
@@ -609,6 +610,31 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     validateEvidenceReuseStrictly: () => evidence,
   });
   const revalidateAuthority = candidateArtifactAuthority(manifest, evidence, evidenceClient);
+  if (options.npmPreflightLineage) {
+    // Retain this owner's authenticated evidence across the consumer handoff.
+    // Serialized or caller-supplied evidence never replaces this traversal.
+    const { validateNpmPreflightQualification, verifyNpmPreflightPublicationLineage } =
+      await import("./npm-preflight-tooling-identity.mjs");
+    const lineage = {
+      manifest,
+      repository: options.expectedRepository,
+      sourceSha: options.expectedTargetSha,
+      toolingSha: options.npmPreflightLineage.qualificationSha,
+      publisherSha: options.expectedTrustedWorkflowSha,
+      publisherFullRef: options.expectedTrustedWorkflowFullRef,
+      producerRunId: options.npmPreflightLineage.producerRunId,
+      producerRunAttempt: options.npmPreflightLineage.producerRunAttempt,
+    };
+    if (manifest.sourceAdmission?.qualificationAdmission || manifest.receiptRecovery) {
+      validateCandidateOwnedArtifactBinding(manifest, lineage.sourceSha, lineage.toolingSha, evidence);
+      validateNpmPreflightQualification(lineage);
+    } else {
+      await verifyNpmPreflightPublicationLineage(lineage);
+    }
+    // Imports and lineage checks can wait. Refresh live admission at the final
+    // handoff, not just before the original full artifact authentication.
+    revalidateAuthority?.();
+  }
   return {
     ...result,
     evidence,
@@ -650,21 +676,8 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
   return revalidateAuthority;
 }
 
-// Publication consumers replace ancestry only after the full FRV owner has
-// authenticated its P admission, frozen coverage, exact attempts and artifacts.
-export async function authenticateCandidateOwnedArtifact({
-  manifest,
-  repository,
-  candidateSha,
-  qualificationSha,
-  publisherSha,
-  publisherFullRef = "refs/heads/main",
-  client,
-}) {
-  const recovery = manifest?.receiptRecovery;
-  if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
-    return null;
-  }
+function validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha) {
+  const recovery = manifest.receiptRecovery;
   if (
     candidateSha !== qualificationSha ||
     manifest.targetSha !== candidateSha ||
@@ -674,19 +687,11 @@ export async function authenticateCandidateOwnedArtifact({
   ) {
     throw new Error("Candidate-owned artifact source and qualification SHA differ");
   }
-  const evidenceClient = client ?? createReleaseEvidenceClient(repository);
-  const evidence = await validateReleaseRunEvidence(
-    {
-      repository,
-      runId: String(manifest.runId),
-      trustedWorkflowFullRef: publisherFullRef,
-      trustedWorkflowRef: publisherFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),
-      trustedWorkflowSha: publisherSha,
-      verifierSourceSha: publisherSha,
-      verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
-    },
-    evidenceClient,
-  );
+}
+
+function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualificationSha, evidence) {
+  const recovery = manifest.receiptRecovery;
+  validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha);
   if (
     evidence.current.manifest.sourceAdmission?.validationPurpose !== "publish" ||
     evidence.current.manifest.publicationAdmissionContract !== "1" ||
@@ -704,6 +709,38 @@ export async function authenticateCandidateOwnedArtifact({
   ) {
     throw new Error("Publication artifact is not bound to authenticated candidate qualification");
   }
+}
+
+// Publication consumers replace ancestry only after the full FRV owner has
+// authenticated its P admission, frozen coverage, exact attempts and artifacts.
+export async function authenticateCandidateOwnedArtifact({
+  manifest,
+  repository,
+  candidateSha,
+  qualificationSha,
+  publisherSha,
+  publisherFullRef = "refs/heads/main",
+  client,
+}) {
+  const recovery = manifest?.receiptRecovery;
+  if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
+    return null;
+  }
+  validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha);
+  const evidenceClient = client ?? createReleaseEvidenceClient(repository);
+  const evidence = await validateReleaseRunEvidence(
+    {
+      repository,
+      runId: String(manifest.runId),
+      trustedWorkflowFullRef: publisherFullRef,
+      trustedWorkflowRef: publisherFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),
+      trustedWorkflowSha: publisherSha,
+      verifierSourceSha: publisherSha,
+      verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
+    },
+    evidenceClient,
+  );
+  validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualificationSha, evidence);
   const revalidateAuthority = candidateArtifactAuthority(manifest, evidence, evidenceClient);
   return { ...evidence, revalidateAuthority };
 }
@@ -788,6 +825,14 @@ async function main() {
             ).publicationSelection
         : undefined,
     manifestPath,
+    npmPreflightLineage:
+      process.env.VERIFY_NPM_PREFLIGHT_LINEAGE === "true"
+        ? {
+            qualificationSha: process.env.PREFLIGHT_WORKFLOW_SHA,
+            producerRunId: process.env.PREFLIGHT_RUN_ID,
+            producerRunAttempt: process.env.PREFLIGHT_RUN_ATTEMPT,
+          }
+        : undefined,
     verifierSourceSha: process.env.WORKFLOW_SHA ?? process.env.GITHUB_SHA,
     verifierSourceContent: readFileSync(
       process.env.STRICT_VALIDATOR_FILE ??

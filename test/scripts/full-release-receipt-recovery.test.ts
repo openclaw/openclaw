@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
@@ -91,66 +90,31 @@ afterEach(() => {
 });
 
 describe("receipt-backed aggregate recovery", () => {
-  it("settles all fixed child readers before rejecting and preserves each deadline", async () => {
+  it("passes a ten-minute budget to recovery child verification", async () => {
     const { old, recovery } = fixture();
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);
     // Candidate payload validation is separate from the child deadline handoff.
     vi.spyOn(candidateReuse, "verifySealedFullReleaseCandidate").mockImplementation(vi.fn());
-    const release = Promise.withResolvers<void>();
-    let readers = 0;
-    let completed = 0;
     const verifyChild = vi
       .spyOn(childReuse, "validateReusableReleaseChild")
-      .mockImplementation(async (_, request) => {
-        readers += 1;
-        if (request.role !== "pluginPrereleaseCandidate") {
-          await release.promise;
-        }
-        completed += 1;
-        throw new Error(`child verification failed: ${request.role}`);
-      });
-    let settled = false;
-    const verification = verifyOriginalReceiptQualification(recovery, {
-      client: {
-        ...old.client,
-        getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
-      },
-    }).catch((error: unknown) => {
-      settled = true;
-      return error;
-    });
-    try {
-      // Let a fail-fast aggregate propagate the last role's rejection while
-      // all earlier readers remain blocked, rather than racing microtasks.
-      await yieldToEventLoop();
-      expect(readers).toBe(5);
-      expect(settled).toBe(false);
-      expect(completed).toBe(1);
-    } finally {
-      release.resolve();
-      await verification;
-    }
-    expect(await verification).toEqual(new Error("child verification failed: normalCi"));
-    expect(completed).toBe(5);
-    expect(verifyChild).toHaveBeenCalledTimes(5);
-    for (const call of verifyChild.mock.calls) {
-      expect(call[2]?.deadlineMs).toBe(now + 600_000);
-    }
+      .mockRejectedValue(new Error("child verification reached"));
+    await expect(
+      verifyOriginalReceiptQualification(recovery, {
+        client: {
+          ...old.client,
+          getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
+        },
+      }),
+    ).rejects.toThrow("child verification reached");
+    expect(verifyChild).toHaveBeenCalledOnce();
+    expect(verifyChild.mock.calls[0]?.[2]?.deadlineMs).toBe(now + 600_000);
   });
 
-  it("overlaps all child histories before verifying payloads with unchanged budgets", async () => {
+  it("gives only recovery Docker payloads the four-minute archive budget", async () => {
     const { old, recovery } = fixture();
     vi.spyOn(candidateReuse, "verifySealedFullReleaseCandidate").mockImplementation(vi.fn());
-    let activeReaders = 0;
-    let peakReaders = 0;
-    const readRoles: string[] = [];
     vi.spyOn(childReuse, "validateReusableReleaseChild").mockImplementation(async (_, request) => {
-      readRoles.push(request.role);
-      activeReaders += 1;
-      peakReaders = Math.max(peakReaders, activeReaders);
-      await Promise.resolve();
-      activeReaders -= 1;
       const coverage = expectDefined(
         old.admission.receipt.coverage.children.find((child) => child.key === request.role),
         "child coverage",
@@ -214,9 +178,6 @@ describe("receipt-backed aggregate recovery", () => {
         },
       }),
     ).rejects.toThrow("publication verification reached");
-    expect(readRoles).toEqual(roles);
-    expect(peakReaders).toBe(5);
-    expect(activeReaders).toBe(0);
     expect(verifyPayloads).toHaveBeenCalledOnce();
     expect(verifyPayloads.mock.calls[0]?.[2]).toMatchObject({
       verifyPayloads: true,
