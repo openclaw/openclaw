@@ -113,6 +113,38 @@ a replacement value for them. Other fields retain their ordinary update behavior
 array changes nothing. Clients using this argument need a Gateway version that
 supports explicit appearance clearing; older Gateways do not implement this reset.
 
+### Cards board columns
+
+A Cards board shows every status as a column by default. **Edit board** → **Columns**
+chooses which statuses the board shows, their order, and a label for each, plus the
+board's default for **Empty columns**. The same settings are available through
+`workboard.boards.upsert`:
+
+```json5
+{
+  id: "overview",
+  columns: {
+    visible: ["triage", "scheduled", "blocked", "done"], // display order
+    labels: { triage: "Todo", scheduled: "In progress", blocked: "Needs you" },
+    emptyColumnMode: "show", // show | collapse | hide
+  },
+}
+```
+
+Columns change presentation only: card statuses, dispatch, lifecycle sync, the CLI
+and agent tools keep using the native status names. A card whose status the board
+does not show stays visible in an **Other statuses** lane after the board's columns,
+labeled with its native status; move it from there into one of the board's columns.
+Status tabs and status pickers on that board offer its visible statuses with their
+labels. **All boards** keeps every status.
+
+`visible` lists 1-9 unique statuses; `labels` maps statuses to 1-40 character labels,
+and unlabeled statuses keep their translated names. `emptyColumnMode` is the board's
+default; a viewer's **Empty columns** choice in **Filters** overrides it for that page
+session. Omitting `columns` keeps the saved value, and `columns: null` restores every
+status in the default order. Sessions boards reject `columns`; edit their columns as
+described below.
+
 `workboard.cards.list` returns up to 100 cards, with claim tokens redacted. When
 `nextCursor` is present, pass that `{ position, createdAt, id }` object as `after`
 with the same filters to request the next page. The final page omits `nextCursor`.
