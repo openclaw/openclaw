@@ -3,7 +3,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
-import { validateNetworkMode, validateSandboxSecurity } from "./validate-sandbox-security.js";
+import {
+  getBlockedBindReason,
+  validateNetworkMode,
+  validateSandboxSecurity,
+} from "./validate-sandbox-security.js";
 
 type SandboxSecurityConfig = Parameters<typeof validateSandboxSecurity>[0];
 
@@ -95,18 +99,23 @@ describe("validateBindMounts", () => {
   });
 
   it("blocks dangerous bind source paths", () => {
-    for (const [bind, expected] of [
-      ["/:/mnt/host", /covers blocked path "\/"/],
-      ["/etc/passwd:/mnt/passwd:ro", /targets blocked path "\/etc"/],
-      ["/proc:/proc:ro", /blocked path "\/proc"/],
-      ["/var/run/docker.sock:/var/run/docker.sock", /docker\.sock/],
-      ["/run/docker.sock:/run/docker.sock", /docker\.sock/],
-      ["/run:/run", /blocked path/],
-      ["/var/run:/var/run", /blocked path/],
-      ["/home/user/../../etc/shadow:/mnt/shadow", /blocked path "\/etc"/],
-      ["//etc//passwd:/mnt/passwd", /blocked path "\/etc"/],
-    ] as const) {
-      bindResult(bind).toThrow(expected);
+    const cases = [
+      ["host root mount", "/:/mnt/host", /covers blocked path "\/"/],
+      ["Windows drive root", "C:/:/mnt/drive", /covers blocked path "C:\/"/],
+      ["etc mount", "/etc/passwd:/mnt/passwd:ro", /blocked path "\/etc"/],
+      ["proc mount", "/proc:/proc:ro", /blocked path "\/proc"/],
+      ["docker socket in /var/run", "/var/run/docker.sock:/var/run/docker.sock", /docker\.sock/],
+      ["docker socket in /run", "/run/docker.sock:/run/docker.sock", /docker\.sock/],
+      ["parent /run mount", "/run:/run", /blocked path/],
+      ["parent /var/run mount", "/var/run:/var/run", /blocked path/],
+      ["traversal into /etc", "/home/user/../../etc/shadow:/mnt/shadow", /blocked path "\/etc"/],
+      ["double-slash normalization into /etc", "//etc//passwd:/mnt/passwd", /blocked path "\/etc"/],
+    ] as const;
+    for (const [label, bind, expected] of cases) {
+      expect(() => validateBindMounts([bind]), label).toThrow(expected);
+      expect(getBlockedBindReason(bind)?.kind).toBe(
+        label === "host root mount" || label === "Windows drive root" ? "covers" : "targets",
+      );
     }
   });
 

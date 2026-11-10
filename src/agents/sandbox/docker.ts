@@ -20,7 +20,10 @@ import {
   withSandboxContainerLifecycle,
   type ContainerSourceLease,
 } from "./container-lifecycle.js";
-import { handleHotSandboxConfigMismatch } from "./current-config.js";
+import {
+  assertChangedSandboxConfigAllowed,
+  handleHotSandboxConfigMismatch,
+} from "./current-config.js";
 import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
 import {
   dockerPersistentTargetFromEngineTarget,
@@ -256,6 +259,8 @@ async function ensureSandboxContainerLifecycle<T>(
           dockerTmpfsSource: params.cfg.dockerTmpfsSource,
         })
       : genericConfigHash;
+  // Creation and changed-config reuse judge binds against the same roots.
+  const bindSourceRoots = [params.workspaceDir, params.agentWorkspaceDir];
   const now = Date.now();
   const needsSetupReservation =
     Boolean(params.cfg.docker.setupCommand?.trim()) ||
@@ -279,6 +284,13 @@ async function ensureSandboxContainerLifecycle<T>(
     currentHash = state.configHash ?? registryEntry?.configHash ?? null;
     hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
+      assertChangedSandboxConfigAllowed({
+        containerName,
+        cfg: params.cfg.docker,
+        bindSourceRoots,
+        scope: params.cfg.scope,
+        sessionKey: params.scopeKey,
+      });
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
       phases.mark("attempt.setup.sandbox.backend.persistent_import");
       const { hasSandboxPersistentExecCustody } = await import("./persistent-exec.js");

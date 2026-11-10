@@ -89,3 +89,39 @@ it.each([{ binds: ["/g:/g:ro"] }, { binds: undefined }])(
     expect(resolved).toMatchObject({ binds: browser.binds, network: "openclaw-sandbox-browser" });
   },
 );
+
+it("preserves global and per-agent allowedBindSources roots", () => {
+  const res = validateConfigObject({
+    agents: {
+      defaults: { sandbox: { docker: { allowedBindSources: ["/srv/shared/team"] } } },
+      entries: {
+        main: { sandbox: { docker: { allowedBindSources: ["/srv/shared/handoff"] } } },
+      },
+    },
+  });
+  expect(res.ok).toBe(true);
+  if (res.ok) {
+    expect(res.config.agents?.defaults?.sandbox?.docker?.allowedBindSources).toEqual([
+      "/srv/shared/team",
+    ]);
+    expect(res.config.agents?.entries?.main?.sandbox?.docker?.allowedBindSources).toEqual([
+      "/srv/shared/handoff",
+    ]);
+  }
+});
+
+it.each(["", "shared/team", " /srv/shared", "/", "C:/"])(
+  "rejects allowedBindSources entry %j",
+  (root) => {
+    expect(validateSandbox({ docker: { allowedBindSources: [root] } }).ok).toBe(false);
+  },
+);
+
+it("unions global and agent allowedBindSources roots", () => {
+  const docker = resolveSandbox(
+    { scope: "agent", docker: { allowedBindSources: ["/srv/shared/team"] } },
+    { docker: { allowedBindSources: ["/srv/shared/handoff"] } },
+  ).docker;
+  expect(docker.allowedBindSources).toEqual(["/srv/shared/team", "/srv/shared/handoff"]);
+  expect(resolveSandbox({ scope: "agent" }).docker.allowedBindSources).toBeUndefined();
+});

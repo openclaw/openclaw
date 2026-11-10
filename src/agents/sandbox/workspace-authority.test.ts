@@ -213,3 +213,73 @@ it("applies inherited session denies to required lifecycle tools", async () => {
     "required tool workboard_complete",
   );
 });
+
+it("rejects writable named bind sources outside the agent workspace", async () => {
+  const externalWritable = await authority(
+    config({
+      mode: "all",
+      workspaceAccess: "rw",
+      docker: {
+        allowedBindSources: ["/srv/shared"],
+        binds: ["/srv/shared:/shared:rw"],
+      },
+    }),
+  );
+  expect(externalWritable.confinementError).toContain("writable bind source outside");
+
+  // A managed-worktree session mounts its projection writable, not the agent workspace.
+  const projected = await authority(
+    config({
+      mode: "all",
+      workspaceAccess: "rw",
+      docker: { binds: ["/workspace/notes:/notes:rw"] },
+    }),
+    { sessionEntry: { worktree: { id: "wt-1", branch: "card", repoRoot: "/workspace" } } },
+  );
+  expect(projected.confinementError).toBe(
+    "target sandbox has writable bind source outside its writable workspace: /workspace/notes.",
+  );
+
+  // The browser container mounts browser.binds in place of docker.binds.
+  for (const enabled of [true, false]) {
+    const browser = await authority(
+      config({
+        mode: "all",
+        workspaceAccess: "rw",
+        docker: { allowedBindSources: ["/srv/shared"] },
+        browser: { enabled, binds: ["/srv/shared:/shared:rw"] },
+      }),
+    );
+    expect(browser.confinementError).toBe(
+      enabled
+        ? "target sandbox has writable bind source outside its writable workspace: /srv/shared."
+        : undefined,
+    );
+  }
+
+  for (const workspaceAccess of ["ro", "none"] as const) {
+    const noWritableWorkspace = await authority(
+      config({
+        mode: "all",
+        workspaceAccess,
+        docker: { binds: ["/workspace/notes:/notes:rw"] },
+      }),
+    );
+    expect(noWritableWorkspace.confinementError).toContain("writable bind source outside");
+  }
+
+  for (const docker of [
+    { allowedBindSources: ["/srv/shared"] },
+    {
+      allowedBindSources: ["/srv/shared"],
+      binds: ["/srv/shared:/shared:ro"],
+    },
+    {
+      allowedBindSources: ["/workspace/shared"],
+      binds: ["/workspace/shared:/shared:rw"],
+    },
+  ]) {
+    const confined = await authority(config({ mode: "all", workspaceAccess: "rw", docker }));
+    expect(confined.confinementError).toBeUndefined();
+  }
+});
