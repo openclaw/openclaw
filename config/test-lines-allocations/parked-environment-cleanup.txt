@@ -1,3 +1,0 @@
-# Lane 2385: 23 net lines extend owner regressions for durable parking,
-# explicit cleanup recovery, original bootstrap failures, and per-session restart reasons.
-23

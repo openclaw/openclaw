@@ -527,55 +527,6 @@ it.each([false, true])(
   },
 );
 
-it("bounds conversation cleanup attempts across four hours of transient provider failure", async () => {
-  const destroy = vi.fn().mockRejectedValue(new Error("coordinator release: http 503"));
-  const warn = vi.fn<(message: string) => void>();
-  makeService({ id: "crabbox", destroy }, { logger: { warn } });
-  support.getDevelopmentProfile().provider = "crabbox";
-  const { attachment } = await create();
-  await expect(stop()).rejects.toThrow("http 503");
-  for (let sweep = 0; sweep < 95; sweep += 1) {
-    state.nowMs += 150_000;
-    await service.reconcileOnce();
-    await service.reconcileEnvironment(attachment.environmentId);
-  }
-  expect(destroy).toHaveBeenCalledTimes(10);
-  expect(warn).toHaveBeenCalledTimes(9);
-  const parked = warn.mock.calls.filter(([message]) => message.includes("cleanup parked"));
-  expect(parked).toHaveLength(1);
-  expect(parked[0]![0]).toContain("lease-1");
-  expect(parked[0]![0]).toContain("http 503");
-  expect(parked[0]![0]).toContain("crabbox inspect --provider <backend> --id lease-1 --json");
-  expect(service.get(attachment.environmentId)?.error).toBe(parked[0]![0]);
-  await runAsCaller(async () => {
-    const { respond, invoke } = createRpc({}, {}, "environments.session.status");
-    await invoke();
-    expectReply(respond, {
-      closed: true,
-      environment: { status: "error", worker: { state: "destroying", error: parked[0]![0] } },
-    });
-  });
-});
-
-it("parks after one hour and resumes only on explicit stop", async () => {
-  const destroy = vi.fn().mockRejectedValue(new Error("stop outcome unknown: http 404"));
-  const warn = vi.fn<(message: string) => void>();
-  makeService({ destroy }, { logger: { warn } });
-  const { attachment } = await create();
-  await expect(stop()).rejects.toThrow("http 404");
-  state.nowMs += 3_600_000;
-  await service.reconcileOnce();
-  await service.reconcileOnce();
-  expect(destroy).toHaveBeenCalledOnce();
-  expect(warn).toHaveBeenCalledOnce();
-  expect(service.get(attachment.environmentId)?.error).toContain("parked");
-  destroy.mockResolvedValue(undefined);
-  await stop();
-  expect(destroy).toHaveBeenCalledTimes(2);
-  expect(service.get(attachment.environmentId)).toMatchObject({ state: "destroyed" });
-  expect(service.get(attachment.environmentId)?.error).toBeUndefined();
-});
-
 it.each(["deadline", "attempts"])(
   "keeps cleanup parked across restarts after %s",
   async (budget) => {
@@ -587,11 +538,26 @@ it.each(["deadline", "attempts"])(
     support.getDevelopmentProfile().provider = "crabbox";
     const { attachment } = await create();
     await expect(stop()).rejects.toThrow(failure);
-    for (let attempt = 0; attempt < (budget === "deadline" ? 1 : 9); attempt++) {
-      state.nowMs += budget === "deadline" ? 3_600_000 : 300_000;
-      await service.reconcileSessionAttachments();
+    for (let sweep = 0; sweep < (budget === "deadline" ? 2 : 95); sweep++) {
+      state.nowMs += budget === "deadline" ? 3_600_000 : 150_000;
+      await service.reconcileOnce();
+      await service.reconcileEnvironment(attachment.environmentId);
     }
-    expect(service.get(attachment.environmentId)?.error).toContain("cleanup parked");
+    expect(destroy).toHaveBeenCalledTimes(budget === "deadline" ? 1 : 10);
+    expect(warn).toHaveBeenCalledTimes(budget === "deadline" ? 1 : 9);
+    const parked = warn.mock.calls.filter(([message]) => message.includes("cleanup parked"));
+    expect(parked).toHaveLength(1);
+    expect(parked[0]![0]).toContain(failure);
+    expect(parked[0]![0]).toContain("crabbox inspect --provider <backend> --id lease-1 --json");
+    expect(service.get(attachment.environmentId)?.error).toBe(parked[0]![0]);
+    await runAsCaller(async () => {
+      const { respond, invoke } = createRpc({}, {}, "environments.session.status");
+      await invoke();
+      expectReply(respond, {
+        closed: true,
+        environment: { status: "error", worker: { state: "destroying", error: parked[0]![0] } },
+      });
+    });
     destroy.mockClear();
     warn.mockClear();
     for (let sweep = 0; sweep < 3; sweep += 1) {
@@ -611,6 +577,7 @@ it.each(["deadline", "attempts"])(
 
     destroy.mockResolvedValue(undefined);
     await stop();
+    expect(destroy).toHaveBeenCalledOnce();
     expect(service.get(attachment.environmentId)).toMatchObject({ state: "destroyed" });
     expect(service.get(attachment.environmentId)?.error).toBeUndefined();
   },
