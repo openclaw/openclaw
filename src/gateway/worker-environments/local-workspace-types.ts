@@ -3,6 +3,13 @@ import type {
   WorktreeWorkerAuthority,
 } from "../../agents/worktrees/types.js";
 
+export type LocalWorkspaceCapture = {
+  root: string;
+  sourceDev: bigint;
+  snapshotDev: bigint;
+  capturedAtMs: number;
+};
+
 export type LocalWorkspaceOwner = {
   agentId: string;
   sessionKey: string;

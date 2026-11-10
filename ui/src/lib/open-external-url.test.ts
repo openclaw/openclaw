@@ -111,49 +111,18 @@ describe("openExternalUrlSafe", () => {
 });
 
 describe("reserveExternalWindowForDeferredNavigation", () => {
-  it.each([
-    {
-      screenX: 100,
-      screenY: 40,
-      availWidth: 1920,
-      availHeight: 1080,
-      expected: "popup,width=520,height=720,left=480,top=130",
-    },
-    {
-      screenX: -1500,
-      screenY: -1000,
-      availWidth: 1920,
-      availHeight: 1080,
-      expected: "popup,width=520,height=720,left=-1120,top=-910",
-    },
-    {
-      screenX: 0,
-      screenY: 0,
-      availWidth: 400,
-      availHeight: 600,
-      expected: "popup,width=400,height=600,left=0,top=0",
-    },
-  ])("centers an explicitly sized popup on the opener ($screenX, $screenY)", (geometry) => {
-    vi.stubGlobal("screenX", geometry.screenX);
-    vi.stubGlobal("screenY", geometry.screenY);
-    vi.stubGlobal("outerWidth", Math.min(1280, geometry.availWidth));
-    vi.stubGlobal("outerHeight", Math.min(900, geometry.availHeight));
-    vi.stubGlobal("screen", { availWidth: geometry.availWidth, availHeight: geometry.availHeight });
+  it("forwards prepared popup features and detaches the opener", () => {
+    const popup = "popup,width=520,height=720,left=480,top=130";
     const opened = { opener: window } as unknown as WindowProxy;
     const open = vi.spyOn(window, "open").mockReturnValue(opened);
-
-    expect(reserveExternalWindowForDeferredNavigation({ popup: { width: 520, height: 720 } })).toBe(
-      opened,
-    );
-    expect(open).toHaveBeenCalledWith("about:blank", "_blank", geometry.expected);
+    expect(reserveExternalWindowForDeferredNavigation({ popup })).toBe(opened);
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank", popup);
     expect(opened.opener).toBeNull();
   });
 
-  it("reports a blocked sized popup without opening another window", () => {
+  it("reports a blocked prepared popup without opening another window", () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
-    expect(
-      reserveExternalWindowForDeferredNavigation({ popup: { width: 520, height: 720 } }),
-    ).toBeNull();
+    expect(reserveExternalWindowForDeferredNavigation({ popup: "popup,width=520" })).toBeNull();
     expect(open).toHaveBeenCalledTimes(1);
   });
 

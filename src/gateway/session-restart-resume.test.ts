@@ -153,7 +153,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
             context.restartResumeWindows = { main: [{ startedAt: 100, endedAt: 200 }] };
           }
           const params = { context, signal: admission.signal, log: { warn: vi.fn() } };
-          const wait = admission.observation.waitForAgentPreparation.bind(admission.observation);
+          const wait = admission.observation.waitForAgentPreparation;
           const preparationWait = vi
             .spyOn(admission.observation, "waitForAgentPreparation")
             .mockImplementation((id, options) => {
@@ -708,6 +708,12 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
       await persistRunningSessionsForRestart({ cfg: {} });
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
         queuedInputIds: [queued.inputId],
+        queuedInputSources: {
+          [queued.inputId]: {
+            runId: "queued-behind-completed-reply",
+            source: { kind: "unavailable" },
+          },
+        },
       });
     } finally {
       queued?.finish("interrupted");
@@ -786,7 +792,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
     }
   }));
 
-it("settles captured queued sends as failed when the recorded owner's authority is revoked", () =>
+it("settles source-less queued sends even when the recorded owner cannot resume", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       gateway: {

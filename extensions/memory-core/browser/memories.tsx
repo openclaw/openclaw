@@ -7,6 +7,7 @@ import type {
   ControlUiSettingsView,
   MemorySearchResponse,
 } from "openclaw/plugin-sdk/control-ui";
+import type { MemorySearchHit } from "openclaw/plugin-sdk/memory-host-search";
 import {
   createMemo,
   createSignal,
@@ -22,7 +23,15 @@ import { loadMessages } from "./i18n/locales.ts";
 import "./memories.css";
 
 type SearchResult = MemorySearchResponse["results"][number];
-type SearchResultPage = MemorySearchResponse & { query: string };
+type ProviderSearchResponse = {
+  version: 2;
+  hits: MemorySearchHit[];
+  warning?: string;
+};
+type ProviderRecordResponse =
+  | { status: "ok"; text: string; truncated?: boolean }
+  | { status: "not_found" };
+type SearchResultPage = (MemorySearchResponse | ProviderSearchResponse) & { query: string };
 
 type MemoryMemoriesProps = {
   context: ControlUiSettingsContext;
@@ -116,10 +125,12 @@ function MemoryMemories(props: MemoryMemoriesProps) {
     detailRequests.clear();
     setQuery(normalizedQuery);
     setOpenResultKey(null);
+    const providerRuntime = props.snapshot.engine.id && props.snapshot.engine.id !== "memory-core";
     const result = props.context
-      .request<MemorySearchResponse>("memory.search", {
+      .request<MemorySearchResponse | ProviderSearchResponse>("memory.search", {
         query: normalizedQuery,
         agentId,
+        ...(providerRuntime ? { version: 2 } : {}),
       })
       .then((response) => {
         if (searchRequest !== request || props.context.signal.aborted) {
@@ -180,6 +191,75 @@ function MemoryMemories(props: MemoryMemoriesProps) {
     detailRequests.set(path, request);
     // The row can close before the request settles, leaving no mounted async reader.
     void request.catch(() => undefined);
+  }
+
+  function providerKey(hit: MemorySearchHit): string {
+    return `provider:${JSON.stringify(hit.reference)}`;
+  }
+
+  function toggleProviderResult(hit: MemorySearchHit) {
+    const key = providerKey(hit);
+    const opening = openResultKey() !== key;
+    setOpenResultKey(opening ? key : null);
+    if (
+      !opening ||
+      detailRequests.has(key) ||
+      !props.snapshot.connected ||
+      props.context.signal.aborted
+    ) {
+      return;
+    }
+    const request = props.context
+      .request<ProviderRecordResponse>("memory.get", {
+        version: 2,
+        agentId: props.snapshot.agentId,
+        reference: hit.reference,
+      })
+      .then((response) => {
+        if (detailRequests.get(key) !== request || props.context.signal.aborted) {
+          return undefined;
+        }
+        if (response.status !== "ok") {
+          throw new Error(t("memoryPage.memories.recordMissing"));
+        }
+        const text =
+          response.text +
+          (response.truncated ? `\n\n${t("memoryPage.memories.recordPartial")}` : "");
+        detailRequests.set(key, text);
+        return text;
+      })
+      .catch((error: unknown) => {
+        if (detailRequests.get(key) !== request || props.context.signal.aborted) {
+          return undefined;
+        }
+        detailRequests.delete(key);
+        throw error;
+      });
+    detailRequests.set(key, request);
+    void request.catch(() => undefined);
+  }
+
+  function ProviderDetail(detailProps: { hit: MemorySearchHit; panelId: string }) {
+    const detail = createMemo(() => detailRequests.get(providerKey(detailProps.hit)));
+    return (
+      <div id={detailProps.panelId} class="memory-memories__detail">
+        <Loading fallback={<p role="status">{t("memoryPage.memories.recordLoading")}</p>}>
+          <Errored
+            fallback={(error) => (
+              <p class="memory-memories__detail-error" role="alert">
+                {t("memoryPage.memories.recordError", {
+                  message: props.context.formatError(error()),
+                })}
+              </p>
+            )}
+          >
+            <pre class="memory-memories__file" tabindex={0}>
+              {detail() ?? ""}
+            </pre>
+          </Errored>
+        </Loading>
+      </div>
+    );
   }
 
   function Detail(detailProps: { result: SearchResult; panelId: string }) {
@@ -280,6 +360,89 @@ function MemoryMemories(props: MemoryMemoriesProps) {
   }
 
   function Results(resultsProps: { ready: SearchResultPage }) {
+    const providerPage = () => {
+      const ready = resultsProps.ready;
+      return "hits" in ready ? ready : undefined;
+    };
+    const workspacePage = () => {
+      const ready = resultsProps.ready;
+      return "results" in ready ? ready : undefined;
+    };
+    return (
+      <>
+        <Show when={providerPage()} keyed>
+          {(ready) => <ProviderResults ready={ready} />}
+        </Show>
+        <Show when={workspacePage()} keyed>
+          {(ready) => <WorkspaceResults ready={ready} />}
+        </Show>
+      </>
+    );
+  }
+
+  function ProviderResults(resultsProps: { ready: ProviderSearchResponse & { query: string } }) {
+    const ready = () => resultsProps.ready;
+    return (
+      <>
+        {ready().warning && (
+          <div class="callout warn" role="status">
+            <p>{ready().warning}</p>
+          </div>
+        )}
+        {ready().hits.length === 0 ? (
+          <Empty>{t("memoryPage.memories.empty", { query: ready().query })}</Empty>
+        ) : (
+          <section class="settings-section">
+            <p class="memory-memories__summary">
+              {t(
+                ready().hits.length === 1
+                  ? "memoryPage.memories.resultOne"
+                  : "memoryPage.memories.results",
+                { count: String(ready().hits.length) },
+              )}
+            </p>
+            <div class="settings-group memory-memories__results">
+              <For each={ready().hits} keyed={(hit) => providerKey(hit)}>
+                {(hit, index) => (
+                  <article class="memory-memories__result">
+                    <button
+                      type="button"
+                      class="settings-row settings-row--nav"
+                      disabled={
+                        !props.snapshot.connected ||
+                        !props.snapshot.advertisedMethods?.includes("memory.get")
+                      }
+                      aria-expanded={openResultKey() === providerKey(hit()) ? "true" : "false"}
+                      aria-controls={`provider-detail-${index()}`}
+                      onClick={() => toggleProviderResult(hit())}
+                    >
+                      <span class="settings-row__text">
+                        <span class="memory-memories__snippet">{hit().excerpt}</span>
+                        <span class="settings-row__desc memory-memories__meta">
+                          <code>
+                            {hit()
+                              .citations?.map((citation) => citation.label)
+                              .join(" · ") || hit().reference.id}
+                          </code>
+                          {hit().score !== undefined &&
+                            ` · ${t("memoryPage.memories.score", { score: hit().score?.toFixed(2) ?? "" })}`}
+                        </span>
+                      </span>
+                    </button>
+                    {openResultKey() === providerKey(hit()) && (
+                      <ProviderDetail hit={hit()} panelId={`provider-detail-${index()}`} />
+                    )}
+                  </article>
+                )}
+              </For>
+            </div>
+          </section>
+        )}
+      </>
+    );
+  }
+
+  function WorkspaceResults(resultsProps: { ready: MemorySearchResponse & { query: string } }) {
     return (
       <>
         {resultsProps.ready.stale && (

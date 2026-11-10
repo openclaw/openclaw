@@ -1,6 +1,7 @@
 import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
 import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
+import { getBrowserExecutableError } from "../chrome.executable-probe.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { getCachedChromeGraphicsDiagnostics } from "../chrome.graphics.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
@@ -297,6 +298,13 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
             const status = await buildBrowserStatus(ctx, profileCtx, signal, live);
             if (route === "/") {
               return status;
+            }
+            const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+            if (capabilities.browserFilesystemLocal && status.detectedExecutablePath) {
+              status.detectError = await getBrowserExecutableError(
+                status.detectedExecutablePath,
+                signal,
+              );
             }
             const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
             const identity =

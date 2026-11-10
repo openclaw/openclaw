@@ -32,6 +32,7 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { proveResumedBaseRefresh } from "./local-workspace-base-refresh.test-support.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
+import { registerSandboxCheckpointTests } from "./local-workspace-checkpoint.test-support.js";
 import {
   prepareLegacyArchiveRetention,
   proveAcceptedDirectoryRetention,
@@ -59,7 +60,6 @@ import {
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { proveRejectedWorkspaceCheckpoint } from "./local-workspace-recovery.test-support.js";
 import {
-  proveUnchangedSandboxCommandCheckpoints,
   proveConcurrentWorkspacePreparation,
   proveColdPreparationCapacityIsolation,
   provePreparationObservationBoundary,
@@ -188,8 +188,7 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
-it("keeps unchanged commands running while checkpointing edits and deletions", () =>
-  proveUnchangedSandboxCommandCheckpoints(owner));
+registerSandboxCheckpointTests(() => owner);
 
 it.each(["canonical", "projection"] as const)(
   "quarantines rejected checkpoints while allowing new agent work: %s",

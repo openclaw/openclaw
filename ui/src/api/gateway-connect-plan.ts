@@ -19,6 +19,7 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import {
+  CONTROL_UI_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
   type ControlUiBootstrapProfileHint,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
@@ -86,15 +87,6 @@ export type GatewayBrowserConnectOptions = {
 };
 
 export const CONTROL_UI_OPERATOR_ROLE = "operator";
-
-export const CONTROL_UI_OPERATOR_SCOPES = [
-  "operator.admin",
-  "operator.read",
-  "operator.write",
-  "operator.approvals",
-  "operator.questions",
-  "operator.pairing",
-] as const;
 
 export type ConnectPlan = {
   generation: number;

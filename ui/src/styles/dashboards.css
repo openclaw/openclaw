@@ -1,33 +1,15 @@
-.dashboards-header__count {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.dashboards-header__count strong {
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-  letter-spacing: -0.03em;
+/* Header tools sit on the 32px control height, like the toolbar icons on Sessions and Usage. */
+.dashboards-header .hub-page-header__actions {
+  min-height: var(--settings-control-height);
 }
 
 .dashboards-gallery {
   width: 100%;
+  padding-top: var(--space-6);
 }
 
 .dashboards-loading {
   pointer-events: none;
-}
-
-.dashboards-loading__control {
-  height: var(--settings-control-height);
-}
-
-.dashboards-loading__select {
-  min-width: 156px;
 }
 
 .dashboards-loading .dashboard-preview {
@@ -38,108 +20,419 @@
   width: 50%;
 }
 
-.dashboards-loading__label {
-  width: 80px;
-  height: calc(var(--control-ui-text-xs) * 1.5);
-}
-
 .dashboards-loading__title {
   height: 14px;
 }
 
-.dashboards-toolbar {
-  display: grid;
-  grid-template-columns: minmax(240px, 1fr) max-content max-content;
-  gap: var(--space-3);
-  align-items: end;
-  margin-bottom: var(--space-3);
-}
-
-.dashboards-search {
-  position: relative;
+.dashboards-tools {
   display: flex;
   align-items: center;
-}
-
-.dashboards-search > span[aria-hidden="true"] {
-  position: absolute;
-  left: var(--space-3);
-  z-index: 1;
-  display: inline-flex;
-  width: 17px;
-  color: var(--muted);
-  pointer-events: none;
-}
-
-.dashboards-search svg {
-  width: 17px;
-  height: 17px;
-}
-
-.dashboards-search input {
-  width: 100%;
-  min-height: var(--settings-control-height);
-  padding: 0 var(--space-3) 0 40px;
-  border: 1px solid var(--field-border);
-  border-radius: var(--field-radius);
-  background-color: var(--field-bg);
-  font-size: var(--field-font-size);
-  outline: none;
-}
-
-.dashboards-select {
-  display: grid;
   gap: var(--space-1);
 }
 
-.dashboards-select > span,
-.dashboards-results {
+/* Search starts as an icon and becomes the field. */
+.dashboards-search {
+  display: flex;
+  align-items: center;
+  width: min(280px, calc(100vw - 140px));
+  height: 32px;
+  padding-inline-end: 4px;
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  cursor: text;
 }
 
-.dashboards-select > span {
-  font-weight: 600;
+.dashboards-search__icon {
+  display: grid;
+  flex: none;
+  width: 32px;
+  place-items: center;
 }
 
-.dashboards-select select {
-  min-width: 156px;
+.dashboards-search__icon svg,
+.dashboards-authors__search svg {
+  width: 14px;
+  height: 14px;
 }
 
-.dashboards-results {
-  margin-bottom: var(--space-3);
+.dashboards-search .header-search__input,
+.dashboards-authors__search input {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
 }
 
-/* Phone widths only; wider layouts keep the labeled selects. */
-.dashboards-filter {
+.dashboards-search .header-search__input {
+  flex: 1 1 auto;
+  font-size: var(--control-ui-text-md);
+}
+
+.dashboards-search .header-search__input::-webkit-search-cancel-button,
+.dashboards-authors__search input::-webkit-search-cancel-button {
   display: none;
 }
 
-.dashboards-filter__popover {
-  --oc-popover-padding: var(--menu-padding);
-
-  min-width: min(224px, calc(100dvw - 16px));
-  font-size: calc(13px * var(--control-ui-text-scale));
-  user-select: none;
+.dashboards-tools__trigger.active {
+  background: var(--bg-hover);
+  color: var(--text-strong);
 }
 
-.dashboards-filter__heading {
-  flex: none;
-  margin: 0.25em 0;
-  padding: 0.25em 0.75em;
+.dashboards-authors {
+  --oc-popover-padding: 0;
+
+  width: min(300px, calc(100dvw - 16px));
+  overflow: hidden;
+  font-size: var(--control-ui-text-md);
+}
+
+.dashboards-authors__search,
+.dashboards-authors__bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 44px;
+  padding: 0 10px 0 14px;
+  color: var(--text-tertiary);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+.dashboards-authors__bar {
+  justify-content: flex-end;
+  height: 36px;
+}
+
+.dashboards-authors__search > span {
+  display: inline-flex;
+}
+
+.dashboards-authors__search input {
+  flex: 1;
+  font: inherit;
+}
+
+.dashboards-authors__clear {
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
   color: var(--muted);
-  font-family: var(--font-body);
-  font-size: round(calc(1em / 1.125), 1px);
+  font-size: var(--control-ui-text-sm);
+  cursor: var(--cursor-action);
+}
+
+.dashboards-authors__clear:hover {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+/* Long lists scroll inside the popover; the global scrollbar draws the thumb only. */
+.dashboards-authors__list {
+  max-height: calc(32px * 8.5 + 12px);
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.dashboards-authors__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-strong);
+  cursor: var(--cursor-action);
+}
+
+.dashboards-authors__row:hover,
+.dashboards-authors__row:focus-within {
+  background: var(--bg-hover);
+}
+
+.dashboards-authors__row--after-pinned {
+  margin-top: 7px;
+}
+
+.dashboards-authors__row > openclaw-session-owner-chip,
+.dashboards-chip openclaw-session-owner-chip {
+  display: inline-flex;
+  flex: none;
+}
+
+.dashboards-authors__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+
+.dashboards-authors__name b {
+  font-weight: 650;
+}
+
+.dashboards-authors__count {
+  color: var(--text-tertiary);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboards-authors__none {
+  padding: 22px 12px 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.dashboards-chips {
+  display: flex;
+  gap: 6px;
+  margin-bottom: var(--space-4);
+}
+
+.dashboards-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 2px 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--text-strong);
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: var(--control-ui-font-weight-semibold);
 }
 
-.dashboards-filter__authors + .dashboards-filter__heading {
-  margin-top: var(--space-2);
+.dashboards-chip:not(:has(openclaw-session-owner-chip)) {
+  padding-inline-start: 11px;
 }
 
-.dashboards-filter__authors {
-  max-height: calc(var(--menu-item-height) * 5.85);
-  overflow-y: auto;
+.dashboards-chip__prefix {
+  color: var(--muted);
+  font-weight: var(--control-ui-font-weight-normal);
+}
+
+.dashboards-chip .session-owner-chip {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  box-shadow: none;
+  font-size: 8px;
+  font-weight: 600;
+}
+
+.dashboards-chip__stack {
+  display: inline-flex;
+}
+
+.dashboards-chip__stack > openclaw-session-owner-chip + openclaw-session-owner-chip {
+  margin-inline-start: -2px;
+}
+
+.dashboards-chip__stack .session-owner-chip {
+  box-shadow: 0 0 0 2px var(--bg-hover);
+}
+
+.dashboards-chip .dashboards-chip__remove {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+}
+
+.dashboards-display {
+  --oc-popover-padding: 12px 14px;
+
+  width: min(300px, calc(100dvw - 16px));
+  font-size: var(--control-ui-text-md);
+}
+
+.dashboards-display__views {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: var(--space-2);
+}
+
+.dashboards-display__view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: var(--control-ui-font-weight-semibold);
+  cursor: var(--cursor-action);
+}
+
+.dashboards-display__view svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dashboards-display__view[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.dashboards-display__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  height: 40px;
+  color: var(--muted);
+}
+
+.dashboards-display__row select {
+  width: auto;
+  min-height: 32px;
+  height: 32px;
+  font-size: var(--control-ui-text-sm);
+}
+
+.dashboards-group + .dashboards-group {
+  margin-top: var(--space-6);
+}
+
+.dashboards-group__heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 2px var(--space-3);
+  color: var(--muted);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+.dashboards-group__heading > openclaw-session-owner-chip {
+  display: inline-flex;
+}
+
+.dashboards-group__heading .session-owner-chip {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  box-shadow: none;
+  font-size: 8px;
+}
+
+/* List rows reuse the card's title, author and time treatment. */
+.dashboard-row__main {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) 200px 150px;
+  gap: var(--space-4);
+  align-items: center;
+  height: 64px;
+  margin: 0 calc(-1 * var(--space-3));
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-lg);
+  color: inherit;
+}
+
+a.dashboard-row__main:hover {
+  background: var(--bg-hover);
+}
+
+.dashboard-row__main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.dashboard-row__thumb {
+  width: 76px;
+  height: 48px;
+  overflow: hidden;
+  padding: 5px 6px 0;
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--text) 6%, var(--card));
+  pointer-events: none;
+}
+
+/* The board renders at a sheet's size, then scales down to the thumbnail. */
+.dashboard-row__canvas {
+  position: relative;
+  width: 860px;
+  height: 600px;
+  overflow: hidden;
+  border-radius: 64px 64px 0 0;
+  background: var(--bg);
+  box-shadow: 0 0 0 12px color-mix(in srgb, var(--text) 7%, transparent);
+  transform: scale(calc(64 / 860));
+  transform-origin: 0 0;
+}
+
+.dashboard-row__canvas > openclaw-dashboard-preview,
+.dashboard-row__canvas openclaw-board-document {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.dashboard-row__canvas .board-document__content > openclaw-board-view {
+  padding: 0;
+  overflow: hidden;
+}
+
+.dashboard-row__canvas .board-tabs {
+  display: none;
+}
+
+.dashboard-row__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dashboard-row__title h2 {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: calc(15px * var(--control-ui-text-scale));
+  font-weight: var(--control-ui-font-weight-semibold);
+  line-height: calc(22px * var(--control-ui-text-scale));
+}
+
+.dashboard-row__title > .session-run-spinner {
+  width: 14px;
+  height: 14px;
+}
+
+.dashboard-row .dashboard-card__title,
+.dashboard-row .dashboard-card__author-name {
+  --hover-marquee-fade-width: 24px;
+
+  display: block;
+  min-width: 0;
+}
+
+.dashboard-row__author {
+  color: var(--muted);
+  font-size: calc(13.5px * var(--control-ui-text-scale));
+}
+
+.dashboard-row .dashboard-row__author .session-owner-chip {
+  width: 18px;
+  height: 18px;
+  font-size: 8px;
+}
+
+.dashboard-row__updated {
+  margin: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: calc(13.5px * var(--control-ui-text-scale));
+  text-align: end;
 }
 
 .dashboards-grid {
@@ -152,7 +445,7 @@
   min-width: 0;
 }
 
-.dashboards-grid__item > .dashboard-card {
+.dashboard-card {
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -262,6 +555,7 @@
 
 /* Titles never ellipsize: they fade, and loop on card hover when they overflow. */
 .dashboard-card__heading {
+  min-height: 22px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -276,7 +570,7 @@
   font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: var(--control-ui-font-weight-semibold);
   letter-spacing: -0.01em;
-  line-height: 22px;
+  line-height: calc(22px * var(--control-ui-text-scale));
 }
 
 .dashboard-card .dashboard-card__title,
@@ -373,55 +667,65 @@
   }
 }
 
+/* Phone search stays on its own row, including while the gallery loads. */
 @media (max-width: 768px) {
-  .dashboards-toolbar {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  .content-header.hub-page-header.dashboards-header {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "title"
+      "actions";
+    align-items: center;
   }
-  .dashboards-search {
-    grid-column: 1 / -1;
+  .dashboards-header .hub-page-header__actions {
+    justify-self: stretch;
   }
-  .dashboards-select select,
-  .dashboards-loading__select {
-    width: 100%;
-    min-width: 0;
+  .dashboards-header .dashboards-search {
+    flex: 1;
+    width: auto;
+  }
+  .dashboards-header .dashboards-search:not(:has(.oc-icon-button)) {
+    padding-inline-end: var(--space-3);
+  }
+  .dashboards-gallery {
+    padding-top: var(--space-4);
   }
 }
 
 @media (max-width: 560px) {
-  .dashboards-header__count {
-    display: none;
-  }
   .dashboards-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .dashboards-toolbar {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--space-2);
+  /* Title and meta sit close; rows breathe between each other. */
+  .dashboard-row__main {
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "thumb title title"
+      "thumb author updated";
+    row-gap: 2px;
+    column-gap: var(--space-3);
+    height: auto;
+    padding-block: var(--space-3);
   }
-  .dashboards-search {
-    grid-column: auto;
+  .dashboard-row__thumb {
+    grid-area: thumb;
+    align-self: center;
+    width: 64px;
+    height: 44px;
+    padding: 4px 5px 0;
   }
-  .dashboards-select,
-  .dashboards-results {
-    display: none;
+  .dashboard-row__canvas {
+    transform: scale(calc(54 / 860));
   }
-  .dashboards-filter {
-    display: block;
+  .dashboard-row__title {
+    grid-area: title;
   }
-  .dashboards-filter__trigger,
-  .dashboards-loading__filter {
-    width: var(--settings-control-height);
-    min-width: 0;
-    height: var(--settings-control-height);
-    padding: 0;
-    border-radius: var(--field-radius);
+  .dashboard-row__author {
+    grid-area: author;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
-  .dashboards-filter__trigger {
-    justify-content: center;
-  }
-  .dashboards-filter__trigger svg {
-    width: 14px;
-    height: 14px;
+  .dashboard-row__updated {
+    grid-area: updated;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
   /* The preview is inert and the card already names it, so its widgets drop the title bar. */
   .dashboard-preview .board-widget {

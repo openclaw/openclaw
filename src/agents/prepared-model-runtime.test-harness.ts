@@ -69,6 +69,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   })),
   createPreparedModelCatalogWorker:
     vi.fn<typeof import("./prepared-model-catalog-worker.js").createPreparedModelCatalogWorker>(),
+  publishedRuntimeModels: new Map<string, import("../llm/types.js").Model[]>(),
   configuredAgentIds: [] as string[],
   configuredAgentIdsError: undefined as Error | undefined,
   configuredAgentDirs: new Map<string, string>(),
@@ -148,7 +149,7 @@ vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
         );
         return {
           modelCatalog: catalog,
-          runtimeModels: new Map(),
+          runtimeModels: preparedModelRuntimeMocks.publishedRuntimeModels,
           providerExpiries: new Map(),
           configuredRuntimeModels: factoryArgs[0].agentFacts.configuredRuntimeModels,
         };
@@ -387,10 +388,11 @@ vi.mock("./model-discovery-context.js", async (importOriginal) => {
   return { resolveModelWorkspaceDir, resolveModelPluginMetadataSnapshot: () => undefined };
 });
 
-vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: (...args: unknown[]) =>
+// mock-isolation: Lifecycle fixtures control model planning/publication timing and failures without initializing real persistence state.
+vi.mock("./models-config.core.js", () => ({
+  ensureOpenClawModelsJsonWithInput: (...args: unknown[]) =>
     preparedModelRuntimeMocks.ensureOpenClawModelsJson(...args),
-  planOpenClawModelsJsonSource: (...args: unknown[]) =>
+  planOpenClawModelsJsonSourceWithInput: (...args: unknown[]) =>
     preparedModelRuntimeMocks.planOpenClawModelsJsonSource(...args),
 }));
 
@@ -493,6 +495,7 @@ export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState)
     .mockReset()
     .mockResolvedValue({ entries: [], routeVariants: [] });
   preparedModelRuntimeMocks.createPreparedModelCatalogWorker.mockClear();
+  preparedModelRuntimeMocks.publishedRuntimeModels = new Map();
   preparedModelRuntimeMocks.discoverAuthStorage
     .mockReset()
     .mockImplementation(() => preparedModelRuntimeMocks.authStorage);

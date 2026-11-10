@@ -84,6 +84,67 @@ async function openResult() {
 }
 const waitMatch = (text: string) => waitForSolid(() => expect(match()).toBe(text));
 
+it.each([false, true])(
+  "searches a provider's records without treating references as workspace files (empty=%s)",
+  async (empty) => {
+    update({
+      engine: { kind: "pinned", id: "knowledge", availability: "enabled" },
+      advertisedMethods: ["memory.search", "memory.get"],
+    });
+    request.mockImplementation(async (method, params) => {
+      if (
+        method === "memory.get" &&
+        params.version === 2 &&
+        (params.reference as { id: string })?.id === "record-123"
+      ) {
+        return { status: "ok", text: "Stored Knowledge record body.", truncated: true };
+      }
+      if (method !== "memory.search" || params.version !== 2) {
+        throw new Error(
+          'memory plugin "knowledge" uses the provider runtime; retry memory.search with version: 2',
+        );
+      }
+      return {
+        version: 2,
+        agentId: "main",
+        providerId: "knowledge",
+        hits: empty
+          ? []
+          : [
+              {
+                reference: { providerId: "knowledge", id: "record-123", revision: "1:hash@vault" },
+                excerpt: "Ada prefers careful reviews from stored Knowledge.",
+                citations: [
+                  {
+                    label: "Review preferences",
+                    reference: { providerId: "knowledge", id: "record-123" },
+                  },
+                ],
+              },
+            ],
+        coverage: "partial",
+        warning: "Only the admitted private partition was searched.",
+      };
+    });
+    search();
+    await waitText(
+      empty ? "No memories matched" : "Ada prefers careful reviews from stored Knowledge.",
+    );
+    expectText(
+      element,
+      ["Only the admitted private partition was searched."],
+      ["Memory search failed", "NaN", "undefined"],
+    );
+    if (!empty) {
+      expect(element.textContent).toContain("Review preferences");
+      await openResult();
+      await waitText("Stored Knowledge record body.");
+      expect(element.textContent).toContain("This record excerpt is partial.");
+    }
+    expect(fileReads()).toHaveLength(0);
+  },
+);
+
 it("loads changed locales without replacing the search input or its draft", async () => {
   const originalInput = input();
   expect(originalInput.placeholder).toBe("Search this agent's memories");

@@ -13,7 +13,9 @@ import {
 import { resolveConfiguredSetupModelForAgent } from "../agents/utility-model.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
+import { captureRuntimeConfigWithSource } from "../config/runtime-config-capture-state.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -65,7 +67,7 @@ export type DefaultInferenceRouteProjection = {
   tools: OpenClawConfig["tools"];
 };
 
-function projectSystemAgentExecutionConfig(
+export function projectSystemAgentExecutionConfig(
   config: OpenClawConfig,
   routeAgentId: string,
   allowProspectiveAgent: boolean,
@@ -94,7 +96,7 @@ function projectSystemAgentExecutionConfig(
     },
   };
   copyConfigResolutionFacts(config, projected);
-  return projected;
+  return captureRuntimeConfigWithSource(projected, projectConfigOntoRuntimeSourceSnapshot(config));
 }
 
 export async function resolveSystemAgentConfiguredRouteFromConfig(

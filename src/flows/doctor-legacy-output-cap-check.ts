@@ -17,7 +17,7 @@ function positiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-/** The cap OpenClaw would invent for this row if its saved maxTokens were removed. */
+/** Context-sized fallback only; a catalog limit may still apply after removing the saved cap. */
 function defaultCapWithoutSavedValue(model: Record<string, unknown>): number {
   const window = positiveNumber(model.contextWindow) ?? DEFAULT_CONTEXT_TOKENS;
   const served = positiveNumber(model.contextTokens) ?? window;
@@ -83,9 +83,9 @@ export const legacyOutputCapCheck: HealthCheck = {
         target: displayProvider,
         path,
         message:
-          `Provider "${displayProvider}" pins maxTokens to a former onboarding default on ${listed}${more}. ` +
-          `OpenClaw's default output cap for models without a known limit is now up to ${next} tokens, ` +
-          "so these rows stay capped lower than new setups.",
+          `Provider "${displayProvider}" has saved maxTokens values matching former onboarding defaults on ${listed}${more}. ` +
+          `OpenClaw's default output cap for models without a known limit is now up to ${next} tokens. ` +
+          "A provider catalog limit may leave the output cap unchanged or lower it when the saved value is removed.",
         fixHint:
           "If you did not choose these values, remove maxTokens from those model rows to use the provider catalog limit or the new default. Keep them if your server needs the lower cap.",
         docsUrl: "https://docs.openclaw.ai/concepts/model-providers/custom-providers",

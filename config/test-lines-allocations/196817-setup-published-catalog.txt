@@ -1,0 +1,3 @@
+# Lease-boundary regression for #196817: retain the subscription route and reject four mismatched scopes/configurations.
+# The 103-line regression needs 95 additional lines of credit after the retained integration's 8-line surplus.
+95

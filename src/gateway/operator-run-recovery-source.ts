@@ -76,7 +76,10 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
 }): OperatorRunRecoverySnapshot | undefined {
   const { client, authority, identity } = params;
   const remote = client.internal?.remoteIngressPrincipal;
-  if (remote?.recoverySource) {
+  if (remote) {
+    if (!remote.recoverySource) {
+      return undefined;
+    }
     remote.assertCurrent();
     authority.assertCurrent();
     const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
@@ -86,16 +89,18 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
     const profile = identity.readCurrentProfile();
     return normalizeGatewayOperatorRecoverySnapshot({
       profileId: authority.profileId,
+      openclawIdPrincipal: authority.openclawIdPrincipal,
       scopes: [...authority.scopes],
       assignedRole: profile.assignedRole,
       githubLogin: profile.githubLogin ?? null,
       rolePolicy: sourceRolePolicy(
-        resolveOperatorRolePolicyForAssignment(
-          profile.profileId,
-          profile.assignedRole,
-          params.config,
-          profile.githubLogin ?? null,
-        ),
+        openclawIdTunnelRolePolicy(authority.openclawIdPrincipal) ??
+          resolveOperatorRolePolicyForAssignment(
+            profile.profileId,
+            profile.assignedRole,
+            params.config,
+            profile.githubLogin ?? null,
+          ),
       ),
       modelPolicy,
       grant: authority.gatewayAccessGrant,

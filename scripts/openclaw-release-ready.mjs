@@ -29,6 +29,7 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version
 import {
   authenticatePreparedNpmArtifact,
   consumePreparedNpmPackage,
+  createPreparedNpmCapacityObserver,
   downloadPreparedNpmRelease,
   validatePreparedNpmArtifactDescriptor,
 } from "./plugin-npm-prepared-release.mjs";
@@ -475,9 +476,15 @@ async function loadPreparedPlugins({
 }
 
 export async function prefetchPreparedPlugins(options) {
-  const manifests = await loadPreparedPlugins(options);
-  const { plugins, inputs, sourceSha, toolingSha, sourceRoot, outputDir, token, fetchImpl } =
-    options;
+  const capacity = options.reportCapacity
+    ? createPreparedNpmCapacityObserver(options.fetchImpl)
+    : undefined;
+  const manifests = await loadPreparedPlugins({
+    ...options,
+    fetchImpl: capacity?.fetchImpl ?? options.fetchImpl,
+  });
+  const { plugins, inputs, sourceSha, toolingSha, sourceRoot, outputDir, token } = options;
+  const fetchImpl = capacity?.packageFetchImpl ?? options.fetchImpl;
   const admissionDir = mkdtempSync(join(outputDir, "verified-"));
   const tasks = [
     ...manifests.npm.packages.map(
@@ -519,6 +526,7 @@ export async function prefetchPreparedPlugins(options) {
     }
   }
   await manifests.adoption.revalidateAuthority?.();
+  capacity?.report(tasks.length);
   writeJson(join(admissionDir, "verified.json"), {
     sourceSha,
     toolingSha,

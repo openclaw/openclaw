@@ -94,6 +94,7 @@ it("launches an independent user service with private environment, cgroup limits
       "--property=ExitType=cgroup",
       "--property=RemainAfterExit=yes",
       "--property=KillMode=control-group",
+      "--property=LimitCORE=0",
       "--property=StandardInput=null",
       "--property=StandardOutput=append:/state/process.log",
       "--property=UnsetEnvironment=MANAGER_ONLY_TOKEN",

@@ -235,7 +235,9 @@ type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "source
 export type OpenClawStateReadResult =
   | ReadResult<
       ReturnType<
-        typeof import("./openclaw-state-read-handlers.js").readOpenClawStateDatabaseCommand
+        Awaited<
+          ReturnType<typeof import("./openclaw-state-read-handlers.js").prepareOpenClawStateRead>
+        >
       >
     >
   | { type: "meetingTranscripts.export"; result: TranscriptExportResult }

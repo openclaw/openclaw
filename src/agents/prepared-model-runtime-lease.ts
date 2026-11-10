@@ -4,6 +4,7 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { projectSystemAgentExecutionConfig } from "../system-agent/inference-route.js";
 import {
   getPreparedSharedAuthStoreOwnership,
   prepareSharedAuthStoreOwnership,
@@ -432,10 +433,19 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       }) ===
         ownerKey({
           ...inventoryInput,
+          readOnly: configuredOwner.input.readOnly,
           loadRuntimePlugins: false,
           runtimePluginPurpose: undefined,
           runtimePluginSelections: undefined,
-        })
+        }) &&
+      (!input.readOnly ||
+        preparedModelRuntimeConfigsMatch(configuredOwner.input.config, inventoryInput.config) ||
+        (input.runtimePluginPurpose === "isolated-completion" &&
+          input.agentId !== undefined &&
+          preparedModelRuntimeConfigsMatch(
+            projectSystemAgentExecutionConfig(configuredOwner.input.config, input.agentId, false),
+            inventoryInput.config,
+          )))
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);

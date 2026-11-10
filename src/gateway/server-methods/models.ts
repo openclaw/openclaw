@@ -117,6 +117,12 @@ export const modelsHandlers: GatewayRequestHandlers = {
           });
           void owner?.recheckNativeLogin?.();
           if (!params.preparedOnly && params.view !== "provider-config") {
+            void owner
+              ?.loadFullModelCatalog?.({
+                changedOnly: true,
+                ...(params.provider ? { providerIds: [params.provider] } : {}),
+              })
+              .catch(() => undefined);
             void owner?.loadNativeModelCatalog?.().catch(() => undefined);
           }
         }
@@ -158,10 +164,10 @@ export const modelsHandlers: GatewayRequestHandlers = {
               assertCurrent();
               const currentConfig = context.getRuntimeConfig();
               const projected =
-                scope && params.view !== "provider-config"
+                params.view !== "provider-config"
                   ? {
                       ...result,
-                      ...(scope.sessionKey
+                      ...(scope?.sessionKey
                         ? {
                             sessionModelRevision: sessionModelRevision(
                               scope.sessionEntry,
@@ -171,7 +177,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
                           }
                         : {}),
                       models: projectSessionModelCatalog(
-                        scope,
+                        scope ?? { agentId: resolved.agentId },
                         result.models,
                         currentConfig,
                         runtimeOwnership,

@@ -9,6 +9,11 @@ export function buildChromeLaunchEnv(): NodeJS.ProcessEnv {
   env.HOME = os.homedir();
   stripGatewayAllocatorEnv(env);
   if (process.platform === "linux") {
+    // Leave room in sockaddr_un for Chromium's private directory and SingletonSocket.
+    // Chromium creates that directory itself with mode 0700 under the selected root.
+    if (Buffer.byteLength(env.TMPDIR ?? "") > 50) {
+      env.TMPDIR = "/tmp";
+    }
     const chromiumStateDir = path.join(resolvePreferredOpenClawTmpDir(), ".chromium");
     env.XDG_CONFIG_HOME ??= chromiumStateDir;
     env.XDG_CACHE_HOME ??= chromiumStateDir;

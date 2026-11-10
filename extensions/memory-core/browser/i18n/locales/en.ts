@@ -28,6 +28,10 @@ const en = {
       fileLoading: "Loading the full memory file…",
       fileError: "Could not load this memory file: {message}",
       fileUnsupported: "This memory file cannot be shown as text.",
+      recordLoading: "Loading memory record…",
+      recordError: "Could not load this memory record: {message}",
+      recordMissing: "This memory record is no longer available.",
+      recordPartial: "This record excerpt is partial.",
     },
     overview: {
       hero: {
