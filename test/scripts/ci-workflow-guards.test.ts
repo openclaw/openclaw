@@ -3229,7 +3229,7 @@ process.exit(JSON.parse(process.env.RECIPE_EXITS)[count] ?? 99);
           cwd: workspace,
           encoding: "utf8",
           env: {
-            PATH: process.env.PATH,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
             NODE_BIN: bin,
             GITHUB_ACTION_PATH: path.resolve(".github/actions/setup-node-env"),
             GITHUB_WORKSPACE: workspace,
