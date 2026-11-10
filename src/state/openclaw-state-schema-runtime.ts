@@ -14,6 +14,7 @@ import { withLegacyTemplateStateSchema } from "./openclaw-state-db-schema-v36-te
 import { withLegacyWorkerResourceReceipts } from "./openclaw-state-db-schema-v37-resource-receipts.js";
 import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
+import { withLegacyDevicePairingBrowserRequests } from "./openclaw-state-db-schema-v40-device-pairing-browser-requests.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const runtimeSchemaCache = new Map<string, string>();
@@ -63,6 +64,7 @@ export function getOpenClawStateRuntimeSchema(options: {
 export function getOpenClawStatePredecessorSchema(version: number): string {
   let schema = OPENCLAW_STATE_SCHEMA_SQL;
   for (const [introduced, transform] of [
+    [40, withLegacyDevicePairingBrowserRequests],
     [39, withLegacyWorkerRetention],
     [38, withLegacyRepositoryDiskAuthority],
     [37, withLegacyWorkerResourceReceipts],

@@ -13,7 +13,10 @@ import { extractSqliteTableSchema } from "../../src/infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../src/state/openclaw-agent-db-contract.js";
 import { getOpenClawAgentMigrationSchema } from "../../src/state/openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
-import { getOpenClawStateRuntimeSchema } from "../../src/state/openclaw-state-schema-runtime.js";
+import {
+  getOpenClawStateRuntimeSchema,
+  getOpenClawStatePredecessorSchema,
+} from "../../src/state/openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import {
   readGeneratedSqliteCatalog,
@@ -78,6 +81,17 @@ describe("generated SQLite schema catalogs", () => {
       expect(registeredSql.has(sql)).toBe(true);
       expect(readGeneratedSqliteFingerprint(sql)).toBeDefined();
     }
+  });
+
+  it("keeps predecessor schemas free of objects introduced after their version", () => {
+    // A state schema edit without a matching predecessor transform retires every
+    // derived hash, stranding real databases on the previous layout.
+    const predecessor39 = getOpenClawStatePredecessorSchema(39);
+    expect(predecessor39).not.toContain(
+      "CREATE TABLE IF NOT EXISTS device_pairing_browser_requests",
+    );
+    expect(readGeneratedSqliteFingerprint(predecessor39)).toBeDefined();
+    expect(readGeneratedSqliteCatalog(predecessor39)).toBeDefined();
   });
 
   it.each([
