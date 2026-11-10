@@ -82,6 +82,7 @@ function runBasePreparation(repo: string, base: string, eventName: string) {
       ),
       PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
       RUNNER_OS: process.platform === "win32" ? "Windows" : "Linux",
+      RUNNER_TEMP: bin,
       GITHUB_ACTION_PATH: actionPath,
       GITHUB_EVENT_NAME: eventName,
       GITHUB_BASE_REF: "main",
@@ -133,4 +134,43 @@ it.each([
         ? mainBase
         : eventBase,
   );
+});
+
+it("reuses hydrated pnpm paths across an empty SSH environment", () => {
+  const root = createTempDir("openclaw-testbox-pnpm-");
+  const bin = path.join(root, "prepared tools");
+  const exposed = path.join(root, "bin");
+  for (const directory of [bin, exposed]) fs.mkdirSync(directory);
+  const writeTool = (name: string, text: string) =>
+    fs.writeFileSync(path.join(bin, name), text, { mode: 0o755 });
+  writeTool("node", '#!/bin/sh\nprintf "%s\\n" "$TESTBOX_NODE"\n');
+  writeTool("git", '#!/bin/sh\nprintf "%s\\n" fixture-base\n');
+  writeTool("sudo", '#!/bin/sh\nexec "$@"\n');
+  writeTool("corepack", '#!/bin/bash\nprintf "%s\\0" "${COREPACK_HOME-}" "${PNPM_CONFIG_STORE_DIR-}" "${PNPM_CONFIG_CACHE_DIR-}" "$@"\n');
+  const prepared = Object.fromEntries(
+    ["COREPACK_HOME", "PNPM_CONFIG_STORE_DIR", "PNPM_CONFIG_CACHE_DIR"]
+      .map((key) => [key, path.join(root, `${key} space ' quote`)]),
+  );
+  const action = parse(fs.readFileSync(".github/actions/prepare-testbox-shell/action.yml", "utf8"));
+  const result = spawnSync("/bin/bash", ["-euo", "pipefail", "-c",
+    action.runs.steps[0].run.replaceAll("/usr/local/bin", exposed)], {
+    encoding: "utf8",
+    env: { ...process.env, ...prepared, PATH: `${bin}:${process.env.PATH}`,
+      TESTBOX_NODE: path.join(bin, "node"), RUNNER_TEMP: root,
+      GITHUB_EVENT_NAME: "workflow_dispatch", TESTBOX_BASE_REF: "HEAD" },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  for (const program of ["pnpm", "corepack"]) {
+    const overrides: Record<string, string>[] = [{}, { PNPM_CONFIG_STORE_DIR: "/explicit/store" }];
+    for (const override of overrides) {
+      const args = [...(program === "corepack" ? ["pnpm"] : []), "install", "--offline", "two words"];
+      const command = spawnSync(path.join(exposed, program), args, {
+        encoding: "utf8", env: { PATH: "/usr/bin:/bin", HOME: root, ...override },
+      });
+      expect(command.status, command.stderr).toBe(0);
+      expect(command.stdout.split("\0").slice(0, -1)).toEqual([
+        ...Object.values({ ...prepared, ...override }), "pnpm", "install", "--offline", "two words",
+      ]);
+    }
+  }
 });
