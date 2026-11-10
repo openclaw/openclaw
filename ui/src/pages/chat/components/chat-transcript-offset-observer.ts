@@ -247,6 +247,11 @@ export function observeTranscriptOffset(
   };
   const recordProgrammaticScroll = (before: number, after: number) => {
     const delta = before - nativeOffset;
+    // A resize receipt can consume reader movement before its native event.
+    // Release a completed end target before the clamp hides that departure.
+    if (delta !== 0 && !owner.state.hasPendingCommand) {
+      owner.cancelScroll();
+    }
     nativeOffset = after;
     publish({
       type: "offset",

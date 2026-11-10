@@ -317,6 +317,8 @@ it.each([true, false])(
 async function resizeViewport(host: EndFollowFixture, thread: HTMLElement, height: number) {
   host.viewportHeight = height;
   host.requestRender();
+  await host.updateComplete;
+  host.transcript.syncViewportGeometry();
   await expect.poll(() => thread.clientHeight).toBe(height);
 }
 
@@ -636,30 +638,28 @@ it.each([
         idleAtClamp ||= scrollingAtClamp && !event.scrolling;
       }
     });
-    try {
-      if (beforeClamp) {
-        thread.scrollTop -= readerMovement;
+    onTestFinished(unsubscribe);
+    if (beforeClamp) {
+      if (behavior === "settled") {
+        host.transcript.scrollToEnd({ behavior: "auto" });
       }
-      await resizeViewport(host, thread, 500);
-      expect(thread.scrollTop).toBe(original - 100);
-      if (!beforeClamp) {
-        thread.scrollTop -= readerMovement;
-      }
-      const readerPosition = thread.scrollTop;
-      // The existing native observer must settle while layout holds the reader
-      // at a temporary end, not after the original viewport has returned.
-      // The settled cases deliberately restore the viewport before this idle.
-      if (behavior !== "settled") {
-        await expect.poll(() => idleAtClamp).toBe(true);
-      }
-      await resizeViewport(host, thread, 400);
-      await settleFrames();
-      expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original);
-      await growLastRow(host, extent);
-      expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original + 48);
-    } finally {
-      unsubscribe();
+      thread.scrollTop -= readerMovement;
     }
+    await resizeViewport(host, thread, 500);
+    expect(thread.scrollTop).toBe(original - 100);
+    if (!beforeClamp) {
+      thread.scrollTop -= readerMovement;
+    }
+    const readerPosition = thread.scrollTop;
+    // Only command cases wait for native idle while the viewport remains clamped.
+    if (behavior !== "settled") {
+      await expect.poll(() => idleAtClamp).toBe(true);
+    }
+    await resizeViewport(host, thread, 400);
+    await settleFrames();
+    expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original);
+    await growLastRow(host, extent);
+    expect(thread.scrollTop).toBe(readerMovement ? readerPosition : original + 48);
   },
 );
 
