@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { pluginCatalogIdFromRouteSuffix } from "../../../../../packages/plugin-package-contract/src/catalog-route.ts";
 import type { TemplatePluginInstallNotice } from "../../../../../src/shared/template-install-notice.js";
 import { pathForPluginCatalogEntry } from "../../../app-route-paths.ts";
@@ -8,7 +8,18 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/chat/clawhub-card.css";
 
 /** Installer receipt, not a recommendation: no discovery reads or install actions. */
-export function ChatTemplatePluginCard(props: { notice: TemplatePluginInstallNotice }) {
+export function ChatTemplatePluginCards(props: { notices: TemplatePluginInstallNotice[] }) {
+  const notices = createMemo(() => [
+    ...new Map(props.notices.map((notice) => [notice.pluginId, notice])).values(),
+  ]);
+  return (
+    <For each={notices()} keyed={(notice) => notice.pluginId}>
+      {(notice) => <ChatTemplatePluginCard notice={notice()} />}
+    </For>
+  );
+}
+
+function ChatTemplatePluginCard(props: { notice: TemplatePluginInstallNotice }) {
   const context = useApplication();
   const catalogId = () =>
     pluginCatalogIdFromRouteSuffix(props.notice.packageName.replace(/^@/, "")) ??

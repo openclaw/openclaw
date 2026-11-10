@@ -18,28 +18,19 @@ export function readTemplatePluginInstallNotice(
   if (
     !isRecord(value) ||
     value.type !== "template_plugin_install" ||
-    typeof value.pluginId !== "string" ||
-    !value.pluginId.trim() ||
-    typeof value.packageName !== "string" ||
-    !value.packageName.trim() ||
-    typeof value.displayName !== "string" ||
-    !value.displayName.trim() ||
-    (value.status !== "installed" && value.status !== "error")
+    !["pluginId", "packageName", "displayName"].every(
+      (key) => typeof value[key] === "string" && value[key].trim().length > 0,
+    ) ||
+    (value.status !== "installed" && value.status !== "error") ||
+    !["registryId", "iconUrl", "error"].every(
+      (key) => value[key] === undefined || typeof value[key] === "string",
+    ) ||
+    (value.official !== undefined && typeof value.official !== "boolean")
   ) {
     return undefined;
   }
-  return {
-    type: "template_plugin_install",
-    pluginId: value.pluginId,
-    packageName: value.packageName,
-    displayName: value.displayName,
-    ...(typeof value.registryId === "string" ? { registryId: value.registryId } : {}),
-    ...(typeof value.iconUrl === "string" ? { iconUrl: value.iconUrl } : {}),
-    ...(typeof value.official === "boolean" ? { official: value.official } : {}),
-    ...(value.status === "error"
-      ? { status: "error", ...(typeof value.error === "string" ? { error: value.error } : {}) }
-      : { status: "installed" }),
-  };
+  // SAFETY: every required and optional receipt field is validated above.
+  return value as TemplatePluginInstallNotice;
 }
 
 export type TemplateInstallOutcome =

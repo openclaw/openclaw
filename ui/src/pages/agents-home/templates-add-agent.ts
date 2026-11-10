@@ -3,6 +3,7 @@ import { routeIdFromPath } from "../../app-route-paths.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { completeAgentCreation } from "../../lib/agents/creation-recovery.runtime.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -91,7 +92,7 @@ export async function addTemplateAgent(
       { initializationPending: true },
     );
     retainCreatedComposer(context, saved.sessionKey, composer);
-    pending.complete({ id: saved.agentId, name });
+    completeAgentCreation(context.agents.state, pending, { id: saved.agentId, name });
     void context.agents.refreshList();
   };
   const admit = (ready: { agentId: string; sessionKey: string }) => {
@@ -104,7 +105,7 @@ export async function addTemplateAgent(
     composer.accept({ key: ready.sessionKey, initialRun: { status: "idle" } });
     retainCreatedComposer(context, ready.sessionKey, composer);
     creation.admitted = true;
-    pending.complete({ id: ready.agentId, name });
+    completeAgentCreation(context.agents.state, pending, { id: ready.agentId, name });
     void context.agents.refreshList();
     if (foreground) {
       selectApplicationSession({

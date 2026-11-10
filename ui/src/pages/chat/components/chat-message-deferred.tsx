@@ -18,7 +18,7 @@ const Recommendation = lazy(() => import("./chat-clawhub-card.tsx"), {
 });
 
 const TemplatePluginReceipt = lazy(() => import("./chat-template-plugin-card.tsx"), {
-  export: "ChatTemplatePluginCard",
+  export: "ChatTemplatePluginCards",
 });
 
 // Pending New Session images use this adapter; transcript images render with the row.
@@ -101,12 +101,14 @@ export function ChatClawHubCard(
   );
 }
 
-export function ChatTemplatePluginCard(
-  props: Parameters<typeof import("./chat-template-plugin-card.tsx").ChatTemplatePluginCard>[0],
+export function ChatTemplatePluginCards(
+  props: Parameters<typeof import("./chat-template-plugin-card.tsx").ChatTemplatePluginCards>[0],
 ) {
   return (
-    <ChatLazyBoundary>
-      <TemplatePluginReceipt {...props} />
-    </ChatLazyBoundary>
+    <Show when={props.notices.length > 0}>
+      <ChatLazyBoundary>
+        <TemplatePluginReceipt {...props} />
+      </ChatLazyBoundary>
+    </Show>
   );
 }
