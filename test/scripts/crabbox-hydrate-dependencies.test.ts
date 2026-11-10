@@ -201,18 +201,22 @@ fi
 `,
         0o755,
       );
-      const result = spawnSync("bash", [".github/actions/setup-node-env/install-dependencies.sh"], {
-        encoding: "utf8",
-        env: {
-          PATH: bin,
-          NODE_BIN: nodeBin,
-          FROZEN_LOCKFILE: frozen,
-          DEPENDENCY_CACHE: "false",
-          DEPENDENCY_CACHE_HIT: "false",
-          PNPM_CALLS: calls,
-          PNPM_LOCK: lock,
+      const result = spawnSync(
+        "/bin/bash",
+        [".github/actions/setup-node-env/install-dependencies.sh"],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: bin,
+            NODE_BIN: nodeBin,
+            FROZEN_LOCKFILE: frozen,
+            DEPENDENCY_CACHE: "false",
+            DEPENDENCY_CACHE_HIT: "false",
+            PNPM_CALLS: calls,
+            PNPM_LOCK: lock,
+          },
         },
-      });
+      );
       expect(result.status, result.stderr).toBe(frozen === "invalid" ? 2 : 0);
       expect(readFileSync(lock, "utf8")).toBe(frozen === "false" ? "rewritten\n" : "original\n");
       expect(existsSync(calls)).toBe(frozen !== "invalid");
