@@ -506,7 +506,7 @@ describe("saveMessageResourceFeishu", () => {
     ["attachment; filename=\"a;b.csv\"; filename*=UTF-8''preferred.csv", undefined, "preferred"],
     ['attachment; filename="report; final.csv', undefined, "backup"],
   ])("saves the filename from %s / %s", async (disposition, originalFilename, base) => {
-    const headers = disposition ? { "content-disposition": disposition } : {};
+    const headers = disposition ? { "content-disposition": disposition } : undefined;
     messageResourceGetMock.mockResolvedValueOnce(resourceResponse("a,b\n1,2\n", headers));
     const result = await downloadResource({ originalFilename: originalFilename ?? "backup.csv" });
     expect(result.id).toMatch(new RegExp(`^${base}---[a-f0-9-]{36}\\.csv$`));
