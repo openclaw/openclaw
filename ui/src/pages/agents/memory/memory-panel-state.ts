@@ -18,6 +18,7 @@ import { pathDisplayName } from "../../../lib/path-display.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 import { projectOwner, projectMutableSource } from "../../../lib/reactive/projection.ts";
 import { showToast } from "../../../lib/toast.ts";
+import { blocksHostEnable, resolveDreamingOwner, statusPromotedCount } from "./dreaming-owner.ts";
 import {
   canCallDreamingMethod,
   clearSettledDreamingRead,
@@ -330,8 +331,12 @@ export function createAgentMemory(
     }
   }
 
+  const ownerBlocks = (enabled: boolean | null) =>
+    blocksHostEnable(dreaming.dreamingStatus, enabled);
+
   function setEnabled(enabled: boolean) {
     if (
+      ownerBlocks(enabled) ||
       !canCallDreamingMethod(dreaming, "config.patch", "operator.admin") ||
       dreaming.dreamingModeSaving ||
       toggleRequest?.pending ||
@@ -363,6 +368,11 @@ export function createAgentMemory(
   }
 
   function confirmToggle(): Promise<void> | undefined {
+    // The owner's report can arrive while the confirmation is already open.
+    if (ownerBlocks(pendingEnabled)) {
+      cancelToggle();
+      return undefined;
+    }
     const enabled = pendingEnabled;
     if (
       enabled == null ||
@@ -394,9 +404,12 @@ export function createAgentMemory(
 
   async function updateToggle(scope: DreamingTaskScope, enabled: boolean) {
     const runtimeConfig = context.runtimeConfig;
+    // Rechecked before each write step: the owner's report can also land while
+    // the write awaits the schema lookup.
     const canDispatch = () =>
       isTaskScopeCurrent(scope) &&
       context.runtimeConfig === runtimeConfig &&
+      !ownerBlocks(enabled) &&
       canCallDreamingMethod(scope.state, "config.patch", "operator.admin");
     const updated = await runDreamingTask(
       (dreamingState) => updateDreamingEnabled(dreamingState, runtimeConfig, enabled, canDispatch),
@@ -406,6 +419,12 @@ export function createAgentMemory(
       return;
     }
     if (!updated) {
+      // Declined by the owner lock, not failed: close like the early guard does.
+      if (ownerBlocks(enabled)) {
+        pendingEnabled = null;
+        dreaming.dreamingStatusError = null;
+        return;
+      }
       throw new Error(dreaming.dreamingStatusError ?? t("dreaming.toggleConfirmation.failed"));
     }
     await runtimeConfig.refresh();
@@ -462,6 +481,11 @@ export function createAgentMemory(
     // cached payload for a future refresh, but never present it as current runtime state.
     const dreamingStatus = configuredDreaming.engineOff ? null : dreaming.dreamingStatus;
     const dreamingOn = dreamingStatus?.enabled ?? configuredDreaming.enabled;
+    const owner = resolveDreamingOwner({
+      status: dreamingStatus,
+      pluginId: configuredDreaming.pluginId,
+      dreamingOn,
+    });
     const loading =
       (dreaming.resourceReads.dreamingStatus?.pending ?? false) || dreaming.dreamingModeSaving;
     const canUpdateConfig = canCallDreamingMethod(dreaming, "config.patch", "operator.admin");
@@ -472,7 +496,7 @@ export function createAgentMemory(
       (dreaming.resourceReads.dreamDiary?.pending ?? false);
 
     return {
-      header: { configuredDreaming, dreamingOn, loading, canUpdateConfig, refreshLoading },
+      header: { configuredDreaming, dreamingOn, loading, canUpdateConfig, refreshLoading, owner },
       dreaming: {
         access: {
           canOpenConfig: canCallDreamingMethod(dreaming, "config.openFile", "operator.admin", {
@@ -484,7 +508,7 @@ export function createAgentMemory(
           canResetGroundedShortTerm: canRunAction("doctor.memory.resetGroundedShortTerm"),
           canRepairDreamingArtifacts: canRunAction("doctor.memory.repairDreamingArtifacts"),
         },
-        active: dreamingOn,
+        active: owner.active,
         selectedAgentId: dreaming.selectedAgentId ?? "",
         statusError: dreaming.dreamingStatusError,
         readStatus: () => readResource(resourceReads.dreamingStatus()),
@@ -546,6 +570,7 @@ export function createAgentMemory(
       toggle: {
         open: pendingEnabled !== null,
         enabling: pendingEnabled === true,
+        ownerPluginId: owner.pluginId,
         disabled: !canUpdateConfig,
         onConfirm: confirmToggle,
         onCancel: cancelToggle,
@@ -666,7 +691,7 @@ export function createAgentMemory(
       : resourceReads.dreamingStatus().value;
     return {
       shortTermCount: status?.shortTermCount ?? 0,
-      promotedCount: status?.promotedToday ?? 0,
+      promotedCount: statusPromotedCount(status ?? null),
       phases: status?.phases,
       shortTermEntries: status?.shortTermEntries ?? [],
       promotedEntries: status?.promotedEntries ?? [],

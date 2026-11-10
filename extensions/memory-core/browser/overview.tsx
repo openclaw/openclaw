@@ -26,9 +26,15 @@ type MemoryOverviewProps = {
 };
 
 type DreamingStatus = NonNullable<DoctorMemoryStatusPayload["dreaming"]>;
-type DreamingPhase = DreamingStatus["phases"][keyof DreamingStatus["phases"]] & {
-  lastRunAtMs?: number;
-};
+type DreamingPhase = DreamingStatus["phases"][keyof DreamingStatus["phases"]];
+
+/**
+ * Whether the memory slot owner reports its own dreaming. Any report counts,
+ * the same rule the Dreams page uses to lock its switch.
+ */
+function ownerReportsDreaming(dreaming: DreamingStatus): boolean {
+  return dreaming.reportedByProvider === true || typeof dreaming.reportedEnabled === "boolean";
+}
 
 export function createMemoryOverview(
   context: ControlUiSettingsContext,
@@ -174,6 +180,11 @@ export function createMemoryOverview(
   }
 
   function Schedule(props: { dreaming: DreamingStatus }) {
+    // Without a provider the host switch gates every row. While a slot owner
+    // reports, each row shows its phase's own flags instead: a reported
+    // `enabled: false` must not hide a host phase that is still scheduled, and
+    // unreported host phases must not read as running.
+    const hostGate = () => ownerReportsDreaming(props.dreaming) || props.dreaming.enabled;
     // One sweep runs the phases in this order.
     const phases = createMemo(() =>
       (
@@ -182,16 +193,15 @@ export function createMemoryOverview(
           ["rem", props.dreaming.phases.rem],
           ["deep", props.dreaming.phases.deep],
         ] as const
-      ).map(([id, phase]) => ({
-        id,
-        phase,
-        scheduled: props.dreaming.enabled && phase.enabled && phase.managedCronPresent,
-        details: phaseScheduleDescription(
+      ).map(([id, phase]) => {
+        const scheduled = hostGate() && phase.enabled && phase.managedCronPresent;
+        return {
+          id,
           phase,
-          props.dreaming.timezone,
-          props.dreaming.enabled && phase.enabled && phase.managedCronPresent,
-        ),
-      })),
+          scheduled,
+          details: phaseScheduleDescription(phase, props.dreaming.timezone, scheduled),
+        };
+      }),
     );
     // A single sweep gives all three the same cadence, so it reads once, above them.
     const sharedDetails = createMemo(() => {
@@ -222,7 +232,7 @@ export function createMemoryOverview(
                   <SettingsStatus
                     kind={entry().scheduled ? "ok" : "muted"}
                     label={
-                      !props.dreaming.enabled || !entry().phase.enabled
+                      !hostGate() || !entry().phase.enabled
                         ? t("common.disabled")
                         : entry().phase.managedCronPresent
                           ? t("common.enabled")
@@ -255,23 +265,38 @@ export function createMemoryOverview(
   }
 
   function Activity(props: { dreaming: DreamingStatus }) {
+    // While a slot owner reports, the counters it reports describe the dreaming
+    // this page schedules, so these rows show its figures only, n/a for any it
+    // leaves out, instead of memory-core's count for a different store.
+    const ownerReports = () => ownerReportsDreaming(props.dreaming);
+    const counter = (key: "promotedToday" | "promotedTotal" | "shortTermCount") => {
+      const value = ownerReports() ? props.dreaming.reportedStats?.[key] : props.dreaming[key];
+      return value === undefined ? t("common.na") : String(value);
+    };
     return (
       <SettingsSection title={t("memoryPage.overview.activity.title")}>
         <>
           <SettingsRow
             title={t("memoryPage.overview.activity.promoted")}
+            description={
+              ownerReports()
+                ? t("memoryPage.overview.activity.ownerReported", {
+                    plugin: snapshot().engine.id ?? "",
+                  })
+                : undefined
+            }
             control={
               <SettingsValue
                 value={t("memoryPage.overview.activity.promotedValue", {
-                  today: String(props.dreaming.promotedToday),
-                  total: String(props.dreaming.promotedTotal),
+                  today: counter("promotedToday"),
+                  total: counter("promotedTotal"),
                 })}
               />
             }
           />
           <SettingsRow
             title={t("memoryPage.overview.activity.shortTermCount")}
-            control={<SettingsValue value={props.dreaming.shortTermCount} />}
+            control={<SettingsValue value={counter("shortTermCount")} />}
           />
           <SettingsRow
             title={t("memoryPage.overview.activity.phaseHitCount")}

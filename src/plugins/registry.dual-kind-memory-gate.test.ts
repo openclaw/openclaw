@@ -51,6 +51,24 @@ it("preserves an earlier capability when an artifact bridge fails", async () => 
   expect(selected()).toEqual(before);
 });
 
+it("layers a separately registered dreaming provider over its runtime capability", async () => {
+  const { config, register, selected } = fixture();
+  const getStatus = async () => ({ enabled: true });
+  register({ id: "memory-core", kind: "memory", memorySlotSelected: true }, (api) => {
+    api.registerMemoryCapability({ runtime: memoryRuntime(), flushPlanResolver: () => null });
+    api.registerMemoryCapability({ dreaming: { getStatus } });
+  });
+  const owner = selected();
+  // The later dreaming-only call must not drop the runtime memory search needs.
+  await expect(
+    owner?.capability.runtime?.getMemorySearchManager({ cfg: config, agentId: "main" }),
+  ).resolves.toEqual({ manager: null, error: "missing" });
+  expect(owner?.capability.flushPlanResolver?.({ cfg: config })).toBeNull();
+  await expect(
+    owner?.capability.dreaming?.getStatus({ cfg: config, agentId: "main" }),
+  ).resolves.toEqual({ enabled: true });
+});
+
 it("uses the last registration when neither owns the slot", () => {
   const promptBuilder = () => ["replacement prompt"];
   expect(
