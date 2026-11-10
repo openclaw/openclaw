@@ -354,9 +354,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expect.element(choices).toBeVisible();
     const choicePage = choices.closest<HTMLElement>(".picker-select__menu")!;
     await finishAnimations(choicePage);
+    const inset = Number.parseFloat(getComputedStyle(panel).paddingInlineStart);
     expect(choicePage.getBoundingClientRect()).toMatchObject({
-      left: sheet.left,
-      right: sheet.right,
+      left: sheet.left + inset,
+      right: sheet.right - inset,
     });
     const back = role("button", "Back");
     await expect.element(back).toHaveFocus();

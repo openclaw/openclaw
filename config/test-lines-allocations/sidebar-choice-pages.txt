@@ -1,0 +1,2 @@
+178
+# Production-path sidebar regressions cover short People pages, viewport-capped scrolling, Back/selection focus, unchanged Sessions roots, and compact catalog owners with a long roster.
