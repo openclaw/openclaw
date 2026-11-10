@@ -1,7 +1,7 @@
 import type { BigIntStats } from "node:fs";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
-import type { LocalWorkspaceCapture } from "./local-workspace-checkpoint.js";
 import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
+import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
 import { workspaceCtimeIsReusable } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 

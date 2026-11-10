@@ -17,7 +17,6 @@ import {
   selectLocalWorkspaceCheckpoint,
   stageLocalWorkspaceCheckpoint,
   createLocalWorkspaceCheckpointRejection,
-  type LocalWorkspaceCapture,
   type LocalWorkspaceSyncOptions,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
@@ -36,7 +35,7 @@ import type {
 } from "./local-workspace-manifest-scan.js";
 import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
-import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import type { LocalWorkspaceCapture, LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   loadStagedWorkspaceManifest,

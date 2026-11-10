@@ -11,6 +11,7 @@ import type {
   LocalWorkspaceProjection,
   LocalWorkspaceRejectedResult,
 } from "./local-workspace-store.types.js";
+import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 import {
   workerWorkspaceResultRef,
@@ -18,12 +19,6 @@ import {
 } from "./workspace-result-staging.js";
 
 export type LocalWorkspaceSyncTarget = "canonical" | "projection";
-export type LocalWorkspaceCapture = {
-  root: string;
-  sourceDev: bigint;
-  snapshotDev: bigint;
-  capturedAtMs: number;
-};
 export type LocalWorkspaceSyncOptions = {
   captureRejected?: true;
   afterCapture?: () => Promise<void>;

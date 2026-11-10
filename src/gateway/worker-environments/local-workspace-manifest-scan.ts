@@ -20,7 +20,6 @@ import {
   readLocalWorkspaceSourcePaths,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
-import type { LocalWorkspaceCapture } from "./local-workspace-checkpoint.js";
 import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
 import {
   prepareLocalWorkspaceArchive,
@@ -45,6 +44,7 @@ import type {
   LocalWorkspaceMutation,
   LocalWorkspacePreparedUpdate,
 } from "./local-workspace-store.types.js";
+import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";

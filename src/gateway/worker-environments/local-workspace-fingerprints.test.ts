@@ -4,13 +4,13 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
-import type { LocalWorkspaceCapture } from "./local-workspace-checkpoint.js";
 import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
 import {
   createLocalWorkspaceManifestTree,
   type LocalWorkspaceManifestNode,
   type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
+import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 
