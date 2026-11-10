@@ -8,9 +8,6 @@ import { projectSessionEntryMessage } from "../session/session.js";
 import {
   classifyToolUseResultPairing,
   extractToolCallsFromAssistant,
-  extractToolResultId,
-  isSyntheticMissingToolResult,
-  SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../session/tool-result-pairing.js";
 import type { SessionTreeEntry } from "../types.js";
 import type { CompactionEntrySource } from "./compaction-entry-source.js";
@@ -109,6 +106,13 @@ function isTurnStartEntry(entry: SessionTreeEntry): boolean {
   return message ? isTurnStartMessage(message) : false;
 }
 
+function readCutNavigation(entries: CompactionEntrySource, index: number) {
+  const navigation = entries.metadata(index);
+  return navigation?.type === "message" && navigation.message.role !== "custom"
+    ? navigation
+    : entries.get(index);
+}
+
 /** Find the user-visible message that starts the turn containing an entry. */
 export function findTurnStartIndex(
   entries: SessionTreeEntry[],
@@ -129,7 +133,7 @@ export function findTurnStartIndexFromSource(
   startIndex: number,
 ): number {
   for (let i = entryIndex; i >= startIndex; i--) {
-    const entry = entries.get(i);
+    const entry = readCutNavigation(entries, i);
     if (entry && isTurnStartEntry(entry)) {
       return i;
     }
@@ -148,56 +152,6 @@ export interface CompactionRetentionConstraints {
     maxTokens: number;
     reserveTokens: number;
     estimateTokens: (message: AgentMessage) => number;
-  };
-}
-
-/**
- * Payload-free classifier input. Preserve only ownership facts (including legacy
- * name fallback and synthetic-result replacement), never call arguments, result
- * content/details, or provider replay data. The classifier remains the single
- * owner of occurrence matching; these message shells are not model messages.
- */
-function toolPairingFact(message: AgentMessage): AgentMessage | undefined {
-  if (message.role === "toolResult") {
-    const synthetic = isSyntheticMissingToolResult(message);
-    return {
-      role: "toolResult",
-      toolCallId: extractToolResultId(message) ?? "",
-      toolName: message.toolName,
-      content: [],
-      isError: synthetic,
-      details: synthetic ? { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true } : undefined,
-      timestamp: 0,
-    };
-  }
-  if (message.role !== "assistant") {
-    return undefined;
-  }
-  const calls = extractToolCallsFromAssistant(message);
-  if (calls.length === 0) {
-    return undefined;
-  }
-  return {
-    role: "assistant",
-    content: calls.map(({ id, name }) => ({
-      type: "toolCall",
-      id,
-      name: name ?? "",
-      arguments: {},
-    })),
-    api: "compaction-pairing",
-    provider: "compaction-pairing",
-    model: "",
-    stopReason: message.stopReason,
-    timestamp: 0,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
   };
 }
 
@@ -292,14 +246,7 @@ export function findCutPointFromSource(
   const toolEntryIndexes: number[] = [];
   const turnStarts: number[] = [];
   for (let i = startIndex; i < endIndex; i++) {
-    const navigation = entries.metadata(i);
-    // Ordinary message navigation owns roles and tool occurrence identities. Custom
-    // carriers still need their details; persisted custom/branch timestamps also
-    // retain their existing projection validation.
-    const entry =
-      navigation?.type === "message" && navigation.message.role !== "custom"
-        ? navigation
-        : entries.get(i);
+    const entry = readCutNavigation(entries, i);
     const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
     if (
       entry &&
@@ -314,9 +261,14 @@ export function findCutPointFromSource(
     if (message && isTurnStartMessage(message)) {
       turnStarts.push(i);
     }
-    const fact = message ? toolPairingFact(message) : undefined;
-    if (fact) {
-      toolPairingFacts.push(fact);
+    // Indexed callers already supply payload-free navigation; array callers own their
+    // existing messages. The pairing classifier can use either without another shell.
+    if (
+      message &&
+      (message.role === "toolResult" ||
+        (message.role === "assistant" && extractToolCallsFromAssistant(message).length > 0))
+    ) {
+      toolPairingFacts.push(message);
       toolEntryIndexes.push(i);
     }
   }
@@ -331,7 +283,7 @@ export function findCutPointFromSource(
   // The latest valid cut also handles an oversized trailing tool result that
   // exhausts the budget before the reverse walk reaches its preceding boundary.
   for (let i = endIndex - 1; i >= startIndex; i--) {
-    const entry = entries.get(i);
+    const entry = entries.tokens ? readCutNavigation(entries, i) : entries.get(i);
     if (!entry) {
       continue;
     }
@@ -342,7 +294,8 @@ export function findCutPointFromSource(
     if (isCutPointMessage(message)) {
       cutIndex = resolveCutPoint(i);
     }
-    accumulatedTokens += retention?.estimateTokens(message) ?? estimateTokens(message);
+    accumulatedTokens +=
+      entries.tokens?.(i) ?? retention?.estimateTokens(message) ?? estimateTokens(message);
     if (accumulatedTokens >= keepRecentTokens) {
       break;
     }
@@ -353,9 +306,9 @@ export function findCutPointFromSource(
     let fittingCut = endIndex;
     let tailLimit = retention.maxTokens;
     for (let i = endIndex - 1; i >= cutIndex; i--) {
-      const entry = entries.get(i);
+      const entry = entries.tokens ? readCutNavigation(entries, i) : entries.get(i);
       const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      retainedTokens += message ? retention.estimateTokens(message) : 0;
+      retainedTokens += message ? (entries.tokens?.(i) ?? retention.estimateTokens(message)) : 0;
       if (retainedTokens > tailLimit) {
         break;
       }
@@ -380,13 +333,13 @@ export function findCutPointFromSource(
   }
   // Decide the split from the selected message, before retaining the metadata in front of it:
   // a bootstrap marker before a user message must not make the previous turn a split-turn prefix.
-  const cutEntry = entries.get(cutIndex);
+  const cutEntry = readCutNavigation(entries, cutIndex);
   if (!cutEntry) {
     throw new Error("compaction cut point does not reference a session entry");
   }
   const startsTurn = isTurnStartEntry(cutEntry);
   while (cutIndex > startIndex) {
-    const prevEntry = entries.get(cutIndex - 1);
+    const prevEntry = readCutNavigation(entries, cutIndex - 1);
     if (!prevEntry) {
       break;
     }

@@ -4,7 +4,7 @@ import { readRestoredSessionTranscriptInWorker } from "../../config/sessions/ses
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
-import type { PreparedCompaction } from "../sessions/prepared-compaction.js";
+import type { PreparedCompaction } from "../sessions/prepared-compaction.types.js";
 import { sessionManagerFromCompactionSource } from "../sessions/session-manager-view-types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import type { SettingsManager } from "../sessions/settings-manager.js";

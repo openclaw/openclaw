@@ -16,10 +16,8 @@ import {
   resolvePendingRuntimeContextReplay,
 } from "../../internal-runtime-context.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
-import {
-  createCompactionRequestBudget,
-  type CompactionRequestBudget,
-} from "../../sessions/compaction/request-budget.js";
+import { createCompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.types.js";
 import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";

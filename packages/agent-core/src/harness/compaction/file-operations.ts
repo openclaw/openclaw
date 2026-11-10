@@ -1,4 +1,3 @@
-import type { ToolCall } from "@openclaw/llm-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../types.js";
 import { createToolCallOccurrenceQueue } from "../session/tool-result-pairing.js";
@@ -32,85 +31,117 @@ export function mergeSummaryFileOperations(
   addFilePaths(fileOps.edited, details.modifiedFiles);
 }
 
-/** Pair outcomes within each tool turn before collecting conservative file metadata. */
+type FileCall = { id: string; name: string; path?: string; unchanged?: boolean };
+export type FileOperationMessage =
+  | { role: "assistant"; calls: FileCall[] }
+  | {
+      role: "toolResult";
+      id: string;
+      name: string;
+      unchanged: boolean;
+      added: string[];
+      modified: string[];
+    }
+  | { role: Exclude<AgentMessage["role"], "assistant" | "toolResult"> };
+
+/** Record only the paths and occurrence outcomes needed after the raw row is released. */
+export function prepareFileOperationMessage(message: AgentMessage): FileOperationMessage {
+  if (message.role === "assistant") {
+    return {
+      role: message.role,
+      calls: message.content.flatMap((call) => {
+        if (call.type !== "toolCall") {
+          return [];
+        }
+        const args = asRecord(call.arguments);
+        return [
+          {
+            id: call.id,
+            name: normalizeFileToolName(call.name),
+            path: [args?.path, args?.file_path, args?.filePath].find(
+              (value): value is string => typeof value === "string",
+            ),
+          },
+        ];
+      }),
+    };
+  }
+  if (message.role !== "toolResult") {
+    return { role: message.role };
+  }
+  const name = normalizeFileToolName(message.toolName);
+  const added = new Set<string>();
+  const modified = new Set<string>();
+  if (name === "apply_patch") {
+    for (const result of [message, ...(Array.isArray(message.content) ? message.content : [])]) {
+      const summary = asRecord(asRecord(asRecord(result)?.details)?.summary);
+      addFilePaths(added, summary?.added);
+      addFilePaths(modified, summary?.modified);
+    }
+  }
+  return {
+    role: message.role,
+    id: message.toolCallId,
+    name,
+    unchanged: asRecord(message.details)?.changed === false,
+    added: [...added],
+    modified: [...modified],
+  };
+}
+
+/** Pair outcomes before committing each tool turn's conservative file metadata. */
+export function extractFileOpsFromFacts(
+  messages: Iterable<FileOperationMessage>,
+  fileOps: FileOperations,
+): void {
+  const calls = createToolCallOccurrenceQueue<FileCall>();
+  let frame: FileCall[] = [];
+  const flush = () => {
+    for (const call of frame) {
+      if (!call.path || call.unchanged) {
+        continue;
+      }
+      if (call.name === "read") {
+        fileOps.read.add(call.path);
+      } else if (call.name === "write") {
+        fileOps.written.add(call.path);
+      } else if (call.name === "edit") {
+        fileOps.edited.add(call.path);
+      }
+    }
+    calls.clear();
+  };
+  for (const message of messages) {
+    if (message.role !== "toolResult") {
+      flush();
+      frame = message.role === "assistant" ? message.calls.map((call) => ({ ...call })) : [];
+      for (const call of frame) {
+        calls.add(call.id, call);
+      }
+      continue;
+    }
+    const call = calls.claim(message.id);
+    if (call?.name === message.name && (call.name === "edit" || call.name === "write")) {
+      call.unchanged = message.unchanged;
+    }
+    addFilePaths(fileOps.written, message.added);
+    addFilePaths(fileOps.edited, message.modified);
+  }
+  flush();
+}
+
 export function extractFileOpsFromMessages(
   messages: readonly AgentMessage[],
   fileOps: FileOperations,
 ): void {
-  const calls = createToolCallOccurrenceQueue<{ call: ToolCall; name: string }>();
-  const unchanged = new Set<ToolCall>();
-  for (const message of messages) {
-    if (message.role === "assistant") {
-      calls.clear();
-      for (const call of message.content) {
-        if (call.type === "toolCall") {
-          calls.add(call.id, { call, name: normalizeFileToolName(call.name) });
-        }
+  extractFileOpsFromFacts(
+    (function* () {
+      for (const message of messages) {
+        yield prepareFileOperationMessage(message);
       }
-    } else if (message.role === "toolResult") {
-      const occurrence = calls.claim(message.toolCallId);
-      const name = normalizeFileToolName(message.toolName);
-      if (
-        occurrence?.name === name &&
-        (name === "edit" || name === "write") &&
-        asRecord(message.details)?.changed === false
-      ) {
-        unchanged.add(occurrence.call);
-      }
-    } else {
-      calls.clear();
-    }
-  }
-  for (const message of messages) {
-    extractFileOpsFromMessage(message, fileOps, unchanged);
-  }
-}
-
-function extractFileOpsFromMessage(
-  message: AgentMessage,
-  fileOps: FileOperations,
-  unchanged: ReadonlySet<ToolCall>,
-): void {
-  if (message.role === "toolResult") {
-    if (normalizeFileToolName(message.toolName) !== "apply_patch") {
-      return;
-    }
-    for (const result of [message, ...(Array.isArray(message.content) ? message.content : [])]) {
-      const details = asRecord(asRecord(result)?.details);
-      const summary = asRecord(details?.summary);
-      addFilePaths(fileOps.written, summary?.added);
-      addFilePaths(fileOps.edited, summary?.modified);
-    }
-    // Deleted paths no longer exist for a continuation to inspect, so omit them.
-    return;
-  }
-
-  if (message.role !== "assistant") {
-    return;
-  }
-  for (const toolCall of message.content) {
-    if (toolCall.type !== "toolCall" || unchanged.has(toolCall)) {
-      continue;
-    }
-    const args = asRecord(toolCall.arguments);
-    const path = [args?.path, args?.file_path, args?.filePath].find(
-      (value): value is string => typeof value === "string",
-    );
-    if (!path) {
-      continue;
-    }
-    switch (normalizeFileToolName(toolCall.name)) {
-      case "read":
-        fileOps.read.add(path);
-        break;
-      case "write":
-        fileOps.written.add(path);
-        break;
-      case "edit":
-        fileOps.edited.add(path);
-        break;
-    }
-  }
+    })(),
+    fileOps,
+  );
 }
 
 /** Compute sorted read-only and modified file lists from accumulated operations. */

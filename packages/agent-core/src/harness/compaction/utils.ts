@@ -4,13 +4,15 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
 import { createToolCallOccurrenceQueue } from "../session/tool-result-pairing.js";
-
 export type { FileOperations } from "../types.js";
 
 export {
   createFileOps,
   mergeSummaryFileOperations,
   extractFileOpsFromMessages,
+  extractFileOpsFromFacts,
+  prepareFileOperationMessage,
+  type FileOperationMessage,
   computeFileLists,
   formatFileOperations,
 } from "./file-operations.js";
@@ -362,76 +364,166 @@ function indexSerializedConversation(
   messages: CompactionMessageSource,
   consume?: (text: string) => void,
 ): SerializedConversationSource {
+  const index = createConversationSerializationIndex(messages, consume);
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const message = messages.get(messageIndex);
+    if (message) {
+      index.append(messageIndex, message);
+    }
+  }
+  return index.source;
+}
+
+/** Payload-free facts can be reused across independently selected summary ranges. */
+export type PreparedConversationMessage =
+  | { kind: "skip" }
+  | {
+      kind: "content";
+      chars: number;
+      hasText: boolean;
+      omissionChars: number;
+      user: boolean;
+      tool?: { id: string; name: string };
+    }
+  | {
+      kind: "assistant";
+      textChars?: number;
+      callsChars?: number;
+      calls: { id: string; label: string }[];
+    };
+
+export function prepareConversationMessage(message: Message): PreparedConversationMessage {
+  return prepareMessage(message);
+}
+
+function prepareMessage(
+  message: Message,
+  consumeCalls?: (text: string) => void,
+): PreparedConversationMessage {
+  if (hasRuntimeContextMarker(message)) {
+    return { kind: "skip" };
+  }
+  if (message.role === "user" || message.role === "toolResult") {
+    const { text, omissionText } = getCompactionContent(message.content);
+    const label =
+      message.role === "toolResult" ? "Tool result" : formatCompactionUserLabel(message);
+    const content =
+      message.role === "toolResult" ? truncateForSummary(text, TOOL_RESULT_MAX_CHARS) : text;
+    return {
+      kind: "content",
+      chars: estimateStringChars(`[${label}]: ${content}`),
+      hasText: Boolean(text),
+      omissionChars: estimateStringChars(omissionText),
+      user: isCompactionUserRequest(message),
+      ...(message.role === "toolResult"
+        ? { tool: { id: message.toolCallId, name: message.toolName } }
+        : {}),
+    };
+  }
+  if (message.role !== "assistant") {
+    return { kind: "skip" };
+  }
+  const text: string[] = [];
+  const toolCalls: string[] = [];
+  const calls: { id: string; label: string }[] = [];
+  for (const block of message.content) {
+    if (block.type === "text") {
+      text.push(block.text);
+    } else if (block.type === "toolCall") {
+      const args = Object.entries(block.arguments).map(
+        ([key, value]) => [key, stringifyCompactionValue(value)] as const,
+      );
+      calls.push({ id: block.id, label: formatCallLabel(block.name, args) });
+      toolCalls.push(`${block.name}(${args.map(([key, value]) => `${key}=${value}`).join(", ")})`);
+    }
+  }
+  const renderedCalls = toolCalls.length
+    ? `[Assistant tool calls]: ${toolCalls.join("; ")}`
+    : undefined;
+  if (renderedCalls !== undefined) {
+    consumeCalls?.(renderedCalls);
+  }
+  return {
+    kind: "assistant",
+    textChars: text.length ? estimateStringChars(`[Assistant]: ${text.join("\n")}`) : undefined,
+    callsChars: renderedCalls === undefined ? undefined : estimateStringChars(renderedCalls),
+    calls,
+  };
+}
+
+/** Append facts in range order; only selected output rereads the original snapshot. */
+export function createConversationSerializationIndex(
+  messages: CompactionMessageSource,
+  consume?: (text: string) => void,
+) {
   const entries: SerializedEntry[] = [];
   const weights: number[] = [];
   const userEntries: number[] = [];
   const callLabels = createToolCallOccurrenceQueue<string>();
   let omissionMessages = 0;
   let totalChars = 0;
-  const add = (entry: SerializedEntry, message: Message, rendered?: string) => {
-    const text = rendered ?? renderSerializedEntry(entry, message, false);
-    consume?.(text);
-    totalChars += estimateStringChars(text) + (entries.length > 0 ? ENTRY_SEPARATOR.length : 0);
-    weights.push(
-      estimateStringChars(entry.callLabel ? renderSerializedEntry(entry, message, true) : text),
-    );
-    entries.push(entry);
-  };
-  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
-    const message = messages.get(messageIndex);
-    if (!message || hasRuntimeContextMarker(message)) {
-      continue;
-    }
-    if (message.role === "user" || message.role === "toolResult") {
-      // Empty results still claim their occurrence, matching replay ordering.
-      const callLabel =
-        message.role === "toolResult"
-          ? (callLabels.claim(message.toolCallId) ?? `${message.toolName}(...)`)
-          : undefined;
-      const { text, omissionText } = getCompactionContent(message.content);
-      if (omissionText && omissionMessages++ === MAX_OMISSION_MESSAGES) {
-        add({ messageIndex, kind: "overflow" }, message);
-      }
-      const includeOmission = omissionMessages <= MAX_OMISSION_MESSAGES;
-      if (!text && !(includeOmission && omissionText)) {
-        continue;
-      }
-      if (isCompactionUserRequest(message)) {
-        userEntries.push(entries.length);
-      }
-      add({ messageIndex, kind: "content", includeOmission, callLabel }, message);
-    } else if (message.role === "assistant") {
-      callLabels.clear();
-      let hasText = false;
-      const toolCalls: string[] = [];
-      for (const block of message.content) {
-        if (block.type === "text") {
-          hasText = true;
-        } else if (block.type === "toolCall") {
-          const args = Object.entries(block.arguments).map(
-            ([key, value]) => [key, stringifyCompactionValue(value)] as const,
-          );
-          callLabels.add(block.id, formatCallLabel(block.name, args));
-          toolCalls.push(
-            `${block.name}(${args.map(([key, value]) => `${key}=${value}`).join(", ")})`,
-          );
+  const appendFact = (
+    messageIndex: number,
+    fact: PreparedConversationMessage,
+    message?: Message,
+    renderedCalls?: string,
+  ) => {
+    const add = (entry: SerializedEntry, chars: number) => {
+      if (consume) {
+        const payload = message ?? messages.get(messageIndex);
+        if (!payload) {
+          throw new Error("Compaction serialization source is missing a selected message");
         }
-      }
-      if (hasText) {
-        add({ messageIndex, kind: "assistant" }, message);
-      }
-      if (toolCalls.length > 0) {
-        add(
-          { messageIndex, kind: "calls" },
-          message,
-          `[Assistant tool calls]: ${toolCalls.join("; ")}`,
+        consume(
+          entry.kind === "calls" && renderedCalls !== undefined
+            ? renderedCalls
+            : renderSerializedEntry(entry, payload, false),
         );
       }
+      totalChars += chars + (entries.length > 0 ? ENTRY_SEPARATOR.length : 0);
+      weights.push(chars + (entry.callLabel ? estimateStringChars(` of ${entry.callLabel}`) : 0));
+      entries.push(entry);
+    };
+    if (fact.kind === "content") {
+      // Claim empty results too; omission limits and occurrence ownership belong to the range.
+      const callLabel = fact.tool
+        ? (callLabels.claim(fact.tool.id) ?? `${fact.tool.name}(...)`)
+        : undefined;
+      if (fact.omissionChars && omissionMessages++ === MAX_OMISSION_MESSAGES) {
+        add({ messageIndex, kind: "overflow" }, OMISSION_OVERFLOW.length);
+      }
+      const includeOmission = omissionMessages <= MAX_OMISSION_MESSAGES;
+      if (!fact.hasText && !(includeOmission && fact.omissionChars)) {
+        return;
+      }
+      if (fact.user) {
+        userEntries.push(entries.length);
+      }
+      add(
+        { messageIndex, kind: "content", includeOmission, callLabel },
+        fact.chars +
+          (includeOmission && fact.omissionChars ? fact.omissionChars + (fact.hasText ? 1 : 0) : 0),
+      );
+    } else if (fact.kind === "assistant") {
+      callLabels.clear();
+      for (const call of fact.calls) {
+        callLabels.add(call.id, call.label);
+      }
+      if (fact.textChars !== undefined) {
+        add({ messageIndex, kind: "assistant" }, fact.textChars);
+      }
+      if (fact.callsChars !== undefined) {
+        add({ messageIndex, kind: "calls" }, fact.callsChars);
+      }
     }
-  }
-  return {
-    count: entries.length,
-    totalChars,
+  };
+  const source: SerializedConversationSource = {
+    get count() {
+      return entries.length;
+    },
+    get totalChars() {
+      return totalChars;
+    },
     weights,
     userEntries,
     render(index, sampled) {
@@ -442,6 +534,24 @@ function indexSerializedConversation(
       }
       return renderSerializedEntry(entry, message, sampled);
     },
+  };
+  return {
+    append(messageIndex: number, message: Message) {
+      let renderedCalls: string | undefined;
+      const fact = prepareMessage(
+        message,
+        consume
+          ? (text) => {
+              renderedCalls = text;
+            }
+          : undefined,
+      );
+      appendFact(messageIndex, fact, message, renderedCalls);
+    },
+    appendPrepared(messageIndex: number, fact: PreparedConversationMessage) {
+      appendFact(messageIndex, fact);
+    },
+    source,
   };
 }
 

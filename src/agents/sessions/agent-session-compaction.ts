@@ -38,9 +38,11 @@ import {
   estimateCompactedRequestTokens,
   estimateCompactionHistoryTokens,
   resolveCompactionRetentionBudget,
-  type CompactionRequestBudget,
-  type CompactionRequestConstraints,
 } from "./compaction/request-budget.js";
+import type {
+  CompactionRequestBudget,
+  CompactionRequestConstraints,
+} from "./compaction/request-budget.types.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
 import { getPreparedCompaction, resolveCompactionFallback } from "./prepared-compaction.js";

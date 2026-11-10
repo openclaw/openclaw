@@ -287,17 +287,21 @@ describe.each(cutPointImplementations)(
   },
 );
 
-it("plans ownership without hydrating historical payloads outside the retained tail", () => {
+it("plans from recorded token costs without hydrating any transcript payload", () => {
   const entries = Array.from({ length: 100 }, (_, index) =>
     messageEntry(userText("Older conversation text", index), index),
   );
   entries.push(messageEntry(assistantText("Latest answer", 101), 100));
   const navigation = entries.map(projectSessionModelContextNavigation);
+  const tokens = entries.map((entry) =>
+    entry.type === "message" ? estimateTokens(entry.message) : 0,
+  );
   let payloadReads = 0;
   const result = findCutPointFromSource(
     {
       length: entries.length,
       metadata: (index) => navigation[index],
+      tokens: (index) => tokens[index] ?? 0,
       get(index) {
         payloadReads++;
         return entries[index];
@@ -308,5 +312,5 @@ it("plans ownership without hydrating historical payloads outside the retained t
     1,
   );
   expect(result).toEqual({ firstKeptEntryIndex: 100, turnStartIndex: 99, isSplitTurn: true });
-  expect(payloadReads).toBeLessThan(10);
+  expect(payloadReads).toBe(0);
 });

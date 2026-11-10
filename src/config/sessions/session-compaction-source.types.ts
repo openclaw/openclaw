@@ -1,11 +1,11 @@
 import type { CompactionSettings } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { BoundedConversation } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import type { SessionTreeEntry } from "../../../packages/agent-core/src/harness/types.js";
-import type { CompactionRequestConstraints } from "../../agents/sessions/compaction/request-budget.js";
+import type { CompactionRequestConstraints } from "../../agents/sessions/compaction/request-budget.types.js";
 import type {
   PreparedCompaction,
   PreparedCompactionFacts,
-} from "../../agents/sessions/prepared-compaction.js";
+} from "../../agents/sessions/prepared-compaction.types.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type {

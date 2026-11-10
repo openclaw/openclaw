@@ -8,17 +8,21 @@ import {
   extractCompactionMessageText as extractMessageText,
   formatCompactionUserLabel,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
+import type { PreparedConversationMessage } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import {
   classifyToolUseResultPairing,
   extractToolCallsFromAssistant,
   extractToolResultId,
-  isSyntheticMissingToolResult,
-  SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { createRealConversationClassifier } from "../compaction-real-conversation.js";
+import {
+  createRealConversationClassifier,
+  createRealConversationFactClassifier,
+  prepareRealConversationFacts,
+} from "../compaction-real-conversation.js";
 import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import type { ContextSection } from "../sessions/prepared-compaction.types.js";
 import { extractOpaqueIdentifiers } from "./compaction-safeguard-quality.js";
 import {
   collectToolFailures,
@@ -28,12 +32,24 @@ import {
 export interface SafeguardMessageSource {
   readonly length: number;
   get(index: number): AgentMessage | undefined;
+  facts(index: number): SafeguardMessageFacts | undefined;
 }
-export type ContextSection = {
-  text: string;
-  segmentStarts: number[];
-  truncatedLoss?: "split-turn-head" | "preserved-turn-head";
-};
+/** Worker callers supply navigation shells; array callers reuse their already-owned messages. */
+export function prepareSafeguardMessage(
+  message: AgentMessage,
+  serialization?: PreparedConversationMessage,
+  shell = message,
+) {
+  return {
+    role: message.role,
+    runtimeContext: isOpenClawRuntimeContextCustomMessage(message),
+    shell,
+    conversation: prepareRealConversationFacts(message),
+    failure: collectToolFailures([message])[0],
+    serialization,
+  };
+}
+export type SafeguardMessageFacts = ReturnType<typeof prepareSafeguardMessage>;
 const MAX_SPLIT_TURN_CONTEXT_CHARS = Math.floor(MAX_COMPACTION_SUMMARY_CHARS / 2);
 const SPLIT_TURN_TRUNCATED_MARKER = "[Earlier split-turn messages truncated]\n";
 const PRESERVED_TURNS_TRUNCATED_MARKER = "[Earlier preserved messages truncated]\n";
@@ -41,12 +57,26 @@ const MAX_RECENT_TURN_TEXT_CHARS = 600;
 const MAX_PRESERVED_TOOL_RESULT_CHARS = 160;
 
 export function arraySafeguardSource(messages: AgentMessage[]): SafeguardMessageSource {
-  return { length: messages.length, get: (index) => messages[index] };
+  const facts = messages.map((message) => prepareSafeguardMessage(message));
+  return {
+    length: messages.length,
+    get: (index) => messages[index],
+    facts: (index) => facts[index],
+  };
 }
-function selectSource(source: SafeguardMessageSource, indexes: number[]): SafeguardMessageSource {
+function selectSource(
+  source: SafeguardMessageSource,
+  indexes = Array.from({ length: source.length }, (_, index) => index).filter((index) =>
+    source.facts(index),
+  ),
+): SafeguardMessageSource {
+  if (indexes.length === source.length) {
+    return source;
+  }
   return {
     length: indexes.length,
     get: (index) => (indexes[index] === undefined ? undefined : source.get(indexes[index])),
+    facts: (index) => (indexes[index] === undefined ? undefined : source.facts(indexes[index])),
   };
 }
 export function materializeSafeguardSource(source: SafeguardMessageSource): AgentMessage[] {
@@ -59,55 +89,8 @@ export function materializeSafeguardSource(source: SafeguardMessageSource): Agen
   }
   return messages;
 }
-/** Snapshot-local indexes and ownership facts; no transcript content survives this scan. */
-type IndexedMessages = {
-  source: SafeguardMessageSource;
-  indexes: number[];
-  roles: AgentMessage["role"][];
-  shells: AgentMessage[];
-  lastUserIndex: number;
-};
-function emptyIndex(source: SafeguardMessageSource): IndexedMessages {
-  return { source, indexes: [], roles: [], shells: [], lastUserIndex: -1 };
-}
-function* indexMessages(indexed: IndexedMessages, stripRuntimeContext = false) {
-  for (let index = 0; index < indexed.source.length; index++) {
-    const message = indexed.source.get(index);
-    if (!message || (stripRuntimeContext && isOpenClawRuntimeContextCustomMessage(message))) {
-      continue;
-    }
-    if (message.role === "user") {
-      indexed.lastUserIndex = indexed.indexes.length;
-    }
-    indexed.indexes.push(index);
-    indexed.roles.push(message.role);
-    indexed.shells.push(pairingShell(message));
-    yield message;
-  }
-}
-function indexSource(source: SafeguardMessageSource): IndexedMessages {
-  const indexed = emptyIndex(source);
-  const messages = indexMessages(indexed);
-  while (!messages.next().done) {
-    // Consume the row before the source releases it; only the index retains facts.
-  }
-  return indexed;
-}
-function indexedSource(indexed: IndexedMessages): SafeguardMessageSource {
-  return indexed.indexes.length === indexed.source.length
-    ? indexed.source
-    : selectSource(indexed.source, indexed.indexes);
-}
-function selectIndexedMessages(indexed: IndexedMessages, positions: number[]): IndexedMessages {
-  // Positions are selected from this index; its parallel facts share one append owner.
-  const roles = positions.map((position) => indexed.roles[position]!);
-  return {
-    source: indexed.source,
-    indexes: positions.map((position) => indexed.indexes[position]!),
-    roles,
-    shells: positions.map((position) => indexed.shells[position]!),
-    lastUserIndex: roles.lastIndexOf("user"),
-  };
+function sourceShells(source: SafeguardMessageSource): AgentMessage[] {
+  return Array.from({ length: source.length }, (_, index) => source.facts(index)!.shell);
 }
 function concatenateSources(
   first: SafeguardMessageSource,
@@ -122,6 +105,8 @@ function concatenateSources(
   return {
     length: first.length + second.length,
     get: (index) => (index < first.length ? first.get(index) : second.get(index - first.length)),
+    facts: (index) =>
+      index < first.length ? first.facts(index) : second.facts(index - first.length),
   };
 }
 function containsRealConversation(messages: Iterable<AgentMessage>): boolean {
@@ -133,80 +118,67 @@ function containsRealConversation(messages: Iterable<AgentMessage>): boolean {
   }
   return false;
 }
-function currentUserAsk(indexed: IndexedMessages): string | null {
-  if (indexed.lastUserIndex < 0) {
-    return null;
-  }
-  const message = indexed.source.get(indexed.indexes[indexed.lastUserIndex]!);
-  return message ? extractCurrentCompactionUserRequest([message], extractMessageText) : null;
-}
-function splitPreservedIndexes(indexed: IndexedMessages, preserveTurns: number) {
-  const conversationIndexes: number[] = [];
-  const userIndexes: number[] = [];
-  if (preserveTurns > 0) {
-    for (let index = 0; index < indexed.roles.length; index++) {
-      const role = indexed.roles[index];
-      if (role === "user" || role === "assistant") {
-        conversationIndexes.push(index);
-      }
-      if (role === "user") {
-        userIndexes.push(index);
-      }
+/** Undefined means no input; null means an independent input with no external-user ask. */
+function currentUserAsk(source: SafeguardMessageSource): string | null | undefined {
+  for (let index = source.length - 1; index >= 0; index--) {
+    if (source.facts(index)?.role === "user") {
+      const message = source.get(index);
+      return message ? extractCurrentCompactionUserRequest([message], extractMessageText) : null;
     }
   }
+  return undefined;
+}
+export function splitPreservedRecentTurnSource(params: {
+  messages: SafeguardMessageSource;
+  recentTurnsPreserve: number;
+}): { summarizableMessages: SafeguardMessageSource; preservedMessages: SafeguardMessageSource } {
+  const messages = selectSource(params.messages);
+  const preserveTurns = params.recentTurnsPreserve;
+  const conversationIndexes = Array.from({ length: messages.length }, (_, index) => index).filter(
+    (index) => preserveTurns > 0 && ["user", "assistant"].includes(messages.facts(index)!.role),
+  );
+  const userIndexes = conversationIndexes.filter((index) => messages.facts(index)!.role === "user");
   const boundaryStartIndex = userIndexes.at(-preserveTurns);
-  const preservedIndexSet = new Set(
+  const preserved = new Set(
     boundaryStartIndex === undefined
       ? userIndexes
       : conversationIndexes.filter((index) => index >= boundaryStartIndex),
   );
   if (boundaryStartIndex === undefined) {
     for (let index = conversationIndexes.length - 1; index >= 0; index--) {
-      preservedIndexSet.add(conversationIndexes[index]!);
-      if (preservedIndexSet.size >= preserveTurns * 2) {
+      preserved.add(conversationIndexes[index]!);
+      if (preserved.size >= preserveTurns * 2) {
         break;
       }
     }
   }
-  const preservedToolCallIds = new Set<string>();
-  for (const index of preservedIndexSet) {
-    const shell = indexed.shells[index]!;
-    if (shell.role === "assistant") {
-      for (const toolCall of extractToolCallsFromAssistant(shell)) {
-        preservedToolCallIds.add(toolCall.id);
+  const toolCallIds = new Set<string>();
+  for (const index of preserved) {
+    const message = messages.facts(index)!.shell;
+    if (message.role === "assistant") {
+      for (const call of extractToolCallsFromAssistant(message)) {
+        toolCallIds.add(call.id);
       }
     }
   }
-  if (preservedToolCallIds.size > 0) {
-    const preservedStartIndex = conversationIndexes.find((index) => preservedIndexSet.has(index))!;
-    for (let index = preservedStartIndex; index < indexed.roles.length; index++) {
-      const shell = indexed.shells[index]!;
-      if (shell.role === "toolResult") {
-        const id = extractToolResultId(shell);
-        if (id && preservedToolCallIds.has(id)) {
-          preservedIndexSet.add(index);
-        }
+  if (toolCallIds.size > 0) {
+    const start = conversationIndexes.find((index) => preserved.has(index))!;
+    for (let index = start; index < messages.length; index++) {
+      const message = messages.facts(index)!.shell;
+      const id = message.role === "toolResult" ? extractToolResultId(message) : undefined;
+      if (id && toolCallIds.has(id)) {
+        preserved.add(index);
       }
     }
   }
   const summarizedIndexes: number[] = [];
   const preservedIndexes: number[] = [];
-  for (let index = 0; index < indexed.roles.length; index++) {
-    (preservedIndexSet.has(index) ? preservedIndexes : summarizedIndexes).push(index);
+  for (let index = 0; index < messages.length; index++) {
+    (preserved.has(index) ? preservedIndexes : summarizedIndexes).push(index);
   }
   return {
-    summarized: selectIndexedMessages(indexed, summarizedIndexes),
-    preserved: selectIndexedMessages(indexed, preservedIndexes),
-  };
-}
-export function splitPreservedRecentTurnSource(params: {
-  messages: SafeguardMessageSource;
-  recentTurnsPreserve: number;
-}): { summarizableMessages: SafeguardMessageSource; preservedMessages: SafeguardMessageSource } {
-  const split = splitPreservedIndexes(indexSource(params.messages), params.recentTurnsPreserve);
-  return {
-    summarizableMessages: indexedSource(split.summarized),
-    preservedMessages: indexedSource(split.preserved),
+    summarizableMessages: selectSource(messages, summarizedIndexes),
+    preservedMessages: selectSource(messages, preservedIndexes),
   };
 }
 
@@ -290,87 +262,35 @@ function formatContextMessage(message: AgentMessage): string | null {
   return `- ${roleLabel}: ${trimmed}`;
 }
 
-const NON_CALL_PAIRING_SHELL: AgentMessage = { role: "user", content: "", timestamp: 0 };
-
-/** Retain only occurrence ownership while the snapshot supplies payloads on demand. */
-function pairingShell(message: AgentMessage): AgentMessage {
-  if (message.role === "toolResult") {
-    const synthetic = isSyntheticMissingToolResult(message);
-    return {
-      role: "toolResult",
-      toolCallId: extractToolResultId(message) ?? "",
-      toolName: message.toolName,
-      content: [],
-      isError: synthetic,
-      timestamp: 0,
-      ...(synthetic ? { details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true } } : {}),
-    };
-  }
-  if (message.role === "assistant") {
-    const calls = extractToolCallsFromAssistant(message);
-    if (calls.length === 0) {
-      return NON_CALL_PAIRING_SHELL;
-    }
-    return {
-      role: "assistant",
-      content: calls.map(({ id, name }) => ({
-        type: "toolCall",
-        id,
-        name: name ?? "",
-        arguments: {},
-      })),
-      api: "compaction-pairing",
-      provider: "compaction-pairing",
-      model: "",
-      stopReason: message.stopReason,
-      timestamp: 0,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-    };
-  }
-  return NON_CALL_PAIRING_SHELL;
-}
-
 function formatBoundedContextSection(params: {
-  indexed: IndexedMessages;
+  messages: SafeguardMessageSource;
   heading: string;
   truncatedMarker: string;
   truncatedLoss: NonNullable<ContextSection["truncatedLoss"]>;
 }): ContextSection {
-  const { indexed } = params;
+  const messages = selectSource(params.messages);
   const toolSegments = new Map(
-    classifyToolUseResultPairing(indexed.shells).map((frame) => [
+    classifyToolUseResultPairing(sourceShells(messages)).map((frame) => [
       frame.startIndex,
       frame.occurrences.flatMap((occurrence) =>
         occurrence.sourceResultIndex === undefined ? [] : [occurrence.sourceResultIndex],
       ),
     ]),
   );
-  const messages = indexedSource(indexed);
   let prefix = `${params.heading}\n`;
   const segments: string[] = [];
   let chars = 0;
   let truncated = false;
   // The section keeps a contiguous tail of atomic interactions. Once an atom
   // overflows, no earlier payload can contribute; do not hydrate those rows.
-  for (let index = indexed.roles.length - 1; index >= 0; index--) {
-    if (indexed.roles[index] !== "user" && indexed.roles[index] !== "assistant") {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const role = messages.facts(index)!.role;
+    if (role !== "user" && role !== "assistant") {
       continue;
     }
-    const message = messages.get(index);
-    if (!message) {
-      continue;
-    }
-    const first = formatContextMessage(message);
-    const lines = first ? [first] : [];
-    let atomChars = first?.length ?? 0;
-    for (const resultIndex of toolSegments.get(index) ?? []) {
+    const lines: string[] = [];
+    let atomChars = 0;
+    for (const resultIndex of [index, ...(toolSegments.get(index) ?? [])]) {
       if (atomChars > MAX_SPLIT_TURN_CONTEXT_CHARS) {
         break;
       }
@@ -413,26 +333,22 @@ function formatBoundedContextSection(params: {
   };
 }
 
-function buildIndexedPreservedTurnsSection(indexed: IndexedMessages): ContextSection {
+export function buildPreservedTurnsSectionFromSource(
+  messages: SafeguardMessageSource,
+): ContextSection {
   return formatBoundedContextSection({
-    indexed,
+    messages,
     heading: "\n\n## Recent turns preserved verbatim",
     truncatedMarker: PRESERVED_TURNS_TRUNCATED_MARKER,
     truncatedLoss: "preserved-turn-head",
   });
 }
 
-export function buildPreservedTurnsSectionFromSource(
-  messages: SafeguardMessageSource,
-): ContextSection {
-  return buildIndexedPreservedTurnsSection(indexSource(messages));
-}
-
 export function buildSplitTurnContextSectionFromSource(
   messages: SafeguardMessageSource,
 ): ContextSection {
   return formatBoundedContextSection({
-    indexed: indexSource(messages),
+    messages,
     heading: "**Turn Context (split turn):**\n",
     truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
     truncatedLoss: "split-turn-head",
@@ -450,20 +366,28 @@ function scanSafeguardMessages(
   historySource: SafeguardMessageSource,
   turnPrefixSource: SafeguardMessageSource,
 ) {
-  const history = emptyIndex(historySource);
-  const turnPrefix = emptyIndex(turnPrefixSource);
-  const classify = createRealConversationClassifier();
+  const classify = createRealConversationFactClassifier();
   let hasRealConversation = false;
-  function* messages() {
-    for (const indexed of [history, turnPrefix]) {
-      for (const message of indexMessages(indexed, true)) {
-        hasRealConversation ||= classify(message);
-        yield message;
+  const failures: ReturnType<typeof collectToolFailures> = [];
+  const seen = new Set<string>();
+  const [history, turnPrefix] = [historySource, turnPrefixSource].map((source) => {
+    const indexes: number[] = [];
+    for (let index = 0; index < source.length; index++) {
+      const facts = source.facts(index);
+      if (!facts || facts.runtimeContext) {
+        continue;
+      }
+      indexes.push(index);
+      hasRealConversation = classify(facts.conversation) || hasRealConversation;
+      if (facts.failure && !seen.has(facts.failure.toolCallId)) {
+        seen.add(facts.failure.toolCallId);
+        failures.push(facts.failure);
       }
     }
-  }
-  const toolFailureSection = formatToolFailuresSection(collectToolFailures(messages()));
-  return { history, turnPrefix, hasRealConversation, toolFailureSection };
+    return selectSource(source, indexes);
+  });
+  const toolFailureSection = formatToolFailuresSection(failures);
+  return { history: history!, turnPrefix: turnPrefix!, hasRealConversation, toolFailureSection };
 }
 
 /** Fuse transcript facts into one scan; later consumers revisit only selected text. */
@@ -471,6 +395,7 @@ export function prepareCompactionSafeguardSource(params: {
   history: SafeguardMessageSource;
   turnPrefix: SafeguardMessageSource;
   currentContext?: () => Iterable<AgentMessage>;
+  currentContextHasRealConversation?: boolean;
   preparationRange?: () => SafeguardMessageSource;
   isSplitTurn: boolean;
   previousSummary?: string;
@@ -488,35 +413,38 @@ export function prepareCompactionSafeguardSource(params: {
       usedRangeFallback = true;
     }
   }
-  const { history: historyIndex, turnPrefix: turnPrefixIndex, toolFailureSection } = scanned;
-  const history = indexedSource(historyIndex);
-  const turnPrefix = indexedSource(turnPrefixIndex);
+  const { history, turnPrefix, toolFailureSection } = scanned;
   const oracle = concatenateSources(history, turnPrefix);
   const hasRealConversation =
     scanned.hasRealConversation ||
+    params.currentContextHasRealConversation === true ||
     Boolean(params.currentContext && containsRealConversation(params.currentContext()));
-  const latestPreparedAsk = currentUserAsk(historyIndex);
-  const prefixAsk = currentUserAsk(turnPrefixIndex);
-  const splitUserAsk = params.isSplitTurn ? prefixAsk : null;
+  const latestPreparedAsk = currentUserAsk(history) ?? null;
+  const prefixAsk = currentUserAsk(turnPrefix);
+  const splitUserAsk = params.isSplitTurn ? (prefixAsk ?? null) : null;
   const latestUserAsk = params.requestSelection
     ? params.requestSelection.state === "unresolved"
       ? params.requestSelection.request
       : null
-    : turnPrefixIndex.lastUserIndex >= 0
-      ? prefixAsk
-      : latestPreparedAsk;
+    : prefixAsk === undefined
+      ? latestPreparedAsk
+      : prefixAsk;
   const latestAskInRetainedTurn = splitUserAsk !== null && splitUserAsk === latestUserAsk;
-  const recentText: string[] = [];
-  for (let index = Math.max(0, oracle.length - 10); index < oracle.length; index++) {
-    const message = oracle.get(index);
-    const text = message ? extractMessageText(message) : "";
-    if (text) {
-      recentText.push(text);
-    }
-  }
-  const identifiers = extractOpaqueIdentifiers(recentText.join("\n"));
-  const split = splitPreservedIndexes(historyIndex, params.recentTurnsPreserve);
-  const preservedTurnsSection = buildIndexedPreservedTurnsSection(split.preserved);
+  const identifiers = extractOpaqueIdentifiers(
+    (function* () {
+      for (let index = Math.max(0, oracle.length - 10); index < oracle.length; index++) {
+        const message = oracle.get(index);
+        if (message) {
+          yield extractMessageText(message);
+        }
+      }
+    })(),
+  );
+  const split = splitPreservedRecentTurnSource({
+    messages: history,
+    recentTurnsPreserve: params.recentTurnsPreserve,
+  });
+  const preservedTurnsSection = buildPreservedTurnsSectionFromSource(split.preservedMessages);
   const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
   const includePreservedContext =
     !params.latestUnresolvedUserRequest &&
@@ -526,9 +454,9 @@ export function prepareCompactionSafeguardSource(params: {
   // The array path repairs the non-preserved slice. Count the same repaired
   // ownership shells; an orphan-only slice must not trigger another summary.
   const summarizableCount =
-    split.preserved.indexes.length > 0
-      ? sanitizeToolUseResultPairing(split.summarized.shells).length
-      : split.summarized.indexes.length;
+    split.preservedMessages.length > 0
+      ? sanitizeToolUseResultPairing(sourceShells(split.summarizableMessages)).length
+      : split.summarizableMessages.length;
   const reconciliation =
     params.previousSummary ||
     includePreservedContext ||

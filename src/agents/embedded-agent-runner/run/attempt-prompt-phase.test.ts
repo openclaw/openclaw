@@ -21,10 +21,8 @@ import {
   streamMocks,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import {
-  estimateCompactionHistoryTokens,
-  type CompactionRequestBudget,
-} from "../../sessions/compaction/request-budget.js";
+import { estimateCompactionHistoryTokens } from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.types.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import {

@@ -35,7 +35,7 @@ import {
   loadSessionStoreRuntime,
 } from "../command/runtime-loaders.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
-import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.types.js";
 import { createSessionMaintenanceOwner } from "./coordinator.js";
 
 const log = createSubsystemLogger("agents/session-maintenance");

@@ -7,7 +7,7 @@ import type {
   SessionCompactionSourceCommand,
   SessionCompactionSourceReply,
 } from "./session-compaction-source.types.js";
-import type { SessionHistoryWorkerRequestRunner } from "./session-transcript-worker-readers.js";
+import type { SessionHistoryWorkerRequestRunner } from "./session-transcript-worker.types.js";
 
 /** Budgeted text exchanges retain the read snapshot only through summary generation. */
 export async function withSessionCompactionSource(

@@ -2,10 +2,10 @@ import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import {
   prepareCompactionFromSource,
   compactWithoutSummary,
-  estimateTokens,
+  type CompactionAgentMessageSource,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
-  createSerializedConversationSource,
+  createConversationSerializationIndex,
   serializeConversationSourceWithinBudget,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
@@ -55,7 +55,10 @@ export async function runSessionCompactionSource(
       }
       assertSessionTranscriptHot(database.db, request.target.sessionId);
       const transcript = prepareTranscriptContextSnapshot(database, request.resolvedScope);
-      const { source, context } = createSessionCompactionEntrySource(transcript);
+      const { source, context, getFacts } = createSessionCompactionEntrySource(
+        transcript,
+        request.requestBudget,
+      );
       const requestBudget = request.requestBudget;
       const pendingKey = requestBudget?.pendingTokens
         ? requestBudget.pendingUserIdempotencyKey
@@ -63,6 +66,10 @@ export async function runSessionCompactionSource(
       let pendingEntryId: string | undefined;
       if (request.pendingUserEntryId || pendingKey) {
         for (let index = source.length - 1; index >= 0; index--) {
+          const navigation = source.metadata(index);
+          if (navigation?.type !== "message" || navigation.message.role !== "user") {
+            continue;
+          }
           const entry = source.get(index);
           if (
             entry?.type === "message" &&
@@ -107,21 +114,15 @@ export async function runSessionCompactionSource(
             }
           : {}),
       };
-      let messageCount = 0;
       let hasRealConversation = false;
-      let estimatedTokens = 0;
       // The planner already consumes the canonical context; record hook facts in that pass.
       const measuredContext = {
         ...context,
         *messages() {
-          messageCount = 0;
           hasRealConversation = false;
-          estimatedTokens = 0;
           const classify = createRealConversationClassifier();
           for (const message of context.messages()) {
             control.throwIfCancelled();
-            messageCount++;
-            estimatedTokens += estimateTokens(message);
             hasRealConversation = classify(message) || hasRealConversation;
             yield message;
           }
@@ -181,11 +182,18 @@ export async function runSessionCompactionSource(
         candidates,
         0,
       ).rows.map(({ seq }) => transcript.readEntry(transcript.entries[seq]!));
+      const messageSource = (messages: CompactionAgentMessageSource): SafeguardMessageSource => ({
+        length: messages.length,
+        get: (index) => messages.get(index),
+        facts: (index) => getFacts(messages.entryId(index))?.safeguard,
+      });
+      const history = messageSource(preparation.messagesToSummarize);
+      const turnPrefix = messageSource(preparation.turnPrefixMessages);
       const safeguard = prepareCompactionSafeguardSource({
-        history: preparation.messagesToSummarize,
-        turnPrefix: preparation.turnPrefixMessages,
+        history,
+        turnPrefix,
         // A prior summary can anchor tool-only work even when it precedes the new cut.
-        currentContext: () => context.messages(),
+        currentContextHasRealConversation: hasRealConversation,
         isSplitTurn: preparation.isSplitTurn,
         previousSummary: preparation.previousSummary,
         requestSelection: preparation.requestSelection,
@@ -216,6 +224,8 @@ export async function runSessionCompactionSource(
         messagesToSummarize,
         turnPrefixMessages,
         turnPrefixSourceAskIndex: _sourceAskIndex,
+        totalEstimatedTokens: estimatedTokens,
+        messageCount,
         ...metadata
       } = preparation;
       const {
@@ -225,26 +235,33 @@ export async function runSessionCompactionSource(
         ...safeguardFacts
       } = safeguard;
       const sources = {
-        history: messagesToSummarize,
-        turnPrefix: turnPrefixMessages,
+        history,
+        turnPrefix,
         reconciliation,
       };
       const serializers = new Map<
         SafeguardMessageSource,
-        ReturnType<typeof createSerializedConversationSource>
+        ReturnType<typeof createConversationSerializationIndex>["source"]
       >();
       const serializer = (name: keyof typeof sources) => {
         const messages: SafeguardMessageSource = sources[name];
         let prepared = serializers.get(messages);
         if (!prepared) {
-          prepared = createSerializedConversationSource({
+          const index = createConversationSerializationIndex({
             length: messages.length,
-            get(index) {
+            get(position) {
               control.throwIfCancelled();
-              const message = messages.get(index);
+              const message = messages.get(position);
               return message ? convertToLlm(sanitizeCompactionMessages([message]))[0] : undefined;
             },
           });
+          for (let position = 0; position < messages.length; position++) {
+            const fact = messages.facts?.(position)?.serialization;
+            if (fact) {
+              index.appendPrepared(position, fact);
+            }
+          }
+          prepared = index.source;
           serializers.set(messages, prepared);
         }
         return prepared;

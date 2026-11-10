@@ -7,23 +7,28 @@ import {
   type SummarizationConversationSource,
 } from "./summarization-completion.js";
 import {
-  createSerializedConversationSource,
+  createConversationSerializationIndex,
+  prepareConversationMessage,
   serializeConversationSourceWithinBudget,
   type BoundedConversation,
 } from "./utils.js";
 
 describe("worker-owned summary input", () => {
   it("resamples the source after overflow and preserves the latest fact", async () => {
-    const indexed = createSerializedConversationSource({
+    const messages = {
       length: 200,
-      get: (index) => user(`FACT-${index} ${"context ".repeat(1_000)}`),
-    });
+      get: (index: number) => user(`FACT-${index} ${"context ".repeat(1_000)}`),
+    };
+    const index = createConversationSerializationIndex(messages);
+    for (let position = 0; position < messages.length; position++) {
+      index.appendPrepared(position, prepareConversationMessage(messages.get(position)));
+    }
     const budgets: number[] = [];
     const source: SummarizationConversationSource = {
       length: 200,
       async serialize(budget) {
         budgets.push(budget);
-        return serializeConversationSourceWithinBudget(indexed, budget);
+        return serializeConversationSourceWithinBudget(index.source, budget);
       },
     };
     const prompts: string[] = [];
@@ -63,6 +68,25 @@ describe("worker-owned summary input", () => {
     expect(prompts.at(-1)?.length).toBeLessThanOrEqual(60_000);
     expect(prompts.at(-1)).toContain("FACT-199");
     expect(prompts.at(-1)).toContain("entries omitted ...]");
+  });
+
+  it("applies omission limits independently when prepared facts feed different ranges", () => {
+    const message = user([{ type: "image", data: "synthetic", mimeType: "image/png" }]);
+    const fact = prepareConversationMessage(message);
+    const messages = { length: 9, get: () => message };
+    const history = createConversationSerializationIndex(messages);
+    const prefix = createConversationSerializationIndex(messages);
+    for (let index = 0; index < messages.length; index++) {
+      history.appendPrepared(index, fact);
+    }
+    prefix.appendPrepared(8, fact);
+
+    expect(serializeConversationSourceWithinBudget(history.source, 10_000).text).toContain(
+      "[More image/non-text data omitted from summary input]",
+    );
+    expect(serializeConversationSourceWithinBudget(prefix.source, 10_000).text).toBe(
+      "[User]: [image data omitted from summary input]",
+    );
   });
 
   it("does not dispatch a provider request after cancellation during source serialization", async () => {

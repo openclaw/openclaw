@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
 import type { AgentMessage } from "../runtime/index.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { extractOpaqueIdentifiers } from "./compaction-safeguard-quality.js";
 import {
+  arraySafeguardSource,
   buildSplitTurnContextSectionFromSource,
   prepareCompactionSafeguardSource,
   type SafeguardMessageSource,
@@ -15,7 +17,7 @@ function transientSource(
 ): SafeguardMessageSource {
   let revoke = () => {};
   return {
-    length: messages.length,
+    ...arraySafeguardSource(messages),
     get(index) {
       onRead?.(index);
       revoke();
@@ -99,7 +101,7 @@ it("does not summarize an orphan-only older slice beside a preserved turn", () =
 });
 
 it.each([100, 1000])(
-  "reads a %i-message active window once plus its bounded retained tail",
+  "reads only bounded retained payloads from a %i-message active window",
   (count) => {
     const messages: AgentMessage[] = [
       { role: "user", content: "First request", timestamp: 0 },
@@ -125,7 +127,7 @@ it.each([100, 1000])(
     });
     // Three user turns preserve the entire active window. Rendering must stop at
     // the section budget, not reparse every preserved row or scan backwards for the ask.
-    expect(reads).toBeLessThanOrEqual(messages.length + 30);
+    expect(reads).toBeLessThanOrEqual(30);
     expect(source.reconciliation.length).toBe(messages.length);
     expect(source.latestUserAsk).toBe("Current request");
     expect(source.hasRealConversation).toBe(true);
@@ -142,3 +144,19 @@ it.each([100, 1000])(
     );
   },
 );
+
+it("extracts ordered unique identifiers without reading beyond the audit limit", () => {
+  function* outputs() {
+    yield "abcdef123456 abcdef123456";
+    yield "ABCDEF123456 https://example.test/first";
+    for (let index = 0; index < 10; index++) {
+      yield `https://example.test/item-${index}`;
+    }
+    throw new Error("must not fetch another large tool output once the audit is full");
+  }
+  expect(extractOpaqueIdentifiers(outputs())).toEqual([
+    "ABCDEF123456",
+    "https://example.test/first",
+    ...Array.from({ length: 10 }, (_, index) => `https://example.test/item-${index}`),
+  ]);
+});

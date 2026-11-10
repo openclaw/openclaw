@@ -8,6 +8,7 @@ import type { BoardReadOperations } from "../../boards/sqlite-board-operations.j
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.types.js";
+import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -371,6 +372,18 @@ export type SessionTranscriptWorkerRequest = SessionTranscriptWorkerInput & {
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
 
 type PreparedHistoryInput<Input> = Input extends unknown ? Omit<Input, "database"> : never;
+export type SessionHistoryWorkerRequestRunner = <
+  Request extends SessionHistoryWorkerPreparedInput,
+  TResult,
+>(
+  prepare: () => Request,
+  inputBytes: number,
+  receive: (value: SessionTranscriptWorkerValues[Request["kind"]]) => TResult,
+  signal?: AbortSignal,
+  onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
+  timeoutMs?: number,
+) => Promise<TResult>;
+
 export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 

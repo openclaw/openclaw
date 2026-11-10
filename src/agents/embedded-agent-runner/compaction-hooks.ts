@@ -14,10 +14,8 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchIndexConfig } from "../memory-search.js";
 import type { AgentMessage } from "../runtime/index.js";
-import {
-  estimateCompactedRequestTokens,
-  type CompactionRequestBudget,
-} from "../sessions/compaction/request-budget.js";
+import { estimateCompactedRequestTokens } from "../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.types.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { log } from "./logger.js";
 

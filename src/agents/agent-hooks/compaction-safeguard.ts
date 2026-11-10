@@ -27,6 +27,7 @@ import {
 import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
 import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
 import { getPreparedCompaction } from "../sessions/prepared-compaction.js";
+import type { ContextSection } from "../sessions/prepared-compaction.types.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import { resolveCompactionInstructions } from "./compaction-instructions.js";
 import {
@@ -56,7 +57,6 @@ import {
   splitPreservedRecentTurns,
   buildPreservedTurnsSection,
   buildSplitTurnContextSection,
-  type ContextSection,
 } from "./compaction-safeguard-source.js";
 import { readWorkspaceContextForSummary } from "./compaction-workspace-context.js";
 

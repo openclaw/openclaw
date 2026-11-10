@@ -1,5 +1,4 @@
 import type { Usage } from "@openclaw/llm-core";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
 import { iterateSessionContextMessages } from "../session/session.js";
@@ -20,9 +19,9 @@ import type { CompactionEntrySource } from "./compaction-entry-source.js";
 import type { CompactionPreparation, CompactionSettings } from "./compaction.js";
 import {
   createFileOps,
-  extractFileOpsFromMessages,
+  extractFileOpsFromFacts,
+  prepareFileOperationMessage,
   findLatestCompactionUserMessage,
-  type FileOperations,
   getCompactionContent,
   mergeSummaryFileOperations,
 } from "./utils.js";
@@ -135,7 +134,7 @@ function extractLatestUserRequest(messages: AgentMessage[]): string | undefined 
 }
 
 /** One forward pass retains usage and the bounded request, never the conversation. */
-function measureCompactionContext(messages: Iterable<AgentMessage>) {
+function measureCompactionContext(messages: Iterable<AgentMessage>, estimate = estimateTokens) {
   let usageTokens = 0;
   let lastUsageIndex: number | null = null;
   let trailingTokens = 0;
@@ -144,7 +143,7 @@ function measureCompactionContext(messages: Iterable<AgentMessage>) {
   let hasLatestInput = false;
   let index = 0;
   for (const message of messages) {
-    const tokens = estimateTokens(message);
+    const tokens = estimate(message);
     totalEstimatedTokens += tokens;
     if (isUnavailableContextBarrier(message)) {
       usageTokens = 0;
@@ -175,6 +174,7 @@ function measureCompactionContext(messages: Iterable<AgentMessage>) {
       lastUsageIndex,
     },
     totalEstimatedTokens,
+    messageCount: index,
     latestInputRequest,
     hasLatestInput,
   };
@@ -184,6 +184,7 @@ function measureCompactionContext(messages: Iterable<AgentMessage>) {
 export interface CompactionAgentMessageSource {
   readonly length: number;
   get(index: number): AgentMessage | undefined;
+  entryId(index: number): string | undefined;
 }
 
 export type IndexedCompactionPreparation = Omit<
@@ -194,11 +195,15 @@ export type IndexedCompactionPreparation = Omit<
   turnPrefixMessages: CompactionAgentMessageSource;
   /** Latest nonempty user message in the prefix, recorded during its indexing pass. */
   turnPrefixSourceAskIndex: number;
+  totalEstimatedTokens: number;
+  messageCount: number;
 };
 
 /** The session-context owner supplies its canonical projection and reset selection. */
 export interface CompactionContextProjection {
   messages(): Iterable<AgentMessage>;
+  /** Reuse token facts recorded while hydrating the canonical context. */
+  estimateTokens?(message: AgentMessage): number;
   resetKeptEntryIndices(startIndex: number, endIndex: number): Iterable<number>;
 }
 
@@ -219,6 +224,8 @@ function indexedMessages(
 ): CompactionAgentMessageSource {
   return {
     length: indices.length,
+    entryId: (index) =>
+      indices[index] === undefined ? undefined : entries.metadata(indices[index])?.id,
     get(index) {
       const entryIndex = indices[index];
       const entry = entryIndex === undefined ? undefined : entries.get(entryIndex);
@@ -237,71 +244,6 @@ function findEntryIndex(entries: CompactionEntrySource, id: string | undefined):
     }
   }
   return -1;
-}
-
-/** Keep one call-bearing message and result flags; file extraction still owns matching. */
-function extractIndexedFileOps(messages: Iterable<AgentMessage>, fileOps: FileOperations) {
-  let frame: AgentMessage[] = [];
-  for (const message of messages) {
-    if (message.role !== "toolResult") {
-      extractFileOpsFromMessages(frame, fileOps);
-      frame =
-        message.role === "assistant"
-          ? [
-              {
-                role: "assistant",
-                content: message.content.flatMap((block) => {
-                  if (block.type !== "toolCall") {
-                    return [];
-                  }
-                  const args = asOptionalRecord(block.arguments);
-                  // These are the file-path inputs consumed by extractFileOpsFromMessages.
-                  return [
-                    {
-                      type: "toolCall" as const,
-                      id: block.id,
-                      name: block.name,
-                      arguments: {
-                        path: typeof args?.path === "string" ? args.path : undefined,
-                        file_path: typeof args?.file_path === "string" ? args.file_path : undefined,
-                        filePath: typeof args?.filePath === "string" ? args.filePath : undefined,
-                      },
-                    },
-                  ];
-                }),
-                api: "compaction-file-operations",
-                provider: "compaction-file-operations",
-                model: "",
-                stopReason: message.stopReason,
-                timestamp: 0,
-                usage: {
-                  input: 0,
-                  output: 0,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 0,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                },
-              },
-            ]
-          : [];
-      continue;
-    }
-    // Patch file summaries are extracted while the full result is available.
-    extractFileOpsFromMessages([message], fileOps);
-    if (frame.length > 0) {
-      frame.push({
-        role: "toolResult",
-        toolCallId: message.toolCallId,
-        toolName: message.toolName,
-        content: [],
-        details: { changed: asOptionalRecord(message.details)?.changed },
-        isError: message.isError,
-        timestamp: message.timestamp,
-      });
-    }
-  }
-  extractFileOpsFromMessages(frame, fileOps);
 }
 
 /** Array callers use the same planner, then explicitly materialize their legacy result. */
@@ -341,7 +283,12 @@ export function prepareCompaction(
   if (!result.value) {
     return ok(undefined);
   }
-  const { turnPrefixSourceAskIndex: _sourceAskIndex, ...preparation } = result.value;
+  const {
+    turnPrefixSourceAskIndex: _sourceAskIndex,
+    totalEstimatedTokens: _estimatedTokens,
+    messageCount: _messageCount,
+    ...preparation
+  } = result.value;
   return ok({
     ...preparation,
     messagesToSummarize: Array.from(iterateCompactionMessages(result.value.messagesToSummarize)),
@@ -413,6 +360,12 @@ export function prepareCompactionFromSource(
         length: pathEntries.length - prevBoundaryIndex - 1,
         metadata: (index) => pathEntries.metadata(index + prevBoundaryIndex + 1),
         get: (index) => pathEntries.get(index + prevBoundaryIndex + 1),
+        tokens: pathEntries.tokens
+          ? (index) => pathEntries.tokens?.(index + prevBoundaryIndex + 1) ?? 0
+          : undefined,
+        fileOperations: pathEntries.fileOperations
+          ? (index) => pathEntries.fileOperations?.(index + prevBoundaryIndex + 1)
+          : undefined,
       };
     } else {
       boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevBoundaryIndex + 1;
@@ -420,11 +373,16 @@ export function prepareCompactionFromSource(
   }
   const boundaryEnd = effectiveEntries.length;
 
-  const measuredContext = measureCompactionContext(context.messages());
+  const measuredContext = measureCompactionContext(
+    context.messages(),
+    context.estimateTokens
+      ? (message) => context.estimateTokens?.(message) ?? estimateTokens(message)
+      : undefined,
+  );
   // Without an admitted ID, only the latest input belongs to this run; do not revive older work.
   const requestEntryId = constraints?.requestBoundary?.entryId;
   const admittedIndex = requestEntryId ? findEntryIndex(pathEntries, requestEntryId) : -1;
-  const admittedEntry = pathEntries.get(admittedIndex);
+  const admittedEntry = pathEntries.metadata(admittedIndex);
   // Recovery hydrates only the latest semantic window. A processed request may already
   // be summarized there; unprocessed input must still exist verbatim.
   const requestWasCompacted = Boolean(
@@ -448,12 +406,18 @@ export function prepareCompactionFromSource(
   if (requestStartIndex >= 0) {
     hasRequestInput = false;
     selectedRequest = undefined;
-    for (let i = requestStartIndex; i < pathEntries.length; i++) {
+    for (let i = pathEntries.length - 1; i >= requestStartIndex; i--) {
+      const navigation = pathEntries.metadata(i);
+      if (!navigation || getMessageFromEntryForCompaction(navigation)?.role !== "user") {
+        continue;
+      }
+      hasRequestInput = true;
       const entry = pathEntries.get(i);
-      const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      if (message?.role === "user") {
-        hasRequestInput = true;
-        selectedRequest = extractLatestUserRequest([message]) ?? selectedRequest;
+      if (entry?.type === "message") {
+        selectedRequest = extractLatestUserRequest([entry.message]);
+        if (selectedRequest) {
+          break;
+        }
       }
     }
   }
@@ -523,43 +487,67 @@ export function prepareCompactionFromSource(
   const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
   const historyIndices: number[] = [];
   const prefixIndices: number[] = [];
-  let turnPrefixSourceAskIndex = -1;
+  function fileFact(entries: CompactionEntrySource, index: number) {
+    if (entries.fileOperations) {
+      return entries.fileOperations(index);
+    }
+    const navigation = entries.metadata(index);
+    const entry =
+      navigation?.type === "message" &&
+      navigation.message.role === "assistant" &&
+      !navigation.message.content.some((block) => block.type === "toolCall")
+        ? navigation
+        : entries.get(index);
+    const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
+    return message ? prepareFileOperationMessage(message) : undefined;
+  }
   function* indexSummaryMessages() {
-    yield* iterateCompactionMessages(resetPreludeSource);
+    for (const index of resetPreludeIndices) {
+      const fact = fileFact(pathEntries, index);
+      if (fact) {
+        yield fact;
+      }
+    }
     for (let i = boundaryStart; i < cutPoint.firstKeptEntryIndex; i++) {
-      const navigation = effectiveEntries.metadata(i);
-      // Text-only assistant payloads cannot contribute file outcomes or a user ask.
-      // Keep their position (including pairing resets), without rereading their text.
-      const entry =
-        navigation?.type === "message" &&
-        navigation.message.role === "assistant" &&
-        !navigation.message.content.some((block) => block.type === "toolCall")
-          ? navigation
-          : effectiveEntries.get(i);
-      const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      if (!message) {
-        continue;
+      const fact = fileFact(effectiveEntries, i);
+      if (fact) {
+        (i < historyEnd ? historyIndices : prefixIndices).push(i);
+        yield fact;
       }
-      if (i < historyEnd) {
-        historyIndices.push(i);
-      } else {
-        if (message.role === "user" && getCompactionContent(message.content).text.trim()) {
-          turnPrefixSourceAskIndex = prefixIndices.length;
-        }
-        prefixIndices.push(i);
-      }
-      yield message;
     }
   }
   const fileOps = createFileOps();
   if (previousSummaryDetails) {
     mergeSummaryFileOperations(fileOps, previousSummaryDetails);
   }
-  // Index selection and file outcomes consume the same raw row while it is resident.
-  extractIndexedFileOps(indexSummaryMessages(), fileOps);
+  extractFileOpsFromFacts(indexSummaryMessages(), fileOps);
+  let turnPrefixSourceAskIndex = -1;
+  for (let index = prefixIndices.length - 1; index >= 0; index--) {
+    const entryIndex = prefixIndices[index];
+    if (entryIndex === undefined) {
+      continue;
+    }
+    const navigation = effectiveEntries.metadata(entryIndex);
+    if (navigation?.type !== "message" || navigation.message.role !== "user") {
+      continue;
+    }
+    const entry = effectiveEntries.get(entryIndex);
+    if (
+      entry?.type === "message" &&
+      entry.message.role === "user" &&
+      getCompactionContent(entry.message.content).text.trim()
+    ) {
+      turnPrefixSourceAskIndex = index;
+      break;
+    }
+  }
   const history = indexedMessages(effectiveEntries, historyIndices);
   const messagesToSummarize: CompactionAgentMessageSource = {
     length: resetPreludeSource.length + history.length,
+    entryId: (index) =>
+      index < resetPreludeSource.length
+        ? resetPreludeSource.entryId(index)
+        : history.entryId(index - resetPreludeSource.length),
     get: (index) =>
       index < resetPreludeSource.length
         ? resetPreludeSource.get(index)
@@ -574,6 +562,8 @@ export function prepareCompactionFromSource(
     messagesToSummarize,
     turnPrefixMessages,
     turnPrefixSourceAskIndex,
+    totalEstimatedTokens,
+    messageCount: measuredContext.messageCount,
     isSplitTurn: cutPoint.isSplitTurn,
     ...(requestSelection ? { requestSelection } : {}),
     ...(selectedRequest ? { latestUnresolvedUserRequest: selectedRequest } : {}),

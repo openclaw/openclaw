@@ -1,5 +1,4 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { CombinedSessionStoreTopologyRequest } from "./combined-store.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -19,6 +18,7 @@ import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydrat
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
+  type SessionHistoryWorkerRequestRunner,
   type SessionHistoryWorkerInput,
   type SessionHistoryWorkerDatabase,
   type SessionHistoryWorkerPreparedInput,
@@ -26,18 +26,6 @@ import {
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { InternalSessionEntry } from "./types.js";
-
-export type SessionHistoryWorkerRequestRunner = <
-  Request extends SessionHistoryWorkerPreparedInput,
-  TResult,
->(
-  prepare: () => Request,
-  inputBytes: number,
-  receive: (value: SessionTranscriptWorkerValues[Request["kind"]]) => TResult,
-  signal?: AbortSignal,
-  onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
-  timeoutMs?: number,
-) => Promise<TResult>;
 
 type Readers = Omit<SessionHistoryWorkerDatabase, "assertCurrent">;
 type ReaderContext = { runRequest: SessionHistoryWorkerRequestRunner };
