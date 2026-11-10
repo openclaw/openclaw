@@ -237,10 +237,14 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   // Catalog rows load when their keyed section needs them.
   private readonly Catalog = lazy(
     async () => {
-      const renderer = await import("./app-sidebar-session-catalog-render.tsx");
-      this.catalogRenderer = renderer;
+      const {
+        memoizedSidebarCatalogRows,
+        revealSidebarCatalogSelection,
+        renderSessionCatalogGroups,
+      } = await import("./app-sidebar-session-catalog-render.tsx");
+      this.catalogRenderer = { memoizedSidebarCatalogRows, revealSidebarCatalogSelection };
       this.invalidate();
-      return renderer;
+      return { renderSessionCatalogGroups };
     },
     { export: "renderSessionCatalogGroups" },
   );

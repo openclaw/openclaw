@@ -52,11 +52,11 @@ function IndicatorAction(props: { label: string; busy: boolean; onClick: () => v
   );
 }
 
-type FailureKind = "error" | "rejected" | "recovery";
+type FailureKind = "error" | "rejected" | "recovery" | "deferred";
 type Failure = { kind: FailureKind; reason: string | null };
 
 const isFailure = (state: string | undefined): state is FailureKind =>
-  state === "error" || state === "rejected" || state === "recovery";
+  state === "error" || state === "rejected" || state === "recovery" || state === "deferred";
 
 export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
   type Command = "retry" | "save" | "reload" | "apply";
@@ -137,7 +137,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
     if (saving() || status() === "saving") {
       return "saving";
     }
-    if (["recovery", "rejected", "error", "paused", "conflict"].includes(status())) {
+    if (["recovery", "rejected", "error", "deferred", "paused", "conflict"].includes(status())) {
       return status();
     }
     if (props.pending) {
@@ -196,7 +196,9 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
             ? t("configView.autoSaveSaving")
             : card.failure.kind === "rejected"
               ? t("configView.autoSaveRejected")
-              : t("configView.autoSaveFailed")}
+              : card.failure.kind === "deferred"
+                ? t("configView.autoSaveDeferred")
+                : t("configView.autoSaveFailed")}
         </span>
         <Show when={card.reason}>
           {(reason) => <p class="settings-save-indicator__reason">{reason()}</p>}
@@ -212,14 +214,16 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
               {t("configView.retry")}
             </button>
           </Show>
-          <button
-            class="btn btn--sm btn--ghost settings-save-indicator__action"
-            type="button"
-            disabled={busy()}
-            onClick={discard}
-          >
-            {t("configView.discardChanges")}
-          </button>
+          <Show when={card.failure.kind !== "deferred" || props.pending}>
+            <button
+              class="btn btn--sm btn--ghost settings-save-indicator__action"
+              type="button"
+              disabled={busy()}
+              onClick={discard}
+            >
+              {t("configView.discardChanges")}
+            </button>
+          </Show>
         </div>
       </div>
     );
