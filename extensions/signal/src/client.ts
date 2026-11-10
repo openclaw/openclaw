@@ -15,6 +15,7 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
+import { describeSignalRateLimitRecovery } from "./rate-limit-recovery.js";
 import { assertSignalSocketEndpoint } from "./socket-path.js";
 
 export type { SignalRpcOptions } from "./client-types.js";
@@ -293,7 +294,10 @@ function result(message: RpcMessage): unknown {
     ) {
       throw new Error(`Signal RPC ${code}: quote metadata rejected (redacted)`);
     }
-    throw new Error(`Signal RPC ${code}: remote error`);
+    // Rate-limit recovery facts live in `data`, never in the (redacted) message.
+    throw new Error(
+      describeSignalRateLimitRecovery(error.data, `Signal RPC ${code}: remote error`),
+    );
   }
   return message.result;
 }
@@ -363,7 +367,9 @@ export async function signalRpcRequest<T = unknown>(
   if (parsed.error) {
     const code = parsed.error.code ?? "unknown";
     const msg = parsed.error.message ?? "Signal RPC error";
-    throw new Error(`Signal RPC ${code}: ${msg}`);
+    throw new Error(
+      describeSignalRateLimitRecovery(parsed.error.data, `Signal RPC ${code}: ${msg}`),
+    );
   }
   return parsed.result as T;
 }
