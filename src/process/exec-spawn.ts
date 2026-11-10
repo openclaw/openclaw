@@ -20,6 +20,7 @@ import {
   type SpawnResult,
 } from "./exec-result.js";
 import { killProcessTree } from "./kill-tree.js";
+import { prepareAgentCoreDumpLimit } from "./linux-core-dump.js";
 import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
@@ -638,11 +639,12 @@ export function spawnCommandWithInvocation<
     remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
   }
   const reservation = reserveCommandProcessCustody([invocation.command, ...invocation.args]);
+  const limited = prepareAgentCoreDumpLimit(invocation.command, invocation.args, executionIntent);
   const child: CommandSubprocess<CommandSpawnOptions> =
     broker && remoteOptions
       ? spawnBrokerCommand(
           broker,
-          [invocation.command, ...invocation.args],
+          [limited.command, ...limited.args],
           commandOptions,
           remoteOptions,
           executionIntent,
@@ -650,7 +652,7 @@ export function spawnCommandWithInvocation<
         )
       : runWithMainThreadTask(
           "process:spawn",
-          () => execa(invocation.command, invocation.args, commandOptions),
+          () => execa(limited.command, limited.args, commandOptions),
           "command",
         );
   // nice execs Git in the same child; retain its family and operation attribution.

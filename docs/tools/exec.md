@@ -49,6 +49,15 @@ and memory-limit enforcement still target the owned command tree. They do not
 terminate other commands sharing its session budget. Startup reports unavailable
 delegation with Doctor guidance; hosts without it retain their existing behavior.
 
+Linux host agent command processes receive a zero core-size limit (`RLIMIT_CORE=0`),
+including their descendants. Host execution requires `prlimit` from util-linux
+at `/usr/bin/prlimit`. The Gateway and its internal workers retain the service's
+core limit for crash diagnostics. Docker sandboxes default to `core=0` through
+the existing `docker.ulimits` setting; an explicit configured core limit wins.
+Durable commands receive the same zero limit on their transient systemd unit.
+This prevents direct-file core dumps. Linux ignores this limit for cores piped
+to a collector; those collectors retain their own capture policy.
+
 ## Parameters
 
 <ParamField path="command" type="string" required>
