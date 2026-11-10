@@ -764,7 +764,7 @@ it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as con
   "sessions.fork revalidates source participation after %s",
   async (revocation) => {
     await withStorage(async () => {
-      // Both variants use native fixture reads; admit their handle before asynchronous writers.
+      // Both variants use native fixture reads; admit their handle before any asynchronous writers.
       openOpenClawAgentDatabase({ agentId: "main" });
       const scope = await seedMemberSource();
       const { authorization, options, request } = await authorizeMemberFork(scope);
