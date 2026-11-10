@@ -209,6 +209,7 @@ const repositoryScriptEntries = [
   // The performance guide and retained package-integrity rerun invoke these benchmarks by path.
   "scripts/bench-package-integrity.ts!",
   "scripts/perf/cron-delivery-gateway-entry.ts!",
+  "scripts/perf/session-pr-invalidation-provider.ts!",
   // Maintained guides and source headers invoke these proof commands by exact path.
   "scripts/bench-control-ui-media.ts!",
   "scripts/bench-control-ui-css.ts!",

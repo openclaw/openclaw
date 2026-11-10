@@ -1,0 +1,2 @@
+# Regression: unrelated metadata does not revalidate task PR readers; root and alias changes do.
+22

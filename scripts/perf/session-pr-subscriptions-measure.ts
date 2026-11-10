@@ -2,9 +2,14 @@
 // Mixed workload: --mutation label --list-every 8 --turn-every 10 --mock-port 41568.
 // Prepare the fixture's OpenAI model with applyMockOpenAiModelConfig for that port,
 // a synthetic API key, and the openai plugin enabled. The mock never contacts a provider.
-// --count-checks injects source-only counters: use a separate count pass, never timing gates.
+// --count-checks injects bounded owner/invalidation counters: separate count passes from timing.
+// --cpu-profile adds sampled owner timings in a separate pass without injected counters.
+// Counter suffixes classify event scopes/facts, never session IDs, paths, or arbitrary stacks.
 // Timing/GC runs omit --trace-gc; collect promotion in separate matched traced passes.
 // --startup-timeout-ms extends setup readiness only; fixed warmup and timed work stay unchanged.
+// --mixed-invalidation adds concurrent streamed turns, one native child spawn, and one PR receipt.
+// Its fixture needs tools.toolSearch=false and tools.codeMode.enabled=false for native tools.
+// Suggested: --clients 4 --keys 18 --operations 30 --interval-ms 2000 --turn-every 10.
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
@@ -23,7 +28,12 @@ import {
   signEd25519Payload,
 } from "../../src/infra/ed25519-signature.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
-import { measureGatewayAllocations, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import {
+  controlGatewayProfile,
+  measureGatewayAllocations,
+  readGatewayCpuProfile,
+  readGatewayGcTrace,
+} from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv, waitForInitialProbe } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -37,6 +47,8 @@ const { values } = parseArgs({
     revision: { type: "string" },
     "trace-gc": { type: "boolean", default: false },
     "count-checks": { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
+    "mixed-invalidation": { type: "boolean", default: false },
     "warmup-ms": { type: "string", default: "0" },
     "startup-timeout-ms": { type: "string", default: "180000" },
     port: { type: "string", default: "41567" },
@@ -62,6 +74,7 @@ const benchmarkOwners = [
   "control-ui-session-task-prs",
   "control-ui-session-pr-read",
   "control-ui-session-pr-subscriptions",
+  "control-ui-session-pr-prepared-read",
   "session-row-scope",
   "session-row-projection",
   "session-row-projection-materialize",
@@ -73,6 +86,7 @@ type BenchReply = {
   drainMs: number;
   pendingScopes: number;
   checks?: Record<string, number>;
+  mixed?: Record<string, unknown>;
 };
 
 if (values.child) {
@@ -80,7 +94,61 @@ if (values.child) {
   let active = false;
   const checks: Record<string, number> = {};
   const installedChecks = new Set<string>();
-  const checkHooks = [
+  let readSharingChange:
+    | typeof import("../../src/config/sessions/session-accessor.sqlite-entry-cache-publication.js").readPreparedSessionSharingChange
+    | undefined;
+  // These fixed buckets bound cardinality even when a plugin supplies another scope.
+  const changeScopes = new Set([
+    "automation",
+    "runtime",
+    "session-entry",
+    "acp",
+    "transcript",
+    "profiles",
+    "catalog",
+    "agent-runs",
+    "subagent-runs",
+    "worker-placements",
+    "worker-environments",
+    "config",
+    "config-presentation",
+    "config-profiles",
+    "stores",
+  ]);
+  const factKinds = new Set([
+    "unchanged",
+    "replacement",
+    "entry",
+    "member",
+    "owner",
+    "participants",
+    "category",
+    "removed",
+    "acp",
+  ]);
+  const changeReason = (change: unknown) => {
+    if (!isRecord(change)) {
+      return "none";
+    }
+    if (["pending", "committed", "settled", "unknown"].includes(String(change.kind))) {
+      return `receipt.${String(change.kind)}`;
+    }
+    const scope =
+      typeof change.scope === "string" && changeScopes.has(change.scope)
+        ? change.scope
+        : isRecord(change.scope)
+          ? "scoped"
+          : "other";
+    const fact =
+      isRecord(change.facts) &&
+      typeof change.facts.kind === "string" &&
+      factKinds.has(change.facts.kind)
+        ? change.facts.kind
+        : "none";
+    return `${"all" in change ? "all" : "key"}.${scope}.${fact}.${change.factsInvalidated ? "invalidated" : "published"}.${readSharingChange?.(change) ?? "unknown"}`;
+  };
+  type CheckHook = readonly [owner: string, name: string, pattern: RegExp, injection?: string];
+  const checkHooks: readonly CheckHook[] = [
     [
       "control-ui-session-task-prs",
       "readPublicationRow",
@@ -109,19 +177,97 @@ if (values.child) {
     [
       "control-ui-session-pr-subscriptions",
       "currentWatcher",
-      /const currentWatcher\s*=\s*(?:__name\(\s*)?async\s*\([^]*?\)\s*=>\s*\{/,
+      /const currentWatcher\s*=\s*(?:__name\(\s*)?(?:async\s*)?\([^]*?\)\s*=>\s*\{/,
     ],
     [
       "control-ui-session-pr-subscriptions",
       "currentKeyState",
       /const currentKeyState\s*=\s*(?:__name\(\s*)?async\s*(?:\([^]*?\)|cacheKey)\s*=>\s*\{/,
     ],
-  ] as const;
+    [
+      "control-ui-session-task-prs",
+      "publicationRowCapture",
+      /row\s*=\s*projection.capture\(node.query\);?/,
+    ],
+    [
+      "session-row-projection",
+      "sharing.catalog",
+      /revisions.invalidate\(\);?(?=\s*revisions.publishFacts\(\);)/,
+    ],
+    ["session-row-projection", "sharing.removal", /revisions.invalidate\(true\);?/],
+    [
+      "session-row-projection",
+      "sharing.runtimeMark",
+      /revisions.invalidate\(!catalogOnly\);?/,
+      'globalThis.__sessionPrCurrencyProbe("sharing.runtimeMark", change);',
+    ],
+    [
+      "session-row-projection",
+      "sharing.transcriptRefresh",
+      /revisions.invalidate\(\);?(?=\s*records.invalidateDatabaseFacts)/,
+    ],
+    [
+      "session-row-projection-revisions",
+      "sharing.attempt",
+      /sharing\s*=\s*(?:undefined|void 0);?/,
+      'globalThis.__sessionPrCurrencyProbe("sharing.attempt"); if (sharing) globalThis.__sessionPrCurrencyProbe("sharing.retired");',
+    ],
+    ["session-row-projection-revisions", "sharing.materialized", /invalidate\(boardChanged\);?/],
+    ["session-row-projection-revisions", "sharing.replace", /invalidate\(changed\);?/],
+    ["session-row-projection-revisions", "sharing.selection", /invalidate\(true\);?/],
+    [
+      "session-row-projection-revisions",
+      "taskRevision.selection",
+      /if\s*\(!row\s*\|\|\s*removed\)\s*\{\s*taskPublication\s*=\s*(?:undefined|void 0);?/,
+    ],
+    [
+      "session-row-projection-revisions",
+      "taskRevision.runtimeMark",
+      /if\s*\(change.factsInvalidated[^]*?taskPublication\s*=\s*(?:undefined|void 0);?/,
+      'globalThis.__sessionPrCurrencyProbe("taskRevision.runtimeMark", change);',
+    ],
+    [
+      "session-row-projection-revisions",
+      "taskRevision.replace",
+      /!isDeepStrictEqual\(previous.parents,\s*row.parents\)\s*\)\s*\{\s*taskPublication\s*=\s*(?:undefined|void 0);?/,
+    ],
+    [
+      "control-ui-session-pr-subscriptions",
+      "lineage.received",
+      /const stopLineage\s*=\s*sessionChanges.subscribeFacts\(\(?change\)?\s*=>\s*\{/,
+      'globalThis.__sessionPrCurrencyProbe("lineage.received", change);',
+    ],
+    [
+      "control-ui-session-pr-subscriptions",
+      "lineage.scheduledKeys",
+      /if\s*\(keys(?:\?\.length|\.length\s*>\s*0)\)\s*\{/,
+      'globalThis.__sessionPrCurrencyProbe("lineage.scheduledKeys", change, keys.length);',
+    ],
+    [
+      "control-ui-session-pr-subscriptions",
+      "currentKeyState.lineage",
+      /return Promise.allSettled\(keys.map\(currentKeyState\)\);?/,
+      'globalThis.__sessionPrCurrencyProbe("currentKeyState.lineage", change, keys.length);',
+    ],
+    [
+      "control-ui-session-pr-subscriptions",
+      "receipt.received",
+      /const stopReceipts\s*=\s*githubPublicationReceipts.subscribeFacts\(\(?change\)?\s*=>\s*\{/,
+      'globalThis.__sessionPrCurrencyProbe("receipt.received", change);',
+    ],
+    [
+      "control-ui-session-pr-subscriptions",
+      "receipt.refreshedKeys",
+      /state.snapshot\s*=\s*(?:undefined|void 0);?(?=\s*if\s*\(state.prepared\))/,
+      'globalThis.__sessionPrCurrencyProbe("receipt.refreshedKeys", change);',
+    ],
+  ];
   if (values["count-checks"]) {
     Object.assign(globalThis, {
-      __sessionPrCurrencyProbe: (name: string) => {
+      __sessionPrCurrencyProbe: (name: string, change?: unknown, count = 1) => {
         if (active) {
-          checks[name] = (checks[name] ?? 0) + 1;
+          const key = change === undefined ? name : `${name}.${changeReason(change)}`;
+          checks[key] = (checks[key] ?? 0) + count;
         }
       },
     });
@@ -140,7 +286,7 @@ if (values.child) {
           typeof loaded.source === "string"
             ? loaded.source
             : new TextDecoder().decode(loaded.source);
-        for (const [, name, pattern] of matching) {
+        for (const [, name, pattern, injection] of matching) {
           const start =
             name === "lookupSessionRow" ? source.indexOf("function lookupSessionRow(") : 0;
           assert(start >= 0, `Missing currency owner: ${name}`);
@@ -152,10 +298,14 @@ if (values.child) {
           );
           source =
             source.slice(0, start) +
-            body.replace(
-              pattern,
-              (match) => `${match} globalThis.__sessionPrCurrencyProbe(${JSON.stringify(name)});`,
-            );
+            body.replace(pattern, (match) => {
+              const probe =
+                injection ?? `globalThis.__sessionPrCurrencyProbe(${JSON.stringify(name)});`;
+              // The lineage return must count before returning; other probes follow their effect.
+              return name === "currentKeyState.lineage" || name === "sharing.attempt"
+                ? `${probe} ${match}`
+                : `${match}; ${probe}`;
+            });
           checks[name] = 0;
           installedChecks.add(name);
         }
@@ -178,6 +328,10 @@ if (values.child) {
         return { ...resolved, url: resolved.url.replace(/\.ts$/, `.${values["owner-suffix"]}.ts`) };
       },
     });
+  }
+  if (values["count-checks"]) {
+    ({ readPreparedSessionSharingChange: readSharingChange } =
+      await import("../../src/config/sessions/session-accessor.sqlite-entry-cache-publication.js"));
   }
   await import("../lib/gateway-bench-profile-preload.ts");
   const { sessionChanges, sessionChangeScopeAffectsStoredRows } =
@@ -217,6 +371,92 @@ if (values.child) {
     }
     void (async () => {
       let drainMs = 0;
+      let mixed: Record<string, unknown> | undefined;
+      if (message.action === "publish") {
+        assert(values["mixed-invalidation"] && typeof message.sessionKey === "string");
+        assert(
+          typeof message.receiptNumber === "number" && Number.isSafeInteger(message.receiptNumber),
+        );
+        const { getRuntimeConfig } = await import("../../src/config/config.ts");
+        const { readResolvedSessionEntryInWorker } =
+          await import("../../src/config/sessions/session-accessor.entry.ts");
+        const entry = await readResolvedSessionEntryInWorker({
+          cfg: getRuntimeConfig(),
+          agentId: "main",
+          sessionKey: message.sessionKey,
+        });
+        assert(entry?.sessionId);
+        const { insertRepositoryGitHubPublicationFixture } =
+          await import("../../src/gateway/github-publication-store.test-support.ts");
+        const { repositoryGitHubPublicationDigest } =
+          await import("../../src/gateway/github-repository-publication.kernel.ts");
+        const requestId = `session-pr-benchmark-${process.pid}`;
+        const row: import("../../src/state/github-publication-read.types.ts").RepositoryGitHubPublicationRow =
+          {
+            request_id: requestId,
+            idempotency_key: requestId,
+            request_digest: "",
+            session_id: entry.sessionId,
+            session_key: message.sessionKey,
+            agent_id: "main",
+            session_lifecycle_revision: entry.lifecycleRevision ?? null,
+            requester_authority_json: null,
+            workspace_id: requestId,
+            owner_profile_id: null,
+            connection_generation: null,
+            identity_source: "system-configured",
+            identity_profile_id: "synthetic-profile",
+            identity_account_id: 42,
+            identity_login: "fixture-bot",
+            title: "Synthetic subscription publication",
+            body: null,
+            draft: null,
+            status: "published",
+            gateway_instance_id: null,
+            execution_id: null,
+            push_repository: "synthetic/subscriptions",
+            repository: "synthetic/subscriptions",
+            branch: "synthetic-subscription",
+            base_branch: "main",
+            source_head_commit: "b".repeat(40),
+            source_index_tree: "c".repeat(40),
+            workspace_tree: "c".repeat(40),
+            previous_head_commit: null,
+            pushed_head_commit: null,
+            head_commit: null,
+            pull_request_url: `https://github.com/synthetic/subscriptions/pull/${message.receiptNumber}`,
+            claim_id: null,
+            run_id: null,
+            environment_id: null,
+            owner_epoch: null,
+            placement_generation: null,
+            checkpoint_ref: null,
+            checkpoint_digest: null,
+            error_code: null,
+            next_action: null,
+            last_effect: null,
+            effect_state: null,
+            created_at_ms: Date.now(),
+            updated_at_ms: Date.now(),
+            reported_at_ms: null,
+          };
+        row.request_digest = repositoryGitHubPublicationDigest(row);
+        insertRepositoryGitHubPublicationFixture(row, () => {});
+        mixed = { publishedUrl: row.pull_request_url };
+      }
+      if (message.action === "inspect-child") {
+        assert(values["mixed-invalidation"] && typeof message.label === "string");
+        const { subagentRuns } =
+          await import("../../src/agents/subagents/registry/subagent-registry-memory.ts");
+        const children = [...subagentRuns.values()].filter((row) => row.label === message.label);
+        assert.equal(children.length, 1, "Exactly one native benchmark child must be recorded");
+        const row = children[0]!;
+        mixed = {
+          childSessionKey: row.childSessionKey,
+          requesterSessionKey: row.requesterSessionKey,
+          runId: row.runId,
+        };
+      }
       if (message.action === "capture") {
         scopes.clear();
       }
@@ -270,6 +510,7 @@ if (values.child) {
         channel,
         action: message.action,
         notifications,
+        ...(mixed ? { mixed } : {}),
         ...(values["count-checks"] ? { checks } : {}),
         scopeCount: scopes.size,
         pendingScopes: [...scopes].filter((scope) => scope.hasPendingWork).length,
@@ -309,6 +550,15 @@ if (values.child) {
   const interval = integer(values["interval-ms"], "--interval-ms");
   const listEvery = integer(values["list-every"], "--list-every", 0);
   const turnEvery = integer(values["turn-every"], "--turn-every", 0);
+  const mixed = values["mixed-invalidation"];
+  assert(
+    !values["cpu-profile"] || !values["count-checks"],
+    "CPU profiles require a separate pass without injected counters",
+  );
+  assert(
+    !mixed || (clients >= 3 && keyCount >= 3 && operations >= 3 && turnEvery > 0),
+    "Mixed invalidation needs >=3 clients/keys/operations and --turn-every",
+  );
   const mockPort = values["mock-port"]
     ? integer(values["mock-port"], "--mock-port", 40000)
     : undefined;
@@ -357,7 +607,7 @@ if (values.child) {
   function snapshotHash(state: ReturnType<typeof snapshotState>) {
     return createHash("sha256").update(JSON.stringify(state)).digest("hex");
   }
-  async function command(action: string) {
+  async function command(action: string, payload: Record<string, unknown> = {}) {
     assert(gateway);
     const child = gateway;
     return await new Promise<BenchReply>((resolve, reject) => {
@@ -391,6 +641,7 @@ if (values.child) {
                 )
               : {
                   notifications: Number(message.notifications ?? 0),
+                  ...(isRecord(message.mixed) ? { mixed: message.mixed } : {}),
                   checks: isRecord(message.checks)
                     ? Object.fromEntries(
                         Object.entries(message.checks).map(([name, count]) => [
@@ -412,7 +663,7 @@ if (values.child) {
       child.on("message", onMessage);
       child.once("exit", onExit);
       if (action !== "ready") {
-        child.send({ channel, action });
+        child.send({ ...payload, channel, action });
       }
     });
   }
@@ -478,12 +729,21 @@ if (values.child) {
     return { bytes: visit(profile.head), leaves };
   }
   const turnText = "Synthetic task PR measurement complete.";
-  async function runTurn() {
+  const spawnLabel = `session-pr-benchmark-child-${process.pid}`;
+  const receiptNumber = 900000000 + process.pid;
+  let turnSequence = 0;
+  let measuredTurns = 0;
+  let spawnedChild: Record<string, unknown> | undefined;
+  let publication: Record<string, unknown> | undefined;
+  async function runTurn(
+    sessionKey = key(4991),
+    message = "Reply with the synthetic measurement text.",
+  ) {
     const started = performance.now();
     const sent = await rpc(peers[0]!, "chat.send", {
-      sessionKey: key(4991),
-      message: "Reply with the synthetic measurement text.",
-      idempotencyKey: `session-pr-bench-${process.pid}-${Date.now()}`,
+      sessionKey,
+      message,
+      idempotencyKey: `session-pr-bench-${process.pid}-${++turnSequence}`,
     });
     assert(isRecord(sent.payload) && typeof sent.payload.runId === "string");
     const done = await rpc(peers[0]!, "agent.wait", {
@@ -501,15 +761,26 @@ if (values.child) {
         `http://127.0.0.1:${mockPort}/v1`,
         "Mixed fixture must target its local mock provider",
       );
+      if (mixed) {
+        assert.equal(config.tools?.toolSearch, false, "Mixed fixture needs direct native tools");
+        assert.equal(config.tools?.codeMode?.enabled, false, "Mixed fixture needs Code Mode off");
+      }
       const responseControl = path.join(output, "mock-response.json");
       writeFileSync(responseControl, JSON.stringify({ text: turnText }));
       provider = spawn(
         process.execPath,
-        ["--import", "./scripts/tsx.mjs", "scripts/e2e/mock-openai-server.mjs"],
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          mixed
+            ? "scripts/perf/session-pr-invalidation-provider.ts"
+            : "scripts/e2e/mock-openai-server.mjs",
+        ],
         {
           env: {
             PATH: process.env.PATH,
             MOCK_PORT: String(mockPort),
+            MOCK_SPAWN_LABEL: spawnLabel,
             MOCK_RESPONSE_CONTROL: responseControl,
             MOCK_REQUEST_LOG: path.join(output, "mock-requests.jsonl"),
           },
@@ -561,6 +832,7 @@ if (values.child) {
         String(port),
         ...(values["owner-suffix"] ? ["--owner-suffix", values["owner-suffix"]] : []),
         ...(values["count-checks"] ? ["--count-checks"] : []),
+        ...(mixed ? ["--mixed-invalidation"] : []),
       ],
       {
         env,
@@ -641,6 +913,19 @@ if (values.child) {
         },
       });
     }
+    if (mixed) {
+      for (const sessionKey of keys.slice(0, 3)) {
+        const described = await rpc(peers[0]!, "sessions.describe", { key: sessionKey });
+        assert(isRecord(described.payload) && isRecord(described.payload.session));
+        const expectedSessionId = described.payload.session.sessionId;
+        assert(typeof expectedSessionId === "string");
+        await rpc(peers[0]!, "sessions.patch", {
+          key: sessionKey,
+          expectedSessionId,
+          archived: false,
+        });
+      }
+    }
     // Long-lived connection work is not part of the subscription owner's completion barrier.
     await command("capture");
     for (const peer of peers) {
@@ -661,7 +946,10 @@ if (values.child) {
     }
     const warmupSettlement = await command("settle");
     if (turnEvery) {
-      await runTurn();
+      // Warm the same session contexts exercised by the measured turns.
+      await Promise.all(
+        (mixed ? keys.slice(0, 3) : [key(4991)]).map((sessionKey) => runTurn(sessionKey)),
+      );
       await command("settle");
     }
     await delay(integer(values["warmup-ms"], "--warmup-ms", 0));
@@ -716,11 +1004,14 @@ if (values.child) {
     const profilePath = path.join(output, "notify.heapprofile");
     let finalSettlement: BenchReply | undefined;
     await command("start");
-    const allocation = await measureGatewayAllocations(
-      gateway,
-      profilePath,
-      operations,
-      async () => {
+    const measuredStarted = performance.now();
+    const cpuProfilePath = values["cpu-profile"] ? path.join(output, "notify.cpuprofile") : null;
+    if (cpuProfilePath) {
+      await controlGatewayProfile(gateway, "cpu", "start", cpuProfilePath);
+    }
+    let allocation: Awaited<ReturnType<typeof measureGatewayAllocations>>;
+    try {
+      allocation = await measureGatewayAllocations(gateway, profilePath, operations, async () => {
         const start = performance.now();
         for (let index = 0; index < operations; index++) {
           const scheduled = start + index * interval;
@@ -746,13 +1037,49 @@ if (values.child) {
             listLatency.push(page.elapsedMs);
           }
           if (turnEvery && index % turnEvery === 0) {
-            turnLatency.push(await runTurn());
+            const samples = mixed
+              ? await Promise.all(keys.slice(0, 3).map((sessionKey) => runTurn(sessionKey)))
+              : [await runTurn()];
+            measuredTurns += samples.length;
+            turnLatency.push(...samples);
+          }
+          if (mixed && index === Math.floor(operations / 3)) {
+            turnLatency.push(
+              await runTurn(
+                keys[0],
+                "SESSION_PR_SPAWN_ONCE: Spawn the synthetic child, then reply with the synthetic measurement text.",
+              ),
+            );
+            measuredTurns++;
+            spawnedChild = (await command("inspect-child", { label: spawnLabel })).mixed;
+            assert(
+              spawnedChild &&
+                spawnedChild.requesterSessionKey === keys[0] &&
+                typeof spawnedChild.runId === "string",
+            );
+            const childDone = await rpc(peers[0]!, "agent.wait", {
+              runId: spawnedChild.runId,
+              timeoutMs: 60000,
+            });
+            assert(
+              isRecord(childDone.payload) && childDone.payload.status === "ok",
+              JSON.stringify(childDone.payload),
+            );
+          }
+          if (mixed && index === Math.floor((operations * 2) / 3)) {
+            publication = (await command("publish", { sessionKey: keys[1], receiptNumber })).mixed;
+            assert(typeof publication?.publishedUrl === "string");
           }
           finalSettlement = await command("settle");
           notifySettlementLatency.push(performance.now() - started);
         }
-      },
-    );
+      });
+    } finally {
+      if (cpuProfilePath) {
+        await controlGatewayProfile(gateway, "cpu", "stop", cpuProfilePath);
+      }
+    }
+    const measuredElapsedMs = performance.now() - measuredStarted;
     const { notifications, checks } = await command("stop");
     assert(notifications >= operations, "The stored-row notification path was not exercised");
     const parentSelections = (snapshot: typeof allocation.sessionRowSelections.before) =>
@@ -785,7 +1112,30 @@ if (values.child) {
         Number(mockHealth.requests.ingress.responses) >= turnLatency.length + 1,
         "Every turn must reach the mock provider",
       );
-      const history = await rpc(peers[0]!, "chat.history", { sessionKey: key(4991), limit: 10 });
+      if (mixed) {
+        assert(mockHealth.spawnCalls === 1, "The mock must issue exactly one spawn call");
+        assert(
+          Number(mockHealth.maxConcurrentStreams) >= 3,
+          "At least three model streams must overlap",
+        );
+        assert(
+          Number(mockHealth.streamChunks) >= measuredTurns * 40,
+          "The stream workload must emit incremental deltas",
+        );
+        assert(spawnedChild && typeof spawnedChild.childSessionKey === "string");
+        const childHistory = await rpc(peers[0]!, "chat.history", {
+          sessionKey: spawnedChild.childSessionKey,
+          limit: 10,
+        });
+        assert(
+          JSON.stringify(childHistory.payload).includes(turnText),
+          "Native child must persist its provider reply",
+        );
+      }
+      const history = await rpc(peers[0]!, "chat.history", {
+        sessionKey: mixed ? keys[0] : key(4991),
+        limit: 10,
+      });
       assert(
         JSON.stringify(history.payload).includes(turnText),
         "Mock response must appear in chat history",
@@ -798,11 +1148,37 @@ if (values.child) {
       path.join(output, "snapshots.json"),
       JSON.stringify({ initialState, finalState }),
     );
-    assert.equal(
-      finalSnapshotHash,
-      initialSnapshotHash,
-      `Unrelated ${mutation} writes changed PR snapshots`,
-    );
+    if (mixed) {
+      assert(
+        publication && spawnedChild,
+        "The mixed run must finish its publication and child work",
+      );
+      for (const client of finalState) {
+        const snapshot = client.sessions.find(([sessionKey]) => sessionKey === keys[1])?.[1];
+        assert(
+          JSON.stringify(snapshot).includes(String(publication.publishedUrl)),
+          "Each client must receive the committed PR receipt",
+        );
+        for (const [sessionKey, value] of client.sessions) {
+          if (sessionKey === keys[0] || sessionKey === keys[1]) {
+            continue;
+          }
+          assert.deepEqual(
+            value,
+            initialState[client.client]!.sessions.find(
+              ([savedKey]) => savedKey === sessionKey,
+            )?.[1],
+            "Unrelated PR snapshots must stay unchanged",
+          );
+        }
+      }
+    } else {
+      assert.equal(
+        finalSnapshotHash,
+        initialSnapshotHash,
+        `Unrelated ${mutation} writes changed PR snapshots`,
+      );
+    }
     const result = {
       format: "session-pr-subscriptions-v1",
       readiness,
@@ -813,6 +1189,20 @@ if (values.child) {
       revision: values.revision ?? null,
       traceGc: values["trace-gc"],
       countChecks: values["count-checks"],
+      cpuProfile: cpuProfilePath ? readGatewayCpuProfile(cpuProfilePath) : null,
+      mixedInvalidation: mixed,
+      measuredElapsedMs,
+      measuredTurns,
+      spawnedChild,
+      publication,
+      checksPerMinute: checks
+        ? Object.fromEntries(
+            Object.entries(checks).map(([counterName, count]) => [
+              counterName,
+              (count * 60000) / measuredElapsedMs,
+            ]),
+          )
+        : undefined,
       subscriptionChecks,
       checks,
       turnEvery,

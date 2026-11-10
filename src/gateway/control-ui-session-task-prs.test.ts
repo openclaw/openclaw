@@ -37,6 +37,7 @@ import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { insertRepositoryGitHubPublicationFixture } from "./github-publication-store.test-support.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication.kernel.js";
 import { handleGatewayRequest } from "./server-methods.js";
+import { yieldSessionListWork } from "./session-projection-work.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import * as records from "./session-row-projection-record.js";
 
@@ -225,6 +226,27 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
     sharing.mockRestore();
   }
 });
+
+it.each(["unrelated", "root", "alias"] as const)(
+  "routes metadata-only publications to their task audience (%s)",
+  async (changed) => {
+    const other = "agent:main:metadata-source";
+    const identity = changed === "alias" ? { sessionId: fixture.sessionId } : {};
+    await fixture.seed(other, fixture.profile.id, identity);
+    stubOffline();
+    await passive();
+    const projection = getSessionRowProjection(fixture.context)!;
+    const captures = vi.spyOn(projection, "capture");
+    await fixture.seed(changed === "root" ? sessionKey : other, fixture.profile.id, {
+      ...identity,
+      worktree: { id: "updated-checkout", branch: "updated", repoRoot: "/synthetic/repository" },
+    });
+    // Join the publication's deferred audience pass without polling or cancelling it.
+    await yieldSessionListWork();
+    const rootReads = captures.mock.calls.filter(([query]) => query.key === sessionKey);
+    expect(rootReads.length > 0).toBe(changed !== "unrelated");
+  },
+);
 
 it("prepares task audience policy once without reacquiring descendant membership", async () => {
   for (let index = 0; index < 4; index++) {

@@ -1,10 +1,7 @@
 import pLimit from "p-limit";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  sessionChanges,
-  sessionChangeScopeAffectsStoredRows,
-} from "../sessions/session-row-changes.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import type {
@@ -22,6 +19,7 @@ import {
   pushedSnapshot,
   removeControlUiSessionPrMembership,
   retainControlUiSessionPrBranchSnapshot,
+  selectControlUiSessionPrChangedKeys,
   staleReceiptsOnlyCell,
   UNAVAILABLE_SNAPSHOT,
 } from "./control-ui-session-pr-prepared-read.js";
@@ -468,40 +466,8 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
   };
 
   const stopLineage = sessionChanges.subscribeFacts((change) => {
-    const facts = "facts" in change ? change.facts?.kind : undefined;
-    const ownAuthorityChanged =
-      "all" in change &&
-      (change.scope === "profiles" ||
-        change.scope === "config" ||
-        change.scope === "config-profiles");
-    if (
-      keyStates.size === 0 ||
-      (!ownAuthorityChanged && !sessionChangeScopeAffectsStoredRows(change)) ||
-      (!change.factsInvalidated &&
-        (facts === "unchanged" || facts === "participants" || facts === "category")) ||
-      change.factsInvalidated === "category"
-    ) {
-      return;
-    }
-    // One notification owns the concurrent reads; each watcher still authorizes its audience.
-    const keys: string[] = [];
-    for (const [key, state] of keyStates) {
-      // A removed root may be immediately replaced under the same key. The next
-      // entry notification (or normal poll) reconciles that watch after replacement.
-      const removedRoot =
-        "sessionKey" in change &&
-        change.sessionKey === state.target.params.sessionKey &&
-        change.facts?.kind === "removed";
-      if (
-        !removedRoot &&
-        (!ownAuthorityChanged || state.target.ownGitHubProfileId) &&
-        (state.target.taskReceipts || state.target.ownGitHubProfileId) &&
-        state.connIds.size
-      ) {
-        keys.push(key);
-      }
-    }
-    if (keys.length > 0) {
+    const keys = selectControlUiSessionPrChangedKeys(change, keyStates);
+    if (keys?.length) {
       // Warm readers must not drain the whole audience ahead of the mutation's RPC reply.
       void scope
         .track(async () => {

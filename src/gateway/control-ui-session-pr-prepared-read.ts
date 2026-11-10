@@ -1,5 +1,13 @@
+import {
+  readPreparedSessionEntryChange,
+  readPreparedSessionSharingChange,
+} from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+  type SessionRowChange,
+} from "../sessions/session-row-changes.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type {
@@ -59,6 +67,64 @@ export type WatchedKeyState = PreparedSessionPrState & {
   cancelRefresh?: () => void;
   delivery?: Promise<void>;
 };
+
+export function selectControlUiSessionPrChangedKeys(
+  change: SessionRowChange,
+  keyStates: ReadonlyMap<string, WatchedKeyState>,
+): string[] | undefined {
+  const facts = "facts" in change ? change.facts?.kind : undefined;
+  const ownAuthorityChanged =
+    "all" in change &&
+    (change.scope === "profiles" ||
+      change.scope === "config" ||
+      change.scope === "config-profiles");
+  if (
+    keyStates.size === 0 ||
+    (!ownAuthorityChanged && !sessionChangeScopeAffectsStoredRows(change)) ||
+    (!change.factsInvalidated &&
+      (facts === "unchanged" || facts === "participants" || facts === "category")) ||
+    change.factsInvalidated === "category"
+  ) {
+    return undefined;
+  }
+  // Only the writer can certify that metadata left lineage and disclosure unchanged.
+  const metadataSessionId =
+    "sessionKey" in change &&
+    !change.factsInvalidated &&
+    readPreparedSessionSharingChange(change) === "unchanged"
+      ? readPreparedSessionEntryChange(change, change.sessionKey)?.entry?.sessionId
+      : undefined;
+  const keys: string[] = [];
+  for (const [key, state] of keyStates) {
+    if (
+      metadataSessionId &&
+      "sessionKey" in change &&
+      state.target.params.sessionKey !== change.sessionKey &&
+      state.target.sessionId !== metadataSessionId &&
+      !state.target.taskReceipts?.sessions.some(
+        (session) =>
+          session.sessionKey === change.sessionKey || session.sessionId === metadataSessionId,
+      )
+    ) {
+      continue;
+    }
+    // A removed root may be immediately replaced under the same key. The next
+    // entry notification (or normal poll) reconciles that watch after replacement.
+    const removedRoot =
+      "sessionKey" in change &&
+      change.sessionKey === state.target.params.sessionKey &&
+      change.facts?.kind === "removed";
+    if (
+      !removedRoot &&
+      (!ownAuthorityChanged || state.target.ownGitHubProfileId) &&
+      (state.target.taskReceipts || state.target.ownGitHubProfileId) &&
+      state.connIds.size
+    ) {
+      keys.push(key);
+    }
+  }
+  return keys;
+}
 
 /** Index each connection's requested keys on the cell that retains its snapshot. */
 export function addControlUiSessionPrMembership(
