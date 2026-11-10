@@ -223,7 +223,7 @@ async function withFixture(
         opts: { token: "123:synthetic", botInfo: bot.botInfo },
         runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
         telegramCfg: hooks.cfg.channels.telegram,
-        logger: { info: vi.fn(), warn: vi.fn() },
+        logger: { info: vi.fn() },
         resolveGroupPolicy: (chatId, cfg) =>
           resolveChannelGroupPolicy({
             cfg,
