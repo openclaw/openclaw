@@ -69,7 +69,10 @@ import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-se
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { createProfileSessionEntryFilter } from "./session-sharing-read.js";
-import { GATEWAY_DELEGATION_DENIED, hasGatewayDelegationClaim } from "./trusted-proxy-delegation.js";
+import {
+  GATEWAY_DELEGATION_DENIED,
+  hasGatewayDelegationClaim,
+} from "./trusted-proxy-delegation.js";
 
 export { getBearerToken, getHeader } from "./http-header-value.js";
 

@@ -20,8 +20,8 @@ import {
   listUserModelAccounts,
   readSelectedUserModelAccount,
 } from "./user-model-accounts.js";
-import { ensureEnterpriseGitHubProfile } from "./user-profile-enterprise-github-write.worker.js";
 import { ensureDelegatedUserProfile } from "./user-profile-delegation.worker.js";
+import { ensureEnterpriseGitHubProfile } from "./user-profile-enterprise-github-write.worker.js";
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,

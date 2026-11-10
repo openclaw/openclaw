@@ -28,7 +28,10 @@ import {
   openclawIdPeerKeyOf,
 } from "../../openclaw-id/device-token-binding.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
-import { GATEWAY_DELEGATION_DENIED, hasGatewayDelegationClaim } from "../../trusted-proxy-delegation.js";
+import {
+  GATEWAY_DELEGATION_DENIED,
+  hasGatewayDelegationClaim,
+} from "../../trusted-proxy-delegation.js";
 import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";

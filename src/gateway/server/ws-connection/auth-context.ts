@@ -1,4 +1,3 @@
-import { GATEWAY_DELEGATION_DENIED } from "../../trusted-proxy-delegation.js";
 // WebSocket auth context resolves handshake credentials before device pairing and capability checks run.
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -19,6 +18,7 @@ import {
 } from "../../auth.js";
 import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "../../ingress-attribution.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
+import { GATEWAY_DELEGATION_DENIED } from "../../trusted-proxy-delegation.js";
 
 type DeviceTokenCandidateSource = "explicit-device-token" | "shared-token-fallback";
 

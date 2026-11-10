@@ -4,7 +4,10 @@ import { isAbsolute } from "node:path";
 import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import { isDelegatedUserSubject, type DelegatedUserIdentity } from "../state/user-profile-delegation.js";
+import {
+  isDelegatedUserSubject,
+  type DelegatedUserIdentity,
+} from "../state/user-profile-delegation.js";
 import { getHeader } from "./http-header-value.js";
 
 export const GATEWAY_DELEGATION_DENIED = "trusted_proxy_delegation_denied";
@@ -60,10 +63,10 @@ export type GatewayDelegation = Readonly<{
 export function hasGatewayDelegationClaim(req?: IncomingMessage, userHeader?: string): boolean {
   return Boolean(
     req &&
-      (getHeader(req, "x-occ-browser-key") !== undefined ||
-        ["x-occ-identity", userHeader].some(
-          (header) => header && getHeader(req, header)?.trim().startsWith("oce:"),
-        )),
+    (getHeader(req, "x-occ-browser-key") !== undefined ||
+      ["x-occ-identity", userHeader].some(
+        (header) => header && getHeader(req, header)?.trim().startsWith("oce:"),
+      )),
   );
 }
 
@@ -100,7 +103,10 @@ export function authorizeGatewayDelegation(
   });
 }
 
-export function isGatewayDelegationCurrent(grant: GatewayDelegation, config: OpenClawConfig): boolean {
+export function isGatewayDelegationCurrent(
+  grant: GatewayDelegation,
+  config: OpenClawConfig,
+): boolean {
   const auth = config.gateway?.auth;
   const delegation = auth?.trustedProxy?.delegation;
   return (

@@ -41,8 +41,8 @@ import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.ty
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
-import { formatForLog } from "./ws-log.js";
 import { isGatewayDelegationCurrent } from "./trusted-proxy-delegation.js";
+import { formatForLog } from "./ws-log.js";
 
 const profileLog = createSubsystemLogger("gateway/user-profiles");
 

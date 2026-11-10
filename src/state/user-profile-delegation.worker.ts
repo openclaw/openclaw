@@ -5,10 +5,7 @@ import {
   isDelegatedUserSubject,
   type DelegatedUserIdentity,
 } from "./user-profile-delegation.js";
-import {
-  publishUserProfileAuthorityChange,
-  publishUserProfileIdentityChange,
-} from "./user-profile-events.js";
+import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
 import {
   runUserProfileWriteTransaction,
@@ -83,11 +80,11 @@ export function ensureDelegatedUserProfile(
           created_at: now,
         }),
       );
+      // A new immutable binding changes no existing alias or account selection.
+      // Publishing an alias change here would revoke its own first HTTP admission.
       options.mutation?.authority(profile.id);
-      options.mutation?.identity(profile.id);
       options.mutation?.publish(profile.id);
       publishUserProfileAuthorityChange(db, profile.id);
-      publishUserProfileIdentityChange(db, profile.id);
       publishUserProfilesChange(db, profile.id);
       return toUserProfile(profile);
     },

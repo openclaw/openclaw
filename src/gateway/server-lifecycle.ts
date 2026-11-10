@@ -1,4 +1,3 @@
-import { disposeGatewayDelegationCredentials } from "./trusted-proxy-delegation.js";
 import { closeAuthProfileUsage } from "../agents/auth-profiles/usage-lifecycle.js";
 import { prepareSandboxRegistryClose } from "../agents/sandbox/registry-lifecycle.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
@@ -51,6 +50,7 @@ import { refreshGatewayHealthSnapshot } from "./server/health-state.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import { prepareTalkConnectionClose } from "./talk/session-registry.js";
 import { withAgentTerminalOpenAdmission } from "./terminal/open-admission.js";
+import { disposeGatewayDelegationCredentials } from "./trusted-proxy-delegation.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayKernelState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
@@ -10,6 +11,8 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-bootstrap-contract.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-user-avatar-route.js";
 import { seedApprovedOperatorReadPairing } from "./server.auth.control-ui.fixtures.test-support.js";
@@ -161,11 +164,13 @@ test("delegated browsers retain profile identity and enforce scopes and current 
         const png =
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
         expect(
-          (await rpcReq(admin.ws, "users.setAvatar", {
-            profileId,
-            mime: "image/png",
-            avatarBase64: png,
-          })).ok,
+          (
+            await rpcReq(admin.ws, "users.setAvatar", {
+              profileId,
+              mime: "image/png",
+              avatarBase64: png,
+            })
+          ).ok,
         ).toBe(true);
         const avatar = await fetch(
           `http://127.0.0.1:${port}${buildControlUiUserAvatarPath(profileId)}`,
@@ -231,6 +236,33 @@ test("delegated browsers retain profile identity and enforce scopes and current 
         const savedToken = savedDevice?.tokens?.operator?.token;
         expect(savedToken).toBeTruthy();
         const paired = { identityPath: seeded.identityPath, token: savedToken! };
+        // A real competing writer makes first-use profile persistence fail. Even a valid
+        // admin device must not bypass that failure. Keep the production SQLite timeout.
+        const blockingWriter = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath());
+        blockingWriter.exec("BEGIN IMMEDIATE");
+        try {
+          expect(
+            (await readHttp(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, "d", "operator.admin")).status,
+          ).toBe(401);
+          const unavailable = await connect("d", "operator.admin", key, paired);
+          expect(unavailable.connected.ok).toBe(false);
+          expect(unavailable.connected.error?.code).toBe("UNAVAILABLE");
+          expect(unavailable.auth?.deviceToken).toBeUndefined();
+        } finally {
+          blockingWriter.exec("ROLLBACK");
+          blockingWriter.close();
+        }
+        expect(
+          (await readHttp(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, "d", "operator.admin")).status,
+        ).toBe(200);
+        const recovered = await connect("d", "operator.admin");
+        expect(recovered.connected.ok).toBe(true);
+        const recoveredSelf = await rpcReq<UsersSelfResult>(recovered.ws, "users.self", {});
+        expect(recoveredSelf.ok).toBe(true);
+        const recoveredAgain = await connect("d", "operator.admin");
+        expect(
+          (await rpcReq<UsersSelfResult>(recoveredAgain.ws, "users.self", {})).payload?.profile.id,
+        ).toBe(recoveredSelf.payload!.profile.id);
         const bounded = await connect("a", "operator.sessions.write", key, paired);
         expect(bounded.connected.ok).toBe(true);
         expect(bounded.auth?.scopes).toEqual(["operator.sessions.write"]);
@@ -238,7 +270,9 @@ test("delegated browsers retain profile identity and enforce scopes and current 
         const spoof = await connect("a", "operator.admin", randomBytes(32).toString("hex"), paired);
         expect(spoof.connected.ok).toBe(false);
         // A native administrator can narrow a person's role, which closes existing connections.
-        expect((await rpcReq(admin.ws, "users.setRole", { profileId, role: "reader" })).ok).toBe(true);
+        expect((await rpcReq(admin.ws, "users.setRole", { profileId, role: "reader" })).ok).toBe(
+          true,
+        );
         expect(await waitForWsClose(operator.ws, 3000)).toBe(true);
         const narrowed = await connect("a", "operator.sessions.write");
         expect(narrowed.connected.ok).toBe(true);
@@ -247,7 +281,9 @@ test("delegated browsers retain profile identity and enforce scopes and current 
           (await rpcReq<UsersSelfResult>(narrowed.ws, "users.self", {})).payload?.profile.id,
         ).toBe(profileId);
         // Establish a real subscription and positive event before revoking its credential.
-        const created = await rpcReq<{ key: string }>(admin.ws, "sessions.create", { agentId: "main" });
+        const created = await rpcReq<{ key: string }>(admin.ws, "sessions.create", {
+          agentId: "main",
+        });
         expect(created.ok, JSON.stringify(created.error)).toBe(true);
         const sessionKey = created.payload!.key;
         expect((await rpcReq(admin.ws, "sessions.subscribe", {})).ok).toBe(true);
@@ -256,7 +292,8 @@ test("delegated browsers retain profile identity and enforce scopes and current 
           (event) => event.event === "sessions.changed" && event.payload?.sessionKey === sessionKey,
         );
         expect(
-          (await rpcReq(admin.ws, "sessions.patch", { key: sessionKey, label: "before-rotation" })).ok,
+          (await rpcReq(admin.ws, "sessions.patch", { key: sessionKey, label: "before-rotation" }))
+            .ok,
         ).toBe(true);
         await eventBefore;
         const nextKey = randomBytes(32).toString("hex");
@@ -271,13 +308,14 @@ test("delegated browsers retain profile identity and enforce scopes and current 
         expect(fresh.connected.ok).toBe(true);
         const staleEvents: unknown[] = [];
         admin.ws.on("message", (data) => {
-          const frame = JSON.parse(String(data));
+          const frame = JSON.parse(rawDataToString(data));
           if (frame.event === "sessions.changed" && frame.payload?.sessionKey === sessionKey) {
             staleEvents.push(frame);
           }
         });
         expect(
-          (await rpcReq(fresh.ws, "sessions.patch", { key: sessionKey, label: "after-rotation" })).ok,
+          (await rpcReq(fresh.ws, "sessions.patch", { key: sessionKey, label: "after-rotation" }))
+            .ok,
         ).toBe(true);
         expect(await waitForWsClose(admin.ws, 3000)).toBe(true);
         expect(staleEvents).toEqual([]);
@@ -289,7 +327,7 @@ test("delegated browsers retain profile identity and enforce scopes and current 
         );
         const staleResponses: unknown[] = [];
         fresh.ws.on("message", (data) => {
-          const frame = JSON.parse(String(data));
+          const frame = JSON.parse(rawDataToString(data));
           if (frame.id === "revoked-rpc" && frame.ok) {
             staleResponses.push(frame);
           }

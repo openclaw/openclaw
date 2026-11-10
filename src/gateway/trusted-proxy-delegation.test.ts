@@ -42,10 +42,7 @@ function fixture() {
     "x-forwarded-for": "203.0.113.10",
     "x-forwarded-proto": "https",
   };
-  const request = (
-    changes: Record<string, string | undefined> = {},
-    remoteAddress = "127.0.0.1",
-  ) =>
+  const request = (changes: Record<string, string | undefined> = {}, remoteAddress = "127.0.0.1") =>
     ({
       headers: { ...headers, ...changes },
       socket: { remoteAddress },
@@ -74,19 +71,28 @@ it("admits the delegated person on HTTP and WS independently of the static roste
 });
 
 it("refuses invalid delegation and alternate credentials", async () => {
-  const { cfg, request } = fixture();
+  const { cfg, request, key, subject } = fixture();
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth });
   const cases = [
     request({ "x-occ-browser-key": undefined }),
     request({ "x-occ-browser-key": randomBytes(32).toString("hex") }),
     request({ "x-occ-identity": "oce:v1:malformed" }),
+    // Node joins repeated custom HTTP headers; neither identity nor credential may be ambiguous.
+    request({ "x-occ-identity": `${subject}, ${subject}` }),
+    request({ "x-occ-browser-key": `${key}, ${key}` }),
     request({ "x-openclaw-scopes": "operator.admin,operator.sessions.write" }),
     request({ "x-openclaw-scopes": undefined }),
     request({}, "203.0.113.20"),
   ];
   for (const req of cases) {
     expect(
-      (await authorizeHttpGatewayConnect({ auth, req, trustedProxies: cfg.gateway?.trustedProxies })).ok,
+      (
+        await authorizeHttpGatewayConnect({
+          auth,
+          req,
+          trustedProxies: cfg.gateway?.trustedProxies,
+        })
+      ).ok,
     ).toBe(false);
   }
   for (const mode of ["token", "password", "none"] as const) {
@@ -98,10 +104,12 @@ it("refuses invalid delegation and alternate credentials", async () => {
     };
     expect((await authorizeHttpGatewayConnect({ ...options, req: request() })).ok).toBe(false);
     expect(
-      (await authorizeHttpGatewayConnect({
-        ...options,
-        req: request({ "x-occ-identity": undefined, "x-occ-browser-key": undefined }),
-      })).ok,
+      (
+        await authorizeHttpGatewayConnect({
+          ...options,
+          req: request({ "x-occ-identity": undefined, "x-occ-browser-key": undefined }),
+        })
+      ).ok,
     ).toBe(true);
   }
   expect(
@@ -134,16 +142,20 @@ it("invalidates old grants through credential replacement and restoration", asyn
   expect(isGatewayAuthPolicyCurrent(policy, cfg)).toBe(true);
   writeFileSync(credentialFile, randomBytes(32).toString("hex"));
   // This waits for the real projected-file watcher, not a mocked authorization decision.
-  await vi.waitFor(() => expect(isGatewayAuthPolicyCurrent(policy, cfg)).toBe(false), { timeout: 3000 });
+  await vi.waitFor(() => expect(isGatewayAuthPolicyCurrent(policy, cfg)).toBe(false), {
+    timeout: 3000,
+  });
   writeFileSync(credentialFile, key);
   await vi.waitFor(
     async () => {
       expect(
-        (await authorizeHttpGatewayConnect({
-          auth: resolveGatewayAuth({ authConfig: cfg.gateway?.auth }),
-          req: request(),
-          trustedProxies: cfg.gateway?.trustedProxies,
-        })).ok,
+        (
+          await authorizeHttpGatewayConnect({
+            auth: resolveGatewayAuth({ authConfig: cfg.gateway?.auth }),
+            req: request(),
+            trustedProxies: cfg.gateway?.trustedProxies,
+          })
+        ).ok,
       ).toBe(true);
     },
     { timeout: 3000 },

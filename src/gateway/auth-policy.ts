@@ -74,7 +74,10 @@ export function captureGatewayAuthPolicy(
         ? [
             ...new Set(
               delegation?.scopes ??
-                resolveIdentityOperatorScopes(verifiedIdentity, config.gateway?.auth?.identityScopes),
+                resolveIdentityOperatorScopes(
+                  verifiedIdentity,
+                  config.gateway?.auth?.identityScopes,
+                ),
             ),
           ].toSorted()
         : undefined;
