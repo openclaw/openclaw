@@ -5,16 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
-import { mountProjectChip } from "./project-chip.test-support.tsx";
-
-async function openProjectSearch(container: ParentNode) {
-  await waitForSolid(() => expect(container.querySelector(".header-search")).not.toBeNull());
-  if (!container.querySelector('input[type="search"]')) {
-    container.querySelector<HTMLButtonElement>(".header-search__toggle")?.click();
-    flush();
-  }
-  await waitForSolid(() => expect(container.querySelector('input[type="search"]')).not.toBeNull());
-}
+import { mountProjectChip, openProjectSearch } from "./project-chip.test-support.tsx";
 
 function result(name: string): ProjectsSearchRemoteResult {
   return {
@@ -149,6 +140,34 @@ describe("remote project search slot", () => {
     typeQuery("absent");
     expect(view.container.querySelector('[data-value="project:sample"]')).toBeNull();
     expect(view.getByText("No local projects match", { exact: true })).not.toBeNull();
+  });
+
+  it("updates empty feedback through results, deduplication, and missing credentials", async () => {
+    const { request, view, input, typeQuery } = await mountSearch();
+    const empty = () => view.queryByText("No additional GitHub repositories", { exact: true });
+    for (const [query, response] of [
+      ["empty", { credential: "configured", projects: [] }],
+      ["current", result("current")],
+      ["registered", result("registered")],
+      ["missing", { credential: "missing", projects: [] }],
+    ] as const) {
+      const pending = createDeferred<ProjectsSearchRemoteResult>();
+      request.mockReturnValueOnce(pending.promise);
+      typeQuery(query);
+      expect(empty()).toBeNull();
+      await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+      await waitForSolid(() => expect(view.queryByRole("status")).not.toBeNull());
+      pending.resolve({ ...response, projects: [...response.projects] });
+      await waitForSolid(() => expect(view.queryByRole("status")).toBeNull());
+      expect(Boolean(empty())).toBe(query !== "current");
+      expect(view.container.querySelectorAll('[data-value^="remote-project:"]')).toHaveLength(
+        query === "current" ? 1 : 0,
+      );
+      expect(view.container.textContent?.includes("No GitHub account is configured")).toBe(
+        query === "missing",
+      );
+      expect(view.container.querySelector('input[type="search"]')).toBe(input);
+    }
   });
 
   it.each(["client", "epoch"] as const)(
