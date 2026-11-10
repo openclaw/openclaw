@@ -1,6 +1,6 @@
 # Temporary installed-updater C → Q verification
 
-Validation branch only: `openclaw/updater-hosted-proof-20261110`. Do not merge this
+Validation branch only: `openclaw/updater-hosted-proof-recovery-20261110`. Do not merge this
 one-off workflow into production. It runs only on same-repository PR opened or
 synchronize events touching this directory or its workflow; there is no dispatch,
 deployment, release, package publication, or write token. The parent owns review

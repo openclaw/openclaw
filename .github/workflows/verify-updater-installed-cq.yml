@@ -20,7 +20,7 @@ jobs:
     if: >-
       github.repository == 'openclaw/openclaw' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.head_ref == 'openclaw/updater-hosted-proof-20261110'
+      github.head_ref == 'openclaw/updater-hosted-proof-recovery-20261110'
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     steps:
