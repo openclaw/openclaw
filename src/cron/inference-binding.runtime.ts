@@ -11,6 +11,7 @@ import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthSelection,
 } from "../agents/cli-execution-auth.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -19,12 +20,14 @@ import { isCliProvider } from "../agents/model-selection-cli.js";
 import { resolveConfiguredModelFallbacks } from "../agents/model-selection-resolve.js";
 import {
   buildModelAliasIndex,
+  resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
+import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
@@ -40,6 +43,12 @@ import {
   resolveCronModelSelectionOwner,
 } from "./isolated-agent/model-selection.js";
 
+/** The model selection a `session:` target contributes to execution. */
+export type CronExecutionSessionSelection = Pick<
+  SessionEntry,
+  "modelOverride" | "providerOverride" | "modelOverrideSource" | "modelProvider"
+>;
+
 /** Capture a current owner; null means an explicit, validated native CLI account selection. */
 export async function captureCronInferenceBinding(params: {
   cfg: OpenClawConfig;
@@ -47,7 +56,7 @@ export async function captureCronInferenceBinding(params: {
   model?: string;
   isGmailHook?: boolean;
   sessionEntry?: SessionEntry;
-  executionSessionEntry?: Pick<SessionEntry, "modelOverride" | "providerOverride">;
+  executionSessionEntry?: CronExecutionSessionSelection;
   /**
    * The entry the cron session takes its runtime override from: the target row of a
    * `session:` job, or what a `current` job carries from its creating conversation.
@@ -315,6 +324,8 @@ type CronFallbackChainParams = {
   model?: string;
   fallbacks?: string[];
   isGmailHook?: boolean;
+  /** A `session:` target's model selection, which execution also uses for the primary. */
+  executionSessionEntry?: CronExecutionSessionSelection;
 };
 
 /** A fallback candidate to record: its model ref and any account the owner named with `@profile`. */
@@ -338,12 +349,17 @@ export async function resolveCronFallbackProviderModels(
     agentDir,
     workspaceDir,
     payloadModel: params.model,
-    sessionEntry: {},
+    sessionEntry: params.executionSessionEntry ?? {},
     isGmailHook: params.isGmailHook === true,
   });
   if (!primary.ok) {
     return [];
   }
+  // Same provenance run-prepare passes, so a user-pinned session model keeps its fallback rule.
+  const sessionModelOverrideSource =
+    primary.modelSource === "session"
+      ? (resolveSessionModelOverrideSource(params.executionSessionEntry) ?? undefined)
+      : undefined;
   const { resolveCronFallbacksOverride, resolveCronPreflightCandidates } =
     await import("./isolated-agent/run-fallback-policy.js");
   const policy = {
@@ -359,6 +375,7 @@ export async function resolveCronFallbackProviderModels(
     agentId,
     useSubagentFallbacks: primary.useSubagentFallbacks,
     inheritDefaultFallbacksForAgentStringModel: primary.inheritDefaultFallbacksForAgentStringModel,
+    sessionModelOverrideSource,
   };
   // The same chain a run builds: payload fallbacks first, then subagent/agent/default policy.
   const chain = resolveCronPreflightCandidates({
@@ -373,11 +390,16 @@ export async function resolveCronFallbackProviderModels(
       ...policy,
       selectedModel: { provider: primary.provider, model: primary.model },
     }) ?? resolveConfiguredModelFallbacks({ cfg: policy.cfg, agentId });
-  const aliasIndex = buildModelAliasIndex({
+  // The candidate builder resolves providerless fallbacks against the configured default
+  // provider, not the job's primary; resolve `@profile` entries the same way.
+  const defaultProvider = resolveConfiguredModelRef({
     cfg: policy.cfg,
     agentId,
-    defaultProvider: primary.provider,
-  });
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: false,
+  }).provider;
+  const aliasIndex = buildModelAliasIndex({ cfg: policy.cfg, agentId, defaultProvider });
   const explicitProfiles = new Map<string, string>();
   for (const raw of effective) {
     const { profile } = splitTrailingAuthProfile(raw);
@@ -386,7 +408,7 @@ export async function resolveCronFallbackProviderModels(
           cfg: policy.cfg,
           agentId,
           raw,
-          defaultProvider: primary.provider,
+          defaultProvider,
           aliasIndex,
         })
       : null;
@@ -466,6 +488,13 @@ export async function captureCronFallbackInferenceAccounts(
     model,
     profileId: explicitProfileId,
   } of await resolveCronFallbackProviderModels(params)) {
+    const recorded = params.recordedAccounts?.find((account) => account.provider === provider);
+    // An edit never re-resolves a recorded account: auth order or a replaced credential must
+    // not silently move it. Only a different explicit `@profile` adopts another account.
+    if (recorded && (!explicitProfileId || explicitProfileId === recorded.profileId)) {
+      accounts.push(recorded);
+      continue;
+    }
     try {
       let profileId = explicitProfileId;
       if (!profileId && params.requireUnambiguous) {
@@ -493,8 +522,7 @@ export async function captureCronFallbackInferenceAccounts(
         },
         isGmailHook: params.isGmailHook,
         runtimeSessionEntry: params.runtimeSessionEntry,
-        recordedRuntime: params.recordedAccounts?.find((account) => account.provider === provider)
-          ?.runtime,
+        recordedRuntime: recorded?.runtime,
         authorizeProfile: params.authorizeProfile,
       });
       if (!captured) {

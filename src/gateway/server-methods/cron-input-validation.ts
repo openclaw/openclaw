@@ -167,6 +167,7 @@ async function captureCronInferenceForCaller(
         model: params.model,
         fallbacks,
         isGmailHook: params.isGmailHook,
+        executionSessionEntry: params.executionSessionEntry,
         runtimeSessionEntry: params.runtimeSessionEntry,
         recordedAccounts: recordedFallbackAccounts,
         authorizeProfile: personal.authorizeProfile,
@@ -543,6 +544,9 @@ async function refreshRecordedFallbackAccounts(
     return undefined;
   }
   const executionKey = resolveCronSessionTargetSessionKey(nextJob.sessionTarget);
+  const executionEntry = executionKey
+    ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))?.entry
+    : undefined;
   const personal = createPersonalAccountAuthorizer(caller);
   return {
     inferenceBinding: await withRecordedFallbackAccounts(binding, {
@@ -551,14 +555,12 @@ async function refreshRecordedFallbackAccounts(
       model: nextJob.payload.model,
       fallbacks: nextJob.payload.fallbacks,
       isGmailHook: nextJob.payload.externalContentSource === "gmail",
+      executionSessionEntry: executionEntry,
       runtimeSessionEntry: await loadCronRuntimeSessionEntry({
         cfg,
         job: nextJob,
         agentId,
-        executionEntry: executionKey
-          ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))
-              ?.entry
-          : undefined,
+        executionEntry,
       }),
       recordedAccounts: binding.fallbackAccounts,
       authorizeProfile: personal.authorizeProfile,
@@ -627,19 +629,21 @@ export async function captureCronUpdatedInferenceBinding(
   // An account edit keeps the runtime the job records; otherwise it resolves the way create does.
   const recordedRuntime = nextJob.inferenceBinding?.runtime;
   const executionKey = resolveCronSessionTargetSessionKey(nextJob.sessionTarget);
+  const executionEntry = executionKey
+    ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))?.entry
+    : undefined;
   const runtimeSessionEntry = await loadCronRuntimeSessionEntry({
     cfg,
     job: nextJob,
     agentId,
-    executionEntry: executionKey
-      ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))?.entry
-      : undefined,
+    executionEntry,
   });
   const inference = await captureCronInferenceForCaller(
     {
       cfg,
       agentId,
       model,
+      executionSessionEntry: executionEntry,
       runtimeSessionEntry,
       recordedRuntime,
       fallbacks,

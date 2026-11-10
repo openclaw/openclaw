@@ -37,6 +37,7 @@ import {
 } from "../../../cron/inference-binding.js";
 import {
   captureCronFallbackInferenceAccounts,
+  type CronExecutionSessionSelection,
   listEligibleSharedCronAccounts,
   resolveCronFallbackProviderModels,
 } from "../../../cron/inference-binding.runtime.js";
@@ -71,6 +72,8 @@ async function recordCronFallbackAccountsForDoctor(params: {
   model?: string;
   fallbacks?: string[];
   isGmailHook: boolean;
+  /** The target session's model selection, which the run's primary also uses. */
+  executionSessionEntry?: CronExecutionSessionSelection;
   binding: CronInferenceBinding;
   shouldRepair: boolean;
   /** Already-bound jobs: record only unambiguous fallback accounts (spec D2). */
@@ -85,6 +88,7 @@ async function recordCronFallbackAccountsForDoctor(params: {
     model: params.model,
     fallbacks: params.fallbacks,
     isGmailHook: params.isGmailHook,
+    executionSessionEntry: params.executionSessionEntry,
   };
   const missing = (await resolveCronFallbackProviderModels(chainParams)).filter(
     ({ provider }) => !known.some((account) => account.provider === provider),
@@ -562,6 +566,7 @@ export async function maybeRepairCronInferenceBindings(params: {
           model: job.payload.model,
           fallbacks: job.payload.fallbacks,
           isGmailHook: job.payload.externalContentSource === "gmail",
+          executionSessionEntry: session.sessionEntry,
           binding: adopted,
           shouldRepair: true,
           // A legacy job adopts the accounts its next unbound run would have used (#173509).

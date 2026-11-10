@@ -552,6 +552,8 @@ type GatewayCase = {
   payload: Record<string, unknown>;
   /** A later cron.update patch, applied before the run. */
   update?: Record<string, unknown>;
+  /** Config changes between create and the update. */
+  beforeUpdate?: (cfg: OpenClawConfig) => void;
   expectAccount: { profileId: string; source: "user" | "auto" };
   expectKey: string;
 };
@@ -609,6 +611,18 @@ const gatewayCases: GatewayCase[] = [
     update: { model: "openai/gpt-4.1", fallbacks: ["backup/gpt-4.1@backup:other"] },
     expectAccount: { profileId: "backup:other", source: "user" },
     expectKey: "Bearer key-backup-other",
+  },
+  {
+    // A recorded fallback account survives a plain --model edit even when auth order now
+    // prefers another account; only an explicit @profile changes it.
+    name: "recorded fallback account across a plain model edit",
+    payload: {},
+    beforeUpdate: (cfg) => {
+      cfg.auth!.order = { backup: ["backup:other", "backup:main"] };
+    },
+    update: { model: "openai/gpt-4.1" },
+    expectAccount: { profileId: "backup:main", source: "auto" },
+    expectKey: "Bearer key-backup",
   },
 ];
 
@@ -682,6 +696,10 @@ it.each(gatewayCases)("Gateway records the $name and the run uses it", async (te
       });
       const id = String(created?.id);
       const [before] = (await loadCronJobsStore(storePath)).jobs;
+      if (testCase.beforeUpdate) {
+        testCase.beforeUpdate(cfg);
+        setRuntimeConfigSnapshot(cfg);
+      }
       if (testCase.update) {
         await invoke("cron.update", {
           id,
@@ -735,5 +753,51 @@ it("Doctor ignores an unusable account when deciding a bound job's fallback is a
     const result = await run(repaired!);
     expect(result.status, result.error).toBe("ok");
     expect(hits.backup).toEqual(["Bearer key-backup"]);
+  });
+});
+
+it("resolves a providerless fallback @profile against the configured default provider", async () => {
+  await withFallbackFixture(async ({ cfg }) => {
+    const { resolveCronFallbackProviderModels } = await import("./inference-binding.runtime.js");
+    // The configured default is openai, so `gpt-4.1` is openai/gpt-4.1 in the run's chain even
+    // though this job's primary is on backup.
+    await expect(
+      resolveCronFallbackProviderModels({
+        cfg,
+        agentId: "main",
+        primaryProvider: "backup",
+        model: "backup/gpt-4.1@backup:main",
+        fallbacks: ["gpt-4.1@openai:other"],
+      }),
+    ).resolves.toEqual([
+      { provider: "openai", model: "openai/gpt-4.1", profileId: "openai:other" },
+    ]);
+  });
+});
+
+it("records fallbacks from the session target's selection, as the run does", async () => {
+  await withFallbackFixture(async ({ cfg }) => {
+    // Subagent policy would apply only without a session selection.
+    cfg.agents!.defaults!.subagents = {
+      model: { primary: "third/gpt-4.1", fallbacks: ["fourth/gpt-4.1"] },
+    };
+    for (const provider of ["third", "fourth"]) {
+      cfg.models!.providers![provider] = cfg.models!.providers!.backup!;
+      cfg.agents!.defaults!.models![`${provider}/gpt-4.1`] = loopbackModelRuntime;
+    }
+    setRuntimeConfigSnapshot(cfg);
+    const { resolveCronFallbackProviderModels } = await import("./inference-binding.runtime.js");
+    await expect(
+      resolveCronFallbackProviderModels({
+        cfg,
+        agentId: "main",
+        primaryProvider: "openai",
+        executionSessionEntry: {
+          providerOverride: "openai",
+          modelOverride: "gpt-4.1",
+          modelOverrideSource: "auto",
+        },
+      }),
+    ).resolves.toEqual([{ provider: "backup", model: "backup/gpt-4.1" }]);
   });
 });
