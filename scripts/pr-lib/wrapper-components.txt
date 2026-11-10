@@ -1498,6 +1498,7 @@ src/logging/config.ts
 src/logging/console.ts
 src/logging/diagnostic-cpu-profile.ts
 src/logging/diagnostic-heap-profile.ts
+src/logging/diagnostic-profile-file.ts
 src/logging/diagnostic-profile.ts
 src/logging/diagnostic-support-key-check.ts
 src/logging/diagnostic-support-causes.ts
