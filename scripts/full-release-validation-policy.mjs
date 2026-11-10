@@ -1119,9 +1119,7 @@ function releaseExecutionPlanShape(payload) {
         : []),
       ...(Object.hasOwn(payload, "telegramWaiver") ? ["targetVersion", "telegramWaiver"] : []),
       ...(Object.hasOwn(payload, "coveragePolicy") ? ["targetVersion", "coveragePolicy"] : []),
-      ...(payload.evidenceReuse?.requested === true && Object.hasOwn(payload, "targetVersion")
-        ? ["targetVersion"]
-        : []),
+      ...(Object.hasOwn(payload, "targetVersion") ? ["targetVersion"] : []),
       ...(Object.hasOwn(payload, "sourceAdmissionContract")
         ? ["sourceAdmissionContract", "sourceAdmission"]
         : []),
@@ -1207,6 +1205,14 @@ function executionPlanDigestPayload(plan) {
     ...(attemptAware ? { repository: plan.repository } : {}),
     rerunGroup: plan.rerunGroup,
     targetSha: plan.targetSha,
+    // Newer producers seal a standalone target version here. Historical waiver,
+    // coverage, and reuse plans retain their original insertion order above.
+    ...(!Object.hasOwn(plan, "telegramWaiver") &&
+    !Object.hasOwn(plan, "coveragePolicy") &&
+    plan.evidenceReuse?.requested !== true &&
+    Object.hasOwn(plan, "targetVersion")
+      ? { targetVersion: plan.targetVersion }
+      : {}),
     trustedWorkflow: plan.trustedWorkflow,
     version: plan.version,
     workflowRef: plan.workflowRef,
