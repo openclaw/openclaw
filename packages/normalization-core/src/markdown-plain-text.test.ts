@@ -33,6 +33,11 @@ describe("flattenMarkdownToPlainText", () => {
       "Before After",
     ],
     [
+      "completed triple fences remove backticks inside the block",
+      "Before\n```text\n`\n```\nAfter `ok`.",
+      "Before After ok.",
+    ],
+    [
       "links and escaped image markers",
       String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,
       String.raw`Read the deployment guide, \!important, \\diagram`,
