@@ -505,11 +505,12 @@ export function stopSession(request: SessionStopRequest): SessionStopExecution {
       ...capture.operations,
       ...capture.activeInputs.flatMap((input) => input.claim?.operation ?? []),
     ]);
-    // Select pending work once after preparation; active cancellation stays bound
-    // to ingress instances, and reentrant arrivals belong to a later Stop.
-    const pendingInputs = policy.cancelQueued ? capture.selectPendingInputs() : [];
     let applied: SessionControllerStopResult;
     try {
+      // Select pending work once after preparation; active cancellation stays bound
+      // to ingress instances, and reentrant arrivals belong to a later Stop. Inside the
+      // try: a throw here must still settle the fence, or fenced successors wait forever.
+      const pendingInputs = policy.cancelQueued ? capture.selectPendingInputs() : [];
       applied = applySessionControllerStop(capture, {
         ...request,
         phase: policy.cancelQueued ? "all" : "active",

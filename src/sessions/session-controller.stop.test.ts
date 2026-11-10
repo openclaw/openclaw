@@ -729,6 +729,30 @@ it("credits an operation's backend run after cancellation detached its backend",
   expect(storedStop()).toBe(5);
 });
 
+it("releases a user Stop's successor fence when pending-input selection throws", async () => {
+  const f = fixture();
+  const source = f.reserve("run");
+  const { release, execution } = await f.start(source, true);
+  const capture = captureSessionControllerStop({ inputs: [source] });
+  const stop = stopSession({
+    source: "client-run",
+    capture: Object.assign(Object.create(Object.getPrototypeOf(capture)), capture, {
+      selectPendingInputs: () => {
+        throw new Error("selection failed");
+      },
+    }),
+    hookContext: { sessionKey: f.sessionKey },
+    reason: createAgentRunDirectAbortError(true),
+    userStop: () => undefined,
+  });
+  await expect(stop.completed).rejects.toThrow("selection failed");
+  release.resolve();
+  await execution.catch(() => undefined);
+  await expect(waitForReplyRunSuccessorAdmission(f.sessionKey, 100)).resolves.toMatchObject({
+    settled: true,
+  });
+});
+
 it("releases a user Stop's successor fence when it is rejected before committing", async () => {
   const f = fixture();
   const source = f.reserve("run");
