@@ -85,6 +85,26 @@ const enOpenClawIdDialogs = {
     publicationStopped:
       "Remote access setup could not finish. Check this claw’s remote access settings on the computer that runs it.",
     securityDetails: "Security details",
+    moveKeysBody:
+      "This computer gets new keys for {host}. Your devices, people, nodes and invites stay. Connected devices disconnect for a moment and reconnect by themselves.",
+    moveKeysKit: "Recovery code",
+    moveKeysKitHint: "The code from your recovery kit. It stays in this browser.",
+    moveKeysCheck: "Check",
+    moveKeysConfirm: "Confirm the new keys",
+    moveKeysRoot: "Owner key",
+    moveKeysRootMatches: "{fp} (matches your recovery kit)",
+    moveKeysEndpoint: "Endpoint key",
+    moveKeysGateway: "Gateway key",
+    moveKeysBinding: "Binding",
+    moveKeysMove: "Move to new keys",
+    moveKeysWrongKit:
+      "This recovery kit is for another claw (owner key {fp}). Use the kit made for {host}.",
+    moveKeysUnverifiable:
+      "The keys OpenClaw ID lists for this claw don't match your recovery kit, so nothing was signed. Ask OpenClaw ID support for help.",
+    moveKeysUnavailable:
+      "Could not check the keys OpenClaw ID lists for this claw. Try again shortly.",
+    moveKeysBadKit: "That isn't a recovery code. Check it and try again.",
+    moveKeysDone: "This claw now uses new keys.",
     regenExpiry: "End this browser's owner access after (days)",
     regenExpiryHint: "Leave empty for no expiry.",
   },

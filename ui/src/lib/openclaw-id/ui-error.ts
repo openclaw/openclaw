@@ -55,6 +55,7 @@ const CODE_KEYS: Record<string, string> = {
   invite_unknown: "errorNotPending",
   invite_used: "errorNotPending",
   name_taken: "errorNameTaken",
+  registration_unsettled: "errorRegistrationUnsettled",
   tunnel_not_running: "errorRemoteNotReady",
   conflict: "errorConflict",
   bad_request: "errorRequest",

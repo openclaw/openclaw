@@ -1,0 +1,220 @@
+// "Move to new keys" from the account menu, on the computer that runs the claw: the recovery
+// code typed here signs the new binding in this browser (lib/openclaw-id/rebind.ts), the
+// owner confirms the key fingerprints, and the Gateway stores it and publishes the new keys.
+import { createSignal, Match, Show, Switch } from "solid-js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
+import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
+import { openClawIdFeatureSignal } from "../../lib/openclaw-id/feature-lifetime.ts";
+import {
+  cancelRebind,
+  commitRebind,
+  prepareRebind,
+  type RebindPlan,
+  type RebindRefusal,
+} from "../../lib/openclaw-id/rebind.ts";
+import type { OpenClawIdSignedIn } from "../../lib/openclaw-id/types.ts";
+import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { showToast } from "../../lib/toast.ts";
+import { withPromiseModalHost } from "../promise-modal-host.ts";
+import { OpenClawIdErrorMessage } from "./error-message.tsx";
+
+registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
+registerEnglishCatalog(registerOpenClawIdEnglish);
+
+/** Plain copy for a signing refusal; nothing was signed. */
+export function rebindRefusalMessage(refusal: RebindRefusal, hostname: string): string {
+  switch (refusal.code) {
+    case "bad_kit":
+      return t("openclawId.moveKeysBadKit");
+    case "wrong_kit":
+      return t("openclawId.moveKeysWrongKit", { fp: refusal.kitRoot, host: hostname });
+    case "published_unverifiable":
+      return t("openclawId.moveKeysUnverifiable");
+    case "published_unavailable":
+    case "binding_seq_too_low":
+      return t("openclawId.moveKeysUnavailable");
+  }
+}
+
+function KeyRow(props: { label: string; from: string; to: string }) {
+  return (
+    <div class="openclaw-id-move-keys__row">
+      <dt>{props.label}</dt>
+      <dd class="mono">
+        {props.from} → {props.to}
+      </dd>
+    </div>
+  );
+}
+
+/** Resolves true once the claw moved to new keys, false when closed without moving. */
+export function showMoveKeysDialog(params: {
+  client: GatewayBrowserClient;
+  signedIn: OpenClawIdSignedIn;
+  hostname: string;
+}): Promise<boolean> {
+  const lifetime = { signal: openClawIdFeatureSignal(), value: false };
+  return withPromiseModalHost<boolean>(lifetime, (modal) => {
+    modal.render(() => {
+      const [kit, setKit] = createSignal("");
+      const [plan, setPlan] = createSignal<RebindPlan | null>(null);
+      const [busy, setBusy] = createSignal(false);
+      const [refused, setRefused] = createSignal<string | null>(null);
+      const [error, setError] = createSignal<OpenClawIdUiError | null>(null);
+      const fail = (cause: unknown) => setError(openClawIdUiError(cause, "setup"));
+
+      const check = async () => {
+        setBusy(true);
+        setRefused(null);
+        setError(null);
+        try {
+          const result = await prepareRebind({
+            client: params.client,
+            signedIn: params.signedIn,
+            kitText: kit(),
+          });
+          if (result.ok) {
+            setKit("");
+            setPlan(result.plan);
+          } else {
+            setRefused(rebindRefusalMessage(result, params.hostname));
+          }
+        } catch (cause) {
+          fail(cause);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const move = async (current: RebindPlan) => {
+        setBusy(true);
+        setError(null);
+        try {
+          await commitRebind(params.client, current);
+          showToast({ severity: "success", message: t("openclawId.moveKeysDone") });
+          modal.finish(true);
+        } catch (cause) {
+          fail(cause);
+          setBusy(false);
+        }
+      };
+
+      const close = () => {
+        if (plan()) {
+          void cancelRebind(params.client).catch(() => undefined);
+        }
+        modal.finish(false);
+      };
+
+      return (
+        <openclaw-modal-dialog label={t("openclawId.moveToNewKeys")} onModal-cancel={close}>
+          <div class="exec-approval-card openclaw-id-move-keys">
+            <h2>{t("openclawId.moveToNewKeys")}</h2>
+            <p>{t("openclawId.moveKeysBody", { host: params.hostname })}</p>
+            <Switch>
+              <Match when={plan()}>
+                {(current) => (
+                  <>
+                    <h3>{t("openclawId.moveKeysConfirm")}</h3>
+                    <dl class="openclaw-id-move-keys__keys">
+                      <div class="openclaw-id-move-keys__row">
+                        <dt>{t("openclawId.moveKeysRoot")}</dt>
+                        <dd class="mono">
+                          {t("openclawId.moveKeysRootMatches", { fp: current().root })}
+                        </dd>
+                      </div>
+                      <KeyRow
+                        label={t("openclawId.moveKeysBinding")}
+                        from={String(current().bindingSeq.from)}
+                        to={String(current().bindingSeq.to)}
+                      />
+                      <KeyRow
+                        label={t("openclawId.moveKeysEndpoint")}
+                        from={current().endpoint.from}
+                        to={current().endpoint.to}
+                      />
+                      <KeyRow
+                        label={t("openclawId.moveKeysGateway")}
+                        from={current().gateway.from}
+                        to={current().gateway.to}
+                      />
+                    </dl>
+                  </>
+                )}
+              </Match>
+              <Match when={!plan()}>
+                <form
+                  id="openclaw-id-move-keys-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void check();
+                  }}
+                >
+                  <label class="field">
+                    <span>{t("openclawId.moveKeysKit")}</span>
+                    <input
+                      type="password"
+                      name="recovery-code"
+                      autocomplete="off"
+                      spellcheck="false"
+                      class="mono"
+                      value={kit()}
+                      disabled={busy()}
+                      onInput={(event) => setKit(event.currentTarget.value)}
+                    />
+                    <small>{t("openclawId.moveKeysKitHint")}</small>
+                  </label>
+                </form>
+              </Match>
+            </Switch>
+            <Show when={refused()}>
+              {(message) => (
+                <p class="callout danger" role="alert">
+                  {message()}
+                </p>
+              )}
+            </Show>
+            <Show when={error()}>
+              {(current) => (
+                <div class="callout danger" role="alert">
+                  <OpenClawIdErrorMessage error={current()} />
+                </div>
+              )}
+            </Show>
+            <openclaw-modal-actions class="exec-approval-actions">
+              <button type="button" class="btn" disabled={busy()} onClick={close}>
+                {t("common.cancel")}
+              </button>
+              <Show
+                when={plan()}
+                fallback={
+                  <button
+                    type="submit"
+                    form="openclaw-id-move-keys-form"
+                    class="btn primary"
+                    disabled={busy() || !kit().trim()}
+                  >
+                    {t("openclawId.moveKeysCheck")}
+                  </button>
+                }
+              >
+                {(current) => (
+                  <button
+                    type="button"
+                    class="btn primary"
+                    disabled={busy()}
+                    onClick={() => void move(current())}
+                  >
+                    {t("openclawId.moveKeysMove")}
+                  </button>
+                )}
+              </Show>
+            </openclaw-modal-actions>
+          </div>
+        </openclaw-modal-dialog>
+      );
+    });
+  });
+}
