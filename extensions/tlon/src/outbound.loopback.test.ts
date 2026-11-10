@@ -65,6 +65,32 @@ function extractStoryText(content: unknown): string {
           parts.push(item);
         }
       }
+    }
+  }
+  return parts.join("");
+}
+
+type StoryVerseSummary = {
+  prose: string[];
+  code: Array<{ code: string; lang: string }>;
+};
+
+/** Split a story into its native prose runs and code-block payloads without flattening them. */
+function extractStoryVerses(content: unknown): StoryVerseSummary {
+  const verses = Array.isArray(content) ? (content as unknown[]) : [];
+  const summary: StoryVerseSummary = { prose: [], code: [] };
+  for (const verse of verses) {
+    if (
+      verse &&
+      typeof verse === "object" &&
+      "inline" in verse &&
+      Array.isArray((verse as { inline?: unknown }).inline)
+    ) {
+      for (const item of (verse as { inline: unknown[] }).inline) {
+        if (typeof item === "string") {
+          summary.prose.push(item);
+        }
+      }
       continue;
     }
     const block =
@@ -76,13 +102,23 @@ function extractStoryText(content: unknown): string {
       typeof block === "object" &&
       "code" in block &&
       block.code &&
-      typeof block.code === "object" &&
-      typeof (block.code as { code?: unknown }).code === "string"
+      typeof block.code === "object"
     ) {
-      parts.push((block.code as { code: string }).code);
+      const codeBlock = block.code as { code?: unknown; lang?: unknown };
+      if (typeof codeBlock.code === "string" && typeof codeBlock.lang === "string") {
+        summary.code.push({ code: codeBlock.code, lang: codeBlock.lang });
+      }
     }
   }
-  return parts.join("\n");
+  return summary;
+}
+
+/** Total reader-visible characters carried by a story, for transport-limit checks. */
+function storyPayloadLength(content: unknown): number {
+  const verses = extractStoryVerses(content);
+  return (
+    verses.prose.join("").length + verses.code.reduce((sum, block) => sum + block.code.length, 0)
+  );
 }
 
 describe("tlon outbound loopback", () => {
@@ -139,8 +175,7 @@ describe("tlon outbound loopback", () => {
           const received = JSON.parse(body) as TlonPoke[];
           recorder.pokes.push(...received);
           const oversized = received.some(
-            (poke) =>
-              extractStoryText(poke.json?.diff?.delta?.add?.memo?.content).length > TEXT_LIMIT,
+            (poke) => storyPayloadLength(poke.json?.diff?.delta?.add?.memo?.content) > TEXT_LIMIT,
           );
           if (oversized) {
             recorder.rejectedOversized.push({ length: received.length });
@@ -309,7 +344,7 @@ describe("tlon outbound loopback", () => {
     expect(delivered.join("")).toBe(text);
   });
 
-  it("delivers a long fenced reply as balanced code blocks the transport accepts", async () => {
+  it("delivers a long fenced reply as native code-block verses the transport accepts", async () => {
     const recorder: ChunkPokeRecorder = { pokes: [], rejectedOversized: [], loginCount: 0 };
     const port = await listenChunkPokeLoopback(recorder);
     const { pokes, rejectedOversized } = recorder;
@@ -332,21 +367,33 @@ describe("tlon outbound loopback", () => {
       await outbound.sendText?.({ cfg, to: "~nec", text: chunk });
     }
 
-    // Every delivered poke stays inside the transport limit; fences never leak into the story.
+    // Every delivered poke stays inside the transport limit and no fence leaks into prose.
     expect(rejectedOversized).toEqual([]);
     expect(recorder.loginCount).toBeGreaterThan(0);
     const delivered = pokes.map((poke) =>
-      extractStoryText(poke.json?.diff?.delta?.add?.memo?.content),
+      extractStoryVerses(poke.json?.diff?.delta?.add?.memo?.content),
     );
     expect(delivered).toHaveLength(chunks.length);
-    for (const part of delivered) {
-      expect(part).not.toContain("```");
-      expect(part.length).toBeLessThanOrEqual(TEXT_LIMIT);
+    for (const [index, poke] of pokes.entries()) {
+      const verses = delivered[index];
+      if (!verses) {
+        throw new Error("expected delivered verses for poke");
+      }
+      for (const prose of verses.prose) {
+        expect(prose).not.toContain("```");
+      }
+      expect(storyPayloadLength(poke.json?.diff?.delta?.add?.memo?.content)).toBeLessThanOrEqual(
+        TEXT_LIMIT,
+      );
+      for (const block of verses.code) {
+        expect(block.lang).toBe("python");
+      }
     }
-    const reassembled = delivered.join("\n");
-    expect(reassembled).toContain("print(0)");
-    expect(reassembled).toContain("print(1199)");
-    expect(reassembled).toContain("Done.");
+    // Full code preservation across pokes, in order, with prose kept outside the code blocks.
+    const deliveredCode = delivered.flatMap((verses) => verses.code.map((block) => block.code));
+    expect(deliveredCode.join("\n")).toBe(codeLines);
+    expect(delivered[0]?.prose.join("")).toContain("Here is the script:");
+    expect(delivered.at(-1)?.prose.join("")).toContain("Done.");
   });
 
   it("redacts a reflected session cookie from a rejected poke", async () => {
