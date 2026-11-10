@@ -178,7 +178,7 @@ describe("Templates discovery", () => {
       createRouteLoaderOptions(location, templatesRoute.loaderDeps!(context, location)),
     );
     expect(result).toEqual({ type: "notFound", data: undefined });
-    expect(ensureConfigLoaded).toHaveBeenCalledOnce();
+    expect(ensureConfigLoaded).not.toHaveBeenCalled();
     expect(page.textContent).toContain("Templates is turned off");
     expect(page.querySelector("[data-templates-explore]")).toBeNull();
     expect(page.querySelector("[data-templates-confirm]")).toBeNull();
