@@ -9,6 +9,7 @@ import {
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
 import type { DelegationCapability } from "../delegation-capability.js";
+import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
 import { resolveStoredSessionPermissionPolicy } from "../tool-fs-policy.js";
 import type { RunCliAgentParams } from "./types.js";
@@ -163,6 +164,7 @@ export function buildCliMcpGrantContext(params: {
   toolsAllow?: string[];
 }): McpLoopbackRequestContext {
   const sessionKey = resolveCliMcpSessionKey(params.run, params.config, params.agentId);
+  const requester = buildHarnessHostRequester(params.run);
   const runtimePolicySessionKey = normalizeOptionalString(params.run.runtimePolicySessionKey);
   const clientCaps = uniqueStrings(
     (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
@@ -198,6 +200,7 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow[0] === "message";
   return {
     sessionKey,
+    ...(Object.keys(requester).length > 0 ? { requester } : {}),
     ...(sessionPermissionPolicy ? { sessionPermissionPolicy } : {}),
     ...(params.run.conversationToolPolicy
       ? { conversationToolPolicy: structuredClone(params.run.conversationToolPolicy) }

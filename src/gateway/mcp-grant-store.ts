@@ -24,7 +24,10 @@ import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
-import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type {
+  PluginHookChannelContext,
+  PluginHookToolRequesterContext,
+} from "../plugins/hook-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -33,6 +36,8 @@ import type { SkillLibraryAuthoringCapability } from "../skills/library/authorin
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 
 export type McpLoopbackRequestContext = {
+  /** Host-captured tool-policy identity; never supplied by MCP clients. */
+  requester?: PluginHookToolRequesterContext;
   /** Recorded requester boundary captured by the host; never read from request headers. */
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   /** Host-prepared channel policy; never sourced from MCP request headers. */

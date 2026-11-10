@@ -8,6 +8,7 @@ import type {
 } from "../../packages/gateway-client/src/client.js";
 import { markGatewayConnectAssemblyError } from "../../packages/gateway-client/src/request-error.js";
 import { resolveGatewayWebSocketTransport } from "../../packages/gateway-client/src/websocket-transport.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
@@ -257,7 +258,8 @@ export class GatewayClient {
       registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
       logDebug,
       logError,
-      redactForLog: redactToolPayloadText,
+      redactForLog: (message) =>
+        redactToolPayloadText(sanitizeTerminalText(redactToolPayloadText(message))),
       ...baseOptions.hostDeps,
       ...(readOnly
         ? {

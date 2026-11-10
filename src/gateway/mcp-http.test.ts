@@ -67,7 +67,7 @@ type ScopedToolsCall = Parameters<typeof resolveGatewayScopedTools>[0] & {
 type BeforeToolCallHookInput = Parameters<typeof runBeforeToolCallHook>[0];
 
 const runBeforeToolCallHookMock = vi.hoisted(() =>
-  vi.fn(async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
+  vi.fn(async (args: BeforeToolCallHookInput): Promise<MockBeforeToolCallHookResult> => ({
     blocked: false,
     params: args.params,
   })),
@@ -171,6 +171,7 @@ import {
   mcpToolCallMessage,
   readMcpPayload,
   readOkMcpPayload,
+  registerRequesterPolicyTests,
   sendLoopbackToolCall,
   sendRaw,
   startLoopbackServerForTest,
@@ -495,7 +496,7 @@ beforeEach(() => {
   resolveGatewayScopedToolsMock.mockClear();
   runBeforeToolCallHookMock.mockClear();
   runBeforeToolCallHookMock.mockImplementation(
-    async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
+    async (args: BeforeToolCallHookInput): Promise<MockBeforeToolCallHookResult> => ({
       blocked: false,
       params: args.params,
     }),
@@ -889,6 +890,13 @@ describe("mcp loopback server", () => {
     expect(call.conversationReadOrigin).toBe("delegated");
     expect(call.includeNodeExecTool).toBe(false);
     expect(Array.from(call.excludeToolNames ?? [])).toContain("exec");
+  });
+
+  registerRequesterPolicyTests({
+    createCliGrant,
+    mockScopedTools,
+    makeMessageTool,
+    beforeToolCall: runBeforeToolCallHookMock,
   });
 
   it("binds a CLI grant's complete context and ignores spoofed scope headers", async () => {
@@ -2373,7 +2381,7 @@ describe("collector result tool across the loopback MCP boundary", () => {
     const scope = await mintCollectorGrant();
     expect(await listToolNames(scope)).toContain("structured_output");
 
-    runBeforeToolCallHookMock.mockImplementation(async (args: { params: unknown }) => {
+    runBeforeToolCallHookMock.mockImplementation(async (args: BeforeToolCallHookInput) => {
       // Grant liveness is untouched, so this reaches the pre-persistence re-check.
       await mutateSubagentRuns([collectorRunId, reboundRunId], (rows) => {
         const entry = expectDefined(rows.get(collectorRunId), "collector run");

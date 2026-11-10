@@ -157,6 +157,13 @@ baseline, and override per channel nest:
 }
 ```
 
+With auto-discovery off, Tlon expands citations only from channels currently in `groupChannels`,
+including channels added through the settings store. Other citations stay as opaque references. With
+auto-discovery on, citations can expand from any channel the bot ship can read. This includes
+Notebook and Gallery channels in joined groups, even though Tlon listens and replies only in
+auto-discovered chat channels. In a 1:1 DM from `ownerShip`, citations can expand from any channel
+the bot ship can read regardless of the auto-discovery setting.
+
 Once the bot has replied inside a thread, it keeps responding to later messages in that thread
 without requiring another mention.
 

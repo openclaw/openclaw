@@ -176,7 +176,8 @@ vi.mock("./gateway-install-token.js", () => ({
   resolveGatewayInstallToken: vi.fn(),
 }));
 
-vi.mock("./health-format.js", () => ({
+vi.mock("./health-format.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./health-format.js")>()),
   formatGatewayClosedDiagnostic,
   formatHealthCheckFailure: vi.fn(() => "health failed"),
 }));
@@ -276,10 +277,14 @@ describe("maybeRepairGatewayDaemon", () => {
     });
   }
 
-  async function runAutoRepair(options: { repair?: boolean; yes?: boolean } = { repair: true }) {
+  async function runAutoRepair(
+    options: { repair?: boolean; yes?: boolean } = { repair: true },
+    gatewayDetailsMessage = "details",
+  ) {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     await runDoctor({
       runtime,
+      gatewayDetailsMessage,
       prompter: createDoctorPrompter({
         runtime,
         options,
@@ -734,7 +739,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
-  it("reports a typed close after restart without depending on error wording", async () => {
+  it("reports a typed close after restart and masks its connection note", async () => {
     setPlatform("linux");
     const error = new Error("transport closed after restart");
     healthCommand.mockRejectedValueOnce(error);
@@ -742,14 +747,14 @@ describe("maybeRepairGatewayDaemon", () => {
       "Gateway connect failed: transport closed after restart",
     );
 
-    const runtime = await runAutoRepair();
+    const runtime = await runAutoRepair(undefined, "details password=doctorSynthetic7");
 
     expect(formatGatewayClosedDiagnostic).toHaveBeenCalledWith(error);
     expect(note).toHaveBeenCalledWith(
       "Gateway connect failed: transport closed after restart",
       "Gateway",
     );
-    expect(note).toHaveBeenCalledWith("details", "Gateway connection");
+    expect(note).toHaveBeenCalledWith("details password=***", "Gateway connection");
     expect(runtime.error).not.toHaveBeenCalled();
   });
 

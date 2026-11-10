@@ -44,7 +44,13 @@ function chatSubscription() {
   return subscription;
 }
 
-function chatEvent(params: { whom: string; author: string; text: string; id: string }) {
+function chatEvent(params: {
+  whom: string;
+  author: string;
+  text: string;
+  id: string;
+  content?: unknown[];
+}) {
   return {
     whom: params.whom,
     id: params.id,
@@ -52,7 +58,7 @@ function chatEvent(params: { whom: string; author: string; text: string; id: str
       add: {
         essay: {
           author: params.author,
-          content: [{ inline: [params.text] }],
+          content: params.content ?? [{ inline: [params.text] }],
           sent: 1_700_000_000_000,
         },
       },
@@ -311,8 +317,8 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
     },
   );
 
-  it("marks new 1:1 DM approvals as verified and club approvals as not", async () => {
-    startMonitorDefaults();
+  it("preserves approval state while persisting discovered channels", async () => {
+    startMonitorDefaults({ autoAcceptGroupInvites: true });
     ingressMock.receive.mockResolvedValue({ kind: "ignored" });
     await withMonitor(async () => {
       await chatSubscription().event(
@@ -331,6 +337,60 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
       expect(pending[0]?.clubId).toBeUndefined();
       expect(pending[1]).toMatchObject({ requestingShip: "~bus", clubId: CLUB_ID });
       expect(pending[1]?.verifiedDirect).toBeUndefined();
+      const groupsSubscription = sseClientMock.subscribe.mock.calls
+        .map(([value]) => value)
+        .find((value) => value.app === "groups" && value.path === "/groups/ui");
+      if (!groupsSubscription) {
+        throw new Error("expected groups subscription");
+      }
+      await groupsSubscription.event({ channels: { "chat/~zod/new": {} } });
+      await chatSubscription().event(
+        chatEvent({
+          whom: OWNER,
+          author: OWNER,
+          text: "approve " + String(pending[0]?.id),
+          id: "~nec/14",
+        }),
+      );
+      await groupsSubscription.event({ channels: { "chat/~zod/next": {} } });
+      inboundRuntimeMock.dispatch.mockClear();
+      await chatSubscription().event(
+        chatEvent({ whom: "~bus", author: "~bus", text: "allowed", id: "~bus/15" }),
+      );
+      expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
     });
+  });
+});
+
+it("keeps club owner claims outside citation privilege and rechecks real owner revocation", async () => {
+  startMonitorDefaults({ dmAllowlist: [OWNER] });
+  ingressMock.receive.mockResolvedValue({ kind: "ignored" });
+  await withMonitor(async () => {
+    const citation = (nest: string) => ({
+      block: { cite: { chan: { nest, where: "/msg/~bus/12345" } } },
+    });
+    const send = async (whom: string, id: string, nests: string[]) => {
+      const event = chatEvent({
+        whom,
+        author: OWNER,
+        id,
+        text: "inspect citation",
+        content: [...nests.map(citation), { inline: ["inspect citation"] }],
+      });
+      await chatSubscription().event(event);
+    };
+    sseClientMock.scry.mockClear();
+    await send(CLUB_ID, "club-cite", ["diary/~private/notes"]);
+    expect(sseClientMock.scry).not.toHaveBeenCalled();
+    sseClientMock.scry.mockImplementationOnce(async () => {
+      settingsManagerMock.startSubscription.mock.calls[0]?.[0]({ ownerShip: "~bus" });
+      return { essay: { content: [{ inline: ["PRIVATE-CONTENT"] }] } };
+    });
+    await send(OWNER, "owner-cite", ["diary/~private/notes", "heap/~private/gallery"]);
+    expect(sseClientMock.scry).toHaveBeenCalledOnce();
+    expect(inboundRuntimeMock.buildContext.mock.calls.at(-1)?.[0].message.rawBody).not.toContain(
+      "PRIVATE-CONTENT",
+    );
+    expect(inboundRuntimeMock.buildContext.mock.calls.at(-1)?.[0].sender.roles).toEqual(["user"]);
   });
 });
