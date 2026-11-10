@@ -232,6 +232,13 @@ agent:
   memory: { search: { enabled: false } }
 ```
 
+Set `enabled: false` on an automation to install it paused; omitting the field
+keeps the enabled default. Jobs belong to the new agent. First-run instructions
+in `BOOTSTRAP.md` should find that agent's declared job, including disabled jobs,
+and update its timezone, tools, or timeout through ordinary automation controls.
+Enable that same job after setup and the user's activation choice; avoid creating
+a duplicate job for the same recipe.
+
 Package and workspace paths must stay inside the package root. Manifests are
 limited to 1 MiB, package metadata to 256 KiB, and workspace files have
 per-file and aggregate limits. Selected files become package content, so
