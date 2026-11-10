@@ -31,7 +31,7 @@ export const DatabaseConfigSchema = z
       }),
     localStores: z.enum(["anchors", "none"]).optional().register(configUiMetadata, {
       label: "Local Store Files",
-      help: "Opt-in for all-PostgreSQL installs (default: anchors). In this release, none only moves Gateway state ownership into PostgreSQL: a session advisory lock keyed by an installation UUID refuses a second Gateway for the same installation on any host. Requires every configurable family to use postgres. Store anchors and other local files are unchanged; see the PostgreSQL operator guide.",
+      help: "Opt-in for all-PostgreSQL installs (default: anchors). In this release, none only moves Gateway state ownership into PostgreSQL: a session advisory lock keyed by the database and schema prefix refuses a second Gateway for the same installation on any host, and losing that session stops the Gateway. Requires every configurable family to use postgres. Store anchors and other local files are unchanged; see the PostgreSQL operator guide.",
     }),
     postgres: z
       .strictObject({

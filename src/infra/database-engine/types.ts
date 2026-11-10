@@ -6,8 +6,8 @@ export type DatabaseEngineInput =
       connectionEnvKey?: string;
       /** Existing sealed stores only; the connection never admits writes or migration. */
       readOnly?: true;
-      /** database.localStores none: install-scoped rows in PostgreSQL key on this UUID. */
-      localStores?: Readonly<{ installationId: string }>;
+      /** database.localStores none: Gateway state ownership is held in PostgreSQL. */
+      localStores?: "none";
     }>
   | undefined;
 export type DatabaseEngineId = "sqlite" | "postgres";

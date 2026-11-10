@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import net from "node:net";
 import { hostname } from "node:os";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
@@ -7,11 +8,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
-import { readOrCreateInstallationId } from "./database-engine/install-identity.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
-import { acquireGatewayLock, type GatewayLockHandle } from "./gateway-lock.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import { acquireConfiguredGatewayPostgresOwner } from "./gateway-postgres-owner.js";
-import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
+import { captureGatewayStateOwner, captureStateDatabaseAccess } from "./gateway-state-owner.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -35,25 +35,25 @@ async function query<T extends pg.QueryResultRow>(sql: string, values: unknown[]
   }
 }
 
-function createInstall(localStores: boolean) {
+function install(postgres: { connection: string; localStores?: "none" }) {
   const schemaPrefix = `gpo_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-  const installationId = readOrCreateInstallationId(tempDirs.make("gateway-pg-owner-id-"));
-  cleanup.push(() => query(`DROP SCHEMA IF EXISTS "${schemaPrefix}_install" CASCADE`));
-  const input = { connection: connection!, schemaPrefix, localStores: { installationId } };
   installDatabaseEngineSelection({
     effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-    postgres: localStores ? input : { connection: connection!, schemaPrefix },
+    postgres: { ...postgres, schemaPrefix },
   });
-  return input;
+  return schemaPrefix;
 }
 
-/** Each call is a separate host: its own state dir and lock dir, the same install. */
-async function acquireOnHost(): Promise<GatewayLockHandle> {
+/**
+ * Each call is a separate host: its own state dir and lock dir, the same database. The
+ * maintenance role skips state-store setup; the gateway role admits ordinary state work.
+ */
+async function acquireOnHost(role: "maintenance" | "gateway" = "maintenance") {
   const stateDir = tempDirs.make("gateway-pg-owner-host-");
   const lock = await acquireGatewayLock({
     env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: path.join(stateDir, "c.json") },
     lockDir: path.join(stateDir, "locks"),
-    databaseAccess: "none",
+    ...(role === "maintenance" ? { databaseAccess: "none" as const } : {}),
     allowInTests: true,
     timeoutMs: 0,
   });
@@ -61,82 +61,162 @@ async function acquireOnHost(): Promise<GatewayLockHandle> {
     throw new Error("Gateway ownership was not acquired");
   }
   cleanup.push(lock.release);
-  return lock;
+  return { lock, databasePath: path.join(stateDir, "state", "openclaw.sqlite") };
 }
 
-async function installSchemaExists(schemaPrefix: string) {
-  const rows = await query("SELECT 1 FROM pg_namespace WHERE nspname = $1", [
-    `${schemaPrefix}_install`,
-  ]);
-  return rows.length > 0;
+function ownerBackends(schemaPrefix: string) {
+  const key = createHash("sha256")
+    .update(`openclaw.gateway-owner:${schemaPrefix}`)
+    .digest()
+    .readBigUInt64BE();
+  return query<{ pid: number }>(
+    `SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted
+       AND classid = $1 AND objid = $2 AND objsubid = 1`,
+    [String(key >> 32n), String(key & 0xffffffffn)],
+  );
 }
 
-async function acquireOwner(heartbeatMs?: number) {
-  const owner = await acquireConfiguredGatewayPostgresOwner(() => {}, { heartbeatMs });
-  if (!owner) {
-    throw new Error("Expected database.localStores none");
+it("bounds connection startup and closes the failed attempt", async () => {
+  const closed: Promise<void>[] = [];
+  const silent = net.createServer((socket) => {
+    // Reading the socket lets the client's close surface here as "close".
+    socket.resume();
+    closed.push(
+      new Promise((resolve) => {
+        socket.once("close", () => resolve());
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => {
+    silent.listen(0, "127.0.0.1", resolve);
+  });
+  cleanup.push(
+    () =>
+      new Promise((resolve) => {
+        silent.close(resolve);
+      }),
+  );
+  const address = silent.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected a TCP listener");
   }
-  cleanup.push(owner.release);
-  return owner;
-}
+  install({ connection: `postgres://owner@127.0.0.1:${address.port}/silent`, localStores: "none" });
 
-function escape(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+  await expect(
+    acquireConfiguredGatewayPostgresOwner({ onContention() {}, onLost() {}, timeoutMs: 200 }),
+  ).rejects.toThrow(/timeout/i);
+  expect(closed).toHaveLength(1);
+  await closed[0];
+});
 
 describe.skipIf(!connection)("Gateway ownership with database.localStores none", () => {
   it("refuses a second Gateway on another host and names the holder", async () => {
-    const install = createInstall(true);
+    const schemaPrefix = install({ connection: connection!, localStores: "none" });
     const first = await acquireOnHost();
-    const boot = createManagedHandoffBootIdentityReader(process.env)();
 
     const refused = acquireOnHost();
     await expect(refused).rejects.toThrow(
       new RegExp(
-        `busy at PostgreSQL schema ${install.schemaPrefix}_install[\\s\\S]*pid ${process.pid} on host ${escape(hostname())} \\(boot ${escape(`${boot.platform}:${boot.identity}`)}\\)`,
+        `busy at PostgreSQL schema prefix ${schemaPrefix}\\. Gateway pid ${process.pid} on host ${hostname()
+          .slice(0, 20)
+          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
       ),
     );
     await expect(refused).rejects.not.toThrow(/openclaw\.sqlite/);
 
-    await first.release();
-    await first.release();
+    await first.lock.release();
+    await first.lock.release();
     await acquireOnHost();
   });
 
-  it("loses ownership when the session ends or the heartbeat fails, and releases the lock", async () => {
-    const install = createInstall(true);
-    const terminated = await acquireOwner();
-    await expect(acquireOwner()).rejects.toThrow(/busy at PostgreSQL/);
-    const key = createHash("sha256")
-      .update(`openclaw.gateway-owner:${install.localStores.installationId}`)
-      .digest()
-      .readBigUInt64BE();
-    const backends = await query(
-      `SELECT pg_terminate_backend(pid) FROM pg_locks
-       WHERE locktype = 'advisory' AND classid = $1 AND objid = $2 AND objsubid = 1`,
-      [String(key >> 32n), String(key & 0xffffffffn)],
-    );
+  it("retires the former Gateway's state owner when its session is terminated", async () => {
+    const schemaPrefix = install({ connection: connection!, localStores: "none" });
+    const former = await acquireOnHost("gateway");
+    const owner = captureGatewayStateOwner(former.databasePath);
+    // Captured before the loss, as work queued in a worker would be.
+    const queued = (await captureStateDatabaseAccess(former.databasePath)).processOwner;
+    expect(owner?.signal.aborted).toBe(false);
+    queued?.assertCurrent();
+
+    const backends = await ownerBackends(schemaPrefix);
     expect(backends).toHaveLength(1);
-    await vi.waitFor(() => expect(terminated.assertCurrent).toThrow(/ownership was lost/));
+    await query("SELECT pg_terminate_backend($1)", [backends[0]?.pid]);
 
-    const stalled = await acquireOwner(20);
-    await query(`DROP TABLE "${install.schemaPrefix}_install".gateway_owner`);
-    await vi.waitFor(() => expect(stalled.assertCurrent).toThrow(/lost: heartbeat failed/));
+    await vi.waitFor(() => expect(owner?.signal.aborted).toBe(true));
+    expect(String(owner?.signal.reason)).toMatch(/PostgreSQL Gateway ownership was lost/);
+    expect(() => queued?.assertCurrent()).toThrow(/PostgreSQL Gateway ownership was lost/);
+    expect(() => former.lock.assertCurrent()).toThrow(/PostgreSQL Gateway ownership was lost/);
+    expect(() => captureGatewayStateOwner(former.databasePath)).toThrow(
+      /PostgreSQL Gateway ownership was lost/,
+    );
+    await expect(
+      captureStateDatabaseAccess(former.databasePath).then((access) => access.prepareAccess()),
+    ).rejects.toThrow(/PostgreSQL Gateway ownership was lost/);
 
-    const next = await acquireOwner();
-    next.assertCurrent();
-    await next.release();
-    await next.release();
-    expect(next.assertCurrent).toThrow(/was released/);
-    (await acquireOwner()).assertCurrent();
+    await acquireOnHost("gateway");
+    expect(await ownerBackends(schemaPrefix)).toHaveLength(1);
+  });
+
+  it("reports loss when the network goes silent, from the next heartbeat", async () => {
+    const target = new URL(connection!);
+    const upstream = { port: Number(target.port || 5432), host: target.hostname };
+    let silent = false;
+    const proxy = net.createServer((inbound) => {
+      const outbound = net.connect(upstream.port, upstream.host);
+      // A silent network drops bytes both ways without closing either socket.
+      inbound.on("data", (chunk) => {
+        if (!silent) {
+          outbound.write(chunk);
+        }
+      });
+      outbound.on("data", (chunk) => {
+        if (!silent) {
+          inbound.write(chunk);
+        }
+      });
+      inbound.on("error", () => outbound.destroy());
+      outbound.on("error", () => inbound.destroy());
+      cleanup.push(async () => {
+        inbound.destroy();
+        outbound.destroy();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      proxy.listen(0, "127.0.0.1", resolve);
+    });
+    cleanup.push(
+      () =>
+        new Promise((resolve) => {
+          proxy.close(resolve);
+        }),
+    );
+    const address = proxy.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected a TCP listener");
+    }
+    target.host = `127.0.0.1:${address.port}`;
+    install({ connection: target.toString(), localStores: "none" });
+    const onLost = vi.fn();
+
+    const owner = await acquireConfiguredGatewayPostgresOwner({
+      onContention() {},
+      onLost,
+      heartbeatMs: 100,
+      timeoutMs: 2_000,
+    });
+    cleanup.push(async () => owner?.release());
+    silent = true;
+
+    await vi.waitFor(() => expect(onLost).toHaveBeenCalledTimes(1), { timeout: 6_000 });
+    expect(String(onLost.mock.calls[0]?.[0])).toMatch(/heartbeat failed: Query read timeout/);
   });
 
   it("leaves the default mode on per-state-dir file ownership", async () => {
-    const install = createInstall(false);
+    const schemaPrefix = install({ connection: connection! });
 
     await acquireOnHost();
     await acquireOnHost();
 
-    expect(await installSchemaExists(install.schemaPrefix)).toBe(false);
+    expect(await ownerBackends(schemaPrefix)).toHaveLength(0);
   });
 });

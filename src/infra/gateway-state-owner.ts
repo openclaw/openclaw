@@ -294,6 +294,8 @@ export function acquireGatewayStateOwner(params: {
   payload?: LockPayload;
   projectionPath?: string;
   getProjection?: () => GatewayStateProjection | undefined;
+  /** Custody held outside this process, such as the PostgreSQL install lock; abort retires it. */
+  custody?: AbortSignal;
 }): StateDatabaseSchemaLease {
   const identity = resolveStateOwnerIdentity(params.databasePath);
   const pathname = identity.ownerPath;
@@ -335,6 +337,16 @@ export function acquireGatewayStateOwner(params: {
   try {
     owner.heartbeat = startGatewayStateOwnerHeartbeat(owner.locks, (error) =>
       loseOwner(owner, error),
+    );
+    // Admission, workers and the server lifecycle all observe this owner's lost signal.
+    const custody = params.custody;
+    custody?.addEventListener(
+      "abort",
+      () => {
+        const reason: unknown = custody.reason;
+        loseOwner(owner, reason instanceof Error ? reason : new Error("State custody was lost"));
+      },
+      { once: true },
     );
     lease.assertCurrent();
   } catch (error) {

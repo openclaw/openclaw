@@ -511,11 +511,14 @@ export async function acquireGatewayLock(
           // Each attempt reports its own contention; never reuse a stale path.
           contendedLockPath = undefined;
           payload.createdAt = resolveTimestampMsToIsoString(Date.now());
+          // PostgreSQL custody loss retires the process owner that admits all state work.
+          const custody = new AbortController();
           const owner = acquireGatewayStateOwner({
             databasePath,
             payload,
             projectionPath: paths.stateLockPath,
             getProjection: () => projection,
+            custody: custody.signal,
           });
           try {
             if (opts.databasePortRecovery) {
@@ -529,8 +532,11 @@ export async function acquireGatewayLock(
             await assertHistoricalGatewayOwnerStopped(paths, opts, (contended) => {
               contendedLockPath = contended;
             });
-            postgresOwner = await acquireConfiguredGatewayPostgresOwner((contended) => {
-              contendedLockPath = contended;
+            postgresOwner = await acquireConfiguredGatewayPostgresOwner({
+              onContention: (contended) => {
+                contendedLockPath = contended;
+              },
+              onLost: (error) => custody.abort(error),
             });
             if (!opts.databasePortRecovery && opts.databaseAccess !== "none") {
               try {
@@ -619,7 +625,6 @@ export async function acquireGatewayLock(
       parentMaintenance?.assertOwnerCurrent(access);
     }
     stateOwner.assertCurrent();
-    postgresOwner?.assertCurrent();
     if (projection && !projection.verifyStillHeld()) {
       throw new Error("OpenClaw Gateway ownership projection is no longer current");
     }

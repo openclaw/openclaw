@@ -1,9 +1,7 @@
 import { createConfigRuntimeEnv } from "../../config/config-env-vars.js";
-import { resolveStateDir } from "../../config/paths.js";
 import { resolveConfigSecretRef } from "../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { resolveCanonicalConfiguredSecretInputString as resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
-import { readOrCreateInstallationId } from "./install-identity.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 import type { DatabaseEngineInput, DatabaseEngineSelection } from "./types.js";
 export type { DatabaseEngineInput } from "./types.js";
@@ -65,12 +63,6 @@ async function resolveDatabasePostgresInput(
     connection: value,
     schemaPrefix: config.database?.postgres?.schemaPrefix ?? "openclaw",
     ...(ref?.source === "env" ? { connectionEnvKey: ref.id } : {}),
-    ...(config.database?.localStores === "none"
-      ? {
-          localStores: Object.freeze({
-            installationId: readOrCreateInstallationId(resolveStateDir(env)),
-          }),
-        }
-      : {}),
+    ...(config.database?.localStores === "none" ? { localStores: "none" as const } : {}),
   });
 }
