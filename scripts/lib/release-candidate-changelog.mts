@@ -18,7 +18,7 @@ import {
   releaseNotesVersionForTag,
   renderGithubReleaseNotes,
 } from "../render-github-release-notes.mts";
-import { loadChangelogCollection, readReleaseChangelogFiles } from "./release-changelog.mjs";
+import { loadChangelogCollection } from "./release-changelog.mjs";
 
 type StringFields<K extends string> = Record<K, string>;
 
@@ -247,22 +247,16 @@ export function validateCandidateChangelogProvenance({
   };
 }
 
-// Operator-accepted for this tag only: its qualified notes shipped this credit,
-// and removing it would mean another Full Release Validation.
-function isAcceptedAttribution(tag: string, handle: string) {
-  return tag === "v2026.11.1" && handle.toLowerCase() === "steipete";
-}
-
-// Applies pnpm check's changelog-only lints to the candidate's committed changelog
-// artifacts, so a release-notes edit fails here instead of hours into validation.
-function validateCandidateChangelogLints({
-  rootDir,
-  tag,
-  targetSha,
-}: StringFields<"rootDir" | "tag" | "targetSha">) {
-  const violations = findChangelogAttributionViolations(
-    readReleaseChangelogFiles({ rootDir, ref: targetSha }),
-  ).filter((violation) => !isAcceptedAttribution(tag, violation.handle));
+// Apply the shared attribution policy only to the selected publication inputs.
+// The standalone repository checker still owns linting the complete archive.
+function validateCandidateChangelogLints(
+  releaseChangelog: ReturnType<typeof loadReleaseNotesForTag>,
+) {
+  const files = [{ path: releaseChangelog.sourcePath, content: releaseChangelog.section }];
+  if (releaseChangelog.record !== null && releaseChangelog.recordPath !== null) {
+    files.push({ path: releaseChangelog.recordPath, content: releaseChangelog.record });
+  }
+  const violations = findChangelogAttributionViolations(files);
   if (violations.length > 0) {
     throw new Error(
       `Forbidden changelog thanks attribution (pnpm check:changelog-attributions): ${violations
@@ -278,9 +272,9 @@ export function validateCandidateChangelog({
   tag,
   targetSha,
 }: StringFields<"rootDir" | "repository" | "tag" | "targetSha">) {
-  validateCandidateChangelogLints({ rootDir, tag, targetSha });
   const version = releaseNotesVersionForTag(tag);
   const releaseChangelog = loadReleaseNotesForTag({ rootDir, ref: targetSha, tag, version });
+  validateCandidateChangelogLints(releaseChangelog);
   return {
     releaseNotesText: releaseChangelog.section,
     releaseNotesCheck: validateCandidateReleaseNotes({

@@ -37,6 +37,7 @@ import { capturePlacementStartupConnection } from "./session-placement-startup.t
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
+const PROFILE_APPEARANCE_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 
 export type StoredOutboxScopeHost = {
   client: GatewayBrowserClient | null;
@@ -82,8 +83,10 @@ export class ShellGatewayOwner {
     client: GatewayBrowserClient;
     profileId: string;
     runtimeConfig: ApplicationContext["runtimeConfig"];
-    configObject: unknown;
     invalidationId: number;
+    failed: boolean;
+    retryAttempt: number;
+    retryTimer?: ReturnType<typeof globalThis.setTimeout>;
     promise: Promise<void>;
   } | null = null;
 
@@ -265,7 +268,10 @@ export class ShellGatewayOwner {
       event.event === "chat.metadata.changed" ? asNullableRecord(event.payload) : undefined;
     const commandsChanged = metadataChange?.commandsChanged !== false;
     if (client && modelAuthEventInvalidates(event)) {
-      invalidateModelAuthStatusRequests(client);
+      invalidateModelAuthStatusRequests(
+        client,
+        typeof metadataChange?.agentId === "string" ? metadataChange.agentId : undefined,
+      );
     }
     if (
       client &&
@@ -332,6 +338,31 @@ export class ShellGatewayOwner {
     const commandParams = event.payload as UiCommandParams;
     const { command } = commandParams;
     if (!command) {
+      return;
+    }
+    if (command.kind === "template-review") {
+      const agentId = commandParams.agentId?.trim();
+      const sessionKey = commandParams.sessionKey?.trim();
+      if (agentId && sessionKey) {
+        const reviewClient = context.gateway.snapshot.client;
+        const revision = context.gateway.connectionRevision;
+        const isCurrent = () =>
+          this.host.context === context &&
+          context.gateway.snapshot.client === reviewClient &&
+          context.gateway.connectionRevision === revision;
+        void (async () => {
+          try {
+            const { openTemplateCreator } = await import("../pages/templates/creator-owner.ts");
+            if (isCurrent()) {
+              openTemplateCreator(context, { agentId, sessionKey, draftId: command.draftId });
+            }
+          } catch (error) {
+            if (isCurrent()) {
+              showToast({ severity: "error", message: String(error) });
+            }
+          }
+        })();
+      }
       return;
     }
     if (command.kind === "agent-github-settings") {
@@ -507,6 +538,7 @@ export class ShellGatewayOwner {
       this.runtimeConfigProfileId = null;
       this.runtimeConfigReady = null;
       this.preferenceGeneration += 1;
+      globalThis.clearTimeout(this.profileAppearanceSource?.retryTimer);
       this.profileAppearanceSource = null;
       return Promise.resolve();
     }
@@ -516,6 +548,13 @@ export class ShellGatewayOwner {
       this.runtimeConfigSource === runtimeConfig &&
       this.runtimeConfigProfileId === profileId
     ) {
+      // Config readiness must not turn an unsuccessful profile read into a cache hit.
+      if (this.host.context && this.profileAppearanceSource?.failed) {
+        this.runtimeConfigReady = Promise.all([
+          this.runtimeConfigReady,
+          this.refreshProfileAppearancePrefs(this.host.context),
+        ]).then(() => undefined);
+      }
       return this.runtimeConfigReady ?? Promise.resolve();
     }
     this.runtimeConfigClient = snapshot.client;
@@ -530,6 +569,8 @@ export class ShellGatewayOwner {
     });
     const context = this.host.context;
     const generation = ++this.preferenceGeneration;
+    // Profile overrides and navigation do not depend on the operator config read.
+    const profileReady = context ? this.refreshProfileAppearancePrefs(context) : Promise.resolve();
     this.runtimeConfigReady = (
       runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureDisplayLoaded()
     ).then(async () => {
@@ -543,6 +584,7 @@ export class ShellGatewayOwner {
         return;
       }
       await this.reconcileServerUiPrefs(runtimeConfig);
+      await profileReady;
     });
     return this.runtimeConfigReady;
   }
@@ -581,47 +623,48 @@ export class ShellGatewayOwner {
     }
   }
 
-  private refreshProfileAppearancePrefs(context: ApplicationContext, force = false): Promise<void> {
-    const snapshot = context.gateway.snapshot;
-    const profileId = snapshot?.selfUser?.id;
+  private refreshProfileAppearancePrefs(
+    context: ApplicationContext,
+    force = false,
+    retryAttempt = 0,
+  ): Promise<void> {
+    const { client, selfUser, phase, hello } = context.gateway.snapshot;
+    const profileId = selfUser?.id;
     if (!profileId) {
       return Promise.resolve();
     }
-    const client = snapshot.client;
-    const configObject = currentDisplayConfig(context.runtimeConfig.state);
-    if (snapshot.phase !== "connected" || !client || !configObject) {
+    if (phase !== "connected" || !client) {
       return Promise.resolve();
     }
     const runtimeConfig = context.runtimeConfig;
     const previous = this.profileAppearanceSource;
-    if (
-      !force &&
+    const sameSource =
       previous?.client === client &&
       previous.profileId === profileId &&
       previous.runtimeConfig === runtimeConfig &&
-      previous.configObject === configObject &&
-      previous.invalidationId === profilePreferencesState.invalidationId
-    ) {
+      previous.invalidationId === profilePreferencesState.invalidationId;
+    if (!force && sameSource && (!previous.failed || previous.retryTimer !== undefined)) {
       return previous.promise;
     }
+    // Exhaustion stops automatic retries, not a later genuine synchronization.
+    globalThis.clearTimeout(previous?.retryTimer);
     // Writes retire profile reads independently of the config snapshot's identity.
-    const source = {
+    const source: NonNullable<typeof this.profileAppearanceSource> = {
       client,
       profileId,
       runtimeConfig,
-      configObject,
       invalidationId: profilePreferencesState.invalidationId,
+      failed: false,
+      retryAttempt: !force && sameSource ? previous.retryAttempt : retryAttempt,
       promise: Promise.resolve(),
     };
     this.profileAppearanceSource = source;
     const scope = context.gateway.connection.gatewayUrl;
-    const hello = snapshot.hello;
     const sourceClient = runtimeConfig.state.client;
     const generation = this.preferenceGeneration;
     const remainsCurrent = () =>
       this.host.context === context &&
       context.runtimeConfig === runtimeConfig &&
-      currentDisplayConfig(runtimeConfig.state) === configObject &&
       runtimeConfig.state.client === sourceClient &&
       context.gateway.snapshot.client === client &&
       context.gateway.snapshot.phase === "connected" &&
@@ -630,22 +673,40 @@ export class ShellGatewayOwner {
       context.gateway.connection.gatewayUrl === scope &&
       this.profileAppearanceSource === source &&
       this.preferenceGeneration === generation;
-    const reportError = (error: unknown) => {
-      if (remainsCurrent()) {
-        console.error("[gateway] profile preference refresh failed:", error);
+    const retry = () => {
+      source.failed = true;
+      const delay = PROFILE_APPEARANCE_RETRY_DELAYS_MS[source.retryAttempt];
+      if (delay === undefined || source.invalidationId !== profilePreferencesState.invalidationId) {
+        return;
       }
+      source.retryTimer = globalThis.setTimeout(() => {
+        source.retryTimer = undefined;
+        if (remainsCurrent()) {
+          void this.refreshProfileAppearancePrefs(context, true, source.retryAttempt + 1);
+        }
+      }, delay);
     };
     source.promise = import("./server-prefs-reconcile.ts")
       .then(async (runtime) => {
         if (!remainsCurrent()) {
           return;
         }
-        const pending = runtime.refreshProfileAppearancePrefs({
-          client,
-          profileId,
-          configObject,
-          scope,
+        const pending = runtime.loadProfileAppearancePrefs(client, profileId, scope, {
           isCurrent: remainsCurrent,
+        });
+        // Read admission may adopt the profile identity before its first await.
+        source.invalidationId = profilePreferencesState.invalidationId;
+        const loaded = await pending;
+        if (!remainsCurrent()) {
+          return;
+        }
+        if (!loaded) {
+          return retry();
+        }
+        const applied = runtime.applyServerUiPrefs(currentDisplayConfig(runtimeConfig.state), {
+          profileId,
+          scope,
+          navigationConfirmed: true,
           onApplied: () => {
             if (remainsCurrent()) {
               context.theme.refresh({ notify: true });
@@ -657,9 +718,6 @@ export class ShellGatewayOwner {
             }
           },
         });
-        // Read admission may adopt the profile identity before its first await.
-        source.invalidationId = profilePreferencesState.invalidationId;
-        const applied = await pending;
         if (remainsCurrent()) {
           if (!applied) {
             context.theme.refresh({ notify: true });
@@ -669,7 +727,12 @@ export class ShellGatewayOwner {
           this.host.invalidate();
         }
       })
-      .catch(reportError);
+      .catch((error: unknown) => {
+        if (remainsCurrent()) {
+          console.error("[gateway] profile preference refresh failed:", error);
+          retry();
+        }
+      });
     return source.promise;
   }
 
@@ -683,6 +746,7 @@ export class ShellGatewayOwner {
     this.runtimeConfigClient = null;
     this.runtimeConfigSource = null;
     this.runtimeConfigProfileId = null;
+    globalThis.clearTimeout(this.profileAppearanceSource?.retryTimer);
     this.profileAppearanceSource = null;
     this.previousGatewayPhase = null;
     if (this.agentRosterRefreshTimer !== null) {

@@ -12,6 +12,7 @@ import { ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
+import { runMutableUpdateRecovery } from "./update-command-mutable-signals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   createUpdateCommandFailureResult,
@@ -176,14 +177,14 @@ export async function withUpdateCommandRecoveryUnwind(
       }
     };
     try {
-      await admitRecovery();
+      await runMutableUpdateRecovery(admitRecovery);
     } catch (error) {
       // Repair settles a matching cohort pair; other retained recovery keeps its original owner.
       const repairable =
         error instanceof UpdateRecoveryRequiredError &&
-        (await inspectPluginCohortRecoveryAdmission({ env: run.env }, error.record.runId).catch(
-          () => undefined,
-        ));
+        (await runMutableUpdateRecovery(() =>
+          inspectPluginCohortRecoveryAdmission({ env: run.env }, error.record.runId),
+        ).catch(() => undefined));
       const pending = pendingFailure(
         error,
         failure?.error ?? error,
@@ -223,12 +224,16 @@ export async function withUpdateCommandRecoveryUnwind(
     }
   }
   try {
-    await recoveryState.windowsTaskAutoStartRecovery?.restore();
-    await recoveryState.windowsTaskAutoStartRecovery?.complete();
+    await runMutableUpdateRecovery(async () => {
+      await recoveryState.windowsTaskAutoStartRecovery?.restore();
+      await recoveryState.windowsTaskAutoStartRecovery?.complete();
+    });
   } catch (restoreError) {
     let error = restoreError;
     try {
-      await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
+      await runMutableUpdateRecovery(async () => {
+        await recoveryState.windowsTaskAutoStartRecovery?.complete(false);
+      });
     } catch (compensationError) {
       error = new AggregateError(
         [error, compensationError],
@@ -247,7 +252,10 @@ export async function withUpdateCommandRecoveryUnwind(
       if (failure.error instanceof UpdateCommandFailure) {
         completeUpdateCommandRun(failure.error.result, run);
       } else {
-        failure.error = await prepareUnexpectedUpdateCommandFailure(failure.error, opts);
+        const original = failure.error;
+        failure.error = await runMutableUpdateRecovery(() =>
+          prepareUnexpectedUpdateCommandFailure(original, opts),
+        );
       }
     }
     throw failure.error;

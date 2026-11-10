@@ -6,12 +6,13 @@ import {
   usageDailyModelIdentity,
   usageModelIdentity,
 } from "./usage-aggregates.js";
-import { buildUsageOverview, getSessionModels } from "./usage-overview.js";
+import { buildUsageOverview, getSessionModels, USAGE_FILTER_KEYS } from "./usage-overview.js";
 import { extractQueryTerms } from "./usage-query.js";
 import type {
   SessionUsageEntry,
   SessionsUsageAggregates,
   SessionsUsageOverview,
+  UsageFilterOptionCounts,
   UsageOverviewOptions,
   UsageOverviewSlice,
 } from "./usage-types.js";
@@ -30,11 +31,13 @@ export type UsageModelCohorts = {
   sessionCount: number;
   cohorts: Cohort[];
   filterOptions: SessionsUsageOverview["filterOptions"];
+  filterOptionCounts: UsageFilterOptionCounts;
 };
 
 export type UsageModelCohortQuery = {
   cohorts: Cohort[];
   filterOptions: SessionsUsageOverview["filterOptions"];
+  filterOptionCounts: UsageFilterOptionCounts;
   unfilteredSessionCount: number;
   order: AggregateOrder;
 };
@@ -99,15 +102,33 @@ export function prepareUsageModelCohorts(
     model: [],
     tool: [],
   };
-  for (const key of ["agent", "channel", "provider", "model", "tool"] as const) {
+  const filterOptionCounts: UsageFilterOptionCounts = {
+    agent: {},
+    channel: {},
+    provider: {},
+    model: {},
+    tool: {},
+  };
+  for (const key of USAGE_FILTER_KEYS) {
     filterOptions[key] = [
       ...new Set(cohorts.flatMap(({ report }) => report.overview.filterOptions[key])),
     ].toSorted();
+    // Cohorts are disjoint sessions, so their per-option session counts add up.
+    const counts = new Map<string, number>();
+    for (const { report } of cohorts) {
+      for (const [value, count] of Object.entries(
+        report.overview.filterOptionCounts?.[key] ?? {},
+      )) {
+        counts.set(value, (counts.get(value) ?? 0) + count);
+      }
+    }
+    filterOptionCounts[key] = Object.fromEntries(counts);
   }
   return {
     sessionCount: rows.length,
     cohorts,
     filterOptions,
+    filterOptionCounts,
   };
 }
 
@@ -152,6 +173,7 @@ export function selectUsageModelCohorts(
     cohorts: selected,
     indices,
     filterOptions: prepared.filterOptions,
+    filterOptionCounts: prepared.filterOptionCounts,
     unfilteredSessionCount: prepared.sessionCount,
     order,
   };
@@ -271,6 +293,7 @@ export function buildUsageModelCohortReport(
   overview.selectedSessionCount = aggregates.sessionCount ?? 0;
   overview.unfilteredSessionCount = query.unfilteredSessionCount;
   overview.filterOptions = query.filterOptions;
+  overview.filterOptionCounts = query.filterOptionCounts;
   return {
     totals: accumulator.totals,
     aggregates,

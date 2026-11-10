@@ -5,6 +5,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { getArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -131,9 +132,12 @@ export async function loadPersistedPluginModelCatalogs(
   };
   const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({ ...options, revoke, close });
   try {
+    const inspection = getArtifactPreservingSqliteRead(options.path);
     reading = readPluginModelCatalogsInWorker(
       {
         ...options,
+        path: inspection?.canonicalPath ?? options.path,
+        expectedIdentity: inspection,
         env: { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) },
         pluginIds: pluginIds && [...pluginIds],
       },

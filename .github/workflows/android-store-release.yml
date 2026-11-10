@@ -56,7 +56,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.operation == 'release'))))
     permissions:
       contents: write
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 120
     environment: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'internal') && 'android-internal' || 'android-store-release' }}
     steps:
@@ -114,13 +114,18 @@ jobs:
         with:
           cache-mode: off
           install-bun: "true"
+          install-deps: "false"
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain
         with:
           cache-mode: off
+          gradle-cache-mode: restore
           install-screenshot-emulators: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.operation == 'release')) && 'true' || 'false' }}
+
+      - name: Install mobile release dependencies
+        run: node scripts/install-mobile-release-dependencies.mjs
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0

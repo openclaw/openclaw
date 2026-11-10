@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
+import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 import { build } from "tsdown";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -22,6 +23,7 @@ const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 const performanceSources = [
   "scripts/check-control-ui-performance.mts",
   "ui/config/control-ui-startup-assets.ts",
+  "ui/config/control-ui-asset-compression.ts",
   "src/gateway/control-ui-route-preloads.ts",
   "src/shared/non-packaged-plugin-dirs.ts",
   ...[
@@ -29,6 +31,7 @@ const performanceSources = [
     "control-ui-i18n-config.ts",
     "control-ui-i18n-config.json",
     "control-ui-module-attribution.mts",
+    "control-ui-script-coverage.mts",
     "control-ui-optional-assets.ts",
     "record-shared.mjs",
     "regexp.mjs",
@@ -49,7 +52,7 @@ function compileFixture(root: string, entry: string[], options: Parameters<typeo
     dts: false,
     clean: false,
     treeshake: false,
-    deps: { neverBundle: ["pako", "@openclaw/fs-safe"] },
+    deps: { neverBundle: ["pako", "libdeflate", "@openclaw/fs-safe"] },
     outExtensions: () => ({ js: ".js" }),
     outputOptions: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
     logLevel: "silent",
@@ -131,6 +134,11 @@ describe("Control UI performance budgets", () => {
     fs.symlinkSync(
       fs.realpathSync(path.resolve("ui/node_modules/pako")),
       path.join(rootDir, "node_modules/pako"),
+      "junction",
+    );
+    fs.symlinkSync(
+      fs.realpathSync(path.resolve("ui/node_modules/libdeflate")),
+      path.join(rootDir, "node_modules/libdeflate"),
       "junction",
     );
     const baselinePath = path.join(rootDir, baselineName);
@@ -226,6 +234,23 @@ describe("Control UI performance budgets", () => {
     ).toEqual(["assets/index-abc.css", "assets/index-abc.js", "assets/runtime-def.js"]);
   });
 
+  it("caps inline document bytes alongside the external startup assets", () => {
+    const { distDir } = createStartupFixture();
+    const metrics = collectMetrics(distDir);
+    expect(metrics.document).toEqual({
+      rawBytes: Buffer.byteLength(startupHtml),
+      gzipBytes: gzipSync(startupHtml).byteLength,
+    });
+    expect(
+      evaluateBudgets(metrics, { ...CONTROL_UI_PERFORMANCE_BUDGETS, documentGzipBytes: 1 }),
+    ).toContainEqual({
+      metric: "document gzip",
+      actual: metrics.document.gzipBytes,
+      limit: 1,
+      unit: "bytes",
+    });
+  });
+
   it("counts identity bytes for each missing compression sidecar", () => {
     const { distDir } = createStartupFixture();
     fs.unlinkSync(path.join(distDir, "assets/index-a.js.gz"));
@@ -234,6 +259,63 @@ describe("Control UI performance budgets", () => {
       js: { rawBytes: 100, gzipBytes: 100, brotliBytes: 30 },
       css: { rawBytes: 50, gzipBytes: 15, brotliBytes: 50 },
     });
+  });
+
+  it("ignores generated asset renames but budgets real code growth and reports served bytes", () => {
+    const buildFixture = (hash: string, extra = "", sidecars = true) => {
+      const { distDir, writeHtml } = createDistFixture();
+      const entry = `index-${hash}.js`;
+      const dependency = `runtime-outputxx.solid-${hash}.js`;
+      const css = `index-${hash}.css`;
+      writeHtml(
+        `<script type="module" src="./assets/${entry}"></script><link rel="stylesheet" href="./assets/${css}">`,
+      );
+      for (const [name, source] of [
+        [
+          entry,
+          `import "./${dependency}";const lazy = () => import("./${dependency}");console.log(lazy);${extra}`,
+        ],
+        [dependency, "console.log('runtime');"],
+        [css, ":root{color:rebeccapurple}"],
+      ] as const) {
+        const file = path.join(distDir, "assets", name);
+        fs.writeFileSync(file, source);
+        if (!sidecars) {
+          continue;
+        }
+        fs.writeFileSync(`${file}.gz`, gzipSync(source));
+        fs.writeFileSync(
+          `${file}.br`,
+          brotliCompressSync(source, {
+            params: { [constants.BROTLI_PARAM_QUALITY]: 11 },
+          }),
+        );
+      }
+      return collectMetrics(distDir);
+    };
+    const base = buildFixture("AbC_d-12");
+    const renamed = buildFixture("98ZYxWvu");
+    expect(renamed.startup.js.gzipBytes).toBe(base.startup.js.gzipBytes);
+    expect(renamed.startup.js.brotliBytes).toBe(base.startup.js.brotliBytes);
+    expect(renamed.startup.js.rawBytes).toBe(base.startup.js.rawBytes);
+    expect(renamed.startup.js.servedGzipBytes).not.toBe(base.startup.js.gzipBytes);
+    expect(formatReport(renamed)).toContain(`served ${renamed.startup.js.servedGzipBytes} B gzip`);
+    const identity = buildFixture("87654321", "", false);
+    expect(identity.startup.js.gzipBytes).toBe(base.startup.js.gzipBytes);
+    expect(identity.startup.js.brotliBytes).toBe(base.startup.js.brotliBytes);
+    expect(identity.startup.js.servedGzipBytes).toBe(identity.startup.js.rawBytes);
+    const grown = buildFixture(
+      "abcdefgh",
+      `console.log(${JSON.stringify(Array.from({ length: 100 }, (_, i) => `value-${i}`).join(" "))});`,
+    );
+    expect(grown.startup.js.gzipBytes).toBeGreaterThan(base.startup.js.gzipBytes);
+    expect(grown.startup.js.brotliBytes).toBeGreaterThan(base.startup.js.brotliBytes);
+    expect(
+      evaluateBudgets(grown, {
+        ...CONTROL_UI_PERFORMANCE_BUDGETS,
+        startupJsGzipBytes: base.startup.js.gzipBytes,
+      }),
+    ).toEqual([expect.objectContaining({ metric: "startup JS gzip" })]);
   });
 
   it("counts route boot preloads once without changing the initial-entry budget", () => {
@@ -502,15 +584,54 @@ describe("Control UI performance budgets", () => {
         }
       };
       writeBytes(base, cap + 100);
-      for (const growth of [-1, 0, 192, 193]) {
+      for (const growth of [-1, 0, 64, 65]) {
         writeBytes(head, cap + 100 + growth);
-        const result = jsonCli(head, ["--base-dist", base.distDir], growth > 192 ? 1 : 0);
-        if (growth > 192) {
+        const result = jsonCli(head, ["--base-dist", base.distDir], growth > 64 ? 1 : 0);
+        if (growth > 64) {
           expect(result.report).toContain("base already exceeds the cap");
-          expect(result.report).toContain("no growth beyond 192 B build variance");
+          expect(result.report).toContain("no growth beyond 64 B build variance");
         } else {
           expect(result.violations).toEqual([]);
         }
+      }
+    },
+  );
+
+  it.each(["report-only", "over-budget base"])(
+    "annotates document and total CSS overages in Actions with %s",
+    (mode) => {
+      const fixture = createCliFixture();
+      fixture.writeHtml(
+        startupHtml +
+          Array.from({ length: 1024 }, (_, index) =>
+            createHash("sha256").update(String(index)).digest("hex"),
+          ).join(""),
+      );
+      for (let index = 0; index < 32; index++) {
+        fixture.writeAsset(
+          "extra-" + index + ".css",
+          Math.ceil(CONTROL_UI_PERFORMANCE_BUDGETS.totalCssRawBytes / 32) + 1,
+          Math.ceil(CONTROL_UI_PERFORMANCE_BUDGETS.totalCssGzipBytes / 32) + 1,
+        );
+      }
+      const summary = path.join(fixture.rootDir, "summary.md");
+      const args = mode === "report-only" ? ["--report-only"] : ["--base-dist", fixture.distDir];
+      const result = fixture.run(["--json", ...args], {
+        GITHUB_ACTIONS: "true",
+        GITHUB_STEP_SUMMARY: summary,
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      const report = JSON.parse(result.stdout);
+      if (mode === "over-budget base") {
+        expect(report.violations).toEqual([]);
+      }
+      expect(result.stderr).toContain("::warning file=");
+      const stepSummary = fs.readFileSync(summary, "utf8");
+      for (const metric of ["document gzip", "total CSS gzip", "total CSS raw"]) {
+        expect(report.report).toContain(`warning: ${metric}`);
+        expect(result.stderr).toContain(`${metric} is `);
+        expect(stepSummary).toContain(`${metric} is `);
       }
     },
   );
@@ -530,7 +651,7 @@ describe("Control UI performance budgets", () => {
       expect.objectContaining({
         metric: "ru locale catalog pair JS gzip",
         actual: 310_193,
-        limit: 310_192,
+        limit: 310_064,
       }),
     ]);
   });
@@ -619,8 +740,8 @@ describe("Control UI performance budgets", () => {
   });
 
   it.each([
-    { baselineBytes: 315_881, limit: 316_585 },
-    { baselineBytes: 311_544, limit: 312_248 },
+    { baselineBytes: 315_881, limit: 316_457 },
+    { baselineBytes: 311_544, limit: 312_120 },
   ])(
     "enforces approved startup allowances for a $baselineBytes B baseline",
     ({ baselineBytes, limit }) => {
@@ -636,7 +757,7 @@ describe("Control UI performance budgets", () => {
         budgets: { startupJsGzipBytes: 325_131 },
         startupBudgetBaseline: { startupJsGzipBytes: baselineBytes },
         startupJsTolerance: 512,
-        startupJsBuildVariance: 192,
+        startupJsBuildVariance: 64,
         metrics: { startup: { js: { gzipBytes: limit, requests: 2 } } },
         violations: [],
       });
@@ -921,7 +1042,7 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
     }
     const uiDependencies = at("ui/node_modules");
     fs.mkdirSync(uiDependencies);
-    for (const name of ["vite", "pako"]) {
+    for (const name of ["vite", "pako", "libdeflate"]) {
       fs.symlinkSync(
         fs.realpathSync(path.join(repoRoot, "ui/node_modules", name)),
         path.join(uiDependencies, name),
@@ -937,7 +1058,7 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
     const { bundles } = await compileFixture(
       root,
       [...cliNames.map((name) => `scripts/${name}.mts`), "ui/vite.config.ts"],
-      { deps: { neverBundle: ["pako", "@openclaw/fs-safe"] } },
+      { deps: { neverBundle: ["pako", "libdeflate", "@openclaw/fs-safe"] } },
     );
     for (const bundle of bundles) {
       await bundle[Symbol.asyncDispose]();

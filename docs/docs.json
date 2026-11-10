@@ -2112,6 +2112,7 @@
                     "group": "Web search",
                     "pages": [
                       "tools/web",
+                      "tools/deep-research",
                       "tools/brave-search",
                       "tools/duckduckgo-search",
                       "tools/exa-search",
@@ -2303,7 +2304,7 @@
                   },
                   {
                     "group": "Decision models",
-                    "pages": ["providers/liquid-ai"]
+                    "pages": ["providers/liquid-ai", "providers/rerank"]
                   },
                   {
                     "group": "Speech and audio",
@@ -2896,6 +2897,7 @@
                       "cli/channels",
                       "cli/directory",
                       "cli/pairing",
+                      "cli/pair",
                       "cli/qr",
                       "cli/users",
                       "cli/voicecall"
@@ -3265,6 +3267,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.11.2",
                   "releases/2026.11.1",
                   "releases/2026.10.10",
                   "releases/2026.10.9",

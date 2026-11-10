@@ -219,21 +219,27 @@ jobs:
         with:
           cache-mode: off
           install-bun: "false"
+          install-deps: "false"
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install mobile release dependencies
+        run: node scripts/install-mobile-release-dependencies.mjs
+
+      - name: Configure release bundle location
+        run: echo "BUNDLE_APP_CONFIG=$RUNNER_TEMP/ios-release-bundle-config" >> "$GITHUB_ENV"
 
       - name: Setup Ruby
         uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "4.0.7"
           bundler: "4.0.23"
-          bundler-cache: false
+          bundler-cache: true
           working-directory: apps/ios
 
-      - name: Install locked Fastlane bundle
+      - name: Verify locked Fastlane bundle
         working-directory: apps/ios
         run: |
           set -euo pipefail
-          bundle _4.0.23_ install --jobs 4 --retry 3
           bundle _4.0.23_ check
           test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.2"
 
@@ -290,6 +296,18 @@ jobs:
           path: &ios_release_packages_cache_path ~/Library/Developer/Xcode/DerivedData/OpenClaw-*/SourcePackages
           key: ios-release-packages-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.watch-rtc-inputs.outputs.xcode }}-${{ hashFiles('apps/ios/**/Package.resolved', 'apps/ios/project.yml', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}
 
+      - name: Restore iOS release compilation cache
+        id: ios-compilation-cache
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &ios_release_compilation_cache_path ${{ runner.temp }}/openclaw-ios-release-cas
+          key: ios-release-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.watch-rtc-inputs.outputs.xcode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # Compiler input hashes own source invalidation; keep cross-release reuse.
+          restore-keys: |
+            ios-release-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.watch-rtc-inputs.outputs.xcode }}-
+
       - name: Create apps-signing read token
         id: apps-signing-token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -338,6 +356,7 @@ jobs:
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           IOS_RELEASE_DESTINATION: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') || inputs.operation == 'testflight') && 'testflight' || 'app-store' }}
           OPENCLAW_TESTFLIGHT_GROUP_ID: ${{ vars.OPENCLAW_TESTFLIGHT_GROUP_ID }}
+          OPENCLAW_IOS_COMPILATION_CACHE_DIR: ${{ runner.temp }}/openclaw-ios-release-cas
           SCAN_APP_NAME: OpenClaw
           SCAN_DEPLOYMENT_TARGET_VERSION: "18.0"
           OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
@@ -348,6 +367,15 @@ jobs:
             pnpm ios:release:upload -- \
             --destination "$IOS_RELEASE_DESTINATION" \
             --recovery-dir "$RUNNER_TEMP/ios-release-recovery"
+
+      - name: Save iOS release compilation cache
+        if: steps.ios-compilation-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *ios_release_compilation_cache_path
+          key: ${{ steps.ios-compilation-cache.outputs.cache-primary-key }}
 
       - name: Save Watch RTC release libraries
         if: steps.watch-rtc-cache.outputs.cache-hit != 'true'

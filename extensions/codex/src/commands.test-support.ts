@@ -20,12 +20,13 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
+  cleanupSessionStateForTest,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import * as computerUse from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import * as models from "./app-server/models.js";
@@ -76,10 +77,14 @@ export const skillGroup = <S extends JsonValue, E extends JsonValue = never>(
   errors,
 });
 
-async function cleanupCodexState(restoreMocks = false) {
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  if (restoreMocks) {
+async function cleanupCodexState(options: { restoreMocks?: boolean; stateDir?: string } = {}) {
+  if (options.stateDir) {
+    await cleanupSessionStateForTest({ stateDir: options.stateDir });
+  } else {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+  }
+  if (options.restoreMocks) {
     vi.restoreAllMocks();
   }
   clearRuntimeAuthProfileStoreSnapshots();
@@ -122,7 +127,7 @@ export function useCodexControlTestState(options: {
       resetPluginRuntimeStateForTest();
     }
     options.cleanup();
-    await cleanupCodexState(options.restoreMocks);
+    await cleanupCodexState({ restoreMocks: options.restoreMocks });
     await fs.rm(root, { recursive: true, force: true });
   });
 }
@@ -131,6 +136,7 @@ export function useCodexCommandTestState(options: {
   onSetup: (tempDir: string) => void;
   beforeCleanup?: () => void;
 }): void {
+  let tempDir: string;
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
       options.beforeCleanup?.();
@@ -140,17 +146,22 @@ export function useCodexCommandTestState(options: {
       codexDiagnosticsFeedbackState.pendingConfirmations.clear();
       codexDiagnosticsFeedbackState.pendingTokensByScope.clear();
       resetSharedCodexAppServerClientForTests();
-      await cleanupCodexState();
+      await cleanupCodexState({ stateDir: tempDir });
       cleanup();
     }),
   );
 
   beforeEach(() => {
     resetCodexTestBindingStore();
-    const tempDir = tempDirs.make("openclaw-codex-command-");
+    tempDir = tempDirs.make("openclaw-codex-command-");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     setRuntimeConfigSnapshot({});
     options.onSetup(tempDir);
+  });
+  afterAll(async () => {
+    // Cases release their databases; the file owns the retained worker code.
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
   });
 }
 

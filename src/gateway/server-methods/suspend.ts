@@ -8,7 +8,7 @@ import {
   validateGatewaySuspendHandoffParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  armGatewaySuspendHandoff,
+  requestGatewaySuspendHandoff,
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
   resumeGatewaySuspend,
@@ -17,6 +17,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
 import { respondError } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext } from "./shared-types.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -57,7 +58,8 @@ function respondSuspendStatus(
 }
 
 export const suspendHandlers: GatewayRequestHandlers = {
-  "gateway.suspend.handoff": ({ respond, params, context, client }) => {
+  "gateway.suspend.handoff": async (options) => {
+    const { respond, params, context, client } = options;
     if (!validateGatewaySuspendHandoffParams(params)) {
       respond(false, undefined, invalidParams("gateway.suspend.handoff"));
       return;
@@ -74,13 +76,17 @@ export const suspendHandlers: GatewayRequestHandlers = {
       respondError(respond, ErrorCodes.UNAVAILABLE, "gateway host does not own process exit");
       return;
     }
-    const result = armGatewaySuspendHandoff({
+    const result = await requestGatewaySuspendHandoff({
       suspensionId: params.suspensionId.trim(),
       owner,
       commit: params.commit,
+      assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
     });
     if (!result.ok) {
-      respondError(respond, ErrorCodes.UNAVAILABLE, result.error);
+      context.logGateway.warn(`gateway.suspend.handoff refused: ${result.error.message}`);
+      respondError(respond, ErrorCodes.UNAVAILABLE, result.error.message, {
+        details: result.error.details,
+      });
       return;
     }
     suspendLog.info(

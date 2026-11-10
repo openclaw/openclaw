@@ -286,6 +286,7 @@ export async function sendPreparedChatQueueItem(
         const ack = await requestChatSend(host, {
           message,
           workContext: prepared.workContext,
+          appContext: prepared.appContext,
           mentions: submitted.mentions,
           attachments: attachments.length ? attachments : undefined,
           runId,

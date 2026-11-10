@@ -9,7 +9,7 @@
 // Gateway has signed a newer one. A replaced server key is retired by that binding_seq alone;
 // no list of revoked keys exists. Withheld or stale freshness is refused under the "enforce"
 // policy and only reported under "report"; positive evidence of a stale binding always refuses.
-import type { ServerBindingBody } from "../statements/types.js";
+import type { ProtocolVersions, ServerBindingBody } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
 import { verifyMembershipSnapshot } from "../statements/verify.js";
 
@@ -34,7 +34,11 @@ export function isOlderSnapshot(a: SnapshotOrder, b: SnapshotOrder): boolean {
 /** What a client keeps per origin. */
 export type FreshnessState = {
   claw_id: string;
-  /** Newest verified snapshot seen: snapshots older than this are replays. */
+  /**
+   * Independent high-water facts from verified snapshots: newest (seq, issued_at) and
+   * highest binding_seq. This unsigned marker only refuses replays/retired bindings;
+   * it never supplies membership or protocols for authorization.
+   */
   snapshot: { seq: number; issued_at: number; binding_seq: number } | null;
 };
 
@@ -56,7 +60,12 @@ export type FreshnessAssessment = {
   state: FreshnessState;
   /** Verdict for dialing this binding. */
   verdict:
-    | { ok: true; fresh: true; snapshotAge: number }
+    /**
+     * Fresh evidence. `protocols` is the Gateway's signed version list from that snapshot: the
+     * only input `selectVersion` may use. Without fresh evidence there is no list; the Gateway's
+     * own enforcement is what keeps a client off a version it refuses (docs/versioning.md).
+     */
+    | { ok: true; fresh: true; snapshotAge: number; protocols: ProtocolVersions }
     | { ok: true; fresh: false; gap: FreshnessGap }
     | { ok: false; code: "stale_binding" | "freshness_unavailable"; detail: string };
 };
@@ -86,11 +95,17 @@ export async function assessFreshness(
   const snapshot = served ? await verifiedSnapshot(evidence.snapshot, binding) : null;
   const storable =
     snapshot && snapshot.issued_at <= now + SNAPSHOT_CLOCK_SKEW_SECONDS ? snapshot : null;
-  const state: FreshnessState = {
+  // A snapshot from the future is never stored: it would make honest snapshots look replayed.
+  const state = mergeFreshnessState(base, {
     claw_id: binding.claw_id,
-    // A snapshot from the future is never stored: it would make every honest snapshot look replayed.
-    snapshot: newestSnapshot(base?.snapshot ?? null, storable),
-  };
+    snapshot: storable
+      ? {
+          seq: storable.seq,
+          issued_at: storable.issued_at,
+          binding_seq: storable.binding_seq,
+        }
+      : null,
+  });
   const result = { state };
   // The Gateway has signed a newer binding than the one served: positive evidence of a replay.
   const highest = Math.max(snapshot?.binding_seq ?? 0, base?.snapshot?.binding_seq ?? 0);
@@ -111,7 +126,12 @@ export async function assessFreshness(
   if (gap === null) {
     return {
       ...result,
-      verdict: { ok: true, fresh: true, snapshotAge: now - snapshot!.issued_at },
+      verdict: {
+        ok: true,
+        fresh: true,
+        snapshotAge: now - snapshot!.issued_at,
+        protocols: snapshot!.protocols,
+      },
     };
   }
   if (ctx.policy === "enforce") {
@@ -120,7 +140,12 @@ export async function assessFreshness(
   return { ...result, verdict: { ok: true, fresh: false, gap } };
 }
 
-type SnapshotFacts = { seq: number; issued_at: number; binding_seq: number };
+type SnapshotFacts = {
+  seq: number;
+  issued_at: number;
+  binding_seq: number;
+  protocols: ProtocolVersions;
+};
 
 // The snapshot's facts when it is well formed and signed by this binding's K_gw for this claw.
 async function verifiedSnapshot(
@@ -135,8 +160,8 @@ async function verifiedSnapshot(
   if (!verified.ok) {
     return null;
   }
-  const { seq, issued_at, binding_seq } = parsed.statement.body;
-  return { seq, issued_at, binding_seq };
+  const { seq, issued_at, binding_seq, protocols } = parsed.statement.body;
+  return { seq, issued_at, binding_seq, protocols };
 }
 
 // Why the snapshot is not fresh evidence for this binding, or null when it is.
@@ -164,18 +189,26 @@ function freshnessGap(
   return null;
 }
 
-// The newer of the stored marker and a verified snapshot (by seq, then issued_at).
-function newestSnapshot(
-  seen: FreshnessState["snapshot"],
-  snapshot: SnapshotFacts | null,
-): FreshnessState["snapshot"] {
-  if (!snapshot) {
-    return seen;
+/** Merge only verified local facts, including evidence retained after a refused refresh. */
+export function mergeFreshnessState(
+  current: FreshnessState | null | undefined,
+  candidate: FreshnessState,
+): FreshnessState {
+  const before = current?.claw_id === candidate.claw_id ? current.snapshot : null;
+  const next = candidate.snapshot;
+  if (!before) {
+    return candidate;
   }
-  const marker = {
-    seq: snapshot.seq,
-    issued_at: snapshot.issued_at,
-    binding_seq: snapshot.binding_seq,
+  if (!next) {
+    return { claw_id: candidate.claw_id, snapshot: before };
+  }
+  const newest = isOlderSnapshot(before, next) ? next : before;
+  return {
+    claw_id: candidate.claw_id,
+    snapshot: {
+      seq: newest.seq,
+      issued_at: newest.issued_at,
+      binding_seq: Math.max(before.binding_seq, next.binding_seq),
+    },
   };
-  return seen && !isOlderSnapshot(seen, marker) ? seen : marker;
 }

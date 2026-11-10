@@ -39,15 +39,18 @@ function observeDocuments(page: Page) {
   return () => count;
 }
 
-async function traceHeadFrames(page: Page, success: boolean) {
+async function traceProbeFrames(page: Page, success: boolean) {
   await page.addInitScript((expectSuccess) => {
-    const observed = window as Window & { completedHeadFrames?: number };
+    const observed = window as Window & { completedProbeFrames?: number };
     const originalFetch = window.fetch;
     window.fetch = async (...args) => {
       const response = await originalFetch(...args);
-      if (args[1]?.method === "HEAD" && (expectSuccess ? response.ok : response.status === 503)) {
+      if (
+        new Headers(args[1]?.headers).get("X-OpenClaw-Reachability-Probe") === "1" &&
+        (expectSuccess ? response.ok : response.status === 503)
+      ) {
         requestAnimationFrame(() => {
-          observed.completedHeadFrames = (observed.completedHeadFrames ?? 0) + 1;
+          observed.completedProbeFrames = (observed.completedProbeFrames ?? 0) + 1;
         });
       }
       return response;
@@ -55,7 +58,7 @@ async function traceHeadFrames(page: Page, success: boolean) {
   }, success);
   return () =>
     page.evaluate(
-      () => (window as Window & { completedHeadFrames?: number }).completedHeadFrames ?? 0,
+      () => (window as Window & { completedProbeFrames?: number }).completedProbeFrames ?? 0,
     );
 }
 
@@ -77,15 +80,19 @@ async function installChunkFailure(
   modulePath: string,
   options: { manualProbe?: Promise<void>; automaticReload?: boolean } = {},
 ) {
-  let headCount = 0;
+  const failure = await failControlUiModuleForDocuments(
+    page,
+    controlUiE2eBuiltModuleRequest(modulePath),
+  );
+  let probeCount = 0;
   let recoveryProbeCount = 0;
   let documentAvailable = options.automaticReload === true;
   await page.route("**/*", async (route) => {
-    if (route.request().method() !== "HEAD") {
+    if (route.request().headers()["x-openclaw-reachability-probe"] !== "1") {
       await route.fallback();
       return;
     }
-    headCount += 1;
+    probeCount += 1;
     // Automatic recovery keeps probing while offline. Manual-retry cases own
     // an outage phase, not a single failed request.
     if (!documentAvailable) {
@@ -96,13 +103,9 @@ async function installChunkFailure(
     await options.manualProbe;
     await route.fallback();
   });
-  const failure = await failControlUiModuleForDocuments(
-    page,
-    controlUiE2eBuiltModuleRequest(modulePath),
-  );
   return {
     chunkDocumentCount: failure.documentCount,
-    headCount: () => headCount,
+    probeCount: () => probeCount,
     recoveryProbeCount: () => recoveryProbeCount,
     restoreDocument: () => {
       documentAvailable = true;
@@ -236,14 +239,14 @@ suite.define(() => {
       };
       await page.goto(suite.server.baseUrl);
       await gateway.waitForRequest("connect");
-      await page.locator(".connect-splash").waitFor();
+      await page.locator(".gateway-connection-view").waitFor();
       expect(failure.chunkDocumentCount()).toBe(0);
       await rejectLogin();
       const error = page.locator(".lazy-view-error");
       await error.waitFor();
       expect(await error.textContent()).toContain("Failed to fetch dynamically imported module");
       expect(failure.chunkDocumentCount()).toBe(1);
-      await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+      await expect.poll(failure.probeCount).toBeGreaterThanOrEqual(1);
       await retryThroughReload(page, error, failure, "Reload");
       await rejectLogin();
       await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
@@ -277,7 +280,7 @@ suite.define(() => {
       const error = await expectRealChunkFailure(page, "terminal panel");
       const failedPathname = new URL(page.url()).pathname;
       expect(failure.chunkDocumentCount()).toBe(1);
-      await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+      await expect.poll(failure.probeCount).toBeGreaterThanOrEqual(1);
       expect(documentRequests()).toBe(1);
 
       await retryThroughReload(page, error, failure);
@@ -447,7 +450,7 @@ suite.define(() => {
         expect(await testCase.close(page).isVisible()).toBe(true);
         await composer.click({ position: { x: 8, y: 8 } });
         expect(await composer.inputValue()).toBe("Keep working");
-        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+        await expect.poll(failure.probeCount).toBeGreaterThanOrEqual(1);
 
         await retryThroughReload(page, error, failure);
       }
@@ -521,7 +524,7 @@ suite.define(() => {
   it("recovers the native titlebar visibly after its chunk fails", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       await page.clock.install();
-      const completedHeadFrames = await traceHeadFrames(page, false);
+      const completedProbeFrames = await traceProbeFrames(page, false);
       await installNativeWebChrome(page);
       const failure = await installChunkFailure(page, nativeTitlebarModule);
       await installMockGateway(page, {
@@ -534,18 +537,18 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await page.locator(".sidebar-rail").waitFor({ state: "attached" });
       const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
-      await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+      await expect.poll(failure.probeCount).toBeGreaterThanOrEqual(1);
       expect(failure.chunkDocumentCount()).toBe(1);
-      await expect.poll(completedHeadFrames).toBeGreaterThanOrEqual(1);
+      await expect.poll(completedProbeFrames).toBeGreaterThanOrEqual(1);
       await pauseVirtualClock(page);
-      const failedProbes = await completedHeadFrames();
-      // Cross the recovery owner's maximum backoff so another real HEAD
+      const failedProbes = await completedProbeFrames();
+      // Cross the recovery owner's maximum backoff so another real document probe
       // fails while the error and its dismissal action remain available.
       await page.clock.runFor(15_001);
       await expect
         .poll(async () => {
           await page.clock.runFor(17);
-          return completedHeadFrames();
+          return completedProbeFrames();
         })
         .toBeGreaterThan(failedProbes);
       expect(documentRequests()).toBe(1);

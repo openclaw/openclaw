@@ -7,7 +7,7 @@ import { wrapSqliteWorkerError } from "./sqlite-worker-error.js";
 type AdmissionWait = {
   readonly deadlineAtMs?: number;
   assertActive?: () => void;
-  /** Outer cancellation stops here; outer deadlines still apply. */
+  /** Outer cancellation and deadlines stop here; the scope brings its own short budget. */
   settlesCancellation?: true;
 };
 type AdmissionWaitScope = { wait: AdmissionWait; parent?: AdmissionWaitScope; active: boolean };
@@ -37,9 +37,15 @@ export function withSqliteDatabaseAdmissionWait<T>(wait: AdmissionWait, run: () 
   }
 }
 
-/** Releasing or retiring cancelled work must finish; only its deadline still bounds the wait. */
+// Long enough for a live host to answer, short enough not to park a dying worker.
+const SETTLEMENT_GRACE_MS = 10_000;
+
+/** Releasing or retiring cancelled or expired work must finish within its own budget. */
 export function withSqliteDatabaseAdmissionSettlement<T>(run: () => T): T {
-  return withSqliteDatabaseAdmissionWait({ settlesCancellation: true }, run);
+  return withSqliteDatabaseAdmissionWait(
+    { settlesCancellation: true, deadlineAtMs: Date.now() + SETTLEMENT_GRACE_MS },
+    run,
+  );
 }
 
 export function readSqliteDatabaseAdmissionDeadline(): number | undefined {
@@ -52,6 +58,9 @@ export function readSqliteDatabaseAdmissionDeadline(): number | undefined {
     const value = scope.wait.deadlineAtMs;
     if (value !== undefined) {
       deadline = Math.min(deadline ?? Infinity, value);
+    }
+    if (scope.wait.settlesCancellation) {
+      break;
     }
   }
   return deadline;

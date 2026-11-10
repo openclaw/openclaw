@@ -14,6 +14,7 @@ import type {
   ScopeUpgradeBinding,
 } from "@openclaw/gateway-client/scope-upgrade";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { CONTROL_UI_OPERATOR_SCOPES } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { trackForegroundActivity } from "../app/foreground-activity.ts";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
 import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
@@ -36,7 +37,6 @@ import {
   deriveLegacyV4RecoveryScope,
   selectBrowserGatewayConnectAuth,
   CONTROL_UI_OPERATOR_ROLE,
-  CONTROL_UI_OPERATOR_SCOPES,
   type ConnectPlan,
   type GatewayBrowserClientOptions,
   type GatewayEventListener,
@@ -243,10 +243,7 @@ export class GatewayBrowserClient {
       onCallbackError: (label, error) => console.error(`[gateway] ${label} handler error:`, error),
       handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
       reconnect: { initialMs: 800, multiplier: 1.7, maxMs: 15_000 },
-      nowMs: () =>
-        typeof performance !== "undefined" && typeof performance.now === "function"
-          ? performance.now()
-          : Date.now(),
+      nowMs: () => performance.now(),
     });
   }
 

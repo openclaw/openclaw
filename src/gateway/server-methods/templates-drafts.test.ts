@@ -104,6 +104,23 @@ describe("Template draft human authority", () => {
   });
 
   it.each(["synthetic", "disconnected", "labs-off"])(
+    "does not turn an agent-authored proposal into %s publication authority",
+    async (condition) => {
+      const reply = await requestDraft(
+        "publish",
+        "/not-a-real-template-draft-workspace",
+        {
+          draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
+          reviewToken: "a".repeat(64),
+        },
+        condition,
+      );
+      expect(reply[0]).toBe(false);
+      expect(reply[2]).toMatchObject({ code: "FORBIDDEN" });
+    },
+  );
+
+  it.each(["synthetic", "disconnected", "labs-off"])(
     "refuses %s creation before touching the workspace",
     async (condition) => {
       const reply = await requestDraft(
@@ -228,7 +245,7 @@ packages:
   - { kind: skill, source: clawhub, ref: "@maker/sources", version: 1.2.3 }
   - { kind: plugin, source: clawhub, ref: "@maker/github", version: 2.0.0 }
 mcpServers: { research: { command: research-mcp } }
-cronJobs:
+automations:
   - id: weekly-recap
     schedule: { cron: "0 9 * * 1", timezone: UTC }
     session: isolated

@@ -33,7 +33,11 @@ import {
   preparePersistedInstalledPluginIndexCacheEntry,
 } from "./installed-plugin-index-record-state.js";
 import { withoutPluginInstallRecords } from "./installed-plugin-index-records.js";
-import { foldPluginSourceSnapshotChanges } from "./installed-plugin-index-source-snapshots.js";
+import {
+  foldPluginSourceSnapshotChanges,
+  listLaterPluginSourceSnapshotChanges,
+} from "./installed-plugin-index-source-snapshots.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
 import {
   clearRetainedManagedNpmInstallMarker,
@@ -42,6 +46,7 @@ import {
   restoreRetainedManagedNpmInstallMarkers,
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import type { PluginSourceSnapshotIndexChange } from "./plugin-source-snapshot.types.js";
 import {
   assertPluginCohortArtifactDirectory,
   readPluginCohortArtifactIdentity as artifactIdentity,
@@ -50,6 +55,7 @@ import {
   ownsPluginCohortRetentionMarker as ownsRetentionMarker,
   readPluginCohortRetentionMarker,
 } from "./update-cohort-artifacts.js";
+import { formatKeptChanges, recordKeptChanges } from "./update-cohort-kept-changes.js";
 
 type ArtifactIdentity = NonNullable<PluginCohortRecovery["priorArtifacts"][number]["identity"]>;
 type CohortOptions = { env: NodeJS.ProcessEnv; fence: UpdateRecoveryFence };
@@ -78,26 +84,34 @@ async function readMarker(packageDir: string): Promise<string | null> {
   }
 }
 
-async function assertArtifact(
+/** False when a later writer replaced the payload or created an originally absent one. */
+async function artifactUnchanged(
   packageDir: string,
   expected: ArtifactIdentity | null,
-): Promise<void> {
+): Promise<boolean> {
   if (expected === null) {
     try {
       await fs.lstat(packageDir);
     } catch (error) {
       if (hasErrnoCode(error, "ENOENT")) {
-        return;
+        return true;
       }
       throw error;
     }
-    throw new Error(
-      `Plugin cohort artifact changed: ${packageDir}. Originally absent payload now exists.`,
-    );
+    return false;
   }
-  if (!isDeepStrictEqual(artifactIdentity(packageDir), expected)) {
+  return isDeepStrictEqual(artifactIdentity(packageDir), expected);
+}
+
+async function assertArtifact(
+  packageDir: string,
+  expected: ArtifactIdentity | null,
+): Promise<void> {
+  if (!(await artifactUnchanged(packageDir, expected))) {
     throw new Error(
-      `Plugin cohort artifact changed: ${packageDir}. Retained recovery was left intact.`,
+      expected === null
+        ? `Plugin cohort artifact changed: ${packageDir}. Originally absent payload now exists.`
+        : `Plugin cohort artifact changed: ${packageDir}. Retained recovery was left intact.`,
     );
   }
 }
@@ -125,7 +139,7 @@ function assertSource(pair: PluginCohortRecoveryPair, options: CohortOptions): v
   }
 }
 
-/** Captured after the database backup, before candidate Doctor can mutate plugins. */
+/** Retain plugin preimages before database capture and candidate Doctor mutations. */
 export async function beginUpdatePluginCohort(
   params: CohortOptions & {
     runId: string;
@@ -135,7 +149,8 @@ export async function beginUpdatePluginCohort(
   },
 ): Promise<PluginCohortRecoveryPair> {
   return await withPluginLifecycleLease(
-    { env: params.env, assertCurrent: params.fence.assertCurrent },
+    // Reservation precedes candidate Doctor; lease bookkeeping must not migrate its source.
+    { env: params.env, schemaPolicy: "existing", assertCurrent: params.fence.assertCurrent },
     async (lease) => {
       const fence = {
         assertCurrent: () => {
@@ -353,13 +368,30 @@ export function recordPluginCohortRetentionMarker(
   });
 }
 
-/** Restore only matching cohort deltas. A later writer keeps its values and blocks old-core readiness. */
+/** Install records are keyed by installation owner; snapshots by plugin ID. */
+function snapshotBelongsToInstallation(
+  restoration: PluginSourceSnapshotIndexChange,
+  installKey: string,
+): boolean {
+  const owners = [restoration.before?.installOwner, restoration.after?.installOwner].filter(
+    (owner) => owner !== undefined,
+  );
+  return owners.length > 0 ? owners.includes(installKey) : restoration.pluginId === installKey;
+}
+
+/**
+ * Restore only matching cohort deltas. A migration obligation, install record,
+ * source snapshot, package payload or config file that a later writer changed
+ * keeps that value; rollback restores the rest, completes, and records what it
+ * kept as a warning on the update run.
+ */
 export async function settleUpdatePluginCohort(
   params: CohortOptions & {
     runId: string;
     action: "commit" | "rollback";
     /** Repair proved the candidate serves; commit over a recorded rollback that restored nothing. */
     supersedeUnsettledRollback?: true;
+    onLaterDecisionsKept?: (warning: string) => void;
   },
 ): Promise<{ configPaths: string[] }> {
   params.fence.assertCurrent();
@@ -421,9 +453,10 @@ export async function settleUpdatePluginCohort(
       pair = writePluginCohortRecovery(pair, { ...pair.cohort, disposition: action }, fence, {
         env: params.env,
       });
+      const kept: string[] = [];
       if (action === "rollback") {
         const recordChanges = foldPluginCohortRecordPublications(pair.cohort.publications);
-        const sourceSnapshotRestorations = foldPluginSourceSnapshotChanges(
+        let sourceSnapshotRestorations = foldPluginSourceSnapshotChanges(
           pair.cohort.publications.flatMap((publication) =>
             publication.kind === "records" ? (publication.sourceSnapshots ?? []) : [],
           ),
@@ -431,10 +464,11 @@ export async function settleUpdatePluginCohort(
         if (migrations.length > 0) {
           const { restorePluginCohortMigrationPublications } =
             await import("../infra/deferred-plugin-migrations.js");
-          await restorePluginCohortMigrationPublications(migrations, {
+          const obligations = await restorePluginCohortMigrationPublications(migrations, {
             env: params.env,
             assertCurrent: fence.assertCurrent,
           });
+          kept.push(...obligations.map((id) => `plugin ${id} data/settings upgrade obligation`));
         }
         const publications = pair.cohort.publications.toReversed();
         for (let index = pair.cohort.settledPublications; index < publications.length; index++) {
@@ -442,10 +476,15 @@ export async function settleUpdatePluginCohort(
           if (publication.kind === "config") {
             const { restorePluginCohortConfigPublication } =
               await import("../config/plugin-cohort-recovery.js");
-            await restorePluginCohortConfigPublication(publication.file, {
+            const restored = await restorePluginCohortConfigPublication(publication.file, {
               env: params.env,
               assertCurrent: fence.assertCurrent,
             });
+            if (!restored) {
+              kept.push(`config file ${publication.file.filePath}`);
+              // Counting this file below means no later repair revisits it; record it first.
+              recordKeptChanges(params.runId, kept, params.env);
+            }
           }
           fence.assertCurrent();
           pair = writePluginCohortRecovery(
@@ -467,13 +506,42 @@ export async function settleUpdatePluginCohort(
           if (snapshot.path !== pair.reservation.source?.configPath) {
             throw new Error("Plugin cohort restoration selected a different configuration path.");
           }
+          // A later writer owns an installation whose record, plugin source snapshot or
+          // package files changed after publication. Keep its index state as it is now.
+          const keepPlugin = (installKey: string, what: string) => {
+            kept.push(`plugin ${installKey} ${what}`);
+            sourceSnapshotRestorations = sourceSnapshotRestorations.filter(
+              (restoration) => !snapshotBelongsToInstallation(restoration, installKey),
+            );
+          };
+          const laterSnapshots = listLaterPluginSourceSnapshotChanges(
+            await readPersistedInstalledPluginIndex({ env: params.env }),
+            sourceSnapshotRestorations,
+          );
+          for (const later of laterSnapshots) {
+            kept.push(`plugin ${later.pluginId} source snapshot`);
+            sourceSnapshotRestorations = sourceSnapshotRestorations.filter(
+              (restoration) => restoration.pluginId !== later.pluginId,
+            );
+          }
           for (const change of recordChanges.values()) {
             const current = currentRecords[change.pluginId];
             const alreadyRestored = isDeepStrictEqual(current, change.before);
-            if (!alreadyRestored && !isDeepStrictEqual(current, change.after)) {
-              throw new Error(
-                `Plugin ${change.pluginId} changed after the update; cohort recovery preserved it.`,
+            if (
+              laterSnapshots.some((later) => snapshotBelongsToInstallation(later, change.pluginId))
+            ) {
+              if (!alreadyRestored && !isDeepStrictEqual(current, change.after)) {
+                kept.push(`plugin ${change.pluginId} install record`);
+              }
+              // The kept record still installs this owner's other plugins at their later state.
+              sourceSnapshotRestorations = sourceSnapshotRestorations.filter(
+                (restoration) => !snapshotBelongsToInstallation(restoration, change.pluginId),
               );
+              continue;
+            }
+            if (!alreadyRestored && !isDeepStrictEqual(current, change.after)) {
+              keepPlugin(change.pluginId, "install record");
+              continue;
             }
             const before = change.before;
             if (before?.source === "npm" && before.installPath) {
@@ -484,10 +552,13 @@ export async function settleUpdatePluginCohort(
                   artifact.packageDir === beforePath &&
                   isDeepStrictEqual(artifact.record, before),
               );
-              if (!priorArtifact) {
-                throw new Error(`Plugin ${change.pluginId} has no matching retained artifact.`);
+              if (
+                !priorArtifact ||
+                !(await artifactUnchanged(priorArtifact.packageDir, priorArtifact.identity))
+              ) {
+                keepPlugin(change.pluginId, "original package files");
+                continue;
               }
-              await assertArtifact(priorArtifact.packageDir, priorArtifact.identity);
             }
             if (alreadyRestored) {
               continue;
@@ -502,7 +573,8 @@ export async function settleUpdatePluginCohort(
                 (entry) => entry.pluginId === change.pluginId && entry.packageDir === afterPath,
               );
               if (!artifact && !priorArtifact) {
-                throw new Error(`Plugin ${change.pluginId} has no matching published artifact.`);
+                keepPlugin(change.pluginId, "package files");
+                continue;
               }
               let exists = true;
               try {
@@ -514,12 +586,10 @@ export async function settleUpdatePluginCohort(
                 // Caught same-scope install rollback may already have removed it.
                 exists = false;
               }
-              if (exists) {
-                const identity = artifact?.identity ?? priorArtifact?.identity;
-                if (!identity) {
-                  throw new Error(`Plugin ${change.pluginId} has no published artifact identity.`);
-                }
-                await assertArtifact(afterPath, identity);
+              const identity = artifact?.identity ?? priorArtifact?.identity;
+              if (exists && (!identity || !(await artifactUnchanged(afterPath, identity)))) {
+                keepPlugin(change.pluginId, "package files");
+                continue;
               }
             }
             if (change.before) {
@@ -566,7 +636,11 @@ export async function settleUpdatePluginCohort(
         if (marker !== artifact.markerAfter) {
           continue;
         }
-        await assertArtifact(artifact.packageDir, artifact.identity);
+        if (!(await artifactUnchanged(artifact.packageDir, artifact.identity))) {
+          // Leave a later writer's payload and its retention marker untouched.
+          kept.push(`plugin ${artifact.pluginId} package files at ${artifact.packageDir}`);
+          continue;
+        }
         fence.assertCurrent();
         const active = Object.values(records).some(
           (record) => record.installPath === artifact.packageDir,
@@ -616,7 +690,10 @@ export async function settleUpdatePluginCohort(
           ...artifact.stagedIdentity,
           realPath: artifact.targetPackageDir,
         };
-        await assertArtifact(artifact.targetPackageDir, expected);
+        if (!(await artifactUnchanged(artifact.targetPackageDir, expected))) {
+          kept.push(`plugin ${artifact.pluginId} package files at ${artifact.targetPackageDir}`);
+          continue;
+        }
         await markRetainedManagedNpmInstall({
           packageDir: artifact.targetPackageDir,
           pluginId: artifact.pluginId,
@@ -632,6 +709,18 @@ export async function settleUpdatePluginCohort(
         await collectInstalledPluginSourceSnapshots(resolveStateDir(params.env));
       } catch (error) {
         process.emitWarning(`Plugin source snapshot collection deferred: ${String(error)}`);
+      }
+      if (kept.length > 0) {
+        let warning: string;
+        try {
+          warning = recordKeptChanges(params.runId, kept, params.env);
+        } catch (error) {
+          warning = formatKeptChanges(kept);
+          process.emitWarning(
+            `Update history did not record kept plugin changes: ${String(error)}`,
+          );
+        }
+        params.onLaterDecisionsKept?.(warning);
       }
       return { configPaths };
     },

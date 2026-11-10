@@ -27,6 +27,7 @@ import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
 import { UnknownModelCatalogProviderError } from "./models-list-capabilities.js";
 import { buildModelsListResult } from "./models-list-result.js";
+import { projectModelsProviderPresentation } from "./models-provider-presentation.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
@@ -116,6 +117,12 @@ export const modelsHandlers: GatewayRequestHandlers = {
           });
           void owner?.recheckNativeLogin?.();
           if (!params.preparedOnly && params.view !== "provider-config") {
+            void owner
+              ?.loadFullModelCatalog?.({
+                changedOnly: true,
+                ...(params.provider ? { providerIds: [params.provider] } : {}),
+              })
+              .catch(() => undefined);
             void owner?.loadNativeModelCatalog?.().catch(() => undefined);
           }
         }
@@ -157,10 +164,10 @@ export const modelsHandlers: GatewayRequestHandlers = {
               assertCurrent();
               const currentConfig = context.getRuntimeConfig();
               const projected =
-                scope && params.view !== "provider-config"
+                params.view !== "provider-config"
                   ? {
                       ...result,
-                      ...(scope.sessionKey
+                      ...(scope?.sessionKey
                         ? {
                             sessionModelRevision: sessionModelRevision(
                               scope.sessionEntry,
@@ -170,7 +177,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
                           }
                         : {}),
                       models: projectSessionModelCatalog(
-                        scope,
+                        scope ?? { agentId: resolved.agentId },
                         result.models,
                         currentConfig,
                         runtimeOwnership,
@@ -184,7 +191,16 @@ export const modelsHandlers: GatewayRequestHandlers = {
               })?.forAgent(resolved.agentId, projected.models);
               respond(
                 true,
-                projectModelFastModeCatalog(policy ? policy.catalog(projected) : projected, client),
+                projectModelsProviderPresentation(
+                  projectModelFastModeCatalog(
+                    policy ? policy.catalog(projected) : projected,
+                    client,
+                  ),
+                  currentConfig,
+                  // Settings reads the configured catalog; only unrestricted whole-catalog
+                  // reads may also disclose configured providers with no model rows.
+                  params.view !== "all" && !params.provider && !scope && !policy,
+                ),
                 undefined,
               );
             };

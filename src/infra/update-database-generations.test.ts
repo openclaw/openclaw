@@ -18,6 +18,7 @@ import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
 import {
   readUnchangedUpdateDatabaseGeneration,
+  readUpdateDatabaseGeneration,
   readUpdateDatabaseGenerationPair,
 } from "./update-database-generations.js";
 import {
@@ -77,7 +78,13 @@ function generationFixture(layout = "delete") {
   vi.spyOn(readOnlyLocation, "prepareSqliteReadOnlyLocationSyncInProcess").mockImplementation(
     (pathname, _staging, ...rest) => prepare(pathname, staging, ...rest),
   );
-  return { file, staging, prepare };
+  // These fixtures pin the private copy, which owns every refusal.
+  const immutableRead = vi
+    .spyOn(nodeSqlite, "resolveImmutableSqliteFileUri")
+    .mockImplementation(() => {
+      throw new Error("immutable read unavailable");
+    });
+  return { file, staging, prepare, immutableRead };
 }
 
 function expectedClosedGeneration(file: string): string {
@@ -301,7 +308,7 @@ it("refuses a generation when a writer commits during the read", () => {
   expect(fs.readdirSync(staging)).toEqual([]);
 });
 
-it("does not reuse a receipt across a reader's WAL index without refusing the source", () => {
+it("reuses a receipt when a reader opens without committing during verification", () => {
   const { file, staging } = generationFixture("wal-absent");
   const receipt = readUpdatePhysicalDatabaseObservation(file).sqliteReceipt;
   if (!receipt) {
@@ -312,7 +319,7 @@ it("does not reuse a receipt across a reader's WAL index without refusing the so
     reader = openReader(file);
   });
   try {
-    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBeUndefined();
+    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBe(receipt.generation);
   } finally {
     reader?.close();
   }
@@ -734,4 +741,43 @@ it("captures opened file identity when Windows pathname stats report unknown IDs
     dev: expected.dev,
     ino: expected.ino,
   });
+});
+
+it.each(["delete", "wal-absent", "wal-empty"])(
+  "reads a drained %s family without a copy or a change to its source",
+  async (layout) => {
+    const { file, immutableRead } = generationFixture(layout);
+    const copy = vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess);
+    const pinned = await readUpdatePhysicalDatabaseGenerations([file]);
+    expect(copy).toHaveBeenCalledOnce();
+    const family = () =>
+      ["", "-wal", "-journal", "-shm"].map((suffix) => {
+        const stat = fs.statSync(file + suffix, { bigint: true, throwIfNoEntry: false });
+        return stat && [stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs];
+      });
+    const before = family();
+    immutableRead.mockRestore();
+    copy.mockClear();
+    expect(await readUpdatePhysicalDatabaseGenerations([file])).toEqual(pinned);
+    expect(copy).not.toHaveBeenCalled();
+    expect(family()).toEqual(before);
+  },
+);
+
+it("refuses a write that lands during a drained read", () => {
+  const { file, immutableRead } = generationFixture();
+  immutableRead.mockRestore();
+  const copy = vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess);
+  let wrote = false;
+  expect(() =>
+    readUpdateDatabaseGeneration(file, () => {
+      if (!wrote) {
+        wrote = true;
+        using writer = new DatabaseSync(file);
+        writer.exec("INSERT INTO receipt VALUES ('raced');");
+      }
+    }),
+  ).toThrow(/snapshot hash mismatch/);
+  expect(wrote).toBe(true);
+  expect(copy).toHaveBeenCalledOnce();
 });

@@ -24,7 +24,7 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { AppSidebarOnline } from "./app-sidebar-online.tsx";
 import { renderSidebarAgentCard } from "./app-sidebar-render.tsx";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
-import { renderRecentSession as RecentSession } from "./app-sidebar-session-row-render.tsx";
+import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import { AppSidebarOwner, type AppSidebarElement } from "./app-sidebar.tsx";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import {
@@ -67,7 +67,7 @@ function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<Sideb
 function mountRow(
   fields: Partial<GatewaySessionRow>,
   presentation: Partial<ReturnType<typeof projectSidebarSession>> = {},
-  options: Pick<Parameters<typeof RecentSession>[0], "icon"> = {},
+  options: Pick<Parameters<typeof SessionTree>[0], "icon"> = {},
 ) {
   const fixture = createHost("chip");
   const session = {
@@ -75,7 +75,7 @@ function mountRow(
     ...presentation,
   };
   const [current, setCurrent] = createSignal(session);
-  mountSolid(() => <RecentSession host={fixture.host} session={current()} {...options} />, {
+  mountSolid(() => <SessionTree host={fixture.host} session={current()} {...options} />, {
     container: fixture.container,
   });
   return { ...fixture, session, current, setCurrent };
@@ -133,6 +133,7 @@ it("keeps named glyphs visible and updates their kind without replacing the lead
 
 it("restores only active dashboards in saved order after alphabetized built-in Pages", async () => {
   const { host, context, dom } = await createCachedHost();
+  host.sidebarAgentsMode = "roster";
   const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
@@ -172,7 +173,7 @@ it("restores only active dashboards in saved order after alphabetized built-in P
 
 it("paints the restored roster and workspace before live data arrives", async () => {
   const { host, dom } = await createCachedHost();
-  host.sidebarAgentsMode = "chip";
+  host.sidebarAgentsMode = "roster";
   host.sidebarLiveActivity = false;
 
   host.restoreSidebarSnapshot({
@@ -443,7 +444,7 @@ it("materializes the archive hint on hover without changing the action name", ()
   onTestFinished(installTitleTooltips(document));
   const { host, container, dom } = createHost();
   const session = projectSidebarSession({ key: "agent:main:thread", label: "Research" });
-  mountSolid(() => <RecentSession host={host} session={session} />, { container });
+  mountSolid(() => <SessionTree host={host} session={session} />, { container });
   const archive = dom.query<HTMLButtonElement>("[data-sidebar-session-archive]")!;
   const name = archive.getAttribute("aria-label");
   const hint = archive.title;
@@ -512,7 +513,7 @@ it("keeps the rendered preview slot after caching without restoring live run aut
   });
   const [current, setCurrent] = createSignal(session);
   const update = mountObservedHost(host, container, (observedHost) => (
-    <RecentSession host={observedHost} session={current()} />
+    <SessionTree host={observedHost} session={current()} />
   ));
   expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
   const [cached] = snapshotSessions([session], (row) => ({
@@ -551,7 +552,7 @@ it("keeps a restored pin's badges after roster handoff until its own descriptor 
   host.restoreSidebarSnapshot({ ...emptySnapshot, pinnedSessions: [saved] });
   const [current, setCurrent] = createSignal(restoreSnapshotSession(saved, saved.key));
   const update = mountObservedHost(host, container, (observedHost) => (
-    <RecentSession host={observedHost} session={current()} />
+    <SessionTree host={observedHost} session={current()} />
   ));
   host.releaseSidebarSnapshot();
   update();
@@ -617,7 +618,7 @@ it.each([false, true])(
       observed.track();
       return session;
     };
-    mountSolid(() => <RecentSession host={observed.host} session={current()} />, { container });
+    mountSolid(() => <SessionTree host={observed.host} session={current()} />, { container });
     const update = observed.update;
     update();
     const row = dom.query(".sidebar-recent-session")!;
@@ -662,7 +663,7 @@ it("updates a pinned session's resolved avatar without replacing its row", () =>
     const label = avatar();
     return <span data-pinned-avatar>{label}</span>;
   };
-  mountSolid(() => <RecentSession host={host} session={session} icon={icon()} />, { container });
+  mountSolid(() => <SessionTree host={host} session={session} icon={icon()} />, { container });
   const row = dom.query(".sidebar-recent-session");
   expect(dom.text("[data-pinned-avatar]")).toBe("Loading avatar");
 
