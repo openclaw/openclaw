@@ -218,7 +218,8 @@ export function Config(props: ConfigProps) {
     const showToolbar = showModeToggle || showSectionTabs;
     const showValidityWarning = props.valid === false && !viewState.validityDismissed;
     return {
-      displayReady: props.activeSection === "__appearance__" && props.appearanceDisplayReady,
+      // Personal controls do not depend on permission to read Gateway-wide configuration.
+      displayReady: props.activeSection === "__appearance__",
       showModeToggle,
       includeVirtualSections: props.includeVirtualSections ?? true,
       include: includedSections(),

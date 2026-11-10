@@ -12,7 +12,11 @@ import { resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  missingReadScopeErrorFixture,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -73,6 +77,88 @@ describe("ConfigPage cold reads", () => {
     }
   });
 
+  it("settles denied lower Appearance reads without blocking personal preferences", async () => {
+    const request = vi.fn(async () => ({}));
+    const client = createTestGatewayClient(request);
+    const { gateway, publish } = createGatewayHarness(client);
+    const hello = gatewayHelloForMethods(
+      ["config.get", "config.schema", "system.info", "plugins.list"],
+      ["operator.sessions.read"],
+    );
+    Object.defineProperty(client, "auth", { value: hello.auth });
+    publish(true, client, hello);
+    const runtimeConfig = createRuntimeConfigCapability(gateway, {
+      current: () => ({ ui: { prefs: { themeMode: "dark" } } }),
+      subscribe: () => () => undefined,
+    });
+    // SAFETY: completeConfigContext fills the partial route fixture around real read owners.
+    const context = completeConfigContext({
+      ...routeContext(),
+      gateway: { ...gateway, connection: { gatewayUrl: "ws://guest.test" } },
+      runtimeConfig,
+    } as unknown as ApplicationContext);
+    const mounted = mountConfigPage(context, { pageId: "appearance" });
+    try {
+      const sidebar = expectDefined(
+        mounted.container.querySelector("#settings-appearance-sidebar"),
+        "sidebar",
+      );
+      sidebar.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+      await waitForSolid(() => {
+        expect(sidebar.querySelector("input:enabled")).not.toBeNull();
+        expect(sidebar.textContent).not.toContain("Loading");
+        expect(sidebar.textContent).not.toContain("no small model");
+        expect(
+          mounted.container.querySelector("#settings-session-sources")?.textContent,
+        ).not.toContain("Loading");
+      });
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      mounted.dispose();
+      runtimeConfig.dispose();
+    }
+  });
+
+  it.each(["config", "schema"] as const)(
+    "does not offer Retry for a typed %s read denial",
+    async (denied) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === (denied === "config" ? "config.get" : "config.schema")) {
+          throw missingReadScopeErrorFixture();
+        }
+        return method === "config.get"
+          ? configSnapshot({ gateway: { port: 18789 } }, "one")
+          : { schema: { type: "object", properties: {} }, uiHints: {} };
+      });
+      const client = createTestGatewayClient(request);
+      const { gateway } = createGatewayHarness(client);
+      const runtimeConfig = createRuntimeConfigCapability(gateway);
+      // SAFETY: the fixture supplies unrelated capabilities; configuration reads use their real owner.
+      const context = completeConfigContext({
+        ...routeContext(),
+        gateway: { ...gateway, connection: { gatewayUrl: "ws://denial.test" } },
+        runtimeConfig,
+      } as unknown as ApplicationContext);
+      const mounted = mountConfigPage(context, { pageId: "appearance" });
+      try {
+        mounted.container
+          .querySelector("#settings-appearance-sidebar")
+          ?.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+        await waitForSolid(() => {
+          expect(mounted.container.querySelector(".config-content-callout")?.textContent).toContain(
+            "grant read access",
+          );
+          expect(mounted.container.querySelector(".config-content-callout button")).toBeNull();
+        });
+        await runtimeConfig.ensureLoaded();
+        expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
+      } finally {
+        mounted.dispose();
+        runtimeConfig.dispose();
+      }
+    },
+  );
+
   it("keeps display-backed Appearance ready while lower settings load and retry", async () => {
     const firstRead = deferred<unknown>();
     const retryRead = deferred<unknown>();
@@ -131,13 +217,11 @@ describe("ConfigPage cold reads", () => {
         mounted.container.querySelector("#settings-appearance-sidebar"),
         "sidebar preferences",
       );
-      const observer = expectDefined(
-        [...sidebar.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].at(-1),
-        "observer toggle",
-      );
+      const observer = () =>
+        [...sidebar.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].at(-1);
       expect(mounted.container.querySelector("#config-sections-tab-ui")).not.toBeNull();
       expect(request).not.toHaveBeenCalled();
-      expect(observer.disabled).toBe(true);
+      expect(sidebar.querySelector("openclaw-select-picker")).toBeNull();
       sidebar.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
       await waitForSolid(() => {
         expect(reads).toBe(1);
@@ -148,7 +232,7 @@ describe("ConfigPage cold reads", () => {
         expect(sidebar.textContent).toContain("Synthetic lower settings failed"),
       );
       expect(mounted.container.querySelector("#settings-appearance-typography")).toBe(typography);
-      expect(observer.disabled).toBe(true);
+      expect(sidebar.querySelector("openclaw-select-picker")).toBeNull();
       expectDefined(
         sidebar.querySelector<HTMLButtonElement>(".config-content-callout button"),
         "retry",
@@ -157,8 +241,8 @@ describe("ConfigPage cold reads", () => {
       retryRead.resolve(response);
       await waitForSolid(() => {
         expect(sidebar.textContent).not.toContain("Synthetic lower settings failed");
-        expect(observer.disabled).toBe(false);
-        expect(observer.checked).toBe(false);
+        expect(observer()?.disabled).toBe(false);
+        expect(observer()?.checked).toBe(false);
       });
       expect(mounted.container.querySelector("#settings-appearance-typography")).toBe(typography);
     } finally {
@@ -283,7 +367,11 @@ describe("ConfigPage cold reads", () => {
         await waitForSolid(() => {
           expect(reads).toBe(2);
           if (failedRead === "config") {
-            expect(mounted.querySelector(".config-loading")).not.toBeNull();
+            expect(
+              mounted.querySelector(
+                pageId === "appearance" ? ".skeleton[aria-busy=true]" : ".config-loading",
+              ),
+            ).not.toBeNull();
           }
         });
         retryRead.resolve(failedRead === "config" ? configResponse : schemaResponse);

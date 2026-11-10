@@ -85,6 +85,10 @@ When you run several Gateways, set `gateway.controlUi.environment` to distinguis
 
 The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the sidebar and narrow topbar, a browser-title suffix, and a matching favicon. The label is trimmed and must contain 1–24 characters. Available colors are `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, and `gray`. The label and color are intentionally visible before sign-in; leave `environment` unset to keep the standard appearance unchanged.
 
+## Appearance preferences
+
+Personal Appearance preferences remain available when you cannot read Gateway-wide settings. Session observer and session-source settings require Gateway read access; unavailable reads do not stay marked as loading. A missing observer status does not mean that no utility model is configured.
+
 ## Browser tab icon
 
 In **Settings → Appearance → Browser tab icon**, choose **Default**, **Agent avatar**, or **Lobsterdex**. Default keeps the theme and Gateway environment icon. Agent avatar follows the explicitly selected agent, fitting its image without cropping and falling back to Default when it is unavailable. Lobsterdex lets you choose a fixed lobster from those already unlocked in this browser. Activity and attention dots remain visible in every mode.

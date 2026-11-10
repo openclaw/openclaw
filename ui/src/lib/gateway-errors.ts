@@ -33,6 +33,14 @@ export function isSetupAdmissionBusyError(err: unknown): boolean {
   return hasGatewayErrorDetail(err, ErrorCodes.UNAVAILABLE, SETUP_ADMISSION_BUSY_ERROR_CODE);
 }
 
+/** A typed permission rejection is terminal until connection authority changes. */
+export function isGatewayAccessDeniedError(error: unknown): boolean {
+  return (
+    Boolean(readMissingScopeError(error)) ||
+    (error instanceof GatewayProtocolRequestError && error.gatewayCode === ErrorCodes.FORBIDDEN)
+  );
+}
+
 export function isMissingOperatorReadScopeError(err: unknown): boolean {
   return readMissingScopeError(err)?.missingScope === "operator.read";
 }

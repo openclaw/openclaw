@@ -2,6 +2,7 @@ import { err as failure, ok, type Result } from "@openclaw/normalization-core/re
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { isGatewayAccessDeniedError } from "../gateway-errors.ts";
 import { configMutationFailure } from "./config-mutation-error.ts";
 import {
   beginConfigRead,
@@ -10,6 +11,7 @@ import {
   isCurrentConfigConnection,
   isCurrentRequest,
   type ConfigRead,
+  type ConfigReadResult,
   type LoadConfigOptions,
   type RuntimeConfigState,
 } from "./config-state-model.ts";
@@ -25,9 +27,13 @@ export type ConfigSnapshotLoadOptions = LoadConfigOptions & {
 
 // Observers re-ensure config on every publication, and every read publishes.
 // A failed foreground read therefore waits before an ensure may repeat it on
-// the same connection; explicit refreshes and reconnects still read at once.
+// the same connection. A typed denial stays terminal for that connection;
+// explicit refreshes and reconnects still read at once.
 const CONFIG_READ_RETRY_DELAY_MS = 5_000;
-const failedReads = new WeakMap<RuntimeConfigState, { connectionEpoch: number; at: number }>();
+const failedReads = new WeakMap<
+  RuntimeConfigState,
+  { connectionEpoch: number; at: number; denied: boolean }
+>();
 
 function canStartConfigRead(state: RuntimeConfigState): boolean {
   const client = state.client;
@@ -43,7 +49,7 @@ export function canEnsureConfigRead(state: RuntimeConfigState): boolean {
   return (
     !failed ||
     failed.connectionEpoch !== currentConfigConnectionEpoch(state) ||
-    Date.now() - failed.at >= CONFIG_READ_RETRY_DELAY_MS
+    (!failed.denied && Date.now() - failed.at >= CONFIG_READ_RETRY_DELAY_MS)
   );
 }
 
@@ -62,7 +68,11 @@ function startConfigLoad(
       if (result.ok) {
         failedReads.delete(state);
       } else {
-        failedReads.set(state, { connectionEpoch: read.connectionEpoch, at: Date.now() });
+        failedReads.set(state, {
+          connectionEpoch: read.connectionEpoch,
+          at: Date.now(),
+          denied: result.denied === true,
+        });
       }
     }
     read.completion.resolve(result);
@@ -111,7 +121,7 @@ async function readConfig(
   { client, connectionEpoch, version }: ConfigRead,
   options: ConfigSnapshotLoadOptions,
   isCurrentLoad: () => boolean,
-): Promise<Result<void, string>> {
+): Promise<ConfigReadResult> {
   const isCurrent = () =>
     isCurrentLoad() && isCurrentRequest(state, version, client, connectionEpoch);
   if (!options.background) {
@@ -178,7 +188,10 @@ async function readConfig(
     ) {
       state.configAutoSaveStatus = "error";
     }
-    return failure(outcome.message);
+    return {
+      ...failure(outcome.message),
+      ...(isGatewayAccessDeniedError(error) ? { denied: true } : {}),
+    };
   } finally {
     if (isCurrentRequest(state, version, client, connectionEpoch)) {
       state.configLoading = false;
