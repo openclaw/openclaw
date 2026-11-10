@@ -73,6 +73,7 @@ console.log(JSON.stringify(results));`,
           {
             env: {
               ...process.env,
+              HOME: f.root,
               OPENCLAW_PR_LIFETIME_FILE: f.lifetime,
               NODE_OPTIONS: `--require ${JSON.stringify(preload)}`,
             },
@@ -92,12 +93,28 @@ console.log(JSON.stringify(results));`,
   );
 
   it.each(runtimes)(
-    "keeps the shared flock while a lazy-reading $runtime child survives its SIGKILLed parent",
+    "keeps both lifetime flocks while a lazy $runtime grandchild survives both killed creators",
     ({ executable }) => {
       const f = fixture(executable);
       const packagePath = join(f.root, "package.txt");
       writeFileSync(packagePath, "still readable");
       const parent = join(f.root, "parent.cjs");
+      const outer = join(f.root, "outer-lifetime");
+      const outerParent = join(f.root, "outer.cjs");
+      writeFileSync(outer, "", { mode: 0o600 });
+      writeFileSync(
+        outerParent,
+        `const { spawn } = require("node:child_process");
+const env = { ...process.env };
+if (process.env.PROTECT_INNER === "yes") env.OPENCLAW_PR_LIFETIME_FILE = process.env.INNER;
+else { delete env.OPENCLAW_PR_LIFETIME_FILE; env.HOME += "/independent"; }
+const child = spawn(process.execPath, [process.env.PARENT], {
+  env, stdio: ["ignore", 1, 2, Number(process.env.CONTROL_FD), Number(process.env.EXIT_FD), "ignore", "ignore", 8],
+});
+console.log("parent " + child.pid);
+setInterval(() => {}, 1000);
+`,
+      );
       writeFileSync(
         parent,
         `const { spawn } = require("node:child_process");
@@ -123,55 +140,74 @@ setInterval(() => {}, 1000);
           [
             "-c",
             `import fcntl, json, os, signal, subprocess, sys
-node, preload, lifetime, parent, package = sys.argv[1:]
-fd = os.open(lifetime, os.O_RDWR)
-os.dup2(fd, 7)
-if fd != 7: os.close(fd)
-fcntl.flock(7, fcntl.LOCK_SH)
+node, preload, lifetime, outer, parent, outer_parent, package, protect_inner = sys.argv[1:]
+ancestors = tuple(item["fd"] for item in json.loads(os.environ.get("OPENCLAW_PR_LIFETIME_ANCESTORS", "[]")))
+for path, target in ((outer,7),(lifetime,8)):
+    fd = os.open(path, os.O_RDWR)
+    os.dup2(fd, target)
+    if fd != target: os.close(fd)
+    fcntl.flock(target, fcntl.LOCK_SH)
 read_fd, write_fd = os.pipe()
-env = dict(os.environ, OPENCLAW_PR_LIFETIME_FILE=lifetime,
-    NODE_OPTIONS=("--require " + json.dumps(preload)) if preload else "", PACKAGE=package, CONTROL_FD=str(read_fd))
-child = subprocess.Popen([node, parent], env=env, pass_fds=(7, read_fd), stdout=subprocess.PIPE, text=True)
+exit_read, exit_write = os.pipe()
+env = dict(os.environ, OPENCLAW_PR_LIFETIME_FILE=outer, INNER=lifetime, PARENT=parent,
+    NODE_OPTIONS="--require " + json.dumps(preload), PACKAGE=package, CONTROL_FD=str(read_fd), EXIT_FD=str(exit_write), PROTECT_INNER=protect_inner)
+child = subprocess.Popen([node, outer_parent], env=env, pass_fds=(7,8,read_fd,exit_write,*ancestors), stdout=subprocess.PIPE, text=True)
 os.close(7)
+os.close(8)
 os.close(read_fd)
+os.close(exit_write)
 reader = None
+inner_parent = None
 try:
+    parent_ready = child.stdout.readline().strip()
+    assert parent_ready.startswith("parent "), parent_ready
+    inner_parent = int(parent_ready.split()[1])
     ready = child.stdout.readline().strip()
     assert ready.startswith("ready "), ready
     reader = int(ready.split()[1])
     child.kill()
     child.wait()
-    with open(lifetime, "r+") as exclusive:
-        try:
-            fcntl.flock(exclusive, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            raise AssertionError("Live child lost the lifetime flock")
-        except BlockingIOError:
-            pass
+    os.kill(inner_parent, signal.SIGKILL)
+    inner_parent = None
+    assert os.read(exit_read, 1) == b"", "Inner creator still owns its descriptors"
+    with open(outer, "r+") as outer_exclusive, open(lifetime, "r+") as exclusive:
+        for label, handle in (("outer",outer_exclusive),("inner",exclusive)):
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                raise AssertionError("Live child lost the " + label + " lifetime flock")
+            except BlockingIOError:
+                pass
         os.write(write_fd, b"r")
         assert child.stdout.readline().strip() == "still readable"
         os.write(write_fd, b"q")
         fcntl.flock(exclusive, fcntl.LOCK_EX)
+        fcntl.flock(outer_exclusive, fcntl.LOCK_EX)
     print("protected-until-last-holder-exited")
 finally:
     os.close(write_fd)
+    os.close(exit_read)
     if child.poll() is None:
         child.kill()
     child.wait()
-    if reader:
-        try: os.kill(reader, signal.SIGKILL)
-        except ProcessLookupError: pass
+    for pid in (reader,inner_parent):
+        if pid:
+            try: os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError: pass
 `,
             f.node,
-            inherit ? preload : "",
+            preload,
             f.lifetime,
+            outer,
             parent,
+            outerParent,
             packagePath,
+            inherit ? "yes" : "no",
           ],
-          { encoding: "utf8", timeout: 15_000 },
+          { env: { ...process.env, HOME: f.root }, encoding: "utf8", timeout: 15_000 },
         );
       const before = run(false);
       expect(before.status).toBe(1);
-      expect(before.stderr).toContain("Live child lost the lifetime flock");
+      expect(before.stderr).toContain("Live child lost the inner lifetime flock");
       const result = run(true);
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).toBe("protected-until-last-holder-exited");

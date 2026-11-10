@@ -62,6 +62,12 @@ def linux_scan(targets):
             with open(root + "/stat", encoding="utf8") as source:
                 fields = source.read().rsplit(")", 1)[1].split()
             processes[int(name)] = None if fields[0] == "Z" else (boot + int(fields[19]) / ticks) * 1000
+            if fields[0] == "Z":
+                # exit_mm/files/fs precede EXIT_ZOMBIE, but a leader can exit
+                # while other threads still retain the group's references.
+                if int(fields[17]) != 1:
+                    raise ValueError("zombie-group-has-threads")
+                continue
             paths = []
             try:
                 paths.append(os.readlink(root + "/cwd"))

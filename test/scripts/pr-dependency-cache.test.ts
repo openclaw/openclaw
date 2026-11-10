@@ -202,7 +202,10 @@ function sweep(cache: string) {
   }
 }
 
-function recoveryFixture(complete = false) {
+function recoveryFixture(
+  complete = false,
+  lifetimes: false | "stage" | "renamed" | "pending-missing" = false,
+) {
   const f = fixture();
   const keys = complete ? ["0", "1", "2", "a", "b", "c"] : ["a"];
   const installations = keys.map((key) => entry(f.cache, key.repeat(64)));
@@ -226,16 +229,124 @@ function recoveryFixture(complete = false) {
   for (const path of historicalAnchors) {
     rmSync(path, { recursive: true });
   }
+  if (lifetimes) {
+    const owner = resolve("scripts/pr-lib/cache-lifetime.mjs");
+    const env = { ...process.env, HOME: f.home };
+    const created = runWithPrAnchor(
+      f.anchor,
+      [owner, "create-lifetime", f.anchor, String(f.creatorPid)],
+      { env },
+    );
+    expect(created.status, created.stderr).toBe(0);
+    const leaseFd = openSync(created.stdout, "r+");
+    const anchorFd = openSync(f.anchor, "r");
+    const stdio = anchoredStdio(anchorFd);
+    stdio[7] = leaseFd;
+    try {
+      const shared = spawnSync(
+        "python3",
+        ["-I", "-B", resolve("scripts/pr-lib/cache-lifetime-process.py"), "shared", "7"],
+        { stdio, encoding: "utf8" },
+      );
+      expect(shared.status, shared.stderr).toBe(0);
+      const options = {
+        stdio,
+        encoding: "utf8" as const,
+        env: { ...env, OPENCLAW_PR_LIFETIME_FILE: created.stdout },
+      };
+      const registered = spawnSync(
+        requireNodeTool("node"),
+        [owner, "register-lifetime", f.anchor, String(f.creatorPid)],
+        options,
+      );
+      expect(registered.status, registered.stderr).toBe(0);
+      const staged = spawnSync(
+        requireNodeTool("node"),
+        [
+          "--input-type=module",
+          "-e",
+          `
+import { claimCreatedAnchor, holdDependencyCache, stageDependencyCache, withDependencyCacheLock } from ${JSON.stringify(lifetime)};
+const anchor = claimCreatedAnchor(process.argv[1], Number(process.argv[2]));
+withDependencyCacheLock(process.argv[3], lock => {
+  holdDependencyCache(lock, process.argv[4], anchor);
+  stageDependencyCache(lock, process.argv[3] + "/" + "d".repeat(64), anchor);
+});`,
+          f.anchor,
+          String(f.creatorPid),
+          f.cache,
+          installation,
+        ],
+        options,
+      );
+      expect(staged.status, staged.stderr).toBe(0);
+    } finally {
+      closeSync(anchorFd);
+      closeSync(leaseFd);
+    }
+    const pendingAnchor = f.anchor + ".pending";
+    mkdirSync(pendingAnchor, { mode: 0o700 });
+    const pending = runWithPrAnchor(
+      pendingAnchor,
+      [owner, "create-lifetime", pendingAnchor, String(f.creatorPid)],
+      { env },
+    );
+    expect(pending.status, pending.stderr).toBe(0);
+  }
   const database = join(f.cache, "lifetime.sqlite");
   const db = new DatabaseSync(database);
   // Simulate a device renumbering after the native producers published their
   // identities. The preserved hold has no retirement proof and must stay held.
+  if (!lifetimes) {
+    // The pre-lease v3 format has only these original three tables.
+    db.exec(
+      "DROP TABLE pending_lifetimes; DROP TABLE operation_lifetimes; DROP TABLE dependency_transitions;",
+    );
+  } else if (lifetimes === "renamed") {
+    const transition = db.prepare("SELECT path, entry_key FROM dependency_transitions").get()!;
+    renameSync(String(transition.path), join(f.cache, String(transition.entry_key)));
+  } else if (lifetimes === "pending-missing") {
+    const pending = db.prepare("SELECT lease_path FROM pending_lifetimes").get()!;
+    rmSync(String(pending.lease_path));
+  }
   const oldDevice = String(lstatSync(f.cache, { bigint: true }).dev + 1n);
   db.prepare("UPDATE owner SET cache_dev = ?, db_dev = ?").run(oldDevice, oldDevice);
   db.prepare("UPDATE installations SET dev = ?").run(oldDevice);
   db.prepare("UPDATE holds SET anchor_dev = ?").run(oldDevice);
-  const before = readPrCacheRows(db);
+  const additional: Record<string, ReturnType<typeof readPrCacheRows>["holds"]> = {};
+  if (lifetimes) {
+    for (const table of ["pending_lifetimes", "operation_lifetimes", "dependency_transitions"]) {
+      db.prepare(`UPDATE ${table} SET anchor_dev = ? WHERE anchor_dev IS NOT NULL`).run(oldDevice);
+      if (table !== "pending_lifetimes") {
+        db.prepare(`UPDATE ${table} SET dev = ? WHERE dev IS NOT NULL`).run(oldDevice);
+      }
+      additional[table] = db
+        .prepare(
+          `SELECT * FROM ${table} ORDER BY ${table === "dependency_transitions" ? "path" : "anchor_path, anchor_dev, anchor_ino"}`,
+        )
+        .all();
+    }
+  }
+  const before = { ...readPrCacheRows(db), ...additional };
   db.close();
+  const resources = [
+    ...new Set(
+      Object.values(additional).flatMap((rows) =>
+        rows
+          .flatMap((row) => [
+            row.anchor_path,
+            row.lease_path,
+            row.path,
+            row.entry_key && !installations.includes(join(f.cache, String(row.entry_key)))
+              ? join(f.cache, String(row.entry_key))
+              : null,
+          ])
+          .filter((path): path is string => typeof path === "string"),
+      ),
+    ),
+  ]
+    .toSorted((left, right) => left.localeCompare(right))
+    .map((path) => ({ path, identity: existsSync(path) ? prDirectoryIdentity(path) : null }));
   const plan = {
     version: 1,
     cache: f.cache,
@@ -244,6 +355,7 @@ function recoveryFixture(complete = false) {
     physical: {
       cache: prDirectoryIdentity(f.cache),
       database: prDirectoryIdentity(database),
+      ...(lifetimes ? { resources } : {}),
       installations: installations.map((path) => ({
         key: path.split("/").at(-1)!,
         ...prDirectoryIdentity(path),
@@ -410,6 +522,84 @@ describePosix("operator dependency hold release", () => {
 });
 
 describePosix("PR cache identity recovery", () => {
+  it.each(["stage", "renamed", "pending-missing"] as const)(
+    "adopts lifetime identities across the %s window with exact recovery replay",
+    (phase) => {
+      const f = recoveryFixture(false, phase);
+      const recovered = f.recover();
+      expect(recovered.status, recovered.stderr).toBe(0);
+      expect(JSON.parse(recovered.stdout).state).toBe("recovered");
+      const bytes = readFileSync(f.database);
+      const repeated = f.recover();
+      expect(repeated.status, repeated.stderr).toBe(0);
+      expect(JSON.parse(repeated.stdout).state).toBe("already-recovered");
+      expect(readFileSync(f.database)).toEqual(bytes);
+      expect(hold(f, f.installation).status).toBe(0);
+      const db = new DatabaseSync(f.database, { readOnly: true });
+      try {
+        const device = f.plan.physical.cache.dev;
+        for (const table of [
+          "pending_lifetimes",
+          "operation_lifetimes",
+          "dependency_transitions",
+        ]) {
+          expect(
+            db
+              .prepare(`SELECT anchor_dev FROM ${table}`)
+              .all()
+              .map((row) => row.anchor_dev),
+          ).toEqual([device]);
+        }
+        expect(db.prepare("SELECT dev FROM operation_lifetimes").get()?.dev).toBe(device);
+        expect(db.prepare("SELECT dev FROM dependency_transitions").get()?.dev).toBe(device);
+        expect(db.prepare("SELECT COUNT(*) AS count FROM holds").get()?.count).toBe(2);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it.each(["lease inode", "lease alias", "transition inode", "lifetime row"])(
+    "preserves the refused lifetime %s preimage",
+    (fault) => {
+      const f = recoveryFixture(false, "stage");
+      const db = new DatabaseSync(f.database);
+      const lease = String(
+        db.prepare("SELECT lease_path FROM operation_lifetimes").get()!.lease_path,
+      );
+      const stage = String(db.prepare("SELECT path FROM dependency_transitions").get()!.path);
+      if (fault === "lifetime row") {
+        db.exec("UPDATE operation_lifetimes SET retired = 1");
+      }
+      db.close();
+      if (fault !== "lifetime row") {
+        const path = fault === "transition inode" ? stage : lease;
+        const retained = join(f.home, "retained-resource");
+        renameSync(path, retained);
+        if (fault === "lease alias") {
+          symlinkSync(retained, path);
+        } else if (fault === "transition inode") {
+          mkdirSync(path, { mode: 0o700 });
+        } else {
+          copyFileSync(retained, path);
+        }
+      }
+      const before = readFileSync(f.database);
+      const recovered = f.recover();
+      expect(recovered.status).not.toBe(0);
+      expect(recovered.stderr).toContain(
+        fault === "lifetime row"
+          ? "preimage differs"
+          : fault === "lease alias"
+            ? "Unsafe PR dependency ledger file"
+            : "physical identities differ",
+      );
+      expect(readFileSync(f.database)).toEqual(before);
+      expect(existsSync(f.installation)).toBe(true);
+      expect(existsSync(f.anchor)).toBe(true);
+    },
+  );
+
   it("adopts the sealed device identities, reconciles a lost reply, and retains historical holds", () => {
     const f = recoveryFixture(true);
     expect(f.plan.before.holds).toHaveLength(12);

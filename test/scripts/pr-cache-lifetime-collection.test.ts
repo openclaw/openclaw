@@ -123,6 +123,42 @@ function sweep(cache: string) {
   }
 }
 
+function completeProcessCensus(f: ReturnType<typeof fixture>) {
+  if (process.platform !== "linux") {
+    return true;
+  }
+  const probe = spawnSync(
+    "python3",
+    [
+      "-I",
+      "-S",
+      "-B",
+      "-c",
+      `
+import importlib.util,sys
+spec = importlib.util.spec_from_file_location("owner", sys.argv[1])
+owner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(owner)
+try:
+    owner.process_scan({sys.argv[2]})
+except (PermissionError, ValueError) as error:
+    if not isinstance(error, PermissionError) and str(error) != "zombie-group-has-threads":
+        raise
+    print(str(error))
+    sys.exit(3)
+`,
+      processHelper,
+      f.anchor,
+    ],
+    { env: f.env, encoding: "utf8", timeout: 30_000 },
+  );
+  expect([0, 3], probe.stderr).toContain(probe.status);
+  if (probe.status === 3) {
+    console.info(`Restricted procfs; asserting retained cache state: ${probe.stdout.trim()}`);
+  }
+  return probe.status === 0;
+}
+
 function transitions(cache: string) {
   const db = new DatabaseSync(join(cache, "lifetime.sqlite"), { readOnly: true });
   try {
@@ -135,8 +171,55 @@ function transitions(cache: string) {
 }
 
 describePosix("PR cache crash collection", () => {
+  it("keeps a shared operation lease until every nested anchor is collected", () => {
+    const f = fixture();
+    const result = child(
+      f,
+      `
+import { spawnSync } from "node:child_process";
+const stage = withDependencyCacheLock(cache, lock => stageDependencyCache(lock, entry, anchor));
+withDependencyCacheLock(cache, lock => publishDependencyCache(lock, stage, entry, anchor));
+for (let index = 1; index < 5; index++) {
+  const nested = anchor.path + index;
+  fs.mkdirSync(nested, { mode: 0o700 });
+  const fd = fs.openSync(nested, "r");
+  try {
+    const held = spawnSync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(`
+import { claimCreatedAnchor, holdDependencyCache, withDependencyCacheLock } from ${JSON.stringify(source)};
+const anchor = claimCreatedAnchor(process.argv[1], Number(process.argv[2]));
+if (!withDependencyCacheLock(process.argv[3], lock => holdDependencyCache(lock, process.argv[4], anchor))) throw new Error("Nested hold missing");
+`)}, nested, process.argv[2], cache, entry], {
+      env: process.env, encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "ignore", "ignore", 7, "ignore", fd],
+    });
+    if (held.status !== 0) throw new Error(held.stderr);
+  } finally { fs.closeSync(fd); }
+}
+withDependencyCacheLock(cache, lock => collectUnusedDependencyCaches(lock));
+`,
+      true,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const entry = join(f.cache, "a".repeat(64));
+    expect(readPrCacheState(entry).anchors).toHaveLength(5);
+    sweep(f.cache);
+    expect(readPrCacheState(entry).anchors).toHaveLength(1);
+    expect(readdirSync(f.cache).filter((name) => name.startsWith("lifetime-"))).toHaveLength(1);
+    sweep(f.cache);
+    expect(readPrCacheState(entry)).toEqual({ registered: true, settled: true, anchors: [] });
+    expect(readdirSync(f.home).filter((name) => name.startsWith(ANCHOR_PREFIX))).toEqual([]);
+    expect(readdirSync(f.cache).filter((name) => name.startsWith("lifetime-"))).toEqual([]);
+    const db = new DatabaseSync(join(f.cache, "lifetime.sqlite"), { readOnly: true });
+    try {
+      expect(db.prepare("SELECT * FROM operation_lifetimes").all()).toEqual([]);
+      expect(db.prepare("SELECT * FROM pending_lifetimes").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   it.each(["intent", "file", "ready"])(
-    "reclaims a zero-hold operation interrupted after lifetime %s",
+    "collects or safely retains an operation interrupted after lifetime %s",
     (phase) => {
       const f = fixture();
       const result =
@@ -176,12 +259,15 @@ await import(${JSON.stringify(source)});
       expect(readdirSync(f.cache).filter((name) => name.startsWith("lifetime-"))).toHaveLength(
         phase === "intent" ? 0 : 1,
       );
+      const complete = phase === "ready" || completeProcessCensus(f);
       sweep(f.cache);
-      expect(existsSync(f.anchor)).toBe(false);
-      expect(readdirSync(f.cache).filter((name) => name.startsWith("lifetime-"))).toEqual([]);
+      expect(existsSync(f.anchor)).toBe(!complete);
+      expect(readdirSync(f.cache).filter((name) => name.startsWith("lifetime-"))).toHaveLength(
+        !complete && phase === "file" ? 1 : 0,
+      );
       const db = new DatabaseSync(join(f.cache, "lifetime.sqlite"), { readOnly: true });
       try {
-        expect(db.prepare("SELECT * FROM pending_lifetimes").all()).toEqual([]);
+        expect(db.prepare("SELECT * FROM pending_lifetimes").all()).toHaveLength(complete ? 0 : 1);
         expect(db.prepare("SELECT * FROM operation_lifetimes").all()).toEqual([]);
       } finally {
         db.close();
@@ -234,11 +320,12 @@ setInterval(() => {}, 1000);
 import fcntl,json,os,signal,sqlite3,subprocess,sys
 node, home, cache, parent, preload, create, collector, phase = sys.argv[1:]
 env = dict(os.environ, HOME=home)
+ancestors = tuple(item["fd"] for item in json.loads(env.get("OPENCLAW_PR_LIFETIME_ANCESTORS", "[]")))
 read_fd,write_fd = os.pipe()
 child_env = dict(env,NODE=node,PARENT=parent,CACHE=cache,FIXTURE_HOME=home,CREATE=create,PRELOAD=preload,
     CONTROL_FD=str(read_fd),PROCESS_HELPER=${JSON.stringify(processHelper)})
 shell = 'ANCHOR="$FIXTURE_HOME/openclaw-pr-anchor-v3.$$.live"; mkdir -m 700 "$ANCHOR"; exec 9<"$ANCHOR"; CREATOR=$$; export ANCHOR CREATOR; OPENCLAW_PR_LIFETIME_FILE=$("$NODE" "$CREATE" create-lifetime "$ANCHOR" "$$"); export OPENCLAW_PR_LIFETIME_FILE; exec 7<>"$OPENCLAW_PR_LIFETIME_FILE"; python3 -I -S -B "$PROCESS_HELPER" shared 7; "$NODE" "$CREATE" register-lifetime "$ANCHOR" "$$"; NODE_OPTIONS="--require $PRELOAD"; export NODE_OPTIONS; exec "$NODE" "$PARENT"'
-child = subprocess.Popen(["/bin/sh","-ec",shell],env=child_env,pass_fds=(read_fd,),stdout=subprocess.PIPE,text=True)
+child = subprocess.Popen(["/bin/sh","-ec",shell],env=child_env,pass_fds=(read_fd,*ancestors),stdout=subprocess.PIPE,text=True)
 os.close(read_fd)
 reader = None
 try:
@@ -250,7 +337,7 @@ try:
         lease = db.execute("SELECT lease_path FROM operation_lifetimes").fetchone()[0]
     child.kill()
     child.wait()
-    subprocess.run([node,"--input-type=module","-e",collector,cache],env=env,check=True)
+    subprocess.run([node,"--input-type=module","-e",collector,cache],env=env,pass_fds=ancestors,check=True)
     assert os.path.isdir(anchor), "Collector deleted a live child's anchor"
     os.write(write_fd,b"r")
     assert child.stdout.readline().strip() == "still readable"
@@ -260,7 +347,7 @@ try:
     with open(lease,"r+") as unlocked:
         fcntl.flock(unlocked,fcntl.LOCK_EX)
     reader = None
-    subprocess.run([node,"--input-type=module","-e",collector,cache],env=env,check=True)
+    subprocess.run([node,"--input-type=module","-e",collector,cache],env=env,pass_fds=ancestors,check=True)
     assert not os.path.exists(anchor)
     assert not os.path.exists(lease)
     with sqlite3.connect(cache+"/lifetime.sqlite") as db:
@@ -411,7 +498,7 @@ catch (error) { if (error.message !== "detach interrupted") throw error; }
     expect(readdirSync(f.cache).filter((name) => name.startsWith("retired-"))).toEqual([]);
   });
 
-  it("settles old legacy holds with dead creators and removes their anchors", () => {
+  it("settles old legacy holds only with a complete process census", () => {
     const f = fixture();
     const entry = createSettledPrCacheEntry(f.cache, "a".repeat(64));
     const result = child(
@@ -421,12 +508,17 @@ catch (error) { if (error.message !== "detach interrupted") throw error; }
     expect(result.status, result.stderr).toBe(0);
     const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
     utimesSync(f.anchor, old, old);
+    const complete = completeProcessCensus(f);
     sweep(f.cache);
-    expect(existsSync(f.anchor)).toBe(false);
-    expect(readPrCacheState(entry)).toEqual({ registered: true, settled: true, anchors: [] });
+    expect(existsSync(f.anchor)).toBe(!complete);
+    expect(readPrCacheState(entry)).toEqual({
+      registered: true,
+      settled: true,
+      anchors: complete ? [] : [f.anchor],
+    });
   });
 
-  it("collects four old orphans per sweep while preserving active nested files and aliases", () => {
+  it("bounds orphan collection and retains entries when the process census is restricted", () => {
     const f = fixture();
     const old = new Date(Date.now() - 48 * 60 * 60 * 1000);
     for (let index = 0; index < 6; index++) {
@@ -443,10 +535,14 @@ catch (error) { if (error.message !== "detach interrupted") throw error; }
     mkdirSync(outside);
     writeFileSync(join(outside, "keep"), "outside cache");
     symlinkSync(outside, join(f.cache, "b".repeat(64)), "dir");
+    const complete = completeProcessCensus(f);
+    const before = prCacheEntries(f.cache).toSorted();
     sweep(f.cache);
-    expect(prCacheEntries(f.cache)).toHaveLength(4);
+    expect(prCacheEntries(f.cache)).toHaveLength(complete ? 4 : 8);
     sweep(f.cache);
-    expect(prCacheEntries(f.cache).toSorted()).toEqual(["a".repeat(64), "b".repeat(64)]);
+    expect(prCacheEntries(f.cache).toSorted()).toEqual(
+      complete ? ["a".repeat(64), "b".repeat(64)] : before,
+    );
     expect(readdirSync(outside)).toEqual(["keep"]);
     expect(existsSync(join(active, "nested", "fresh"))).toBe(true);
   });

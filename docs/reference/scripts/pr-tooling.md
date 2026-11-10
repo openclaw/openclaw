@@ -60,7 +60,9 @@ held on FD 9; an inherited path or a descendant does not grant deletion authorit
 New materializations also inherit FD 7, holding a shared `flock` on a private
 lifetime file outside the anchor. Shell children inherit it; the bootstrap Node
 preload preserves it through Node and Bun subprocess APIs, which otherwise close
-extra descriptors. This descriptor grants liveness protection, not creator
+extra descriptors. A nested operation with its own cache namespace or lifetime
+retains enclosing leases on additional descriptors, so its children protect both
+operations even after both creators exit. This descriptor grants liveness protection, not creator
 retirement authority. Python 3's standard-library `fcntl` supplies the kernel lock.
 Lifetime registration also covers operations that reuse installed dependencies
 without acquiring a cache entry. Creation intent precedes the lifetime file;
@@ -80,6 +82,8 @@ Pre-lease anchors use the disposable-scratch policy: the anchor must be older
 than 24 hours, its creator incarnation must be gone, and no process may reference
 the anchor or its entries through cwd, open descriptors, or mappings. Linux uses
 `/proc`; macOS uses `ps` and `lsof`. Failed observation retains the resources.
+An unreaped Linux zombie with no surviving threads has already released its
+filesystem references; unreadable live processes still prevent collection.
 PID reuse is checked against anchor creation time; ambiguous timestamps retain
 the anchor. This deliberately accepts an old, dormant legacy child that keeps
 only a pathname in memory: scratch older than 24 hours can disappear and must be
@@ -474,7 +478,8 @@ scripts/pr dependency-cache-recover <plan.json> \
 This shared-cache operation uses the existing metadata mutex, not a PR lock or
 workflow binding. It requires the official OpenClaw origin and authenticates the
 complete official-main wrapper before opening the ledger, using only Git and
-Node built-ins. Origin admission runs before wrapper substitution or bootstrap.
+Node built-ins for authentication. The metadata lock uses Python's standard
+library. Origin admission runs before wrapper substitution or bootstrap.
 Review and land tooling repairs before use. Developer-wrapper opt-in and unlanded
 code do not authorize recovery. The command does not install packages or select
 another dependency donor.
@@ -491,23 +496,34 @@ The SHA-256 seals exact UTF-8 JSON bytes. The version-1 plan contains:
 - `before`: complete `owner`, `installations`, and `holds` row arrays. Include
   every column and preserve SQLite value types. Sort owner rows by `id`,
   installations by `key`, and holds by `entry_key`, `anchor_path`, `anchor_dev`,
-  then `anchor_ino`.
+  then `anchor_ino`. When any additive lifetime table has rows, also include all
+  three arrays: `pending_lifetimes`, `operation_lifetimes`, and
+  `dependency_transitions`. Sort lifetimes by `anchor_path`, `anchor_dev`, then
+  `anchor_ino`, and transitions by `path`.
 - `physical`: `cache` and `database` identities, plus an `installations` array
   ordered by key. Each installation has `key` and its physical identity.
   Identities contain decimal strings for `dev`, `ino`, `uid`, and `mode` from
   `lstat`. The database is the existing `lifetime.sqlite` file.
+- With additive rows, `physical.resources` seals their anchor and lease paths,
+  plus both names of each pending filesystem transition outside registered
+  installations. Each element is `{ path, identity }`, sorted by path using
+  `localeCompare`; `identity` is the same four-field record, or `null` for an
+  absent resource. Plans for old ledgers or empty additive tables omit these
+  extra arrays and resources.
 
 Preserve the sealed plan until reconciliation finishes. Exclude manual ledger
 writers and cache-directory replacement throughout inspection and recovery; the
 metadata mutex serializes native owners only. The cache must contain exactly the
-ledger and registered installations, with no unresolved journal or unknown
-entries. Recorded cache, database, and installation device numbers must identify
+ledger, registered installations, and sealed lifetime/transition resources, with
+no unresolved journal or unknown entries. Recorded cache, database, and installation device numbers must identify
 one old device, and their current identities must identify one new device. Inodes,
 owners, modes, schema, and integrity must match.
 
 The owner compares the complete logical preimage inside one synchronous SQLite
 write transaction. It updates only `owner.cache_dev`, `owner.db_dev`, and each
-registered `installations.dev`. It preserves all holds, including absent anchors,
+registered `installations.dev`, plus device cells in lifetime, transition, and
+hold rows whose present resource identities prove the same device change.
+Absent resources retain their recorded identities. It preserves all holds,
 and preserves sequence, settlement, reuse order, and installed contents. Recovery
 grants no collection, anchor retirement, or hold-release authority.
 

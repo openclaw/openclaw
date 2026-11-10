@@ -1,6 +1,7 @@
 """PR cache kernel-lease and retirement safety contracts (stdlib only)."""
 
 import importlib.util
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 HELPER = Path(__file__).resolve().parents[2] / "scripts/pr-lib/cache-lifetime-process.py"
@@ -157,6 +159,28 @@ class RetirementTests(unittest.TestCase):
         os.utime(file, (old, old))
         self.assertEqual(self.retire(({}, set()))["state"], "retired")
 
+    def test_proc_scan_skips_only_fully_exited_zombie_groups(self):
+        for state, threads in (("Z", 1), ("Z", 2), ("S", 1)):
+            with self.subTest(state=state, threads=threads):
+                fields = [state] + ["0"] * 19
+                fields[17] = str(threads)
+                fields[19] = "100"
+                def source(path, **_kwargs):
+                    return io.StringIO("btime 1000\n" if path == "/proc/stat"
+                                       else "1234 (fixture) " + " ".join(fields))
+                with mock.patch("builtins.open", side_effect=source), \
+                     mock.patch.object(OWNER.os, "listdir", return_value=["1234"]), \
+                     mock.patch.object(OWNER.os, "stat", return_value=os.stat(self.anchor)), \
+                     mock.patch.object(OWNER.os, "readlink", side_effect=PermissionError("unreadable process")):
+                    if state == "Z" and threads == 1:
+                        self.assertEqual(OWNER.linux_scan({str(self.anchor)}), ({1234: None}, set()))
+                    elif state == "Z":
+                        with self.assertRaisesRegex(ValueError, "zombie-group-has-threads"):
+                            OWNER.linux_scan({str(self.anchor)})
+                    else:
+                        with self.assertRaises(PermissionError):
+                            OWNER.linux_scan({str(self.anchor)})
+
     @unittest.skipUnless(sys.platform == "linux", "Linux procfs reference contract")
     def test_proc_scan_finds_cwd_descriptor_and_mapping(self):
         file = self.anchor / "mapped"
@@ -166,9 +190,20 @@ class RetirementTests(unittest.TestCase):
                                   cwd=self.anchor, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         try:
             self.assertEqual(worker.stdout.readline().strip(), "ready")
-            processes, references = OWNER.process_scan({str(self.anchor)})
-            self.assertIn(worker.pid, processes)
-            self.assertIn(str(self.anchor), references)
+            try:
+                processes, references = OWNER.process_scan({str(self.anchor)})
+            except (PermissionError, ValueError) as error:
+                if not isinstance(error, PermissionError) and str(error) != "zombie-group-has-threads":
+                    raise
+                self.legacy()
+                result = OWNER.batch({"candidates": [self.candidate]})["results"][0]
+                self.assertEqual(result["reason"], "process-census-unavailable")
+                self.assertTrue(file.exists())
+                print("Restricted procfs; confirmed retained live reader:", error, flush=True)
+            else:
+                self.assertIn(worker.pid, processes)
+                self.assertIn(str(self.anchor), references)
+                print("Complete procfs census found live cwd/fd/maps references", flush=True)
         finally:
             worker.communicate("q", timeout=5)
 

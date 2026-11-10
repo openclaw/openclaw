@@ -944,15 +944,22 @@ pr_start_dependency_lifetime() {
   export NODE_OPTIONS="${NODE_OPTIONS:-} --require $preload"
 }
 
+pr_collect_dependencies() {
+  [ "${OPENCLAW_PR_CACHE_COLLECTION_PID:-}" != "$$" ] || return 0
+  # Recovery must retain its target and lock-recover needs no Node toolchain.
+  case "$requested_subcommand" in
+    workspace | *-recover | dependency-hold-release) ;;
+    *) node "$1" collect ;;
+  esac
+  export OPENCLAW_PR_CACHE_COLLECTION_PID="$$"
+}
+
 pr_materialize_dependencies() {
   # Discovery and cache recovery use built-ins only. Recovery still authenticates
   # the complete official-main source closure before it can open the ledger.
   case "$requested_subcommand" in workspace | dependency-cache-recover | dependency-hold-release) return 0 ;; esac
   pr_verify_bootstrap || { echo "Refusing unauthenticated parent dependency helpers." >&2; return 1; }
-  if [ "${OPENCLAW_PR_CACHE_SWEPT_PID:-}" != "$$" ]; then
-    node "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" collect
-    export OPENCLAW_PR_CACHE_SWEPT_PID="$$"
-  fi
+  pr_collect_dependencies "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs"
   node --input-type=module - "$1" "$canonical_repo_root" "$2" "${3:-${PR_WORKFLOW_SOURCE_REVISION:-}}" "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" <<'EOF_TOOLING'
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -1002,7 +1009,7 @@ function dependencyKey(rows, tree, audit) {
 }
 
 function materializeDependencies(owner, canonicalPath, destination, revision) {
-  if (process.env.OPENCLAW_PR_CACHE_SWEPT_PID !== String(process.ppid)) {
+  if (process.env.OPENCLAW_PR_CACHE_COLLECTION_PID !== String(process.ppid)) {
     try { sweepDependencyCaches(); }
     catch (error) { console.error(`Warning: retaining PR dependency cache entries: ${error.message}`); }
   }
@@ -1405,11 +1412,7 @@ readonly canonical_repo_root
 
 # Ordinary installed-checkout runs also drain abandoned cache work. Recovery and
 # read-only discovery retain their independent, non-mutating bootstrap contract.
-if ! is_dependency_recovery_command && [ "$requested_subcommand" != workspace ] &&
-  [ "${OPENCLAW_PR_CACHE_SWEPT_PID:-}" != "$$" ]; then
-  node "$script_parent_dir/pr-lib/cache-lifetime.mjs" collect
-  export OPENCLAW_PR_CACHE_SWEPT_PID="$$"
-fi
+pr_collect_dependencies "$script_parent_dir/pr-lib/cache-lifetime.mjs"
 
 if is_dependency_recovery_command; then
   if [ "$requested_subcommand" = dependency-cache-recover ]; then

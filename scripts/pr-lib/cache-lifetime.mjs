@@ -481,13 +481,30 @@ export function withDependencyCacheLock(cache, operation) {
 const identityRecord = (stat) =>
   Object.fromEntries(identityKeys.map((key) => [key, String(stat[key])]));
 
+const lifetimeRecoveryTables = {
+  pending_lifetimes: "anchor_path, anchor_dev, anchor_ino",
+  operation_lifetimes: "anchor_path, anchor_dev, anchor_ino",
+  dependency_transitions: "path",
+};
+
 function recoverySnapshot(db) {
   const rows = (sql) =>
     db
       .prepare(sql)
       .all()
       .map((row) => Object.assign({}, row));
+  const additional = db
+    .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'operation_lifetimes'")
+    .get()
+    ? Object.fromEntries(
+        Object.entries(lifetimeRecoveryTables).map(([table, order]) => [
+          table,
+          rows(`SELECT * FROM ${table} ORDER BY ${order}`),
+        ]),
+      )
+    : {};
   return {
+    ...(Object.values(additional).some((items) => items.length) ? additional : {}),
     owner: rows("SELECT * FROM owner ORDER BY id"),
     installations: rows("SELECT * FROM installations ORDER BY key"),
     holds: rows("SELECT * FROM holds ORDER BY entry_key, anchor_path, anchor_dev, anchor_ino"),
@@ -547,12 +564,68 @@ export function recoverDependencyCache(planPath, planSha256) {
     cache,
     (lock) => {
       const context = ledger(lock);
+      const additional = Object.keys(lifetimeRecoveryTables).some((table) => plan.before[table]);
+      const resourceKinds = new Map();
+      if (additional) {
+        for (const table of Object.keys(lifetimeRecoveryTables)) {
+          if (!Array.isArray(plan.before[table])) {
+            throw new Error("Incomplete PR lifetime recovery preimage");
+          }
+          for (const row of plan.before[table]) {
+            if (row.anchor_path) {
+              if (!basename(row.anchor_path).startsWith(ANCHOR_PREFIX)) {
+                throw new Error("Invalid PR recovery anchor");
+              }
+              resourceKinds.set(row.anchor_path, "directory");
+            }
+            if (row.lease_path) {
+              if (
+                dirname(row.lease_path) !== cache ||
+                !/^lifetime-[0-9]+-[a-f0-9-]+$/.test(basename(row.lease_path))
+              ) {
+                throw new Error("Invalid PR recovery lifetime");
+              }
+              resourceKinds.set(row.lease_path, "file");
+            }
+            if (row.path) {
+              if (
+                dirname(row.path) !== cache ||
+                !/^(?:install-[0-9]+-[A-Za-z0-9]+|retired-[a-f0-9-]+)$/.test(basename(row.path)) ||
+                !/^[a-f0-9]{64}$/.test(row.entry_key)
+              ) {
+                throw new Error("Invalid PR recovery transition");
+              }
+              resourceKinds.set(row.path, "directory");
+              if (!plan.before.installations.some(({ key }) => key === row.entry_key)) {
+                resourceKinds.set(join(cache, row.entry_key), "directory");
+              }
+            }
+          }
+        }
+      }
+      const resources = () =>
+        [...resourceKinds]
+          .toSorted(([left], [right]) => left.localeCompare(right))
+          .map(([path, kind]) => ({
+            path,
+            identity: lstatSync(path, { throwIfNoEntry: false })
+              ? identityRecord(kind === "file" ? physicalFile(path) : directory(path))
+              : null,
+          }));
       const physical = () => {
         const installations = plan.before.installations.map(({ key }) => ({
           key,
           ...identityRecord(entryIdentity(cache, join(cache, key))),
         }));
-        const names = [ledgerName, ".metadata-lock", ...installations.map(({ key }) => key)];
+        const observedResources = resources();
+        const names = [
+          ledgerName,
+          ".metadata-lock",
+          ...installations.map(({ key }) => key),
+          ...observedResources
+            .filter(({ path, identity }) => identity && dirname(path) === cache)
+            .map(({ path }) => basename(path)),
+        ];
         if (
           !isDeepStrictEqual(
             readdirSync(cache).toSorted((left, right) => left.localeCompare(right)),
@@ -564,6 +637,7 @@ export function recoverDependencyCache(planPath, planSha256) {
         return {
           cache: identityRecord(directory(cache)),
           database: identityRecord(physicalFile(context.path)),
+          ...(additional ? { resources: observedResources } : {}),
           installations,
         };
       };
@@ -579,6 +653,53 @@ export function recoverDependencyCache(planPath, planSha256) {
         installations: plan.before.installations.map((row) => ({ ...row, dev: newDevice })),
         holds: plan.before.holds,
       };
+      if (additional) {
+        const identities = new Map(
+          observed.resources.map(({ path, identity }) => [path, identity]),
+        );
+        const adopt = (row, prefix, path) => {
+          const identity = identities.get(path);
+          if (!identity) {
+            return row;
+          }
+          const migrated =
+            row[`${prefix}dev`] === oldDevice ? { ...row, [`${prefix}dev`]: newDevice } : row;
+          if (!rowMatches(migrated, prefix, identity)) {
+            throw new Error("PR dependency recovery resource identity differs");
+          }
+          return migrated;
+        };
+        for (const table of Object.keys(lifetimeRecoveryTables)) {
+          postimage[table] = plan.before[table].map((row) => {
+            let migrated =
+              row.anchor_path && table !== "dependency_transitions"
+                ? adopt(row, "anchor_", row.anchor_path)
+                : row;
+            if (table === "operation_lifetimes") {
+              migrated = adopt(migrated, "", row.lease_path);
+            }
+            if (table === "dependency_transitions" && row.dev !== null) {
+              const path = identities.get(row.path) ? row.path : join(cache, row.entry_key);
+              migrated = adopt(migrated, "", path);
+            }
+            if (table === "dependency_transitions" && row.anchor_path) {
+              for (const owner of ["pending_lifetimes", "operation_lifetimes"]) {
+                const index = plan.before[owner].findIndex(
+                  (item) =>
+                    item.anchor_path === row.anchor_path &&
+                    item.anchor_dev === row.anchor_dev &&
+                    item.anchor_ino === row.anchor_ino,
+                );
+                if (index !== -1) {
+                  migrated = { ...migrated, anchor_dev: postimage[owner][index].anchor_dev };
+                }
+              }
+            }
+            return migrated;
+          });
+        }
+        postimage.holds = plan.before.holds.map((row) => adopt(row, "anchor_", row.anchor_path));
+      }
       if (
         !/^[0-9]+$/.test(oldDevice) ||
         oldDevice === newDevice ||
@@ -628,6 +749,33 @@ export function recoverDependencyCache(planPath, planSha256) {
               throw new Error("PR dependency recovery installation changed");
             }
           }
+          if (additional) {
+            for (const table of ["holds", ...Object.keys(lifetimeRecoveryTables)]) {
+              for (let index = 0; index < plan.before[table].length; index++) {
+                const before = plan.before[table][index];
+                const after = postimage[table][index];
+                const changed = Object.keys(before).filter((key) => before[key] !== after[key]);
+                if (!changed.length) {
+                  continue;
+                }
+                const keys =
+                  table === "holds"
+                    ? ["entry_key", "anchor_path", "anchor_dev", "anchor_ino"]
+                    : lifetimeRecoveryTables[table].split(", ");
+                const lifetimeUpdate = context.db.prepare(
+                  `UPDATE ${table} SET ${changed.map((key) => `${key} = ?`).join(", ")} WHERE ${keys.map((key) => `${key} = ?`).join(" AND ")}`,
+                );
+                if (
+                  lifetimeUpdate.run(
+                    ...changed.map((key) => after[key]),
+                    ...keys.map((key) => before[key]),
+                  ).changes !== 1
+                ) {
+                  throw new Error("PR dependency recovery lifetime changed");
+                }
+              }
+            }
+          }
           if (!isDeepStrictEqual(recoverySnapshot(context.db), postimage)) {
             throw new Error("PR dependency recovery postimage differs");
           }
@@ -637,6 +785,7 @@ export function recoverDependencyCache(planPath, planSha256) {
           // objects directly rather than rejecting that transaction artifact.
           if (
             !same(directory(cache), context.cacheIdentity) ||
+            (additional && !isDeepStrictEqual(resources(), observed.resources)) ||
             observed.installations.some(
               (entry) => !rowMatches(entry, "", entryIdentity(cache, join(cache, entry.key))),
             )
@@ -1213,7 +1362,15 @@ export function collectUnusedDependencyCaches(lock, current = "") {
         "DELETE FROM operation_lifetimes WHERE anchor_path = ? AND anchor_dev = ? AND anchor_ino = ?",
       )
       .run(row.anchor_path, row.anchor_dev, row.anchor_ino);
-    rmSync(row.lease_path);
+    if (
+      !context.db
+        .prepare(
+          "SELECT 1 FROM operation_lifetimes WHERE lease_path = ? UNION ALL SELECT 1 FROM pending_lifetimes WHERE lease_path = ?",
+        )
+        .get(row.lease_path, row.lease_path)
+    ) {
+      rmSync(row.lease_path);
+    }
   }
   const rows = context.db
     .prepare(`
