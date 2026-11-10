@@ -223,7 +223,6 @@ type ToolInventoryRuntimeModelContext = ReturnType<
 
 async function withGatewayToolInventoryScope<T>(
   config: OpenClawConfig,
-  workspaceDir: string,
   run: () => Promise<T>,
 ): Promise<T> {
   const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
@@ -236,7 +235,12 @@ async function withGatewayToolInventoryScope<T>(
     !metadata ||
     metadata.manifestRegistry !== context.manifestRegistry ||
     context.controlPlaneFingerprint !==
-      resolvePluginControlPlaneFingerprint({ config, env: context.env, workspaceDir })
+      // Compare the Gateway discovery inputs, not the agent's execution workspace.
+      resolvePluginControlPlaneFingerprint({
+        config,
+        env: context.env,
+        workspaceDir: context.workspaceDir,
+      })
   ) {
     return run();
   }
@@ -386,7 +390,7 @@ export async function resolveEffectiveToolInventory(
     }));
   const diagnostics = createToolAccessDiagnostics({ profiles: capabilityProfile.policy.profiles });
   let githubPreviewUnavailable = false;
-  const effectiveTools = await withGatewayToolInventoryScope(params.cfg, workspaceDir, async () => {
+  const effectiveTools = await withGatewayToolInventoryScope(params.cfg, async () => {
     const tools = await createOpenClawCodingToolsInternalAsync(
       {
         ...params,
