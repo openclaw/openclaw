@@ -3,7 +3,10 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
-import { restoreOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
+import {
+  intersectOperatorModelPolicies,
+  restoreOperatorModelPolicySnapshot,
+} from "../agents/operator-model-policy-state.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
@@ -53,7 +56,6 @@ import {
 import {
   bindGatewayOperatorContinuationAuthority,
   captureChannelOperatorRunAuthority,
-  intersectOperatorRunModelPolicy,
 } from "./operator-run-authority.js";
 import {
   decodeQueuedOperatorRecoverySource,
@@ -384,7 +386,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       recoverySnapshot: snapshot,
       retain: retainPolicy,
       get modelPolicy() {
-        return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
+        return intersectOperatorModelPolicies(originalModels, live.modelPolicy);
       },
     });
     const authority = createAdmittedRunOperatorAuthority({
@@ -545,7 +547,7 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
         }
       },
       get modelPolicy() {
-        return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
+        return intersectOperatorModelPolicies(originalModels, live.modelPolicy);
       },
     });
     authority.assertCurrent();

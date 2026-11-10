@@ -78,7 +78,6 @@ function collectExpectedMediaFromInternalEvents(events: AgentInternalEvent[] | u
 
 export async function deliverSubagentAnnouncement(
   params: Omit<SubagentAnnounceDirectParams, "createUserTurnTranscriptRecorder"> & {
-    sourceRunId?: string;
     preparedRequester?: { binding: SessionDeliveryRequesterBinding; entry: SessionEntry };
   },
 ): Promise<SubagentAnnounceDeliveryResult> {

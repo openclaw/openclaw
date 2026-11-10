@@ -9,10 +9,15 @@ import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import * as modelSelection from "./model-selection-shared.js";
 import {
   captureOperatorModelPolicySnapshot,
-  prepareOperatorModelPolicy,
+  captureRequesterModelPolicySnapshot,
+  restoreRequesterModelPolicySnapshot,
+  intersectOperatorModelPolicies,
   readOperatorModelPolicyMembership,
-  resolveOperatorModelDefault,
   restoreOperatorModelPolicySnapshot,
+} from "./operator-model-policy-state.js";
+import {
+  prepareOperatorModelPolicy,
+  resolveOperatorModelDefault,
 } from "./operator-model-policy.js";
 
 const cfg: OpenClawConfig = {
@@ -260,4 +265,41 @@ it("refreshes same-object config publications and keeps unowned mutable inputs l
   } finally {
     clearRuntimeConfigSnapshot();
   }
+});
+
+it("round-trips requester model ceilings including intersected wildcard restrictions", () => {
+  const original = prepareOperatorModelPolicy({
+    cfg,
+    policy: { allow: ["vendor/*"], deny: ["vendor/restricted-*"] },
+  });
+  const current = prepareOperatorModelPolicy({
+    cfg,
+    policy: { allow: ["vendor/primary", "vendor/restricted-one", "second/manual"] },
+  });
+  const captured = captureRequesterModelPolicySnapshot(
+    intersectOperatorModelPolicies(original, current),
+  );
+  const encoded = JSON.stringify(captured);
+  const restored = restoreRequesterModelPolicySnapshot(JSON.parse(encoded));
+  expect(restored?.allows({ provider: "vendor", model: "primary" })).toBe(true);
+  expect(restored?.allows({ provider: "vendor", model: "restricted-one" })).toBe(false);
+  expect(restored?.allows({ provider: "second", model: "manual" })).toBe(false);
+  expect(restored?.allows({ provider: "vendor", model: "forbidden" })).toBe(false);
+  // A later unrestricted/current policy cannot erase the captured ceiling.
+  expect(intersectOperatorModelPolicies(restored, undefined)).toBe(restored);
+});
+
+it("distinguishes explicit unbounded requester policy from missing legacy facts", () => {
+  const unbounded = captureRequesterModelPolicySnapshot(undefined);
+  const encoded = JSON.stringify(unbounded);
+  expect(restoreRequesterModelPolicySnapshot(JSON.parse(encoded))).toBeUndefined();
+  expect(() => restoreRequesterModelPolicySnapshot(undefined)).toThrow(
+    "requester model policy is unavailable",
+  );
+  expect(() => restoreRequesterModelPolicySnapshot({ kind: "unknown" })).toThrow(
+    "requester model policy is unavailable",
+  );
+  expect(() => restoreRequesterModelPolicySnapshot({ kind: "bounded", constraints: [] })).toThrow(
+    "requester model policy is unavailable",
+  );
 });

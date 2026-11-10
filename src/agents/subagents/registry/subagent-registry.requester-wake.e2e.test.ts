@@ -20,8 +20,6 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import type { deliverAgentCommandResult } from "../../command/delivery.js";
-import type { EmbeddedAgentRunResult } from "../../embedded-agent-runner/types.js";
 import "../spawn/subagent-spawn-model.mocks.shared.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
@@ -40,9 +38,11 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildScopedSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
+import { registerIndependentSiblingCompletionTests } from "./subagent-registry.independent-sibling-completion.test-support.js";
 import {
   createExternalRequesterSessionEntry,
   type GatewayRequest,
+  type GatewayResponse,
   type SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
@@ -62,17 +62,6 @@ import { registerRequesterWakeSettlementBoundaryTests } from "./subagent-registr
 import * as registry from "./subagent-registry.test-helpers.js";
 
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
-
-type GatewayDeliveryStatus = NonNullable<
-  Awaited<ReturnType<typeof deliverAgentCommandResult>>["deliveryStatus"]
->;
-
-type GatewayResponse = {
-  status?: string;
-  runId?: string;
-  messages?: Array<Record<string, unknown>>;
-  result?: Partial<EmbeddedAgentRunResult> & { deliveryStatus?: Partial<GatewayDeliveryStatus> };
-};
 
 let lifecycleHandler: Parameters<typeof onAgentEvent>[0] | undefined;
 let agentCallGates = new Map<string, Promise<void>>();
@@ -397,6 +386,8 @@ describe("requester settle wake product flow", () => {
     getAgentCalls,
     wakeRequester,
   };
+
+  registerIndependentSiblingCompletionTests({ ...requesterFixture, callGatewayMock });
 
   it.each(["six-child DM batch", "nested three-child completion"])(
     "delivers a %s with execution-identity collection enabled",

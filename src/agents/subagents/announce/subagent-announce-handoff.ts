@@ -23,6 +23,7 @@ export type TrustedSubagentCompletionHandoff = {
 
 export type SubagentCompletionToolHandoffRegistration = {
   sourceSessionKey: string;
+  sourceRunIds?: readonly string[];
   sourceSessionId?: string;
   targetSessionKey: string;
   targetSessionId: string;

@@ -20,6 +20,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw
 import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
+  readRunModelPolicy,
 } from "../../admitted-run-context.js";
 import { resolveSessionAgentIdsStrict } from "../../agent-scope.js";
 import {
@@ -207,7 +208,8 @@ async function prepareNativeSessionRuntime(
     );
   }
   const operatorAuthority = readRunOperatorAuthority(runParams);
-  assertOperatorModelAllowed(operatorAuthority, ownership.modelRef);
+  const modelPolicy = readRunModelPolicy(runParams);
+  assertOperatorModelAllowed(operatorAuthority, ownership.modelRef, modelPolicy);
   if (ownership.auth === "host" && !ownership.modelRef) {
     throw new AgentHarnessPreflightError(
       "The native session's model and provider are unavailable for host authentication. Reattach the original native session before retrying.",
@@ -227,7 +229,7 @@ async function prepareNativeSessionRuntime(
     // Compare host-prepared auth against its exact tuple; native auth may follow its owner's model.
     assertCurrent: async () => {
       const current = await readOwnership();
-      assertOperatorModelAllowed(operatorAuthority, current?.modelRef);
+      assertOperatorModelAllowed(operatorAuthority, current?.modelRef, modelPolicy);
       if (
         current?.model !== ownership.model ||
         current.auth !== ownership.auth ||
@@ -260,6 +262,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
 }) {
   const runParams = params.runParams;
   const operatorAuthority = readRunOperatorAuthority(runParams);
+  const modelPolicy = readRunModelPolicy(runParams);
   const hookSelection =
     runParams.resolvedModelSelection ??
     (await resolveHookModelSelection({
@@ -311,7 +314,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     provider = nativeSessionRuntime.modelRef.provider;
     modelId = nativeSessionRuntime.modelRef.model;
   }
-  if (operatorAuthority?.modelPolicy && !nativeSessionRuntime) {
+  if (modelPolicy && !nativeSessionRuntime) {
     const selected = resolveModelCandidateChain({
       cfg: runParams.config,
       agentId: runParams.agentId,
@@ -323,7 +326,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
       fallbacksOverride: [],
       manifestPlugins: params.preparedModelRuntime?.metadataSnapshot,
     })[0];
-    assertOperatorModelAllowed(operatorAuthority, selected);
+    assertOperatorModelAllowed(operatorAuthority, selected, modelPolicy);
   }
   const requestedModelId = modelId;
   if (nativeSessionRuntime?.auth === "native" && requestStreamTransportOverrides) {
@@ -465,7 +468,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
   }
   const { model, authStorage, modelRegistry } = modelResolution;
   if (!nativeSessionRuntime) {
-    assertOperatorModelAllowed(operatorAuthority, { provider, model: modelId });
+    assertOperatorModelAllowed(operatorAuthority, { provider, model: modelId }, modelPolicy);
   }
 
   return {

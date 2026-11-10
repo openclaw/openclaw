@@ -18,6 +18,7 @@ import {
   assertOperatorModelAllowed,
   bindOperatorModelExecution,
   readRunOperatorAuthority,
+  readRunModelPolicy,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
 import {
@@ -521,7 +522,7 @@ function assertHarnessModelPolicySupport(harness: AgentHarness, params: Embedded
   const authority = readRunOperatorAuthority(params);
   authority?.assertCurrent();
   const error = !isBuiltInOpenClawAgentHarness(harness)
-    ? resolveAgentHarnessOperatorPolicyError(harness, authority)
+    ? resolveAgentHarnessOperatorPolicyError(harness, authority, readRunModelPolicy(params))
     : undefined;
   if (error) {
     throw new AgentHarnessPreflightError(error);

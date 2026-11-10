@@ -24,6 +24,7 @@ export async function createAdmittedHostCapabilityTestFixture(
     toolCalls?: "deny";
     gatewayContext?: true;
     operatorAuthority?: AdmittedRunOperatorAuthority;
+    modelPolicy?: Parameters<typeof prepareAgentRunAdmission>[0]["modelPolicy"];
   } = {},
 ) {
   let resolveGatewayContext: GatewayContextResolver | undefined;
@@ -58,6 +59,7 @@ export async function createAdmittedHostCapabilityTestFixture(
     },
     operationalRunInstance: createOperationalRunInstanceRef(attempt.runId),
     operatorAuthority: options.operatorAuthority,
+    modelPolicy: options.modelPolicy,
   });
   const admittedRunContext = await admission.admit("plugin-harness", `harness-${attempt.runId}`);
   bindGateway?.(admittedRunContext);

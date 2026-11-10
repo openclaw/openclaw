@@ -1,6 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  captureRequesterModelPolicySnapshot,
+  restoreRequesterModelPolicySnapshot,
+} from "../agents/operator-model-policy-state.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
+import {
   callAgentToolGatewayRequest,
   callInProcessGatewayTool,
   runWithGatewayToolContinuationContext,
@@ -112,6 +117,63 @@ describe("synthetic operator scope attenuation", () => {
 
 describe("registered plugin SDK scope attenuation", () => {
   afterEach(() => resetTestPluginRegistry());
+
+  it("preserves the requester model ceiling on an authenticated scoped client", async () => {
+    const snapshot = captureRequesterModelPolicySnapshot(
+      prepareOperatorModelPolicy({
+        cfg: { agents: { defaults: { model: "custom/allowed" } } },
+        policy: { allow: ["custom/allowed"] },
+        manifestPlugins: [],
+      }),
+    );
+    expect(snapshot.kind).toBe("bounded");
+    const handler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
+      expect(client?.internal?.syntheticClient).not.toBe(true);
+      expect(client?.internal?.requesterModelPolicySnapshot).toEqual(snapshot);
+      const ceiling = expectDefined(
+        restoreRequesterModelPolicySnapshot(client?.internal?.requesterModelPolicySnapshot),
+        "requester ceiling",
+      );
+      expect(ceiling.allows({ provider: "custom", model: "forbidden" })).toBe(false);
+      respond(true, { ok: true });
+    });
+    const context = createContext([["scopeProof.models", "operator.read", "scope-proof", handler]]);
+    context.resolveGatewayContext = () => context;
+    const client = createOperatorClient({
+      profileName: "model-ceiling-owner",
+      scopes: ["operator.read"],
+    });
+    const source = expectDefined(
+      await captureGatewayOperatorRunAuthority({
+        client,
+        context,
+        hasCurrentClientAuthority: () => true,
+      }),
+      "operator source",
+    );
+    try {
+      await withPluginRuntimeGatewayRequestScope(
+        {
+          context,
+          client: { ...client, internal: { operatorRunAuthority: source.authority } },
+          resolveGatewayContext: context.resolveGatewayContext,
+          isWebchatConnect: () => false,
+        },
+        () =>
+          dispatchGatewayMethodInProcess(
+            "scopeProof.models",
+            {},
+            {
+              requesterModelPolicySnapshot: snapshot,
+              resolveGatewayContext: context.resolveGatewayContext,
+            },
+          ),
+      );
+      expect(handler).toHaveBeenCalledOnce();
+    } finally {
+      source.release();
+    }
+  });
 
   it.each([
     { original: "write", scoped: "read", effective: "read" },

@@ -3,9 +3,9 @@ import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-conte
 import { configFor } from "../agents/model-auth.fixtures.test-support.js";
 import {
   captureOperatorModelPolicySnapshot,
-  prepareOperatorModelPolicy,
   restoreOperatorModelPolicySnapshot,
-} from "../agents/operator-model-policy.js";
+} from "../agents/operator-model-policy-state.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";

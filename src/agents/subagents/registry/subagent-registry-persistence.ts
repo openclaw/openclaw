@@ -589,7 +589,7 @@ export async function restoreSubagentRunsFromDisk(params: {
         params.runs.set(runId, retained);
         if (params.runs === subagentRuns && !getGatewayContextResolver(retained)?.()) {
           // Retained rows are history. Only a newly admitted live task may own completion.
-          subagentRuns.retireCompletionAuthority(retained);
+          subagentRuns.retireCompletion(retained);
         }
         rememberRestoredSubagentRunNotification(entry);
         added += 1;

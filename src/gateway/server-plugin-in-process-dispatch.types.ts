@@ -51,6 +51,7 @@ export type DispatchGatewayMethodInProcessOptions = {
   operatorRoleActor?: GatewayOperatorRoleActor;
   pluginRuntimeOwnerId?: string;
   pluginSubagentRequester?: PluginSubagentRequesterContext;
+  requesterModelPolicySnapshot?: import("../agents/operator-model-policy.types.js").RequesterModelPolicySnapshot;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   pluginSubagentToolsAllow?: string[];
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;

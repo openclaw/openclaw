@@ -91,6 +91,7 @@ export type GatewayClient = Pick<
     agentRunTracking?: GatewayAgentRunTaskOwner;
     /** Host-captured requester lineage for opt-in plugin subagent completion delivery. */
     pluginSubagentRequester?: PluginSubagentRequesterContext;
+    requesterModelPolicySnapshot?: import("../../agents/operator-model-policy.types.js").RequesterModelPolicySnapshot;
     runtimeContextFragments?: RuntimeContextFragment[];
     /** Host-owned: deliver only authored output, never runtime error payloads. */
     internalDeliverySuppressErrors?: boolean;

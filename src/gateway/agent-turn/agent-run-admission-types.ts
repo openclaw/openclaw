@@ -40,6 +40,7 @@ export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   releaseCallerAuthority?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  modelPolicy?: import("../../agents/operator-model-policy.types.js").PreparedOperatorModelPolicy;
   operationalRunInstance: OperationalRunInstanceRef;
   timeoutSeconds?: number;
   effectiveProviderOverride?: string;

@@ -426,13 +426,11 @@ export const startSubagentAnnounceCleanupFlow = (
     prepareChildSessionEffects,
     isCompletionDeliveryAllowed: () => {
       assertPersistenceCurrent();
-      return (
-        isSubagentCompletionDeliveryAllowed(
-          context,
-          entry,
-          cleanupGeneration,
-          committedDeliveryOwner,
-        ) && subagentRuns.runWithCompletionAuthority(entry, () => true)
+      return isSubagentCompletionDeliveryAllowed(
+        context,
+        entry,
+        cleanupGeneration,
+        committedDeliveryOwner,
       );
     },
     isCompletionOwnedByRequesterYield: requesterOwnsCompletion,
@@ -581,21 +579,19 @@ export const startSubagentAnnounceCleanupFlow = (
           throw new Error("Subagent completion requester is unavailable");
         }
       }
-      announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
-        params.runSubagentAnnounceFlow({
-          ...announceParams,
-          controllerInput,
-          childAgentId: entry.childAgentId,
-          childSessionIdentity: entry.childSessionIdentity,
-          signal: deadline.signal,
-          onAccepted: releasePreparation,
-          // Delivery expiry bounds admission; the requester owns its execution budget.
-          onExecutionStarted: () => {
-            releasePreparation();
-            clearTimeout(deadlineTimer);
-          },
-        }),
-      );
+      announceOutcome = await params.runSubagentAnnounceFlow({
+        ...announceParams,
+        controllerInput,
+        childAgentId: entry.childAgentId,
+        childSessionIdentity: entry.childSessionIdentity,
+        signal: deadline.signal,
+        onAccepted: releasePreparation,
+        // Delivery expiry bounds admission; the requester owns its execution budget.
+        onExecutionStarted: () => {
+          releasePreparation();
+          clearTimeout(deadlineTimer);
+        },
+      });
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;
@@ -613,7 +609,7 @@ export const startSubagentAnnounceCleanupFlow = (
     if (
       context.isCleanupAttemptCurrent(entry, cleanupGeneration) &&
       getCurrentSubagentRunOwner(params.runs, entry)?.delivery?.status !== "delivered" &&
-      (subagentRuns.isCompletionAuthorityRetired(entry) ||
+      (subagentRuns.isCompletionRetired(entry) ||
         (shouldSuspendPendingFinalDelivery(entry) &&
           !isSystemEventStoreCurrent(
             entry.requesterSessionKey,

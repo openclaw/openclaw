@@ -107,7 +107,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     let preparedRows: (() => ReadonlyMap<string, SubagentRunRecord>) | undefined;
     let plannedEntry: SubagentRunRecord | undefined;
     let registered: SubagentRunRecord | undefined;
-    let custodyTransferred = false;
     let queuedScope: SubagentRegistrationScope | undefined;
     let initialOutcome: "pending" | "refused" | "uncertain" = "pending";
     let initialFailure: unknown;
@@ -196,7 +195,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 activated && registryCurrent() && Boolean(currentEntry()) && ownsSession(),
               canAcceptLaunch: () =>
                 registered !== undefined &&
-                !subagentRuns.isCompletionAuthorityRetired(registered) &&
+                !subagentRuns.isCompletionRetired(registered) &&
                 registryCurrent() &&
                 Boolean(currentEntry()) &&
                 ownsSession(),
@@ -276,7 +275,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 "Accepted run already has another completion owner; inspect it before retrying.",
               );
             }
-            subagentRuns.runWithCompletionAuthority(previous, () => options.assertCurrent?.());
+            options.assertCurrent?.();
             return { value: undefined };
           }
           if (selected ? !isSameSubagentRunOwner(previous, selected) : previous !== undefined) {
@@ -290,22 +289,30 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           if (candidates.some((row) => !runIds.has(row.runId))) {
             throw new SubagentRegistryMutationRejectedError("Subagent registration cohort changed");
           }
-          const entry = createSubagentRegistrationRecord(registerParams, {
-            now: Date.now(),
-            generation: nextSubagentRunGeneration(rows.values(), childSessionKey, childAgentId),
-            lifecycleGeneration,
-            childAgentId,
-            requesterAgentId,
-            requesterOrigin: normalizeDeliveryContext(registerParams.requesterOrigin),
-            swarmWaitOwnerSessionKeys:
-              registerParams.collect && registerParams.swarmRequesterSessionKey
-                ? resolveSwarmWaitOwnerSessionKeys(
-                    this.options.getRunsForChildSession,
-                    registerParams.swarmRequesterSessionKey,
-                    requesterAgentId,
-                  )
-                : undefined,
-          });
+          const entry = createSubagentRegistrationRecord(
+            {
+              ...registerParams,
+              requesterModelPolicySnapshot: registerParams.requesterModelPolicySnapshot ?? {
+                kind: "unknown",
+              },
+            },
+            {
+              now: Date.now(),
+              generation: nextSubagentRunGeneration(rows.values(), childSessionKey, childAgentId),
+              lifecycleGeneration,
+              childAgentId,
+              requesterAgentId,
+              requesterOrigin: normalizeDeliveryContext(registerParams.requesterOrigin),
+              swarmWaitOwnerSessionKeys:
+                registerParams.collect && registerParams.swarmRequesterSessionKey
+                  ? resolveSwarmWaitOwnerSessionKeys(
+                      this.options.getRunsForChildSession,
+                      registerParams.swarmRequesterSessionKey,
+                      requesterAgentId,
+                    )
+                  : undefined,
+            },
+          );
           entry.requesterStorePath =
             previous?.requesterStorePath ??
             resolvePhysicalSessionStorePath(
@@ -353,13 +360,8 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   requesterAgentId,
                 ),
               });
-              if (authority && !registerParams.collect) {
-                subagentRuns.bindCompletionAuthority(
-                  entry,
-                  authority,
-                  options.requesterRunInstance,
-                );
-                custodyTransferred = true;
+              if (!registerParams.collect) {
+                subagentRuns.bindCompletionOwner(entry, options.requesterRunInstance);
               }
             } finally {
               if (!registrationOwnership.superseded) {
@@ -430,9 +432,15 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           current,
           this.options.resolveSubagentWaitTimeoutMs(cfg, registerParams.runTimeoutSeconds ?? 0),
         );
-        await startSubagentTyping(current, authority, currentEntry);
+        await startSubagentTyping(current, currentEntry);
       }
     } catch (error) {
+      // The publication marker survives caller loss after COMMIT; retries must not
+      // mistake an accepted child for a refused registration.
+      const failure =
+        registered && !(error instanceof SubagentRegistryWriteError)
+          ? new SubagentRegistryWriteError("committed", error, "published")
+          : error;
       if (!queuedScope) {
         initialOutcome =
           hasSqliteWorkerOutcomeUnknown(error) ||
@@ -441,12 +449,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             !registered)
             ? "uncertain"
             : "refused";
-        initialFailure = error;
+        initialFailure = failure;
       }
       if (!registerParams.queued && registered && !activated) {
-        subagentRuns.retireCompletionAuthority(registered);
         if (registryCurrent() && currentEntry()) {
-          // A committed child still needs terminal observation after its caller retires.
+          // A committed child still owes its recorded requester a result after caller retirement.
           activate();
         }
       }
@@ -455,14 +462,12 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         error instanceof SubagentRegistryWriteError &&
         error.outcome === "not-committed"
       ) {
-        subagentRuns.releaseCompletionAuthority(registered);
+        subagentRuns.releaseRequesterRunInstance(registered);
       }
-      throw error;
+      throw failure;
     } finally {
       registrationSettled = true;
-      if (!custodyTransferred) {
-        authority?.release();
-      }
+      authority?.release();
       registrationOwnership.release();
     }
   };

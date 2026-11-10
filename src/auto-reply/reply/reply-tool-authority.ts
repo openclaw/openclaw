@@ -21,7 +21,7 @@ import {
   type PreparedQuestionCallerRead,
   type ReplyToolAuthorityCaller,
 } from "../../agents/harness/host-private-capabilities.js";
-import { readOperatorModelPolicyMembership } from "../../agents/operator-model-policy.js";
+import { readOperatorModelPolicyMembership } from "../../agents/operator-model-policy-state.js";
 import {
   captureRequesterOrigin,
   resolveRequesterPrincipalKey,

@@ -103,6 +103,7 @@ import {
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "./subagent-depth.js";
 import { withPreparedSessionCapabilityRead } from "./subagent-session-store.js";
+import { captureSubagentSpawnGatewayContext } from "./subagent-spawn-gateway-context.js";
 import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
@@ -165,6 +166,7 @@ export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
+  const { modelCeiling } = captureSubagentSpawnGatewayContext();
   const cfg = getRuntimeConfig();
   const creatorProfileId = requesterCreatorProfileId(
     getGatewayToolCallerIdentity()?.requesterOrigin,
@@ -685,6 +687,7 @@ export async function spawnAcpDirect(
         controllerSessionKey,
         sessionEntry: state.initializedSession.sessionEntry,
         requesterSessionKey: ownership.completionRequesterSessionKey,
+        requesterModelPolicySnapshot: modelCeiling,
         completionRequesterSessionId,
         completionRequesterLifecycleRevision,
         requesterOrigin,

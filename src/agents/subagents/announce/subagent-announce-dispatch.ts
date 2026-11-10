@@ -16,7 +16,6 @@ type SubagentAnnounceDeliveryFailureReason =
   | "delivery_suppressed"
   | "generated_media_missing"
   | "message_tool_delivery_missing"
-  | "operator_authority_unavailable"
   | "requester_abandoned"
   | "requester_transcript_conflict"
   | "requester_turn_pending"
@@ -73,8 +72,10 @@ export type SubagentAnnounceDirectParams = {
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;
   sourceSessionKey?: string;
+  sourceRunId?: string;
   sourceTool?: string;
   settleWakeSourceSessionKeys?: readonly string[];
+  settleWakeSourceRunIds?: readonly string[];
   isSourceSessionEffectsAllowed?: () => boolean;
   sourceReceiptAdmission?: GatewayToolCallerReceiptAdmission;
   /** Reconcile an already-admitted public settle turn; never dispatch or send. */

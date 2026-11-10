@@ -13,6 +13,7 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { captureSubagentSpawnGatewayContext } from "../agents/subagents/spawn/subagent-spawn-gateway-context.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -516,6 +517,9 @@ export function createGatewaySubagentRuntime(
       const pluginSubagentRequester = resolvePluginSubagentCompletionRequester(
         params.completionDelivery,
       );
+      const requesterModelPolicySnapshot =
+        pluginSubagentRequester?.requesterModelPolicySnapshot ??
+        captureSubagentSpawnGatewayContext().modelCeiling;
       const scope = getPluginRuntimeGatewayRequestScope();
       const pluginId = normalizeOptionalString(scope?.pluginId);
       const runtimePluginToolGrant = resolvePluginSubagentToolsAlsoAllow({
@@ -602,6 +606,7 @@ export function createGatewaySubagentRuntime(
           ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
           ...(pluginSubagentRequester ? { pluginSubagentRequester } : {}),
+          requesterModelPolicySnapshot,
           ...(runtimePluginToolGrant ? { runtimePluginToolGrant } : {}),
           ...(params.disableTools === true ? { pluginSubagentToolsAllow: [] } : {}),
           resolveGatewayContext,

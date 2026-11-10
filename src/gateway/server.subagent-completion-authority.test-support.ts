@@ -197,6 +197,7 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
         childAgentId: "main",
         sessionEntry: child.entry,
         requesterSessionKey: requesterScope.sessionKey,
+        requesterModelPolicySnapshot: { kind: "unbounded" },
         requesterAgentId: "main",
         requesterDisplayKey: requesterScope.sessionKey,
         task: "First task",

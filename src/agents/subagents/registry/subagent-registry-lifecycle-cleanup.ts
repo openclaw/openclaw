@@ -105,7 +105,7 @@ export function isSubagentCompletionDeliveryAllowed(
       committedDeliveryOwner.requesterSettleWake?.batchRunIds?.toSorted().join("\0");
   const { requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
   const allowed =
-    !subagentRuns.isCompletionAuthorityRetired(entry) &&
+    !subagentRuns.isCompletionRetired(entry) &&
     entry.suppressCompletionDelivery !== true &&
     !isDeliverySuspended(entry) &&
     (entry.delivery?.status !== "delivered" ||
@@ -121,7 +121,7 @@ export function isSubagentCompletionDeliveryAllowed(
     return allowed;
   }
   if (entry.expectsCompletionMessage === true) {
-    subagentRuns.retireCompletionAuthority(entry);
+    subagentRuns.retireCompletion(entry);
   }
   return false;
 }
@@ -154,7 +154,7 @@ export function suspendReplacedStoreNotifications(
     return Promise.all(pending).then(() => {});
   }
   for (const entry of entries) {
-    subagentRuns.retireCompletionAuthority(entry);
+    subagentRuns.retireCompletion(entry);
     retireSubagentControllerInputs(entry);
   }
   const work = runWithSubagentCleanupWorkAdmission(async () => {

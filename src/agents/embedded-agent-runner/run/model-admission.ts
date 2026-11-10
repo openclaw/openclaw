@@ -4,6 +4,7 @@ import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-s
 import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
+  readRunModelPolicy,
 } from "../../admitted-run-context.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
@@ -38,7 +39,8 @@ export function assertInitialOperatorModelPolicy(
   entry: Parameters<typeof resolveSessionPinnedHarnessId>[0],
 ): void {
   const operatorAuthority = readRunOperatorAuthority(params);
-  if (!operatorAuthority?.modelPolicy || resolveSessionPinnedHarnessId(entry)) {
+  const modelPolicy = readRunModelPolicy(params);
+  if (!modelPolicy || resolveSessionPinnedHarnessId(entry)) {
     return;
   }
   const selection = resolveInitialEmbeddedRunModel({ ...params, config: params.config });
@@ -51,5 +53,5 @@ export function assertInitialOperatorModelPolicy(
     fallbacksOverride: [],
     manifestPlugins: params.pluginGeneration?.pluginMetadataSnapshot,
   })[0];
-  assertOperatorModelAllowed(operatorAuthority, selected);
+  assertOperatorModelAllowed(operatorAuthority, selected, modelPolicy);
 }

@@ -174,7 +174,7 @@ export function resumeSubagentRun(runId: string) {
   if (
     !entry ||
     resumedRuns.has(getSubagentRunRuntimeKey(entry)) ||
-    subagentRuns.isCompletionAuthorityRetired(entry)
+    subagentRuns.isCompletionRetired(entry)
   ) {
     return;
   }

@@ -179,6 +179,7 @@ export function registerNativeCancellationCases(
       });
       const requesterContext = expectDefined(
         createPluginSubagentRequesterContext({
+          requesterModelPolicySnapshot: { kind: "unbounded" },
           sessionKey: requester,
           origin: { channel: "telegram", to: "telegram:native-cancellation" },
         }),

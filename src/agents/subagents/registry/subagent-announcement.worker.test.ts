@@ -10,10 +10,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
-} from "../../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
@@ -458,12 +455,7 @@ it.each([false, true])(
         expect(storedAnnouncement(run.runId)?.task).toBe("live retirement successor");
         expect(getSubagentRegistryPublicationRevision()).toBeGreaterThan(publicationRevision);
         expect(ended).not.toHaveBeenCalled();
-        subagentRuns.runWithCompletionAuthority(successor, () => {
-          const retained =
-            getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-          expect(retained?.source).toBe(source.authority.source);
-          retained?.assertCurrent();
-        });
+        expect(subagentRuns.isCompletionRetired(successor)).toBe(false);
       } else {
         expect(result).toEqual({ completed: true });
         expect(subagentRuns.has(run.runId)).toBe(false);

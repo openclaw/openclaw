@@ -47,6 +47,7 @@ function prepareAgentCommandRunAdmission(
     onAdmitted?: Parameters<typeof prepareAgentRunAdmission>[0]["onAdmitted"];
     assertSourceCurrent?: () => void;
     operatorAuthority?: AgentCommandOpts["operatorAuthority"];
+    modelPolicy?: AgentCommandOpts["modelPolicy"];
   },
   spawnFacts?: AgentCommandExecutionIdentitySpawnFacts,
 ) {
@@ -77,6 +78,7 @@ function prepareAgentCommandRunAdmission(
     ...(params.onAdmitted ? { onAdmitted: params.onAdmitted } : {}),
     assertSourceCurrent: params.assertSourceCurrent,
     operatorAuthority: params.operatorAuthority,
+    modelPolicy: params.modelPolicy,
   });
 }
 
@@ -109,6 +111,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
     runId: prepared.runId,
     assertSourceCurrent: opts.assertSourceCurrent,
     operatorAuthority: opts.operatorAuthority,
+    modelPolicy: opts.modelPolicy,
     onAdmitted: opts.onAdmittedRunContext,
   };
   const spawnFacts = readAgentCommandExecutionIdentitySpawnFacts(opts);

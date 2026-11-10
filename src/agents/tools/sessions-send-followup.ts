@@ -9,6 +9,8 @@ import { withFollowupRequest } from "../subagents/completion/session-followup-co
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
+import type { NewSubagentRunRegistration } from "../subagents/registry/subagent-registry-run-launch-record.js";
+import { captureSubagentSpawnGatewayContext } from "../subagents/spawn/subagent-spawn-gateway-context.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -95,6 +97,7 @@ export async function dispatchSessionsSendFollowup(
     withRequesterAuthority?: <T>(run: () => T) => T;
   },
 ) {
+  const { modelCeiling, gatewayContextResolver } = captureSubagentSpawnGatewayContext();
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   const completionChild = options.watch
@@ -201,6 +204,7 @@ export async function dispatchSessionsSendFollowup(
               requesterSessionKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
               requesterTurnRunId: registryTurn,
+              requesterModelPolicySnapshot: modelCeiling,
               requesterRunInstance: instance,
               assertCurrent: assertCompletionCurrent,
             });
@@ -218,6 +222,8 @@ export async function dispatchSessionsSendFollowup(
               sessionEntry: options.targetSession,
               childAgentId: params.sessionStoreTarget.agentId,
               requesterSessionKey: options.requesterSessionKey,
+              requesterModelPolicySnapshot: modelCeiling,
+              gatewayContextResolver,
               requesterDisplayKey: options.requesterSessionKey,
               requesterAgentId: options.requesterAgentId,
               requesterTurnRunId: registryTurn,
@@ -230,7 +236,7 @@ export async function dispatchSessionsSendFollowup(
               completionRequesterSessionId: replyContext.requesterSession?.sessionId,
               completionRequesterLifecycleRevision:
                 replyContext.requesterSession?.lifecycleRevision,
-            },
+            } satisfies NewSubagentRunRegistration,
             {
               assertCurrent: assertCompletionCurrent,
               assertPublicationCurrent: () => request?.custody.assertCurrent(),

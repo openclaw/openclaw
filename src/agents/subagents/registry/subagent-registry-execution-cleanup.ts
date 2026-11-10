@@ -18,6 +18,7 @@ import type { SubagentKillSession } from "./subagent-control-session.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasRequiredRequesterReceipt } from "./subagent-requester-turn-liveness.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 // A retired row retains only its exact source reference; the controller owns cleanup.
@@ -130,7 +131,10 @@ export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void 
       void execution.input.settlement.promise.then(release, release);
     }
   }
-  clearGatewayContextResolver(entry);
+  // Execution custody retires now; a required receipt still owns routing for a later cohort.
+  if (!hasRequiredRequesterReceipt(entry, subagentRuns)) {
+    clearGatewayContextResolver(entry);
+  }
 }
 
 function hasRetainedControllerExecution(entry: SubagentRunRecord): boolean {

@@ -444,6 +444,10 @@ export async function dispatchGatewayMethodInProcess<T>(
         client: resolved.client,
         isWebchatConnect: resolved.isWebchatConnect,
       });
+      const admissionSource = captureExternalSessionCommitGuard(
+        options?.sessionMutationCommitGuard,
+      );
+      const executionSource = captureExternalSessionCommitGuard(resolved.assertGatewayCurrent);
       return method === "agent"
         ? await facade.dispatch<T>(params as AgentRunRequest, {
             controllerInput: options?.controllerInput,
@@ -452,8 +456,10 @@ export async function dispatchGatewayMethodInProcess<T>(
               // The caller authorizes admission; accepted execution retains its own authority.
               resolved.assertSourceCurrent,
               resolved.assertInvocationCurrent,
-              captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard),
+              admissionSource,
             ]),
+            // Host lifecycle remains current at effects; caller invocation is admission-only.
+            executionSource,
             privateCompletion: options?.privateCompletion,
             replyExpectation: options?.replyExpectation,
             settleWakeReplay: options?.settleWakeReplay,

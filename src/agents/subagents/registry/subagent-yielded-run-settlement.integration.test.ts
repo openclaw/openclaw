@@ -297,7 +297,7 @@ describe("yielded run settlement", () => {
       expect(restored.waitForMessage).toBe(
         requesterState === "descendants-lost" ? undefined : true,
       );
-      expect(subagentRuns.isCompletionAuthorityRetired(restored)).toBe(true);
+      expect(subagentRuns.isCompletionRetired(restored)).toBe(true);
       if (requesterState === "live") {
         expect(
           emitAgentEventIfCurrent({

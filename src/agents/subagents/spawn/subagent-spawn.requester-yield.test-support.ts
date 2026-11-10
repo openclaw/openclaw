@@ -12,9 +12,11 @@ import {
 } from "../../accepted-session-spawn.js";
 import {
   readAdmittedRunOperatorAuthority,
+  assertOperatorModelAllowed,
   getAdmittedRunDelegatedAuthority,
 } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
+import { restoreRequesterModelPolicySnapshot } from "../../operator-model-policy-state.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -103,7 +105,7 @@ export function registerYieldedRequesterBatchCase(
       options.runEmbeddedAgent.mockImplementation(async (params) => {
         try {
           const admitted = await admitEmbeddedRun(params);
-          if (guest) {
+          if (guest && params.sessionKey !== bound.parentSessionKey) {
             const authority = readAdmittedRunOperatorAuthority(admitted);
             expect(authority?.profileId).toBe(guest.source.authority.profileId);
             expect(authority?.scopes).toEqual(["operator.sessions.write"]);
@@ -133,6 +135,24 @@ export function registerYieldedRequesterBatchCase(
           }
           expect(subagentRuns.get(params.runId)?.childSessionKey).toBe(bound.parentSessionKey);
           expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+          if (guest) {
+            const authority = readAdmittedRunOperatorAuthority(admitted);
+            const ceiling = expectDefined(admitted.modelPolicy, "resumed parent own model ceiling");
+            expect(ceiling.allows({ provider: "custom", model: "test-model" })).toBe(true);
+            // Native System principal authority is legitimate, but cannot substitute for the saved ceiling.
+            for (const currentAuthority of [undefined, authority]) {
+              expect(() =>
+                assertOperatorModelAllowed(
+                  currentAuthority,
+                  {
+                    provider: "custom",
+                    model: "forbidden-model",
+                  },
+                  ceiling,
+                ),
+              ).toThrow("cannot use this model");
+            }
+          }
           parentCalls.push(params.prompt);
           parentStarted.resolve();
           await recordFinal(bound, params, "Nested parent is complete.");
@@ -264,6 +284,15 @@ export function registerYieldedRequesterBatchCase(
         expect(parentCalls).toHaveLength(1);
         expect(parentCalls[0]).toContain("Nested child result.");
         const durable = loadSubagentRegistryFromSqlite().get(childRunId);
+        if (guest) {
+          const restoredCeiling = restoreRequesterModelPolicySnapshot(
+            durable?.requesterModelPolicySnapshot,
+          );
+          expect(restoredCeiling?.allows({ provider: "custom", model: "test-model" })).toBe(true);
+          expect(restoredCeiling?.allows({ provider: "custom", model: "forbidden-model" })).toBe(
+            false,
+          );
+        }
         expect(durable?.delivery?.status).toBe("delivered");
         expect(durable?.requesterSettleWake).toBeUndefined();
       } catch (error) {

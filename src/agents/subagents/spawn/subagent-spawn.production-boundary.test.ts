@@ -15,7 +15,6 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import type { GatewayOperatorRoleDefinition } from "../../../config/types.gateway.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../../gateway/agent-runtime-approval-authority.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
@@ -46,8 +45,6 @@ import {
   getRpcSource,
   getRpcSourceIdentity,
 } from "../../../sessions/session-controller.rpc-sources.js";
-import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
-import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import {
   createOpenClawTestState,
@@ -63,7 +60,6 @@ import {
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { assertAgentHarnessExecutionEnvironment } from "../../harness/execution-environment.js";
 import type { AgentHarness } from "../../harness/types.js";
-import { prepareOperatorModelPolicy } from "../../operator-model-policy.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../../prepared-model-runtime.js";
 import { ModelRegistry } from "../../sessions/model-registry.js";
 import {
@@ -91,7 +87,10 @@ import { registerAccessStateSpawnCases } from "./subagent-spawn.access-state.tes
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
 import { registerCollectorResultSpawnCases } from "./subagent-spawn.collector-results.test-support.js";
 import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
-import { registerGuestSpawnCases } from "./subagent-spawn.guest.test-support.js";
+import {
+  createGuestParentFixture,
+  registerGuestSpawnCases,
+} from "./subagent-spawn.guest.test-support.js";
 import { registerParticipantSpawnCases } from "./subagent-spawn.participants.test-support.js";
 import { registerNativePluginSpawnCases } from "./subagent-spawn.plugin-native.test-support.js";
 import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
@@ -220,9 +219,13 @@ afterEach(async ({ task }) => {
 
 async function createBoundParent(
   operatorAuthority?: AdmittedRunOperatorAuthority,
-  settings: { maxChildrenPerAgent?: number; guestProfileId?: string } = {},
+  settings: {
+    maxChildrenPerAgent?: number;
+    guestProfileId?: string;
+    modelPolicy?: Parameters<typeof createSpawnBoundaryParent>[0]["modelPolicy"];
+  } = {},
 ) {
-  const { maxChildrenPerAgent, guestProfileId } = settings;
+  const { maxChildrenPerAgent, guestProfileId, modelPolicy } = settings;
   if (maxChildrenPerAgent !== undefined) {
     runtimeConfig = await writeTestConfig(maxChildrenPerAgent);
   }
@@ -241,6 +244,7 @@ async function createBoundParent(
     parentSessionKey,
     parentRunId,
     operatorAuthority,
+    modelPolicy,
     // These guest scenarios start with an authenticated human request, not just
     // an execution grant. Keep its causal facts separate from selected authority.
     requesterOrigin: guestProfileId
@@ -377,41 +381,17 @@ async function closeBoundGateway(
   return failures;
 }
 
-async function createGuestParent(audit = true) {
-  const guestRole = {
-    scopes: ["operator.sessions.write"],
-    agents: ["main"],
-    sessions: { others: "none" },
-    sandbox: "required",
-  } satisfies GatewayOperatorRoleDefinition;
-  runtimeConfig = {
-    ...runtimeConfig,
-    logging: { audit: { enabled: audit, executionIdentity: audit } },
-    gateway: { roles: { default: "guest", definitions: { guest: guestRole } } },
-  };
-  await state.writeConfig(runtimeConfig);
-  clearConfigCache();
-  setRuntimeConfigSnapshot(runtimeConfig);
-  const modelPolicy = prepareOperatorModelPolicy({
-    cfg: runtimeConfig,
-    policy: { sourceAgent: "main", allow: ["custom/test-model"] },
-  });
-  const guest = ensureProfileForEmail("spawn-guest@example.test");
-  releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
-  const source = createSpawnOperatorSource(guest.id, guestRole.scopes, {
-    modelPolicy,
-    rolePolicy: { sessionAccessCap: "none", sandboxRequired: true, agents: ["main"] },
-    readCurrentRoleFacts: () => ({ assignedRole: "guest" }),
-  });
-  const bound = await createBoundParent(source.authority, {
-    guestProfileId: source.authority.profileId,
-  });
-  expect(readSession(bound)).toMatchObject({
-    sandbox: "required",
-    createdActor: { type: "human", source: "profile", id: source.authority.profileId },
-  });
-  return { bound, source, modelPolicy, scopes: guestRole.scopes };
-}
+const createGuestParent = createGuestParentFixture({
+  getRuntimeConfig: () => runtimeConfig,
+  setRuntimeConfig: (cfg) => {
+    runtimeConfig = cfg;
+  },
+  writeConfig: (cfg) => state.writeConfig(cfg),
+  setProfileCatalogRelease: (release) => {
+    releaseProfileCatalog = release;
+  },
+  createBoundParent,
+});
 
 describe("recursive spawn production boundary", () => {
   it.each([
@@ -495,6 +475,10 @@ describe("recursive spawn production boundary", () => {
   );
 
   const boundSpawnFixture = {
+    getRuntimeConfig: () => runtimeConfig,
+    setRuntimeConfig: (cfg: OpenClawConfig) => {
+      runtimeConfig = cfg;
+    },
     createBoundParent,
     createBoundGateway,
     closeBoundGateway,

@@ -5,6 +5,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
+import { intersectOperatorModelPolicies } from "../agents/operator-model-policy-state.js";
 import {
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,
@@ -30,10 +31,7 @@ import {
 import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import {
-  captureGatewayOperatorRunAuthority,
-  intersectOperatorRunModelPolicy,
-} from "./operator-run-authority.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -102,7 +100,7 @@ export async function prepareSessionPrincipalRunAuthority(
         gatewayAccessGrant: original.gatewayAccessGrant,
         recoverySnapshot: original.recoverySnapshot,
         get modelPolicy() {
-          return intersectOperatorRunModelPolicy(original.modelPolicy, current.modelPolicy);
+          return intersectOperatorModelPolicies(original.modelPolicy, current.modelPolicy);
         },
       });
     }

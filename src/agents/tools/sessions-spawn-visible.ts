@@ -36,13 +36,14 @@ import {
 import { resolveSpawnAdmission } from "../spawn-plan.js";
 import { resolveRequesterDeliveryThreadId } from "../spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
+import type { NewSubagentRunRegistration } from "../subagents/registry/subagent-registry-run-launch-record.js";
 import { prepareSubagentSessionListReadCache } from "../subagents/registry/subagent-registry-state.js";
 import { registerSubagentRun } from "../subagents/registry/subagent-registry.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../subagents/spawn/subagent-depth.js";
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
+import { captureSubagentSpawnGatewayContext } from "../subagents/spawn/subagent-spawn-gateway-context.js";
 import {
   callNativeSubagentGateway,
-  captureSubagentSpawnGatewayContext,
   resolveSubagentAgentGatewayTimeoutMs,
 } from "../subagents/spawn/subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
@@ -149,6 +150,7 @@ export async function maybeSpawnVisibleSession(
     gatewayContextResolver: resolveGatewayContext,
     requester,
     creatorProfileId,
+    modelCeiling,
   } = captureSubagentSpawnGatewayContext();
   const cloudGateway = placement ? resolveGatewayContext?.() : undefined;
   if (placement && (!cloudGateway || cloudGateway.localEmbedded === true)) {
@@ -632,6 +634,7 @@ export async function maybeSpawnVisibleSession(
           sessionEntry: { sessionId, lifecycleRevision },
           controllerSessionKey: ownership.controllerSessionKey,
           requesterSessionKey: ownership.completionRequesterSessionKey,
+          requesterModelPolicySnapshot: modelCeiling,
           completionRequesterSessionId,
           completionRequesterLifecycleRevision,
           requesterOrigin: normalizeDeliveryContext({
@@ -652,7 +655,7 @@ export async function maybeSpawnVisibleSession(
           runTimeoutSeconds,
           expectsCompletionMessage: params.expectsCompletionMessage,
           spawnMode: "run",
-        },
+        } satisfies NewSubagentRunRegistration,
         withExecRequestOwners(
           {
             assertCurrent: () => {

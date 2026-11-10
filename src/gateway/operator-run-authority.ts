@@ -6,10 +6,10 @@ import {
 } from "../agents/admitted-run-context.js";
 import { bindSharedGatewayOwnerRunAuthority } from "../agents/harness/host-private-capabilities.js";
 import {
-  prepareOperatorModelPolicy,
+  intersectOperatorModelPolicies,
   readOperatorModelPolicyMembership,
-  type PreparedOperatorModelPolicy,
-} from "../agents/operator-model-policy.js";
+} from "../agents/operator-model-policy-state.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
@@ -149,21 +149,6 @@ function prepareRunRolePolicy(
     : undefined;
 }
 
-export function intersectOperatorRunModelPolicy(
-  original: PreparedOperatorModelPolicy | undefined,
-  current: PreparedOperatorModelPolicy | undefined,
-): PreparedOperatorModelPolicy | undefined {
-  return original &&
-    current &&
-    readOperatorModelPolicyMembership(original) !== readOperatorModelPolicyMembership(current)
-    ? Object.freeze({
-        models: Object.freeze(current.models.filter(original.allows)),
-        allows: (ref: Parameters<typeof original.allows>[0]) =>
-          original.allows(ref) && current.allows(ref),
-      })
-    : (current ?? original);
-}
-
 /** Keep the admission ceiling while refreshing only committed config/metadata views. */
 function prepareRunModelPolicy(params: {
   cfg: OpenClawConfig;
@@ -192,7 +177,7 @@ function prepareRunModelPolicy(params: {
           policy: params.resolvePolicy(nextConfig),
           manifestPlugins: nextMetadata ?? [],
         });
-        policy = intersectOperatorRunModelPolicy(original, current);
+        policy = intersectOperatorModelPolicies(original, current);
         cfg = nextConfig;
         metadata = nextMetadata;
         publication = nextPublication;

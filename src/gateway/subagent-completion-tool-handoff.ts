@@ -4,16 +4,27 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  captureRequesterModelPolicySnapshot,
+  intersectOperatorModelPolicies,
+  restoreRequesterModelPolicySnapshot,
+} from "../agents/operator-model-policy-state.js";
+import type {
+  PreparedOperatorModelPolicy,
+  RequesterModelPolicySnapshot,
+} from "../agents/operator-model-policy.types.js";
 import type {
   SubagentCompletionToolHandoffRegistration,
   TrustedSubagentCompletionHandoff,
 } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 const SUBAGENT_COMPLETION_TOOL_HANDOFF_TTL_MS = 5 * 60 * 1000;
 
 type SubagentCompletionToolHandoffEntry = SubagentCompletionToolHandoffRegistration & {
   expiresAtMs: number;
+  requesterModelPolicySnapshot: RequesterModelPolicySnapshot;
 };
 
 const handoffs = resolveGlobalMap<string, SubagentCompletionToolHandoffEntry>(
@@ -43,6 +54,7 @@ function normalizeRegistration(
   }
   return {
     sourceSessionKey,
+    ...(params.sourceRunIds ? { sourceRunIds: [...params.sourceRunIds] } : {}),
     ...(sourceSessionId ? { sourceSessionId } : {}),
     targetSessionKey,
     targetSessionId,
@@ -78,7 +90,36 @@ export function registerSubagentCompletionToolHandoff(
     return undefined;
   }
   const handoffId = randomUUID();
-  handoffs.set(handoffId, { ...normalized, expiresAtMs });
+  let requesterPolicy: PreparedOperatorModelPolicy | undefined;
+  let requesterModelPolicySnapshot: RequesterModelPolicySnapshot;
+  try {
+    if (!normalized.sourceRunIds?.length) {
+      throw new Error("Completion model restrictions require their recorded source runs.");
+    }
+    const sourceSessionKeys = normalized.settleBatch?.sourceSessionKeys ?? [
+      normalized.sourceSessionKey,
+    ];
+    for (const runId of normalized.sourceRunIds) {
+      const source = subagentRuns.get(runId);
+      const matches =
+        source &&
+        sourceSessionKeys.includes(source.childSessionKey) &&
+        source.requesterSessionKey === normalized.targetSessionKey &&
+        (!source.completionRequesterSessionId ||
+          source.completionRequesterSessionId === normalized.targetSessionId);
+      requesterPolicy = intersectOperatorModelPolicies(
+        requesterPolicy,
+        restoreRequesterModelPolicySnapshot(
+          matches ? source.requesterModelPolicySnapshot : undefined,
+        ),
+      );
+    }
+    requesterModelPolicySnapshot = captureRequesterModelPolicySnapshot(requesterPolicy);
+  } catch {
+    // Result custody is independent of whether an old task can resume inference safely.
+    requesterModelPolicySnapshot = { kind: "unknown" };
+  }
+  handoffs.set(handoffId, { ...normalized, expiresAtMs, requesterModelPolicySnapshot });
   return handoffId;
 }
 
@@ -140,4 +181,35 @@ export function consumeSubagentCompletionToolHandoff(params: {
     model,
     ...(entry.settleBatch ? { settleBatch: entry.settleBatch } : {}),
   };
+}
+
+type CompletionRequesterTarget = {
+  handoffId: string | undefined;
+  targetSessionKey: string;
+  targetSessionId: string;
+  idempotencyKey: string;
+};
+
+function findCompletionRequesterTarget(params: CompletionRequesterTarget) {
+  const entry = params.handoffId ? handoffs.get(params.handoffId) : undefined;
+  return entry &&
+    entry.expiresAtMs > Date.now() &&
+    entry.targetSessionKey === params.targetSessionKey &&
+    entry.targetSessionId === params.targetSessionId &&
+    entry.idempotencyKey === params.idempotencyKey
+    ? entry
+    : undefined;
+}
+
+/** Read restriction facts before model selection; this never consumes or grants a capability. */
+export function readSubagentCompletionRequesterModelPolicy(
+  params: CompletionRequesterTarget,
+): RequesterModelPolicySnapshot {
+  return findCompletionRequesterTarget(params)?.requesterModelPolicySnapshot ?? { kind: "unknown" };
+}
+
+/** Only a current host-recorded completion relation can qualify its own System continuation. */
+export function isCurrentSubagentCompletionRequester(params: CompletionRequesterTarget): boolean {
+  const entry = findCompletionRequesterTarget(params);
+  return entry !== undefined && (entry.settleBatch?.isCurrent() ?? true);
 }

@@ -15,6 +15,7 @@ import {
   bindOperatorModelExecution,
   captureAdmittedRunActiveAssertion,
   readAdmittedRunOperatorAuthority,
+  readRunModelPolicy,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
@@ -142,7 +143,12 @@ export function bindHarnessModelExecution(
   assertActive: () => void,
 ): ReturnType<NonNullable<AgentHarnessHostCapabilities["bindModelExecution"]>> {
   assertActive();
-  return bindOperatorModelExecution(readAdmittedRunOperatorAuthority(admittedRunContext), model);
+  return bindOperatorModelExecution(
+    readAdmittedRunOperatorAuthority(admittedRunContext),
+    model,
+    undefined,
+    readRunModelPolicy({ admittedRunContext }),
+  );
 }
 
 const retainedSources = resolveGlobalSingleton(
@@ -169,9 +175,11 @@ export function retainHarnessSource(
   if (!source) {
     return undefined;
   }
+  // Retain only the independent requester ceiling; the operator policy stays live on source.
+  const modelPolicy = admittedRunContext.modelPolicy;
   const modelExecution = nativeModelPolicySupported
     ? undefined
-    : bindOperatorModelExecution(source, undefined);
+    : bindOperatorModelExecution(source, undefined, undefined, modelPolicy);
   const release = nativeModelPolicySupported ? source.retain?.() : modelExecution?.release;
   const assertSourceCurrent = () => {
     if (nativeModelPolicySupported) {
@@ -212,7 +220,7 @@ export function retainHarnessSource(
     assertCurrent,
     get modelPolicyRequired() {
       assertCurrent();
-      const required = requiresOperatorModelExecutionPolicy(source);
+      const required = requiresOperatorModelExecutionPolicy(source, modelPolicy);
       assertCurrent();
       return required;
     },
@@ -224,7 +232,7 @@ export function retainHarnessSource(
       model: Parameters<NonNullable<AgentHarnessHostCapabilities["bindModelExecution"]>>[0],
     ) => {
       assertCurrent();
-      const binding = bindOperatorModelExecution(source, model);
+      const binding = bindOperatorModelExecution(source, model, undefined, modelPolicy);
       if (!binding) {
         return undefined;
       }

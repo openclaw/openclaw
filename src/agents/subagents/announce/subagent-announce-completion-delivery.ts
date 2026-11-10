@@ -11,6 +11,7 @@ import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
@@ -29,6 +30,7 @@ import { hasVisibleCompletionResult } from "../../internal-event-contract.js";
 import { collectAgentInternalEventMedia, type AgentInternalEvent } from "../../internal-events.js";
 import { MISSING_REPLY_NOTICE_TEXT, type ReplyExpectation } from "../../reply-completion.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
+import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   hasAnnounceSendEvidence,
   SourceOwnerChangedError,
@@ -124,18 +126,14 @@ export async function runAnnounceAgentCall(params: {
           operatorRoleActor: { kind: "system" },
           delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
           signal: executionSignal,
-          ...(isSourceSessionAdmissionAllowed
-            ? {
-                sessionMutationCommitGuard: () => {
-                  if (!isSourceSessionAdmissionAllowed()) {
-                    const error = new SourceOwnerChangedError();
-                    materializeErrorStack(error);
-                    sourceLifecycle.abort(error);
-                    throw error;
-                  }
-                },
-              }
-            : {}),
+          sessionMutationCommitGuard: () => {
+            if (!params.isExecutionAllowed() || isSourceSessionAdmissionAllowed?.() === false) {
+              const error = new SourceOwnerChangedError();
+              materializeErrorStack(error);
+              sourceLifecycle.abort(error);
+              throw error;
+            }
+          },
           // Accepted queue waits belong to session admission; execution belongs to
           // the requester runtime budget, not the announcement handoff deadline.
           onAccepted: (payload) => {
@@ -178,9 +176,19 @@ export async function runAnnounceAgentCall(params: {
       );
     };
     const continuationCaller = params.controllerInput?.continuationCaller;
-    const dispatched = runOutsideOperatorToolGatewayAuthority(() =>
-      continuationCaller ? continuationCaller.run(dispatch) : dispatch(),
-    );
+    const resume = () => (continuationCaller ? continuationCaller.run(dispatch) : dispatch());
+    // Recorded registry settlement outlives its invocation. A mailbox input alone
+    // does not replace native harness or ordinary reply custody and its live checks.
+    const dispatched =
+      continuationCaller || params.delegatedToolPolicyHandoff
+        ? withoutGatewayToolCallerIdentity(() =>
+            runOutsideOperatorToolGatewayAuthority(() =>
+              withPluginRuntimeGatewayContextResolver(params.resolveGatewayContext, resume, {
+                inheritRequestScope: false,
+              }),
+            ),
+          )
+        : runOutsideOperatorToolGatewayAuthority(resume);
     return params.privateCompletion
       ? await waitForGatewayDispatch("agent", dispatched, undefined, signal)
       : await dispatched;

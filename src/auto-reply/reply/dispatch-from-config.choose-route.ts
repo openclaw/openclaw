@@ -3,6 +3,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { captureRequesterModelPolicySnapshot } from "../../agents/operator-model-policy-state.js";
 import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -562,8 +563,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     // This outer lookup key is resolved from the routed context; fields inside
     // sessionStoreEntry.entry cannot redirect hook or requester lineage.
     const beforeDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+    const requesterModelPolicy = params.replyOptions?.operatorAuthority?.modelPolicy;
     const pluginSubagentRequester = createPluginSubagentRequesterContext({
       sessionKey: beforeDispatchSessionKey,
+      requesterModelPolicySnapshot: captureRequesterModelPolicySnapshot(requesterModelPolicy),
       origin: {
         channel: routeReplyChannel,
         to: routeReplyTo,

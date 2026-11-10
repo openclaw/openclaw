@@ -40,6 +40,7 @@ export function createSyntheticPluginRuntimeClient(
       | "pluginApprovalRequestOwnerId"
       | "nodeInvokeApprovalSessionKey"
       | "pluginSubagentRequester"
+      | "requesterModelPolicySnapshot"
       | "runtimePluginToolGrant"
       | "pluginSubagentToolsAllow"
       | "delegatedToolPolicyHandoffId"
@@ -91,6 +92,9 @@ export function createSyntheticPluginRuntimeClient(
         : {}),
       ...(params?.nodeInvokeApprovalSessionKey
         ? { nodeInvokeApprovalSessionKey: params.nodeInvokeApprovalSessionKey }
+        : {}),
+      ...(params?.requesterModelPolicySnapshot
+        ? { requesterModelPolicySnapshot: params.requesterModelPolicySnapshot }
         : {}),
       ...(params?.pluginSubagentRequester
         ? { pluginSubagentRequester: params.pluginSubagentRequester }

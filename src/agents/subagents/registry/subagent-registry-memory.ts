@@ -15,8 +15,6 @@ import {
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
@@ -280,19 +278,21 @@ function completeRetirementPublication(publication: SubagentRetirementPublicatio
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   readLookup = new SubagentSessionReadLookup();
   readonly workIndex = new SubagentRunWorkIndex();
-  private readonly completionAuthorities = new Map<object, SubagentCompletionCustody>();
-  // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
-  private readonly requiredCompletionEntries = new WeakSet<object>();
+  private readonly requesterRunInstances = new Map<
+    object,
+    { entry: SubagentRunRecord; instance: OperationalRunInstanceRef }
+  >();
+  // Lifecycle retirement rejects stale callbacks independently of the spawning operator.
   private readonly retiredCompletionEntries = new WeakSet<object>();
 
-  retireCompletionAuthority(observed: SubagentRunRecord): void {
+  retireCompletion(observed: SubagentRunRecord): void {
     const entry = this.currentValue(observed);
     revokeGoalContinuationReturn(entry);
     this.retiredCompletionEntries.add(getSubagentRunRuntimeKey(entry));
-    this.releaseCompletionAuthority(entry);
+    this.releaseRequesterRunInstance(entry);
   }
 
-  isCompletionAuthorityRetired(entry: SubagentRunRecord): boolean {
+  isCompletionRetired(entry: SubagentRunRecord): boolean {
     return this.retiredCompletionEntries.has(getSubagentRunRuntimeKey(entry));
   }
 
@@ -300,181 +300,55 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     return getCurrentSubagentRunOwner(this, entry) ?? entry;
   }
 
-  bindCompletionAuthority(
+  bindCompletionOwner(
     row: SubagentRunRecord,
-    source: SubagentCompletionCustody["authority"],
     requesterRunInstance?: OperationalRunInstanceRef,
-  ) {
+  ): void {
     const entry = this.currentValue(row);
-    const key = getSubagentRunRuntimeKey(entry);
-    // A committed row with captured custody stays restricted if its source expires before publication.
-    this.requiredCompletionEntries.add(key);
-    source.assertCurrent();
-    if (
-      this.retiredCompletionEntries.has(key) &&
-      !isSameSubagentRunOwner(this.get(entry.runId), entry)
-    ) {
-      throw new Error("Subagent completion retry no longer owns its source");
-    }
-    this.releaseCompletionAuthority(entry);
-    this.requiredCompletionEntries.add(key);
-    this.retiredCompletionEntries.delete(key);
-    const custody: SubagentCompletionCustody = {
-      authority: source,
-      entry,
-      requesterRunInstance,
-      stop: () => source.signal.removeEventListener("abort", revoked),
-    };
-    const revoked = () => this.releaseCompletionAuthority(custody.entry);
-    this.completionAuthorities.set(key, custody);
-    source.signal.addEventListener("abort", revoked, { once: true });
-    if (source.signal.aborted) {
-      revoked();
-    }
+    this.retiredCompletionEntries.delete(getSubagentRunRuntimeKey(entry));
+    this.releaseRequesterRunInstance(entry);
+    this.bindRequesterRunInstance(entry, requesterRunInstance);
   }
 
-  /** Steering adopts an existing execution without replacing its completion source. */
+  /** Steering changes requester accounting, not the completion's recorded destination. */
   bindRequesterRunInstance(entry: SubagentRunRecord, instance?: OperationalRunInstanceRef): void {
-    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
-    if (custody && instance && isSameSubagentRunOwner(this.get(entry.runId), entry)) {
-      custody.requesterRunInstance = instance;
+    if (instance && isSameSubagentRunOwner(this.get(entry.runId), entry)) {
+      this.requesterRunInstances.set(getSubagentRunRuntimeKey(entry), { entry, instance });
     }
   }
 
   getRequesterRunInstance(entry: SubagentRunRecord): OperationalRunInstanceRef | undefined {
     return isSameSubagentRunOwner(this.get(entry.runId), entry)
-      ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterRunInstance
+      ? this.requesterRunInstances.get(getSubagentRunRuntimeKey(entry))?.instance
       : undefined;
   }
 
-  releaseCompletionAuthority(observed: SubagentRunRecord): void {
-    const entry = this.currentValue(observed);
-    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
-    this.completionAuthorities.delete(getSubagentRunRuntimeKey(entry));
-    custody?.stop();
-    custody?.authority.release();
+  releaseRequesterRunInstance(observed: SubagentRunRecord): void {
+    this.requesterRunInstances.delete(getSubagentRunRuntimeKey(this.currentValue(observed)));
   }
 
-  private assertCompletionEntryCurrent(entry: SubagentRunRecord): void {
-    const current =
-      this.get(entry.runId) ??
-      this.readLookup
-        .selectRunIds(new Set([entry.swarmRunId ?? entry.runId]))
-        .map((id) => this.get(id))
-        .find((candidate) => candidate && isQueuedSubagentRunRekey(entry, candidate));
-    if (current && !isSameSubagentRunOwner(current, entry)) {
-      throw new Error("Subagent completion runtime owner is no longer active");
-    }
-    if (this.retiredCompletionEntries.has(getSubagentRunRuntimeKey(entry))) {
-      throw new Error("Subagent completion requester store was retired");
-    }
-    if (
-      this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) &&
-      !isSameSubagentRunOwner(this.get(entry.runId), entry)
-    ) {
-      throw new Error("Subagent completion authority is no longer active");
-    }
-  }
-
-  runWithCompletionAuthority<T>(observed: SubagentRunRecord, run: () => T): T {
-    const entry = this.currentValue(observed);
-    this.assertCompletionEntryCurrent(entry);
-    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
-    // Keep the requester's retained authority after child cancellation. Only a notice
-    // without that custody uses its independently admitted cancellation caller.
-    if (!custody && this.isCancellationNotice(entry)) {
-      return run();
-    }
-    if (this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
-      throw new Error("Subagent completion authority is no longer active");
-    }
-    return custody ? custody.authority.run(run) : run();
-  }
-
-  private isCancellationNotice(entry: SubagentRunRecord): boolean {
-    return (
-      entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-      entry.execution.outcome?.status === "error"
-    );
-  }
-
-  runWithCompletionBatchAuthority<T>(observed: readonly SubagentRunRecord[], run: () => T): T {
-    const batch = observed.map((entry) => this.currentValue(entry));
-    batch.forEach((entry) => this.assertCompletionEntryCurrent(entry));
-    const resultEntry = batch.find((entry) => !this.isCancellationNotice(entry));
-    if (!resultEntry) {
-      const sources = batch.map(
-        (entry) => this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority,
-      );
-      const first = sources[0];
-      const original = first?.operatorAuthority;
-      // A cancellation-only cohort can share its retained requester. Otherwise its
-      // independently admitted cancellation caller still owns the notices.
-      if (
-        !first ||
-        !original ||
-        sources.some(
-          (source) =>
-            source?.operatorAuthority?.source !== original.source ||
-            source?.operatorAuthority?.invocation !== original.invocation ||
-            !isDeepStrictEqual(source?.operatorAuthority?.scopes, original.scopes),
-        )
-      ) {
-        return run();
-      }
-      sources.forEach((source) => source?.assertCurrent());
-      return first.run(run);
-    }
-    const firstCustody = this.completionAuthorities.get(getSubagentRunRuntimeKey(resultEntry));
-    const first = firstCustody?.authority.operatorAuthority;
-    // Mixed waves must still prove the cancelled member's original source is live and identical.
-    // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
-    for (const entry of batch) {
-      const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
-      if (this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
-        throw new Error("Subagent completion authority is no longer active");
-      }
-      custody?.authority.assertCurrent();
-      const source = custody?.authority.operatorAuthority;
-      if (
-        source?.source !== first?.source ||
-        source?.invocation !== first?.invocation ||
-        !isDeepStrictEqual(source?.scopes, first?.scopes) ||
-        !isDeepStrictEqual(custody?.authority.scopes, firstCustody?.authority.scopes)
-      ) {
-        throw new Error("Subagent completion batch has incompatible operator authority");
-      }
-    }
-    return this.runWithCompletionAuthority(resultEntry, run);
-  }
-
-  /** Committed replacement transfers custody without reviving a retired source. */
-  transferCompletionAuthority(previous: SubagentRunRecord, next: SubagentRunRecord): void {
+  /** Committed replacement transfers the completion obligation and requester accounting. */
+  transferCompletionOwner(previous: SubagentRunRecord, next: SubagentRunRecord): void {
     transferFollowupCohort(previous, next);
     const previousKey = getSubagentRunRuntimeKey(previous);
     const nextKey = getSubagentRunRuntimeKey(next);
     if (this.retiredCompletionEntries.has(previousKey)) {
       this.retiredCompletionEntries.add(nextKey);
     }
-    if (this.requiredCompletionEntries.has(previousKey)) {
-      this.requiredCompletionEntries.add(nextKey);
+    const requester = this.requesterRunInstances.get(previousKey);
+    if (requester) {
+      this.requesterRunInstances.delete(previousKey);
+      this.requesterRunInstances.set(nextKey, { entry: next, instance: requester.instance });
     }
-    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(previous));
-    if (!custody) {
-      return;
-    }
-    this.completionAuthorities.delete(getSubagentRunRuntimeKey(previous));
-    custody.entry = next;
-    this.completionAuthorities.set(getSubagentRunRuntimeKey(next), custody);
   }
 
-  /** Only acknowledged registry state retires completion custody. */
-  settleCompletionAuthorities(
+  /** Only acknowledged registry state releases requester accounting. */
+  settleCompletionOwners(
     committed: ReadonlyMap<string, SubagentRunRecord>,
     changedRunIds?: readonly string[],
   ): void {
     const changed = changedRunIds && new Set(changedRunIds);
-    for (const { entry } of this.completionAuthorities.values()) {
+    for (const { entry } of this.requesterRunInstances.values()) {
       if (changed && !changed.has(entry.runId)) {
         continue;
       }
@@ -491,7 +365,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
             record.delivery?.status === "discarded" ||
             record.suppressCompletionDelivery === true))
       ) {
-        this.releaseCompletionAuthority(entry);
+        this.releaseRequesterRunInstance(entry);
       }
     }
   }
@@ -604,7 +478,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   private publishRuntimeOwner(previous: SubagentRunRecord, entry: SubagentRunRecord): void {
-    this.transferCompletionAuthority(previous, entry);
+    this.transferCompletionOwner(previous, entry);
     bindGatewayContextResolver(entry, getGatewayContextResolver(previous));
   }
 
@@ -652,9 +526,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 
   override clear(): void {
     this.forEach(revokeGoalContinuationReturn);
-    for (const { entry } of this.completionAuthorities.values()) {
-      this.releaseCompletionAuthority(entry);
-    }
+    this.requesterRunInstances.clear();
     for (const pending of retirementPublications.values()) {
       for (const publication of pending) {
         completeRetirementPublication(publication);

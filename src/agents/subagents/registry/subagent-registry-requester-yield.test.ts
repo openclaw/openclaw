@@ -227,6 +227,7 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
       requesterSessionKey: REQUESTER,
       requesterAgentId: "main",
       requesterTurnRunId: REQUESTER_TURN,
+      requesterModelPolicySnapshot: { kind: "unbounded" as const },
       assertCurrent: () => {},
       runs,
     };
@@ -253,9 +254,13 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
       expect(params.runs.get(child.runId)).toEqual({
         ...before,
         requesterTurnRunId: REQUESTER_TURN,
+        requesterModelPolicySnapshot: params.requesterModelPolicySnapshot,
         requesterTurnYielded: undefined,
         requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
       });
+      expect(
+        loadSubagentRegistryFromSqlite().get(child.runId)?.requesterModelPolicySnapshot,
+      ).toEqual(params.requesterModelPolicySnapshot);
       if (!receipt) {
         throw new Error("Expected adoption receipt");
       }

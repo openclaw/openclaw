@@ -28,10 +28,7 @@ import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
-import {
-  captureOperatorToolGatewayContinuationContext,
-  dispatchGatewayMethodInProcess,
-} from "./server-plugin-in-process-dispatch.js";
+import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { installAuthorityProofGateway } from "./server.agent-runtime-authority-proof.test-support.js";
 import { agentCommandMock, prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
@@ -180,16 +177,15 @@ it.for([
           }),
           "Gateway admitted caller",
         );
-        expect(caller.operatorAuthority).toMatchObject({
-          profileId: client.authenticatedUserProfile!.profileId,
-        });
-        const continued = followsUp && runId === continuationRunId;
-        if (continued) {
+        const internalReturn = runId === pauseRunId || runId === continuationRunId;
+        if (internalReturn) {
+          expect(caller.operatorAuthority).toBeUndefined();
+        } else {
           expect(caller.operatorAuthority).toMatchObject({
-            scopes: originalSource?.authority.scopes,
+            profileId: client.authenticatedUserProfile!.profileId,
           });
-          expect(caller.operatorAuthority?.source).toBe(originalSource?.authority.source);
         }
+        const continued = followsUp && runId === continuationRunId;
         expect(opts.cronCreatorAuthorityCapability?.managementEntitlement?.source).toBe(
           outcome === "operator only" || continued ? undefined : "control-ui-admin",
         );
@@ -197,11 +193,7 @@ it.for([
           const recorder = expectDefined(opts.userTurnTranscriptRecorder, "Gateway input recorder");
           expect(await recorder.persistApproved()).toMatchObject({ appended: true });
           if (runId === originalRunId) {
-            const completion = expectDefined(
-              await captureOperatorToolGatewayContinuationContext(),
-              "registered completion source",
-            );
-            runs.bindCompletionAuthority(currentChild(), completion);
+            runs.bindCompletionOwner(currentChild(), admitted.operationalRunInstance);
             expect(await markRequesterTurnYielded(requester)).toBe(1);
             expect(
               await settleRequesterAfterSessionSpawns({
@@ -249,32 +241,30 @@ it.for([
       message: string,
       onAccepted?: (payload: unknown) => void,
     ) =>
-      runs.runWithCompletionBatchAuthority([currentChild()], () =>
-        captureRequesterContinuationCaller({
-          requesterSessionKey: parent,
-          requesterSessionId: parentId,
-          requesterAgentId: "main",
-          batch: [currentChild()],
-          rearmGeneration: currentChild().requesterSettleWake?.rearmGeneration,
-          runId,
-          isCurrent: () => true,
-        }).run(() =>
-          dispatchGatewayMethodInProcess(
-            "agent",
-            {
-              ...agentInput(runId, target, message),
-              inputProvenance: {
-                kind: "inter_session",
-                sourceTool: "subagent_settle",
-                sourceSessionKey: child.childSessionKey,
-              },
+      captureRequesterContinuationCaller({
+        requesterSessionKey: parent,
+        requesterSessionId: parentId,
+        requesterAgentId: "main",
+        batch: [currentChild()],
+        rearmGeneration: currentChild().requesterSettleWake?.rearmGeneration,
+        runId,
+        isCurrent: () => true,
+      }).run(() =>
+        dispatchGatewayMethodInProcess(
+          "agent",
+          {
+            ...agentInput(runId, target, message),
+            inputProvenance: {
+              kind: "inter_session",
+              sourceTool: "subagent_settle",
+              sourceSessionKey: child.childSessionKey,
             },
-            {
-              expectFinal: true,
-              resolveGatewayContext: () => context,
-              ...(onAccepted ? { onAccepted } : {}),
-            },
-          ),
+          },
+          {
+            expectFinal: true,
+            resolveGatewayContext: () => context,
+            ...(onAccepted ? { onAccepted } : {}),
+          },
         ),
       );
     const sendHuman = async (
@@ -383,7 +373,7 @@ it.for([
         });
         freshClient.internal = { controlUiAdmin: true };
         await sendHuman(freshClient, followupRunId, "Same human follow-up");
-        expect(originalSource?.authority.assertCurrent).not.toThrow();
+        expect(originalSource?.authority.assertCurrent).toThrow();
       }
       const target = foreignRequester ? foreign : parent;
       const sessionId = foreignRequester ? foreignId : parentId;
@@ -437,7 +427,7 @@ it.for([
           }
           resume.resolve();
         }
-        if (!foreignRequester && !resetRequester && !revokedSource) {
+        if (!foreignRequester && !resetRequester) {
           await continuation;
           await Promise.all(trackedRequests());
           expect(received).toEqual([
@@ -461,9 +451,7 @@ it.for([
           );
           const expectedDenial = foreignRequester
             ? "does not own this continuation"
-            : revokedSource
-              ? "Original completion source revoked during dispatch"
-              : "no longer current";
+            : "no longer current";
           const settled = await Promise.allSettled(trackedRequests());
           for (const work of settled) {
             if (work.status === "rejected") {
@@ -491,7 +479,7 @@ it.for([
       revokeRequesterCronAuthority(parent);
       const remaining = runs.get(child.runId);
       if (remaining) {
-        runs.releaseCompletionAuthority(remaining);
+        runs.releaseRequesterRunInstance(remaining);
       }
       originalSource?.release();
       await writeChild(() => null);

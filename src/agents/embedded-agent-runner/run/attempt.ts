@@ -17,6 +17,7 @@ import {
 import {
   bindOperatorModelExecution,
   readRunOperatorAuthority,
+  readRunModelPolicy,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
@@ -72,11 +73,16 @@ import type {
 export async function runEmbeddedAttempt(
   input: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
-  const modelExecution = bindOperatorModelExecution(readRunOperatorAuthority(input), {
-    provider: input.provider,
-    model: input.modelId,
-    cyberAccessProgram: input.cyberAccessProgram,
-  });
+  const modelExecution = bindOperatorModelExecution(
+    readRunOperatorAuthority(input),
+    {
+      provider: input.provider,
+      model: input.modelId,
+      cyberAccessProgram: input.cyberAccessProgram,
+    },
+    undefined,
+    readRunModelPolicy(input),
+  );
   try {
     const attempt = modelExecution
       ? {

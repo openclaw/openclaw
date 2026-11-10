@@ -2,7 +2,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
-import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
+import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy-state.js";
 import type { PreparedOperatorModelPolicy } from "../agents/operator-model-policy.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -41,6 +42,7 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import { resolveAgentTestConfig } from "./agent.mocks.test-utils.js";
 import { settleAgentSubagentWakeRoots } from "./agent.subagent-registry.mocks.test-support.js";
 import {
@@ -49,6 +51,7 @@ import {
   backendGatewayClient,
   requireValue,
   makeContext,
+  primeMainAgentRun,
   invokeAgent,
   waitForAgentCommandCall,
   waitForAgentCommandCallAfter,
@@ -319,6 +322,91 @@ export function registerPluginSubagentToolForwardingTests() {
       );
     },
   );
+  it("forwards trusted delegated policy handoffs only from internal client metadata", async () => {
+    primeMainAgentRun();
+    const source = createSubagentRunRecord({
+      runId: "delegated-policy-source",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      completionRequesterSessionId: "existing-session-id",
+      requesterModelPolicySnapshot: { kind: "unbounded" },
+    });
+    subagentRuns.set(source.runId, source);
+    const handoffId = registerSubagentCompletionToolHandoff({
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceSessionId: "child-session-id",
+      sourceRunIds: [source.runId],
+      targetSessionKey: "agent:main:main",
+      targetSessionId: "existing-session-id",
+      idempotencyKey: "delegated-policy-handoff",
+    });
+
+    await invokeAgent(
+      {
+        message: "child completed",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "delegated-policy-handoff",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:main:subagent:child",
+            childSessionId: "child-session-id",
+            announceType: "subagent task",
+            taskLabel: "work",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child completed",
+            replyInstruction: "Continue from this result.",
+          },
+        ],
+      },
+      {
+        client: createSyntheticPluginRuntimeClient({
+          delegatedToolPolicyHandoffId: handoffId,
+        }),
+      },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      onActiveModelSelected?: (selection: { provider: string; model: string }) => Promise<void>;
+      trustedInternalHandoff?: {
+        kind: string;
+        sourceSessionKey: string;
+        sourceSessionId?: string;
+        targetSessionKey: string;
+        targetSessionId: string;
+        provider: string;
+        model: string;
+      };
+    }>();
+    const trustedInternalHandoff = expectDefined(
+      call.trustedInternalHandoff,
+      "trusted completion handoff test invariant",
+    );
+    await expectDefined(
+      call.onActiveModelSelected,
+      "model-selection callback test invariant",
+    )({
+      provider: "anthropic",
+      model: "sonnet-4.6",
+    });
+    expect(call.trustedInternalHandoff).toBe(trustedInternalHandoff);
+    expect(call.trustedInternalHandoff).toMatchObject({
+      kind: "subagent-completion",
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceSessionId: "child-session-id",
+      targetSessionKey: "agent:main:main",
+      targetSessionId: "existing-session-id",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+    });
+  });
 }
 
 export function registerPluginSubagentAdmissionTests() {

@@ -29,13 +29,22 @@ By default, delivery depends on requester depth:
 - Nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session.
 - If a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available.
 
-Completion follow-up turns retain the requester's authority, including
-session-scoped write access. Gateway admission still checks access to the selected
-requester session; a child completion does not grant global write access.
+Returning a child's result to its recorded requester is internal task settlement.
+It does not require sibling results to share operator authority or keep the
+spawning tool invocation alive. Run identity and lifecycle checks still prevent
+unrelated or stale work from targeting a replacement session.
 
-Model fallback and other model-routing updates do not invalidate prepared
-completion or child follow-up authority. Changes to session identity, lifecycle,
-spawn lineage, tool policy, sandbox, or execution host still reject stale work.
+A completion does not transfer human permissions. Resumed parent turns and
+external delivery still follow their normal authorization and tool policies.
+
+Model fallback and other model-routing updates do not change a child's recorded
+return destination. Session identity, lifecycle, and spawn lineage still protect
+that destination; resumed execution follows its normal tool policy, sandbox, and
+execution-host constraints. The requester's model ceiling also survives as a
+restriction, not a human authority grant. Automatic model selection still chooses
+an allowed default. If an older task has no recoverable model-policy facts, its
+result remains recorded, but automatic inference is blocked rather than becoming
+unrestricted. Send a new message to continue the requester turn.
 
 New-turn capability preparation refreshes stale inherited session metadata once
 per affected lookup before evaluating current policy again. This lets ordinary

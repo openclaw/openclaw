@@ -152,6 +152,7 @@ test.for(["completed", "self-stopped"] as const)(
         requesterAgentId: "main",
         requesterDisplayKey: "main",
         task: "Stop this child from its own running command",
+        requesterModelPolicySnapshot: { kind: "unbounded" },
         cleanup: "keep",
         expectsCompletionMessage: false,
       });

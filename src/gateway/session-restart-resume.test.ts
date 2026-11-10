@@ -602,7 +602,7 @@ it.for([
     });
     subagentRuns.set(childRunId, child);
     if (source === "retired-completed") {
-      subagentRuns.retireCompletionAuthority(child);
+      subagentRuns.retireCompletion(child);
     }
     const grandchildRunId = "parked-grandchild-run";
     if (source === "nested-message") {

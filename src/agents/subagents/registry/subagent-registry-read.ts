@@ -138,8 +138,7 @@ function resolveYieldWaitingChild(
         : undefined
       : owesRequesterCompletion(child) &&
           (isSubagentRunLive(child) ||
-            (child.execution.status === "terminal" &&
-              !subagentRuns.isCompletionAuthorityRetired(child)))
+            (child.execution.status === "terminal" && !subagentRuns.isCompletionRetired(child)))
         ? "waiting"
         : "resume";
     // Stopped descendants need root reconciliation, even beside a surviving wait.

@@ -1,78 +1,19 @@
-import {
-  modelPolicyWildcardMatches,
-  parseModelPolicyWildcardRef,
-} from "../config/model-policy-ref.js";
+import { parseModelPolicyWildcardRef } from "../config/model-policy-ref.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  freezeJsonSnapshot,
-  freezeTrustedJsonSnapshot,
-  isDeeplyFrozenPlainData,
-} from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { resolveConfiguredAgentId, resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
-import { normalizeProviderId } from "./model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "./model-selection-shared.js";
+import {
+  operatorModelPolicyIdentity,
+  matchesOperatorModelPolicy,
+  recordPreparedOperatorModelPolicy,
+} from "./operator-model-policy-state.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
-
-export type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
-
-export type OperatorModelPolicySnapshot = {
-  models: ModelRef[];
-  allowed: { exact: string[]; wildcards: string[] };
-  denied: { exact: string[]; wildcards: string[] };
-};
-const modelPolicySnapshots = new WeakMap<
-  PreparedOperatorModelPolicy,
-  { snapshot: OperatorModelPolicySnapshot; membership: string }
->();
-
-/** Preserve resolved identities and wildcard predicates, not only discovered default choices. */
-export function captureOperatorModelPolicySnapshot(
-  policy: PreparedOperatorModelPolicy | undefined,
-) {
-  return policy ? modelPolicySnapshots.get(policy)?.snapshot : undefined;
-}
-
-export function restoreOperatorModelPolicySnapshot(
-  snapshot: OperatorModelPolicySnapshot,
-): PreparedOperatorModelPolicy {
-  const prepare = (refs: OperatorModelPolicySnapshot["allowed"]) => ({
-    exact: new Set(refs.exact),
-    wildcards: refs.wildcards,
-  });
-  const captured = freezeJsonSnapshot(structuredClone(snapshot));
-  const allowed = prepare(captured.allowed);
-  const denied = prepare(captured.denied);
-  return recordPreparedPolicy(captured, (ref) => matches(allowed, ref) && !matches(denied, ref));
-}
-
-function recordPreparedPolicy(
-  captured: OperatorModelPolicySnapshot,
-  allows: PreparedOperatorModelPolicy["allows"],
-): PreparedOperatorModelPolicy {
-  const policy = Object.freeze({ models: captured.models, allows });
-  modelPolicySnapshots.set(policy, {
-    snapshot: captured,
-    membership: JSON.stringify([
-      captured.allowed.exact,
-      captured.allowed.wildcards,
-      captured.denied.exact,
-      captured.denied.wildcards,
-    ]),
-  });
-  return policy;
-}
-
-/** Comparison uses the original predicate, including models outside concrete discovery choices. */
-export function readOperatorModelPolicyMembership(
-  policy: PreparedOperatorModelPolicy | undefined,
-): string | undefined {
-  return policy ? modelPolicySnapshots.get(policy)?.membership : "unrestricted";
-}
 
 /** Preserve the already-selected default when allowed, otherwise use the first compatible source choice. */
 export function resolveOperatorModelDefault(
@@ -88,13 +29,13 @@ export function resolveOperatorModelDefault(
     return params.model;
   }
   const automatic = new Set(
-    prepareAgentModels(params, preparedConfigModels(params)).models.map(identity),
+    prepareAgentModels(params, preparedConfigModels(params)).models.map(
+      operatorModelPolicyIdentity,
+    ),
   );
-  return params.policy.models.find((ref) => automatic.has(identity(ref)) || params.allows(ref));
-}
-
-function identity(ref: ModelRef): string {
-  return JSON.stringify([normalizeProviderId(ref.provider), ref.model]);
+  return params.policy.models.find(
+    (ref) => automatic.has(operatorModelPolicyIdentity(ref)) || params.allows(ref),
+  );
 }
 
 type PreparedAgentModels = {
@@ -188,7 +129,7 @@ function prepareRefs(refs: readonly string[], resolve: (raw: string) => ModelRef
     } else {
       const ref = resolve(raw);
       if (ref) {
-        exact.set(identity(ref), ref);
+        exact.set(operatorModelPolicyIdentity(ref), ref);
       }
     }
   }
@@ -196,20 +137,6 @@ function prepareRefs(refs: readonly string[], resolve: (raw: string) => ModelRef
     exact,
     wildcards: [...wildcards].toSorted(),
   };
-}
-
-function matches(
-  prepared: {
-    exact: ReadonlySet<string> | ReadonlyMap<string, ModelRef>;
-    wildcards: readonly string[];
-  },
-  ref: ModelRef,
-) {
-  const key = `${normalizeProviderId(ref.provider)}/${ref.model}`;
-  return (
-    prepared.exact.has(identity(ref)) ||
-    prepared.wildcards.some((wildcard) => modelPolicyWildcardMatches(wildcard, key))
-  );
 }
 
 /** Prepare once per current role/config view; row and execution checks consume only these facts. */
@@ -239,18 +166,22 @@ export function prepareOperatorModelPolicy(
   const allowed =
     policy.allow === undefined
       ? {
-          exact: new Map(sourceModels.map((ref) => [identity(ref), ref])),
+          exact: new Map(sourceModels.map((ref) => [operatorModelPolicyIdentity(ref), ref])),
           wildcards: [],
         }
       : prepareRefs(policy.allow, resolve);
   const denied = prepareRefs(policy.deny ?? [], resolve);
-  const allows = (ref: ModelRef) => matches(allowed, ref) && !matches(denied, ref);
+  const allows = (ref: ModelRef) =>
+    matchesOperatorModelPolicy(allowed, ref) && !matchesOperatorModelPolicy(denied, ref);
   const models = [
     ...new Map(
-      [...sourceModels, ...allowed.exact.values()].map((ref) => [identity(ref), ref]),
+      [...sourceModels, ...allowed.exact.values()].map((ref) => [
+        operatorModelPolicyIdentity(ref),
+        ref,
+      ]),
     ).values(),
   ].filter(allows);
-  const result = recordPreparedPolicy(
+  const result = recordPreparedOperatorModelPolicy(
     freezeTrustedJsonSnapshot({
       models,
       allowed: { exact: [...allowed.exact.keys()].toSorted(), wildcards: allowed.wildcards },

@@ -263,6 +263,7 @@ async function runSpawnSample(
         sessionEntry: { sessionId: runId },
         requesterSessionKey: "agent:bench:main",
         requesterDisplayKey: "bench",
+        requesterModelPolicySnapshot: { kind: "unbounded" as const },
         task: `benchmark child ${index}`,
         cleanup: "keep" as const,
         expectsCompletionMessage: false,

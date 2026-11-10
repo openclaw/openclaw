@@ -41,7 +41,7 @@ export async function settleUnreachableYieldedSubagentRun(params: {
     requesterEnded =
       !requester || requester.archivedAt !== undefined || isTerminalSessionStatus(requester.status);
   }
-  const retired = subagentRuns.isCompletionAuthorityRetired(entry);
+  const retired = subagentRuns.isCompletionRetired(entry);
   let continuation = isYieldedSubagentRun(entry)
     ? resolveYieldedRunContinuation(entry, requesterEnded)
     : undefined;

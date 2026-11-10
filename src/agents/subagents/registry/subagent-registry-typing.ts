@@ -1,29 +1,27 @@
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import type { PreparedSessionSourceAuthority } from "../../../config/sessions/session-source-authority.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAccountId } from "../../../routing/account-id.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
-import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-typing");
 
-/** Detached work borrows its captured requester authority, never a later session's route. */
+/** Typing owns its external-effect authority; task settlement never retains that lease. */
 export async function startSubagentTyping(
   entry: SubagentRunRecord,
-  source: SubagentCompletionCustody["authority"] | undefined,
   currentEntry: () => SubagentRunRecord | undefined,
 ): Promise<void> {
   const origin = entry.requesterOrigin;
   const resolveGatewayContext = getGatewayContextResolver(entry);
   const runtime = resolveGatewayContext?.()?.lifecycleRuntime;
   if (
-    !source ||
     origin?.channel !== "telegram" ||
     !origin.to ||
     entry.expectsCompletionMessage !== true ||
@@ -33,6 +31,15 @@ export async function startSubagentTyping(
     !entry.requesterStorePath ||
     !runtime?.startTyping
   ) {
+    return;
+  }
+  let source: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
+  try {
+    source = await captureOperatorToolGatewayContinuationContext();
+  } catch {
+    return;
+  }
+  if (!source) {
     return;
   }
   let stopped = false;
@@ -45,6 +52,7 @@ export async function startSubagentTyping(
     stopped = true;
     unsubscribe();
     source.signal.removeEventListener("abort", stop);
+    source.release();
     stopTyping?.();
     void session?.release?.();
   };
