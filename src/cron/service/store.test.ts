@@ -136,6 +136,20 @@ describe("cron service store seam coverage", () => {
     await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
   });
 
+  it("loads previously accepted timestamp schedules alongside recurring jobs", async () => {
+    const { storePath } = await makeStorePath();
+    const legacy = createReloadCronJob({
+      id: "legacy-timestamp",
+      schedule: { kind: "cron", expr: new Date(STORE_TEST_NOW + 3_600_000).toISOString() },
+    });
+    const recurring = createReloadCronJob({ id: "recurring-control" });
+    await writeJobStore(storePath, [legacy, recurring]);
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state);
+    expect(state.store?.jobs.map((job) => job.id)).toEqual([legacy.id, recurring.id]);
+    expect(await cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([]);
+  });
+
   it("quarantines unsatisfiable schedules and persisted timestamps outside the Date domain", async () => {
     const { storePath } = await makeStorePath();
     const invalidInterval = createReloadCronJob({

@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveCronDeliveryMode } from "../delivery-defaults.js";
+import { isValidCronExpression } from "../expression.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
@@ -176,6 +177,14 @@ function validateFullJob(
     context.kind === "patch" ? context.patch : undefined,
   );
   assertFailureDestinationSupport(job);
+  // Reject newly authored timestamps without changing evaluation of legacy stored jobs.
+  if (
+    (context.kind !== "patch" || context.patch.schedule !== undefined) &&
+    job.schedule.kind === "cron" &&
+    !isValidCronExpression(job.schedule.expr, job.schedule.tz)
+  ) {
+    throw new Error('invalid cron expression: use schedule.kind="at" for absolute timestamps');
+  }
   const scheduleTouched =
     context.kind !== "patch" ||
     context.patch.schedule !== undefined ||

@@ -71,6 +71,7 @@ const schemaCases: Array<[string, unknown, boolean]> = [
   ["update.auto.schedule", "30 3 * * *", true],
   ["update.auto.schedule", "15 4 * * MON", true],
   ["update.auto.schedule", "*/5 * * * *", true],
+  ["update.auto.schedule", "2027-02-01T09:00:00Z", false],
   ["update.auto.schedule", "not cron", false],
   ["update.auto.schedule", "70 25 * * *", false],
   ["update.auto.schedule", "", false],

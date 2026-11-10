@@ -1,0 +1,2 @@
+# Reject ISO timestamps as cron inputs; preserve stored jobs and validate update schedules.
+47
