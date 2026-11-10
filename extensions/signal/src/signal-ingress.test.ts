@@ -11,7 +11,6 @@ import { useSignalHttpServer } from "./client.test-support.js";
 import type { SignalDataMessage, SignalReceivePayload } from "./monitor/event-handler.types.js";
 import { startSignalIngressMonitor } from "./signal-ingress.js";
 import { runSignalSseLoop, type SignalStatusSink } from "./sse-reconnect.js";
-
 type SignalIngressQueue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
 type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
 type SignalIngressDispatch = Parameters<typeof startSignalIngressMonitor>[0]["dispatch"];
@@ -20,7 +19,6 @@ const defer = (_event: SignalSseEvent, lifecycle: Parameters<SignalIngressDispat
   lifecycle.onDeferred();
   return { kind: "deferred" } as const;
 };
-
 function signalEvent(
   envelope: SignalEnvelope = {},
   dataMessage: SignalDataMessage = {},
@@ -37,7 +35,6 @@ function signalEvent(
     }),
   };
 }
-
 type Monitor = Awaited<ReturnType<typeof startSignalIngressMonitor>>;
 const withSignalServer = useSignalHttpServer();
 let queue: SignalIngressQueue;
@@ -80,7 +77,6 @@ async function receive(monitor: Monitor, ...events: SignalSseEvent[]) {
   }
   await monitor.waitForIdle();
 }
-
 describe("Signal durable ingress", () => {
   it("resumes accepted ingress and publishes HTTP recovery", async () => {
     const abort = new AbortController();
@@ -136,7 +132,6 @@ describe("Signal durable ingress", () => {
       expect.objectContaining({ lastError: expect.stringContaining("503") }),
     );
   });
-
   it("propagates durable append failure before dispatch scheduling", async () => {
     const appendError = new Error("sqlite unavailable");
     const failingQueue = {
@@ -149,7 +144,6 @@ describe("Signal durable ingress", () => {
     await expect(monitor.receive(signalEvent())).rejects.toBe(appendError);
     expect(dispatch).not.toHaveBeenCalled();
   });
-
   it("persists independent conversation lanes and recovers each raw event exactly once", async () => {
     const direct = signalEvent({ sourceUuid: "123e4567-e89b-12d3-a456-426614174000" });
     const group = signalEvent(
@@ -178,7 +172,6 @@ describe("Signal durable ingress", () => {
       ]),
     );
   });
-
   it("completes only when deferred dispatch adoption becomes durable", async () => {
     const event = signalEvent();
     let adopt: (() => void | Promise<void>) | undefined;
@@ -196,7 +189,6 @@ describe("Signal durable ingress", () => {
     await receive(started, event);
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
-
   it("dead-letters malformed persisted payloads without retry", async () => {
     await queue.enqueue(
       "malformed-event",
@@ -211,7 +203,6 @@ describe("Signal durable ingress", () => {
     ).resolves.toMatchObject({ kind: "failed" });
     expect(dispatch).not.toHaveBeenCalled();
   });
-
   it("keeps a pending dual-identity message dispatchable through redelivery", async () => {
     const sender = {
       sourceNumber: "+15550002222",
@@ -239,7 +230,6 @@ describe("Signal durable ingress", () => {
       "second",
     ]);
   });
-
   it.each([
     ["sync", { envelope: { sourceNumber: "+15550001111", timestamp: 1, syncMessage: {} } }],
     ["receipt", { envelope: { sourceNumber: "+15550001111", timestamp: 2, receiptMessage: {} } }],
@@ -250,5 +240,15 @@ describe("Signal durable ingress", () => {
     await expect(queue.listPending({ limit: "all" })).resolves.toHaveLength(0);
     await expect(queue.listClaims()).resolves.toHaveLength(0);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+  it("stops while a pre-adoption delivery callback stays unresolved", async () => {
+    const gate = Promise.withResolvers<void>();
+    const started = await start(async () => {
+      gate.resolve();
+      await new Promise(() => {});
+    });
+    void started.receive(signalEvent()).catch(() => undefined);
+    await gate.promise.then(() => expect(started.stop()).resolves.toBeUndefined());
+    monitors.delete(started);
   });
 });

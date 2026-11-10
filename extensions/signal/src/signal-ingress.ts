@@ -198,6 +198,8 @@ export async function startSignalIngressMonitor(params: {
       failedMaxEntries: 1_000,
     },
     appendRetryDelaysMs: [0],
+    // Skip delivery-idle join on stop; settlements still wait in dispose.
+    waitForDeliveryIdleOnStop: false,
     drain: {
       resolveNonRetryableFailure: resolveSignalIngressNonRetryableFailure,
       onLog: (message) => params.runtime.log?.(`signal ${message}`),
