@@ -52,7 +52,12 @@ openclaw id rebind --cancel
 Moves this claw to a new endpoint key and Gateway key with its recovery kit (`OCK1-…`).
 Use it when a key file was lost or may have leaked, after a move to a new computer without
 the key files, or to rotate keys. In the Control UI on this computer the same action is
-**Move to new keys**.
+**Move to new keys** in the account menu, once you're signed in with OpenClaw ID: it takes the
+link code from your account, you type the recovery code in the browser, which signs the binding
+and checks Discovery's in place of the CLI, and you confirm the same fingerprints. The account
+menu also warns when a key file is missing or doesn't match, when Discovery lists newer keys
+(`binding_superseded`), and when new keys still need publishing (`needs_link_code`, with
+**Publish new keys**).
 
 1. You give a link code from your OpenClaw ID account (the **Add a claw** page at
    `https://claws.<loaderDomain>/link`), at the prompt or with `--code`. Discovery moves a claw

@@ -92,7 +92,7 @@ const enOpenClawIdDialogs = {
     moveKeysCheck: "Check",
     moveKeysConfirm: "Confirm the new keys",
     moveKeysRoot: "Owner key",
-    moveKeysRootMatches: "{fp} (matches your recovery kit)",
+    moveKeysRootMatches: "matches your recovery kit",
     moveKeysEndpoint: "Endpoint key",
     moveKeysGateway: "Gateway key",
     moveKeysBinding: "Binding",
