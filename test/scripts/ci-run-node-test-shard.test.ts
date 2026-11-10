@@ -338,6 +338,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     {
       configs: ["test/vitest/vitest.tooling.config.ts"],
+      files: [
+        "test/scripts/vitest-runtime-worker-selection.test.ts",
+        "test/scripts/ci-workflow-cost.test.ts",
+        "test/scripts/vitest-isolated.test.ts",
+        "test/scripts/update-restart-module-outcome.test.ts",
+        "test/scripts/eager-import-closure.test.ts",
+        "test/scripts/pr-wrapper-source-closure.test.ts",
+      ],
+      preset: "tooling",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling.config.ts"],
       files: ["test/scripts/test-extension.test.ts", "unknown.test.ts"],
       preset: "full",
     },
@@ -349,6 +361,29 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         includePatterns: ["src/config/io.load-async.test.ts"],
       },
       preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: undefined,
+      sibling: {
+        configs: ["test/vitest/vitest.tooling.config.ts"],
+        includePatterns: [
+          "test/scripts/test-projects.test.ts",
+          "test/scripts/ci-ui-e2e-selection.test.ts",
+        ],
+      },
+      preset: "tooling",
+    },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: ["src/infra/boundary-path.test.ts"],
+      preset: "tooling",
+    },
+    { configs: ["test/vitest/vitest.boundary.config.ts"], files: [], preset: "full" },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: ["test/unknown-boundary.test.ts"],
+      preset: "full",
     },
     { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
     { configs: [gatewayDatabaseConfig], files: null, preset: "full" },
@@ -391,7 +426,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               for (const spec of specs) {
                 const selectionArgs = [
                   spec.config,
-                  args,
+                  spec.pnpmArgs.slice(
+                    spec.pnpmArgs.indexOf(buildPrerequisites.resolveVitestCliEntry()) + 1,
+                  ),
                   spec.env,
                   undefined,
                   spec.includePatterns ?? undefined,
