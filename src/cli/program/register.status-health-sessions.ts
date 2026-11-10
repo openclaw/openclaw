@@ -253,7 +253,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--debug", "Alias for --verbose", false)
     .addHelpText("after", () => formatDocsHelp("/cli/health"))
     .action(async (opts) => {
-      const signal = getAsyncWorkSignal();
       await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
         const { healthCommand } = await import("../../commands/health.js");
         await healthCommand(
@@ -261,7 +260,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             json: Boolean(opts.json),
             timeoutMs,
             verbose,
-            ...(signal ? { signal } : {}),
+            signal: getAsyncWorkSignal(),
           },
           defaultRuntime,
         );

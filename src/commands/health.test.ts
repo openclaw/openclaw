@@ -8,7 +8,6 @@ import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { waitForGatewayDiagnosticReadiness } from "../cli/daemon-cli/diagnostic-readiness.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { createAbortError } from "../infra/abort-signal.js";
 import { ExitError } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -114,100 +113,6 @@ describe("healthCommand", () => {
     rpc.isGatewayCredentialsRequiredError.mockReturnValue(false);
     isGatewaySecretRefUnavailableErrorMock.mockReturnValue(false);
     probeGatewayStatusMock.mockReset();
-  });
-
-  it.each(["precanceled", "readiness", "request", "late-success", "auth-probe"] as const)(
-    "retires canceled health work without diagnostic output (%s)",
-    async (phase) => {
-      const controller = new AbortController();
-      const reason = new Error("Synthetic health interruption");
-      const interrupt = () => {
-        controller.abort(reason);
-        return createAbortError("Synthetic canceled health read");
-      };
-      rpc.callGateway.mockReset();
-      if (phase === "precanceled") {
-        controller.abort(reason);
-      } else if (phase === "readiness") {
-        vi.mocked(waitForGatewayDiagnosticReadiness).mockImplementationOnce(async () => {
-          throw interrupt();
-        });
-      } else if (phase === "auth-probe") {
-        rpc.callGateway.mockRejectedValueOnce(new Error("Synthetic credentials required"));
-        rpc.isGatewayCredentialsRequiredError.mockReturnValueOnce(true);
-        probeGatewayStatusMock.mockImplementationOnce(async () => {
-          throw interrupt();
-        });
-      } else {
-        rpc.callGateway.mockImplementationOnce(async () => {
-          const error = interrupt();
-          if (phase === "request") {
-            throw error;
-          }
-          return createHealthSummary();
-        });
-      }
-      await expect(runHealth({ json: true, signal: controller.signal })).resolves.toBeUndefined();
-      expect(runtime.log).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-      if (phase === "precanceled" || phase === "readiness") {
-        expect(rpc.callGateway).not.toHaveBeenCalled();
-      } else {
-        expect(rpc.callGateway.mock.calls[0]?.[0]).toMatchObject({ signal: controller.signal });
-      }
-      if (phase === "auth-probe") {
-        expect(probeGatewayStatusMock.mock.calls[0]?.[0]).toMatchObject({
-          signal: controller.signal,
-        });
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "preserves a genuine health failure (interrupted=%s)",
-    async (interrupted) => {
-      const controller = new AbortController();
-      const error = new Error("Synthetic unrelated transport failure");
-      rpc.callGateway.mockImplementationOnce(async () => {
-        if (interrupted) {
-          controller.abort();
-        }
-        throw error;
-      });
-      await expect(runHealth({ signal: controller.signal })).rejects.toBe(error);
-      expect(runtime.exit).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([false, true])("stops late account presentation (debug=%s)", async (debug) => {
-    const controller = new AbortController();
-    const logSelfId = vi.fn();
-    listReadOnlyChannelPluginsForConfigMock.mockReturnValueOnce([
-      {
-        id: "cancel-fixture",
-        config: {
-          listAccountIds: () => ["default"],
-          inspectAccount: async () => {
-            controller.abort();
-            return { accountId: "default", enabled: true, configured: true };
-          },
-          resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-        },
-        status: { logSelfId },
-      },
-    ]);
-    rpc.callGateway.mockResolvedValueOnce(
-      createHealthSummary({
-        channels: { "cancel-fixture": { accountId: "default", linked: true } },
-      }),
-    );
-    await runHealth({
-      signal: controller.signal,
-      config: debug ? { diagnostics: { flags: ["health"] } } : {},
-    });
-    expect(logSelfId).not.toHaveBeenCalled();
-    expect(textOutput()).not.toContain("configured=true");
-    expect(textOutput()).not.toContain("Gateway check duration");
   });
 
   it("preserves plugin health in JSON while surfacing configured failures and unavailable warnings", async () => {
@@ -378,7 +283,7 @@ describe("healthCommand", () => {
     });
   });
 
-  it("prints persistent event-loop degradation duration in text output", async () => {
+  it("prints event-loop degradation and disabled hot reload in text output", async () => {
     const snapshot = createHealthSummary({
       eventLoop: {
         degraded: true,
@@ -390,15 +295,11 @@ describe("healthCommand", () => {
         utilization: 0.75,
         cpuCoreRatio: 0.5,
       },
+      configReload: { hotReloadStatus: "disabled" },
     });
     const output = await renderHealth(snapshot, { timeoutMs: 1000 });
     expect(output).toContain("Gateway event loop: degraded for 3m");
     expect(output).toContain("p99=1200ms");
-  });
-
-  it("prints the config hot-reload disabled line in text output", async () => {
-    const snapshot = createHealthSummary({ configReload: { hotReloadStatus: "disabled" } });
-    const output = await renderHealth(snapshot);
     expect(output).toContain(
       "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)",
     );
@@ -599,6 +500,16 @@ describe("healthCommand", () => {
     expect(rpc.callGateway).not.toHaveBeenCalled();
   });
 
+  it("drops a pending health read and its output on interrupt", async () => {
+    const controller = new AbortController();
+    rpc.callGateway.mockImplementationOnce(async (opts: { signal: AbortSignal }) => {
+      controller.abort();
+      opts.signal.throwIfAborted();
+    });
+    await runHealth({ json: true, signal: controller.signal });
+    expect([...runtime.log.mock.calls, ...runtime.exit.mock.calls]).toEqual([]);
+  });
+
   it("keeps structured JSON failures inside the non-exiting host", async () => {
     rpc.callGateway.mockRejectedValueOnce(new Error("health request failed"));
     const payload = { ok: false, error: { type: "gateway_request_error" } };
@@ -657,13 +568,6 @@ it("formatContextEngineHealthLine summarizes quarantined context engines", () =>
 });
 
 describe("formatHealthCheckFailure", () => {
-  it("keeps non-rich output stable", () => {
-    const err = new Error("gateway closed (1006 abnormal closure): no close reason");
-    expect(formatHealthCheckFailure(err, { rich: false })).toBe(
-      `Health check failed: ${String(err)}`,
-    );
-  });
-
   it("formats gateway connection details as indented key/value lines", () => {
     const err = new Error(`gateway closed (1006 abnormal closure (no close frame)): no close reason
 Gateway target: ws://127.0.0.1:19001

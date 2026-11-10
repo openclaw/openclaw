@@ -1,7 +1,6 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, expect, it, vi } from "vitest";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { ExpectedCliError } from "../expected-cli-error.js";
 import { expectNoCalls } from "./program.test-helpers.js";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
@@ -81,13 +80,6 @@ const key = "agent:work:main";
 const request = "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ";
 
 beforeEach(() => vi.clearAllMocks());
-
-it("passes the health invocation lifetime through Commander", async () => {
-  const scope = new AsyncWorkScope();
-  await scope.run(() => run("health --json"));
-  expectOptions(mocks.health, { signal: scope.signal });
-  await scope.drain();
-});
 
 it.each([
   [

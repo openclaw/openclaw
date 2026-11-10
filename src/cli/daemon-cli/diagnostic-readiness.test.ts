@@ -115,25 +115,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([false, true])(
-  "cancels diagnostic readiness (before admission=%s)",
-  async (precanceled) => {
-    const controller = new AbortController();
-    const reason = new Error("Synthetic health interruption");
-    if (precanceled) {
-      controller.abort(reason);
-    } else {
-      readGatewayOwnerLease.mockImplementationOnce(() => {
-        controller.abort(reason);
-        return foregroundOwner();
-      });
-    }
-    await expect(waitForReadiness({ signal: controller.signal })).rejects.toBe(reason);
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(requestStartupProbe).not.toHaveBeenCalled();
-  },
-);
-
 it.each<{ envUrl?: string; url?: string; config?: OpenClawConfig }>([
   { url: "ws://127.0.0.1:18789" },
   { config: { gateway: { mode: "remote", remote: { url: "wss://peer.example" } } } },

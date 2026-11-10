@@ -10,7 +10,6 @@ export async function waitForGatewayDiagnostic(
   opts: Parameters<typeof waitForGatewayDiagnosticReadiness>[0] & { json?: boolean },
   runtime: RuntimeEnv,
 ): Promise<number | undefined> {
-  opts.signal?.throwIfAborted();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
   const startedAtMs = performance.now();
   const deadlineMs = Math.min(opts.deadlineMs ?? Infinity, startedAtMs + timeoutMs);

@@ -21,7 +21,6 @@ import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { resolveHealthAccountContext } from "../gateway/health/account-context.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { info } from "../globals.js";
-import { isAbortError } from "../infra/abort-signal.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatExactDuration } from "../infra/format-time/format-duration-exact.js";
@@ -70,14 +69,10 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   if (!directRateLimit && !isGatewayHealthAuthUnavailableError(params.error)) {
     return false;
   }
-  if (params.signal?.aborted) {
-    return false;
-  }
   let rateLimited = directRateLimit;
   if (!directRateLimit) {
     try {
       const details = await buildGatewayProbeConnectionDetails(params);
-      params.signal?.throwIfAborted();
       const probe = await probeGatewayStatus({
         url: details.url,
         token: params.token,
@@ -87,15 +82,15 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
         timeoutMs: params.timeoutMs ?? DEFAULT_RESTART_HEALTH_TIMEOUT_MS,
         config: params.config,
         json: params.json,
-        ...(params.signal ? { signal: params.signal } : {}),
+        signal: params.signal,
       });
-      params.signal?.throwIfAborted();
       if (!gatewayProbeResultSawGateway(probe)) {
         return false;
       }
       rateLimited = gatewayProbeResultWasRateLimited(probe);
     } catch (error) {
-      if (params.signal?.aborted && (error === params.signal.reason || isAbortError(error))) {
+      // Interrupted: the caller has nothing left to report.
+      if (params.signal?.aborted) {
         return true;
       }
       throw error;
@@ -159,13 +154,7 @@ export async function healthCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  if (opts.signal?.aborted) {
-    return;
-  }
   const cfg = opts.config ?? (await readNonObservingHealthConfig());
-  if (opts.signal?.aborted) {
-    return;
-  }
   // Always query the running gateway; do not open a direct Baileys socket here.
   let summary: HealthSummary;
   try {
@@ -190,11 +179,11 @@ export async function healthCommand(
           sharedStateMode: "read-only",
           ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
           localPortOverride: opts.localPortOverride,
-          ...(opts.signal ? { signal: opts.signal } : {}),
+          signal: opts.signal,
         }),
     );
   } catch (error) {
-    if (opts.signal?.aborted && (error === opts.signal.reason || isAbortError(error))) {
+    if (opts.signal?.aborted) {
       return;
     }
     if (
@@ -234,9 +223,6 @@ export async function healthCommand(
     }
     const { buildHealthAgentSummaries, resolveHealthAgentOrder } =
       await import("../gateway/health/collector.js");
-    if (opts.signal?.aborted) {
-      return;
-    }
     const localAgents = resolveHealthAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
@@ -264,9 +250,6 @@ export async function healthCommand(
               cfg,
               accountId,
             });
-          if (opts.signal?.aborted) {
-            return;
-          }
           const record = asNullableRecord(inspectedAccount ?? probeAccount);
           const tokenSource =
             record && typeof record.tokenSource === "string" ? record.tokenSource : undefined;
@@ -318,9 +301,6 @@ export async function healthCommand(
         cfg,
         accountId,
       });
-      if (opts.signal?.aborted) {
-        return;
-      }
       if (
         accountContext.probeAccount === undefined ||
         !accountContext.enabled ||
@@ -340,9 +320,6 @@ export async function healthCommand(
     const resolvedAgents = collectLocalAgents
       ? await buildHealthAgentSummaries(cfg, localAgents)
       : agents;
-    if (opts.signal?.aborted) {
-      return;
-    }
     const displayDefaultAgentId =
       collectLocalAgents && defaultAgentId
         ? (resolvedAgents.find((agent) => agent.agentId === defaultAgentId) ?? resolvedAgents[0])

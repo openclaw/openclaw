@@ -437,9 +437,8 @@ function defineRoutedCommand<TArgs>(
 
 const routedCommandDefinitions = {
   health: defineRoutedCommand(parseHealthRouteArgs, async (args) => {
-    const signal = getAsyncWorkSignal();
     const { healthCommand } = await import("../commands/health.js");
-    await healthCommand({ ...args, ...(signal ? { signal } : {}) }, defaultRuntime);
+    await healthCommand({ ...args, signal: getAsyncWorkSignal() }, defaultRuntime);
   }),
   status: defineRoutedCommand(parseStatusRouteArgs, async (args) => {
     if (args.json) {
@@ -464,9 +463,8 @@ const routedCommandDefinitions = {
     await runDaemonStatus(args);
   }),
   "gateway-health": defineRoutedCommand(parseGatewayHealthRouteArgs, async (args) => {
-    const signal = getAsyncWorkSignal();
     const { runGatewayHealthJsonRoute } = await import("./gateway-cli/health-route.js");
-    await runGatewayHealthJsonRoute({ ...args, ...(signal ? { signal } : {}) }, defaultRuntime);
+    await runGatewayHealthJsonRoute({ ...args, signal: getAsyncWorkSignal() }, defaultRuntime);
   }),
   sessions: defineRoutedCommand(parseSessionsRouteArgs, async (args) => {
     const { sessionsCommand } = await import("../commands/sessions.js");

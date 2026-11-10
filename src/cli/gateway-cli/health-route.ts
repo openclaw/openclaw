@@ -1,4 +1,3 @@
-import { isAbortError } from "../../infra/abort-signal.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 /** Run the successful JSON path without loading text presentation modules. */
@@ -10,9 +9,6 @@ export async function runGatewayHealthJsonRoute(
   },
   runtime: RuntimeEnv,
 ): Promise<void> {
-  if (args.signal?.aborted) {
-    return;
-  }
   let rpc = args.rpc;
   if (args.localPortOverride !== undefined) {
     const { readNonObservingHealthConfig } = await import("../../commands/health.js");
@@ -35,13 +31,13 @@ export async function runGatewayHealthJsonRoute(
     const result = await callGatewayFromCliWithTransport("health", rpc, undefined, {
       defaultTimeoutMs: 10_000,
       sharedStateMode: "read-only",
-      ...(args.signal ? { signal: args.signal } : {}),
+      signal: args.signal,
     });
     if (!args.signal?.aborted) {
       writeRuntimeJson(runtime, result);
     }
   } catch (error) {
-    if (args.signal?.aborted && (error === args.signal.reason || isAbortError(error))) {
+    if (args.signal?.aborted) {
       return;
     }
     const {
@@ -58,7 +54,7 @@ export async function runGatewayHealthJsonRoute(
       password: rpc.password,
       localPortOverride: rpc.localPortOverride,
       json: true,
-      ...(args.signal ? { signal: args.signal } : {}),
+      signal: args.signal,
     });
     if (handled) {
       return;

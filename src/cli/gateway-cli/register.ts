@@ -3,7 +3,6 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -59,7 +58,7 @@ async function callGatewayReadOnlyCli(
   return await callGatewayFromCliWithTransport(method, opts, params, {
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
     sharedStateMode: "read-only",
-    ...(signal ? { signal } : {}),
+    signal,
   });
 }
 
@@ -352,15 +351,12 @@ export function registerGatewayCli(program: Command) {
       .action(
         gatewayAction(async (opts, command) => {
           const signal = getAsyncWorkSignal();
-          if (signal?.aborted) {
-            return;
-          }
           const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
           let result: unknown;
           try {
             result = await callGatewayReadOnlyCli("health", rpcOpts, undefined, signal);
           } catch (error) {
-            if (signal?.aborted && (error === signal.reason || isAbortError(error))) {
+            if (signal?.aborted) {
               return;
             }
             const { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig } =
@@ -376,7 +372,7 @@ export function registerGatewayCli(program: Command) {
               password: rpcOpts.password,
               localPortOverride: rpcOpts.localPortOverride,
               json: Boolean(rpcOpts.json),
-              ...(signal ? { signal } : {}),
+              signal,
             });
             if (handled) {
               return;
@@ -394,9 +390,6 @@ export function registerGatewayCli(program: Command) {
             import("../../commands/health.js"),
             import("../../../packages/terminal-core/src/health-style.js"),
           ]);
-          if (signal?.aborted) {
-            return;
-          }
           const rich = isRich();
           const obj: Record<string, unknown> =
             result && typeof result === "object" ? (result as Record<string, unknown>) : {};
