@@ -612,6 +612,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       }),
     accountCatalog: params.accountCatalog,
     prepareSelectedAccountCatalog,
+    hasPinnedAccount: (entry: ModelCatalogEntry) => pinnedProfileForEntry(entry) !== undefined,
     evaluateEntry,
     evaluateNative,
     resolveOpenAIProviderRoutes,

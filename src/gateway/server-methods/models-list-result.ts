@@ -69,6 +69,7 @@ import {
   buildPublicModelProjection,
   projectModelServiceTiers,
   projectProviderCatalogOutcomes,
+  retainModelChoiceAccountPin,
 } from "./models-list-public-projection.js";
 import { resolveDefaultModelsPreview } from "./models-list-result.default-models.js";
 import { prepareModelPickerRuntimeChoices } from "./models-list-runtime-choices.js";
@@ -513,7 +514,7 @@ export async function prepareModelsListResult({
                 baseUrl: route.baseUrl,
               })
             : undefined;
-        return {
+        const choice: ModelChoice = {
           ...preparedEntry,
           ...(supportsFastMode === undefined ? {} : { supportsFastMode }),
           ...(speedPolicy.supportsServiceTierRecovery === true
@@ -549,6 +550,7 @@ export async function prepareModelsListResult({
               }
             : {}),
         };
+        return retainModelChoiceAccountPin(choice, decisions.hasPinnedAccount(entry));
       };
     };
 
@@ -584,7 +586,6 @@ export async function prepareModelsListResult({
         }),
       };
     }
-    const { evaluateEntry } = projector;
     const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
     const runtimeChoiceReaders = new Map<string, () => ModelRuntimeChoice[]>();
     const twinRoutes = new Map<string, CliRuntimeTwinRoute>();
@@ -646,7 +647,7 @@ export async function prepareModelsListResult({
                 resolveOpenAIProviderRoutes: projector.resolveOpenAIProviderRoutes,
               }).runtime
             : undefined;
-          const preparedHost = evaluateEntry(entry, variants, baseRuntime);
+          const preparedHost = projector.evaluateEntry(entry, variants, baseRuntime);
           // Picker alternatives never change the configured row when a session selects a sibling.
           const host = baseRuntime
             ? { ...preparedHost, requestedRuntimeId: undefined }
@@ -670,9 +671,8 @@ export async function prepareModelsListResult({
           return () => {
             const evaluation = evaluateNative(entry, host);
             evaluations.set(key, evaluation);
-            const routeManaged = evaluation.routeResolution !== null;
             const syntheticLocal =
-              !routeManaged &&
+              evaluation.routeResolution === null &&
               normalizeProviderId(entry.provider) !== "openai" &&
               evaluation.availability === undefined &&
               evaluation.evidence === "synthetic";
