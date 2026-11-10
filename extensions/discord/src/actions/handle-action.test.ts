@@ -106,6 +106,15 @@ describe("handleDiscordMessageAction", () => {
     },
   );
 
+  it("rejects a thread-reply buffer attachment instead of dropping it", async () => {
+    await expectRejected(
+      'Use action: "send" for base64 buffer attachments; thread-reply requires filePath, path, or media.',
+      "thread-reply",
+      { threadId: "channel-1", message: "case A", buffer: "JVBERi0xLjQK", filename: "a.pdf" },
+      { cfg: discordConfig({ threads: true }), ...threadContext },
+    );
+  });
+
   it.each(adminCases)("rejects foreign requester identities for %s", async (action, params) => {
     await expectRejected("trusted Discord sender identity", action, params, {
       cfg: discordConfig({ channels: true, moderation: true }),

@@ -262,6 +262,13 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       readStringParam(actionParams, "media", { trim: false }) ??
       readStringParam(actionParams, "path", { trim: false }) ??
       readStringParam(actionParams, "filePath", { trim: false });
+    if (!mediaUrl && readStringParam(actionParams, "buffer", { trim: false })) {
+      // Buffer attachments are send-only, so replying with one would post text and
+      // drop the file without a trace. Fail like upload-file instead of losing it.
+      throw new Error(
+        'Use action: "send" for base64 buffer attachments; thread-reply requires filePath, path, or media.',
+      );
+    }
     const replyTo = readStringParam(actionParams, "replyTo");
 
     // `message.thread-reply` (tool) uses `threadId`, while the CLI historically used `to`/`channelId`.
