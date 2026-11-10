@@ -212,16 +212,15 @@ describe("Access page", () => {
     const { container } = await mountPage([linked()]);
     await vi.waitFor(() => expect(container.textContent).toMatch(/Device ID: fp:[a-f0-9]{64}/));
     expect(container.textContent).toContain("Operator invite · created");
-    expect(container.textContent).toContain(
-      "member@example.test · Device details unavailable · Falkenstein, DE",
-    );
+    expect(container.textContent).toContain("member@example.test");
+    expect(container.textContent).toContain("Falkenstein, DE");
     expect(container.textContent?.match(/member@example.test/g)).toHaveLength(1);
     expect(container.querySelector("details")?.open).toBe(false);
     expect(container.querySelector("details code")?.textContent).toMatch(/^fp:[a-f0-9]{64}$/);
     expect(container.querySelector("details")?.textContent).toContain(
       "OpenClaw ID provided this email and approximate location. Device details are unavailable.",
     );
-    expect(container.querySelector("header")?.textContent?.trim()).toBe("Remote access");
+    expect(container.querySelector("header h1")?.textContent).toBe("Remote access");
     expect(container.querySelector("#ocid-access-people")?.textContent).toBe("People");
     expect(button(container, "Add node")?.disabled).toBe(false);
     expect(
@@ -247,9 +246,7 @@ describe("Access page", () => {
         ],
       }),
     ]);
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain("member@example.test · Device details unavailable"),
-    );
+    await vi.waitFor(() => expect(container.textContent).toContain("member@example.test"));
     await vi.waitFor(() => expect(button(container, "Approve")?.disabled).toBe(false));
     button(container, "Approve")!.click();
     await vi.waitFor(() =>
@@ -375,7 +372,8 @@ describe("Access page", () => {
     await vi.waitFor(() =>
       expect(container.textContent).toContain("can view people but cannot change access"),
     );
-    expect(button(container, "Approve")?.disabled).toBe(true);
+    expect(button(container, "Approve")).toBeUndefined();
+    expect(button(container, "Create invite link")).toBeUndefined();
     expect(button(container, "Add node")).toBeUndefined();
   });
 
@@ -569,6 +567,13 @@ describe("Access page", () => {
       expect(harness.container.querySelector('[role="alert"]')).not.toBeNull(),
     );
     const alert = harness.container.querySelector('[role="alert"]')!;
+    expect(alert.closest("li")?.textContent).toContain("member@example.test");
+    expect(
+      harness.container
+        .querySelector("#ocid-nodes")
+        ?.closest("section")
+        ?.querySelector('[role="alert"]'),
+    ).toBeNull();
     expect(alert.querySelector("p")?.textContent).toBe(
       "Could not confirm whether access was approved. Refresh this page and check the person's access before approving again.",
     );

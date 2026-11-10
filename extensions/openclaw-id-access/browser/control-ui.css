@@ -1,33 +1,39 @@
 .ocid-access {
-  width: min(100%, 860px);
+  box-sizing: border-box;
+  width: min(100%, 760px);
   margin: 0 auto;
-  padding: var(--space-5);
+  padding: var(--space-6) var(--space-4) var(--space-6);
   color: var(--text);
+  font-size: calc(12.5px * var(--control-ui-text-scale));
+  line-height: 1.5;
   display: grid;
-  gap: var(--space-5);
+  gap: 40px;
 }
 
 .ocid-access h1 {
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(24px * var(--control-ui-text-scale));
+  font-size: calc(22px * var(--control-ui-text-scale));
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.025em;
 }
 
-.ocid-access h2 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: calc(18px * var(--control-ui-text-scale));
-}
-
+.ocid-access h2,
 .ocid-access h3 {
-  margin: 0 0 var(--space-2);
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
+  margin: 0;
+  color: var(--muted-strong, var(--muted));
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .ocid-access__group {
   display: grid;
-  gap: var(--space-5);
+  gap: 40px;
+  min-width: 0;
 }
 
 .ocid-access__header {
@@ -37,9 +43,19 @@
   gap: var(--space-4);
 }
 
+.ocid-access > .ocid-access__header {
+  display: grid;
+  gap: 2px;
+}
+
 .ocid-access__section {
   display: grid;
   gap: var(--space-3);
+  min-width: 0;
+}
+
+.ocid-access__section > h3 + .ocid-access__hint {
+  margin-top: -8px;
 }
 
 .ocid-access__hint,
@@ -49,30 +65,83 @@
   line-height: 1.5;
 }
 
+.ocid-access > .ocid-access__empty {
+  padding: var(--space-5);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  color: var(--text);
+}
+
 .ocid-access__form,
-.ocid-access__actions {
+.ocid-access__actions,
+.ocid-access__link-copy {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
 }
 
+.ocid-access__actions {
+  flex-wrap: wrap;
+}
+
+.ocid-access__invite-card,
+.ocid-access__list {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+}
+
+.ocid-access__invite-card {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  min-width: 0;
+}
+
+.ocid-access__form .settings-input {
+  width: 0;
+  min-width: 0;
+  font: inherit;
+}
+
 .ocid-access__form input {
-  flex: 1 1 240px;
+  flex: 1 1 180px;
+}
+
+.ocid-access__form select {
+  flex: 1.7 1 320px;
+}
+
+.ocid-access__form .btn,
+.ocid-access__link-copy .btn {
+  flex: none;
+}
+
+.ocid-access__link {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--bg-hover);
+  overflow-wrap: anywhere;
 }
 
 .ocid-access__url {
-  overflow-wrap: anywhere;
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  white-space: nowrap;
   font-family: var(--mono);
 }
 
 .ocid-access__list {
   display: grid;
   margin: 0;
-  padding: 0;
+  padding: var(--space-1);
   list-style: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md, 8px);
+  min-width: 0;
 }
 
 .ocid-access__row {
@@ -80,30 +149,155 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-3);
+  padding: 10px var(--space-3);
+  min-width: 0;
+  border-radius: var(--radius-lg);
 }
 
-.ocid-access__row + .ocid-access__row {
-  border-top: 1px solid var(--border);
+.ocid-access__row--member,
+.ocid-access__row--owner,
+.ocid-access__row--invited {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  column-gap: var(--space-3);
+  row-gap: 0;
+}
+
+.ocid-access__row--request {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: start;
+}
+
+.ocid-access__row--member:hover,
+.ocid-access__row--member:focus-within,
+.ocid-access__row--confirming {
+  background: var(--bg-hover);
+}
+
+.ocid-access__person {
+  min-width: 0;
 }
 
 .ocid-access__title {
   overflow-wrap: anywhere;
   color: var(--text-strong);
+  font-weight: 550;
+  font-size: calc(13.5px * var(--control-ui-text-scale));
+}
+
+.ocid-access__person > .ocid-access__hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ocid-access__row--request .ocid-access__hint {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.ocid-access__avatar {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: white;
+  background: color-mix(in srgb, var(--chart-series-2) 65%, black);
+  font-size: calc(11px * var(--control-ui-text-scale));
   font-weight: 600;
+  line-height: 1;
+}
+
+.ocid-access__row:nth-child(3n) .ocid-access__avatar {
+  background: color-mix(in srgb, var(--chart-series-3) 65%, black);
+}
+
+.ocid-access__row:nth-child(3n + 1) .ocid-access__avatar {
+  background: color-mix(in srgb, var(--chart-series-5) 65%, black);
+}
+
+.ocid-access__row--owner .ocid-access__avatar {
+  background: color-mix(in srgb, var(--chart-series-1) 65%, black);
+}
+
+.ocid-access .chip {
+  padding: 2px 9px;
+  font-size: var(--control-ui-text-xs);
+  line-height: 18px;
+  text-transform: capitalize;
+}
+
+.ocid-access__member-actions {
+  position: relative;
+  justify-self: end;
+}
+
+.ocid-access__remove {
+  position: absolute;
+  inset-inline-end: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* Keep the role edge fixed, while making room for the revealed action. */
+.ocid-access__row--member:hover .ocid-access__person,
+.ocid-access__row--member:focus-within .ocid-access__person {
+  padding-inline-end: 76px;
+}
+
+.ocid-access__confirmation,
+.ocid-access__row-error {
+  grid-column: 2 / -1;
+  min-width: 0;
+}
+
+.ocid-access__confirmation {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+}
+
+.ocid-access__confirmation p {
+  margin: 0;
+}
+
+.ocid-access__confirmation .ocid-access__actions {
+  justify-content: flex-end;
+}
+
+.ocid-access__confirmation .btn {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .ocid-access__details {
-  margin-top: var(--space-2);
+  margin-top: var(--space-1);
   color: var(--muted);
 }
 
 .ocid-access__details summary {
   width: fit-content;
+  cursor: pointer;
 }
 
 .ocid-access__details code {
   overflow-wrap: anywhere;
+}
+
+.ocid-access__row--request .ocid-access__actions {
+  margin-top: var(--space-3);
+}
+
+.ocid-access__error {
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.ocid-access__person > .ocid-access__error,
+.ocid-access__row-error > .ocid-access__error {
+  margin-top: var(--space-2);
 }
 
 .ocid-access__error p {
@@ -112,6 +306,79 @@
 
 .ocid-access__error code {
   white-space: pre-wrap;
+}
+
+.ocid-access__notice {
+  padding: var(--space-3) var(--space-3) var(--space-3) 54px;
+  color: var(--success);
+  overflow-wrap: anywhere;
+}
+
+.ocid-access .ocid-access__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ocid-access__remove {
+    opacity: 0;
+  }
+
+  .ocid-access__row:hover .ocid-access__remove,
+  .ocid-access__row:focus-within .ocid-access__remove {
+    opacity: 1;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .ocid-access__row--member .ocid-access__person {
+    padding-inline-end: 76px;
+  }
+}
+
+@media (max-width: 640px) {
+  .ocid-access__form {
+    flex-wrap: wrap;
+  }
+
+  .ocid-access__form .settings-input {
+    width: 100%;
+    flex-basis: 100%;
+  }
+
+  .ocid-access__row--member .ocid-access__person {
+    padding-inline-end: 0;
+  }
+
+  .ocid-access__member-actions {
+    grid-column: 2 / -1;
+    justify-self: stretch;
+    justify-content: flex-end;
+  }
+
+  .ocid-access__remove {
+    position: static;
+    transform: none;
+    opacity: 1;
+    margin-inline-end: auto;
+  }
+
+  .ocid-access__confirmation,
+  .ocid-access__row-error {
+    grid-column: 1 / -1;
+  }
+
+  .ocid-access__person > .ocid-access__hint {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 .ocid-node-dialog {

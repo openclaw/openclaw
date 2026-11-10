@@ -88,3 +88,15 @@ export function removalNote(name: string, removal: RemovalSummary | null): strin
   parts.push(`${removal.runsCancelled} ${removal.runsCancelled === 1 ? "task" : "tasks"} stopped`);
   return parts.join(" · ");
 }
+
+/** Decorative initials only; the full reported identity stays beside the avatar. */
+export function personInitials(name: string): string {
+  return name
+    .split("@")[0]!
+    .split(/[\s._-]+/u)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => Array.from(part)[0])
+    .join("")
+    .toLocaleUpperCase();
+}

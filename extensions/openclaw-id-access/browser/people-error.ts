@@ -7,6 +7,11 @@ export type PeopleErrorAction = "load" | "update" | "approve";
 /** Plain copy and a separately sanitized diagnostic for a collapsed disclosure. */
 export type PeopleError = { message: string; diagnostic: string };
 
+/** Where an owner operation failed; retained even if its row leaves the next snapshot. */
+export type PeopleOperationError = PeopleError & {
+  target: "invite" | "nodes" | `request:${string}` | `member:${string}`;
+};
+
 const OWNER_BROWSER =
   "This browser cannot manage access to this claw. Use an approved owner browser.";
 const MESSAGES: Readonly<Record<string, string>> = {
