@@ -335,3 +335,44 @@ it("waits for a transcript change before preparing media for the current convers
       await Promise.all([mutation, commit]);
     }
   }));
+
+it.each(["sessionRoot", "spawnedWorkspaceDir"] as const)(
+  "delivers current-session media from its %s without admitting sibling workspaces",
+  (workspaceField) =>
+    withCompletionFixture(async (fixture, state) => {
+      const workspace = state.statePath("worktrees", "selected");
+      const image = path.join(workspace, "selected.png");
+      const sibling = state.statePath("worktrees", "sibling", "private.png");
+      for (const source of [image, sibling]) {
+        await fs.mkdir(path.dirname(source), { recursive: true });
+        await fs.writeFile(source, PNG);
+      }
+      await replaceSessionEntry(fixture.scope, {
+        sessionId: fixture.scope.sessionId,
+        lifecycleRevision: "report-generation",
+        updatedAt: 1,
+        permissionMode: "workspace",
+        [workspaceField]: workspace,
+      });
+      fixture.params.cfgWithAgentDefaults.tools = { fs: { workspaceOnly: true } };
+      fixture.params.deliveryPayloads = [
+        { text: "After", mediaUrls: [image, sibling, fixture.payload.mediaUrl!] },
+      ];
+      await expect(fixture.commit()).resolves.toMatchObject({
+        ok: true,
+      });
+      const messages = await fixture.messages();
+      expect(messages).toHaveLength(1);
+      expect(readAssistantDisplayContent(readTranscriptEventMessage(messages[0]))).toEqual([
+        { type: "text", text: "After" },
+        expect.objectContaining({ type: "image", alt: "selected.png" }),
+        expect.objectContaining({ type: "attachment_error" }),
+        expect.objectContaining({ type: "attachment_error" }),
+      ]);
+      const records = await fixture.records();
+      expect(records).toHaveLength(1);
+      expect(await fixture.downloadAttachment(records[0]!.record.attachmentId)).toMatchObject({
+        type: "image",
+      });
+    }),
+);

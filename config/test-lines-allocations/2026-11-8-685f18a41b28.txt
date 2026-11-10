@@ -1,0 +1,5 @@
+41
+# LOCAL 2026.11.8 row 29; source 685f18a41b28b07e93b411b895be1c60dec3fc23.
+# Background media uses existing live reply-media scope, release and cancellation; selected workspace accepted, siblings rejected. UI scope excluded.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
