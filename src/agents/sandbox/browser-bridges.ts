@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 /**
  * In-process browser bridge registry keyed by sandbox session.
  *
@@ -42,5 +43,36 @@ export async function stopCachedBrowserBridgesForContainer(
       return;
     }
     await stopCachedBrowserBridge(match[0], match[1], assertCurrent);
+  }
+}
+
+/** Attribute newly provisioned bridges to the active embedded one-shot turn. */
+const oneShotBridgeOwners = new AsyncLocalStorage<Map<string, CachedBrowserBridge>>();
+
+export function withOneShotBrowserBridgeScope<T>(run: () => Promise<T>): Promise<T> {
+  return oneShotBridgeOwners.run(new Map(), run);
+}
+
+export function trackOneShotBrowserBridge(key: string, bridge: CachedBrowserBridge): void {
+  oneShotBridgeOwners.getStore()?.set(key, bridge);
+}
+
+/** Release only the current bridge generations owned by this one-shot turn. */
+export async function stopOneShotBrowserBridges(): Promise<void> {
+  const owned = oneShotBridgeOwners.getStore();
+  if (!owned) {
+    return;
+  }
+  const failures: unknown[] = [];
+  for (const [key, bridge] of owned) {
+    try {
+      await stopCachedBrowserBridge(key, bridge);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  owned.clear();
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Failed to stop one-shot sandbox browser bridges");
   }
 }

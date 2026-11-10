@@ -5,6 +5,7 @@ import path from "node:path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
+import { stopOneShotBrowserBridges, withOneShotBrowserBridgeScope } from "../agents/sandbox/browser-bridges.js";
 import { createAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
 import {
   recordAgentCleanupFailure,
@@ -92,7 +93,7 @@ function isStructuredTimeoutError(error: unknown): boolean {
 }
 
 /** Run one isolated embedded agent turn and project its stable CLI result. */
-export async function agentExecCommand(
+async function runAgentExecCommand(
   positionalMessage: string | undefined,
   opts: AgentExecCliOptions,
   runtime: RuntimeEnv,
@@ -427,6 +428,11 @@ export async function agentExecCommand(
       cleanupError ??= error;
     }
   }
+  try {
+    await stopOneShotBrowserBridges();
+  } catch (error) {
+    cleanupError ??= error;
+  }
   if (cleanupError) {
     recordAgentCleanupFailure();
     const cleanupFailure = new Error(
@@ -462,4 +468,14 @@ export async function agentExecCommand(
     runtime.error(envelope.error.message);
   }
   return commandResult;
+}
+
+
+/** Run an embedded CLI turn with its own browser-bridge ownership context. */
+export function agentExecCommand(
+  positionalMessage: string | undefined,
+  opts: AgentExecCliOptions,
+  runtime: RuntimeEnv,
+): Promise<AgentExecCommandResult> {
+  return withOneShotBrowserBridgeScope(() => runAgentExecCommand(positionalMessage, opts, runtime));
 }
