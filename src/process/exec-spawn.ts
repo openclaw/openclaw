@@ -638,8 +638,8 @@ export function spawnCommandWithInvocation<
     // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
     remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
   }
-  const reservation = reserveCommandProcessCustody([invocation.command, ...invocation.args]);
   const limited = prepareAgentCoreDumpLimit(invocation.command, invocation.args, executionIntent);
+  const reservation = reserveCommandProcessCustody([invocation.command, ...invocation.args]);
   const child: CommandSubprocess<CommandSpawnOptions> =
     broker && remoteOptions
       ? spawnBrokerCommand(

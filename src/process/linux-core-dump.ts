@@ -1,7 +1,5 @@
+import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import type { ProcessExecutionIntent } from "./linux-exec-cgroup.js";
-
-const prlimit = "/usr/bin/prlimit";
-const coreLimit = "--core=0:0";
 
 /** prlimit execs in place, so command descendants inherit the limit without changing the host. */
 export function prepareAgentCoreDumpLimit(
@@ -9,7 +7,14 @@ export function prepareAgentCoreDumpLimit(
   args: string[],
   intent: ProcessExecutionIntent | undefined,
 ): { command: string; args: string[] } {
-  return process.platform === "linux" && intent === "agent-tool"
-    ? { command: prlimit, args: [coreLimit, "--", command, ...args] }
-    : { command, args };
+  if (process.platform !== "linux" || intent !== "agent-tool") {
+    return { command, args };
+  }
+  const prlimit = resolveSystemBin("prlimit");
+  if (!prlimit) {
+    throw new Error(
+      "Linux agent execution requires prlimit; install util-linux in a system directory.",
+    );
+  }
+  return { command: prlimit, args: ["--core=0:0", "--", command, ...args] };
 }
