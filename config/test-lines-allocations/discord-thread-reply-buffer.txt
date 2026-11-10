@@ -1,2 +1,2 @@
 # thread-reply must reject buffer attachments instead of dropping them.
-8
+9
