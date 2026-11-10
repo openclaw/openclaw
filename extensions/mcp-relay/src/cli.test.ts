@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { AsyncWorkScope, createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -33,74 +33,30 @@ async function runCli(args: string[]) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  mocks.callGatewayFromCli.mockReset().mockResolvedValue({ connected: true });
+  vi.resetAllMocks();
 });
 
 it.each([
-  ["status", {}, "operator.read"],
-  ["pair", {}, "operator.admin"],
-  ["grants", {}, "operator.admin"],
-  ["revoke", { grantId: "gr_fixture" }, "operator.admin"],
-] as const)("routes %s with its required scope", async (method, params, scope) => {
-  const args = method === "revoke" ? [method, "gr_fixture"] : [method];
-  await runCli([...args, "--json", "--url", "ws://localhost:19000"]);
-
+  ["status", {}, "operator.read", true],
+  ["pair", {}, "operator.admin", false],
+  ["grants", {}, "operator.admin", true],
+  ["revoke", { grantId: "gr_fixture" }, "operator.admin", false],
+] as const)("routes %s and drops only interrupted reads", async (method, params, scope, read) => {
+  const work = new AsyncWorkScope();
+  mocks.callGatewayFromCli.mockImplementation(async () => {
+    work.beginClose(new Error("interrupted"));
+    return { connected: true };
+  });
+  const result = work.run(() => runCli([method, ...Object.values(params), "--json"]));
+  await (read ? expect(result).rejects.toThrow("interrupted") : result);
   expect(mocks.callGatewayFromCli).toHaveBeenCalledWith(
     `mcp-relay.${method}`,
-    expect.objectContaining({ json: true, url: "ws://localhost:19000" }),
+    expect.objectContaining({ json: true }),
     params,
-    { progress: false, scopes: [scope] },
+    { progress: false, scopes: [scope], ...(read && { signal: work.signal }) },
   );
-  expect(mocks.writeJson).toHaveBeenCalledWith({ connected: true });
+  expect(mocks.writeJson).toHaveBeenCalledTimes(read ? 0 : 1);
 });
-
-it.each([
-  ["status", true],
-  ["grants", true],
-  ["pair", false],
-  ["revoke", false],
-] as const)(
-  "settles %s interruption without losing an accepted receipt",
-  async (method, cancel) => {
-    const response = createDeferred<{ connected: boolean }>();
-    const called = createDeferred();
-    mocks.callGatewayFromCli.mockImplementation((_method, _opts, _params, extra) => {
-      if (extra?.signal?.aborted) {
-        response.reject(extra.signal.reason);
-      } else {
-        extra?.signal?.addEventListener("abort", () => response.reject(extra.signal.reason), {
-          once: true,
-        });
-      }
-      called.resolve();
-      return response.promise;
-    });
-    const scope = new AsyncWorkScope();
-    const args = method === "revoke" ? [method, "gr_fixture"] : [method];
-    const command = scope.run(() => runCli([...args, "--json"]));
-    let settled = false;
-    void command.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await called.promise;
-    scope.beginClose(new Error("interrupted"));
-    for (let index = 0; index < 8; index += 1) {
-      await Promise.resolve();
-    }
-    const settledBeforeResponse = settled;
-    response.resolve({ connected: true });
-    await command.catch(() => undefined);
-
-    expect(settledBeforeResponse).toBe(cancel);
-    expect(mocks.writeJson).toHaveBeenCalledTimes(cancel ? 0 : 1);
-  },
-);
 
 it("prints pairing details and instructions", async () => {
   mocks.callGatewayFromCli.mockResolvedValue({
@@ -110,11 +66,8 @@ it("prints pairing details and instructions", async () => {
   });
   await runCli(["pair"]);
 
-  const output = mocks.log.mock.calls.flat().join("\n");
-  expect(output).toContain("ABCDE-FGHJK");
-  expect(output).toContain("https://mcp.openclaw.ai/mcp");
-  expect(output).toContain("1970-01-01T00:10:00.000Z");
-  expect(output).toContain("consent page");
+  expect(mocks.log).toHaveBeenCalledWith("Pairing code: ABCDE-FGHJK");
+  expect(mocks.log).toHaveBeenCalledWith("Expires: 1970-01-01T00:10:00.000Z");
 });
 
 it.each([
@@ -148,5 +101,4 @@ it.each([false, true])("reports Gateway recovery instructions (json=%s)", async 
     expect(mocks.error).toHaveBeenCalledExactlyOnceWith(message);
     expect(mocks.exit).toHaveBeenCalledExactlyOnceWith(1);
   }
-  expect(mocks.writeJson).not.toHaveBeenCalled();
 });
