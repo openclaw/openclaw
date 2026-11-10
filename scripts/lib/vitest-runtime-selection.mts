@@ -28,6 +28,7 @@ const runtimeOnlyBuiltCliFiles = new Set([
 const runtimeOnlyUnitFiles = new Set([
   "src/agents/agent-tools.delegated-authority.test.ts",
   "src/agents/session-placement-computer.test.ts",
+  "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
   "src/auto-reply/reply/commands-system-prompt.test.ts",
@@ -46,6 +47,7 @@ const runtimeOnlyUnitFiles = new Set([
   "src/plugins/loader.runtime-registry.test.ts",
   "src/plugins/plugin-generation-source-inspection.worker.test.ts",
   "src/plugins/plugin-generation-worker.test.ts",
+  "src/state/dreaming-startup-admission.test.ts",
   "test/canonical-descendant.integration.test.ts",
   "test/codex-settled-turn-finalization.integration.test.ts",
   "test/codex-web-search-native.integration.test.ts",
@@ -63,6 +65,7 @@ const runtimeOnlyUnitFiles = new Set([
   "test/scripts/pr-wrapper-source-closure.test.ts",
   "test/scripts/type-suppression-inventory.test.ts",
   "test/skill-usage.codex.integration.test.ts",
+  "test/slack-outbound-permanent-rejection-loopback.test.ts",
   "test/vitest-projects-config.test.ts",
 ]);
 
