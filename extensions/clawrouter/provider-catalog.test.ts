@@ -7,6 +7,7 @@ import {
   normalizeClawRouterResolvedModel,
   prepareClawRouterRequestModel,
 } from "./provider-catalog.js";
+import { resolveFastModeSupport } from "./provider-policy-api.js";
 
 const PRICING = {
   inputMicrosPerMillion: 3_000_000,
@@ -28,7 +29,7 @@ function catalogProvider(
     input?: unknown;
     nativeCapabilities?: unknown;
     supportedReasoningEfforts?: string[];
-    pricing?: typeof PRICING;
+    pricing?: typeof PRICING & { anthropicModifiers?: { fastMultiplier: number | null } };
   } = {},
 ) {
   return {
@@ -103,6 +104,66 @@ describe("ClawRouter provider catalog", () => {
     clearLiveCatalogCacheForTests();
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    ["claude-opus-4-8", undefined, true],
+    ["claude-opus-4-8", { fastMultiplier: null }, false],
+    ["claude-opus-4-8-unreviewed", undefined, false],
+    ["claude-sonnet-4-6", undefined, false],
+    ["custom-model", { fastMultiplier: 2 }, true],
+  ] as const)(
+    "projects native fast support from the catalog for %s (%j)",
+    async (upstream, modifiers, supported) => {
+      buildFetchGuard().mockResolvedValue({
+        response: Response.json({
+          providers: [
+            catalogProvider(
+              "anthropic",
+              "Anthropic",
+              upstream,
+              ["llm.messages"],
+              [["/v1/messages", "anthropic.messages"]],
+              {
+                id: "anthropic/" + upstream + ":pool",
+                pricing: { ...PRICING, ...(modifiers ? { anthropicModifiers: modifiers } : {}) },
+              },
+            ),
+          ],
+        }),
+        finalUrl: "https://clawrouter.example/v1/catalog",
+        release: async () => undefined,
+      });
+      const provider = await buildClawRouterProviderConfig({
+        apiKey: "fixture-key",
+        baseUrl: "https://clawrouter.example/v1",
+      });
+      const row = provider.models[0];
+      if (!row) {
+        throw new Error("Missing fixture catalog model");
+      }
+      const model = normalizeClawRouterResolvedModel({
+        ...row,
+        input: ["text"],
+        api: row.api ?? provider.api,
+        baseUrl: provider.baseUrl,
+        provider: "clawrouter",
+      });
+      if (!model) {
+        throw new Error("Missing fixture native route");
+      }
+      const policy = {
+        provider: "clawrouter",
+        modelId: model.id,
+        api: model.api,
+        baseUrl: model.baseUrl,
+        modelParams: model.params,
+        runtimeId: "openclaw",
+        requestCapabilities: { endpointClass: "custom", allowsAnthropicServiceTier: false },
+      };
+      expect(resolveFastModeSupport(policy)).toBe(supported);
+      expect(resolveFastModeSupport({ ...policy, baseUrl: "https://other.example" })).toBe(false);
+    },
+  );
 
   it("maps every supported catalog protocol to its OpenClaw transport", async () => {
     const fetchGuard = buildFetchGuard();

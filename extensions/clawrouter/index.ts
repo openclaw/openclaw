@@ -17,6 +17,7 @@ import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-mod
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   createAnthropicThinkingPrefillPayloadWrapper,
+  createAnthropicFastModePayloadWrapper,
   createOpenAIHostedWebSearchWrapper,
   mapAssistantMessageStream,
   transformProviderStreamMessages,
@@ -57,6 +58,7 @@ import {
 } from "./provider-catalog.js";
 import {
   resolveClawRouterServiceTiers,
+  resolveClawRouterFastModeCostMultiplier,
   resolveFastModeSupport,
   resolveNativeWebSearch,
   resolveServiceTiers,
@@ -214,41 +216,49 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
     }
     const tiers = resolveClawRouterServiceTiers(model);
     const preference = ctx.extraParams?.fastMode ?? ctx.extraParams?.fast_mode;
+    const fastModeCostMultiplier = resolveClawRouterFastModeCostMultiplier(model);
+    const nativeFast =
+      fastModeCostMultiplier === undefined
+        ? undefined
+        : normalizeFastMode(typeof preference === "function" ? preference() : preference);
     // Reuse the native tier/Auto precedence only for catalog-qualified routes.
-    const stream = tiers
-      ? (openAiServiceTier.wrapStreamFn?.({
-          ...ctx,
-          streamFn: (requestModel, requestContext, requestOptions) =>
-            underlying(requestModel, requestContext, {
-              ...requestOptions,
-              onPayload: wrapProviderPayloadHook(
-                requestOptions?.onPayload,
-                (payload, replacement) => {
-                  // The caller owns explicit tiers, including async replacements.
-                  const body = readRecord(replacement ?? payload);
-                  if (body?.service_tier === "ultrafast" && !tiers.includes("ultrafast")) {
-                    throw new Error(
-                      "ClawRouter model " +
-                        model.id +
-                        " does not advertise ultrafast; supported tiers: " +
-                        tiers.join(", "),
-                    );
-                  }
-                  return replacement;
+    const stream =
+      fastModeCostMultiplier !== undefined && (nativeFast === true || nativeFast === "ultrafast")
+        ? createAnthropicFastModePayloadWrapper(underlying, fastModeCostMultiplier)
+        : tiers
+          ? (openAiServiceTier.wrapStreamFn?.({
+              ...ctx,
+              streamFn: (requestModel, requestContext, requestOptions) =>
+                underlying(requestModel, requestContext, {
+                  ...requestOptions,
+                  onPayload: wrapProviderPayloadHook(
+                    requestOptions?.onPayload,
+                    (payload, replacement) => {
+                      // The caller owns explicit tiers, including async replacements.
+                      const body = readRecord(replacement ?? payload);
+                      if (body?.service_tier === "ultrafast" && !tiers.includes("ultrafast")) {
+                        throw new Error(
+                          "ClawRouter model " +
+                            model.id +
+                            " does not advertise ultrafast; supported tiers: " +
+                            tiers.join(", "),
+                        );
+                      }
+                      return replacement;
+                    },
+                  ),
+                }),
+              extraParams: {
+                ...ctx.extraParams,
+                fastMode: () => {
+                  const fast = normalizeFastMode(
+                    typeof preference === "function" ? preference() : preference,
+                  );
+                  return fast === true && !tiers.includes("priority") ? undefined : fast;
                 },
-              ),
-            }),
-          extraParams: {
-            ...ctx.extraParams,
-            fastMode: () => {
-              const fast = normalizeFastMode(
-                typeof preference === "function" ? preference() : preference,
-              );
-              return fast === true && !tiers.includes("priority") ? undefined : fast;
-            },
-          },
-        }) ?? underlying)
-      : underlying;
+              },
+            }) ?? underlying)
+          : underlying;
     const response = stream({ ...preparedModel, headers }, context, options);
     if (preparedModel.id === model.id) {
       return response;

@@ -78,6 +78,7 @@ type RouteMetadata = {
   baseUrl: string;
   upstreamModel?: string;
   serviceTiers?: string[];
+  fastModeCostMultiplier?: number;
   hostedWebSearch?: true;
 };
 
@@ -229,6 +230,13 @@ type ResolveNativeModelFacts = Awaited<ReturnType<typeof loadBundledModelIdentit
 // Upstream catalogs whose first-party model facts are qualified for routed rows. A row
 // inherits only when its upstream id and wire API match the bundled native row exactly.
 const NATIVE_MODEL_FACT_PROVIDERS = new Set(["openai", "anthropic", "cohere"]);
+// ClawRouter's reviewed legacy cards predate anthropicModifiers. Keep its exact
+// worker/anthropic-pricing.ts fallback, not the native provider's family-wide support.
+const LEGACY_ANTHROPIC_FAST_MODELS = new Set([
+  "claude-opus-4-8",
+  "claude-opus-5",
+  "claude-opus-5-5",
+]);
 // Catalog providers whose id differs from the bundled provider serving the same native API.
 const BUNDLED_CATALOG_PROVIDER_IDS = new Map([["google-gemini", "google"]]);
 
@@ -387,6 +395,16 @@ function buildRoutedModel(
   const serviceTiers = Array.isArray(pricing?.serviceTiers)
     ? normalizeTrimmedStringList(pricing.serviceTiers.map((tier) => asOptionalRecord(tier)?.id))
     : undefined;
+  const anthropicModifiers = asOptionalRecord(pricing?.anthropicModifiers);
+  // Explicit cards own support/pricing; only reviewed legacy cards may omit modifiers.
+  const fastModeCostMultiplier =
+    provider.id === "anthropic" && api === "anthropic-messages" && pricing && pricing.unit == null
+      ? anthropicModifiers
+        ? asFiniteNumberInRange(anthropicModifiers.fastMultiplier, { min: 0, minExclusive: true })
+        : LEGACY_ANTHROPIC_FAST_MODELS.has(upstream)
+          ? 2
+          : undefined
+      : undefined;
   // Identity facts match only an exact bundled row with the same upstream id and wire API.
   const identityFacts = resolveNativeModelFacts({
     provider: BUNDLED_CATALOG_PROVIDER_IDS.get(provider.id) ?? provider.id,
@@ -472,6 +490,7 @@ function buildRoutedModel(
         api,
         baseUrl,
         ...(upstreamModel ? { upstreamModel } : {}),
+        ...(fastModeCostMultiplier ? { fastModeCostMultiplier } : {}),
         // Support is not a grant: require this key's exact matching route admission.
         ...(provider.id === "openai" &&
         api === "openai-responses" &&

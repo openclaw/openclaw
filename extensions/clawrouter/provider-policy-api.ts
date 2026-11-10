@@ -5,6 +5,7 @@ import type {
   ProviderResponseModelEquivalenceContext,
 } from "openclaw/plugin-sdk/provider-model-types";
 import {
+  asFiniteNumberInRange,
   asOptionalRecord,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -68,9 +69,30 @@ export function resolveServiceTiers(
   });
 }
 
-export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
-  if (ctx.runtimeId !== "openclaw") {
+export function resolveClawRouterFastModeCostMultiplier(
+  model: Pick<ProviderRuntimeModel, "api" | "baseUrl" | "params">,
+): number | undefined {
+  const route = asOptionalRecord(model.params?.[CLAWROUTER_ROUTE_METADATA_KEY]);
+  if (
+    model.api !== "anthropic-messages" ||
+    route?.api !== model.api ||
+    route.baseUrl !== model.baseUrl
+  ) {
     return undefined;
   }
-  return resolveServiceTiers(ctx)?.includes("priority") ?? false;
+  return asFiniteNumberInRange(route.fastModeCostMultiplier, { min: 0, minExclusive: true });
+}
+
+export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
+  if (ctx.provider !== "clawrouter" || ctx.runtimeId !== "openclaw") {
+    return undefined;
+  }
+  return (
+    (resolveServiceTiers(ctx)?.includes("priority") ?? false) ||
+    resolveClawRouterFastModeCostMultiplier({
+      api: ctx.api ?? "",
+      baseUrl: ctx.baseUrl ?? "",
+      params: ctx.modelParams,
+    }) !== undefined
+  );
 }

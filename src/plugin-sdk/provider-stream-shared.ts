@@ -4,6 +4,7 @@ import {
 } from "@openclaw/ai/internal/openai";
 import {
   createEmptyTransportUsage,
+  mergeTransportHeaders,
   resolveOpenAIReasoningEffortMap,
 } from "@openclaw/ai/transports";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
@@ -27,7 +28,7 @@ import {
 import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
-import type { AssistantMessage, Model } from "../llm/types.js";
+import type { AssistantMessage, Model, ModelRequestHeaders } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
 import { createCodeRegionResolver } from "../shared/text/code-regions.js";
@@ -404,6 +405,75 @@ export function stripTrailingAnthropicAssistantPrefillWhenThinking(
   return thinking && thinking.type !== "disabled"
     ? stripTrailingAssistantPrefillMessages(payload)
     : 0;
+}
+
+function parseHeaderList(value: unknown): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function mergeAnthropicBetaHeader(
+  headers: ModelRequestHeaders | undefined,
+  betas: string[],
+): ModelRequestHeaders {
+  const merged = { ...headers };
+  const existingKey = Object.keys(merged).find(
+    (key) => key.trim().toLowerCase() === "anthropic-beta",
+  );
+  const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
+  const values = Array.from(new Set([...existing, ...betas]));
+  const key = existingKey ?? "anthropic-beta";
+  merged[key] = values.join(",");
+  return merged;
+}
+
+function applyAnthropicFastModePricing(
+  model: Parameters<StreamFn>[0],
+  multiplier: number,
+): Parameters<StreamFn>[0] {
+  const scaleRates = (rates: Parameters<StreamFn>[0]["cost"]) => ({
+    input: rates.input * multiplier,
+    output: rates.output * multiplier,
+    cacheRead: rates.cacheRead * multiplier,
+    cacheWrite: rates.cacheWrite * multiplier,
+  });
+  return {
+    ...model,
+    cost: {
+      ...scaleRates(model.cost),
+      ...(model.cost.tieredPricing
+        ? {
+            tieredPricing: model.cost.tieredPricing.map((tier) => ({
+              ...tier,
+              ...scaleRates(tier),
+            })),
+          }
+        : {}),
+    },
+  };
+}
+
+/** Native Messages fast transport; the provider owns eligibility and price selection. */
+export function createAnthropicFastModePayloadWrapper(
+  baseStreamFn: StreamFn,
+  costMultiplier = 2,
+): StreamFn {
+  const fastPayloadWrapper = createPayloadPatchStreamWrapper(baseStreamFn, ({ payload }) => {
+    delete payload.service_tier;
+    payload.speed = "fast";
+  });
+  return (model, context, options) =>
+    fastPayloadWrapper(applyAnthropicFastModePricing(model, costMultiplier), context, {
+      ...options,
+      headers: mergeAnthropicBetaHeader(mergeTransportHeaders(model.headers, options?.headers), [
+        "fast-mode-2026-02-01",
+      ]),
+    });
 }
 
 /** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
