@@ -251,6 +251,8 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "wake",
   "cron.list",
   "cron.get",
+  "cron.scratch.get",
+  "cron.scratch.set",
   "cron.add",
   "cron.update",
   "cron.remove",

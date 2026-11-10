@@ -1,3 +1,4 @@
+import { sessionPrAutoFixTarget } from "../../shared/session-pr-auto-fix.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
@@ -55,15 +56,29 @@ export function applyTriggerEvaluationState(
 /** Persists fired/error trigger metadata and disarms successful once triggers. */
 export function applyTriggerRunResult(
   job: CronJob,
-  result: { status: CronRunStatus; endedAt: number; triggerEval?: CronTriggerEvalOutcome },
+  result: {
+    status: CronRunStatus;
+    endedAt: number;
+    triggerEval?: CronTriggerEvalOutcome;
+    errorClassification?: CronRunErrorClassification;
+    interruptedByRestart?: boolean;
+  },
   opts?: { scheduleOwnership?: "current" | "stale"; triggerOwnership?: "current" | "stale" },
 ): void {
   if (!result.triggerEval || opts?.triggerOwnership === "stale") {
     return;
   }
-  // Failed payloads keep the old state so the next evaluation re-detects the event.
+  // Ordinary failed payloads re-detect the event from the old state. This native
+  // recipe instead correlates the fired attempt with settled occurrence history;
+  // losing it also loses its retry counter/cooldown. Cancellation never adopts it.
+  const failedAutoFixAttempt =
+    result.status === "error" &&
+    result.triggerEval.fired &&
+    result.errorClassification?.kind !== "aborted" &&
+    !result.interruptedByRestart &&
+    sessionPrAutoFixTarget(job) !== undefined;
   const persistedEval =
-    result.status === "ok"
+    result.status === "ok" || failedAutoFixAttempt
       ? result.triggerEval
       : { ...result.triggerEval, stateChanged: false, state: undefined };
   applyTriggerEvaluationState(job, persistedEval, result.endedAt);

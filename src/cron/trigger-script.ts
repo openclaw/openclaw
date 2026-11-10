@@ -85,6 +85,7 @@ import {
   MAX_CRON_SCRIPT_TOOL_BUDGET,
 } from "./script-payload.js";
 import type { CronServiceDeps } from "./service/state.js";
+import { observePrAutoFix, prAutoFixFailureCode } from "./session-pr-auto-fix.js";
 import { resolveCronAuthenticatedChannelRequester } from "./tools-allow-provenance.js";
 import { acquireCronScriptMcpTools, type CronScriptMcpTools } from "./trigger-script-mcp.js";
 import {
@@ -584,6 +585,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         approvalSignals: [evaluationScope.signal],
       });
       assertActive();
+      const triggerState = await observePrAutoFix(params, caller, evaluationScope, assertActive);
       // Reload during setup is best effort; the next invocation refreshes its cache.
       let tools = await withPluginRuntimeRegistryScope(runtime.pluginRegistry, () =>
         runtime.createTools(
@@ -651,7 +653,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           code: params.script,
           wallClockMs: remainingWallClockMs,
           maxToolCalls: params.maxToolCalls,
-          extraNamespaces: [triggerStateNamespace(params.state, params.streamBatch)],
+          extraNamespaces: [triggerStateNamespace(triggerState, params.streamBatch)],
           signal: evaluationScope.signal,
         });
         if (result.status === "failed") {
@@ -671,7 +673,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           ? "timeout"
           : error instanceof CodeModeHeadlessAbortError
             ? "aborted"
-            : "internal_error",
+            : prAutoFixFailureCode(params, error),
       );
     } finally {
       try {

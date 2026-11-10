@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { beforeEach, expect, it, vi } from "vitest";
 import { CronAddParamsSchema } from "../../../packages/gateway-protocol/src/schema/cron.js";
+import { SESSION_PR_AUTO_FIX_TRIGGER } from "../../../src/shared/session-pr-auto-fix.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../api/types.ts";
 import {
@@ -152,6 +153,25 @@ it.each(["autoFix", "autoMerge"] as const)(
     expect(request).toHaveBeenCalledTimes(2);
   },
 );
+
+it("explicitly enables a legacy Auto-fix with the current native condition and unchanged prose", async () => {
+  const current = job("autoFix", {
+    enabled: false,
+    trigger: undefined,
+    payload: { kind: "agentTurn", message: "Keep the reviewed task scope" },
+  });
+  request.mockResolvedValueOnce(page([current]));
+  expect((await load()).autoFix).toEqual(current);
+  const trigger = { script: SESSION_PR_AUTO_FIX_TRIGGER };
+  const enabled = { ...current, enabled: true, trigger };
+  request.mockResolvedValueOnce(enabled);
+  expect(await set("autoFix", true, current)).toEqual({ job: enabled });
+  expect(request).toHaveBeenLastCalledWith("cron.update", {
+    id: current.id,
+    expectedConfigRevision: current.configRevision,
+    patch: { enabled: true, trigger },
+  });
+});
 
 it("never creates a disabled row or retries an uncertain mutation", async () => {
   expect(await set("autoMerge", false)).toBeUndefined();
