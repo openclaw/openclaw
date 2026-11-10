@@ -1,3 +1,4 @@
-48
-# Signal receive-handler regressions: 51 net test lines consume 3 existing spare lines.
-# Exact measured total and ceiling: 6,591,995; shared scalar and unrelated tests unchanged.
+51
+# Signal receive-handler regressions: exactly 51 net test lines.
+# Complete/truncated UTF-8 carriers, downloads on/off, and unrelated image handling.
+# Do not rely on spare lines from the comparison base; shared scalar stays unchanged.
