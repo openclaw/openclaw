@@ -1909,12 +1909,18 @@ async function measureVisit(
             routeId === "config"
               ? document.getElementById("settings-language")?.getBoundingClientRect().top
               : undefined;
+          // The floating phone header reserves the anchor's scroll destination.
+          const scrollPaddingTop =
+            anchorTop === undefined
+              ? 0
+              : Number.parseFloat(getComputedStyle(scrollport).scrollPaddingTop) || 0;
           const anchorSettled =
             routeId !== "config" ||
             (anchorTop !== undefined &&
               anchorTop >= -1 &&
               anchorTop < window.innerHeight &&
-              (Math.abs(anchorTop - scrollport.getBoundingClientRect().top) < 1 ||
+              (Math.abs(anchorTop - scrollport.getBoundingClientRect().top - scrollPaddingTop) <
+                1 ||
                 Math.abs(scrollport.scrollHeight - scrollport.clientHeight - scrollport.scrollTop) <
                   1) &&
               anchorTop === previousAnchorTop);

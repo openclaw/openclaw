@@ -1101,6 +1101,14 @@ function retainVerifiedArchive(archivePath, bytes, expected, maxBytes) {
 function createArtifactTransfer(params, expected, digestOnly = false) {
   const token = assertTrimmedString(params.token, "GitHub token");
   const timeoutMs = boundedLimit(params.timeoutMs, DEFAULT_TIMEOUT_MS, "GitHub request timeout");
+  const archiveTimeoutMs =
+    params.archiveTimeoutMs === undefined
+      ? timeoutMs
+      : boundedLimit(
+          params.archiveTimeoutMs,
+          DEFAULT_TRANSFER_TIMEOUT_MS,
+          "GitHub archive request timeout",
+        );
   const explicitDeadlineMs =
     params.deadlineMs === undefined
       ? undefined
@@ -1177,7 +1185,7 @@ function createArtifactTransfer(params, expected, digestOnly = false) {
             {
               headers,
               redirect: "follow",
-              signal: AbortSignal.timeout(Math.min(timeoutMs, remainingMs)),
+              signal: AbortSignal.timeout(Math.min(archiveTimeoutMs, remainingMs)),
             },
           );
           const bodyPolicy = {

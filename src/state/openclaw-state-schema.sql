@@ -674,6 +674,20 @@ CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   expires_at_ms INTEGER
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS device_pairing_browser_requests (
+  request_id TEXT NOT NULL PRIMARY KEY,
+  code TEXT NOT NULL UNIQUE,
+  device_id TEXT NOT NULL UNIQUE,
+  public_key TEXT NOT NULL,
+  remote_ip TEXT,
+  user_agent TEXT,
+  origin TEXT,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+  approved_token_sha256 TEXT,
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
   pid INTEGER NOT NULL PRIMARY KEY,
   port INTEGER NOT NULL,
