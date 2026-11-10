@@ -40,14 +40,18 @@ describe("matrix poll actions", () => {
     });
 
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
-    expect(sendEvent).toHaveBeenCalledWith("!room:example.org", "m.poll.response", {
-      "m.poll.response": { answers: ["berry"] },
-      "m.relates_to": {
-        event_id: "$poll",
-        rel_type: "m.reference",
+    expect(sendEvent).toHaveBeenCalledWith(
+      "!room:example.org",
+      "org.matrix.msc3381.poll.response",
+      {
+        "m.poll.response": { answers: ["berry"] },
+        "m.relates_to": {
+          event_id: "$poll",
+          rel_type: "m.reference",
+        },
+        "org.matrix.msc3381.poll.response": { answers: ["berry"] },
       },
-      "org.matrix.msc3381.poll.response": { answers: ["berry"] },
-    });
+    );
     expect(result).toEqual({
       eventId: "$vote1",
       roomId: "!room:example.org",

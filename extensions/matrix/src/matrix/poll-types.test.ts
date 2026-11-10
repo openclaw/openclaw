@@ -80,8 +80,18 @@ it("buildPollStartContent: preserves the requested multiselect cap instead of wi
     maxSelections: 2,
   });
 
-  expect(content["m.poll.start"]?.max_selections).toBe(2);
-  expect(content["m.poll.start"]?.kind).toBe("m.poll.undisclosed");
+  expect(content["org.matrix.msc3381.poll.start"]?.max_selections).toBe(2);
+  expect(content["org.matrix.msc3381.poll.start"]?.kind).toBe(
+    "org.matrix.msc3381.poll.undisclosed",
+  );
+  expect(content["org.matrix.msc3381.poll.start"]).toMatchObject({
+    question: { "org.matrix.msc1767.text": "Lunch?" },
+    answers: [
+      { id: "answer1", "org.matrix.msc1767.text": "Pizza" },
+      { id: "answer2", "org.matrix.msc1767.text": "Sushi" },
+      { id: "answer3", "org.matrix.msc1767.text": "Tacos" },
+    ],
+  });
   expect(content["m.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
   expect(content["org.matrix.msc1767.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
 });
