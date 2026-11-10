@@ -1,2 +1,2 @@
-# Issue #196245: real PostgreSQL foreground verification and cold native helper adoption/cancellation.
-235
+# Issue #196245: 235 real PG regression lines plus 5 existing staging-consumer assertion lines.
+240

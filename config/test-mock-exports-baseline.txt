@@ -4825,7 +4825,6 @@
 ["src/gateway/server-methods/update-run-campaign.test.ts","../../config/commands.flags.js","b310a9ab07e411f36ee8e5d83d21a1410391247f777cd42f5afde02f48cfb381",1]
 ["src/gateway/server-methods/update-run-campaign.test.ts","../../config/config.js","1dabc39bc3317fb1c591d1f4d0c0fe18ad6270730c16ae8add27557a824c7ca3",1]
 ["src/gateway/server-methods/update-run-campaign.test.ts","../../config/sessions.js","303a0635320bd8ae361faea67218979de6488a1a17bc79ea3c635a1f9d4de8cd",1]
-["src/gateway/server-methods/update-run-campaign.test.ts","../../infra/gateway-owner-lease.js","25708d7377eac061d99657170921f7cfab52d1500970fe3c69d53b77a356b6b4",1]
 ["src/gateway/server-methods/update-run-campaign.test.ts","../../infra/gateway-supervision.js","fb9795b042d7cee6633e2a77f3e63fe4142fa45c24990abf3c358553a51f4a5c",1]
 ["src/gateway/server-methods/update-run-campaign.test.ts","../../infra/package-json.js","61732a6a80bf075ae11c696d41ff25178ac90262aee668ed8c473036c53aeff4",1]
 ["src/gateway/server-methods/update-run-campaign.test.ts","../../infra/supervisor-markers.js","92e796158f04887c3fbfdfd94224564741239b3022d9a8c6dd4228ab719ffffb",1]
