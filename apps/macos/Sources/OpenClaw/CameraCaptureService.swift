@@ -116,51 +116,29 @@ actor CameraCaptureService {
         facing: OpenClawCameraFacing,
         durationMs: Int?,
         includeAudio: Bool,
-        deviceId: String?,
-        captureMovie: (@Sendable (CameraMovieSessionOptions, URL, URL) async throws -> URL)? = nil,
-        exportToMP4: @Sendable (URL, URL) async throws -> Void = CameraCaptureService.exportToMP4,
-        temporaryDirectory: URL = FileManager().temporaryDirectory)
-        async throws -> (path: String, durationMs: Int, hasAudio: Bool)
+        deviceId: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
     {
         let durationMs = CaptureRateLimits.clampDurationMs(durationMs, defaultMs: 3000)
         let deviceId = deviceId?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let tmpMovURL = temporaryDirectory
+        try await self.ensureAccess(for: .video)
+        if includeAudio {
+            try await self.ensureAccess(for: .audio)
+        }
+
+        let tmpMovURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mov")
         defer { try? FileManager().removeItem(at: tmpMovURL) }
 
-        let outputURL = temporaryDirectory
+        let outputURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-camera-\(UUID().uuidString).mp4")
-        let captureMovie = captureMovie ?? self.captureMovie
-        let recordedURL = try await captureMovie(
-            CameraMovieSessionOptions(
+        let logger = self.logger
+        let recordedURL = try await CameraCapturePipelineSupport.withWarmMovieSession(
+            options: CameraMovieSessionOptions(
                 preferFrontCamera: facing == .front,
                 deviceId: deviceId,
                 includeAudio: includeAudio,
                 durationMs: durationMs),
-            tmpMovURL, outputURL)
-        do {
-            try await exportToMP4(recordedURL, outputURL)
-        } catch {
-            try? FileManager().removeItem(at: outputURL)
-            throw error
-        }
-        return (path: outputURL.path, durationMs: durationMs, hasAudio: includeAudio)
-    }
-
-    private func captureMovie(
-        options: CameraMovieSessionOptions,
-        tmpMovURL: URL,
-        outputURL: URL) async throws -> URL
-    {
-        try await self.ensureAccess(for: .video)
-        if options.includeAudio {
-            try await self.ensureAccess(for: .audio)
-        }
-
-        let logger = self.logger
-        let recordedURL = try await CameraCapturePipelineSupport.withWarmMovieSession(
-            options: options,
             pickCamera: Self.pickCamera,
             mapSetupError: { setupError in
                 CameraCapturePipelineSupport.mapMovieSetupError(
@@ -180,7 +158,13 @@ actor CameraCaptureService {
                 withExtendedLifetime(delegate) {}
                 return recordedURL
             })
-        return recordedURL
+        do {
+            try await Self.exportToMP4(inputURL: recordedURL, outputURL: outputURL)
+        } catch {
+            try? FileManager().removeItem(at: outputURL)
+            throw error
+        }
+        return (path: outputURL.path, durationMs: durationMs, hasAudio: includeAudio)
     }
 
     private func ensureAccess(for mediaType: AVMediaType) async throws {
