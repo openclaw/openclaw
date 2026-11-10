@@ -7884,13 +7884,14 @@ try {
       result = readinessWaived || channelsWaived ? "READY_CPU_DEGRADED_OPERATOR_WAIVED" : "READY";
       break;
     }
+    case "suspension-handoff-failure":
     case "suspension-poll-failure":
     case "suspension-prepare-failure": {
       if (args.length !== 2 || args[0] !== "@stdin") reject("invalid suspension failure diagnostic arguments");
       const exit = integer(args[1], "suspension failure exit");
       if (exit < 1 || exit > 255) reject("invalid suspension failure exit");
       // Child stdout may include private config or auth text. Parse a bounded input
-      // and emit only fixed categories, never error messages or arbitrary fields.
+      // and emit only fixed categories or bounded owner-recorded holder facts.
       const bytes = Buffer.alloc(16 * 1024 + 1);
       let length = 0;
       while (length < bytes.length) {
@@ -7901,6 +7902,22 @@ try {
       let payload;
       if (length < bytes.length) {
         try { payload = JSON.parse(bytes.toString("utf8", 0, length)); } catch {}
+      }
+      if (command === "suspension-handoff-failure") {
+        const error = payload?.ok === false ? payload.error : undefined;
+        const pending = error?.details?.terminalPersistence;
+        result = "unclassified";
+        if (error?.type === "gateway_request_error" && error.code === "UNAVAILABLE" &&
+            Number.isSafeInteger(pending?.count) && pending.count > 0 &&
+            (pending.oldestAgeMs === null || (Number.isSafeInteger(pending.oldestAgeMs) && pending.oldestAgeMs >= 0)) &&
+            Array.isArray(pending.runIds) && pending.runIds.length <= Math.min(8, pending.count) &&
+            pending.runIds.every(id => typeof id === "string" && id.length > 0 && id.length <= 256 && !/[\x00-\x1f\x7f]/.test(id))) {
+          // The Gateway redacts these IDs at its RPC egress; never forward message or other fields.
+          result = JSON.stringify({ terminalPersistence: {
+            count: pending.count, oldestAgeMs: pending.oldestAgeMs, runIds: pending.runIds,
+          } });
+        }
+        break;
       }
       if (command === "suspension-poll-failure") {
         // Protocol/authentication refusals remain fatal even when the subprocess

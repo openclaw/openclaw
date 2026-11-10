@@ -23,6 +23,7 @@ export function createTokenBindingPublisher(params: {
     setDeviceTokenBindingOwner({
       lookup: (deviceId, role) => owner.tokenBinding(deviceId, role),
       record: (deviceId, role, peerKey) => owner.bindToken(deviceId, role, peerKey),
+      forget: (tokens) => owner.unbindTokens(tokens),
       reportMismatch: (event) =>
         params.log.warn(
           `openclaw-id: security: refused device token for ${event.deviceId} (${event.role}) presented from ${event.presentedFrom ?? "a non-tunnel connection"}; bound to ${event.boundTo ?? "no tunnel key"}`,

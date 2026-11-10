@@ -5,6 +5,22 @@ import { isHumanAddressedChatMessage } from "./chat-human-mentions.js";
 const cfg = { agents: { entries: { main: { identity: { name: "Robo" } } } } } as OpenClawConfig;
 
 it.each([
+  "Please make previews. cc @Bob",
+  "Can you review this with @Bob?",
+  "cc @Bob: please make previews",
+])("keeps the agent turn for an incidental mention: %s", (text) => {
+  const start = text.indexOf("@Bob");
+  expect(
+    isHumanAddressedChatMessage({
+      cfg,
+      agentId: "main",
+      text,
+      mentions: [{ profileId: "bob", start, end: start + 4 }],
+    }),
+  ).toBe(false);
+});
+
+it.each([
   ["@Bob some of the stickers are cool", "bob", 4, true],
   ["@Bob look at this. Robo, put them on one sheet.", "bob", 4, false],
   ["@robo-bot nice work", "robo-bot", 9, true],

@@ -11,7 +11,7 @@ import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
-import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.async.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../auth-profiles/store-runtime.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";

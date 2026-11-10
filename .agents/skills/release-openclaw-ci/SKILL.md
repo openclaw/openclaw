@@ -572,10 +572,16 @@ attestation, not a bot exception. Scheduled main qualification explicitly uses
 An existing `--request-file` reconciles the original request without changing
 its route, Q/P identities, or inputs. `--reconcile-request <file>` is read-only.
 Only `--resume-request <file>` can continue a candidate request after admission
-and before any Q ref mutation or FRV POST. Stable/checklist refusals print that
-exact next command for a v2 prepared request whose Q ref is still intended;
-run it explicitly, then rerun the wrapper. Reconciliation alone does not advance
-an admitted request into qualification. Uncertain writes never retry. Keep
+and before its first FRV POST. If Q ref creation succeeded but readback failed,
+resume verifies the existing exact Q=C ref and empty workflow inventory, then
+reuses it without a second ref POST. Missing/moved refs or uncertain/nonempty
+inventories block. Read-only reconciliation verifies an uncertain prepared ref
+before suggesting resume; it does not rewrite or advance the request. Every
+resume revalidates authenticated admission and signer authority after recovery
+inventory reads, then checks the ref immediately before dispatch. Stable/checklist
+wrappers relay the helper’s verified recovery advice, never infer safety from raw
+uncertain state. Run the explicit resume command when offered, then rerun the wrapper.
+An attempted or uncertain FRV POST remains observation-only and never retries. Keep
 original producer and current consumer identities when reusing evidence.
 
 Select `npmDistTag=beta` for beta publication and `route=prepared` only for an

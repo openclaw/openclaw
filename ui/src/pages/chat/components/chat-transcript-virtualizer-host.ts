@@ -238,7 +238,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         this.acceptedRows?.[index]?.estimatedSize ?? CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
       initialRect: initialTranscriptRect(),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
-      anchorTo: "end",
+      // Structural key changes opt into end anchoring in commitTranscriptRows.
+      // ReaderAnchor owns measurements; end-follow is explicitly managed below.
+      anchorTo: "start",
       scrollToFn: (...args) =>
         scrollTranscriptOffset(this.offsetState, this, this.headerHeight, ...args),
       observeElementRect: this.viewportRect.observe,
@@ -256,8 +258,10 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             invalidate,
             // Nested or canceled input must not admit offscreen measurements.
             onOffset: (delta) => void (delta && this.initialRange.recordReaderMovement(delta)),
+            onWheel: (delta) => this.initialRange.recordWheel(delta),
             onComposerLayout: (changed) => this.commitComposerResize(changed),
             onReaderScroll: (towardEnd) => this.callbacks.onReaderScroll?.(towardEnd),
+            onRequestEnd: callbacks.onRequestEnd,
             onNativeScroll: (event) => {
               // Measurement may have consumed this offset before its native event.
               // Commit its queued rows now, ahead of this frame's paint.
@@ -578,13 +582,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.captureInteractionResize,
           measureRowRefFor: (key) => this.rowRefs.forKey(key),
-          measureRows:
-            // The first correction reveals new rows; their real sizes must land before retiring the anchor.
-            this.initialRange.pending ||
-            this.initialRange.preparingEnd ||
-            this.prependAnchor.messageKey !== null ||
-            this.offsetState.scrollCommand?.target === "message" ||
-            this.offsetState.scrollCommand?.target === "index",
         });
       },
       () =>
@@ -625,15 +622,11 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   scrollToEnd({ source = "manual", behavior = "auto" }: ChatScrollToEndOptions = {}): boolean {
     // Hydration/resize follow cannot replace a saved reader. A new latest
     // command intentionally supersedes restoration.
-    const allowed =
-      source !== "auto" || (!this.offsetState.pendingScrollOffset && this.canAutoFollow());
-    // An accepted end command may still be measuring its destination.
-    if (!allowed || (source === "auto" && this.initialRange.preparingEnd)) {
-      return allowed;
-    }
     if (source !== "auto") {
       // End-follow must not let speculative history measurements move its target.
       this.initialRange.finish(true);
+    } else if (this.offsetState.pendingScrollOffset || !this.canAutoFollow()) {
+      return false;
     }
     scrollTranscriptToEnd(
       this.offsetState,
@@ -643,17 +636,19 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       () => this.presentation.queueRowMeasure(),
       this.endAnchor,
       this.initialRange.prepareEnd,
+      this.initialRange.preparingEnd,
     );
     return true;
   }
 
   cancelScroll(preserveEnd = false): void {
-    this.initialRange.finishEnd();
     // Completing a smooth journey can reveal skipped row sizes. Retain its
     // resting edge before that measurement moves the end; reader input clears it.
     if (preserveEnd) {
+      this.initialRange.finishEndWhenSettled();
       this.endAnchor.capture(this.scrollElement);
     } else {
+      this.initialRange.finishEnd();
       this.endAnchor.clear();
       this.virtualizer.cancelScroll();
     }

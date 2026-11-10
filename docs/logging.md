@@ -433,6 +433,11 @@ enabled.
 latency, and request fields such as method, URL, timeout, proxy, and policy)
 uses `debug` by default. Responses with a non-2xx status remain at `info`,
 and transport failures remain warnings.
+HTTP `400` records also include a bounded, credential-redacted `providerError`
+from the provider's JSON error message when available. This distinguishes request
+validation failures from upstream credit failures that use the same status code.
+Diagnostics read at most 16 KiB with a one-second deadline; the SDK still receives
+the original response body.
 `[model-fetch]` and `[responses]` report caller-signaled `AbortError` as `aborted`
 at `debug` (or `info` with the targeted flags), rather than as provider failures.
 The requesting layer owns the final cancellation or timeout outcome; an SDK can

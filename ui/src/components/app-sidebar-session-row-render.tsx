@@ -410,6 +410,7 @@ export function renderChildSessionLoadError(host: () => SessionListHost, parentK
 export function renderSessionTree(params: {
   host: SessionListHost;
   session: SidebarRecentSession;
+  display?: CatalogBackingSessionDisplay;
   pinReorder?: boolean;
   listItem?: boolean;
   icon?: JSX.Element;
@@ -456,6 +457,7 @@ export function renderSessionTree(params: {
         host={host()}
         session={session()}
         pinReorder={params.pinReorder}
+        display={params.display}
         listItem={false}
         icon={icon()}
       />

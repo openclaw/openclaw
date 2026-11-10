@@ -75,6 +75,7 @@ export function createRunTurnLookup(items: ChatItem[]) {
   let bounds: Map<string, TurnInsertionBounds> | undefined;
   const inputs = new Map<string, TurnInsertionBounds>();
   const pagedInputCeilings = new Map<string, TurnInsertionBounds>();
+  const causalBounds = new Map<string, Map<string | undefined, TurnInsertionBounds | null>>();
   let messages: unknown[] | undefined;
   const startsExecutionTurn = (item: ChatItem) =>
     chatItemStartsUserTurn(item) &&
@@ -132,22 +133,35 @@ export function createRunTurnLookup(items: ChatItem[]) {
     if (retainedInputBounds) {
       return retainedInputBounds;
     }
+    // One lookup owns one fixed transcript. Bursts repeat even missing causal
+    // intervals, but different observed inputs must keep independent bounds.
+    let byInput = causalBounds.get(runId);
+    if (byInput?.has(afterUserSendId)) {
+      return byInput.get(afterUserSendId)!;
+    }
     messages ??= items.map((item) => (item.kind === "message" ? item.message : null));
     const interval = knownStreamCausalInterval(messages, { runId }, afterUserSendId);
-    if (!interval) {
-      return null;
+    const ceiling = interval
+      ? items.find(
+          (item, index) =>
+            index >= interval.start &&
+            index < interval.end &&
+            startsExecutionTurn(item) &&
+            (item.kind !== "message" || transcriptRunId(item.message) !== runId),
+        )
+      : undefined;
+    const result = interval
+      ? {
+          afterKey: items[interval.start - 1]?.key,
+          beforeKey: ceiling?.key ?? items[interval.end]?.key,
+        }
+      : null;
+    if (!byInput) {
+      byInput = new Map();
+      causalBounds.set(runId, byInput);
     }
-    const ceiling = items.find(
-      (item, index) =>
-        index >= interval.start &&
-        index < interval.end &&
-        startsExecutionTurn(item) &&
-        (item.kind !== "message" || transcriptRunId(item.message) !== runId),
-    );
-    return {
-      afterKey: items[interval.start - 1]?.key,
-      beforeKey: ceiling?.key ?? items[interval.end]?.key,
-    };
+    byInput.set(afterUserSendId, result);
+    return result;
   };
 }
 
