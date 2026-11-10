@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { flushLogger, getLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
@@ -73,13 +74,9 @@ function records() {
   const seen: RecordValue[] = [];
   getLogger().attachTransport((record) => {
     for (const value of [record, ...Object.values(record)]) {
-      if (
-        value &&
-        typeof value === "object" &&
-        "event" in value &&
-        value.event === "lease-unavailable-first-refusal"
-      ) {
-        const { _meta: _metadata, ...payload } = value as Record<string, unknown>;
+      const entry = asOptionalRecord(value);
+      if (entry?.event === "lease-unavailable-first-refusal") {
+        const { _meta: _metadata, ...payload } = entry;
         seen.push(payload as RecordValue);
       }
     }
@@ -131,7 +128,7 @@ it("records the inner row refusal once with bounded private flip frames", async 
     relation: "observed-invalidation-call-chain",
   });
   const record = seen[0]!;
-  expect(Object.keys(record).sort()).toEqual([
+  expect(Object.keys(record).toSorted()).toEqual([
     "branch",
     "event",
     "flip",
@@ -139,8 +136,8 @@ it("records the inner row refusal once with bounded private flip frames", async 
     "relation",
     "state",
   ]);
-  expect(Object.keys(record.state).sort()).toEqual(["active", "invalidated", "revoked"]);
-  expect(Object.keys(record.flip).sort()).toEqual(["async", "captured", "frames", "kind"]);
+  expect(Object.keys(record.state).toSorted()).toEqual(["active", "invalidated", "revoked"]);
+  expect(Object.keys(record.flip).toSorted()).toEqual(["async", "captured", "frames", "kind"]);
   expect(record.flip.frames!.length).toBeGreaterThan(0);
   expect(record.flip.frames!.length).toBeLessThanOrEqual(4);
   for (const frame of record.flip.frames!) {
@@ -329,6 +326,10 @@ it("projects only bounded package positions and rejects unsafe stack forms", () 
     "/package/src/a\nb.ts:1:2",
     "/package/src/a\u0001b.ts:1:2",
     "https:///package/src/a.ts:1:2",
+    ...[...Array.from({ length: 33 }, (_, code) => code), 127].flatMap((code) => {
+      const filename = path.join(root, "src", `a${String.fromCharCode(code)}b.ts`);
+      return [filename + ":1:2", pathToFileURL(filename).href + ":1:2"];
+    }),
   ];
   for (const frame of negative) {
     expect(projectLeaseDiagnosticFrames("    at " + frame, root)).toEqual({
@@ -345,6 +346,12 @@ it("projects only bounded package positions and rejects unsafe stack forms", () 
     frames: ["src/a0.ts:1:2", "src/a1.ts:1:2", "src/a2.ts:1:2", "src/a3.ts:1:2"],
     async: true,
   });
+  expect(
+    projectLeaseDiagnosticFrames(
+      `    at ${pathToFileURL(path.join(root, "src", "a\u0080.ts")).href}:1:2`,
+      root,
+    ),
+  ).toEqual({ captured: true, frames: ["src/a\u0080.ts:1:2"], async: false });
   expect(projectLeaseDiagnosticFrames(stack, undefined)).toEqual({
     captured: false,
     notCapturedReason: "root-unresolved",

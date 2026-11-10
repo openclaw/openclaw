@@ -1,0 +1,3 @@
+411
+# 393 lines: distinct lease-diagnostic, privacy, error, and lifecycle regressions.
+# 18 lines: inherited debt at CI base 83d832338dd892458678fcd8e159f84e4ba7f77f.

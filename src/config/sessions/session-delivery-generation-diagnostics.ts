@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { getLogger } from "../../logging/logger.js";
 import {
   SessionDeliveryGenerationUnavailableError,
@@ -70,7 +71,7 @@ export function projectLeaseDiagnosticFrames(stack: string, root: string | undef
   const frames: string[] = [];
   let async = false;
   for (const line of stack.split("\n")) {
-    if (/[\x00-\x1f\x7f]|\b(?:eval|vm)\b|<anonymous>|node:/.test(line)) {
+    if (containsAsciiControlCharacter(line) || /\b(?:eval|vm)\b|<anonymous>|node:/.test(line)) {
       continue;
     }
     const match = /(?:\(|^\s*at (?:async )?)([^()]+):(\d+):(\d+)\)?$/.exec(line);
@@ -80,7 +81,11 @@ export function projectLeaseDiagnosticFrames(stack: string, root: string | undef
     let filename = match[1]!;
     try {
       const decoded = decodeURIComponent(filename);
-      if (/[?#\x00-\x20\x7f]/.test(decoded) || decoded.split(/[\\/]/).includes("..")) {
+      if (
+        containsAsciiControlCharacter(decoded) ||
+        /[?# ]/.test(decoded) ||
+        decoded.split(/[\\/]/).includes("..")
+      ) {
         continue;
       }
       filename = filename.startsWith("file:") ? fileURLToPath(filename) : filename;
