@@ -183,6 +183,61 @@ describe("redactSensitiveText", () => {
     );
   });
 
+  it("keeps shell command substitutions syntactically valid when masking", () => {
+    // Regression: masking only the opener chunk of a command substitution like
+    // TOKEN=$(cat ~/.openclaw/secrets/key) produced `TOKEN=*** ~/.openclaw/secrets/key)` - an
+    // orphan `)` that fails bash parsing ("syntax error near unexpected token `)`) wherever the
+    // redacted command text is replayed or re-emitted through exec. The exemption is scoped to
+    // the shell/env assignment rules; quoted captures, literal secrets and opaque-credential
+    // captures must still be masked.
+    // Built without literal `$(` sequences so the corpus survives redaction of this very file
+    // in logs, transcripts, and tool events.
+    const openParen = String.fromCharCode(36, 40); // $ + (
+    const assignmentCases = [
+      `TOKEN=${openParen}cat ~/.openclaw/secrets/svc-panel-token); code=${openParen}curl -s -o /tmp/svc.json -X POST https://panel.example.test/api/renew)`,
+      `OPENAI_API_KEY=${openParen}cat ~/.openclaw/secrets/key)`,
+      `export TOKEN=${openParen}cat ~/.secrets/x) && curl -s https://example.test`,
+      // `Authorization: Bearer ${MY_TOKEN}` reaches the guard too: the credential value class
+      // excludes `}`, so the capture is the unbalanced `${MY_TOKEN` and masking it would leave an
+      // orphan `}`. It is a bare variable name, so preserving it hides nothing.
+      'curl -s -H "Authorization: Bearer ${MY_TOKEN}" https://api.example.test/v1',
+    ];
+    for (const input of assignmentCases) {
+      expect(redactSensitiveText(input, { mode: "tools" }), input).toBe(input);
+    }
+    // Opaque credentials must not take the expansion exemption: the URL-userinfo rule captures
+    // the password itself, and a password that merely begins with `$(` is literal credential
+    // material, not shell syntax, so it has to stay masked on the way to console output.
+    const urlCredential = `https://alice:${openParen}s3cr3t@api.example.test/v1`;
+    const urlOut = redactSensitiveText(urlCredential, { mode: "tools" });
+    expect(urlOut).not.toBe(urlCredential);
+    expect(urlOut).not.toContain(`${openParen}s3cr3t`);
+    expect(urlOut).toContain("api.example.test");
+    // A *balanced* variable reference inside an opaque-credential capture stays masked: the
+    // variable-name exemption only ever repairs unbalanced openers that would orphan a delimiter.
+    const urlVarRef = "https://alice:${PASS}@api.example.test/v1";
+    const urlVarOut = redactSensitiveText(urlVarRef, { mode: "tools" });
+    expect(urlVarOut).not.toBe(urlVarRef);
+    expect(urlVarOut).not.toContain("${PASS}");
+    const isBalanced = (value: string): boolean =>
+      value.split("(").length === value.split(")").length;
+    // Quoted values keep their existing hint-masking output (byte-identical to before this
+    // fix; covered by redact-byte-identity.test.ts): the expansion content must not survive
+    // verbatim inside the masked placeholder.
+    const quoted = `TOKEN="${openParen}cat /home/admin/.openclaw/secrets/key)"`;
+    const quotedOut = redactSensitiveText(quoted, { mode: "tools" });
+    expect(quotedOut).not.toBe(quoted);
+    expect(quotedOut.startsWith("TOKEN=")).toBe(true);
+    expect(quotedOut).toContain("***");
+    expect(quotedOut).not.toContain(`${openParen}cat`);
+    // Literal vendor secrets sharing the line with an expansion still get masked.
+    const leaked = `TOKEN=${openParen}cat /home/admin/.openclaw/secrets/x) && export API_KEY="sk-live-value-1234567890"`;
+    const leakedOut = redactSensitiveText(leaked, { mode: "tools" });
+    expect(leakedOut).toContain(`TOKEN=${openParen}cat`);
+    expect(leakedOut).not.toContain("sk-live-value-1234567890");
+    expect(isBalanced(leakedOut)).toBe(true);
+  });
+
   it("preserves shell references, option prose, and ordinary token-like identifiers", () => {
     for (const input of [
       [
