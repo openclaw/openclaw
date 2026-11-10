@@ -1,11 +1,18 @@
 import { channel } from "node:diagnostics_channel";
+import { Session } from "node:inspector/promises";
 import { arch, cpus, loadavg } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  startCollectedHeapSampling,
+  sumSampledHeapBytes,
+} from "../../scripts/lib/heap-sampling.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import {
   createCatalogCodeModeHarness,
   jsonTool,
+  pluginToolWithExecute,
   resetCodeModeTestState,
   testing,
 } from "./code-mode.test-support.js";
@@ -13,8 +20,10 @@ import {
 // Opt-in measurement: public exec/wait owner with deterministic external tool I/O.
 // OPENCLAW_CODE_MODE_MEASURE=1 node scripts/run-vitest.mjs <this-file> -t '^node '
 // Separate processes and alternate engines for independent comparison arms.
+// OPENCLAW_CODE_MODE_MEASURE_ALLOCATIONS=1 adds separate sampled-allocation runs.
 const enabled = process.env.OPENCLAW_CODE_MODE_MEASURE === "1";
 const rounds = Number(process.env.OPENCLAW_CODE_MODE_MEASURE_ROUNDS ?? 12);
+const allocationSampling = process.env.OPENCLAW_CODE_MODE_MEASURE_ALLOCATIONS === "1";
 const diagnostics = channel("openclaw.worker.task");
 type TaskTiming = {
   queueMs: number;
@@ -77,10 +86,125 @@ const cases = [
   },
 ];
 
-describe.runIf(enabled).each(["node", "quickjs"] as const)(
-  "%s production owner measurements",
-  (executor) => {
+const measurementModes = (["node", "quickjs"] as const).flatMap((executor) =>
+  (allocationSampling ? [false, true] : [false]).map((sampling) => ({ executor, sampling })),
+);
+describe.runIf(enabled).each(measurementModes)(
+  "$executor production owner measurements (sampling=$sampling)",
+  ({ executor, sampling }) => {
     afterEach(resetCodeModeTestState);
+    it("rejected-cell-with-held-sibling", async () => {
+      const cutoffMs = 250;
+      const sampler = sampling ? new Session() : undefined;
+      let started = createDeferred();
+      const held = pluginToolWithExecute(
+        "fixture_held",
+        "Held synthetic tool",
+        async (_id, _args, signal) => {
+          if (!signal) {
+            throw new Error("Expected the cell's bridge signal");
+          }
+          started.resolve();
+          await new Promise<void>((resolve) => {
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return { content: [], details: null };
+        },
+      );
+      const failed = pluginToolWithExecute("fixture_failed", "Reject a sibling call", async () => {
+        await started.promise;
+        throw new Error("Synthetic bridge failure");
+      });
+      const extra = Array.from({ length: 158 }, (_, i) => jsonTool(`fixture_${i}`, i));
+      const h = createCatalogCodeModeHarness([held, failed, ...extra], { codeMode: { executor } });
+      const host = new LegacyPluginSdkResourceHost();
+      host.bindScheduler(new GatewayScheduler());
+      const samples: Array<{
+        elapsedMs: number;
+        cpuMs: number;
+        sampledAllocatedBytes?: number;
+        censored: boolean;
+      }> = [];
+      const initialLoad = loadavg();
+      try {
+        for (let index = -3; index < rounds; index++) {
+          // Probe cancellation retires the baseline worker; warm every measured cell.
+          await host.run(() => h.run("return 42;", `warm-${index}`));
+          started = createDeferred();
+          const abort = new AbortController();
+          let censored = false;
+          if (sampler && index >= 0) {
+            await startCollectedHeapSampling(sampler, 4096);
+          }
+          const beforeCpu = process.threadCpuUsage();
+          const before = performance.now();
+          const timer = setTimeout(() => {
+            censored = true;
+            abort.abort();
+          }, cutoffMs);
+          try {
+            const result = await host.run(() =>
+              h.tools[0]!.execute(
+                `failure-${index}`,
+                {
+                  code: "await Promise.all([fixture_held({}), fixture_failed({})]);",
+                  awaitResults: true,
+                },
+                abort.signal,
+              ),
+            );
+            const elapsedMs = performance.now() - before;
+            const cpu = process.threadCpuUsage(beforeCpu);
+            const sampledAllocatedBytes =
+              sampler && index >= 0
+                ? sumSampledHeapBytes(
+                    (await sampler.post("HeapProfiler.stopSampling")).profile.head,
+                  )
+                : undefined;
+            sampler?.disconnect();
+            expect(result.details).toMatchObject(
+              censored
+                ? { status: "failed", code: "aborted" }
+                : { status: "failed", failurePhase: "bridge" },
+            );
+            if (index >= 0) {
+              samples.push({
+                elapsedMs,
+                cpuMs: (cpu.user + cpu.system) / 1000,
+                sampledAllocatedBytes,
+                censored,
+              });
+            }
+          } finally {
+            clearTimeout(timer);
+            abort.abort();
+          }
+        }
+        expect(held.execute).toHaveBeenCalledTimes(rounds + 3);
+        expect(failed.execute).toHaveBeenCalledTimes(rounds + 3);
+        expect(testing.activeRuns.size).toBe(0);
+        console.log(
+          "CODE_MODE_FAILURE_MEASURE " +
+            JSON.stringify({
+              executor,
+              rounds,
+              cutoffMs,
+              catalogBindings: 160,
+              calls: rounds * 2,
+              activeRuns: testing.activeRuns.size,
+              allocationSamplingInterval: sampler ? 4096 : undefined,
+              samples,
+              loadStart: initialLoad,
+              loadEnd: loadavg(),
+              node: process.version,
+              arch: arch(),
+            }),
+        );
+      } finally {
+        sampler?.disconnect();
+        await host.close();
+      }
+    });
     it.each(cases)(
       "$name",
       async (scenario) => {
@@ -126,6 +250,9 @@ describe.runIf(enabled).each(["node", "quickjs"] as const)(
         };
         const initialLoad = loadavg();
         const beforeCpu = process.cpuUsage();
+        const beforeMainCpu = process.threadCpuUsage();
+        const sampler = sampling ? new Session() : undefined;
+        const sampledAllocatedBytes: number[] = [];
         const beforeRss = process.memoryUsage().rss;
         let peakObservedRss = beforeRss;
         let firstCellMs = 0;
@@ -136,6 +263,9 @@ describe.runIf(enabled).each(["node", "quickjs"] as const)(
             const beforeCalls =
               vi.mocked(fixture.execute).mock.calls.length +
               vi.mocked(large.execute).mock.calls.length;
+            if (sampler && index >= 0) {
+              await startCollectedHeapSampling(sampler, 4096);
+            }
             const at = performance.now();
             let result = await host.run(() =>
               h.run(scenario.source, `owner-${index}`, {
@@ -150,6 +280,12 @@ describe.runIf(enabled).each(["node", "quickjs"] as const)(
               result = await host.run(() => h.resume(current, waitCallId));
             }
             const elapsed = performance.now() - at;
+            if (sampler && index >= 0) {
+              sampledAllocatedBytes.push(
+                sumSampledHeapBytes((await sampler.post("HeapProfiler.stopSampling")).profile.head),
+              );
+              sampler.disconnect();
+            }
             expect(result).toMatchObject({ status: "completed", value: scenario.value });
             const actualCalls =
               vi.mocked(fixture.execute).mock.calls.length +
@@ -174,6 +310,7 @@ describe.runIf(enabled).each(["node", "quickjs"] as const)(
             }
           }
           const cpu = process.cpuUsage(beforeCpu);
+          const mainCpu = process.threadCpuUsage(beforeMainCpu);
           console.log(
             "CODE_MODE_OWNER_MEASURE " +
               JSON.stringify({
@@ -188,6 +325,9 @@ describe.runIf(enabled).each(["node", "quickjs"] as const)(
                 waits,
                 timingTotals,
                 cpuMsIncludingWarmup: (cpu.user + cpu.system) / 1000,
+                mainCpuMsIncludingWarmup: (mainCpu.user + mainCpu.system) / 1000,
+                allocationSamplingInterval: sampler ? 4096 : undefined,
+                sampledAllocatedBytes: sampler ? sampledAllocatedBytes : undefined,
                 beforeRss,
                 peakObservedRss,
                 loadStart: initialLoad,
@@ -198,6 +338,7 @@ describe.runIf(enabled).each(["node", "quickjs"] as const)(
               }),
           );
         } finally {
+          sampler?.disconnect();
           diagnostics.unsubscribe(onTask);
           await host.close();
         }

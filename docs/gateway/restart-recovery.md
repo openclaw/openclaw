@@ -17,6 +17,13 @@ survives; a lost source produces a visible failure instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
+If the interrupted turn left a managed workspace pending, its recovery input waits
+for the workspace owner to finish preparation before starting the turn. Setup
+failures still produce the ordinary actionable error; pending setup alone does
+not discard the resume input. Setup scripts require the recovered caller's current
+administrator authority. The restart marker remains durable until the resumed
+turn is admitted, so another restart during preparation can recover it again.
+
 During graceful shutdown, interrupted embedded runs have a short abort-settle
 budget (normally two seconds) to deliver their terminal partial reply before their
 writers close. Already accepted transcript writes still drain. A provider that
