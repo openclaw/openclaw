@@ -35,7 +35,7 @@ type RecentSessionParams = {
   listItem?: boolean;
   icon?: JSX.Element;
 };
-export function renderRecentSession(params: RecentSessionParams) {
+function renderRecentSession(params: RecentSessionParams) {
   return (
     <Show when={params.session.key} keyed>
       {(_key) => renderRecentSessionRow(params)}
@@ -410,6 +410,7 @@ export function renderChildSessionLoadError(host: () => SessionListHost, parentK
 export function renderSessionTree(params: {
   host: SessionListHost;
   session: SidebarRecentSession;
+  display?: CatalogBackingSessionDisplay;
   pinReorder?: boolean;
   listItem?: boolean;
   icon?: JSX.Element;
@@ -456,6 +457,7 @@ export function renderSessionTree(params: {
         host={host()}
         session={session()}
         pinReorder={params.pinReorder}
+        display={params.display}
         listItem={false}
         icon={icon()}
       />

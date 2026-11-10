@@ -10,19 +10,19 @@
 .ocid-access h1 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 24px;
+  font-size: calc(24px * var(--control-ui-text-scale));
 }
 
 .ocid-access h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
 }
 
 .ocid-access h3 {
   margin: 0 0 var(--space-2);
   color: var(--text-strong);
-  font-size: 16px;
+  font-size: var(--control-ui-text-lg);
 }
 
 .ocid-access__group {
@@ -112,4 +112,30 @@
 
 .ocid-access__error code {
   white-space: pre-wrap;
+}
+
+.ocid-node-dialog {
+  display: grid;
+  gap: var(--space-3);
+  overflow-y: auto;
+  max-height: var(--openclaw-modal-height-limit, 85vh);
+}
+
+.ocid-node-dialog__command {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.ocid-node-dialog__code {
+  font-family: var(--mono);
+  font-size: calc(28px * var(--control-ui-text-scale));
+  letter-spacing: 0.12em;
+}
+
+.ocid-node-dialog__surface {
+  padding-left: var(--space-5);
+  overflow-wrap: anywhere;
 }

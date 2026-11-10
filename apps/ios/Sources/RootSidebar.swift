@@ -304,13 +304,20 @@ struct RootSidebar: View {
         ZStack {
             Circle()
                 .fill(OpenClawSidebarPalette.elevated)
-            Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
-                .font(OpenClawType.caption2Bold)
-                .foregroundStyle(OpenClawSidebarPalette.textStrong)
-                .minimumScaleFactor(0.65)
-                .lineLimit(1)
+            if let image = self.appModel.agentAvatarImage(for: agent.id) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
+                    .font(OpenClawType.caption2Bold)
+                    .foregroundStyle(OpenClawSidebarPalette.textStrong)
+                    .minimumScaleFactor(0.65)
+                    .lineLimit(1)
+            }
         }
         .frame(width: size, height: size)
+        .clipShape(Circle())
         .overlay(Circle().strokeBorder(OpenClawSidebarPalette.hairline, lineWidth: 1))
         .accessibilityHidden(true)
     }
@@ -435,6 +442,7 @@ struct RootSidebar: View {
                 }
             }
 
+            let isSessionsSelected = self.selectedDestination == .sessions
             Button {
                 self.selectSidebarDestination(.sessions)
             } label: {
@@ -451,6 +459,10 @@ struct RootSidebar: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(OpenClawSidebarPalette.accent)
+            .background(isSessionsSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+                cornerRadius: OpenClawProMetric.controlRadius,
+                style: .continuous))
+            .accessibilityAddTraits(isSessionsSelected ? .isSelected : [])
         }
     }
 
@@ -535,12 +547,18 @@ struct RootSidebar: View {
 
     /// Web-parity compact footer: connection state left, Settings gear right.
     private var footer: some View {
-        VStack(spacing: 0) {
+        let isGatewaySelected = self.selectedDestination == .gateway
+        let isSettingsSelected = self.selectedDestination == .settings
+        return VStack(spacing: 0) {
             self.separator
             HStack(spacing: 4) {
                 RootSidebarGatewayControl(fallbackName: self.gatewayName) {
                     self.selectSidebarDestination(.gateway)
                 }
+                .background(isGatewaySelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+                    cornerRadius: OpenClawProMetric.controlRadius,
+                    style: .continuous))
+                .accessibilityAddTraits(isGatewaySelected ? .isSelected : [])
 
                 Spacer(minLength: 4)
 
@@ -550,7 +568,11 @@ struct RootSidebar: View {
                 {
                     self.selectSidebarDestination(.settings)
                 }
+                .background(isSettingsSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+                    cornerRadius: OpenClawProMetric.controlRadius,
+                    style: .continuous))
                 .accessibilityIdentifier("RootTabs.Sidebar.Destination.settings")
+                .accessibilityAddTraits(isSettingsSelected ? .isSelected : [])
             }
         }
         .padding(.horizontal, 10)

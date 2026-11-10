@@ -3229,7 +3229,7 @@ process.exit(JSON.parse(process.env.RECIPE_EXITS)[count] ?? 99);
           cwd: workspace,
           encoding: "utf8",
           env: {
-            PATH: process.env.PATH,
+            PATH: `${bin}${path.delimiter}${process.env.PATH}`,
             NODE_BIN: bin,
             GITHUB_ACTION_PATH: path.resolve(".github/actions/setup-node-env"),
             GITHUB_WORKSPACE: workspace,
@@ -3671,6 +3671,34 @@ server.listen(0, "127.0.0.1", () => {
         resolvedNode,
       ).trim();
       expect(warmerKey.startsWith(otherRuntimePrefix)).toBe(false);
+    }
+  });
+
+  it("keeps each compiled worker preset in a separate archive", () => {
+    const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
+    const steps = setup.runs.steps as WorkflowStep[];
+    const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");
+    expect(restore.with?.path).toBe("${{ steps.vitest-worker-cache-meta.outputs.path }}");
+    expect(restore.with?.["restore-keys"]).toBe(
+      "${{ steps.vitest-worker-cache-meta.outputs.prefix }}-${{ steps.vitest-worker-cache-meta.outputs.preset }}-\n",
+    );
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const warmSteps = warmer.jobs.warm.steps as WorkflowStep[];
+    for (const preset of ["full", "runtime", "tooling"]) {
+      const save = requiredWorkflowStep(
+        warmSteps,
+        preset === "full"
+          ? "Save compiled Vitest workers"
+          : `Save ${preset} compiled Vitest workers`,
+      );
+      expect(save.with?.path).toBe(
+        `.artifacts/vitest-worker-cache/run-cache${preset === "full" ? "" : `-${preset}`}-0`,
+      );
+      expect(save.with?.key).toBe(
+        preset === "full"
+          ? "${{ steps.setup-node-env.outputs.vitest-worker-cache-key }}"
+          : `\${{ steps.setup-node-env.outputs.vitest-worker-cache-prefix }}-${preset}-\${{ github.run_id }}-\${{ github.run_attempt }}`,
+      );
     }
   });
 
@@ -7568,15 +7596,23 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     const steps = job.steps as WorkflowStep[];
     const checkout = requiredWorkflowStep(steps, "Checkout selected tag");
     expect(job.permissions, jobName).toEqual({ contents: "read" });
-    expect(checkout.with?.["persist-credentials"], jobName).toBe(false);
     const jobJson = JSON.stringify(job);
     expect(jobJson, jobName).not.toContain("${{ secrets.");
     for (const envName of tauriSigningEnvNames) {
       expect(jobJson, jobName).not.toContain(envName);
     }
     if (jobName === "validate_release") {
+      expect(checkout.uses).toBeUndefined();
+      expect(checkout.env).toEqual({
+        RELEASE_TAG: "${{ steps.request.outputs.release_tag }}",
+      });
+      expect(checkout.run).toContain('f"+refs/tags/{release_tag}:refs/tags/{release_tag}"');
+      expect(checkout.run).toContain("for attempt in range(1, 4):");
+      expect(checkout.run).toContain("timeout=120");
+      expect(checkout.run).toContain('git_output(workspace, "rev-parse", "HEAD")');
       continue;
     }
+    expect(checkout.with?.["persist-credentials"], jobName).toBe(false);
     const checkoutIndex = steps.indexOf(checkout);
     expect(checkout.with?.ref).toBe("${{ needs.validate_release.outputs.tag_sha }}");
     expect(checkoutIndex, `${jobName} selected checkout order`).toBeGreaterThan(0);

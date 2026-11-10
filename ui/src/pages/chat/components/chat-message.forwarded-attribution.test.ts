@@ -90,6 +90,7 @@ function renderFrame(
         options: {
           streamOptions: {},
           workPreviews: new Map(),
+          partDependencies: (part) => [part],
           renderGroupOptions: () => ({ showReasoning: true, ...options }),
           isWorkExpanded: () => true,
           onToggleWork: () => {},

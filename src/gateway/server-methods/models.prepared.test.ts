@@ -380,3 +380,100 @@ it("bounds saved-session reads while projecting configured models and runtime ch
     },
   );
 });
+
+it("keeps default snapshots distinct from user selections in the prepared session catalog", async () => {
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "default-session-model-list-", env: WITHOUT_OPENAI_ENV_AUTH },
+    async (state) => {
+      const config: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          defaults: {
+            model: "openai/current",
+            models: { "openai/current": {} },
+            modelPolicy: { allow: ["openai/*", "anthropic/*"] },
+          },
+        },
+      };
+      await state.writeConfig(config);
+      const catalog = [
+        providerCatalogEntry("openai", "current"),
+        providerCatalogEntry("anthropic", "previous"),
+      ];
+      const pluginRegistry = createEmptyPluginRegistry();
+      const context = createModelsListTestContext({
+        cfg: config,
+        catalog,
+        pluginRegistry,
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+      });
+      const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
+      harness.setOwner({
+        ...createChatMetadataOwner(config, "current", {}, "openai", "openai-completions"),
+        pluginRegistry,
+        modelCatalog: { entries: catalog, routeVariants: catalog },
+      });
+      context.readPreparedModelsList = harness.runtime.readModelsList;
+      const sessionKey = "agent:main:default-catalog";
+      const userSessionKey = "agent:main:user-catalog";
+      for (const [key, source] of [
+        [sessionKey, "default"],
+        [userSessionKey, "user"],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: key },
+          {
+            sessionId: key,
+            updatedAt: 1,
+            providerOverride: "anthropic",
+            modelOverride: "previous",
+            modelOverrideSource: source,
+            agentRuntimeOverride: "openclaw",
+          },
+        );
+      }
+      try {
+        using prepare = vi.spyOn(modelsListResult, "prepareModelsListResult");
+        await harness.runtime.refresh();
+        const client = authorizationClient(
+          "default-catalog",
+          ["operator.read"],
+          { internal: { syntheticClient: true } },
+          { caps: ["model-selection-policy"] },
+        );
+        const read = (key: string) =>
+          modelsReader(
+            context,
+            {
+              agentId: "main",
+              sessionKey: key,
+              view: "configured",
+            },
+            client,
+          )();
+        const inherited = await read(sessionKey);
+        expect(inherited?.models.map(({ provider, id }) => `${provider}/${id}`)).toEqual([
+          "openai/current",
+        ]);
+        const selected = await read(userSessionKey);
+        expect(selected?.models.map(({ provider, id }) => `${provider}/${id}`)).toContain(
+          "anthropic/previous",
+        );
+        expect(prepare).toHaveBeenCalledTimes(2);
+        expect(inherited?.models[0]?.agentRuntime).toMatchObject({
+          id: "openclaw",
+          source: "model",
+        });
+        expect(
+          selected?.models.find(({ provider }) => provider === "openai")?.agentRuntime,
+        ).toMatchObject({ id: "codex", source: "implicit" });
+        expect(await read(sessionKey)).toEqual(inherited);
+        expect(await read(userSessionKey)).toEqual(selected);
+        expect(prepare).toHaveBeenCalledTimes(2);
+      } finally {
+        await harness.runtime.stop();
+      }
+    },
+  );
+});

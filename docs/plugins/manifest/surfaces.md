@@ -526,7 +526,9 @@ Paths must stay inside the plugin package, use `/` separators, and end in `.svg`
 URLs, absolute paths, and `..` segments are rejected. Ship the file with your package.
 Icons are limited to 16 KiB and must be self-contained, without scripts, embedded
 documents, or external references. Missing, unreadable, symlinked, oversized, or
-invalid artwork falls back to the generic panel icon without disabling the panel.
+invalid artwork falls back to the panel's registered `icon` name, or the generic
+`plug` icon when that name is omitted or unknown, without disabling the panel.
+Manifest artwork takes precedence over the optional per-panel registry name.
 Icon bytes are captured with the browser revision; rebuild and reload the plugin UI
 after changing the declaration or artwork.
 

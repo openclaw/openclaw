@@ -10,6 +10,10 @@ import {
 } from "../keys.js";
 import { checkVersion, SUPPORTED_STATEMENT_VERSIONS, type StatementVersion } from "../version.js";
 import {
+  MAX_NODE_DISPLAY_NAME,
+  MAX_NODE_PLATFORM,
+  MAX_NODE_SURFACE_ITEMS,
+  MAX_NODE_SURFACE_NAME,
   MEMBER_ROLES,
   MEMBERSHIP_OPS,
   OWNER_CAPABILITIES,
@@ -112,9 +116,9 @@ function nullable(check: Check): Check {
 }
 
 // A list of unique items, each passing `check`.
-function list(check: Check, minLength = 0): Check {
+function list(check: Check, minLength = 0, maxLength = MAX_LIST): Check {
   return (value, path) => {
-    if (!Array.isArray(value) || value.length < minLength || value.length > MAX_LIST) {
+    if (!Array.isArray(value) || value.length < minLength || value.length > maxLength) {
       fail(path, "expected list");
     }
     value.forEach((item, index) => check(item, `${path}[${index}]`));
@@ -162,6 +166,20 @@ function tagged(field: string, variants: Record<string, Check>): Check {
   };
 }
 
+// These fields are shown in a terminal; reject embedded terminal controls at the signed boundary.
+// oxlint-disable-next-line no-control-regex
+const NODE_CONTROL_RE = /[\u0000-\u001f\u007f]/;
+const nodeText = (max: number): Check =>
+  predicate(
+    (v) => isText(v) && v.length > 0 && v.length <= max && !NODE_CONTROL_RE.test(v),
+    `expected non-empty text of at most ${max} UTF-16 code units without control characters`,
+  );
+const nodeDescription = object({
+  display_name: nodeText(MAX_NODE_DISPLAY_NAME),
+  platform: nodeText(MAX_NODE_PLATFORM),
+  commands: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
+  caps: list(nodeText(MAX_NODE_SURFACE_NAME), 0, MAX_NODE_SURFACE_ITEMS),
+});
 const role = oneOf(MEMBER_ROLES);
 const ownerDeviceCertBody = object({
   device_pub: ed25519Key,
@@ -215,6 +233,22 @@ const V1_BODIES: Record<StatementType, Check> = {
     single_use: bool,
     secret_hash: sha256Hex,
   }),
+  NodeInviteCap: object({
+    claw_id: clawId,
+    invite_id: randomId,
+    label: text,
+    created_at: seconds,
+    expires_at: seconds,
+    secret_hash: sha256Hex,
+  }),
+  NodeRedemption: object({
+    description: nodeDescription,
+    claw_id: clawId,
+    invite_id: randomId,
+    peer_key: irohKey,
+    proof: sha256Hex,
+    requested_at: seconds,
+  }),
   MembershipChange: object({
     claw_id: clawId,
     seq: positive,
@@ -226,6 +260,13 @@ const V1_BODIES: Record<StatementType, Check> = {
         peer_keys: list(irohKey, 1),
         invite_id: nullable(randomId),
       }),
+      add_node: object({
+        op: oneOf(["add_node"]),
+        peer_key: irohKey,
+        label: text,
+        invite_id: randomId,
+      }),
+      remove_node: object({ op: oneOf(["remove_node"]), peer_key: irohKey }),
       remove: object({ op: oneOf(["remove"]), account_id: nonEmptyText }),
       set_role: object({ op: oneOf(["set_role"]), account_id: nonEmptyText, role }),
       revoke_device: object({ op: oneOf(["revoke_device"]), peer_key: irohKey }),
@@ -253,6 +294,7 @@ const V1_BODIES: Record<StatementType, Check> = {
     binding_seq: positive,
     owner_devices: list(object({ device_pub: ed25519Key, caps: list(oneOf(OWNER_CAPABILITIES)) })),
     owner_peer_keys: list(irohKey),
+    node_peer_keys: list(irohKey),
     members: list(object({ account_id: nonEmptyText, role, peer_keys: list(irohKey) })),
     protocols: object({ statement: versionList, descriptor: versionList }),
     issued_at: seconds,

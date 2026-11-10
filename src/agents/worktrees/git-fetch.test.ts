@@ -112,7 +112,12 @@ it.each(["dry-run", "option value"])("does not repair origin for %s", async (mod
   expect((await executeGitCommand(clone, ["cat-file", "-t", tip], { env })).code).not.toBe(0);
 });
 
-it.each(["worktree", "renamed project branch", "pinned project commit"] as const)(
+it.each([
+  "worktree",
+  "missing cached default",
+  "renamed project branch",
+  "pinned project commit",
+] as const)(
   "repairs commit-graph-only tips through %s without removing local branches or detached HEADs",
   async (entry) => {
     if (entry === "renamed project branch") {
@@ -120,7 +125,10 @@ it.each(["worktree", "renamed project branch", "pinned project commit"] as const
       await git(source, ["branch", "-D", "keep"]);
     }
     expectBrokenFetch(await executeGitCommand(clone, fetchArgs, { env }));
-    if (entry === "worktree") {
+    if (entry === "missing cached default") {
+      await fs.writeFile(path.join(clone, ".git/refs/remotes/origin/main"), `${tip}\n`);
+    }
+    if (entry === "worktree" || entry === "missing cached default") {
       expect(await resolveWorktreeBase(clone)).toMatchObject({ commit: tip, fetchSucceeded: true });
     } else if (entry === "renamed project branch") {
       await refresh();
@@ -132,8 +140,14 @@ it.each(["worktree", "renamed project branch", "pinned project commit"] as const
     expect(await ref(clone, "refs/heads/main")).toBe(base);
     expect(await ref(clone, "refs/heads/retained")).toBe(tip);
     expect(await ref(linked, "HEAD")).toBe(tip);
+    // Isolated default refresh need not inspect or prune unrelated broken tips.
+    expect(await trackingRefs(clone)).toBe(
+      entry === "worktree" || entry === "missing cached default"
+        ? "refs/remotes/origin/retired"
+        : "",
+    );
+    expect((await fetch("--prune")).code).toBe(0);
     expect(await trackingRefs(clone)).toBe("");
-    expect((await executeGitCommand(clone, fetchArgs, { env })).code).toBe(0);
   },
 );
 
@@ -155,6 +169,38 @@ it("repairs physical tips hidden by a replacement during project refresh", async
   await refresh();
   expect(await git(clone, ["--no-replace-objects", "cat-file", "-t", tip])).toBe("commit");
   expect(await ref(clone, replacement)).toBe(base);
+});
+
+it.each(["worktree", "project refresh"])(
+  "negotiates %s missing-tip repair against resident history in a full blobless clone",
+  async (entry) => {
+    await config(clone, "fetch.unpackLimit", "1");
+    vi.stubEnv("GIT_CONFIG_COUNT", "1");
+    vi.stubEnv("GIT_CONFIG_KEY_0", "fetch.unpackLimit");
+    vi.stubEnv("GIT_CONFIG_VALUE_0", "1");
+    const packedObjects = async () =>
+      Number(/^in-pack: (\d+)$/m.exec(await git(clone, ["count-objects", "-v"]))![1]);
+    const before = await packedObjects();
+    if (entry === "worktree") {
+      expect((await fetch()).code).toBe(0);
+    } else {
+      await refresh();
+    }
+    expect(await git(clone, ["cat-file", "-t", tip])).toBe("commit");
+    // Only the missing tip is new; its parent and unchanged tree are already resident.
+    expect((await packedObjects()) - before).toBe(1);
+  },
+);
+
+it("repairs a missing tip below the resident negotiation commit", async () => {
+  const relative = path.join(retired.slice(0, 2), retired.slice(2));
+  const destination = path.join(clone, ".git/objects", relative);
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.copyFile(path.join(source, ".git/objects", relative), destination);
+  await git(clone, ["update-ref", "refs/heads/a-descendant", retired]);
+  expect((await fetch()).code).toBe(0);
+  expect(await git(clone, ["cat-file", "-t", tip])).toBe("commit");
+  expect(await ref(clone, "refs/heads/a-descendant")).toBe(retired);
 });
 
 it("preserves tags and tracking refs when the caller disables configured pruning", async () => {

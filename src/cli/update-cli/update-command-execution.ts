@@ -686,7 +686,6 @@ export async function executeMutableUpdate(
   }
 
   result = await settleMutableUpdateResult(params, {
-    originalManagedServiceRuntime,
     result,
     failure,
     candidateFailureReason,

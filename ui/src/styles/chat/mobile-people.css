@@ -14,9 +14,9 @@
   gap: 8px;
   margin: 0 12px 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 400;
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .chat-mobile-people__list,
@@ -69,8 +69,8 @@
   overflow: hidden;
   text-overflow: clip;
   white-space: nowrap;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--control-ui-text-md);
+  line-height: calc(20px * var(--control-ui-text-scale));
 }
 
 .chat-mobile-people__mention {
@@ -83,7 +83,8 @@
   border: 0;
   background: transparent;
   color: var(--accent);
-  font: 400 13px/20px var(--font-body);
+  font: 400 calc(13px * var(--control-ui-text-scale))/calc(20px * var(--control-ui-text-scale))
+    var(--font-body);
   cursor: default;
 }
 
@@ -135,15 +136,15 @@
 .chat-mobile-people__viewer .chat-mobile-people__name {
   width: 100%;
   max-width: 80px;
-  font-size: 11px;
-  line-height: 17px;
+  font-size: var(--control-ui-text-xs);
+  line-height: calc(17px * var(--control-ui-text-scale));
 }
 
 .chat-mobile-people__unlisted {
   margin: 0 12px;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .chat-mobile-people__mention:focus-visible,

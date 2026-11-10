@@ -14,6 +14,7 @@ import {
 import { isLikelyContextOverflowError } from "../../failover/context-overflow.js";
 import { isProviderRequestSizeCeilingError } from "../../failover/message-patterns.js";
 import type { FailoverClassification } from "../../failover/signal.js";
+import { sessionManagerReadToolResultProjectionEntries } from "../../sessions/session-manager-view-types.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { classifyCompactionReason, isBenignCompactionSkipResult } from "../compact-reasons.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
@@ -192,7 +193,7 @@ export async function recoverEmbeddedRunOverflow(
       const projectionState = promptState.state.toolResults;
       restoreCacheTtlToolResultProjections(
         projectionState,
-        sessionManager.getToolResultProjectionEntries(),
+        sessionManager[sessionManagerReadToolResultProjectionEntries](),
       );
       const result = await truncateOversizedToolResultsInSessionManager({
         sessionManager,
