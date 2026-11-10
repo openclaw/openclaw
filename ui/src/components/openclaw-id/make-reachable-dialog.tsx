@@ -28,7 +28,7 @@ import type {
 import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
-import { Icon } from "../solid/icon.tsx";
+import { DialogHeader } from "../solid/dialog-header.tsx";
 import { SettingsRow } from "../solid/settings-ui.tsx";
 import { clawNameFromHostname } from "./claw-name.ts";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
@@ -290,250 +290,245 @@ export function showMakeReachableDialog(params: {
           description={t("openclawId.dialogDescription")}
           onModal-cancel={cancel}
         >
-          <div class="exec-approval-card">
-            <div class="secret-reveal__header">
-              <Show when={step().kind === "done"}>
-                <span class="secret-reveal__status" aria-hidden="true">
-                  <Icon name="check" />
-                </span>
-              </Show>
-              <div class="exec-approval-title">{t("openclawId.dialogTitle")}</div>
-            </div>
-            <Switch>
-              <Match when={step().kind === "name"}>
-                <div class="secret-reveal__body">
-                  <p>{t("openclawId.nameBody")}</p>
-                </div>
-                <Show when={codeNote()}>
-                  {(note) => (
-                    <p class="secret-reveal__note" role="status">
-                      {note()}
-                    </p>
-                  )}
-                </Show>
-                <Show when={codeError()}>
-                  {(error) => (
-                    <div class="callout danger" role="alert">
-                      <OpenClawIdErrorMessage error={error()} />
-                    </div>
-                  )}
-                </Show>
-                <Show when={!codeFromAccount()}>
+          <div class="oc-dialog">
+            <DialogHeader title={t("openclawId.dialogTitle")} />
+            <div class="oc-dialog__body">
+              <Switch>
+                <Match when={step().kind === "name"}>
+                  <div>
+                    <p>{t("openclawId.nameBody")}</p>
+                  </div>
+                  <Show when={codeNote()}>
+                    {(note) => (
+                      <p class="secret-reveal__note" role="status">
+                        {note()}
+                      </p>
+                    )}
+                  </Show>
+                  <Show when={codeError()}>
+                    {(error) => (
+                      <div class="callout danger" role="alert">
+                        <OpenClawIdErrorMessage error={error()} />
+                      </div>
+                    )}
+                  </Show>
+                  <Show when={!codeFromAccount()}>
+                    <SettingsRow
+                      title={t("openclawId.enrollmentCode")}
+                      description={t("openclawId.enrollmentCodeHint")}
+                      control={
+                        <input
+                          class="settings-input"
+                          type="text"
+                          aria-label={t("openclawId.enrollmentCode")}
+                          autocomplete="off"
+                          spellcheck="false"
+                          value={enrollmentCode()}
+                          onInput={(event) => {
+                            setEnrollmentCode(event.currentTarget.value);
+                            setCheck(null);
+                          }}
+                          onChange={() => void checkName()}
+                        />
+                      }
+                    />
+                    <a
+                      class="btn btn--sm"
+                      href={linkCodePageUrl(params.loaderDomain)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {t("openclawId.getLinkCode")}
+                    </a>
+                  </Show>
                   <SettingsRow
-                    title={t("openclawId.enrollmentCode")}
-                    description={t("openclawId.enrollmentCodeHint")}
+                    title={t("openclawId.clawName")}
+                    description={t("openclawId.clawNameHint")}
                     control={
                       <input
                         class="settings-input"
                         type="text"
-                        aria-label={t("openclawId.enrollmentCode")}
+                        aria-label={t("openclawId.clawName")}
                         autocomplete="off"
                         spellcheck="false"
-                        value={enrollmentCode()}
+                        maxlength={57}
+                        value={name()}
                         onInput={(event) => {
-                          setEnrollmentCode(event.currentTarget.value);
+                          setName(event.currentTarget.value);
                           setCheck(null);
                         }}
                         onChange={() => void checkName()}
                       />
                     }
                   />
-                  <a
-                    class="btn btn--sm"
-                    href={linkCodePageUrl(params.loaderDomain)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {t("openclawId.getLinkCode")}
-                  </a>
-                </Show>
-                <SettingsRow
-                  title={t("openclawId.clawName")}
-                  description={t("openclawId.clawNameHint")}
-                  control={
-                    <input
-                      class="settings-input"
-                      type="text"
-                      aria-label={t("openclawId.clawName")}
-                      autocomplete="off"
-                      spellcheck="false"
-                      maxlength={57}
-                      value={name()}
-                      onInput={(event) => {
-                        setName(event.currentTarget.value);
-                        setCheck(null);
-                      }}
-                      onChange={() => void checkName()}
-                    />
-                  }
-                />
-                <Show when={check()}>
-                  {(checked) => (
-                    <p class="secret-reveal__note" role="status">
-                      {checked().available
-                        ? t("openclawId.nameAvailable", { host: checked().hostname })
-                        : t("openclawId.nameTaken", { host: checked().hostname })}
-                    </p>
-                  )}
-                </Show>
-                <Show when={nameError()}>
-                  {(message) => (
-                    <div class="callout danger" role="alert">
-                      <OpenClawIdErrorMessage error={message()} />
-                    </div>
-                  )}
-                </Show>
-                <openclaw-modal-actions class="exec-approval-actions">
-                  <button type="button" class="btn" onClick={() => finish(false)}>
-                    {t("common.cancel")}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn primary"
-                    disabled={
-                      preparing() ||
-                      !nameRequest().enrollmentCode ||
-                      !nameRequest().name ||
-                      check()?.available === false
-                    }
-                    onClick={() => void prepare()}
-                  >
-                    {t("openclawId.continue")}
-                  </button>
-                </openclaw-modal-actions>
-              </Match>
-              <Match when={stepOfKind(step(), "ownerKey")}>
-                {(ownerKey) => (
-                  <>
-                    <div class="secret-reveal__body openclaw-id-owner-key">
-                      <p>
-                        <strong>{t("openclawId.ownerKeyTitle")}</strong>
+                  <Show when={check()}>
+                    {(checked) => (
+                      <p class="secret-reveal__note" role="status">
+                        {checked().available
+                          ? t("openclawId.nameAvailable", { host: checked().hostname })
+                          : t("openclawId.nameTaken", { host: checked().hostname })}
                       </p>
-                      <p>{t("openclawId.ownerKeyBody")}</p>
-                    </div>
-                    <openclaw-modal-actions class="exec-approval-actions">
-                      <button type="button" class="btn" onClick={() => finish(false)}>
-                        {t("common.cancel")}
-                      </button>
-                      <button
-                        type="button"
-                        class="btn primary"
-                        autofocus
-                        onClick={() => void createKit(ownerKey().preparation)}
-                      >
-                        {t("openclawId.createOwnerKey")}
-                      </button>
-                    </openclaw-modal-actions>
-                  </>
-                )}
-              </Match>
-              <Match when={stepOfKind(step(), "kit")}>
-                {(kitStep) => (
-                  <RecoveryKitForm
-                    details={kitStep().details}
-                    accountEmail={params.signedIn?.email}
-                    saved={saved()}
-                    onContinue={() => void link(kitStep().preparation)}
-                  >
-                    <div class="secret-reveal__body">
-                      <p>
-                        <strong>{t("openclawId.kitTitle")}</strong>
-                      </p>
-                      <p>{t("openclawId.kitBody")}</p>
-                    </div>
-                    <RecoveryKitPanel
+                    )}
+                  </Show>
+                  <Show when={nameError()}>
+                    {(message) => (
+                      <div class="callout danger" role="alert">
+                        <OpenClawIdErrorMessage error={message()} />
+                      </div>
+                    )}
+                  </Show>
+                  <openclaw-modal-actions>
+                    <button type="button" class="btn" onClick={() => finish(false)}>
+                      {t("common.cancel")}
+                    </button>
+                    <button
+                      type="button"
+                      class="btn primary"
+                      disabled={
+                        preparing() ||
+                        !nameRequest().enrollmentCode ||
+                        !nameRequest().name ||
+                        check()?.available === false
+                      }
+                      onClick={() => void prepare()}
+                    >
+                      {t("openclawId.continue")}
+                    </button>
+                  </openclaw-modal-actions>
+                </Match>
+                <Match when={stepOfKind(step(), "ownerKey")}>
+                  {(ownerKey) => (
+                    <>
+                      <div class="openclaw-id-owner-key">
+                        <p>
+                          <strong>{t("openclawId.ownerKeyTitle")}</strong>
+                        </p>
+                        <p>{t("openclawId.ownerKeyBody")}</p>
+                      </div>
+                      <openclaw-modal-actions>
+                        <button type="button" class="btn" onClick={() => finish(false)}>
+                          {t("common.cancel")}
+                        </button>
+                        <button
+                          type="button"
+                          class="btn primary"
+                          autofocus
+                          onClick={() => void createKit(ownerKey().preparation)}
+                        >
+                          {t("openclawId.createOwnerKey")}
+                        </button>
+                      </openclaw-modal-actions>
+                    </>
+                  )}
+                </Match>
+                <Match when={stepOfKind(step(), "kit")}>
+                  {(kitStep) => (
+                    <RecoveryKitForm
                       details={kitStep().details}
+                      accountEmail={params.signedIn?.email}
                       saved={saved()}
-                      onSaved={setSaved}
-                    />
-                    <openclaw-modal-actions class="exec-approval-actions">
-                      <button type="button" class="btn" onClick={() => finish(false)}>
-                        {t("common.cancel")}
-                      </button>
-                      <button type="submit" class="btn primary" disabled={!saved()}>
-                        {t("openclawId.continue")}
-                      </button>
-                    </openclaw-modal-actions>
-                  </RecoveryKitForm>
-                )}
-              </Match>
-              <Match when={stepOfKind(step(), "linking")}>
-                {(linking) => (
-                  <div class="secret-reveal__body" role="status">
-                    <p class="openclaw-id-linking__title">
-                      {t("openclawId.linkingTitle", {
-                        name: clawNameFromHostname(linking().hostname),
-                      })}
-                    </p>
-                    <div class="list openclaw-id-steps" role="list">
-                      <For each={LINK_STEPS}>
-                        {(id) => {
-                          const current = () => linkStates()[id];
-                          return (
-                            <div
-                              role="listitem"
-                              class={`row openclaw-id-steps__item is-${current().state}`}
-                            >
-                              <span class={stepChip(current().state)} aria-hidden="true">
-                                {stepMark(current().state)}
-                              </span>
-                              <div>
-                                {t(`openclawId.step_${id}`, {
-                                  name: clawNameFromHostname(linking().hostname),
-                                  host: linking().hostname,
-                                })}
-                                <Show when={stepMessage(current())}>
-                                  <div class="muted">{stepMessage(current())}</div>
-                                </Show>
+                      onContinue={() => void link(kitStep().preparation)}
+                    >
+                      <div>
+                        <p>
+                          <strong>{t("openclawId.kitTitle")}</strong>
+                        </p>
+                        <p>{t("openclawId.kitBody")}</p>
+                      </div>
+                      <RecoveryKitPanel
+                        details={kitStep().details}
+                        saved={saved()}
+                        onSaved={setSaved}
+                      />
+                      <openclaw-modal-actions>
+                        <button type="button" class="btn" onClick={() => finish(false)}>
+                          {t("common.cancel")}
+                        </button>
+                        <button type="submit" class="btn primary" disabled={!saved()}>
+                          {t("openclawId.continue")}
+                        </button>
+                      </openclaw-modal-actions>
+                    </RecoveryKitForm>
+                  )}
+                </Match>
+                <Match when={stepOfKind(step(), "linking")}>
+                  {(linking) => (
+                    <div role="status">
+                      <p class="openclaw-id-linking__title">
+                        {t("openclawId.linkingTitle", {
+                          name: clawNameFromHostname(linking().hostname),
+                        })}
+                      </p>
+                      <div class="list openclaw-id-steps" role="list">
+                        <For each={LINK_STEPS}>
+                          {(id) => {
+                            const current = () => linkStates()[id];
+                            return (
+                              <div
+                                role="listitem"
+                                class={`row openclaw-id-steps__item is-${current().state}`}
+                              >
+                                <span class={stepChip(current().state)} aria-hidden="true">
+                                  {stepMark(current().state)}
+                                </span>
+                                <div>
+                                  {t(`openclawId.step_${id}`, {
+                                    name: clawNameFromHostname(linking().hostname),
+                                    host: linking().hostname,
+                                  })}
+                                  <Show when={stepMessage(current())}>
+                                    <div class="muted">{stepMessage(current())}</div>
+                                  </Show>
+                                </div>
                               </div>
-                            </div>
-                          );
-                        }}
-                      </For>
+                            );
+                          }}
+                        </For>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </Match>
-              <Match when={stepOfKind(step(), "done")}>
-                {(done) => (
-                  <>
-                    <div class="secret-reveal__body">
-                      <p>{t("openclawId.doneBody", { host: done().hostname })}</p>
-                      <Show when={linkStates().relay.state === "warning"}>
-                        <p>{t("openclawId.stepRelayOffline")}</p>
-                      </Show>
-                      <Show when={done().publication?.state !== "published"}>
-                        <OpenClawIdErrorMessage error={publicationError(done().publication)} />
-                      </Show>
-                    </div>
-                    <openclaw-modal-actions class="exec-approval-actions">
-                      <button
-                        type="button"
-                        class="btn primary"
-                        autofocus
-                        onClick={() => finish(true)}
-                      >
-                        {t("openclawId.done")}
-                      </button>
-                    </openclaw-modal-actions>
-                  </>
-                )}
-              </Match>
-              <Match when={stepOfKind(step(), "error")}>
-                {(failed) => (
-                  <>
-                    <div class="callout danger" role="alert">
-                      <OpenClawIdErrorMessage error={failed().message} />
-                    </div>
-                    <openclaw-modal-actions class="exec-approval-actions">
-                      <button type="button" class="btn" autofocus onClick={() => finish(false)}>
-                        {t("common.close")}
-                      </button>
-                    </openclaw-modal-actions>
-                  </>
-                )}
-              </Match>
-            </Switch>
+                  )}
+                </Match>
+                <Match when={stepOfKind(step(), "done")}>
+                  {(done) => (
+                    <>
+                      <div>
+                        <p>{t("openclawId.doneBody", { host: done().hostname })}</p>
+                        <Show when={linkStates().relay.state === "warning"}>
+                          <p>{t("openclawId.stepRelayOffline")}</p>
+                        </Show>
+                        <Show when={done().publication?.state !== "published"}>
+                          <OpenClawIdErrorMessage error={publicationError(done().publication)} />
+                        </Show>
+                      </div>
+                      <openclaw-modal-actions>
+                        <button
+                          type="button"
+                          class="btn primary"
+                          autofocus
+                          onClick={() => finish(true)}
+                        >
+                          {t("openclawId.done")}
+                        </button>
+                      </openclaw-modal-actions>
+                    </>
+                  )}
+                </Match>
+                <Match when={stepOfKind(step(), "error")}>
+                  {(failed) => (
+                    <>
+                      <div class="callout danger" role="alert">
+                        <OpenClawIdErrorMessage error={failed().message} />
+                      </div>
+                      <openclaw-modal-actions>
+                        <button type="button" class="btn" autofocus onClick={() => finish(false)}>
+                          {t("common.close")}
+                        </button>
+                      </openclaw-modal-actions>
+                    </>
+                  )}
+                </Match>
+              </Switch>
+            </div>
           </div>
         </openclaw-modal-dialog>
       );
