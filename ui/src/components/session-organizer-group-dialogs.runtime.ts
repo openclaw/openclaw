@@ -30,7 +30,7 @@ export async function createSessionGroupDialog(
   scope: SidebarSessionMutationScope,
   signal: AbortSignal,
   sessions: readonly SidebarRecentSession[],
-  notify: () => void,
+  revealCreatedGroup: (name: string, scope: SidebarSessionMutationScope) => void,
 ) {
   const dialog = await import("./input-dialog.tsx");
   await dialog.showInputDialog({
@@ -52,8 +52,12 @@ export async function createSessionGroupDialog(
           : t("sessionsView.newGroupStale");
       }
       const result = await operations.createSessionGroup(deps, name, sessions, currentScope);
-      if (result === "completed" && sessions.length === 0) {
-        notify();
+      if (
+        result === "completed" &&
+        sessions.length === 0 &&
+        deps.sessionData.isSessionMutationScopeCurrent(currentScope)
+      ) {
+        revealCreatedGroup(name, currentScope);
       }
       if (result === "failed") {
         return deps.sessionData.sessionMutationError ?? t("sessionsView.newGroupFailed");

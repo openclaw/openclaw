@@ -1,9 +1,8 @@
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createEffect, onCleanup } from "solid-js";
 import type { SessionsListResult } from "../api/types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isRestrictedSessionGuest } from "../app/operator-access.ts";
-import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
 import {
   loadStoredSidebarSessionOwnerFilter,
   storeSidebarSessionOwnerFilter,
@@ -96,14 +95,14 @@ export class SessionOwnerFilter {
     return intent;
   }
 
-  set(ownerId: string | null, involvingMe = false, options?: { automatic: true }): void {
+  set(ownerId: string | null, involvingMe = false): void {
     this.read();
     this.value = {
       ownerId: involvingMe ? null : ownerId?.trim() || null,
       involvingMe,
       scope: this.value.scope,
     };
-    this.userIntent ||= !options?.automatic;
+    this.userIntent = true;
     const gateway = this.getGateway();
     const selfUserId = this.selfUserId;
     if (gateway && selfUserId) {
@@ -125,27 +124,21 @@ export function createSessionOwnerFilterQuery(
       scheduleSidebarSessions(): Promise<void>;
     };
   },
-  getFacet: () => Omit<SessionListSnapshot, "agentId"> | undefined,
 ) {
   let previous: string | undefined;
-  let pending: Promise<void> | null = null;
-  const [settled, setSettled] = createSignal(0);
   createEffect(
     () => {
-      settled();
       const host = getHost();
       const query = host.sidebarSessionOwnerFilter();
       return {
         host,
         current: JSON.stringify([query.ownerId, query.involvingMe, filter.read().scope]),
-        facet: getFacet(),
       };
     },
-    ({ host, current, facet }) => {
+    ({ host, current }) => {
       const userIntent = filter.takeUserIntent();
       if (!host.isConnected) {
         previous = undefined;
-        pending = null;
         return;
       }
       const prior = previous;
@@ -154,38 +147,13 @@ export function createSessionOwnerFilterQuery(
         if (prior) {
           host.sessionData.resetSessionList();
         }
-        const request = userIntent
+        void (userIntent
           ? host.sessionData.refreshSidebarSessions()
-          : host.sessionData.scheduleSidebarSessions();
-        pending = request;
-        void request.finally(() => {
-          if (pending === request) {
-            pending = null;
-            setSettled((value) => value + 1);
-          }
-        });
-      } else if (
-        !pending &&
-        facet &&
-        !facet.loading &&
-        !facet.startupPending &&
-        !facet.error &&
-        facet.readSucceeded !== false &&
-        facet.result?.owners
-      ) {
-        const ownerId = filter.read().ownerId;
-        if (
-          ownerId &&
-          ownerId !== filter.selfUserId &&
-          !facet.result.owners.some((owner) => owner.id === ownerId)
-        ) {
-          filter.set(null, false, { automatic: true });
-        }
+          : host.sessionData.scheduleSidebarSessions());
       }
     },
   );
   onCleanup(() => {
-    pending = null;
     filter.takeUserIntent();
   });
 }

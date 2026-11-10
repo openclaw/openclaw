@@ -1,0 +1,2 @@
+# Integrated sidebar group creation, owner visibility and retained folder preferences.
+42

@@ -20,6 +20,7 @@ import {
   catalogSessionRowsByKey,
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
+import { includeSidebarSessionSection } from "./app-sidebar-session-section-filter.ts";
 import {
   sidebarSessionPagination,
   isListedInPinnedSection,
@@ -61,6 +62,7 @@ type SidebarProjectionInput = {
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   emptyGroupsMode: SidebarEmptyGroupsMode;
+  revealedCreatedGroup?: string | null;
   /** "owner" selects exactly one owner; "involvingMe" can span several. */
   ownerFilter: "owner" | "involvingMe" | null;
   visibleSessionLimits: ReadonlyMap<string, number>;
@@ -581,11 +583,8 @@ export class SidebarSessionProjection {
           sectionOrder,
           catalogIds,
         },
-      ).filter(
-        (section) =>
-          section.id !== "pinned" &&
-          // Catalog rows have their own projection; these sections are placeholders.
-          !(hideEmptyGroups && !section.id.startsWith("catalog:") && section.rows.length === 0),
+      ).filter((section) =>
+        includeSidebarSessionSection(section, hideEmptyGroups, input.revealedCreatedGroup),
       );
     const sectionIds = new Set<string>(sections.map((section) => section.id));
     for (const sectionId of this.stickySections.keys()) {

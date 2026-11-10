@@ -269,7 +269,7 @@ export async function runBatchSessionAction(
   rows: SidebarRecentSession[],
   allUnread: boolean,
   scope: SidebarSessionMutationScope,
-): Promise<void> {
+): Promise<SessionActionRow[] | null | void> {
   switch (action.kind) {
     case "toggle-unread":
       await patchSessionRows(deps, rows, { unread: !allUnread }, scope, { sessionScope: true });
@@ -278,7 +278,7 @@ export async function runBatchSessionAction(
       }
       break;
     case "move-to-group":
-      await moveSessionRowsToCategory(
+      return moveSessionRowsToCategory(
         deps,
         rows.filter(
           (row) => (row.category ?? null) !== action.category || needsGroupPromotion(row),
@@ -286,7 +286,6 @@ export async function runBatchSessionAction(
         action.category,
         scope,
       );
-      break;
     case "toggle-archived":
       if (rows.every((row) => row.archived === true)) {
         await patchSessionRows(deps, rows, { archived: false }, scope, { sessionScope: true });
@@ -392,6 +391,8 @@ export async function assignSessionOwner(
     }
   }
 }
+
+export { createSessionGroupDialog } from "./session-organizer-group-dialogs.runtime.ts";
 
 export async function createSessionGroup(
   deps: SessionOrganizerDependencies,

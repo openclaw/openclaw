@@ -32,6 +32,32 @@ export type { SessionOrganizerDependencies } from "./session-organizer-types.ts"
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
 
 export class SessionOrganizer {
+  private createdGroup: { name: string; scope: SidebarSessionMutationScope } | null = null;
+
+  get revealedCreatedGroup(): string | null {
+    const created = this.createdGroup;
+    if (
+      created &&
+      (!this.deps.sessionData.isSessionMutationScopeCurrent(created.scope) ||
+        this.deps.selectedAgentIdForSessions() !== created.scope.selectedAgentId)
+    ) {
+      this.createdGroup = null;
+    }
+    return this.createdGroup?.name ?? null;
+  }
+
+  clearRevealedCreatedGroup(): void {
+    this.createdGroup = null;
+  }
+
+  get effectiveGrouping() {
+    return this.revealedCreatedGroup ? "category" : this.deps.sessionsGrouping;
+  }
+
+  acceptEmptyGroupsMode<T>(mode: T): T {
+    this.clearRevealedCreatedGroup();
+    return mode;
+  }
   readonly sectionHeaders = new Map<string, HTMLElement>();
   collapsedSessionSections = loadStoredCollapsedSessionSections();
   draggingSessionKey: string | null = null;
@@ -80,6 +106,23 @@ export class SessionOrganizer {
         this.deps.sessionData.publishSessionMutationError(scope, error);
       }
     }
+  }
+
+  createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
+    const signal = this.deps.sessionData.sessionDraftSignal;
+    return this.runOperation((operations, scope) =>
+      operations.createSessionGroupDialog(
+        this.deps,
+        scope,
+        signal,
+        sessions,
+        (name, currentScope) => {
+          this.createdGroup = { name: name.trim(), scope: currentScope };
+          this.deps.releaseSidebarSnapshot();
+          this.notify();
+        },
+      ),
+    );
   }
 
   readonly patchSession = async (
@@ -401,10 +444,22 @@ export class SessionOrganizer {
   }
 
   assignSessionCategory(session: SidebarRecentSession, category: string | null): Promise<void> {
-    return this.runOperation(
-      (operations, scope) => operations.assignSessionCategory(this.deps, session, category, scope),
-      true,
-    );
+    return this.runOperation(async (operations, scope) => {
+      const result = await operations.assignSessionCategory(this.deps, session, category, scope);
+      if (result === "completed") {
+        this.revealSessionGroup(category, scope);
+      }
+    }, true);
+  }
+
+  revealSessionGroup(category: string | null, scope: SidebarSessionMutationScope): void {
+    if (
+      category &&
+      this.deps.sessionData.isSessionMutationScopeCurrent(scope) &&
+      this.collapsedSessionSections.has(`category:${category}`)
+    ) {
+      this.toggleSection(`category:${category}`);
+    }
   }
 
   private sectionAcceptsSession(

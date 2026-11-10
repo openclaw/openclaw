@@ -54,7 +54,7 @@ const enSessionOrganizationShared = {
     stopCloudWorkerConfirmAction: "Stop",
     deleteSessionStale: "The connection changed before “{session}” was deleted. Try again.",
     newGroupPrompt: "New group name",
-    newGroupTitle: "New group",
+    newGroupTitle: en.sessionsView.newGroupTitle,
     newGroupCreate: "Create group",
     newGroupFailed: "Couldn’t create the group. Try again.",
     newGroupStale: "The connection changed before the group was saved. Try again.",
