@@ -1,2 +1,2 @@
-219
-# Preserve the contributor regressions for catalog policy, bounded failed adoption, and setup capture cleanup.
+184
+# Catalog current-policy HTTP boundary and bounded failed-adoption regressions.

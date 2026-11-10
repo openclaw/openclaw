@@ -1,3 +1,4 @@
+import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
@@ -5,6 +6,7 @@ import {
   fetchConfiguredLocalOriginWithSsrFGuard,
   fetchWithSsrFGuard,
 } from "../infra/net/fetch-guard.js";
+import { isSameSsrFPolicy } from "../infra/net/ssrf.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { VERSION } from "../version.js";
@@ -90,6 +92,7 @@ export async function refreshRemoteModelCatalog(params: {
   if (!isRemoteModelCatalogRefreshEnabled(params.config)) {
     return { status: "disabled", providers: 0, models: 0 };
   }
+  const getCurrentConfig = createRuntimeConfigReader(params.config);
   const databaseOptions = params.databaseOptions ?? {};
   const now = Date.now();
   try {
@@ -117,16 +120,31 @@ export async function refreshRemoteModelCatalog(params: {
     if (activeStored?.last_modified) {
       headers.set("If-Modified-Since", activeStored.last_modified);
     }
+    // Keep the preparation grant separate from later config replacement or mutation.
+    const configuredPolicy = structuredClone(configuredFetchSsrFPolicy(params.config));
     const fetchParams = {
       url,
       init: { headers },
       timeoutMs: REMOTE_MODEL_CATALOG_TIMEOUT_MS,
       signal: params.signal,
       auditContext: "remote-model-catalog",
+      beforeRequest: () => {
+        const currentConfig = getCurrentConfig();
+        // DNS and every redirect prepare asynchronously. A changed grant needs a new
+        // refresh, not an HTTP effect using transport prepared under the previous one.
+        if (
+          !isRemoteModelCatalogRefreshEnabled(currentConfig) ||
+          resolveRemoteCatalogUrl(currentConfig) !== url ||
+          !isSameSsrFPolicy(configuredPolicy, configuredFetchSsrFPolicy(currentConfig))
+        ) {
+          throw new Error(
+            "Remote catalog network policy changed; retry with the current configuration.",
+          );
+        }
+      },
     } as const;
     const explicitOverride = Boolean(params.config.models?.catalogRefresh?.url);
     const localHttp = isExplicitLocalHttpUrl(params.config, url);
-    const configuredPolicy = configuredFetchSsrFPolicy(params.config);
     let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
     if (explicitOverride) {
       const configuredOrigin = new URL(url).origin;
