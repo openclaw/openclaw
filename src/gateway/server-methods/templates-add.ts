@@ -13,6 +13,7 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../../config/runtime-write-application.js";
+import type { AgentEntryConfig } from "../../config/types.agents.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
@@ -152,6 +153,19 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
       const admissionApplication = createRuntimeConfigWriteApplication(
         captureGatewayRootWorkAdmissionContinuationScope()?.run,
       );
+      const assertRetainedRuntime = (agent: { agentId: string; config: AgentEntryConfig }) => {
+        assertCurrent();
+        if (
+          !isDeepStrictEqual(
+            context.getRuntimeConfig().agents?.entries?.[agent.agentId],
+            agent.config,
+          )
+        ) {
+          throw new Error(
+            "The retained Template agent configuration is not active in this Gateway; wait for runtime recovery before retrying.",
+          );
+        }
+      };
       const result = await applyTemplateAddForGateway({
         source: params.source,
         ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -189,7 +203,11 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         ...(reloadPlugins ? { reloadPlugins } : {}),
         configWriteOptions: attachRuntimeConfigWriteApplication({}, application),
         admissionConfigWriteOptions: attachRuntimeConfigWriteApplication({}, admissionApplication),
-        waitForAdmissionRuntime: async () => {
+        waitForAdmissionRuntime: async (retainedAgent) => {
+          if (retainedAgent) {
+            assertRetainedRuntime(retainedAgent);
+            return "applied";
+          }
           const outcome = admissionApplication.claimed
             ? await admissionApplication.result
             : "unclaimed";
@@ -217,7 +235,11 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
             );
           }
         },
-        waitForAgentRuntime: async () => {
+        waitForAgentRuntime: async (retainedAgent) => {
+          if (retainedAgent) {
+            assertRetainedRuntime(retainedAgent);
+            return "applied";
+          }
           const outcome = application.claimed ? await application.result : "unclaimed";
           // Report publication before the caller rechecks authority: an already exposed
           // ordinary agent must be retained even when installation authority expires.

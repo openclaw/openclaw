@@ -102,7 +102,10 @@ export type StatelessTemplateAddOptions = TemplateMutationStateOptions & {
   /** Persist verified configuration before runtime wait. Uncertain acknowledgement retains custody. */
   onAgentConfigured?: (checkpoint: TemplateConfiguredAgentCheckpoint) => Promise<void>;
   /** Confirm active runtime publication before transferring rollback custody. */
-  waitForAgentRuntime?: () => Promise<"applied" | "applied-restart-required">;
+  waitForAgentRuntime?: (retainedAgent?: {
+    agentId: string;
+    config: TemplateConfiguredAgentCheckpoint["config"];
+  }) => Promise<"applied" | "applied-restart-required">;
   /** Instructions, canonical chat, and active runtime are ready; setup continues here. */
   onAgentReady?: (agent: { agentId: string; sessionKey: string }) => Promise<void>;
   /** Publish each actual installation outcome without a model recap. */
@@ -185,7 +188,7 @@ export async function applyTemplateAddPlanStateless(
   const checkpointPlanDigest = configuredPlanDigest(plan);
   let configuredCheckpoint: TemplateConfiguredAgentCheckpoint | undefined;
   let initialSourceIntegrity: string | undefined;
-  let releaseBootstrapDeferral: (() => void) | undefined;
+  let releaseBootstrapDeferral: (() => Promise<void>) | undefined;
   let workspaceCreated = false;
   let workspaceExposed = false;
   let workspaceBeforeExposure: string | undefined;
@@ -194,6 +197,7 @@ export async function applyTemplateAddPlanStateless(
   let rollbackAgentSession: (() => Promise<void>) | undefined;
   let configCommitAttempted = false;
   let workspaceFiles: PersistedTemplateWorkspaceFile[] = [];
+  let rollbackWorkspaceFiles: (() => Promise<void>) | undefined;
   let bootstrapSeededAt: string | undefined;
   let packages: PersistedTemplatePackageRef[] = [];
   const mcpServers: PersistedTemplateMcpServerRef[] = [];
@@ -383,6 +387,17 @@ export async function applyTemplateAddPlanStateless(
     // Exposure is a one-way custody transfer, not a reason to delete a usable agent.
     // Keep its workspace, chat, requirements and actual routine outcomes on later failure.
     if (retained) {
+      if (!configCommitted && rollbackWorkspaceFiles) {
+        try {
+          await rollbackWorkspaceFiles();
+          workspaceFiles = [];
+        } catch (cleanupError) {
+          return result("partial", {
+            code: "add_rollback_incomplete",
+            message: `${coerceErrorMessage(error)} Owned instruction cleanup failed: ${coerceErrorMessage(cleanupError)}. The agent and chat were kept.`,
+          });
+        }
+      }
       return result("partial", {
         code,
         message: `${coerceErrorMessage(error)} The agent was already made available and was kept. Continue setup in this agent; do not add another copy.`,
@@ -396,7 +411,7 @@ export async function applyTemplateAddPlanStateless(
       );
     }
     if (!configCommitted && !workspaceCreated) {
-      releaseBootstrapDeferral?.();
+      await releaseBootstrapDeferral?.();
     }
     const message = coerceErrorMessage(error);
     const sharedRetained =
@@ -437,7 +452,9 @@ export async function applyTemplateAddPlanStateless(
       );
     }
     if (plan.actions.some((action) => action.kind === "bootstrap")) {
-      releaseBootstrapDeferral = deferWorkspaceBootstrap(workspace);
+      await options.prepareEffect?.();
+      assertForwardCurrent();
+      releaseBootstrapDeferral = await deferWorkspaceBootstrap(workspace, options);
     }
     if (configuredRetry) {
       const admitted = options.admittedAgent!;
@@ -463,7 +480,9 @@ export async function applyTemplateAddPlanStateless(
         await mkdir(workspace);
         workspaceCreated = true;
       }
-      workspaceFiles = await createTemplateWorkspaceFiles(plan, stageOptions());
+      const instructions = await createTemplateWorkspaceFiles(plan, stageOptions());
+      workspaceFiles = instructions.files;
+      rollbackWorkspaceFiles = instructions.rollback;
       workspaceBeforeExposure = await workspaceIdentity(workspace);
       const deletion = await readAgentDeletionJournalAsync(plan.agent.finalId);
       if (deletion && !deletion.cleanupCompleted) {
@@ -540,7 +559,15 @@ export async function applyTemplateAddPlanStateless(
         const agent = listAgentEntries(current).find(
           (entry) => normalizeAgentId(entry.id) === normalizeAgentId(plan.agent.finalId),
         );
-        if (agent) {
+        // A refused write leaves the original admitted agent in place. It is
+        // not a configured checkpoint, so only this attempt's instructions roll back.
+        const admissionUnchanged =
+          options.admittedAgent &&
+          isDeepStrictEqual(
+            current.agents?.entries?.[plan.agent.finalId],
+            options.admittedAgent.config,
+          );
+        if (agent && !admissionUnchanged) {
           if (!sameCommittedAgent(agent, plan)) {
             throw new Error("Agent config changed during Add", { cause: error });
           }
@@ -574,7 +601,11 @@ export async function applyTemplateAddPlanStateless(
       await assertConfigured(configuredCheckpoint);
     }
     if (options.waitForAgentRuntime) {
-      const outcome = await options.waitForAgentRuntime();
+      const outcome = await options.waitForAgentRuntime(
+        configuredRetry
+          ? { agentId: plan.agent.finalId, config: options.admittedAgent!.config }
+          : undefined,
+      );
       retained = true;
       rollbackAgentSession = undefined;
       if (outcome === "applied-restart-required") {

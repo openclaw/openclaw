@@ -22,10 +22,11 @@ export async function workspaceIdentity(workspace: string): Promise<string> {
     if (stat.isSymbolicLink()) {
       throw new Error(`Workspace path ${JSON.stringify(relative)} became a symlink.`);
     }
-    entries.push(
-      `${relative}:${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`,
-    );
+    // Owned writes and their rollback change directory clocks, not its incarnation.
+    // Child membership and file bytes below still detect actual workspace edits.
+    entries.push(`${relative}:${stat.dev}:${stat.ino}:${stat.mode}`);
     if (stat.isFile()) {
+      entries.push(`${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`);
       const read = await source.read(relative, {
         hardlinks: "reject",
         maxBytes: MAX_MANAGED_FILE_BYTES,

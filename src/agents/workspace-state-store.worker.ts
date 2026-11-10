@@ -111,12 +111,16 @@ export function mergeWorkspaceSetupStateInDatabase(
     version: WORKSPACE_SETUP_STATE_VERSION,
     ...(bootstrapSeededAt ? { bootstrapSeededAt } : {}),
     ...(setupCompletedAt ? { setupCompletedAt } : {}),
+    ...((next.bootstrapDeferred ?? snapshot.setup.bootstrapDeferred)
+      ? { bootstrapDeferred: true }
+      : {}),
   };
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
   const values = {
     workspace_path: identity.workspacePath,
     version: WORKSPACE_SETUP_STATE_VERSION,
     bootstrap_seeded_at: merged.bootstrapSeededAt ?? null,
+    bootstrap_deferred: merged.bootstrapDeferred ? 1 : null,
     setup_completed_at: merged.setupCompletedAt ?? null,
     updated_at: nowMs,
   };
@@ -158,7 +162,13 @@ export function rollbackWorkspaceBootstrapSeedInDatabase(
       .where("workspace_key", "=", identity.workspaceKey),
   );
   workspaceStatePublication.stagePostimages(database.db, [
-    { ...snapshot, setup: { version: WORKSPACE_SETUP_STATE_VERSION } },
+    {
+      ...snapshot,
+      setup: {
+        version: WORKSPACE_SETUP_STATE_VERSION,
+        ...(snapshot.setup.bootstrapDeferred ? { bootstrapDeferred: true } : {}),
+      },
+    },
   ]);
 }
 

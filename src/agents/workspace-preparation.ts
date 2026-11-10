@@ -3,31 +3,32 @@ import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writ
 import { DuplicateAgentError } from "./agent-create-error.js";
 import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
-import { replaceWorkspaceAttestation, type WorkspaceAttestation } from "./workspace-state-store.js";
+import {
+  mergeWorkspaceSetupState,
+  replaceWorkspaceAttestation,
+  type WorkspaceAttestation,
+} from "./workspace-state-store.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
 
 const preparationQueues = resolveGlobalMap<string, StoreWriterQueue>(
   Symbol.for("openclaw.workspacePreparationQueues"),
 );
 
-// The initializer owns seeding while ordinary turns may already use this workspace.
-// Keep failed, retained initialization deferred until a seed retry succeeds.
-const deferredBootstraps = resolveGlobalMap<string, true>(
-  Symbol.for("openclaw.workspaceDeferredBootstraps"),
-);
-
-export function deferWorkspaceBootstrap(dir: string): () => void {
-  const canonicalDir = resolveCanonicalWorkspacePath(dir);
-  deferredBootstraps.set(canonicalDir, true);
-  return () => settleWorkspaceBootstrapDeferral(canonicalDir);
+// The initializer owns seeding even when ordinary turns use this workspace.
+// Persist that custody with setup state so a restart cannot seed defaults.
+export async function deferWorkspaceBootstrap(
+  dir: string,
+  options: Parameters<typeof mergeWorkspaceSetupState>[3] = {},
+): Promise<() => Promise<void>> {
+  await mergeWorkspaceSetupState(dir, { bootstrapDeferred: true }, undefined, options);
+  return () => settleWorkspaceBootstrapDeferral(dir, options);
 }
 
-export function isWorkspaceBootstrapDeferred(dir: string): boolean {
-  return deferredBootstraps.has(resolveCanonicalWorkspacePath(dir));
-}
-
-export function settleWorkspaceBootstrapDeferral(dir: string): void {
-  deferredBootstraps.delete(resolveCanonicalWorkspacePath(dir));
+export async function settleWorkspaceBootstrapDeferral(
+  dir: string,
+  options: Parameters<typeof mergeWorkspaceSetupState>[3] = {},
+): Promise<void> {
+  await mergeWorkspaceSetupState(dir, { bootstrapDeferred: false }, undefined, options);
 }
 
 /** Keep host filesystem preparation and its worker writes in one directory's FIFO interval. */

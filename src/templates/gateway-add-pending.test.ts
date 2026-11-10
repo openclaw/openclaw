@@ -46,6 +46,7 @@ it.each([
   "admitted-session-replaced",
   "admitted-source-retry",
   "admitted-runtime-retry",
+  "admitted-config-retry",
 ] as const)(
   "prepares empty ordinary Template chat before runtime publication: %s",
   async (outcome) => {
@@ -161,6 +162,7 @@ it.each([
       let current = true;
       let publicationReached = false;
       let runtimeFailed = false;
+      let configFailed = false;
       const sessionKey = "agent:fixture-first:main";
       const prepareAgentChat = vi.fn(
         async (
@@ -208,7 +210,11 @@ it.each([
         policyConfig: { configPath: state.configPath, env: state.env },
         configWriteOptions: {
           beforeCommit: async () => {
-            if (outcome === "abort-before-commit") {
+            if (
+              outcome === "abort-before-commit" ||
+              (outcome === "admitted-config-retry" && !configFailed)
+            ) {
+              configFailed = true;
               throw new Error("Fixture config admission refused");
             }
           },
@@ -251,7 +257,11 @@ it.each([
         onAgentReady,
       };
       let result = await applyTemplateAddForGateway(applyInput);
-      if (outcome === "admitted-source-retry" || outcome === "admitted-runtime-retry") {
+      if (
+        outcome === "admitted-source-retry" ||
+        outcome === "admitted-runtime-retry" ||
+        outcome === "admitted-config-retry"
+      ) {
         expect(result).toMatchObject({
           status: "partial",
           agentRetained: true,
@@ -260,6 +270,11 @@ it.each([
         const retained = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey });
         expect(retained?.sessionId).toBe(admittedSessionId);
         const profile = path.join(config.agents!.entries!["fixture-first"]!.workspace!, "SOUL.md");
+        if (outcome === "admitted-config-retry") {
+          expect(result.error?.code).toBe("add_failed");
+          expect(result.error?.message).toContain("Fixture config admission refused");
+          await expect(fs.stat(profile)).rejects.toMatchObject({ code: "ENOENT" });
+        }
         const before = outcome === "admitted-runtime-retry" ? await fs.stat(profile) : undefined;
         result = await applyTemplateAddForGateway(applyInput);
         if (before) {
@@ -315,7 +330,8 @@ it.each([
             outcome === "applied" ||
             outcome === "admitted-applied" ||
             outcome === "admitted-source-retry" ||
-            outcome === "admitted-runtime-retry"
+            outcome === "admitted-runtime-retry" ||
+            outcome === "admitted-config-retry"
               ? "complete"
               : "partial",
         });
@@ -324,7 +340,8 @@ it.each([
           outcome !== "applied" &&
           outcome !== "admitted-applied" &&
           outcome !== "admitted-source-retry" &&
-          outcome !== "admitted-runtime-retry"
+          outcome !== "admitted-runtime-retry" &&
+          outcome !== "admitted-config-retry"
         ) {
           expect(result.agentRetained).toBe(true);
         }
@@ -333,7 +350,8 @@ it.each([
         outcome === "applied" ||
           outcome === "admitted-applied" ||
           outcome === "admitted-source-retry" ||
-          outcome === "admitted-runtime-retry"
+          outcome === "admitted-runtime-retry" ||
+          outcome === "admitted-config-retry"
           ? 1
           : 0,
       );
