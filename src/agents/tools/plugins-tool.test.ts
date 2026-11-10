@@ -10,7 +10,7 @@ const callGateway = vi.mocked(callAgentToolGatewayRequest);
 const runtime = { operationId: "reload-1", generation: 2, pluginIds: ["local-tool"] };
 const reloadArgs = { action: "reload", pluginId: "local-tool" };
 type Result = Awaited<ReturnType<ReturnType<typeof createPluginsTool>["execute"]>>;
-const json = (value: unknown) => JSON.stringify(value, null, 2);
+const json = (value: unknown) => JSON.stringify(value);
 const execute = (args: Record<string, unknown>) => createPluginsTool().execute("call", args);
 const reload = () => execute(reloadArgs);
 function fail(

@@ -61,11 +61,11 @@ export function summarizeUpdateRunResponse(response: unknown) {
         ? `${acknowledgementOwned ? "The gateway owns the acknowledgement; do not send another acknowledgement." : `Reply with the update acknowledgement${acknowledgement ? `: ${acknowledgement}` : "."}`} Wait for the automatic restart, verification, and final notices; do not run shell commands or restart anything.`
         : "Tell the user the update did not start and why; relay any exact manual instructions."),
   };
-  if (JSON.stringify(summary, null, 2).length >= 4000) {
+  if (JSON.stringify(summary).length >= 4000) {
     for (const step of failedSteps) {
       step.stderrTail = "";
     }
-    if (JSON.stringify(summary, null, 2).length >= 4000) {
+    if (JSON.stringify(summary).length >= 4000) {
       failedSteps.length = 0;
     }
   }

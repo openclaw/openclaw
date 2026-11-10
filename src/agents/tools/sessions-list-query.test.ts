@@ -292,7 +292,7 @@ describe("sessions-list inventory queries", () => {
     });
     expect(sessionKeys(details)).toEqual([firstRow.key]);
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(64 * 1024);
-    expect(text).toBe(JSON.stringify(result.details, null, 2));
+    expect(text).toBe(JSON.stringify(result.details));
     expect(Value.Check(tool.outputSchema!, details)).toBe(true);
     mockSessionPages([[omittedRow, finalRow]], 23);
 

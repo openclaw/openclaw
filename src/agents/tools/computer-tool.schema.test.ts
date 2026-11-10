@@ -84,7 +84,7 @@ function expectUnavailable(
   const refusal = { status: "refused", reason: "action_unavailable", action, availableActions };
   expect(readToolExecutionRefusal(result)?.kind).toBe("gated");
   expect(result.details).toEqual(refusal);
-  expect(result.content[0]).toEqual({ type: "text", text: JSON.stringify(refusal, null, 2) });
+  expect(result.content[0]).toEqual({ type: "text", text: JSON.stringify(refusal) });
 }
 
 // Frozen from v2026.9.4 src/plugins/computer-use-contract.ts, including actionObject fields.
