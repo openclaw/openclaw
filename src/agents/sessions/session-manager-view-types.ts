@@ -3,7 +3,6 @@ import type { SessionEntryCohortRequest } from "../../config/sessions/session-en
 import type { SessionTranscriptContextSelection } from "../../config/sessions/session-history-read.types.js";
 import type { PreparedSessionTranscriptHydration } from "../../config/sessions/session-transcript-worker.types.js";
 import type { SessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
-import type { SessionManagerCore } from "./session-manager-core.js";
 
 /** Internal readers own their array; transcript payloads stay immutable. */
 export const sessionManagerReadTranscriptBranch = Symbol.for(
@@ -34,21 +33,3 @@ export type SessionManagerBoundedContext = SessionManagerBoundedView &
     SessionTranscriptBoundedActiveContext,
     "persistedSuffixStartSeq" | "boundaryCount" | "transcriptMutationAt"
   > & { limits: SessionManagerBoundedContextLimits };
-
-export type ReadonlySessionManager = Pick<
-  SessionManagerCore,
-  | "getCwd"
-  | "getSessionId"
-  | "getSessionTarget"
-  | "getLeafId"
-  | "getAppendParentId"
-  | "getAppendMode"
-  | "getLeafEntry"
-  | "getEntry"
-  | "getLabel"
-  | "getBranch"
-  | "getHeader"
-  | "getEntries"
-  | "getTree"
-  | "getSessionName"
->;

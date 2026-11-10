@@ -767,4 +767,4 @@ export class SessionManager extends SessionManagerBranching {
   }
 }
 
-export type { ReadonlySessionManager } from "./session-manager-core.js";
+export type { ReadonlySessionManager } from "./session-manager-readonly.js";

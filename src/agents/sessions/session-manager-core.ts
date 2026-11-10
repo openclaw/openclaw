@@ -770,5 +770,3 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     return target ? { ...target, ...(target.env ? { env: { ...target.env } } : {}) } : undefined;
   }
 }
-
-export type { ReadonlySessionManager } from "./session-manager-view-types.js";
