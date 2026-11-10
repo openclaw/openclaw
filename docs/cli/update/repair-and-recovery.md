@@ -121,6 +121,12 @@ stays stopped. If recovery is refused or fails, repair names the reason and
 `openclaw gateway start` as the manual next step after resolving it; a successful
 automatic restart does not emit that warning. Named data-risk refusals keep the
 Gateway stopped and retain their recovery guidance.
+If finalization succeeds but the service is absent or its ownership cannot be
+verified, repair completes with manual-start guidance instead of failing the
+completed maintenance. Interrupted handoff recovery checks the pending stop
+before recovery and again before starting the service, preserving a later
+operator stop. If post-core repair migrates state and then fails, the verified
+installed runtime records the terminal failure rather than the staged old writer.
 Normal Doctor exits do not require a separate process-settlement receipt. On
 Windows, recovery restores the suspended Scheduled Task before restarting the
 Gateway, while preserving the failed Doctor check IDs in the update report.

@@ -50,7 +50,7 @@ export function readLocation(params: Readonly<Record<string, string>> = {}): Kno
     (["browse", "search", "settings", "scribes"] as const).find((t) => t === view) ?? "recent";
   const upperSequence = integer(params.upper),
     beforeSequence = integer(params.before);
-  const offset = integer(params.offset, 500);
+  const offset = integer(params.offset, tab === "browse" ? Number.MAX_SAFE_INTEGER : 500);
   const trail = text(params.back, 2000);
   const back =
     trail && /^(0|[1-9]\d*)(,(0|[1-9]\d*))*$/.test(trail) ? trail.split(",").map(Number) : [];

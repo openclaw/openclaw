@@ -16,7 +16,7 @@
   border-radius: 999px;
   color: var(--muted);
   background: color-mix(in srgb, var(--card) 75%, transparent);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 650;
 }
 
@@ -83,19 +83,19 @@
 
 .lobsterdex-page__card h3 {
   color: var(--text-strong);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 700;
 }
 
 .lobsterdex-page__lore {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
 }
 
 .lobsterdex-page__date {
   color: var(--muted);
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .lobsterdex-page__dates {

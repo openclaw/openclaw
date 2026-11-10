@@ -62,7 +62,9 @@ export function resolveCompletionInputReplyExpectation(
 ): ReplyExpectation {
   // Available child findings do not create a reply obligation for their parent.
   const isSubagentCompletion =
-    sourceTool === "subagent_announce" || sourceTool === "subagent_settle";
+    sourceTool === "subagent_announce" ||
+    sourceTool === "subagent_settle" ||
+    sourceTool === "agent_harness_completion";
   return params.requireVisibleReply || (params.expectsCompletionMessage && !isSubagentCompletion)
     ? "required"
     : "optional";

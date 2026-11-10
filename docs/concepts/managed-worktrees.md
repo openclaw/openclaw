@@ -47,6 +47,9 @@ local message attachments, and generation tools reading local references, wait f
 initial diff baseline. Tools that do not use the workspace can run immediately,
 including generation with inline or remote references. Completion also waits
 for preparation, and a preparation failure ends the turn with a retryable error.
+If workspace ownership expires or is lost, retry the operation. Caller access
+revocation is separate: restore access before retrying. Preparation diagnostics
+retain the failing phase when a lease error wraps the original failure.
 Accelerated clones can start prompt preparation once their files are complete,
 while Git index preparation finishes behind the same workspace-tool gate.
 
@@ -87,6 +90,23 @@ Sandboxed project sessions use a private Git checkout for execution,
 while the managed worktree remains the source of truth for accepted changes.
 Docker and Podman support this local projection. The host repository's shared Git
 metadata and ignored-file provisioning are not mounted or copied into it.
+
+Changed local checkpoints report `Local workspace checkpoint capture` in the
+`agents/worktrees` log, with the worktree ID and selected `path=snapshot` or `path=paused`.
+The rendered `reason` distinguishes adaptive direct capture, a non-subvolume root,
+an unavailable Btrfs clone backend, clone failure, and a nested-subvolume fallback.
+`attemptedSnapshot=true` also identifies a snapshot attempt that fell back to
+paused capture; `cloneError` names an expected clone failure code.
+`preCopyMs` measures from completed pause preparation to the copy attempt,
+including settlement of an earlier checkpoint. `copyMs` covers the complete
+native copy helper, and `postCopyBeforeResumeMs` covers the interval from its
+completion to the resume call. `resumeMs` sums resume calls, including container
+inspection, unpause, and receipt persistence. Missing measurements appear as `-`.
+These are owner-operation timings, not syscall or writeback timings, and their
+sum is not the container's frozen duration. The record follows finalization
+attempts, including failures that retain a pause. `accepted=true` means
+synchronization returned successfully; it does not certify that resume succeeded.
+
 On Btrfs, APFS, and ReFS, new private checkouts with a committed `pnpm-lock.yaml`
 can reuse installed dependencies. OpenClaw prepares the dependencies once in a
 disposable sandbox, then clones the prepared checkout for each session. After the
@@ -124,6 +144,17 @@ commit reuses its prepared dependencies instead of refreshing the shared templat
 back and forth. Every build still passes disk admission. Live clone and installer
 readers can temporarily retain additional generations; cleanup never removes
 their files before those readers settle.
+
+The template registry keeps compressed content manifests in a process-local LRU
+bounded to 64 MiB, keyed by generation, selected commit and build-cache path policy.
+A matching preparation uses that manifest instead of hashing the cloned source again. Commit refreshes reuse
+unchanged file hashes from the previous generation using Git's source delta;
+metadata discovery still records empty directories and changed input markers.
+Missing manifests or changed checkout attributes use a full capture. Canonical
+workspace edits are reconciled separately, so cached template contents never
+replace authored changes. Retirement deletes the cached manifest. After a Gateway
+restart or cache eviction, the first preparation rebuilds it; the template registry
+does not persist manifests.
 
 Older runtime identities become eligible for cleanup after six unused hours.
 The most recently used identity keeps the ordinary idle retention window, subject
@@ -331,7 +362,7 @@ to `templateApply`. Sub-phases separate registration metadata and inspection, co
 
 The `workspaceWait` phase records waits for private sandbox workspace reconciliation custody and for an already-running preparation. It includes waits behind another caller's dependency-template build, even when the waiting caller ultimately reuses the prepared workspace without selecting a template itself.
 
-The `provision` phase includes ignored-file selection (`provisionInspect`), copy admission and worker preparation (`provisionCopyWait`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue. `provisionCopyWait` includes filesystem worker queueing, startup, and eligibility checks before the first authorized mutation; `provisionCopy` covers the remaining copy work and safety checks. Copying runs in a filesystem worker so other sessions remain responsive; the new worktree waits for copying to finish before becoming ready. `provisionCopy` is absent when no file reaches an authorized mutation. Safe copying requests copy-on-write cloning when supported and falls back to ordinary copying otherwise; destination files remain independent of their source. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
+The `provision` phase includes ignored-file selection (`provisionInspect`), copy admission and worker preparation (`provisionCopyWait`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue. `provisionCopyWait` includes filesystem worker queueing, startup, and eligibility checks before the first authorized mutation; `provisionCopy` covers the remaining copy work and safety checks. Copying runs in a filesystem worker so other sessions remain responsive; the new worktree waits for copying to finish before becoming ready. `provisionCopy` starts at the first authorized copy-directory or file admission. Safe copying requests copy-on-write cloning when supported and falls back to ordinary copying otherwise; destination files remain independent of their source. On Linux with procfs and GNU `cp`, selected directories are admitted once and retained by descriptor; batches of up to 128 pinned files are reflinked through private staging while preserving nanosecond timestamps. One small helper runs those batches, so each batch does not fork the Gateway's resident address space. Other systems retain the portable guarded copier. `copyDetails` records the selected copier and fallback reason, admitted source bytes, batch and Gateway-child counts, synchronous spawn time, child wait time, and live-authority check count/time. Source bytes describe selected content, not exclusive disk usage; reflinks can share those bytes. These bounded diagnostics include no file paths. Creation records the provisioned file paths; later recovery snapshots may replace that ledger with file modes and chunk counts. Those snapshot fields describe recovery storage, not whether initial provisioning used a reflink. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
 
 Private Git index copies for template checkouts prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Safety snapshots use Git's read-only status and cached file metadata to identify changes. Clean checkouts reuse the committed tree without building a private snapshot index; changed checkouts hash only selected paths. Hidden index flags do not exclude edits from snapshots.
 
@@ -479,7 +510,11 @@ tracking branches confirmed deleted upstream (unless the fetch explicitly uses
 `--no-prune`), preserving tracking refs required by local symbolic refs or
 worktree HEADs, then fetches missing ref and
 worktree-HEAD objects by ID with commit-graph lookup and automatic maintenance
-disabled. Local branches, tags, and worktree HEADs are never deleted. Repair is
+disabled. Repair negotiates from a physically present commit when available,
+including in isolated transport metadata, to reuse local history. If requested
+objects remain missing, it retries once without negotiation: a resident descendant
+can otherwise hide a missing ancestor. Local branches, tags, and worktree HEADs
+are never deleted. Repair is
 limited to 50,000 refs, 4,096 missing tips, and five minutes; healthy fetches do
 not scan repository health. Managed project refresh retains its isolated,
 URL-pinned transport during recovery.
@@ -594,6 +629,17 @@ OpenClaw exposes these tools only to operator sessions with an actionable Gatewa
 The resulting managed worktree is owned by the session, and every agent run in that session uses its checkout. When the workspace is a repository subdirectory, the worktree is anchored at the repository root and the session runs from the matching subdirectory inside it. Session worktree creation uses the method's `operator.write` scope. Repository checkout/ref hooks and filesystem monitors are always disabled. The `.openclaw/worktree-setup.sh` step runs only for an `operator.admin` caller; retries evaluate the current caller's scope rather than retaining the original caller's permission. `.worktreeinclude` provisioning still applies to every caller. Deleting the session attempts to snapshot and remove its managed worktree, including dirty worktrees and branches with unpushed commits. Hourly cleanup also snapshots session worktrees after 7 idle days, treating recent session activity as worktree activity. Removed worktrees remain restorable from their snapshots as described below.
 
 Reply commands `/new` and `/reset`, and automatic idle resets, start a fresh conversation context while keeping the session's managed worktree, project, and working directory. Plain **New Chat** in the Control UI deliberately leaves the previous worktree through the normal cleanup flow.
+
+If an earlier local publication adopted a conversation into a managed worktree,
+create a linked ordinary conversation to continue in its original workspace.
+Call `sessions.create` with the old conversation's key as `parentSessionKey`, the
+absolute original workspace as `cwd`, `worktree: false`, and
+`emitCommandHooks: false`; leave `key` unset. Continue using the returned key.
+The new conversation starts fresh at that folder under the normal workspace-path
+permissions. The old conversation keeps its history, file links, managed checkout,
+and publication receipts. Recover any pending publication there using its original
+request identity. This also keeps each conversation's historical file references
+associated with the source that produced them.
 
 Archiving a session returns after its archive state and publication are committed, preserving the conversation and worktree binding. After sending the response, the Gateway wakes background maintenance to snapshot and remove the checkout. The response does not wait for Git or the worktree allocation lease. A failed metadata write leaves the checkout untouched. If cleanup cannot finish safely, the session stays archived and its files remain available for a later cleanup pass. Hourly garbage collection also picks up automatically archived sessions. Cleanup holds the session lifecycle mutation only while admitting its registry claim and publishing the removed checkout. Git runs outside that mutation. Unarchiving before cleanup starts keeps the existing checkout; during cleanup, unarchive reports that removal is in progress and asks you to retry after it settles. An incomplete deletion requires recovery of its preserved snapshot before unarchive.
 

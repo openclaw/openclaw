@@ -172,6 +172,18 @@ describe("tunnel child supervisor", () => {
     expect(starts()).toBe(1);
   });
 
+  it.each([
+    ["key-missing", "keys_missing"],
+    ["key-mismatch", "key_mismatch"],
+  ] as const)("reports a refused bound key (%s) and does not restart", async (mode, reason) => {
+    const { supervisor, starts, log } = setup(mode);
+    supervisor.start();
+    await vi.waitFor(() => expect(supervisor.status()).toEqual({ state: "key_refused", reason }));
+    await sleep(200);
+    expect(starts()).toBe(1);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("the Gateway keeps running"));
+  });
+
   it("recovers to running once the binding becomes available again", async () => {
     const { supervisor, starts } = setup("unavailable-until", { unavailableRetryMs: 100 });
     supervisor.start();

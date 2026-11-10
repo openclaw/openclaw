@@ -346,7 +346,6 @@ extension OpenClawSnapshotUITests {
             initialTab: initialTab,
             initialDestination: initialDestination)
         XCTAssertTrue(app.staticTexts["You're connected"].waitForExistence(timeout: 45))
-        print("IOS_RELEASE_CHECKPOINT pairing-connected")
         app.buttons["Go to Chat"].tap()
         return app
     }
@@ -383,43 +382,43 @@ extension OpenClawSnapshotUITests {
         }
 
         let app = XCUIApplication()
-        addUIInterruptionMonitor(withDescription: "Local network access") { alert in
-            guard alert.buttons["Allow"].exists else { return false }
-            alert.buttons["Allow"].tap()
-            return true
-        }
         app.launchArguments += [
             "--openclaw-reset-onboarding",
             "--openclaw-initial-tab",
             initialTab,
             "--openclaw-initial-destination",
             initialDestination,
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
         ]
-        // Temporary pairing incident checkpoints; never include setup credentials or UI contents.
-        print("IOS_RELEASE_CHECKPOINT pairing-launching")
         app.launch()
         self.app = app
-        print("IOS_RELEASE_CHECKPOINT pairing-launched")
 
         XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
         app.buttons["Continue"].tap()
-        app.tap()
-        print("IOS_RELEASE_CHECKPOINT pairing-continued")
+        // Continue deliberately requests Local Network access. Handle the expected
+        // system prompt directly, before the next app interaction can interrupt it.
+        // Later tests on the same simulator retain the authorization and show no prompt.
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = springboard.alerts.firstMatch
+        let localNetwork = alert.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "local network")).firstMatch
+        if localNetwork.waitForExistence(timeout: 8) {
+            let allow = alert.buttons["Allow"]
+            XCTAssertTrue(allow.wait(for: \.isHittable, toEqual: true, timeout: 5))
+            allow.tap()
+            XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
+        }
         XCTAssertTrue(app.buttons["Connect Manually"].waitForExistence(timeout: 8))
         app.buttons["Connect Manually"].tap()
-        print("IOS_RELEASE_CHECKPOINT pairing-manual")
 
         let setupCodeField = app.textFields["Enter setup code"]
         XCTAssertTrue(setupCodeField.waitForExistence(timeout: 5))
-        print("IOS_RELEASE_CHECKPOINT pairing-code-field")
         setupCodeField.tap()
         setupCodeField.press(forDuration: 1)
         XCTAssertTrue(app.menuItems["Paste"].waitForExistence(timeout: 3))
-        print("IOS_RELEASE_CHECKPOINT pairing-paste-menu")
         app.menuItems["Paste"].tap()
-        print("IOS_RELEASE_CHECKPOINT pairing-pasted")
         app.buttons["Apply"].tap()
-        print("IOS_RELEASE_CHECKPOINT pairing-applied")
         return app
     }
 

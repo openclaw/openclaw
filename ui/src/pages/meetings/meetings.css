@@ -27,7 +27,7 @@
 
 .transcripts-layout:not(.transcripts-layout--selected) .transcripts-library {
   width: 100%;
-  max-width: 960px;
+  max-width: 1120px;
   margin-inline: auto;
 }
 
@@ -527,7 +527,7 @@
   }
 
   .transcripts-reader__header h1 {
-    font-size: 22px;
+    font-size: calc(22px * var(--control-ui-text-scale));
   }
 
   /* One row with or without Clear search; a long query scrolls inside its field. */

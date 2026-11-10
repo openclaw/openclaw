@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, createProjection, For, onSettled, Show } from "solid-js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
@@ -35,7 +36,7 @@ type RecentSessionParams = {
   listItem?: boolean;
   icon?: JSX.Element;
 };
-export function renderRecentSession(params: RecentSessionParams) {
+function renderRecentSession(params: RecentSessionParams) {
   return (
     <Show when={params.session.key} keyed>
       {(_key) => renderRecentSessionRow(params)}
@@ -262,7 +263,21 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       >
         {indicators.persistentIndicator}
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__title-row">{marqueeLabel()}</span>
+          <span
+            class="sidebar-recent-session__title-row"
+            onDblClick={(event: MouseEvent) => {
+              if (
+                !host().sidebarSnapshot &&
+                !session().snapshot &&
+                shouldHandleNavigationClick(event)
+              ) {
+                event.preventDefault();
+                void host().sessionOrganizer.renameSession(actionSession());
+              }
+            }}
+          >
+            {marqueeLabel()}
+          </span>
           <span class="sidebar-recent-session__details">
             <Show when={session().channelPresentation}>
               {(channel) => (
@@ -410,6 +425,7 @@ export function renderChildSessionLoadError(host: () => SessionListHost, parentK
 export function renderSessionTree(params: {
   host: SessionListHost;
   session: SidebarRecentSession;
+  display?: CatalogBackingSessionDisplay;
   pinReorder?: boolean;
   listItem?: boolean;
   icon?: JSX.Element;
@@ -456,6 +472,7 @@ export function renderSessionTree(params: {
         host={host()}
         session={session()}
         pinReorder={params.pinReorder}
+        display={params.display}
         listItem={false}
         icon={icon()}
       />

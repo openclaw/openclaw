@@ -164,7 +164,7 @@
   max-width: 100%;
   background: color-mix(in srgb, var(--accent) 2%, var(--bg-elevated));
   box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 4%, transparent);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   display: block;
   overflow-x: auto;
 }
@@ -232,7 +232,7 @@
   gap: 6px;
   width: auto;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .markdown-table__actions button:hover,
@@ -1195,7 +1195,7 @@
   /* CODE_PREVIEW_LINE_COUNT in components/markdown-code-blocks.ts decides how many
      lines the renderer reports as hidden; the clip below must show the same count. */
   --code-block-preview-lines: 7;
-  --code-block-line-height: 18px;
+  --code-block-line-height: calc(18px * var(--control-ui-text-scale));
 
   min-width: 0;
   max-width: 100%;
@@ -1226,7 +1226,7 @@
 }
 
 .code-block-wrapper.is-collapsible:not(.is-expanded) .code-block-wrap {
-  display: none;
+  visibility: hidden;
 }
 
 .code-block-expand {
@@ -1240,7 +1240,7 @@
   background: transparent;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   cursor: var(--cursor-action);
 }
 
@@ -1261,10 +1261,10 @@
   --code-block-icon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
 }
 
-/* The wrap control is offered only once a line measurably overflows, so it never
-   advertises an action that would change nothing. */
+/* Reserve the wrap slot during streaming; hidden controls remain unfocusable. */
 .code-block-wrap {
-  display: none;
+  display: inline-flex;
+  visibility: hidden;
   align-items: center;
   justify-content: center;
   width: 32px;
@@ -1279,7 +1279,7 @@
 
 .code-block-wrapper.has-horizontal-overflow .code-block-wrap,
 .code-block-wrapper.is-wrapped .code-block-wrap {
-  display: inline-flex;
+  visibility: visible;
 }
 
 .code-block-wrap__icon {
@@ -1324,7 +1324,7 @@
 .chat-text :where(pre code) {
   background: none;
   padding: 0;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   white-space: pre;
 }
 
@@ -1384,7 +1384,7 @@
 
 @media (max-width: 640px) {
   .chat-text :where(pre) {
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   .chat-text :where(.markdown-inline-image) {
