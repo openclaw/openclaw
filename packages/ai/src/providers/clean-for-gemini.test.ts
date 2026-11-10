@@ -25,7 +25,7 @@ describe("cleanSchemaForGemini", () => {
     ["first type", { type: ["null", "string", "number"], default: "" }, { ...string, default: "" }],
     ["null-only", { type: ["null"], description: "x" }, { description: "x" }],
     ["empty type", { type: [], title: "Empty" }, { title: "Empty" }],
-    ["integer const", { const: 42, type: "integer" }, { enum: ["42"], type: "integer" }],
+    ["boolean const", { const: true, type: "boolean" }, { type: "boolean" }],
     [
       "empty enum after coercion",
       { type: "integer", enum: [null, undefined, {}] },
@@ -62,16 +62,13 @@ describe("cleanSchemaForGemini", () => {
     ).toStrictEqual(object({ nested }, { required: ["nested"] }));
   });
 
-  it("stringifies nested numeric enums while preserving their number type", () => {
+  it("drops nested numeric enums while preserving their number type", () => {
     const cleaned = cleanSchemaForGemini(
       object({
         outer: { type: "array", items: object({ score: { type: "number", enum: [1, 2] } }) },
       }),
     );
-    expect(cleaned).toHaveProperty("properties.outer.items.properties.score", {
-      type: "number",
-      enum: ["1", "2"],
-    });
+    expect(cleaned).toHaveProperty("properties.outer.items.properties.score", { type: "number" });
   });
 
   it("preserves the type behind a percent-encoded local schema reference", () => {

@@ -604,43 +604,79 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
       return isStringArray(value) ? value : [];
     });
+  const preparedBuildEnv: NodeJS.ProcessEnv = {};
   if (
-    baseEnv.OPENCLAW_E2E_USE_PREBUILT_DIST === "1" &&
     fileURLToPath(import.meta.url) === join(process.cwd(), "scripts/ci-run-node-test-shard.mts")
   ) {
-    const { preparePrebuiltAiPackage, prepareVitestControlUi } =
+    const { prepareE2eVitestRuntime, preparePrebuiltAiPackage, prepareVitestControlUi } =
       await import("./lib/vitest-build-prerequisites.mts");
-    const { matchesVitestCliSelection } = await import("../test/vitest/vitest.pattern-file.ts");
-    const uiSelections = [];
+    const { buildVitestRunPlans } = await import("./test-projects.test-support.mts");
+    // A child build can invalidate inputs already captured by sibling readers.
+    // Finish selected E2E preparation before creating their shared compiler.
     for (const entry of plans) {
-      const selection = entry.kind === "target" ? { includePatterns: [entry.target] } : entry.plan;
-      const childEnv = prepareChildEnv(entry, baseEnv);
-      const code = await preparePrebuiltAiPackage([selection], childEnv);
+      const env = prepareChildEnv(entry, baseEnv);
+      const args = entry.kind === "target" ? [entry.target] : entry.plan.configs;
+      const forwarded = extraArgs(entry);
+      const selected = buildVitestRunPlans(
+        forwarded.length ? [...args, "--", ...forwarded] : args,
+        process.cwd(),
+        undefined,
+        { env },
+      ).filter((plan) => plan.config === "test/vitest/vitest.e2e.config.ts");
+      if (selected.length === 0) {
+        continue;
+      }
+      const { parseCLI } = await import("vitest/node");
+      const { parseVitestExecutionArgs } = await import("./lib/vitest-cli.mts");
+      if (
+        selected.some((plan) =>
+          parseVitestExecutionArgs(
+            [...(plan.watchMode ? [] : ["run"]), ...plan.forwardedArgs],
+            parseCLI,
+          ),
+        )
+      ) {
+        Object.assign(
+          preparedBuildEnv,
+          await prepareE2eVitestRuntime({ ...env, ...preparedBuildEnv }),
+        );
+      }
+    }
+    Object.assign(baseEnv, preparedBuildEnv);
+    if (baseEnv.OPENCLAW_E2E_USE_PREBUILT_DIST === "1") {
+      const { matchesVitestCliSelection } = await import("../test/vitest/vitest.pattern-file.ts");
+      const uiSelections = [];
+      for (const entry of plans) {
+        const selection =
+          entry.kind === "target" ? { includePatterns: [entry.target] } : entry.plan;
+        const childEnv = { ...prepareChildEnv(entry, baseEnv), ...preparedBuildEnv };
+        const code = await preparePrebuiltAiPackage([selection], childEnv);
+        if (code !== 0) {
+          return vitestInfrastructureExitCode(code);
+        }
+        if (childEnv.OPENCLAW_E2E_SKIP_BUILD !== "1") {
+          uiSelections.push({
+            ...selection,
+            matchesFile: (
+              file: string,
+              included: boolean,
+              includePatterns?: readonly string[] | null,
+            ) =>
+              matchesVitestCliSelection(
+                file,
+                included ? [file] : [],
+                extraArgs(entry),
+                "",
+                childEnv,
+                includePatterns,
+              ),
+          });
+        }
+      }
+      const code = await prepareVitestControlUi(uiSelections, baseEnv);
       if (code !== 0) {
         return vitestInfrastructureExitCode(code);
       }
-      if (childEnv.OPENCLAW_E2E_SKIP_BUILD !== "1") {
-        uiSelections.push({
-          ...selection,
-          matchesFile: (
-            file: string,
-            included: boolean,
-            includePatterns?: readonly string[] | null,
-          ) =>
-            matchesVitestCliSelection(
-              file,
-              included ? [file] : [],
-              extraArgs(entry),
-              "",
-              childEnv,
-              includePatterns,
-            ),
-        });
-      }
-    }
-    const code = await prepareVitestControlUi(uiSelections, baseEnv);
-    if (code !== 0) {
-      return vitestInfrastructureExitCode(code);
     }
   }
   // Historical targets use a workflow-owned adapter. Their Node
@@ -695,30 +731,26 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   }
   // Final plan admission owns both compiler and child worker budgets.
   let admittedPlans = plans.map((entry): ShardPlan => {
-    if (entry.kind !== "group" || entry.plan.fallbackMaxWorkers === undefined) {
+    if (entry.kind !== "group") {
       return entry;
     }
-    const fallback = parsePositiveInt(entry.plan.fallbackMaxWorkers, "Fallback worker limit");
-    const minTotalMemoryBytes =
-      entry.plan.minTotalMemoryBytes === undefined
-        ? 0
-        : parsePositiveInt(entry.plan.minTotalMemoryBytes, "Worker memory floor");
-    if (
-      measuredHost &&
-      (concurrency === 1 || exclusive(entry)) &&
-      measuredHost.totalMemoryBytes >= minTotalMemoryBytes
-    ) {
-      return entry;
+    // Successful shared preparation supersedes stale per-group build flags.
+    const env = mergePlanEnv(mergePlanEnv({}, entry.plan.env), preparedBuildEnv);
+    if (entry.plan.fallbackMaxWorkers !== undefined) {
+      const fallback = parsePositiveInt(entry.plan.fallbackMaxWorkers, "Fallback worker limit");
+      const minTotalMemoryBytes =
+        entry.plan.minTotalMemoryBytes === undefined
+          ? 0
+          : parsePositiveInt(entry.plan.minTotalMemoryBytes, "Worker memory floor");
+      if (
+        !measuredHost ||
+        (concurrency !== 1 && !exclusive(entry)) ||
+        measuredHost.totalMemoryBytes < minTotalMemoryBytes
+      ) {
+        env.OPENCLAW_VITEST_MAX_WORKERS = String(fallback);
+      }
     }
-    return {
-      ...entry,
-      plan: {
-        ...entry.plan,
-        env: mergePlanEnv(mergePlanEnv({}, entry.plan.env), {
-          OPENCLAW_VITEST_MAX_WORKERS: String(fallback),
-        }),
-      },
-    };
+    return { ...entry, plan: { ...entry.plan, env } };
   });
   const preparedRuntimeSelections = new Map<ShardPlan, CiTestRuntimeSelection[]>();
   const overlapRequests = admittedPlans.filter(
@@ -938,7 +970,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
               delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
             }
           }
-          Object.assign(childEnv, selection.env);
+          Object.assign(childEnv, selection.env, preparedBuildEnv);
           delete childEnv.OPENCLAW_VITEST_OBSERVATION_DIR;
           if (
             observe &&

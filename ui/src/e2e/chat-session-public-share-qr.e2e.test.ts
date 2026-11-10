@@ -13,7 +13,7 @@ import {
 
 const suite = createSessionManagementE2eSuite();
 const sessionKey = "agent:main:dashboard:619dfdde-5f1b-4f7f-be9c-68ab72f812f8";
-const title = "Recognizable halftone lobster QR for public conversations";
+const title = "Recognizable halftone claw QR for public conversations";
 const owner = { type: "human", id: "owner", label: "Owner" };
 const phase = process.env.OPENCLAW_PUBLIC_SHARE_QR_PHASE ?? "after";
 
@@ -78,8 +78,8 @@ async function expectQrEncodes(qr: Locator, url: string) {
   expect(rendered.width / (size + quiet * 2)).toBeGreaterThanOrEqual(2.5);
 }
 
-async function expectLobster(qr: Locator, page: Page, surface: Locator, url: string, name: string) {
-  const toggle = surface.getByRole("button", { name: "Use lobster QR", exact: true });
+async function expectClaw(qr: Locator, page: Page, surface: Locator, url: string, name: string) {
+  const toggle = surface.getByRole("button", { name: "Use claw QR", exact: true });
   if (name.includes("desktop")) {
     await surface.locator(".chat-pane__sharing-url").focus();
     await page.keyboard.press("Tab");
@@ -89,7 +89,7 @@ async function expectLobster(qr: Locator, page: Page, surface: Locator, url: str
     await toggle.click();
   }
   const image = surface.getByRole("img", {
-    name: "Lobster QR code for the public link",
+    name: "Claw QR code for the public link",
     exact: true,
   });
   await image.waitFor();
@@ -98,7 +98,7 @@ async function expectLobster(qr: Locator, page: Page, surface: Locator, url: str
       await element.decode();
     }
   });
-  const download = surface.getByRole("link", { name: "Download lobster QR" });
+  const download = surface.getByRole("link", { name: "Download claw QR" });
   expect(await download.getAttribute("href")).toBe(await image.getAttribute("src"));
   const frame = await takeControlUiScreenshotFrame(page, surface, [image, download], {
     elements: [image],
@@ -140,7 +140,7 @@ suite.define(() => {
             expect(qrBox!.x).toBeGreaterThanOrEqual(panelBox!.x);
             expect(qrBox!.x + qrBox!.width).toBeLessThanOrEqual(panelBox!.x + panelBox!.width);
           }
-          await expectLobster(
+          await expectClaw(
             panel.getByRole("img", { name: "QR code for the public link", exact: true }),
             page,
             panel,
@@ -182,7 +182,7 @@ suite.define(() => {
             expect(qrBox!.x).toBeGreaterThanOrEqual(0);
             expect(qrBox!.x + qrBox!.width).toBeLessThanOrEqual(390);
           }
-          await expectLobster(
+          await expectClaw(
             sharing.getByRole("img", { name: "QR code for the public link", exact: true }),
             page,
             sharing,

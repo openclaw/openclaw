@@ -118,6 +118,17 @@ WantedBy=default.target
 systemctl --user enable --now openclaw-browser.service
 ```
 
+### Missing shared libraries
+
+`error while loading shared libraries`: the browser binary exists, but the
+host is missing a required runtime library. `openclaw browser doctor` runs
+the local managed executable with `--version` and reports the loader error
+as a failed **Chromium executable** check. Install the named library through
+your distribution's package manager, or use a browser package that includes
+the required dependencies. Downloading Playwright's Chromium alone does not
+install system libraries. The probe does not start a browser or touch its
+profile; ordinary status checks remain passive.
+
 ### Verify the browser works
 
 OpenClaw logs a managed browser as started only after HTTP discovery and a CDP
