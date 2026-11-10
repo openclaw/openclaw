@@ -88,8 +88,8 @@ it.each([
         settled = true;
       },
     );
-    scope.beginClose(new Error("interrupted"));
     await called.promise;
+    scope.beginClose(new Error("interrupted"));
     for (let index = 0; index < 8; index += 1) {
       await Promise.resolve();
     }
