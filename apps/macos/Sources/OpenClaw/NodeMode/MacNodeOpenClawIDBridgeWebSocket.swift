@@ -8,7 +8,9 @@ private final class MacNodeOpenClawIDBridgeWebSocketLifetime: Sendable {
     let upstream: WebSocketTaskBox
     private let canceled = Mutex(false)
 
-    init(upstream: WebSocketTaskBox) { self.upstream = upstream }
+    init(upstream: WebSocketTaskBox) {
+        self.upstream = upstream
+    }
 
     func cancel(code: URLSessionWebSocketTask.CloseCode = .goingAway, reason: Data? = nil) {
         let first = self.canceled.withLock { canceled in
@@ -27,7 +29,9 @@ private actor MacNodeOpenClawIDBridgeWebSocketWriter {
     private var tail: Task<Void, Error>?
     private var closing = false
 
-    init(io: MacNodeOpenClawIDBridgeIO) { self.io = io }
+    init(io: MacNodeOpenClawIDBridgeIO) {
+        self.io = io
+    }
 
     func send(opcode: UInt8, payload: Data) async throws {
         guard !self.closing else { return }
@@ -53,8 +57,10 @@ enum MacNodeOpenClawIDBridgeWebSocket {
     /// The upstream owner must return only after validating tunnel HTTP 101. Never
     /// acknowledge a local upgrade while upstream admission is unknown or rejected.
     static func serve(
-        request: MacNodeOpenClawIDBridgeRequest, reader: MacNodeOpenClawIDBridgeReader,
-        io: MacNodeOpenClawIDBridgeIO, prepare: Prepare) async throws
+        request: MacNodeOpenClawIDBridgeRequest,
+        reader: MacNodeOpenClawIDBridgeReader,
+        io: MacNodeOpenClawIDBridgeIO,
+        prepare: Prepare) async throws
     {
         let response: Data
         do { response = try Codec.upgrade(request) } catch {
@@ -97,11 +103,13 @@ enum MacNodeOpenClawIDBridgeWebSocket {
     }
 
     private static func reject(_ status: Int, io: MacNodeOpenClawIDBridgeIO) async throws {
-        try await io.write(Data("HTTP/1.1 \(status) Upgrade Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".utf8))
+        try await io
+            .write(Data("HTTP/1.1 \(status) Upgrade Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".utf8))
     }
 
     private static func fromWorker(
-        reader: MacNodeOpenClawIDBridgeReader, writer: MacNodeOpenClawIDBridgeWebSocketWriter,
+        reader: MacNodeOpenClawIDBridgeReader,
+        writer: MacNodeOpenClawIDBridgeWebSocketWriter,
         lifetime: MacNodeOpenClawIDBridgeWebSocketLifetime) async throws
     {
         let upstream = lifetime.upstream
@@ -112,7 +120,7 @@ enum MacNodeOpenClawIDBridgeWebSocket {
                 // Validate fragmentation/cumulative size before reading its payload.
                 try messages.validate(header)
                 let key = try await reader.exactly(4)
-                let payload = try Codec.unmask(try await reader.exactly(header.length), key: key)
+                let payload = try await Codec.unmask(reader.exactly(header.length), key: key)
                 guard let event = try messages.consume(header, payload: payload) else { continue }
                 switch event {
                 case let .text(text): try await upstream.send(.string(text))
@@ -124,9 +132,12 @@ enum MacNodeOpenClawIDBridgeWebSocket {
                 case .pong: break
                 case let .close(bytes):
                     try await writer.send(opcode: 8, payload: bytes)
-                    let code = bytes.isEmpty ? 1000 : ((Int(bytes[bytes.startIndex]) << 8) | Int(bytes[bytes.startIndex + 1]))
+                    let code = bytes
+                        .isEmpty ? 1000 : ((Int(bytes[bytes.startIndex]) << 8) | Int(bytes[bytes.startIndex + 1]))
                     let reason = bytes.isEmpty ? nil : Data(bytes.dropFirst(2))
-                    lifetime.cancel(code: URLSessionWebSocketTask.CloseCode(rawValue: code) ?? .normalClosure, reason: reason)
+                    lifetime.cancel(
+                        code: URLSessionWebSocketTask.CloseCode(rawValue: code) ?? .normalClosure,
+                        reason: reason)
                     return
                 }
             }
@@ -141,8 +152,8 @@ enum MacNodeOpenClawIDBridgeWebSocket {
     private static func readHeader(_ reader: MacNodeOpenClawIDBridgeReader) async throws -> Codec.Header {
         var bytes = try await reader.exactly(2)
         let tag = bytes[bytes.startIndex + 1] & 0x7F
-        if tag == 126 { bytes.append(try await reader.exactly(2)) }
-        if tag == 127 { bytes.append(try await reader.exactly(8)) }
+        if tag == 126 { try await bytes.append(reader.exactly(2)) }
+        if tag == 127 { try await bytes.append(reader.exactly(8)) }
         return try Codec.Header.parse(bytes)
     }
 

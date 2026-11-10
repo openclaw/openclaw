@@ -25,7 +25,7 @@ public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
     public func loadOrCreateSeed() throws -> Data {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service, kSecAttrAccount as String: account,
+            kSecAttrService as String: self.service, kSecAttrAccount as String: self.account,
             kSecAttrSynchronizable as String: false,
         ]
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
@@ -60,8 +60,13 @@ public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
 /// Swift-owned W signing material. It is never Codable and has no public seed getter.
 public struct OpenClawIDNodeIdentity: Sendable {
     private let key: Curve25519.Signing.PrivateKey
-    public var peerKey: String { "iroh:" + Self.hex(key.publicKey.rawRepresentation) }
-    public var signingKey: String { "ed25519:" + Self.hex(key.publicKey.rawRepresentation) }
+    public var peerKey: String {
+        "iroh:" + Self.hex(self.key.publicKey.rawRepresentation)
+    }
+
+    public var signingKey: String {
+        "ed25519:" + Self.hex(self.key.publicKey.rawRepresentation)
+    }
 
     /// Resolves the durable identity before any enrollment mail can be sent.
     public static func loadOrCreate(store: any OpenClawIDNodeIdentityStore) async throws -> Self {
@@ -75,15 +80,17 @@ public struct OpenClawIDNodeIdentity: Sendable {
         self.key = try Curve25519.Signing.PrivateKey(rawRepresentation: seed)
     }
 
-    // Module-only native adapter handoff. Never expose this to JSONL, configuration or diagnostics.
+    /// Module-only native adapter handoff. Never expose this to JSONL, configuration or diagnostics.
     func withNativeSeed<T>(_ body: (Data) async throws -> T) async rethrows -> T {
         // CryptoKit can share its key storage with rawRepresentation; wipe only an owned copy.
-        var seed = key.rawRepresentation.withUnsafeBytes { Data(bytes: $0.baseAddress!, count: $0.count) }
+        var seed = self.key.rawRepresentation.withUnsafeBytes { Data(bytes: $0.baseAddress!, count: $0.count) }
         defer { seed.resetBytes(in: 0..<seed.count) }
         return try await body(seed)
     }
 
-    func sign(_ input: Data) throws -> Data { try key.signature(for: input) }
+    func sign(_ input: Data) throws -> Data {
+        try self.key.signature(for: input)
+    }
 
     static func hex(_ bytes: some Sequence<UInt8>) -> String {
         bytes.map { String(format: "%02x", $0) }.joined()

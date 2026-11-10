@@ -6,8 +6,8 @@ import Testing
 #if OPENCLAW_IROH_NATIVE
 import OpenClawIroh
 
-@Suite struct OpenClawIDNodeNativeTransportTests {
-    @Test func canceledAdmissionWaitDoesNotCancelLifetimeObservation() async throws {
+struct OpenClawIDNodeNativeTransportTests {
+    @Test func `canceled admission wait does not cancel lifetime observation`() async throws {
         let native = NativeCloseTestConnection(noHandle: .init())
         let connection = OpenClawIDNodeNativeConnection(native: native)
         // Like the tunnel's admission race, but no wall clock or real sleeps.
@@ -29,7 +29,10 @@ import OpenClawIroh
 /// Models UniFFI's uncancellable Rust future; only a real close completes it.
 private final class NativeCloseTestConnection: OpenClawIroh.Connection, @unchecked Sendable {
     let state = NativeCloseTestState()
-    override func closed() async -> OpenClawIroh.CloseInfo { await self.state.wait() }
+    override func closed() async -> OpenClawIroh.CloseInfo {
+        await self.state.wait()
+    }
+
     override func close(code: Int64, reason: Data) throws {
         Task { await self.state.complete(.init(kind: .locallyClosed, code: nil, reason: "")) }
     }
@@ -51,12 +54,14 @@ private actor NativeCloseTestState {
         self.result = result
         let pending = self.pending
         self.pending.removeAll()
-        for waiter in pending { waiter.resume(returning: result) }
+        for waiter in pending {
+            waiter.resume(returning: result)
+        }
     }
 }
 #else
-@Suite struct OpenClawIDNodeNativeTransportTests {
-    @Test func unpackagedTransportFailsBeforeNativeAccess() async throws {
+struct OpenClawIDNodeNativeTransportTests {
+    @Test func `unpackaged transport fails before native access`() async throws {
         let identity = try OpenClawIDNodeIdentity(seed: Data(repeating: 7, count: 32))
         let relay = try #require(URL(string: "https://relay.invalid"))
         await #expect(throws: OpenClawIDNodeNativePackagingError.notPackaged) {

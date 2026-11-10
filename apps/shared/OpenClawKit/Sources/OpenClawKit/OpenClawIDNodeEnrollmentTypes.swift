@@ -23,7 +23,9 @@ public struct OpenClawIDNodeEnrollmentDescription: Sendable, Equatable {
             guard list.count <= 64, Set(list.map { Data($0.utf8) }).count == list.count else {
                 throw OpenClawIDNodeEnrollmentError.malformed
             }
-            for item in list { try Self.validateText(item, maximum: 128) }
+            for item in list {
+                try Self.validateText(item, maximum: 128)
+            }
         }
         self.displayName = displayName
         self.platform = platform
@@ -32,8 +34,12 @@ public struct OpenClawIDNodeEnrollmentDescription: Sendable, Equatable {
     }
 
     var json: OpenClawIDCanonicalJSON {
-        .object(["display_name": .string(displayName), "platform": .string(platform),
-                 "commands": .array(commands.map { .string($0) }), "caps": .array(caps.map { .string($0) })])
+        .object([
+            "display_name": .string(self.displayName),
+            "platform": .string(self.platform),
+            "commands": .array(self.commands.map { .string($0) }),
+            "caps": .array(self.caps.map { .string($0) }),
+        ])
     }
 
     private static func validateText(_ value: String, maximum: Int) throws {
@@ -52,11 +58,13 @@ public struct OpenClawIDNodeEnrollmentLink: Sendable {
     public let relayURL: URL
     private var secret: Data
 
-    // Erase the owned invite bytes once the signed redemption is prepared. Swift may retain COW copies;
-    // callers must also discard their pasted link, and no zeroization of the caller's String is claimed.
+    /// Erase the owned invite bytes once the signed redemption is prepared. Swift may retain COW copies;
+    /// callers must also discard their pasted link, and no zeroization of the caller's String is claimed.
     mutating func consumeSecret<T>(_ body: (Data) throws -> T) rethrows -> T {
-        defer { secret.resetBytes(in: 0..<secret.count); secret.removeAll(keepingCapacity: false) }
-        return try body(secret)
+        defer { secret.resetBytes(in: 0..<secret.count)
+            secret.removeAll(keepingCapacity: false)
+        }
+        return try body(self.secret)
     }
 
     /// Strictly decodes the protocol's five-field link, rejecting duplicate and unknown fields.
@@ -104,7 +112,8 @@ public struct OpenClawIDNodeEnrollmentLink: Sendable {
     }
 
     static func validHostname(_ value: String) -> Bool {
-        value.utf16.count <= 253 && matches(value,
+        value.utf16.count <= 253 && self.matches(
+            value,
             "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?::[0-9]{1,5})?$")
     }
 
@@ -113,8 +122,10 @@ public struct OpenClawIDNodeEnrollmentLink: Sendable {
               !text.unicodeScalars.contains(where: { $0.value <= 32 || $0.value == 127 }),
               let parts = URLComponents(string: text), let host = parts.host, !host.isEmpty,
               parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
-              parts.scheme == "https" || (parts.scheme == "http" && ["localhost", "127.0.0.1", "[::1]", "::1"].contains(host)),
-              !originOnly || parts.path.isEmpty || parts.path == "/", let url = parts.url
+              parts
+                  .scheme == "https" ||
+                  (parts.scheme == "http" && ["localhost", "127.0.0.1", "[::1]", "::1"].contains(host)),
+                  !originOnly || parts.path.isEmpty || parts.path == "/", let url = parts.url
         else { throw OpenClawIDNodeEnrollmentError.invalidLink }
         return url
     }

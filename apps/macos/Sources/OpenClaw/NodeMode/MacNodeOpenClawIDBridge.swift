@@ -14,7 +14,10 @@ actor MacNodeOpenClawIDBridge {
 
     nonisolated let socketPath: String
     /// Existing Bun transfer and worker endpoint owners already understand ws+unix.
-    nonisolated var gatewayURL: String { "ws+unix:\(self.socketPath):/" }
+    nonisolated var gatewayURL: String {
+        "ws+unix:\(self.socketPath):/"
+    }
+
     private let directory: String
     private let server: LocalSocketServer
     private let tunnel: OpenClawIDNodeTunnel
@@ -68,7 +71,9 @@ actor MacNodeOpenClawIDBridge {
 
     /// Idempotently drains accepted handlers before deleting only this route's directory.
     func shutdown() async {
-        if let stopping = self.stopping { await stopping.value; return }
+        if let stopping = self.stopping { await stopping.value
+            return
+        }
         let server = self.server
         let directory = self.directory
         let stopping = Task {
