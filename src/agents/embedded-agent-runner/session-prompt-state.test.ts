@@ -183,6 +183,41 @@ describe("system prompt series", () => {
     expect(temporal.update?.content).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
+  it("keeps withheld continuation workspace files instead of announcing them removed", () => {
+    const head =
+      "Opening instructions.\n## Workspace Files (injected)\nUser-editable; OpenClaw loads below as Project Context.\n";
+    const projectContext =
+      "# Project Context\nLoaded project context:\n## /workspace/AGENTS.md\n# AGENTS\n## Rules\nBe brief.\n";
+    const withFiles = (day: string) =>
+      `${head}${projectContext}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Temporal Context\n${day}`;
+    const withheld = (day: string) =>
+      `${head}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Temporal Context\n${day}`;
+    const continuation = (systemPrompt: string, retainProjectContext?: boolean) =>
+      prepareSessionSystemPrompt({
+        state: fixture.state,
+        routeKey,
+        systemPrompt,
+        entries: [],
+        retainProjectContext,
+      });
+
+    project(withFiles("day-1"));
+    const skipped = continuation(withheld("day-1"), true);
+    expect(skipped.update).toBeUndefined();
+    skipped.commit();
+
+    const nextDay = continuation(withheld("day-2"), true);
+    expect(nextDay.update?.content).toBe(`${updateHeading}## Temporal Context\nday-2`);
+    nextDay.commit();
+    // Redelivering unchanged files after the skip window is not a prompt change.
+    expect(project(withFiles("day-2")).update).toBeUndefined();
+
+    // An explicit removal, such as contextInjection "never", is still announced.
+    const removed = continuation(withheld("day-2"));
+    expect(removed.update?.content).toContain("## /workspace/AGENTS.md\n(removed)");
+    expect(removed.update?.content).toContain("## Rules\n(removed)");
+  });
+
   it("preserves large prompt revisions, including distinct lone surrogates", () => {
     const stable = "## Stable\n" + "Keep these instructions.\n".repeat(100);
     const first = `${stable}## Changed\n\ud800`;

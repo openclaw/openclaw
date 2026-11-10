@@ -178,6 +178,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     contextFiles,
     bootstrapInjectionStats,
     shouldRecordCompletedBootstrapTurn,
+    // Withheld for continuation, not removed: a pinned prompt series still carries the files.
+    workspaceContextWithheld: isContinuationTurn,
     workspaceNotes,
   };
 }

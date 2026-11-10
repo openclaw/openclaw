@@ -508,6 +508,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     runtimeInfo: runtimePrompt.runtimeInfo,
     systemPromptReport,
     systemPromptText: attemptSystemPrompt.systemPrompt,
+    workspaceContextWithheld: params.bootstrap.workspaceContextWithheld,
     // Current run facts belong beside their turn, not ahead of all prior history.
     get runtimeContextFragments(): RuntimeContextFragment[] {
       const fragments = [

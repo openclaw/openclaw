@@ -1,5 +1,8 @@
 /** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
-import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
@@ -270,6 +273,26 @@ export function beginSessionSystemPrompt(params: {
   );
 }
 
+const PROJECT_CONTEXT_HEADING = "\n# Project Context\n";
+
+/**
+ * A continuation-skip turn withholds workspace files that the pinned prefix still carries.
+ * Reuse the pinned block so the delta does not announce those instructions as removed.
+ */
+function retainPinnedProjectContext(pinned: string, current: string): string {
+  const pinnedBoundary = pinned.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+  const currentBoundary = current.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+  if (pinnedBoundary < 0 || currentBoundary < 0) {
+    return current;
+  }
+  const start = pinned.slice(0, pinnedBoundary).indexOf(PROJECT_CONTEXT_HEADING);
+  if (start < 0 || current.slice(0, currentBoundary).includes(PROJECT_CONTEXT_HEADING)) {
+    return current;
+  }
+  const block = pinned.slice(start + 1, pinnedBoundary);
+  return current.slice(0, currentBoundary) + block + current.slice(currentBoundary);
+}
+
 function promptSections(text: string): Map<string, string> {
   const sections = new Map<string, string>();
   for (const section of text.split(/(?=^## )/m)) {
@@ -304,9 +327,11 @@ export function prepareSessionSystemPrompt(params: {
   systemPrompt: string;
   entries: SessionEntry[];
   historyBoundaryCount?: number;
+  /** The attempt deliberately withheld workspace files already delivered to this series. */
+  retainProjectContext?: boolean;
 }) {
   const { permissionNotice, systemPrompt } = extractAttemptPermissionNotice(params.systemPrompt);
-  const renderedPrefix = shareSystemPromptPrefix(systemPrompt);
+  const freshPrefix = shareSystemPromptPrefix(systemPrompt);
   const historyId = resolvePromptHistoryId(params);
   const markerIndex = params.entries.findLastIndex(
     (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
@@ -360,6 +385,10 @@ export function prepareSessionSystemPrompt(params: {
         : afterCheckpoint.some((later) => later.type === "model_change")
           ? "restarted:model-change"
           : `restarted:${changedPromptRoutePart(previous.routeKey, params.routeKey)}`;
+  const renderedPrefix =
+    params.retainProjectContext && !restart && series
+      ? shareSystemPromptPrefix(retainPinnedProjectContext(series.renderedPrefix, freshPrefix))
+      : freshPrefix;
   const sections =
     !restart && series && series.renderedPrefix !== renderedPrefix
       ? promptDelta(
