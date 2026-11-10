@@ -37,6 +37,7 @@ beforeEach(() => {
           modelIdNormalization: {
             providers: { openai: { aliases: { "private-manifest-alias": "gpt-test" } } },
           },
+          modelCatalog: { providers: { openai: { defaultUtilityModel: "gpt-test", models: [] } } },
         },
       ],
     }),
@@ -127,6 +128,54 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
       unsubscribe();
       await harness.observer.disposeAsync();
       releaseAgentRunContext("run-1", owner);
+    }
+  },
+);
+
+it.each([
+  { name: "provider default", utilityModel: undefined, agentUtilityModel: undefined, warnings: 0 },
+  {
+    name: "configured fallback",
+    utilityModel: { fallbacks: ["openai/gpt-recovery"] },
+    agentUtilityModel: undefined,
+    warnings: 1,
+  },
+  {
+    name: "per-agent model",
+    utilityModel: undefined,
+    agentUtilityModel: "openai/gpt-test",
+    warnings: 1,
+  },
+])(
+  "only posts a conversation warning for explicit utility settings: $name",
+  async ({ utilityModel, agentUtilityModel, warnings }) => {
+    const notices: AgentEventPayload[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.stream === "notice") {
+        notices.push(evt);
+      }
+    });
+    const prepareModel = vi.fn(async () => {
+      throw new Error("Synthetic utility model failure");
+    });
+    const harness = createHarness({
+      prepareModel,
+      config: {
+        agents: {
+          defaults: { model: "openai/gpt-main", utilityModel },
+          entries: { main: { utilityModel: agentUtilityModel } },
+        },
+      },
+    });
+    try {
+      await startAndAddToolNotes(harness.observer);
+      await advance(24_000);
+      expect(prepareModel).toHaveBeenCalledTimes(2);
+      expect(notices).toHaveLength(warnings);
+      await advance(60_000);
+      expect(prepareModel).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
     }
   },
 );
@@ -264,4 +313,30 @@ it("aborts stuck completions at the cap and disables the run after two failures"
   await advance(60_000);
   expect(completeModel).toHaveBeenCalledTimes(2);
   expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
+});
+
+it("budgets one model call per configured utility candidate", async () => {
+  const completeModel = completionAfter();
+  const request = createSessionObserverCompletion({
+    getConfig: () => ({
+      agents: {
+        defaults: {
+          utilityModel: { primary: "openai/gpt-test", fallbacks: ["anthropic/claude-haiku-5-5"] },
+        },
+      },
+    }),
+    prepareModel: vi.fn(async () => ({ ...preparedModel(), config: {} })),
+    completeModel,
+    isCurrent: () => true,
+  });
+  const settled = request(observerState(), []).catch((error: unknown) => error);
+  await advance(29_999);
+  const signal = completeModel.mock.calls[0]?.[0].abortSignal;
+  expect(signal?.aborted).toBe(false);
+  // The primary used its own call budget; the configured fallback still needs a turn.
+  await advance(1);
+  expect(signal?.aborted).toBe(false);
+  await advance(30_000);
+  expect(signal?.aborted).toBe(true);
+  await expect(settled).resolves.toBeInstanceOf(Error);
 });

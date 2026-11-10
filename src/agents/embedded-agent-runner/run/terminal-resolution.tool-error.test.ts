@@ -21,7 +21,7 @@ vi.mock("./auth-profile-success.js", () => ({
 
 it.each([
   { output: "native", denialFirst: true },
-  { output: "native", denialFirst: false },
+  { output: "native", denialFirst: false, providerFailure: "Usage limit; try again at noon." },
   { output: "commentary" },
   { output: "toolUse" },
   { output: "delegated" },
@@ -29,7 +29,7 @@ it.each([
   { output: "silent" },
 ])(
   "delivers the terminal denied-exec outcome (output=$output, denialFirst=$denialFirst)",
-  async ({ output, denialFirst = true }) => {
+  async ({ output, denialFirst = true, providerFailure }) => {
     const commentary = output === "commentary" ? "I will check the command and file." : undefined;
     const toolCalls = toolAssistant(["denied", "bash"], ["sibling", "read"]);
     if (commentary) {
@@ -39,9 +39,12 @@ it.each([
       makeTextToolResult("denied", "bash", "Execution denied.", true, 0),
       makeTextToolResult("sibling", "read", "File contents.", false, 0),
     ];
-    const answered = output === "visible" || output === "silent";
-    const answerText =
-      output === "silent" ? "NO_REPLY" : "The command was denied; the file was read successfully.";
+    const silent = output === "silent";
+    const answered = output === "visible" || silent;
+    const answerText = silent
+      ? "NO_REPLY"
+      : "The command was denied; the file was read successfully.";
+    const warningText = `⚠️ Bash ${providerFailure ? "failed" : "blocked"}`;
     const assistant = answered
       ? textAssistant(answerText)
       : commentary
@@ -53,6 +56,9 @@ it.each([
       assistant,
       attemptOverrides: {
         assistantTexts: answered ? [answerText] : commentary ? [commentary] : [],
+        terminal: providerFailure
+          ? { kind: "failed", source: "prompt", error: providerFailure }
+          : { kind: "ok" },
         agentHarnessResultClassification: output === "native" ? "empty" : undefined,
         acceptedSessionSpawns:
           output === "delegated"
@@ -61,7 +67,7 @@ it.each([
         lastToolError: {
           toolName: "bash",
           error: "codex native tool blocked",
-          executionStarted: false,
+          executionStarted: Boolean(providerFailure),
           mutatingAction: false,
         },
         toolMetas: [
@@ -80,13 +86,9 @@ it.each([
       },
     });
     input.prepared = await prepareAttempt({
-      runParams: input.runParams,
-      attempt: input.attempt,
+      ...input,
       currentAttemptCompletedAssistant: assistant,
-      terminalState: input.terminalState,
     });
-
-    const failureWarningText = input.prepared.payloads?.find((payload) => payload.isError)?.text;
     if (output === "native" || output === "commentary") {
       expect(
         resolveSettledTurnFinalizationRequest({
@@ -99,27 +101,25 @@ it.each([
       ).toBeNull();
     }
     const resolved = await resolveEmbeddedRunTerminal(input);
-
     expectComplete(resolved);
+    const { payloads } = resolved.result;
     expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
     expect(classifyAgentExecResult(resolved.result).status).toBe(answered ? "ok" : "error");
     if (answered) {
       expect(resolved.result.meta.error).toBeUndefined();
-      if (output === "silent") {
+      expect(payloads?.map(({ text }) => text)).toEqual(silent ? undefined : [answerText]);
+      if (silent) {
         expect(resolved.result.meta.terminalReply).toEqual({ disposition: "silent" });
-        expect(resolved.result.payloads).toBeUndefined();
-      } else {
-        expect(resolved.result.payloads?.map((payload) => payload.text)).toEqual([answerText]);
       }
     } else {
-      expect(failureWarningText).toContain("blocked");
-      expect(resolved.result.payloads).toMatchObject([{ text: failureWarningText, isError: true }]);
+      const expected = [providerFailure && `⚠️ ${providerFailure}`, warningText].filter(Boolean);
+      expect(payloads).toMatchObject(expected.map((text) => ({ text, isError: true })));
       if (output === "delegated") {
         expect(resolved.result.meta.error).toBeUndefined();
       } else {
         expect(resolved.result.meta.error).toMatchObject({
           kind: "incomplete_turn",
-          message: failureWarningText,
+          message: providerFailure ?? warningText,
         });
         expect(resolved.result.meta.stopReason).toBe("error");
       }

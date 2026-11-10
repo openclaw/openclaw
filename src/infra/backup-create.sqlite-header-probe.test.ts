@@ -3,10 +3,30 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { shortenHomePath } from "../utils.js";
 import { createBackupArchive } from "./backup-create.js";
 import { probeSqliteDatabaseHeaders } from "./sqlite-header-probe.js";
+import { injectHeaderReadFailure } from "./sqlite-header-probe.test-support.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+it("refuses capture with the busy path and errno before publishing or changing the source", async () => {
+  await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+    const candidate = state.statePath("unreadable-candidate.db");
+    await fs.writeFile(candidate, "retained source bytes");
+    await injectHeaderReadFailure(state.root, candidate, "EBUSY", 100);
+    const output = state.path("backups");
+    await fs.mkdir(output);
+    await expect(createBackupArchive({ output, includeWorkspace: false })).rejects.toThrow(
+      new RegExp(`${shortenHomePath(candidate).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*EBUSY`),
+    );
+    expect(await fs.readdir(output)).toEqual([]);
+    expect(await fs.readFile(candidate, "utf8")).toBe("retained source bytes");
+  });
+});
 
 it("probes a batch through a declared worker using the current runtime without eval", async () => {
   await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {

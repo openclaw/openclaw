@@ -80,7 +80,7 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
       }
       return Math.ceil(remaining);
     };
-    const run = async (args: string[], input?: string) => {
+    const run = async (args: string[], input?: string, allowNegotiationFailure = false) => {
       const outcome = await params.run(
         [
           "-c",
@@ -107,7 +107,8 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
       assertCurrent();
       if (
         outcome.termination !== "exit" ||
-        outcome.code !== 0 ||
+        (outcome.code !== 0 &&
+          !(allowNegotiationFailure && (outcome.code === 1 || outcome.code === 128))) ||
         outcome.stdoutTruncatedBytes ||
         outcome.outputLimitExceeded
       ) {
@@ -213,29 +214,39 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
       throw new Error(`repair exceeds ${MAX_MISSING_TIPS} missing ref tips`);
     }
     if (missing.length) {
+      const negotiationTip = /^([a-f0-9]+) commit$/m.exec(objects)?.[1];
       const partial =
         (
           await run(["config", "--type=bool", "--default=false", "--get", "remote.origin.promisor"])
         ).trim() === "true";
       // No ref updates or FETCH_HEAD: avoid connectivity walking the very refs being repaired.
+      const fetchArgs = [
+        "--no-auto-maintenance",
+        "--no-tags",
+        "--no-prune",
+        "--no-prune-tags",
+        "--no-write-fetch-head",
+        "--no-recurse-submodules",
+        ...(partial ? ["--filter=blob:none"] : []),
+        "--stdin",
+        "--",
+        params.remote,
+      ];
+      const input = `${missing.join("\n")}\n`;
       await run(
-        [
-          "-c",
-          "fetch.negotiationAlgorithm=noop",
-          "fetch",
-          "--no-auto-maintenance",
-          "--no-tags",
-          "--no-prune",
-          "--no-prune-tags",
-          "--no-write-fetch-head",
-          "--no-recurse-submodules",
-          ...(partial ? ["--filter=blob:none"] : []),
-          "--stdin",
-          "--",
-          params.remote,
-        ],
-        `${missing.join("\n")}\n`,
+        // Repair can run in ref-less transport metadata sharing this object store.
+        ["fetch", ...(negotiationTip ? [`--negotiation-tip=${negotiationTip}`] : []), ...fetchArgs],
+        input,
+        true,
       );
+      // A resident descendant can hide a missing ancestor from negotiation.
+      if (
+        (await run(["cat-file", "--batch-check=%(objectname) %(objecttype)"], input)).includes(
+          " missing",
+        )
+      ) {
+        await run(["-c", "fetch.negotiationAlgorithm=noop", "fetch", ...fetchArgs], input);
+      }
     }
     assertCurrent();
     const retried = await params.retry();

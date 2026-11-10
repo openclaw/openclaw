@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 
 const mediaMetadataPlugins = vi.hoisted(() => {
   const pdf = { pdf: { textExtraction: "MiniMax-M2.7", image: false } };
@@ -76,7 +76,7 @@ describe("media defaults", () => {
       "hook-only",
       "a-tie",
       "z-tie",
-      "google",
+      "gemini",
       "google",
     ]);
   });

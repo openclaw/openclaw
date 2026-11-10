@@ -1,17 +1,20 @@
 // Shared selection over prepared provider metadata. Keep runtime registration
 // out of manifest/default lookups and preserve the runner's lazy defaults load.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import {
+  getMediaProviderFromRegistry,
+  normalizeMediaProviderKey,
+} from "../../packages/media-understanding-common/src/provider-id.js";
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
-import { getMediaUnderstandingProvider } from "./provider-registry.js";
-import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
+import type { MediaUnderstandingCapability } from "./types.js";
 
 export function resolveDefaultMediaModelFromRegistry(params: {
   providerId: string;
   capability: MediaUnderstandingCapability;
   providerRegistry: Map<string, MediaUnderstandingProvider>;
 }): string | undefined {
-  const provider = getMediaUnderstandingProvider(params.providerId, params.providerRegistry);
+  const provider = getMediaProviderFromRegistry(params.providerId, params.providerRegistry);
   return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
 }
 
@@ -20,22 +23,22 @@ export function resolveAutoMediaKeyProvidersFromRegistry(params: {
   providerRegistry: Map<string, MediaUnderstandingProvider>;
 }): string[] {
   /* oxlint-disable unicorn/no-array-sort -- This function only sorts its private flatMap result. */
-  return [...params.providerRegistry.values()]
+  return [...params.providerRegistry.entries()]
     .filter(
-      (provider) =>
+      ([, provider]) =>
         provider.capabilities?.includes(params.capability) ??
         providerSupportsCapability(provider, params.capability),
     )
-    .flatMap((provider) => {
+    .flatMap(([providerId, provider]) => {
       const priority = provider.autoPriority?.[params.capability];
       return typeof priority === "number" && Number.isFinite(priority)
-        ? [{ provider, priority }]
+        ? [{ providerId, priority }]
         : [];
     })
     .sort(
       (left, right) =>
-        left.priority - right.priority || left.provider.id.localeCompare(right.provider.id),
+        left.priority - right.priority || left.providerId.localeCompare(right.providerId),
     )
-    .map((entry) => normalizeMediaProviderId(entry.provider.id))
+    .map((entry) => normalizeMediaProviderKey(entry.providerId))
     .filter(Boolean);
 }

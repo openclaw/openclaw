@@ -100,6 +100,8 @@ retention per projection. The estimate counts history identities, current row
 references and cached row/fact encodings, serialized array buffers, selection and
 partition entries, query keys, and view overhead. Shared current row encodings are
 counted once per projection, while packed replies are charged per view. Selection
+vectors charge eight bytes per reference to an upstream-owned entry pair;
+facet and map records retain a larger per-record estimate. Selection
 refreshes remove superseded filtered partitions and their byte charges together;
 unchanged partitions remain reusable. This accounting does not depend on garbage
 collection. This is a
@@ -658,6 +660,9 @@ deduplicated by resolved session and run ID. While the `system.run` invocation
 that started the run still waits for its result, the Gateway holds the finished
 notification: the caller receives the output inline, and the notification is queued
 only if that invocation then fails (timeout, cancellation or disconnect). A
+started, finished, or denied event that arrives after the caller already received
+a successful result inline produces no notification; a terminal event consumes
+the retained authorization. A
 heartbeat wake is requested only after a system event is queued.
 
 Node event delivery is best-effort, not a durable completion ledger.

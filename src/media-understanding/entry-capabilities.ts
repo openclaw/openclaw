@@ -1,4 +1,4 @@
-import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import { getMediaProviderFromRegistry } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import type {
   MediaUnderstandingCapability,
@@ -33,11 +33,11 @@ export function resolveEffectiveMediaEntryCapabilities(params: {
   if ((params.entry.type ?? (params.entry.command ? "cli" : "provider")) === "cli") {
     return undefined;
   }
-  const providerId = normalizeMediaProviderId(params.entry.provider ?? "");
+  const providerId = params.entry.provider?.trim();
   if (!providerId) {
     return undefined;
   }
-  const provider = params.providerRegistry.get(providerId);
+  const provider = getMediaProviderFromRegistry(providerId, params.providerRegistry);
   return provider?.sharedEntryCapabilities === undefined
     ? provider?.capabilities
     : provider.sharedEntryCapabilities.filter((capability) =>

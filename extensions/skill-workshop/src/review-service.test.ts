@@ -38,6 +38,9 @@ it("runs daily maintenance once per agent as a service job that a stop waits for
   const api = createTestPluginApi({ id: "skill-workshop", runtime, on, registerService });
   registerSkillWorkshopReview(api);
   const service = registerService.mock.calls.find(([entry]) => entry.apiVersion === 2)?.[0];
+  if (service?.apiVersion !== 2) {
+    throw new Error("Expected service API version 2");
+  }
   const agentEnd = on.mock.calls.find(([name]) => name === "agent_end")?.[1] as Hook | undefined;
   const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler("fake-timers"));
   const ctx = { config: {}, stateDir: "/tmp/skill-workshop-test", logger: api.logger, scheduler };

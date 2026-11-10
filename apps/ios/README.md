@@ -11,6 +11,7 @@ OpenClaw iOS is the officially released iPhone app. It connects to an OpenClaw G
 ## Support Notes
 
 - UI and onboarding changes ship through normal app releases.
+- The native agent picker, agent list, and chat toolbar show configured agent images. Missing or unreadable images fall back to the agent's emoji or initials. Images use bounded inline data or authenticated Gateway avatar routes.
 - Upgrade migrations support data written by releases shipped on or after July 1, 2026. Earlier UserDefaults gateway locations are no longer imported; reconnect from Gateway settings if needed. Push registrations without a relay profile are refreshed through normal registration.
 - Connections use the current `openclaw-ios` client identity without pre-rename retries or undocumented legacy client-ID overrides. Talk credentials come from the Gateway's configuration; local provider keys whose writer retired before July are no longer read.
 - Some node commands require foreground access because of iOS platform limits.
@@ -24,6 +25,28 @@ Onboarding names the device from its iOS device idiom, so an iPad keeps iPad wor
 - Navigation uses the root view's available width and size classes, not the device type or orientation. Regular width and height with at least 800pt available default to a persistent sidebar (300pt sidebar plus at least 500pt detail), including expanded iPhone Duo windows. Compact space and accessibility text sizes use a drawer. The sidebar grows only to 320pt.
 - Hiding the persistent sidebar is remembered while the window narrows and widens. Entering a compact window closes the drawer; keyboard appearance does not change navigation mode.
 - The detail view stays mounted across navigation layout changes. In regular width and height, native Chat messages, composer, and progress content use a centered column capped at 760pt within the remaining detail space. Assistant answers, including streaming output, use this shared column instead of a nested 560pt cap. Detail-pane margins grow from 12pt to 24pt with available width. Compact space, including narrow iPad windows, uses compact chat spacing. User bubbles retain their 560pt maximum.
+
+## Talk microphone mute
+
+During Talk, use the microphone button in the Talk activity strip to mute or
+unmute input without ending the call, canceling submitted work, or stopping
+reply audio. The crossed-out microphone uses the composer's symbol size and
+weight, with a 44-point tap target: gray while input is on, orange while muted.
+While Talk is active, the composer's dictation/voice-note microphone is hidden;
+it returns when Talk ends. The mute button stays in the Talk activity strip.
+A muted label and VoiceOver state identify when input is off. An idle muted
+realtime session shows "Connected (Realtime)" instead of "Listening (Realtime)";
+working, speaking, connection, and error statuses remain visible.
+The choice survives Talk restarts until you unmute or restart the app;
+standalone push-to-talk remains available after ending Talk.
+
+Native Talk stops audio input immediately and lets already-captured speech finish
+transcription before submitting it. If recognition errors or does not finish within
+two seconds, it submits the latest partial transcript. A quick unmute takes effect
+when that pending native turn finishes. Ending Talk discards pending recognition.
+Realtime relay sends silence, and WebRTC disables only the outgoing audio
+track. Realtime capture stays open, so the iOS microphone indicator may remain
+visible while muted.
 
 ## Exact Xcode Manual Deploy Flow
 
@@ -94,6 +117,15 @@ watchOS 27 SDK; the app's deployment target remains watchOS 11. See the
 [native Watch module README](../shared/OpenClawWatchRTC/README.md) for supported
 architectures, build output locations, and dependency notices.
 
+Run app tests on a simulator from the repo root with `pnpm ios:test`. With no
+arguments it runs the `OpenClaw` scheme (`OpenClawTests` and
+`OpenClawLogicTests`). Pass suite names (`pnpm ios:test TalkModeManagerTests`)
+or `Target/Suite[/test]` selectors to run fewer; a name that matches no test
+fails the run. `OpenClawUITests` selectors run through their own scheme. Set
+`IOS_SIM` to a simulator name or UDID to choose the device. The command prints
+failures and counts; the full log and `.xcresult` stay in
+`apps/ios/build/TestResults`.
+
 Run `OpenClawWatchTests` through the `OpenClawWatchApp` scheme for configuration,
 call lifecycle, and native codec coverage. These tests and signed simulator
 builds do not prove a real Watch microphone/speaker route, background audio,
@@ -102,6 +134,38 @@ A native macOS provider roundtrip is interoperability evidence, not Watch
 hardware proof. Validate those behaviors separately through a physical Watch's
 normal **Enable Standalone Voice → Talk on Watch → Start** flow; see
 [Watch setup and limits](https://docs.openclaw.ai/platforms/ios#standalone-voice).
+
+## Share extension UI qualification
+
+Use a dedicated, task-owned simulator with sample Photos and a deliberately
+selected isolated session. Never use an operator Gateway or daily-use simulator.
+`OPENCLAW_IOS_SHARE_PROOF` is test-only: unset skips the three integration tests,
+`wire` or `gateway` selects that mode, and an unrecognized value fails. The other
+recognized mode skips; the ordinary unpaired test skips while the flag is set.
+
+Prepare owned copies of the fixtures and Gateway recipe from the
+[qualification artifacts](https://github.com/openclaw/openclaw/pull/191514#issuecomment-6596234392),
+recording any checkout/hold-path adaptations and hashes. For `wire`, start
+`node share-wire-fixture.cjs` on `127.0.0.1:19876` and manually prepare the Share
+relay for that fixture. For `gateway`, start `node share-provider-fixture.cjs` and
+the isolated production Gateway, then manually prepare its Share relay/session.
+Manage any held-provider release separately; dismissal is not agent completion.
+
+The opt-in expresses intent only: tests neither provision services nor verify or
+retarget saved relay/session settings. Keep the chosen isolated session intact.
+Misconfigured manual setup can fail the tests; missing wire service retains the
+original request/HTTP failure assertions. Run the selected mode with:
+
+```bash
+export TEST_RUNNER_OPENCLAW_IOS_SHARE_PROOF=wire # or gateway
+xcodebuild -project apps/ios/OpenClaw.xcodeproj -scheme OpenClawUITests \
+  -destination "platform=iOS Simulator,id=${SHARE_PROOF_SIMULATOR:?}" \
+  -testLanguage en -testRegion US -parallel-testing-enabled NO \
+  -only-testing:OpenClawUITests/ShareExtensionUITests test
+```
+
+Without the flag, run the unpaired case only on an unpaired simulator. Stop only
+owned services and release only task-owned simulator resources afterward.
 
 ## App Store Release Flow
 

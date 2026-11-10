@@ -499,6 +499,8 @@ Native login makes the Claude CLI route available; it does not supply an Anthrop
 New sessions select saved subscription credentials through the configured account
 order and forward them to the CLI through a protected file descriptor. Existing
 sessions keep their account until you select another or remove its saved profile.
+Saved accounts are checked again before starting a CLI process and sending its first input.
+If the account was removed during preparation, the reply and saved history explain that the turn was not submitted. Select a connected account or sign in again under **Models**, then retry. Group replies omit account identifiers; personal account storage identifiers are never included in this notice.
 Explicit account selections and empty account orders remain authoritative. API keys saved
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
@@ -652,10 +654,12 @@ hand payloads to consumers without retaining them, so those payloads do not coun
 toward the output budget; IDs, metadata, padding, and frames still do. Mixed user
 records and cumulative snapshots still count. Forwarded subagent assistant
 messages and tool-result messages that the parser discards are charged a fixed
-allowance for their parent progress id.
-Child attribution alone does not earn that discount: retained stream-event text
-still counts toward the same 8 MiB output limit. Single-line limits and bounded
-frame counts remain active.
+allowance for their parent progress id. Child attribution alone does not earn
+that discount: retained stream-event text still counts toward the same 8 MiB
+output limit. Discarded stream control frames (thinking signatures and progress
+ticks, block and message stops, message deltas) are charged a fixed allowance,
+and progress ticks and stops also skip the frame count like partial-message
+envelopes. Single-line limits and bounded frame counts remain active.
 
 Input modes:
 

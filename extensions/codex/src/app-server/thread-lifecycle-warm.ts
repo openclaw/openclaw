@@ -390,7 +390,16 @@ export async function tryReuseCodexLiveThread(
       await prepareCodexThreadFinalConfigPatch(params, options.nativeModelInputTools, binding);
       throwIfAborted();
       params.assertCurrent?.();
-      return { kind: "ready", binding: { ...binding, lifecycle: { action: "resumed" } } };
+      return {
+        kind: "ready",
+        binding: {
+          ...binding,
+          // Nothing is sent to this live thread, so report the base it got at creation,
+          // never a render of current inputs.
+          preparedOpenClawBaseInstructions: creationPolicy?.baseInstructions,
+          lifecycle: { action: "resumed" },
+        },
+      };
     }
     return { kind: "rotate" };
   }
@@ -512,6 +521,11 @@ export async function tryReuseCodexLiveThread(
         return { kind: "resume" };
       }
     }
+    // A native switch moves supervision past the stored model; render and fingerprint the
+    // prompt for Codex's current one, as cold resume does, so a changed base resumes cold.
+    const nativeModel =
+      binding.connectionScope === "supervision" ? nativeThread?.model?.trim() : undefined;
+    const promptBinding = nativeModel ? { ...binding, model: nativeModel } : binding;
     const pluginThreadConfig = await options.buildLoadedPluginThreadConfig(binding);
     assertWarmOwner();
     if (pluginThreadConfig && pluginThreadConfig.fingerprint !== binding.pluginAppsFingerprint) {
@@ -544,7 +558,7 @@ export async function tryReuseCodexLiveThread(
       prebuiltFinalConfigPatch.configPatch,
     );
     const resumeParams = await lifecycleTiming.measure("warm-thread-resume-params", () =>
-      options.buildResumeParams(binding, resumeAuthProfileId, resumeConfig),
+      options.buildResumeParams(promptBinding, resumeAuthProfileId, resumeConfig),
     );
     options.assertInferenceConfig(
       resumeParams.config,
@@ -558,6 +572,8 @@ export async function tryReuseCodexLiveThread(
       incognito &&
       (!ephemeralPolicy ||
         ephemeralPolicy.developerInstructions !== params.developerInstructions ||
+        ephemeralPolicy.baseInstructions !==
+          options.resolveOpenClawBaseInstructions(promptBinding) ||
         getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute ||
         [...(params.inferenceProviderRoutes?.keys() ?? [])].some(
           (provider) =>
@@ -713,6 +729,7 @@ export async function tryReuseCodexLiveThread(
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy,
         liveThreadOwnership: retainedThread,
+        preparedOpenClawBaseInstructions: options.resolveOpenClawBaseInstructions(promptBinding),
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
           ? { clearInheritedServiceTier: true }
           : {}),

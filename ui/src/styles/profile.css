@@ -1,6 +1,37 @@
 /* Profile settings page: authenticated user profile and identity controls.
    Structural surfaces come from settings.css. */
 
+.profile-discord-reservation {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  /* Reserve the unavailable copy and the action's final row before the status reply. */
+  .profile-discord-description {
+    display: grid;
+
+    > span {
+      grid-area: 1 / 1;
+    }
+  }
+
+  .profile-discord-reservation {
+    display: block;
+    visibility: hidden;
+  }
+
+  :is(.shell--settings, .shell--embed-settings)
+    .settings-row:has(> .settings-row__text .profile-discord-description) {
+    flex-wrap: wrap;
+
+    > .settings-row__control {
+      width: 100%;
+      max-width: 100%;
+      justify-content: flex-start;
+    }
+  }
+}
+
 .identity-emails {
   display: flex;
   flex-direction: column;
@@ -62,7 +93,7 @@
 .profile-hero__name {
   max-width: 100%;
   overflow-wrap: anywhere;
-  font-size: 20px;
+  font-size: calc(20px * var(--control-ui-text-scale));
   font-weight: 650;
   line-height: 1.3;
   letter-spacing: -0.015em;

@@ -8,7 +8,7 @@ import {
   NATIVE_HARD_GENERATED_I18N_RE,
 } from "./lib/ci-native-generated-scope.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
+import { ensureGitCommit, resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 import nativeProtocolInputs from "./native-protocol-inputs.json" with { type: "json" };
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runMacosNode: boolean; runIosBuild: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runControlUiI18n: boolean; runUiTests: boolean }} ChangedScope */
@@ -48,7 +48,7 @@ export function isNodeTestDataOnlyPath(changedPath) {
 }
 
 const GLOBAL_NODE_TEST_INPUT_RE =
-  /^(?:pnpm-workspace\.yaml|\.npmrc|node-version\.mjs|tsconfig(?:\.[^/]+)?\.json|vitest\.config\.ts|test\/setup(?:\.shared|\.extensions|-openclaw-runtime)?\.ts|test\/vitest\/vitest\.(?:shared\.config|scoped-config|performance-config)\.ts|scripts\/run-vitest\.(?:mjs|mts)|scripts\/test-projects\.mts|scripts\/lib\/vitest-process-env\.mts|\.github\/actions\/(?:setup-node-env|setup-pnpm-store-cache)\/action\.yml)$|^patches\//u;
+  /^(?:pnpm-workspace\.yaml|\.npmrc|node-version\.mjs|tsconfig(?:\.[^/]+)?\.json|vitest\.config\.ts|test\/setup(?:\.shared|\.extensions|-openclaw-runtime)?\.ts|test\/vitest\/vitest\.(?:shared\.config|scoped-config|performance-config)\.ts|scripts\/run-vitest\.(?:mjs|mts)|scripts\/test-projects\.mts|scripts\/lib\/vitest-(?:process-env|node-args)\.mts|\.github\/actions\/(?:setup-node-env|setup-pnpm-store-cache)\/action\.yml)$|^patches\//u;
 
 /** @param {string} changedPath @param {string} cwd */
 export function isIndependentlyCheckedDocumentation(changedPath, cwd) {
@@ -672,15 +672,17 @@ export function listChangedPaths(
   if (!base) {
     return [];
   }
+  const headCommit = ensureGitCommit(head, cwd);
   const diffBase = resolveMergeHeadDiffBase({
     base,
-    head,
+    head: headCommit,
     cwd,
     preferFirstParent: preferMergeHeadFirstParent,
   });
+  const baseCommit = ensureGitCommit(diffBase, cwd);
   const output = execFileSync(
     "git",
-    ["diff", "--no-renames", "--name-only", "-z", diffBase, head],
+    ["diff", "--no-renames", "--name-only", "-z", baseCommit, headCommit],
     {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],

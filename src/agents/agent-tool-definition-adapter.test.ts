@@ -21,16 +21,15 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
-import {
-  findClientToolNameConflicts,
-  isClientToolNameConflictError,
-  toClientToolDefinitions,
-  toToolDefinitions,
-} from "./agent-tool-definition-adapter.js";
+import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
 import type { ClientToolDefinition } from "./command/shared-types.js";
+import {
+  findClientToolNameConflicts,
+  isClientToolNameConflictError,
+} from "./embedded-agent-runner/tool-name-allowlist.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import { ToolInputError } from "./tools/common.js";

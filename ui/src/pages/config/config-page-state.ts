@@ -66,6 +66,7 @@ import {
   type SessionObserverModelSelection,
 } from "./session-observer-settings.ts";
 import { createConfigUpdatesPresentation } from "./updates-page-presentation.ts";
+import { visibleConfigSchema } from "./view-schema.tsx";
 import { createConfigViewState } from "./view-state.ts";
 import type * as View from "./view-state.ts";
 
@@ -81,6 +82,7 @@ export function createConfigPage(
 ) {
   const agents = projectOwner(context.agents, (owner) => owner.state);
   const identities = projectOwner(context.agentIdentity, (owner) => owner);
+  const applicationConfig = projectOwner(context.config, (owner) => owner.current);
   const lobsterdex = projectSource(subscribeLobsterdex, {
     read: getLobsterdex,
     subscribe: (subscribe, notify) => subscribe(notify),
@@ -92,6 +94,13 @@ export function createConfigPage(
     : null;
   // Imperative owner notifications can arrive while a descendant is rendering.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
+  const rawSchema = createMemo(() => {
+    revision();
+    return context.runtimeConfig.state.configSchema;
+  });
+  const openclawIdEnabled = createMemo(() => applicationConfig.read().openclawIdEnabled === true);
+  // Refreshing config values must not rebuild the unchanged schema's presentation tree.
+  const schema = createMemo(() => visibleConfigSchema(rawSchema(), openclawIdEnabled()));
   const invalidate = () => {
     publish((value) => value + 1);
     onSettled(afterCommit);
@@ -433,7 +442,7 @@ export function createConfigPage(
       connected: configState.connected,
       mutationAllowed: runtimeConfig.canSet,
       openFileAllowed: runtimeConfig.canOpenFile,
-      schema: configState.configSchema,
+      schema: schema(),
       schemaLoading: configState.configSchemaLoading,
       schemaRead: runtimeConfig.schemaRead,
       onRetrySchema: () => void runtimeConfig.refreshSchema(),

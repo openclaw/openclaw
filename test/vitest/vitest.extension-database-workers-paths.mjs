@@ -7,6 +7,11 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/google/research-gateway.test.ts",
+  "extensions/deep-research/src/jobs.test.ts",
+  "extensions/deep-research/src/jobs.cancel.test.ts",
+  "extensions/deep-research/src/jobs.control.test.ts",
+  "extensions/deep-research/src/jobs.wake.test.ts",
   "extensions/alibaba/video-generation-provider.test.ts",
   "extensions/mcp-events/src/service.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
@@ -67,6 +72,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/voice-call/index.call-scope.test.ts",
   "extensions/agentsapi/agentsapi-attempt.test.ts",
   "extensions/agentsapi/agentsapi-harness.persistence.test.ts",
+  "extensions/agentsapi/agentsapi-harness.startup.test.ts",
   "extensions/codex/src/migration/provider.auth.test.ts",
   "extensions/codex/src/migration/provider.test.ts",
   "extensions/github-copilot/index.test.ts",
@@ -251,6 +257,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/inference-proxy.native.test.ts",
   "extensions/codex/src/app-server/native-command-auth.native.test.ts",
   "extensions/codex/src/app-server/reasoning-effort.native.test.ts",
+  "extensions/codex/src/app-server/isolated-completion.native.test.ts",
   "extensions/codex/src/app-server/settled-turn-finalizer.native.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.assignment-rotation.test.ts",
   "extensions/codex/src/app-server/thread-lifecycle.native.test.ts",
@@ -541,6 +548,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/voice-call/src/runtime.realtime-routing.test.ts",
   "extensions/voice-call/src/webhook.auto-response.lifecycle.test.ts",
   "extensions/voice-call/src/webhook.hangup-once.lifecycle.test.ts",
+  "extensions/voice-call/src/webhook.twilio-fallback.test.ts",
   "extensions/whatsapp/src/auto-reply/monitor/process-message.batched-reply.test.ts",
   "extensions/whatsapp/src/auto-reply/monitor/process-message.response-prefix.test.ts",
   "extensions/whatsapp/src/send.delivery-recovery.test.ts",

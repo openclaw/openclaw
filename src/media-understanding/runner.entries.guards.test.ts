@@ -1,5 +1,12 @@
+import { createServer } from "node:http";
+import path from "node:path";
 import { ok } from "@openclaw/normalization-core/result";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -9,9 +16,10 @@ import {
   runtimeMediaRequestSecretOwnerId,
 } from "../secrets/runtime-media-secret-owner.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
+import { buildMediaUnderstandingRegistry } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { runProviderEntry } from "./runner.entries.js";
-import { withAudioFixture } from "./runner.test-utils.js";
-import type { MediaUnderstandingProvider } from "./types.js";
+import { withAudioFixture, withMediaFixture } from "./runner.test-utils.js";
 
 afterEach(() => setActiveDegradedSecretOwners([]));
 
@@ -116,6 +124,131 @@ it("rechecks admission after attachment/auth preparation", async () => {
     expect(transcribeAudio).not.toHaveBeenCalled();
   });
 });
+
+it.each(["audio", "image"] as const)(
+  "sends %s and credentials only to the selected provider",
+  async (capability) => {
+    function receiver() {
+      const received: Array<{ auth?: string; provider?: string | string[]; body: Buffer }> = [];
+      const server = createServer(async (request, response) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) {
+          chunks.push(Buffer.from(chunk));
+        }
+        received.push({
+          auth: request.headers.authorization,
+          provider: request.headers["x-fixture-provider"],
+          body: Buffer.concat(chunks),
+        });
+        response.end("transcribed");
+      });
+      return { received, server };
+    }
+
+    const google = receiver();
+    const gemini = receiver();
+    const googleUrl = await listenLoopback(google.server);
+    const geminiUrl = await listenLoopback(gemini.server);
+    try {
+      const upload = async (
+        id: string,
+        baseUrl: string | undefined,
+        apiKey: string,
+        buffer: Buffer,
+      ) => {
+        if (!baseUrl) {
+          throw new Error("No test receiver URL");
+        }
+        const response = await fetch(baseUrl, {
+          method: "POST",
+          body: new Uint8Array(buffer),
+          headers: { authorization: `Bearer ${apiKey}`, "x-fixture-provider": id },
+        });
+        return { text: await response.text() };
+      };
+      const buildProvider = (id: string): MediaUnderstandingProvider => ({
+        id,
+        capabilities: [capability],
+        transcribeAudio: ({ apiKey, baseUrl, buffer }) => upload(id, baseUrl, apiKey, buffer),
+        describeImage: ({ cfg, provider, buffer }) => {
+          const config = cfg.models?.providers?.[provider];
+          if (!config || typeof config.apiKey !== "string") {
+            throw new Error("No test receiver credentials");
+          }
+          return upload(id, config.baseUrl, config.apiKey, buffer);
+        },
+      });
+      const cfg = {
+        models: {
+          providers: {
+            google: { apiKey: "google-fixture", baseUrl: googleUrl, models: [] },
+            gemini: { apiKey: "gemini-fixture", baseUrl: geminiUrl, models: [] },
+          },
+        },
+      };
+      const png = createSolidPngBuffer(8, 8, { r: 24, g: 96, b: 208 });
+      const runFixture: Parameters<typeof withMediaFixture>[1] = async ({ cache, mediaPath }) => {
+        const entry = { provider: " Gemini ", model: "fixture-model" };
+        const googleProvider = buildProvider("google");
+        const geminiProvider = buildProvider("gemini");
+        const providerRegistry = buildMediaUnderstandingRegistry(undefined, cfg, [
+          googleProvider,
+          geminiProvider,
+        ]);
+        const expectedBody = (
+          await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024 * 1024, timeoutMs: 10_000 })
+        ).buffer;
+        const run = () =>
+          runProviderEntry({
+            capability,
+            cfg,
+            cache,
+            entry,
+            providerRegistry,
+            attachmentIndex: 0,
+            agentDir: path.dirname(mediaPath),
+          });
+        const expectGemini = async () => {
+          await expect(run()).resolves.toMatchObject({ ok: true, value: { provider: "gemini" } });
+        };
+
+        await expectGemini();
+        providerRegistry.delete("google");
+        await expectGemini();
+        expect(google.received).toEqual([]);
+        const geminiRequest = {
+          auth: "Bearer gemini-fixture",
+          provider: "gemini",
+          body: expectedBody,
+        };
+        expect(gemini.received).toEqual([geminiRequest, geminiRequest]);
+
+        providerRegistry.delete("gemini");
+        providerRegistry.set("google", googleProvider);
+        await expect(run()).resolves.toMatchObject({ ok: true, value: { provider: "google" } });
+        expect(google.received).toEqual([
+          { auth: "Bearer google-fixture", provider: "google", body: expectedBody },
+        ]);
+        expect(gemini.received).toEqual([geminiRequest, geminiRequest]);
+      };
+      if (capability === "audio") {
+        await withAudioFixture("openclaw-media-provider-owner", runFixture);
+      } else {
+        await withMediaFixture(
+          {
+            filePrefix: "openclaw-media-provider-owner",
+            extension: "png",
+            mediaType: "image/png",
+            fileContents: png,
+          },
+          runFixture,
+        );
+      }
+    } finally {
+      await Promise.all([closeHttpServer(google.server), closeHttpServer(gemini.server)]);
+    }
+  },
+);
 
 it("includes the catalog repair hint for a media provider contract", async () => {
   await expect(runAudio({ entry: { provider: "groq" } })).rejects.toThrow(

@@ -1,0 +1,2 @@
+# Preserve restart guidance in the model transcript while keeping it out of public chat history.
+12

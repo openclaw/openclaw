@@ -24,8 +24,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
 import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
+import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import { recordSessionOperatorSource } from "../session-operator-sources.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
@@ -356,6 +358,7 @@ export async function handleChatSendWithStorage(
       const staged = await withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
         userTurnRecorder.stageApproved?.({
           ...pendingAdmission,
+          recoverySource: captureQueuedOperatorRecoverySource(admission.operatorAuthority),
         }),
       );
       stagePhase?.finish();
@@ -396,7 +399,20 @@ export async function handleChatSendWithStorage(
     if (commitFreshInput) {
       inputAdmissionAttempted = true;
       using transcriptPhase = diagnostics.scope("detail.persist.transcript");
-      const persistedUserTurn = await persistGatewayUserTurnTranscript();
+      // Accepted plain input must survive a crash during hooks, before runtime start.
+      const persistedUserTurn = await persistGatewayUserTurnTranscript({
+        sessionLifecyclePatch: isInternalTextSlashCommandTurn
+          ? undefined
+          : {
+              ...deriveGatewaySessionLifecycleSnapshot({
+                event: { runId: clientRunId, ts: admissionStartedAt, data: { phase: "start" } },
+              }),
+              activeWriterRunId: clientRunId,
+              lifecycleRunId: clientRunId,
+              lastRunId: undefined,
+              lastInteractionAt: admissionStartedAt,
+            },
+      });
       transcriptPhase?.finish();
       approvedInput = persistedUserTurn?.message;
       const goalOperation = request.goalOperation;

@@ -379,7 +379,16 @@ describe("release-note verification", () => {
   it("credits human maintainers but excludes automation identities", () => {
     expect(isEligibleHandle("human-contributor")).toBe(true);
     expect(isEligibleHandle("steipete")).toBe(true);
-    for (const handle of ["steipete-oai", "hugin-bot", "roboclaw-bot", "tideclaw-bot"]) {
+    expect(isEligibleHandle("copilot-contributor")).toBe(true);
+    for (const handle of [
+      "steipete-oai",
+      "hugin-bot",
+      "roboclaw-bot",
+      "tideclaw-bot",
+      "Copilot",
+      "copilot",
+      "COPILOT",
+    ]) {
       expect(isEligibleHandle(handle)).toBe(false);
     }
   });
@@ -704,7 +713,7 @@ Release provenance for ${hash} -> #3`
     },
   );
 
-  it("requires release provenance PRs to be merged into current main", () => {
+  it("requires main provenance PRs to be merged into current main", () => {
     const releaseCommit = "a".repeat(40);
     const mainCommit = "b".repeat(40);
     const mergeCommit = "c".repeat(40);
@@ -729,11 +738,68 @@ Release provenance for ${hash} -> #3`
     expect(() => validate(validNode)).not.toThrow();
     for (const node of [
       { ...validNode, baseRefName: "release/2026.7.1" },
+      { ...validNode, baseRefName: "feature/unrelated" },
       { ...validNode, mergedAt: null },
     ]) {
-      expect(() => validate(node)).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references invalid source PR #104905");
     }
-    expect(() => validate(validNode, false)).toThrow("references non-main PR #104905");
+    expect(() => validate(validNode, false)).toThrow("references invalid source PR #104905");
+  });
+
+  it("checks canonical main origins through the production Git matcher", () => {
+    const { cwd, base } = seedRepository("openclaw-release-original-", "main");
+    writeFileSync(join(cwd, "shared.txt"), "main\n");
+    const main = commitAll(cwd, "fix: durable  writes (#7)");
+    const mainNode = {
+      baseRefName: "main",
+      mergedAt: "2026-07-12T00:00:00Z",
+      mergeCommit: { oid: main },
+    };
+    const cases = [
+      {
+        subject: "fix: renamed original",
+        body: "(cherry picked from commit " + main + ")",
+        shared: true,
+      },
+      {
+        subject: "fix: renamed original",
+        body: "Backport of #7 to release/2026.7.1.",
+        shared: true,
+      },
+      { subject: "fix: durable writes", body: "", shared: true },
+      {
+        subject: "fix: independent original",
+        body: "(cherry picked from commit " + main + ")",
+        shared: false,
+      },
+    ];
+    for (const [index, scenario] of cases.entries()) {
+      git(cwd, ["checkout", "-qb", "release/case-" + index, base]);
+      writeFileSync(join(cwd, scenario.shared ? "shared.txt" : "independent.txt"), "release\n");
+      const source = commitAll(cwd, scenario.subject + "\n\n" + scenario.body);
+      const node = {
+        __typename: "PullRequest",
+        baseRefName: "release/2026.7.1",
+        mergedAt: mainNode.mergedAt,
+        mergeCommit: { oid: source },
+      };
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `import { validateReleaseProvenanceOverrides as validate } from ${JSON.stringify(verifier)};
+const { source, node, main, mainNode } = ${JSON.stringify({ source, node, main, mainNode })};
+validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => new Map([[7, mainNode]]));`,
+        ],
+        { cwd, encoding: "utf8" },
+      );
+      if (scenario.shared) {
+        expect(result.stderr).toContain("references invalid source PR #9");
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+      }
+    }
   });
 
   it("validates release provenance PRs that shipped-ref subtraction left unresolved", () => {
@@ -763,7 +829,7 @@ Release provenance for ${hash} -> #3`
     expect(() => validate(mainNode)).not.toThrow();
     expect(requested).toEqual([[104905]]);
     for (const node of [{ ...mainNode, baseRefName: "release/2026.7.1" }, undefined]) {
-      expect(() => validate(node)).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references invalid source PR #104905");
     }
   });
 
@@ -1115,7 +1181,7 @@ Release provenance for ${hash} -> #3`
   it("credits the original PR, not its backport, and rejects stale generated thanks", () => {
     const { cwd, base, changelog } = seedRepository("openclaw-release-credit-", "main");
     const originalMessage =
-      "fix: preserve playback errors (#21)\n\nFixes #20\nCo-authored-by: Helper <helper@example.invalid>";
+      "fix: preserve playback errors (#21)\n\nFixes #20\nCo-authored-by: Helper <helper@example.invalid>\nCo-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>";
     writeFileSync(join(cwd, "playback.txt"), "fixed\n");
     const original = commitAll(cwd, originalMessage);
     git(cwd, ["checkout", "-qb", "release", base]);
@@ -1142,7 +1208,7 @@ const data = {};
 for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
   data[alias] = { object: {
     associatedPullRequests: { nodes: hash === original ? [{ number: 21, mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: original } }] : [], pageInfo: { hasNextPage: false } },
-    authors: { nodes: [{ email: "helper@example.invalid", user: { login: "original-helper" } }, ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : [])] },
+    authors: { nodes: [{ email: "helper@example.invalid", user: { login: "original-helper" } }, { email: "223556219+Copilot@users.noreply.github.com", user: { login: "Copilot" } }, ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : [])] },
     author: { user: { login: "release-operator" } }
   } };
 }
@@ -1180,6 +1246,7 @@ console.log(JSON.stringify({ data }));
     expect(section).toContain(
       "(#21) Authored by @steipete. Thanks @original-helper and @reporter.",
     );
+    expect(section).not.toContain("@Copilot");
     expect(section).not.toContain("@RomneyDa");
     expect(section).not.toContain("@release-operator");
     const checked = run(false);

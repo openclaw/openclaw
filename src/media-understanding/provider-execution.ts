@@ -1,6 +1,7 @@
 // Media provider credentials, availability, and per-attempt execution authority.
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { resolveMediaProviderKey } from "../../packages/media-understanding-common/src/provider-id.js";
 import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
@@ -25,13 +26,10 @@ import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js
 import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtime-media-secret-owner.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
-import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
+import { getMediaUnderstandingProvider } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { resolveCliModelEntry } from "./resolve.js";
-import type {
-  AudioTranscriptionRequest,
-  MediaUnderstandingCapability,
-  MediaUnderstandingProvider,
-} from "./types.js";
+import type { AudioTranscriptionRequest, MediaUnderstandingCapability } from "./types.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 
@@ -163,7 +161,7 @@ export async function isAudioModelEntryAvailable(params: {
     const cli = resolveCliModelEntry(entry);
     return cli.ok && Boolean(resolveExecutablePath(cli.value.command));
   }
-  const providerId = normalizeMediaProviderId(entry.provider ?? "");
+  const providerId = resolveMediaProviderKey(entry.provider ?? "", params.providerRegistry);
   const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
   if (!provider?.transcribeAudio && !provider?.transcribeAudioWithContext) {
     return false;

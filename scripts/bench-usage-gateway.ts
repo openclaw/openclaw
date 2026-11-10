@@ -21,6 +21,7 @@ import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener
 import { isAbortError } from "../src/infra/abort-signal.ts";
 import { createRedactingStreamWriter } from "../src/logging/redacting-stream.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../src/shared/control-ui-storage.js";
+import { controlUiBenchOrder } from "./lib/control-ui-bench-order.ts";
 import {
   mapColdLoadCpuProfile,
   prepareColdLoadTraceEvent,
@@ -109,6 +110,7 @@ const helperFiles = [
   "lib/usage-bench-observer.mjs",
   "lib/usage-bench-rtt.ts",
   "lib/control-ui-renderer-metrics.ts",
+  "lib/control-ui-bench-order.ts",
   "lib/control-ui-cold-load-trace.ts",
   "lib/control-ui-interaction-trace.ts",
   "lib/control-ui-engine-metrics.ts",
@@ -895,16 +897,35 @@ async function waitForResponse(
   }
   throw new Error(`No actual Usage response for ${query}`);
 }
+/** The compared baseline may still expose the query directly in its toolbar. */
+async function applyUsageQuery(page: Page, query: string) {
+  const trigger = page.locator(".usage-filter-menu__trigger");
+  const hasMenu = await trigger.isVisible();
+  if (hasMenu) {
+    await trigger.click();
+  }
+  const input = page.locator(hasMenu ? ".usage-filter-menu__query input" : ".usage-query-input");
+  await input.fill(query);
+  await input.press("Enter");
+  if (hasMenu) {
+    await trigger.click();
+  }
+}
+
 async function settled(page: Page, count: number, diagnostic = false) {
   await page.waitForFunction((expected) => {
     const button = document.querySelector<HTMLButtonElement>(
       '.usage-page button[aria-label="Refresh"]',
     );
-    const text = document
-      .querySelector(".usage-query-count")
-      ?.textContent?.replaceAll(",", "")
-      .replaceAll(".", "");
-    return button?.disabled === false && text?.startsWith(`${expected} `);
+    const summary =
+      document.querySelector(".sessions-card-header .sessions-card-count")?.textContent ?? "";
+    // The header shows the full matching total after the bounded-page count.
+    // It omits "total" only when every matching session is already in that page.
+    const match =
+      summary.match(/(?:^|·)\s*([\d,.\s]+)\s+total\b/) ??
+      summary.match(/^\s*([\d,.\s]+)\s+shown\b/);
+    const total = match ? Number(match[1]!.replace(/[^0-9]/g, "")) : undefined;
+    return button?.disabled === false && total === expected;
   }, count);
   if (diagnostic) {
     await page.evaluate(() => performance.mark("usage:visible"));
@@ -1548,7 +1569,7 @@ try {
           const defaultDispatchBefore = (await owner.snapshot()).length;
           const defaultStarted = performance.now();
           await page.goto(url.href);
-          await page.locator(".usage-query-input").waitFor();
+          await page.locator(".usage-date-input").first().waitFor();
           const defaultResponse = await waitForResponse(responses, 0, "");
           await settled(page, defaultResponse.sessions);
           const defaultWallMs = performance.now() - defaultStarted;
@@ -1736,8 +1757,8 @@ try {
                 : pairs * 2 + (values["profile-last-pair"] ? 2 : 0);
         for (let iteration = 0; iteration < iterations; iteration++) {
           const pair = Math.floor(iteration / 2);
-          const order = pair % 2 ? pages.toReversed() : pages;
-          for (const entry of order) {
+          const order = controlUiBenchOrder(pages, pair);
+          for (const [position, entry] of order.entries()) {
             const { owner, page, cdp, processSession, usage } = entry;
             const { responses } = usage;
             const model = `fixture-model-${iteration % 2 ? "01" : "00"}-end`;
@@ -1778,8 +1799,7 @@ try {
             if (diagnostic) {
               await page.evaluate(() => performance.mark("usage:action-start"));
             }
-            await page.locator(".usage-query-input").fill(query);
-            await page.locator(".usage-query-input").press("Enter");
+            await applyUsageQuery(page, query);
             const response = await waitForResponse(responses, requestsBefore, query);
             assert.equal(response.tokens, truth.tokens);
             assert.equal(response.sessions, truth.sessions);
@@ -1819,6 +1839,7 @@ try {
               ...(structure === undefined ? {} : { structure }),
               ...(entry.wire ? { wireStart, wireEnd } : {}),
               pair,
+              position,
               cpu,
               rtt,
               model,
@@ -2054,6 +2075,8 @@ try {
         lastStep: activeStep,
         preparationSamples: preparations.length,
         samples: samples.length,
+        order:
+          "Build positions rotate and reverse across pairs; each model uses the same order within a pair.",
         browserResourceSamples: samples.filter((sample) => sample.browserResources?.complete)
           .length,
         mode: values["cold-backend"]

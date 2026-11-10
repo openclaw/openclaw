@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { PresenceEntry } from "../../api/types.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -198,7 +199,11 @@ function resolveNodeCoreVersion(entry: DeviceInventoryEntry): string | undefined
   return legacyHeadless ? normalizeOptionalString(entry.node?.version) : undefined;
 }
 
-type EntryWarning = { label: string; detail?: string };
+type EntryWarning = {
+  kind: "version" | "worker" | "wake" | "approval";
+  label: string;
+  detail?: string;
+};
 
 function entryWarnings(entry: DeviceInventoryEntry, gatewayVersion: string | null): EntryWarning[] {
   const warnings: EntryWarning[] = [];
@@ -206,24 +211,27 @@ function entryWarnings(entry: DeviceInventoryEntry, gatewayVersion: string | nul
   const nodeVersion = resolveNodeCoreVersion(entry);
   if (isApprovedNode && nodeVersion && gatewayVersion && nodeVersion !== gatewayVersion) {
     warnings.push({
+      kind: "version",
       label: t("devices.inventory.versionDrift"),
       detail: t("devices.inventory.versionDriftTitle", { nodeVersion, gatewayVersion }),
     });
   }
   if (entry.node?.workerBundle?.status === "missing") {
     warnings.push({
+      kind: "worker",
       label: t("devices.inventory.workerMissing"),
       detail: t("devices.inventory.workerMissingTitle"),
     });
   }
   if (isApprovedNode && entry.node?.connected === false && isWindowsPlatform(entry.platform)) {
     warnings.push({
+      kind: "wake",
       label: t("devices.inventory.manualWake"),
       detail: t("devices.inventory.manualWakeTitle"),
     });
   }
   if (isPendingNode(entry.node)) {
-    warnings.push({ label: t("devices.inventory.approvalNeeded") });
+    warnings.push({ kind: "approval", label: t("devices.inventory.approvalNeeded") });
   }
   return warnings;
 }
@@ -279,6 +287,8 @@ function InventoryEntry(props: {
     deviceDesktopEnvironment(props.devices, `node:${props.entry.id}`),
   );
   const rowConnected = () => props.entry.node?.connected ?? props.entry.connected;
+  // OpenClaw ID membership owns these browsers; the Access page removes them.
+  const managedByOpenClawId = () => props.entry.device?.managedBy === "openclaw-id";
   const warnings = createMemo(() => entryWarnings(props.entry, props.devices.gatewayVersion));
   const tokens = createMemo(() => props.entry.device?.tokens ?? []);
   const tokenRoles = createMemo(() => new Set(tokens().map((token) => token.role)));
@@ -305,10 +315,10 @@ function InventoryEntry(props: {
       alerts={
         <Show when={hasAlerts()}>
           <span class="device-entry__alerts">
-            <For each={warnings()}>
+            <For each={warnings()} keyed={(warning) => warning.kind}>
               {(warning) => (
-                <span title={warning.detail}>
-                  <SettingsStatus kind={"warn"} label={warning.label} />
+                <span title={warning().detail}>
+                  <SettingsStatus kind={"warn"} label={warning().label} />
                 </span>
               )}
             </For>
@@ -330,11 +340,28 @@ function InventoryEntry(props: {
                 })
             : undefined
         }
-        onRemove={() => props.devices.onInventoryRemove(toRemovalRequest(props.entry))}
+        onRemove={
+          managedByOpenClawId()
+            ? undefined
+            : () => props.devices.onInventoryRemove(toRemovalRequest(props.entry))
+        }
       />
       <dl class="device-entry__facts">
-        <For each={warnings().filter((warning) => warning.detail)}>
-          {(warning) => <DeviceFact label={warning.label}>{warning.detail}</DeviceFact>}
+        <Show when={managedByOpenClawId()}>
+          <DeviceFact label={t("devices.inventory.openclawIdLabel")}>
+            {t("devices.inventory.openclawIdManaged")}{" "}
+            <a
+              href={`${pathForRoute("plugin", props.devices.basePath)}?${new URLSearchParams({ plugin: "openclaw-id-access", id: "access" })}`}
+            >
+              {t("devices.inventory.openclawIdOpen")}
+            </a>
+          </DeviceFact>
+        </Show>
+        <For
+          each={warnings().filter((warning) => warning.detail)}
+          keyed={(warning) => warning.kind}
+        >
+          {(warning) => <DeviceFact label={warning().label}>{warning().detail}</DeviceFact>}
         </For>
         <Show when={desktopUnavailable()}>
           <DeviceFact label={t("devices.inventory.desktop")}>
@@ -366,6 +393,7 @@ function InventoryEntry(props: {
                     device={{ id: props.entry.id, name: props.entry.name }}
                     tokenSummary={token()}
                     devices={props.devices}
+                    revocable={!managedByOpenClawId()}
                   />
                 )}
               </For>
@@ -560,6 +588,7 @@ function TokenRow(props: {
   device: { id: string; name: string };
   tokenSummary: DeviceTokenSummary;
   devices: DevicesProps;
+  revocable: boolean;
 }) {
   const disabled = () =>
     props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
@@ -608,7 +637,7 @@ function TokenRow(props: {
         >
           {t("devices.inventory.rotate")}
         </button>
-        {props.tokenSummary.revokedAtMs ? undefined : (
+        {props.tokenSummary.revokedAtMs || !props.revocable ? undefined : (
           <button
             class="btn btn--sm danger"
             disabled={disabled()}

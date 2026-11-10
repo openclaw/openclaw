@@ -1,15 +1,15 @@
-import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import {
+  getMediaProviderFromRegistry,
+  normalizeMediaProviderId,
+  normalizeMediaProviderKey,
+} from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import {
   listImageCapableConfiguredProviders,
   resolveConfiguredMediaProviderCapabilities,
 } from "./config-provider-models.js";
-import type { MediaUnderstandingProvider } from "./types.js";
-
-function exactMediaProviderKey(id: string): string {
-  return id.trim().toLowerCase();
-}
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,
@@ -18,7 +18,7 @@ function mergeProviderIntoRegistry(
 ) {
   // Historical aliases (gemini -> google) must not fold a separately registered
   // provider into the canonical one. That merge copies hooks across identities.
-  const normalizedKey = exactMediaProviderKey(registryKey);
+  const normalizedKey = normalizeMediaProviderKey(registryKey);
   const existing = registry.get(normalizedKey);
   const merged = existing
     ? {
@@ -82,11 +82,5 @@ export function getMediaUnderstandingProvider(
   id: string,
   registry: Map<string, MediaUnderstandingProvider>,
 ): MediaUnderstandingProvider | undefined {
-  const exact = exactMediaProviderKey(id);
-  const direct = registry.get(exact);
-  if (direct) {
-    return direct;
-  }
-  const aliased = normalizeMediaProviderId(exact);
-  return aliased === exact ? undefined : registry.get(aliased);
+  return getMediaProviderFromRegistry(id, registry);
 }

@@ -72,6 +72,11 @@ export interface ReleaseChildSpec {
 }
 export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export function evidenceReadRetryDelay(
+  args: readonly string[],
+  error: unknown,
+  attempt: number,
+): number;
 export function isReleaseGhServerError(error: unknown): boolean;
 export function readReleaseJobListing<T>(
   readListing: (perPage: number, options: { smallerPageFallback: boolean }) => Promise<T>,

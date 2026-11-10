@@ -2,8 +2,10 @@ import type { JSX } from "@solidjs/web";
 import {
   createMemo,
   createSignal,
+  Errored,
   isPending,
   latest,
+  lazy,
   Loading,
   mapArray,
   merge,
@@ -24,6 +26,7 @@ import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-sk
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -39,6 +42,11 @@ import {
 import type { ChatSessionSharingContentProps } from "./chat-session-sharing.solid.tsx";
 
 registerEnglishCatalog(registerChatSessionSharingEnglish);
+
+// Loaded only once a public link is shown, so the encoder stays out of the menu chunk.
+const ChatSessionPublicQr = lazy(() => import("./chat-session-public-qr.tsx"), {
+  export: "ChatSessionPublicQr",
+});
 
 function SharingModeContent(props: { visibility: SessionVisibility }) {
   return (
@@ -497,8 +505,8 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
             >
               <Icon name="globe" />
               <span>{t("chat.sessionSharing.anyoneWithLink")}</span>
-              <span class="settings-toggle chat-pane__sharing-switch" aria-hidden="true">
-                <span class="settings-toggle__control" />
+              <span class="chat-pane__sharing-switch">
+                <SwitchIndicator checked={Boolean(result()?.publicShare)} size="sm" />
               </span>
             </button>
             <div
@@ -541,6 +549,16 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                     </div>
                   )}
                 </ChatSessionSharingError>
+                <Show when={result()?.publicShare && props.state?.publicUrl}>
+                  {(url) => (
+                    // A failed load or an unencodable URL drops the code; copy still works.
+                    <Errored fallback={null}>
+                      <Loading>
+                        <ChatSessionPublicQr url={url()} compact controls={controls} />
+                      </Loading>
+                    </Errored>
+                  )}
+                </Show>
               </div>
             </div>
           </section>

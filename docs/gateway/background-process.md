@@ -137,9 +137,11 @@ Durable commands have no interactive input: `pty: true`
 and `awaitResults: true` are refused, as are `process write`, `send-keys`, `submit`,
 and `paste`. Exec security policy, approvals, managed environment preparation, cwd
 restrictions, and process timeouts remain in effect. `timeoutSeconds` maps to
-`RuntimeMaxSec`; `timeoutSeconds: 0` disables that lifetime bound. The ordinary
-host-exec memory calculation supplies `MemoryMax`, enforced by the unit's cgroup
-instead of the sampled watchdog. Durable processes do not block safe Gateway
+`RuntimeMaxSec`; `timeoutSeconds: 0` disables that lifetime bound. Durable work shares the automatic
+[host-exec memory budget](/tools/exec#host-memory-protection) with ordinary commands.
+The shared sampler accounts their cgroup usage, including descendants after the
+initial shell exits. Each new unit also has hard RAM and swap bounds equal to the
+full shared allowance. Durable processes do not block safe Gateway
 restart or cooperative suspension. Ordinary background processes retain their
 existing restart and suspension behavior.
 
@@ -253,7 +255,9 @@ entry path, then uses in-process spawning for the rest of that Gateway process.
 A new Gateway process tries the broker again.
 When the broker is ready, exec commands, shell-snapshot capture and validation,
 and helpers using the shared command runner spawn from it, so Linux does not copy
-the Gateway's page tables for each command. The existing process supervisors and
+the Gateway's page tables for each command. Sandbox housekeeping retains that
+broker when it leaves the requesting turn's context, including recurring prune
+passes. The existing process supervisors and
 service relays still own cancellation, output, and cleanup. After the broker first
 becomes ready, broker loss fails affected commands rather than rerunning them; later commands use the restarted
 broker. One-shot CLI commands, native file-descriptor inputs, and independently

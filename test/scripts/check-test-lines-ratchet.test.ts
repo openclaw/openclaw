@@ -1,13 +1,14 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { devNull } from "node:os";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-test-lines-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "main"));
 afterEach(() => vi.restoreAllMocks());
 afterEach(() => vi.unstubAllEnvs());
 const baseline = "config/test-lines-baseline.txt";
@@ -46,6 +47,7 @@ function fixture(initial: Record<string, string>) {
 }
 
 it("does not require test-line allocations on release branches", () => {
+  vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "");
   vi.stubEnv("GITHUB_ACTIONS", "");
   const f = fixture({ [baseline]: "1\n", "a.test.ts": "one\n" });
   f.write("a.test.ts", "one\ntwo\n");
@@ -125,7 +127,7 @@ it("rejects separate grants for overlapping test growth", () => {
   f.git("merge", "--no-edit", "first");
   expect(f.check()).toBe(1);
   expect(console.error).toHaveBeenLastCalledWith(
-    "Test line allocation credit 2 exceeds added test lines 1.",
+    "Test line allocation credit 2 exceeds allowed ceiling growth 1.",
   );
 });
 
@@ -139,7 +141,7 @@ it("bounds renamed allocations with scalar changes but ignores comment-only edit
   f.write(baseline, "2\n");
   expect(f.check()).toBe(1);
   expect(console.error).toHaveBeenLastCalledWith(
-    "Test line allocation credit 1 exceeds added test lines 0.",
+    "Test line allocation credit 1 exceeds allowed ceiling growth 0.",
   );
   f.write(baseline, "1\n");
   expect(f.check()).toBe(0);
@@ -166,6 +168,20 @@ it("measures literal LF growth and does not forgive inherited debt", () => {
   expect(console.error).toHaveBeenLastCalledWith(
     expect.stringContaining("Test lines: 2; ceiling: 1; over by: 1; net delta: +1."),
   );
+});
+
+it.each([-1, 0, 1])("bounds exact debt reconciliation with net growth %i", (delta) => {
+  const f = fixture({ [baseline]: "1\n", "base.test.ts": "line\n".repeat(3) });
+  f.write("base.test.ts", "line\n".repeat(3 + delta));
+  const grant = 2 + delta;
+  f.write(allocation("approved"), `${grant}\n`);
+  f.git("add", ".");
+  expect(f.check()).toBe(0);
+  expect(console.log).toHaveBeenLastCalledWith(
+    `Test lines OK: ${3 + delta}; ceiling: ${3 + delta}; slack: 0.`,
+  );
+  f.write(allocation("approved"), `${grant + 1}\n`);
+  expect(f.check()).toBe(1);
 });
 
 it("uses exact index snapshots and ignores untracked or deleted allocation files", () => {
@@ -215,7 +231,7 @@ it.each([5, 25])(
       expect(f.read(allocation("untracked"))).toBe("999\n");
     } else {
       expect(console.error).toHaveBeenLastCalledWith(
-        "Test line allocation credit 25 exceeds added test lines 5.",
+        "Test line allocation credit 25 exceeds allowed ceiling growth 5.",
       );
     }
   },
