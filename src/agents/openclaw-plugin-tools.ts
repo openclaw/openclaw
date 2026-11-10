@@ -612,9 +612,11 @@ function* resolveOpenClawPluginToolSteps(
     ) {
       continue;
     }
-    // Unregistered nodes cannot grant themselves plugin-scoped access by
-    // claiming another plugin's ID. Only the reserved node-mcp ID is trusted.
-    const pluginIdTrusted = entry.registered || pluginId === NODE_MCP_PLUGIN_ID;
+    const mcpTool = descriptor.command === NODE_MCP_TOOLS_CALL_COMMAND ? descriptor.mcp : undefined;
+    // Decide ownership once after normalizing the ID. The reserved exception
+    // requires the core MCP shape; every policy projection consumes this trust.
+    const isNodeMcp = pluginId === NODE_MCP_PLUGIN_ID && Boolean(mcpTool?.server && mcpTool.tool);
+    const pluginIdTrusted = entry.registered || isNodeMcp;
     if (
       !allowlist.includesDefaults &&
       !(
@@ -626,7 +628,6 @@ function* resolveOpenClawPluginToolSteps(
       continue;
     }
     existingNormalized.add(exposedToolName);
-    const mcpTool = descriptor.command === NODE_MCP_TOOLS_CALL_COMMAND ? descriptor.mcp : undefined;
     const tool: AnyAgentTool = {
       name: toolName,
       label: toolName,
@@ -700,7 +701,7 @@ function* resolveOpenClawPluginToolSteps(
               safeServerName: sanitizeServerName(descriptor.mcp.server, new Set<string>()),
               toolName: descriptor.mcp.tool,
               operation: "tool",
-              ...(descriptor.pluginId === NODE_MCP_PLUGIN_ID && mcpTool
+              ...(isNodeMcp && mcpTool
                 ? {
                     node: {
                       id: entry.nodeId,

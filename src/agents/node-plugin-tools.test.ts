@@ -656,13 +656,15 @@ describe("materializeNodeTools", () => {
     connectTool(githubDescriptor, { nodeId: "node-1", registered: true });
     expect(toolNames({ toolAllowlist: ["github"] })).toEqual(["remote_repo_search"]);
 
-    connectTool({
-      ...githubDescriptor,
-      pluginId: "node-mcp",
-      command: "mcp.tools.call.v1",
-      mcp: { server: "github", tool: "search" },
-    });
-    expect(toolNames({ toolAllowlist: ["node-mcp"] })).toEqual(["remote_repo_search"]);
+    for (const pluginId of ["node-mcp", "NODE-MCP", " Node-Mcp "]) {
+      connectTool({
+        ...githubDescriptor,
+        pluginId,
+        command: "mcp.tools.call.v1",
+        mcp: { server: "github", tool: "search" },
+      });
+      expect(toolNames({ toolAllowlist: ["node-mcp"] })).toEqual(["remote_repo_search"]);
+    }
 
     connectTool(githubDescriptor);
     expect(toolNames({ toolAllowlist: ["remote_repo_search"] })).toEqual(["remote_repo_search"]);
@@ -706,6 +708,38 @@ describe("materializeNodeTools", () => {
         steps: [{ label: "plugin deny", policy: { deny: ["remote-demo"] } }],
       }),
     ).toEqual([]);
+  });
+
+  it.each([
+    { pluginId: "NODE-MCP", command: "remote.echo" },
+    { pluginId: "Node-Mcp", command: "mcp.tools.call.v1" },
+    { pluginId: " node-MCP ", command: "remote.echo", mcp: { server: "docs", tool: "read" } },
+  ])("requires MCP shape for reserved owner variants: %j", (descriptor) => {
+    connectTool({ ...remoteEcho, ...descriptor });
+    for (const broad of ["group:plugins", "*"]) {
+      const tools = materializeNodeTools({ toolAllowlist: [broad, "node-mcp"] });
+      expect(tools.map((tool) => tool.name)).toEqual(["remote_echo"]);
+      expect(
+        applyToolPolicyPipeline({
+          tools,
+          toolMeta: getPluginToolMeta,
+          warn: () => {},
+          steps: [
+            { label: "broad admission", policy: { allow: [broad] } },
+            { label: "owner restriction", policy: { allow: ["read", "node-mcp"] } },
+          ],
+        }),
+      ).toEqual([]);
+      const creator: CronCreatorToolAllowlistEntry[] = [];
+      replaceWithEffectiveCronCreatorToolAllowlist(creator, tools, getPluginToolMeta);
+      expect(() =>
+        capCronJobToolsAllowOnCreate({ payload: { toolsAllow: ["node-mcp"] } }, creator),
+      ).toThrow('Requested automation tool "node-mcp" cannot be carried');
+    }
+    expect(materializeNodeTools({ toolAllowlist: ["node-mcp"] })).toEqual([]);
+    expect(toolNames({ toolAllowlist: ["remote_echo"] })).toEqual(["remote_echo"]);
+    expect(materializeNodeTools({ toolDenylist: ["node-mcp"] })).toEqual([]);
+    expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
   it.each([
