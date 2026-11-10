@@ -121,6 +121,7 @@ function expectProfileMode(profilePath: string) {
 it.skipIf(process.platform === "win32").for([
   ["zsh", "ZDOTDIR", ".zshrc"],
   ["fish", "XDG_CONFIG_HOME", "fish/config.fish"],
+  ["powershell", "XDG_CONFIG_HOME", "powershell/Microsoft.PowerShell_profile.ps1"],
   ["zsh", "HOME", ".zshrc"],
   ["bash", "HOME", ".bash_profile"],
   ["fish", "HOME", ".config/fish/config.fish"],
@@ -139,7 +140,7 @@ it.skipIf(process.platform === "win32").for([
     await installCompletion(shell, true, "openclaw");
     await expect(readProfile(path.join(profileParent, profileName))).resolves.toContain(cachePath);
     const hintRoot =
-      variable !== "HOME" ? "~/linked-profiles/.." : shell === "powershell" ? startupDir : "~";
+      shell === "powershell" ? startupDir : variable !== "HOME" ? "~/linked-profiles/.." : "~";
     expect(resolveCompletionProfileHint(shell)).toBe(`${hintRoot}/${profileName}`);
   },
 );
