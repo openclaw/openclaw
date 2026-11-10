@@ -100,6 +100,13 @@
   flex: 1;
 }
 
+@media (max-width: 560px) {
+  .template-creator__row:has(> details[open]) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 .template-creator__summary dl {
   display: grid;
   grid-template-columns: auto 1fr;
