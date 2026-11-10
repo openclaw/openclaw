@@ -765,11 +765,8 @@ export async function authenticateReceiptRecovery({
     }
     requireValue(expectedRunAttempts.size === 0, "unexpected run-attempt constraints");
   }
-  await revalidateReceiptRecoveryRuns(request, client);
-  client.revalidateQualificationAdmissionAuthority({
-    descriptor: request.qualificationAdmission,
-    admission: verified.admission,
-  });
+  // The original qualification owner just refreshed its runs and admission.
+  // Only synchronous binding checks intervene; recovery authority is separate.
   verifyReceiptRecoveryAuthority(request.repository, producer);
   const current = {
     artifact: {

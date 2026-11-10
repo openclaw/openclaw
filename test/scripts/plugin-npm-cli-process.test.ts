@@ -132,6 +132,17 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
     // Bound all immutable work, including routes not listed in the fixture inventory.
     expect(categoriesByProcess[name]!.immutable, name + " reacquired immutable evidence").toBe(0);
     const calls = requests(name);
+    // One owner refreshes original qualification; retain the later effect-boundary checks.
+    for (const [route, count] of [
+      ["actions/runs/910", 4],
+      ["actions/artifacts/70", 6],
+      ["collaborators/release-operator/permission", 18],
+    ] as const) {
+      expect(
+        calls.filter((row) => row.route === route),
+        name + " redundant refresh " + route,
+      ).toHaveLength(count);
+    }
     for (const route of immutableAuthorityRoutes) {
       expect(
         calls.filter((row) => row.route === route),
