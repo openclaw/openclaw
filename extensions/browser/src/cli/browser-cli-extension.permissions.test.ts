@@ -68,9 +68,9 @@ const safe = {
   worldReadable: true,
 } as const;
 const unverifiedMessage =
-  "Cannot verify Windows owner or ACL: permission inspection is unavailable or incomplete. Chrome extension setup remains blocked.";
+  "Cannot verify Windows owner or ACL: permission inspection is unavailable or incomplete. Chrome extension setup remains blocked. Collect the OpenClaw version and this diagnostic for the installation maintainer. Do not loosen permissions to bypass verification.";
 const unsafeMessage =
-  "Refusing unsafe Windows owner or ACL: the permission check reported an untrusted owner or group/world write access.";
+  "Refusing unsafe Windows owner or ACL: the permission check reported an untrusted owner or group/world write access. Ask the installation maintainer to review ownership and write permissions before retrying.";
 
 async function setup() {
   const local = await fixture("win32");
