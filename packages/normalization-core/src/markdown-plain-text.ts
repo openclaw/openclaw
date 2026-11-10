@@ -79,9 +79,11 @@ function holdInlineCodeSpans(text: string, code: string[]): string {
       }
       j += runLength;
     }
-    if (close === -1) {
+    if (close === -1 || text.slice(index + openLength, close).includes("\n")) {
       // Consume the whole unmatched run so its tail backticks cannot reopen as a
-      // narrower span and steal delimiters from a later valid code span.
+      // narrower span and steal delimiters from a later valid code span. A run
+      // that spans a line break is a fenced block, not an inline code span, so
+      // it is left for fence stripping.
       index += openLength;
       continue;
     }
@@ -103,13 +105,15 @@ function holdInlineCodeSpans(text: string, code: string[]): string {
  */
 export function flattenMarkdownToPlainText(text: string): string {
   const code: string[] = [];
-  const withoutFences = stripCompletedLongOrTildeFences(text)
+  // Real fenced blocks are stripped first so their backticks cannot become spans.
+  const withoutFences = stripCompletedLongOrTildeFences(text);
+  // Link stripping runs on the raw text so backticks inside link destinations stay visible.
+  const withoutLinks = stripInlineLinks(withoutFences);
+  // Code spans (single- or multi-backtick, matched by equal-length runs) become
+  // `\0<index>\0` placeholders so block-marker and emphasis stripping cannot rewrite them.
+  const withoutCode = holdInlineCodeSpans(withoutLinks, code)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/```/g, " ");
-  // Link stripping runs first so backticks inside link destinations stay visible.
-  const withoutLinks = stripInlineLinks(withoutFences);
-  // Code spans become `\0<index>\0` so block and emphasis stripping cannot rewrite them.
-  const withoutCode = holdInlineCodeSpans(withoutLinks, code);
   // Quote markers may nest with horizontal whitespace, but must not consume another line.
   let flattened = withoutCode.replace(
     /^[\t ]{0,3}(?:(?:>[\t ]*)+|(?:#{1,6}|[-+*]|\d+[.)])\s+)/gm,

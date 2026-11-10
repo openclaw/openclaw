@@ -4,11 +4,17 @@ import { flattenMarkdownToPlainText } from "./markdown-plain-text.js";
 describe("flattenMarkdownToPlainText", () => {
   it.each([
     ["fences", "a\n````\n```\nx\n```\n````x\nx\n`````\n~~~\nx\n~~~~\n```\nx\n```\nb", "a b"],
-    ["code", "**`_i_`** [`**/*`](u`v`) `[x](y)`\0`\x00` ````z````", "_i_ **/* [x](y)\x00\x00 `"],
+    ["code", "**`_i_`** [`**/*`](u`v`) `[x](y)`\0`\x00` ````z````", "_i_ **/* [x](y)\x00\x00 z"],
     [
       "code with embedded backticks",
       "Rename to ``a`b`` and match ``**/*.ts``.",
       "Rename to a`b and match **/*.ts.",
+    ],
+    ["triple-backtick inline code span", "Run ```a`b`c``` to finish", "Run a`b`c to finish"],
+    [
+      "single-line backtick runs are code spans, not fences",
+      "Use ```code``` and ````z````",
+      "Use code and z",
     ],
     ["unmatched wider run before a valid span", "`` prefix `__init__`", "`` prefix __init__"],
     [
