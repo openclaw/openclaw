@@ -39,7 +39,7 @@ describe("transcript expansion", () => {
     const fullPane = document.body.appendChild(document.createElement("div"));
     const partialPane = document.body.appendChild(document.createElement("div"));
     const disclosures = (pane: HTMLElement) =>
-      Array.from(pane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary")).filter(
+      Array.from(pane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary:enabled")).filter(
         (button) => !button.closest(".chat-tool-msg-body"),
       );
     onTestFinished(() => {
