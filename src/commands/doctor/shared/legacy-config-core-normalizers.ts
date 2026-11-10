@@ -239,24 +239,14 @@ function stringRefs(values: unknown[]): string[] {
   return values.filter((ref): ref is string => typeof ref === "string");
 }
 
-function selectionRefs(owner: unknown): string[] {
-  const model = isRecord(owner) ? owner.model : undefined;
-  return stringRefs(
-    isRecord(model)
-      ? [model.primary, ...(Array.isArray(model.fallbacks) ? model.fallbacks : [])]
-      : [model],
-  );
-}
-
-const SELECTION_OWNERS = ["", "heartbeat", "subagents"] as const;
-
 /**
  * Refs whose runtime one migration pin decides. Migration pins a CLI ref's runtime on the
- * canonical ref in its scope's model map. That pin reaches every selection the scope runs,
- * including selections inherited from defaults, and a defaults pin reaches every agent. An
- * allowlist naming both spellings also requests both routes, as does a model map whose
- * canonical key the scope selects or allows; canonical map keys alone are metadata, and
- * legacy entries alone are a sign-in seed, so both still migrate.
+ * canonical ref in its scope's model map. That pin reaches every selection the scope runs
+ * (primary, heartbeat, subagent, utility, media and other model keys), including selections
+ * inherited from defaults, and a defaults pin reaches every agent. An allowlist naming both
+ * spellings also requests both routes, as does a model map whose canonical key the scope
+ * selects or allows; canonical map keys alone are metadata, and legacy entries alone are a
+ * sign-in seed, so both still migrate.
  */
 function* routeGroups(
   cfg: OpenClawConfig,
@@ -264,17 +254,16 @@ function* routeGroups(
 ): Generator<{ path: string; agentId?: string; groups: string[][] }> {
   const agents: unknown = cfg.agents;
   const defaults = isRecord(agents) && isRecord(agents.defaults) ? agents.defaults : undefined;
-  const selections = (agent: Record<string, unknown> | undefined) =>
-    SELECTION_OWNERS.map((key) => selectionRefs(key ? agent?.[key] : agent));
   const inherited = selections(defaults);
   // Selections outside agent scopes take their pin from agents.defaults, so every agent runs them.
-  const outside = [...inherited.flat(), ...outsideAgentRefs(cfg)];
+  const outside = [...[...inherited.values()].flat(), ...outsideAgentRefs(cfg)];
   const inheritedLegacy = outside.filter((ref) => migrate(ref));
   yield { path: "config", groups: [outside] };
   for (const [path, agent, agentId] of agentScopes(agents)) {
     const isDefaults = agent === defaults;
-    const effective = selections(agent).flatMap((refs, index) =>
-      refs.length || isDefaults ? refs : inherited[index]!,
+    const own = selections(agent);
+    const effective = [...new Set([...inherited.keys(), ...own.keys()])].flatMap(
+      (key) => own.get(key) ?? inherited.get(key)!,
     );
     const rawAllow = isRecord(agent.modelPolicy) ? agent.modelPolicy.allow : undefined;
     const allow = stringRefs(Array.isArray(rawAllow) ? rawAllow : []);
@@ -293,10 +282,26 @@ function* routeGroups(
   }
 }
 
+/** Model refs a scope selects, per top-level key; its model map and policy are grouped apart. */
+function selections(scope: Record<string, unknown> | undefined): Map<string, string[]> {
+  const byKey = new Map<string, string[]>();
+  for (const [key, value] of Object.entries(scope ?? {})) {
+    const refs = key === "models" || key === "modelPolicy" ? [] : collectRefs(value, `.${key}`);
+    if (refs.length) {
+      byKey.set(key, refs);
+    }
+  }
+  return byKey;
+}
+
 /** Model refs configured outside agent scopes: channel overrides, hook mappings, tools. */
 function outsideAgentRefs(cfg: OpenClawConfig): string[] {
+  return collectRefs({ ...cfg, agents: undefined }, "config");
+}
+
+function collectRefs(value: unknown, path: string): string[] {
   const refs: string[] = [];
-  rewriteModelRefs({ ...cfg, agents: undefined }, "config", [], (ref) => {
+  rewriteModelRefs(value, path, [], (ref) => {
     refs.push(ref);
     return null;
   });

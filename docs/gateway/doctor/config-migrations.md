@@ -364,16 +364,17 @@ Doctor rewrites legacy `claude-cli/<model>` refs to `anthropic/<model>` and pins
 the `claude-cli` runtime on that model entry. Runtime is chosen per model, so the
 rewrite would also move any direct `anthropic/<model>` selection onto Claude CLI.
 Doctor keeps the `claude-cli/*` refs as written, and reports a warning, when an
-agent runs the same model both ways: in its primary, fallbacks, heartbeat, or
-subagent model (including selections inherited from `agents.defaults`), or by
-listing both spellings in one model map or allowlist. Both routes keep working.
+agent runs the same model both ways: in its primary, fallbacks, heartbeat,
+subagent, utility, media, or other model selection (including selections
+inherited from `agents.defaults`), or by listing both spellings in one model map
+or allowlist. Both routes keep working.
 The same rule applies to `google-gemini-cli/*` refs.
 
 Refs outside agent scopes, such as `channels.modelByChannel` overrides and hook
 mapping models, take their runtime from `agents.defaults.models`, so Doctor pins
-the runtime on the migrated entry there. Because that pin reaches every agent, an
-agent that selects the same model directly also keeps the legacy refs as written,
-with a warning.
+the runtime on the migrated entry there. Because that pin reaches every agent,
+Doctor keeps the outside refs as written, with a warning, when any agent selects
+that model directly.
 
 ## Command-owner target kinds
 
