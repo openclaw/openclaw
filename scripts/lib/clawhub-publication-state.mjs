@@ -1,6 +1,15 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { readBoundedResponseText } from "./bounded-response.mjs";
 
+export function isPreparedClawHubTrustedPublisher(publisher) {
+  return (
+    publisher?.provider === "github-actions" &&
+    publisher?.repository === "openclaw/openclaw" &&
+    publisher?.workflowFilename === "plugin-clawhub-release.yml" &&
+    publisher?.environment == null
+  );
+}
+
 export function isClawHubPublishAttemptId(value) {
   return typeof value === "string" && /^[A-Za-z0-9_-]{1,200}$/u.test(value);
 }
