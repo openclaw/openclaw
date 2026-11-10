@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
@@ -388,6 +389,7 @@ function createPreparedRestartRecovery(
 export async function resumeMarkedSessions(
   params: RestartResumeParams & { onPrepared?: () => void },
 ): Promise<void> {
+  const owner = params.context.agentDatabaseStartup;
   const recovery = getRestartRecovery(params.context);
   const prepared = new Map<string, PreparedRestartStore[]>();
   const byAgent = new Map<string, RestartStoreTarget[]>();
@@ -405,10 +407,7 @@ export async function resumeMarkedSessions(
     }
     for (const [agentId, stores] of byAgent) {
       params.signal.throwIfAborted();
-      if (
-        !recovery.agents.has(agentId) &&
-        !params.context.agentDatabaseStartup?.isAgentInputRecoveryPending(agentId)
-      ) {
+      if (!recovery.agents.has(agentId) && !owner?.isAgentInputRecoveryPending(agentId)) {
         const batch = await prepareRestartStores(params, stores);
         if (batch) {
           prepared.set(agentId, batch);
@@ -419,7 +418,6 @@ export async function resumeMarkedSessions(
     // The startup observer reaches here only after deletion and subagent restoration.
     recovery.ready.resolve();
   }
-  const owner = params.context.agentDatabaseStartup;
   const pending = [...prepared].map(([agentId, stores]) => {
     const work = createPreparedRestartRecovery(params, agentId, stores);
     const completion = createDeferredCore();
@@ -441,10 +439,7 @@ export async function resumeMarkedSessions(
     params.onPrepared?.();
   }
   for (const agentId of byAgent.keys()) {
-    await params.context.agentDatabaseStartup?.waitForAgentPreparation(agentId, {
-      signal: params.signal,
-      forInput: true,
-    });
+    await owner?.waitForAgentPreparation(agentId, { signal: params.signal, forInput: true });
   }
   for (const work of recovery.agents.values()) {
     await work;
@@ -586,7 +581,7 @@ async function resumeRestartStore(
         });
         if (!resumed) {
           summary.record(
-            parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
+            agentId,
             sessionKey,
             interrupted ? "orphaned-run-interrupted" : "marker-not-current-or-legacy-ineligible",
           );
@@ -607,6 +602,9 @@ async function resumeRestartStore(
         } else if (parked === "waiting") {
           // The registry retains the wait; a new requester message owns fresh admission.
           summary.record(agentId, sessionKey, "parked");
+          log.warn(
+            `Parked restart resume (yield-waiting): ${truncateUtf16Safe(JSON.stringify({ agentId, sessionKey }), 1024)}`,
+          );
         } else {
           try {
             authority = await prepareSessionSystemTurnAuthority({

@@ -36,7 +36,7 @@ import {
 } from "./plugin-npm-prepared-release.mjs";
 import {
   revalidateQualificationAdmissionAuthority,
-  verifyReleaseQualificationOperator,
+  verifyReleaseQualificationOperators,
 } from "./release-qualification-admission.mjs";
 import { validateQualificationJobs } from "./release-qualification-coverage.mjs";
 import {
@@ -240,8 +240,12 @@ export function verifyReceiptRecoveryAuthority(repository, producer, completed =
     workflowEvent: "workflow_dispatch",
     runStatePolicy: completed ? "success" : "active",
   });
-  verifyReleaseQualificationOperator(repository, run.actor, runReleaseToolingGh);
-  verifyReleaseQualificationOperator(repository, run.triggering_actor, runReleaseToolingGh);
+  verifyReleaseQualificationOperators(
+    repository,
+    run.actor,
+    run.triggering_actor,
+    runReleaseToolingGh,
+  );
   return run;
 }
 
@@ -765,11 +769,8 @@ export async function authenticateReceiptRecovery({
     }
     requireValue(expectedRunAttempts.size === 0, "unexpected run-attempt constraints");
   }
-  await revalidateReceiptRecoveryRuns(request, client);
-  client.revalidateQualificationAdmissionAuthority({
-    descriptor: request.qualificationAdmission,
-    admission: verified.admission,
-  });
+  // The original qualification owner just refreshed its runs and admission.
+  // Only synchronous binding checks intervene; recovery authority is separate.
   verifyReceiptRecoveryAuthority(request.repository, producer);
   const current = {
     artifact: {

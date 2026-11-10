@@ -4069,6 +4069,7 @@ try {
         repoRoot,
         syncRoot,
         reuseMirror: canonicalProvider === "blacksmith-testbox",
+        seedFromBase: canonicalProvider === "ascii-box",
         syncPlan: spawnInvocation(
           binary,
           ["sync-plan", "--json", "--limit", "2147483647"],

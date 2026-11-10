@@ -202,6 +202,10 @@ export async function runReleasePublishPreflight(
     );
   }
   const sourceSha = releaseSha ?? context.targetSha;
+  const includeStableCloseout =
+    !options.tag.includes("-beta.") &&
+    options.npmDistTag !== "extended-stable" &&
+    options.publishOpenclawNpm !== false;
   let workflowRef = options.workflowRef.replace(/^refs\/(?:heads|tags)\//u, "");
   let toolingSha = context.toolingSha ?? "";
   await check(
@@ -430,9 +434,7 @@ export async function runReleasePublishPreflight(
       for (const consumer of [
         "publisher",
         ...(options.publishOpenclawNpm === false ? [] : ["core-npm"]),
-        ...(!options.tag.includes("-beta.") && options.publishOpenclawNpm !== false
-          ? ["stable-closeout"]
-          : []),
+        ...(includeStableCloseout ? ["stable-closeout"] : []),
       ] as const) {
         rows.push(
           ...evaluateReleasePublishGates({
@@ -574,7 +576,15 @@ export async function runReleasePublishPreflight(
         "github.release-admission",
         "Visible release metadata passed initial publication checks.",
         "Reconcile the exact public release's canonical notes and dependency evidence; leave docs-published bodies with their publication owner.",
-        () => inspectPublishReleasePage({ repo: options.repo, tag: options.tag, sourceSha, runGh }),
+        () =>
+          inspectPublishReleasePage({
+            repo: options.repo,
+            tag: options.tag,
+            sourceSha,
+            toolingSha,
+            retiredLineReason: options.retiredLinePublicationReason,
+            runGh,
+          }),
       );
     }
     const github = await check(
@@ -638,7 +648,7 @@ export async function runReleasePublishPreflight(
       );
     }
   }
-  if (!options.tag.includes("-beta.") && options.publishOpenclawNpm !== false) {
+  if (includeStableCloseout) {
     if (sourceSha) {
       rows.push(
         ...inspectStableCloseoutPreflight({
