@@ -1,2 +1,2 @@
-285
-# In-process immediate/deferred settlement and shipped Gateway channel fault/reset recovery, retaining writer custody.
+300
+# Immediate/deferred custody, shipped Gateway cleanup/reset recovery, and lossless rollover-failure reporting.

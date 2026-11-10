@@ -183,6 +183,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
   it.each([
     { missingProfile: false, policyFailure: false, sessionChanged: false },
     { unstarted: true },
+    { unstarted: true, rolloverTimeout: true },
     { unstarted: true, stateContention: true, flattenedStartup: true },
     { stateContention: true },
     { restartFailure: true },
@@ -199,6 +200,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       restartFailure,
       unstarted,
       flattenedStartup,
+      rolloverTimeout,
     }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         setRuntimeConfigSnapshot({});
@@ -296,7 +298,11 @@ describe("createChatSendDispatchErrorLifecycle", () => {
                   ? new AgentHarnessPreflightError("private-policy-diagnostic", {
                       userMessage: policyMessage,
                     })
-                  : new Error("Cloud worker unavailable");
+                  : new Error(
+                      rolloverTimeout
+                        ? `timed out draining work before reply session rollover: ${target.sessionKey}`
+                        : "Cloud worker unavailable",
+                    );
         if (restartFailure) {
           markGatewayRestartDraining();
         }
@@ -396,6 +402,15 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           });
           expect(restored[0]).not.toHaveProperty("details.error");
           expect(restored[0]).not.toHaveProperty("details.runId");
+        }
+        if (rolloverTimeout) {
+          const summary =
+            "Previous work has not settled, so this conversation could not reset. Check for completed work before retrying. If blocked, ask the operator to inspect the logs.";
+          expect(loadSessionEntry(target)?.lastRunError).toBe(summary);
+          expect(messages[1]).toMatchObject({
+            content: expect.stringContaining(summary),
+            details: { error: String(failure) },
+          });
         }
         if (missingProfile) {
           const recovery = renderFailoverCodeUserCopy("selected_auth_profile_unavailable")!;

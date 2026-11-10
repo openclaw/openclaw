@@ -107,6 +107,13 @@ export function renderStorageFailureSummary(
   return storageFailure ? STORAGE_FAILURE_COPY[storageFailure] : undefined;
 }
 
+/** A rollover wait is host settlement, not a provider request timeout. */
+export function renderSessionRolloverFailureSummary(error: string): string | undefined {
+  return /^(?:Error:\s*)?timed out draining work before reply session rollover:\s*\S/iu.test(error)
+    ? "Previous work has not settled, so this conversation could not reset. Check for completed work before retrying. If blocked, ask the operator to inspect the logs."
+    : undefined;
+}
+
 /** Render classified facts without exposing raw provider response text. */
 export function renderAssistantRequestFailureCopy(
   facts: AssistantRequestFailureCopyFacts,
@@ -297,6 +304,10 @@ export function renderRecordedAssistantFailureCopy(
     return `⚠️ ${approvalMessage}`;
   }
   const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
+  const rollover = renderSessionRolloverFailureSummary(raw);
+  if (rollover) {
+    return `⚠️ ${rollover} ${ERROR_DETAILS_HINT}`;
+  }
   // Terminal lifecycle errors can already contain our safe copy without the original failure facts.
   for (const copy of Object.values(ASSISTANT_REQUEST_FAILURE_COPY)) {
     if (copy && (raw === copy || raw === `⚠️ ${copy}`)) {

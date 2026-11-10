@@ -15,7 +15,11 @@ import {
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
-import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
+import {
+  ERROR_DETAILS_HINT,
+  ERROR_PREFIX_RE,
+  renderSessionRolloverFailureSummary,
+} from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   AUTH_PROFILE_COOLDOWN_ERROR_CODE,
@@ -261,6 +265,10 @@ export function renderSanitizedUserFacingText(
     return shouldRewriteRawPayloadWithoutErrorContext(trimmed)
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
+  }
+  const rollover = renderSessionRolloverFailureSummary(trimmed);
+  if (rollover) {
+    return rollover;
   }
   for (const format of [
     formatCommandErrorForUser,
