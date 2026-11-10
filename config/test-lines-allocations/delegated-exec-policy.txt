@@ -1,2 +1,2 @@
-81
-# Covers denied delegated changes, deployment limits, grant limits, and profile grants through production paths.
+242
+# Covers delegated policy cases and a spawned Gateway approval and config-write flow.
