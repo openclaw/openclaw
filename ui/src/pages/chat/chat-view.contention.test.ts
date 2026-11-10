@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { cancelLayout, scheduleLayout } from "../../lib/layout-frame.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { getComposerTextarea, renderChatView } from "./chat-view.test-helpers.ts";
@@ -42,12 +43,18 @@ it("keeps a contention check separate from sending and the composer draft", asyn
 
 it.each([
   ["waiting_for_state", "Temporarily busy—retrying…"],
-  ["preparing_context", "Preparing this turn…"],
+  ["preparing_context", "Preparing reply…"],
   ["answer", null],
   ["finishing", null],
-] as const)("keeps Stop available during %s", (phase, status) => {
+] as const)("keeps Stop available during %s", async (phase, status) => {
   const onAbort = vi.fn();
   const onSend = vi.fn();
+  if (!status) {
+    // A mount must not synchronously drain another owner's pending layout frame.
+    const queuedLayout = {};
+    scheduleLayout(queuedLayout, () => {});
+    onTestFinished(() => cancelLayout(queuedLayout));
+  }
   const container = renderChatView({
     canAbort: true,
     runActive: true,
@@ -57,11 +64,12 @@ it.each([
     onAbort,
     onSend,
   });
+  expect(container.querySelector(".chat-send-btn--stop")).not.toBeNull();
   if (status) {
     expect(workingStatus(container)).toContain(status);
     expect(container.querySelector(".chat-error")).toBeNull();
   } else {
-    expect(container.textContent).toContain("The answer is ready.");
+    await waitForSolid(() => expect(container.textContent).toContain("The answer is ready."));
     expect(container.querySelector(".chat-working-indicator")).toBeNull();
     expect(
       container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),

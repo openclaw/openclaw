@@ -3,20 +3,47 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate } from "node:timers/promises";
 import { getEnvironmentData } from "node:worker_threads";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   resolveDatabaseFamilyEngines,
   withDatabaseEngineSelection,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { Client } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
 import { describePeriod } from "./periods.js";
-import { githubItem } from "./reports-data.test-support.js";
+import {
+  fixtureChannels,
+  fixtureDay,
+  fixturePeople,
+} from "./report-run.benchmark-fixtures.test-support.js";
+import { githubItem, reportDocument, reportMember } from "./reports-data.test-support.js";
 import { buildRoster } from "./roster.js";
+import { TeamReportsRunner } from "./run-worker.js";
+import { TeamReportsScheduler } from "./scheduler.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
+
+const collectionExit = vi.hoisted(() => ({ notify: () => {} }));
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(...args: ConstructorParameters<typeof actual.Worker>) {
+        super(...args);
+        if (String(args[0]).endsWith("/report-run.benchmark-worker.test-support.ts")) {
+          this.once("exit", () => collectionExit.notify());
+        }
+      }
+    },
+  };
+});
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -49,27 +76,42 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+function openStore(databasePath: string) {
+  return withDatabaseEngineSelection(
+    {
+      effectiveEngines: resolveDatabaseFamilyEngines({
+        database: { families: { "team-reports": { engine: "postgres" } } },
+      }),
+      postgres: { connection: connection!, schemaPrefix },
+    },
+    () =>
+      createTeamReportsStore({
+        dbPath: databasePath,
+        workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
+      }),
+  );
+}
+
 describe.skipIf(!connection)("Team Reports PostgreSQL worker recovery", () => {
   beforeAll(async () => {
     await observer.connect();
   });
 
+  afterEach(async () => {
+    try {
+      await store?.close();
+      store = undefined;
+    } finally {
+      collectionExit.notify = () => {};
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
   it("reopens after a terminated write without replay and with fresh collection scratch", async () => {
     const directory = realpathSync(tempDirs.make("team-reports-recovery-"));
     const databasePath = path.join(directory, "anchor.sqlite");
-    store = await withDatabaseEngineSelection(
-      {
-        effectiveEngines: resolveDatabaseFamilyEngines({
-          database: { families: { "team-reports": { engine: "postgres" } } },
-        }),
-        postgres: { connection: connection!, schemaPrefix },
-      },
-      () =>
-        createTeamReportsStore({
-          dbPath: databasePath,
-          workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
-        }),
-    );
+    store = await openStore(databasePath);
     let schema: string;
     {
       using anchor = new DatabaseSync(databasePath, { readOnly: true });
@@ -154,5 +196,135 @@ describe.skipIf(!connection)("Team Reports PostgreSQL worker recovery", () => {
       { id: "retained" },
       { id: "after" },
     ]);
+  });
+
+  it("drains cancelled collection before recording failure and closing its PostgreSQL store", async () => {
+    const directory = realpathSync(tempDirs.make("team-reports-collection-stop-"));
+    const databasePath = path.join(directory, "anchor.sqlite");
+    store = await openStore(databasePath);
+    const periods = [describePeriod("day", fixtureDay), describePeriod("month", fixtureDay)];
+    const accepted = periods.map((period) => ({
+      report: reportDocument([reportMember("person-0")], { period, orgs: ["fixture"] }),
+      summary: null,
+      markdown: "Previously accepted report",
+    }));
+    for (const document of accepted) {
+      await store.upsertPeriod(document);
+    }
+    const config = parseTeamReportsConfig({
+      github: { token: "synthetic-fixture", orgs: ["fixture"] },
+      discord: { token: "synthetic-fixture", guildId: "1000", channels: fixtureChannels },
+      people: fixturePeople,
+      summaries: { enabled: true },
+      schedule: { enabled: false, weekly: false, monthly: true },
+    });
+    const resolved = await resolveTeamReportsConfig(config, {});
+    const workerUrl = new URL("./report-run.benchmark-worker.test-support.ts", import.meta.url);
+    const runner = new TeamReportsRunner(workerUrl);
+    const entered = createDeferred<void>();
+    const released = createDeferred<void>();
+    const cancelled = createDeferred<void>();
+    const exited = createDeferred<void>();
+    collectionExit.notify = () => exited.resolve();
+    const execute = store.execute.bind(store);
+    let held = false;
+    const calls = vi.spyOn(store, "execute").mockImplementation(async (...args) => {
+      if (args[0] !== "appendActivity" || held) {
+        return execute(...args);
+      }
+      held = true;
+      args[2]?.signal?.addEventListener("abort", () => cancelled.resolve(), { once: true });
+      const result = await execute(...args);
+      // The real PostgreSQL append committed; cancellation still owes this host result delivery.
+      entered.resolve();
+      await released.promise;
+      return result;
+    });
+    const close = vi.spyOn(store, "close");
+    const complete = vi.fn(async () => {
+      throw new Error("Cancelled collection must not start a model request");
+    });
+    const context = {
+      scheduler: createTestPluginServiceScheduler(),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      serviceHealth: { reportFailure: vi.fn(), clearFailure: vi.fn() },
+    };
+    const scheduler = new TeamReportsScheduler({
+      config,
+      resolved,
+      store,
+      llm: { complete },
+      context,
+      runReports: (params) => runner.run(params),
+      closeRunner: () => runner.close(),
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let stopped: Promise<void> | undefined;
+    let stopSettled = false;
+    let id: string;
+    try {
+      await scheduler.start();
+      id = await scheduler.generate({ date: fixtureDay });
+      await entered.promise;
+      stopped = scheduler.stop().then(() => {
+        stopSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.all([cancelled.promise, exited.promise]);
+      await setImmediate();
+      expect(stopSettled).toBe(false);
+      expect(close).not.toHaveBeenCalled();
+      expect(context.serviceHealth.reportFailure).not.toHaveBeenCalled();
+      released.resolve();
+      await stopped;
+      expect(close).toHaveBeenCalledOnce();
+      expect(complete).not.toHaveBeenCalled();
+      expect(calls.mock.calls.map(([command]) => command)).not.toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^(aggregateActivity|aggregatePeriod|upsertPeriod)$/),
+        ]),
+      );
+      expect(context.serviceHealth.reportFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Team Reports stopped after 30 seconds" }),
+      );
+      expect(context.logger.error).toHaveBeenCalledWith(
+        "team-reports: Team Reports stopped after 30 seconds",
+      );
+      expect(context.serviceHealth.clearFailure).not.toHaveBeenCalled();
+    } finally {
+      released.resolve();
+      await (stopped ?? scheduler.stop());
+      vi.useRealTimers();
+    }
+    store = await openStore(databasePath);
+    expect((await store.listRuns()).find((run) => run.id === id)).toMatchObject({
+      status: "error",
+      error: "Team Reports stopped after 30 seconds",
+    });
+    for (const document of accepted) {
+      const { period, key } = document.report.period;
+      expect(await store.getPeriod(period, key)).toEqual(document);
+    }
+    const next = new TeamReportsRunner(workerUrl);
+    try {
+      const statuses = await next.run({
+        config: { ...config, summaries: { ...config.summaries, enabled: false } },
+        resolved,
+        store,
+        periods,
+        llm: { complete },
+        runtime: { logger: context.logger, signal: new AbortController().signal },
+        onRoster() {},
+      });
+      expect(Object.values(statuses).every((source) => source.ok)).toBe(true);
+      for (const { period, key } of periods) {
+        expect((await store.getPeriod(period, key))?.report.totals).toMatchObject({
+          github: { issuesOpened: 2000, commits: 1000 },
+          discord: { messages: 1500 },
+        });
+      }
+    } finally {
+      await next.close();
+    }
   });
 });

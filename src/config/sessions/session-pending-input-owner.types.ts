@@ -9,6 +9,9 @@ export type SessionPendingInputOwner = Omit<
   SessionPendingInputWorkerFacts,
   "preparedAuthority" | "sources"
 > & {
+  /** Host source identity for graceful shutdown; worker receipts do not grant recovery. */
+  runId?: string;
+  recoverySource?: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
   sessionActor?: SessionActorStorageBinding;
   /** Immutable facts decoded from this owner's accepted bytes before projections escape. */
   requesterOrigin?: RequesterOrigin;
@@ -23,7 +26,7 @@ export type SessionPendingInputOwner = Omit<
   promotedOwner?: SessionPendingInputOwner;
   /** Prompt authority is revoked; this owner still holds terminal disposition custody. */
   settling?: true;
-  finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
+  finish: (disposition: Exclude<SessionPendingInputState, "queued">, userInitiated?: true) => void;
   /** Host-only staged retry custody; inbound dedupe spends it once. */
   dedupeRetryAvailable?: true;
   /** Graceful shutdown leaves this accepted input for the session's ordinary FIFO. */

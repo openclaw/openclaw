@@ -240,6 +240,7 @@ it("upgrades a persisted owned snapshot through refresh, release, and one destin
     expect((await catalog.list({ agentId: "main" }))[0]?.sessions[0]).toMatchObject({
       threadId: upload.beamId,
       canContinue: false,
+      continuationUnavailableReasonCode: "source-handoff-required",
     });
     expect((await catalog.read(params)).items).toHaveLength(upload.items.length);
     expect(await catalog.resolveGatewayConversation!(params)).toBeUndefined();
@@ -263,6 +264,9 @@ it("upgrades a persisted owned snapshot through refresh, release, and one destin
       id: refreshed.publicationId,
       accepted: true,
     });
+    const handedOff = (await catalog.list({ agentId: "main" }))[0]?.sessions[0];
+    expect(handedOff?.canContinue).toBe(true);
+    expect(handedOff).not.toHaveProperty("continuationUnavailableReasonCode");
     const first = (await catalog.copyToGatewaySession!(params)).continuation!;
     releases.push(first.release);
     expect(await first.beginCreate(() => {})).toBe(true);

@@ -9,7 +9,7 @@
   gap: 6px 16px;
   color: var(--muted);
   font-family: var(--font-body);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   white-space: normal;
 }

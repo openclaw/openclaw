@@ -109,7 +109,8 @@ export function renderChatComposerView(
   const placeholder = createMemo(() =>
     context().goalComposer.active
       ? t("chat.goals.objectivePlaceholder")
-      : t("chat.composer.placeholder", { name: props.assistantName || "agent" }),
+      : (context().slashArgsHint ??
+        t("chat.composer.placeholder", { name: props.assistantName || "agent" })),
   );
   const mirrorCameraPreview = createMemo(
     () =>
@@ -220,6 +221,7 @@ export function renderChatComposerView(
         {props.realtimeTalkInputNotice ? (
           <ChatVoiceStatus
             status="error"
+            tone="warning"
             detail={props.realtimeTalkInputNotice}
             onDismissError={props.onDismissRealtimeTalkInputNotice}
           />
@@ -409,7 +411,7 @@ export function renderChatComposerView(
             ]}
             aria-busy={props.disabledReasonBusy ? "true" : "false"}
             data-composer-layout={mobileResting() ? "single-line" : undefined}
-            data-incognito={props.selectedSession?.incognito ? "true" : undefined}
+            data-incognito={props.incognito ? "true" : undefined}
             onOpenclaw-composer-dismiss-invocations={() => {
               context().state.slashMenu.reset();
               context().state.skillMenu.reset();
@@ -559,6 +561,7 @@ export function renderChatComposerView(
                 <span
                   class="agent-chat__composer-placeholder"
                   aria-hidden="true"
+                  style={{ display: context().slashArgsHint ? "block" : undefined }}
                   ref={[
                     elementRef<HTMLSpanElement>((element) => {
                       placeholderElement = element;
@@ -570,7 +573,18 @@ export function renderChatComposerView(
                     }),
                   ]}
                 >
-                  {context().dictation?.active || context().predictionText ? "" : placeholder()}
+                  {context().dictation?.active || context().predictionText ? (
+                    ""
+                  ) : (
+                    <>
+                      {context().slashArgsHint ? (
+                        <span style={{ visibility: "hidden", "white-space": "pre" }}>
+                          {context().visibleDraft}
+                        </span>
+                      ) : undefined}
+                      {placeholder()}
+                    </>
+                  )}
                 </span>
                 <Show when={context().predictionText}>
                   <span class="agent-chat__composer-prediction" aria-hidden="true">
@@ -649,6 +663,7 @@ export function renderChatComposerView(
                     session={props.selectedSession}
                     messages={props.messages}
                     providerUsage={props.providerUsage}
+                    accountSelection={props.composerControls?.model.accountSelection}
                     gateway={props.contextGateway}
                     agentId={props.currentAgentId}
                     onOpenContext={props.onOpenContext}

@@ -11,6 +11,7 @@ import {
   onSettled,
 } from "solid-js";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
+import { ErrorDetails } from "../../components/config-error.tsx";
 import {
   LearnMoreLink,
   SettingsPage,
@@ -21,11 +22,11 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerLabsEnglish } from "../../i18n/locales/en-labs.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import {
   currentConfigObject,
   resolveEditableSnapshotConfig,
 } from "../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
@@ -37,6 +38,7 @@ import { resolveLabFeatureState, type LabFeature } from "./labs-feature-state.ts
 import { labFeatureMergePatch, labFeatureResetPatch, LAB_FEATURES } from "./labs-registry.ts";
 
 registerEnglishCatalog(registerLabsEnglish);
+registerEnglishCatalog(registerRouteSubtitlesEnglish);
 
 export function LabsPage() {
   const context = useApplication();
@@ -369,8 +371,9 @@ export function LabsPage() {
               <Errored
                 fallback={(error) => (
                   <SettingsRow
+                    role="alert"
                     title={t("labsPage.saveErrorTitle")}
-                    description={<span role="alert">{formatUiError(error())}</span>}
+                    description={<ErrorDetails error={error()} />}
                   />
                 )}
               >

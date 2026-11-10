@@ -349,6 +349,22 @@ export type ConfigSubmission = ConfigSubmittedDraft & {
 };
 export type ConfigSubmissionObserver = (submission: ConfigSubmission) => void;
 
+function persistedConfigReceipt(error: unknown): { ack: ConfigWriteAck; deferred: boolean } | null {
+  return error instanceof GatewayRequestError &&
+    isGatewayProtocolResponseError(error) &&
+    error.gatewayCode === ErrorCodes.UNAVAILABLE &&
+    isRecord(error.details) &&
+    error.details.publication !== "partial" &&
+    error.details.publication !== "complete" &&
+    isConfigWriteAck(error.details.persistedConfig)
+    ? {
+        ack: error.details.persistedConfig,
+        deferred:
+          isRecord(error.details.application) && error.details.application.status === "deferred",
+      }
+    : null;
+}
+
 export async function submitConfigDraft(
   state: RuntimeConfigState,
   mode: "auto" | "save" | "apply",
@@ -438,6 +454,15 @@ export async function submitConfigDraft(
     return true;
   } catch (err) {
     if (isCurrent()) {
+      const persisted = persistedConfigReceipt(err);
+      if (submission && persisted) {
+        onSubmitted?.({ ...submission, ack: persisted.ack });
+        const adoptedStatus = adoptConfigWriteAck(state, submission, persisted.ack);
+        state.configNeedsApply = true;
+        if (adoptedStatus === "conflict") {
+          return false;
+        }
+      }
       const outcome = configMutationFailure(state, err, submittedFormRaw);
       // A response can follow persistence without completing runtime apply.
       // Only a pre-write refusal or confirmed rollback retires the receipt.
@@ -449,7 +474,7 @@ export async function submitConfigDraft(
         onSubmitted?.({ ...submission, rejected: true });
       }
       state.lastError = outcome.message;
-      state.configAutoSaveStatus = outcome.status;
+      state.configAutoSaveStatus = persisted?.deferred ? "deferred" : outcome.status;
     }
     return false;
   } finally {
@@ -562,18 +587,11 @@ export async function patchConfig(
     return true;
   } catch (err) {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
-      if (
-        err instanceof GatewayRequestError &&
-        isGatewayProtocolResponseError(err) &&
-        err.gatewayCode === ErrorCodes.UNAVAILABLE &&
-        isRecord(err.details) &&
-        err.details.publication !== "partial" &&
-        err.details.publication !== "complete" &&
-        isConfigWriteAck(err.details.persistedConfig)
-      ) {
+      const persisted = persistedConfigReceipt(err);
+      if (persisted) {
         // This negative response confirms persistence, not runtime application.
-        onSubmitted({ ...submitted, ack: err.details.persistedConfig });
-        const adoptedStatus = adoptConfigWriteAck(state, submitted, err.details.persistedConfig);
+        onSubmitted({ ...submitted, ack: persisted.ack });
+        const adoptedStatus = adoptConfigWriteAck(state, submitted, persisted.ack);
         state.configNeedsApply = true;
         if (adoptedStatus === "conflict") {
           return false;
@@ -581,7 +599,7 @@ export async function patchConfig(
       }
       const outcome = configMutationFailure(state, err);
       state.lastError = outcome.message;
-      state.configAutoSaveStatus = outcome.status;
+      state.configAutoSaveStatus = persisted?.deferred ? "deferred" : outcome.status;
     }
     return false;
   }
@@ -651,7 +669,7 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
       );
       return;
     }
-    showToast({ message: t("configView.fileOpenedOnGateway") });
+    showToast({ severity: "success", message: t("configView.fileOpenedOnGateway") });
   } catch (err) {
     await publishFailure(formatUiError(err), state.configSnapshot?.path);
   }

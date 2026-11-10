@@ -13,15 +13,15 @@ export function readUpdateRunAdmissionCommand(
   db: EngineConnection,
   command: UpdateRunAdmissionReadCommand,
 ) {
+  if (command.type === "updateRuns.reconciliationCandidates") {
+    return {
+      type: command.type,
+      candidates: readUpdateRunReconciliationCandidates(db, command.input),
+    };
+  }
   return runSqliteReadSnapshotSync(db, () => {
     if (command.type === "updateRuns.recoveryAdmission") {
       return { type: command.type, facts: readUpdateRecoveryAdmissionFacts(db) };
-    }
-    if (command.type === "updateRuns.reconciliationCandidates") {
-      return {
-        type: command.type,
-        candidates: readUpdateRunReconciliationCandidates(db, command.input),
-      };
     }
     const run = tableExists(db, "update_runs") ? readUpdateRunRecord(db, command.runId) : undefined;
     return {

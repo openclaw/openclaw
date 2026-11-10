@@ -13,10 +13,8 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import type { OpenClawConfig } from "../../src/config/types.js";
 import { selectAttachments } from "../../src/media-understanding/attachments.select.js";
 import { resolveAutoMediaKeyProviders } from "../../src/media-understanding/defaults.js";
-import type {
-  MediaAttachment,
-  MediaUnderstandingProvider,
-} from "../../src/media-understanding/types.js";
+import type { MediaUnderstandingProvider } from "../../src/media-understanding/provider-types.js";
+import type { MediaAttachment } from "../../src/media-understanding/types.js";
 import { prepareRuntimePluginsConfig } from "../../src/plugins/config-state.js";
 import { setGatewayPluginMetadataSnapshot } from "../../src/plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../../src/plugins/current-plugin-metadata-state.js";

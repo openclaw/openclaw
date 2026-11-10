@@ -23,6 +23,7 @@ struct ChatProTab: View {
     }
 
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(GatewayConnectionController.self) private var gatewayController
     @AppStorage("openclaw.webchat.showAssistantTrace")
@@ -48,7 +49,6 @@ struct ChatProTab: View {
 
     var body: some View {
         self.content
-            .disabled(self.isGatewayTransitionPending)
             .task {
                 if self.speech == nil {
                     let gateway = self.appModel.operatorSession
@@ -69,10 +69,21 @@ struct ChatProTab: View {
                 .chatViewModelOwnerID)
     }
 
+    /// Session actions write through the chat owner, so they wait out a gateway handoff
+    /// even though the toolbar that offers them stays enabled.
+    private var areSessionActionsDisabled: Bool {
+        self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned ||
+            self.isGatewayTransitionPending
+    }
+
     private var content: some View {
         self.chatSurface
-            // The shared canvas supplies color for the native blur. Automatic
-            // edge effects harden to black when the host inserts an opaque fill.
+            // Protect the chat owner during a handoff, but keep the toolbar outside this
+            // scope. Automatic reconnects keep the handoff pending while they retry an
+            // unreachable gateway, and the toolbar is the way to reach Gateway settings.
+                .disabled(self.isGatewayTransitionPending)
+                // The shared canvas supplies color for the native blur. Automatic
+                // edge effects harden to black when the host inserts an opaque fill.
                 .scrollEdgeEffectStyle(.soft, for: .vertical)
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
@@ -89,10 +100,13 @@ struct ChatProTab: View {
                 }
                 .sheet(isPresented: self.$showsNewSessionOptions) {
                     if let viewModel {
-                        ChatNewSessionOptionsPopover(viewModel: viewModel) {
-                            self.showsNewSessionOptions = false
+                        ScrollView {
+                            ChatNewSessionOptionsPopover(viewModel: viewModel) {
+                                self.showsNewSessionOptions = false
+                            }
                         }
-                        .presentationDetents([.medium])
+                        .disabled(self.isGatewayTransitionPending)
+                        .presentationDetents(self.dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
                         .presentationDragIndicator(.visible)
                     }
                 }
@@ -189,18 +203,26 @@ struct ChatProTab: View {
             diameter: 38,
             avatarDiameter: 28)
         {
-            Text(self.agentBadge)
-                .font(OpenClawType.avatar(size: self.agentBadge.count > 2 ? 12 : 16))
-                .foregroundStyle(.white)
-                .minimumScaleFactor(0.6)
-                .lineLimit(1)
-                .frame(width: 28, height: 28)
-                .background(Circle().fill(OpenClawBrand.carapaceElevated))
+            Group {
+                if let image = self.agentAvatarImage {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else {
+                    Text(self.agentBadge)
+                        .font(OpenClawType.avatar(size: self.agentBadge.count > 2 ? 12 : 16))
+                        .foregroundStyle(.white)
+                        .minimumScaleFactor(0.6)
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: 28, height: 28)
+            .background(Circle().fill(OpenClawBrand.carapaceElevated))
+            .clipShape(Circle())
         }
         .overlay(alignment: .topTrailing) {
             self.gatewayAvatarStatusDot
         }
         .accessibilityElement(children: .ignore)
+        .openClawToolbarGlyphScale()
     }
 
     private var gatewayAvatarStatusDot: some View {
@@ -230,7 +252,8 @@ struct ChatProTab: View {
         Button(action: self.handleHeaderAgentIdentityTap) {
             self.headerAgentIdentityLabel
         }
-        .frame(minHeight: 44)
+        .openClawToolbarHitTarget(preservesIntrinsicWidth: true)
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
         .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
@@ -358,6 +381,12 @@ struct ChatProTab: View {
             statusText: self.appModel.talkMode.statusText,
             providerLabel: self.appModel.talkMode.gatewayTalkProviderLabel,
             level: self.talkLevel,
+            isMicrophoneMuted: self.appModel.talkMode.isMicrophoneMuted,
+            toggleMicrophone: {
+                Task {
+                    await self.appModel.talkMode.setMicrophoneMuted(!self.appModel.talkMode.isMicrophoneMuted)
+                }
+            },
             inputDevices: self.talkInputDevices,
             selectedInputDeviceID: self.selectedTalkInputDeviceID,
             selectInputDevice: { deviceID in
@@ -429,10 +458,11 @@ struct ChatProTab: View {
             } icon: {
                 Image(systemName: "ellipsis.circle")
                     .font(.system(size: 22))
+                    .openClawToolbarGlyphScale()
             }
             .foregroundStyle(OpenClawBrand.accent)
         }
-        .frame(width: 44, height: 44)
+        .openClawToolbarHitTarget()
         .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel("Chat actions")
@@ -452,7 +482,7 @@ struct ChatProTab: View {
                     self.chatActionButton(
                         title: "New chat in worktree",
                         systemImage: "arrow.triangle.branch",
-                        disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                        disabled: self.areSessionActionsDisabled)
                     {
                         Task { await self.viewModel?.startNewSession(worktree: true) }
                     }
@@ -461,7 +491,7 @@ struct ChatProTab: View {
                 self.chatActionButton(
                     title: "New session options…",
                     systemImage: "slider.horizontal.3",
-                    disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                    disabled: self.areSessionActionsDisabled)
                 {
                     self.pendingChatAction = .newSessionOptions
                 }
@@ -472,6 +502,7 @@ struct ChatProTab: View {
                     {
                         self.showsChatActions = false
                     }
+                    .disabled(self.isGatewayTransitionPending)
                 }
 
                 Button {
@@ -712,6 +743,12 @@ struct ChatProTab: View {
 
     private var agentBadge: String {
         self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentBadge : self.currentAgentBadge
+    }
+
+    private var agentAvatarImage: UIImage? {
+        self.isAttachmentOwnerPinned
+            ? self.appModel.chatPresentation.presentationAgentAvatar
+            : self.appModel.agentAvatarImage(for: self.currentActiveAgent?.id ?? self.appModel.chatAgentId)
     }
 
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [

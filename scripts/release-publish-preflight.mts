@@ -43,6 +43,7 @@ import {
   observeReleaseNpmState,
   readReleasePublicationPackages,
 } from "./lib/release-publish-state.mts";
+import { validateRetiredLineReason } from "./lib/release-version.mjs";
 import { verifyReleasePreflightToolingIdentity } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPublishBoundary } from "./openclaw-npm-extended-stable-release.mjs";
 import { verifyOpenClawNpmResumeRun } from "./openclaw-npm-resume-run.mts";
@@ -133,10 +134,11 @@ export async function runReleasePublishPreflight(
       ) {
         throw new Error("Core npm publication requires plugin_publish_scope=all-publishable.");
       }
-      if (options.publishOpenclawNpm !== false && options.npmDistTag === "extended-stable") {
-        throw new Error(
-          "Extended-stable core npm publication uses its canonical extended-stable workflow.",
-        );
+      if (options.retiredLinePublicationReason !== undefined) {
+        validateRetiredLineReason(options.retiredLinePublicationReason);
+        if (options.npmDistTag !== "extended-stable") {
+          throw new Error("A retired-line decision requires the extended-stable npm dist-tag.");
+        }
       }
       if (
         options.pluginPublishScope === "selected"
@@ -241,12 +243,9 @@ export async function runReleasePublishPreflight(
         );
         toolingSha ||= String(main.sha);
         const proposed = `release-publish/${toolingSha.slice(0, 12)}-${Math.floor(Date.now() / 1000)}`;
-        workflowRef = proposed;
-        const remediation = `Repeat preflight with --workflow-sha ${toolingSha}; the helper reuses or mints the protected tooling tag (or create ${proposed} yourself with gh api -X POST repos/${options.repo}/git/refs).`;
-        if (!context.allowPlannedTag) {
-          throw new Error(`Mutating publish cannot dispatch from main. ${remediation}`);
-        }
-        warn("publisher.planned-tooling", "Protected tooling tag is still pending.", remediation);
+        throw new Error(
+          `Mutating publish cannot dispatch from main. Repeat preflight with --workflow-sha ${toolingSha}; the helper reuses or mints the protected tooling tag (or create ${proposed} yourself with gh api -X POST repos/${options.repo}/git/refs).`,
+        );
       } else {
         throw new Error(
           "This preflight supports the regular protected-tag publication route; use the extended-stable owner workflow for other routes.",
@@ -518,6 +517,9 @@ export async function runReleasePublishPreflight(
       );
     }
   }
+  // Sealed FRV npm decisions predate publication, so resume discovery reads the
+  // live core version alongside the current selector.
+  let corePublished = false;
   const npmEvidence =
     evidenceRequired && sourceSha && SHA.test(toolingSha)
       ? await check(
@@ -529,10 +531,15 @@ export async function runReleasePublishPreflight(
               packageName: "openclaw",
               packageUrl: "https://registry.npmjs.org/openclaw",
               maxBytes: 16 * 1024 * 1024,
+              exactVersion: options.tag.slice(1),
             });
             const packument = requirePreflightRecord(
               result.packument,
               "openclaw registry metadata",
+            );
+            corePublished = Object.hasOwn(
+              requirePreflightRecord(packument.versions, "openclaw versions"),
+              options.tag.slice(1),
             );
             const tags = requirePreflightRecord(packument["dist-tags"], "openclaw dist-tags");
             const version = tags[options.npmDistTag];
@@ -588,7 +595,7 @@ export async function runReleasePublishPreflight(
     }
   }
   let resume = options.openclawNpmResumeRunId ?? "";
-  if (registry?.corePublished && options.publishOpenclawNpm !== false && npmEvidence) {
+  if (corePublished && options.publishOpenclawNpm !== false && npmEvidence) {
     const tarballSha512 = await check(
       "core-npm.immutable-bytes",
       "Published core tarball matches the prepared release bytes.",

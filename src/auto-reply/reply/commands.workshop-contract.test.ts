@@ -399,7 +399,7 @@ describe("/learn through the command registry", () => {
       expect(await dispatch(params)).toMatchObject({
         shouldContinue: false,
         reply: {
-          text: "/learn can't save anything on this agent: neither the skill_workshop tool nor the memory plugin's learning tools are available here. They need a non-sandboxed session, a model and harness with tool support, and a tool policy that allows them.",
+          text: "/learn can't save anything on this agent: no learning tools are available here. They need a non-sandboxed session, a model and harness with tool support, and a tool policy that allows them.",
         },
       });
       expect(params.ctx.BodyForAgent).toBe("/learn remember the deploy steps");

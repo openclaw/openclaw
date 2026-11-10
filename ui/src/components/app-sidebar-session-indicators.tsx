@@ -1,8 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
-import { formatDurationCompact } from "../lib/format-duration.ts";
 import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
@@ -184,11 +183,14 @@ export function renderSidebarSessionIndicators(
       ) : undefined}
     </>
   );
+  const [clockOffscreen, setClockOffscreen] = createSignal(false);
   const trail = createMemo(() => {
     const currentSession = readSession();
     return hasTrail() ? (
       <span
+        ref={[sessionRunVisibility(setClockOffscreen)]}
         class={["session-row-trail", { "session-row-trail--snooze": snoozed() }]}
+        style={snoozed() ? undefined : { "min-width": "7ch", "justify-content": "flex-start" }}
         id={metaId()}
         title={
           snoozed()
@@ -204,13 +206,16 @@ export function renderSidebarSessionIndicators(
             {formatSessionSnoozeWakeTime(readSession().snoozedUntil!, new Date(), true)}
           </>
         ) : currentSession.runtimeMs != null ? (
-          currentSession.hasActiveRun ? (
-            <ElapsedTime startMs={currentSession.runtimeSampledAt! - currentSession.runtimeMs} />
-          ) : (
-            (formatDurationCompact(currentSession.runtimeMs) ?? "0ms")
-          )
+          <ElapsedTime
+            startMs={currentSession.runtimeSampledAt! - currentSession.runtimeMs}
+            paused={clockOffscreen()}
+          />
         ) : (
-          <ElapsedTime startMs={readSession().startedAt!} endMs={readSession().endedAt ?? null} />
+          <ElapsedTime
+            startMs={readSession().startedAt!}
+            endMs={readSession().endedAt ?? null}
+            paused={clockOffscreen()}
+          />
         )}
       </span>
     ) : undefined;

@@ -491,18 +491,16 @@ async function startSessionExpiryServer(stateful: boolean) {
           res.writeHead(404).end("Session not found");
         } else if (message.method === "notifications/initialized") {
           res.writeHead(202).end();
+        } else if (message.method === "tools/list") {
+          reply({
+            tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
+          });
+        } else if (stateful && message.method === "tools/call") {
+          reply({
+            content: [{ type: "text", text: `recovered ${sessionId}` }],
+          });
         } else {
-          if (message.method === "tools/list") {
-            reply({
-              tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
-            });
-          } else if (stateful && message.method === "tools/call") {
-            reply({
-              content: [{ type: "text", text: `recovered ${sessionId}` }],
-            });
-          } else {
-            res.writeHead(405).end();
-          }
+          res.writeHead(405).end();
         }
       })().catch(() => res.destroy());
     }

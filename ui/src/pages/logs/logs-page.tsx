@@ -9,10 +9,8 @@ import {
   failPanelRefresh,
 } from "../../components/panel-refresh-status-state.ts";
 import { downloadTextFile } from "../../lib/download.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";

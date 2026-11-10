@@ -65,17 +65,29 @@ it.each(["advanced", "security"] as const)(
         return {
           schema: (heldSchema ??= {
             type: "object",
-            properties: Object.fromEntries(
-              ["logging", "security"].map((key) => [
-                key,
-                {
-                  type: "object",
-                  properties: {
-                    value: { type: "string", title, minLength, default: defaultValue },
+            properties: {
+              ...Object.fromEntries(
+                ["logging", "security"].map((key) => [
+                  key,
+                  {
+                    type: "object",
+                    properties: {
+                      value: { type: "string", title, minLength, default: defaultValue },
+                    },
+                  },
+                ]),
+              ),
+              // Curated leaves outside this editor must not invalidate its retained schema.
+              ui: {
+                type: "object",
+                properties: {
+                  prefs: {
+                    type: "object",
+                    properties: { locale: { type: "string" } },
                   },
                 },
-              ]),
-            ),
+              },
+            },
           }),
           uiHints,
           version: "synthetic",
@@ -124,6 +136,12 @@ it.each(["advanced", "security"] as const)(
       publishConfigSource(context.overlays);
       flush();
       expect(split).not.toHaveBeenCalled();
+      publishConfigSource(context.runtimeConfig);
+      publishConfigSource(context.config);
+      context.config.current.openclawIdEnabled = false;
+      publishConfigSource(context.config);
+      expect(analyze).not.toHaveBeenCalled();
+      expect(split).not.toHaveBeenCalled();
       field.setSelectionRange(1, 4);
       gateway.publish({ ...gateway.gateway.snapshot, lastError: null });
       publishConfigSource(context.overlays);
@@ -168,6 +186,15 @@ it.each(["advanced", "security"] as const)(
       expect(request).not.toHaveBeenCalled();
       expect(analyze).not.toHaveBeenCalled();
 
+      for (const enabled of [true, false]) {
+        context.config.current.openclawIdEnabled = enabled;
+        publishConfigSource(context.config);
+        expect(analyze).toHaveBeenCalledOnce();
+        expect(view.page.querySelector('input[aria-label="Synthetic scoped value"]')).toBe(field);
+        analyze.mockClear();
+        split.mockClear();
+      }
+
       title = "Replacement schema label";
       minLength = 10;
       defaultValue = "replacement default";
@@ -202,7 +229,7 @@ it.each(["advanced", "security"] as const)(
       expect(split).toHaveBeenCalled();
       uiHints = { [`${section}.value`]: { advanced: true } };
       await runtimeConfig.refreshSchema();
-      // Privacy & Security titles its sections itself, so advanced settings stay in place.
+      // Privacy & security titles its sections itself, so advanced settings stay in place.
       await waitForSolid(() => {
         const disclosure = view.page.querySelector(".config-advanced-disclosure");
         if (pageId === "security") {
