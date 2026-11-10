@@ -42,6 +42,12 @@ capabilities; this prevents simultaneous Gateways from issuing camera,
 location, screen, or notification commands to the same phone. Android can
 suspend the secondary connections after the app leaves the foreground.
 
+Local Gateway discovery pauses when it has no active consumer. It remains
+available for cold background recovery of a saved discovered Gateway, for
+enabled secondary Gateways in the foreground, and while **Settings → Gateway →
+Discovered** or Gateway onboarding is open. Resuming a scan rebuilds the local
+list; an already accepted connection retains its own reconnect address.
+
 The sidebar defaults to **Home → Threads → Skills → Overview**. Existing
 personalized orders and pinned work pages are preserved; **Pages pencil → Edit pinned items →
 Reset pinned items** restores these defaults. The **Settings** gear beside the

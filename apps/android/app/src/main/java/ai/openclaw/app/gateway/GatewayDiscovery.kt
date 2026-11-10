@@ -163,6 +163,9 @@ class GatewayDiscovery(
     synchronized(discoveryLock) {
       if (active) {
         if (discoveryListener != null) return
+        // Loss events during a pause are not replayed. Connected sessions retain their own route;
+        // the discovered list must be rebuilt from this scan rather than presenting stale endpoints.
+        updateDiscovery { localById.clear() }
         val listener = newDiscoveryListener()
         discoveryListener = listener
         try {

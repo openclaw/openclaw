@@ -455,10 +455,14 @@ fun OnboardingFlow(
       }
     }
 
-    LaunchedEffect(step) {
-      if (step == OnboardingStep.Gateway || step == OnboardingStep.Manual) {
-        viewModel.startGatewayDiscovery()
-      }
+    DisposableEffect(viewModel, step) {
+      val discovery =
+        if (step == OnboardingStep.Gateway || step == OnboardingStep.Manual) {
+          viewModel.startGatewayDiscovery()
+        } else {
+          null
+        }
+      onDispose { discovery?.cancel() }
     }
 
     fun resetNodeApprovalCheck(autoContinue: Boolean = false) {

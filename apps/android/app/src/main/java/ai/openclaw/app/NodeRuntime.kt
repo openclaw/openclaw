@@ -141,6 +141,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -957,7 +958,7 @@ class NodeRuntime internal constructor(
   val activeAudioInputDevicePreference: StateFlow<String?> = _activeAudioInputDevicePreference.asStateFlow()
 
   private val discovery =
-    GatewayDiscovery(appContext, scope = scope, startActive = initialForeground && mode == NodeRuntimeMode.Live)
+    GatewayDiscovery(appContext, scope = scope, startActive = false)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
 
   private val identityStore = DeviceIdentityStore.withPrefs(appContext, prefs)
@@ -2871,7 +2872,8 @@ class NodeRuntime internal constructor(
   val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
 
-  private var didAutoConnect = false
+  @Volatile private var didAutoConnect = false
+  private var gatewayDiscoveryConsumers = 0
 
   @Volatile private var preferredGatewayReconnectSuppressed = initialReconnectSuppressed
 
@@ -2996,6 +2998,7 @@ class NodeRuntime internal constructor(
         prefs.setVoiceMicEnabled(false)
       }
 
+      synchronized(gatewayStatusLock) { refreshGatewayDiscovery() }
       scope.launch(Dispatchers.Default) {
         gateways.collect { list ->
           seedLastDiscoveredGateway(list)
@@ -3012,6 +3015,7 @@ class NodeRuntime internal constructor(
         ) { _, _, _, _, _ -> Unit }
           .collect {
             ensureActive()
+            synchronized(gatewayStatusLock) { refreshGatewayDiscovery() }
             reconcileBackgroundGatewayFleet()
           }
       }
@@ -3053,8 +3057,38 @@ class NodeRuntime internal constructor(
     }
   }
 
+  /** Keeps discovery available for a visible browser, including while another Gateway is connected. */
+  suspend fun discoverGateways(): Nothing {
+    synchronized(gatewayStatusLock) {
+      gatewayDiscoveryConsumers++
+      refreshGatewayDiscovery()
+    }
+    try {
+      awaitCancellation()
+    } finally {
+      synchronized(gatewayStatusLock) {
+        gatewayDiscoveryConsumers--
+        refreshGatewayDiscovery()
+      }
+    }
+  }
+
   private fun refreshGatewayDiscovery() {
-    discovery.setActive(mode == NodeRuntimeMode.Live && _isForeground.value && !_isConnected.value && !_nodeConnected.value)
+    // Sticky-service recovery must resolve its saved route without reviving foreground capabilities.
+    val recoveringDiscoveredGateway =
+      !preferredGatewayReconnectSuppressed && !didAutoConnect && gatewayLifecycleIntentSeq.get() == 0L &&
+        prefs.gatewayRegistry.activeEntry()?.kind == GatewayRegistryEntryKind.DISCOVERED
+    // Enabled secondary Gateways can appear after the focused connection is already established.
+    val discoveringSecondaryGateway =
+      currentBackgroundGatewayStableIds().any { stableId ->
+        prefs.gatewayRegistry.entries.value.any { it.stableId == stableId && it.kind == GatewayRegistryEntryKind.DISCOVERED }
+      }
+    discovery.setActive(
+      mode == NodeRuntimeMode.Live &&
+        (recoveringDiscoveredGateway ||
+          (_isForeground.value &&
+            (gatewayDiscoveryConsumers > 0 || discoveringSecondaryGateway || (!_isConnected.value && !_nodeConnected.value)))),
+    )
   }
 
   /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */

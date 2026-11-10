@@ -1655,8 +1655,10 @@ private fun GatewaySettingsScreen(
     )
   }
 
-  // Keep discovery available to the disclosed list, as in onboarding.
-  LaunchedEffect(Unit) { viewModel.startGatewayDiscovery() }
+  DisposableEffect(viewModel, showDiscovery) {
+    val discovery = if (showDiscovery) viewModel.startGatewayDiscovery() else null
+    onDispose { discovery?.cancel() }
+  }
 
   fun connectGateway(useSetupCode: Boolean) {
     val plan =
