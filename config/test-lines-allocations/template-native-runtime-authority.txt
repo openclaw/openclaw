@@ -1,0 +1,3 @@
+# Native bundled-plugin Add authority fixture consolidation adds 46 net lines.
+# The separate restored scheduling regression already has its own 68-line grant.
+46
