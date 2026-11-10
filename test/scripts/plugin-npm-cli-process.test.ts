@@ -129,12 +129,8 @@ it(
       );
       expect(calls.filter((row) => row.route === "actions/artifacts/9003/zip")).toHaveLength(0);
       for (const id of f.recovery.immutableArchiveIds) {
-        expect
-          .soft(
-            calls.filter((row) => row.route === "actions/artifacts/" + id + "/zip"),
-            name + " reacquired immutable " + id,
-          )
-          .toHaveLength(0);
+        const downloads = calls.filter((row) => row.route === "actions/artifacts/" + id + "/zip");
+        expect.soft(downloads, name + " reacquired immutable " + id).toHaveLength(0);
       }
       expect(
         calls.filter((row) => row.route?.startsWith("contents/") || row.route?.endsWith("/logs")),
@@ -157,17 +153,17 @@ it(
         "actions/runs/5001/artifacts?per_page=100&page=1",
         "collaborators/release-operator/permission",
       ]) {
-        expect(calls.some((row) => row.route === route), name + " did not refresh " + route).toBe(
-          true,
-        );
+        const refreshed = calls.some((row) => row.route === route);
+        expect(refreshed, name + " did not refresh " + route).toBe(true);
       }
       expect(calls.some((row) => row.route?.startsWith("git/ref/"))).toBe(true);
     }
     for (const id of f.recovery.metadataOnlyPayloadIds) {
       for (const name of phases) {
-        expect(requests(name).some((row) => row.route === "actions/artifacts/" + id + "/zip")).toBe(
-          false,
+        const downloaded = requests(name).some(
+          (row) => row.route === "actions/artifacts/" + id + "/zip",
         );
+        expect(downloaded).toBe(false);
       }
     }
 
