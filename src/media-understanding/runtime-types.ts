@@ -2,8 +2,7 @@ import type { ActiveMediaModel } from "../../packages/media-understanding-common
 import type {
   ImageDescriptionResult,
   ImagesDescriptionInput,
-  MediaUnderstandingDecision,
-  MediaUnderstandingOutput,
+  RunMediaUnderstandingFileResult,
   StructuredExtractionResult,
 } from "../../packages/media-understanding-common/src/types.js";
 // Public media-understanding runtime API types for file-based image/audio/video
@@ -28,14 +27,6 @@ export type RunMediaUnderstandingFileParams = {
     channel?: string;
     chatType?: string;
   };
-};
-
-export type RunMediaUnderstandingFileResult = {
-  text: string | undefined;
-  provider?: string;
-  model?: string;
-  output?: MediaUnderstandingOutput;
-  decision?: MediaUnderstandingDecision;
 };
 
 export type DescribeImageFileParams = Omit<RunMediaUnderstandingFileParams, "capability">;
