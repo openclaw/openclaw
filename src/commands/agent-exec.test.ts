@@ -494,6 +494,34 @@ describe("agent exec command composition", () => {
     expect(error).toHaveBeenCalledWith("Agent exec cleanup failed: cleanup denied");
   });
 
+  it("releases plugin-capture tokens before removing temporary state directory", async () => {
+    const runtime = createTestRuntime();
+    let observedStateDir = "";
+
+    const result = await runExec(
+      { json: true },
+      async () => {
+        observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+        const { retainPluginSourceCaptureInstance } =
+          await import("../plugins/plugin-source-capture-directory.js");
+        const instance = retainPluginSourceCaptureInstance(observedStateDir);
+        instance.createDirectory("exec-test-capture-");
+        return successResult("done");
+      },
+      runtime,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 0,
+      envelope: {
+        status: "ok",
+        final: "done",
+      },
+    });
+    expect(observedStateDir).not.toBe("");
+    await expect(fs.stat(observedStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("reports exhaustion of the ordered explicit fallback chain", async () => {
     const fallback = ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"];
     const result = await runExec(

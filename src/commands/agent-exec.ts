@@ -397,6 +397,13 @@ export async function agentExecCommand(
     });
     await closeOpenClawStateDatabaseByPathAsync(temporaryStatePath).catch(recordCleanupError);
   }
+  if (!cleanupError && temporaryStateDir) {
+    const { releasePluginSourceCaptureInstancesForStateDirAsync } =
+      await import("../plugins/plugin-source-capture-directory.js");
+    await releasePluginSourceCaptureInstancesForStateDirAsync(temporaryStateDir).catch(
+      recordCleanupError,
+    );
+  }
   if (!cleanupError) {
     await temporaryDatabaseScope?.close().catch(recordCleanupError);
   }

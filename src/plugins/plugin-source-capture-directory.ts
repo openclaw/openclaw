@@ -144,6 +144,38 @@ function removeInstanceSync(root: string, pendingNative: Iterable<string> = []):
   }
 }
 
+async function teardownRetiredInstanceAsync(
+  instance: Instance,
+  root: string | undefined,
+  previousScope?: GatewaySchedulerScope,
+): Promise<void> {
+  if (previousScope && previousScope !== instance.cleanupScope) {
+    await previousScope.stop();
+  }
+  if (instance.references.size === 0) {
+    // A previous scheduler may still own the root's coalesced scan after rebinding.
+    const sweepKey = path.resolve(resolvePluginSourceCapturesDirectory(instance.storage.stateDir));
+    await sweeps.get(sweepKey)?.catch(() => {});
+  }
+  if (root) {
+    try {
+      await fsPromises.rm(path.join(root, "captures"), { recursive: true, force: true });
+      for (const directory of instance.pendingNative) {
+        await fsPromises.rm(directory, { recursive: true, force: true });
+      }
+      const native = await fsPromises.readdir(path.join(root, "native")).catch((error: unknown) => {
+        ignoreMissingPath(error);
+        return [];
+      });
+      if (native.length === 0) {
+        await fsPromises.rm(root, { recursive: true, force: true });
+      }
+    } catch (error) {
+      warn(error);
+    }
+  }
+}
+
 async function reclaimInstances(
   root: string,
   recordFailure: (error: unknown) => void,
@@ -559,32 +591,7 @@ export function retainPluginSourceCaptureInstance(
     async releaseAsync() {
       const scope = retained.cleanupScope;
       const root = retire();
-      if (scope !== retained.cleanupScope) {
-        await scope?.stop();
-      }
-      if (retained.references.size === 0) {
-        // A previous scheduler may still own the root's coalesced scan after rebinding.
-        await sweeps.get(path.resolve(resolvePluginSourceCapturesDirectory(storage.stateDir)));
-      }
-      if (root) {
-        try {
-          await fsPromises.rm(path.join(root, "captures"), { recursive: true, force: true });
-          for (const directory of retained.pendingNative) {
-            await fsPromises.rm(directory, { recursive: true, force: true });
-          }
-          const native = await fsPromises
-            .readdir(path.join(root, "native"))
-            .catch((error: unknown) => {
-              ignoreMissingPath(error);
-              return [];
-            });
-          if (native.length === 0) {
-            await fsPromises.rm(root, { recursive: true, force: true });
-          }
-        } catch (error) {
-          warn(error);
-        }
-      }
+      await teardownRetiredInstanceAsync(retained, root, scope);
     },
   };
 }
@@ -657,5 +664,19 @@ export function createPluginSourceCaptureRoot(
   } catch (error) {
     instance.release();
     throw error;
+  }
+}
+
+/** Drains and releases plugin capture instances associated with a temporary or retiring state directory. */
+export async function releasePluginSourceCaptureInstancesForStateDirAsync(
+  stateDir: string,
+): Promise<void> {
+  const resolvedStateDir = path.resolve(stateDir);
+  for (const [key, instance] of Array.from(instances.entries())) {
+    if (path.resolve(instance.storage.stateDir) === resolvedStateDir) {
+      const scope = instance.cleanupScope;
+      const root = retireInstance(key, instance);
+      await teardownRetiredInstanceAsync(instance, root, scope);
+    }
   }
 }
