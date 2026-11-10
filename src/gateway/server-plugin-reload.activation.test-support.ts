@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { expect, vi } from "vitest";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import { readPluginReplacementOperation } from "../plugins/plugin-replacement-operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   reloadFailure,
@@ -152,6 +153,7 @@ export async function verifyIndependentPostCommitActivation(
   const channelFailure = new Error("channel preparation refused");
   const starts: string[] = [];
   let generation = 0;
+  let replacement: ReturnType<typeof readPluginReplacementOperation>;
   const fixture = await createFixture({
     abortOnCandidateStart: false,
     afterPublish: async () => {
@@ -254,12 +256,21 @@ export async function verifyIndependentPostCommitActivation(
   const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   const channelIds = ["first-channel", "healthy-channel", "removed-channel"];
+  const instance = pluginInstance(fixture.previousRegistry);
+  const releaseWork = instance.retainWork("prepared-generation-lease");
   try {
     for (const id of channelIds) {
       await manager.startChannel(id);
     }
-    const result = await fixture.reload().catch((error: unknown) => error);
+    const reloading = fixture.reload().catch((error: unknown) => error);
+    await vi.waitFor(() => {
+      replacement = readPluginReplacementOperation(instance);
+      expect(replacement).toBeDefined();
+    });
+    releaseWork();
+    const result = await reloading;
     expect(result).toMatchObject(reloadFailure("activate", true));
+    await expect(replacement?.settled).resolves.toMatchObject({ kind: "failed", committed: true });
     const readiness = createReadinessChecker({
       channelManager: manager,
       startedAt: Date.now(),
@@ -299,6 +310,7 @@ export async function verifyIndependentPostCommitActivation(
     });
     expect(pluginInstance(fixture.previousRegistry).lifecycle.signal.aborted).toBe(true);
   } finally {
+    releaseWork();
     for (const id of channelIds) {
       await manager.stopChannel(id);
     }
@@ -420,7 +432,7 @@ export async function verifyIndependentRollbackRestoration(
     await manager.startChannel("first-restore");
     await manager.startChannel("healthy-restore");
     const result = await fixture.reload().catch((error: unknown) => error);
-    expect(result).toMatchObject({ details: { committed: false } });
+    expect(result).toMatchObject({ details: { committed: false, runtimeRestorationFailed: true } });
     expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
     const restoredRecord = fixture.registryOwner.registry.plugins.find(
       (record) => record.id === "first",

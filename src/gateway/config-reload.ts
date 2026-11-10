@@ -53,6 +53,7 @@ import {
 import { reconcileInitialConfigSource } from "./config-reload-initial-source.js";
 import {
   buildGatewayReloadPlan,
+  buildPluginLifecycleReloadPlan,
   isNoopGatewayReloadPlan,
   listConfigReloadRefinementPrefixes,
   resolvePluginInstallReloadMetadata,
@@ -1145,15 +1146,7 @@ export function startGatewayConfigReloader(
         const applied = await runWithCandidateWaitingRoots(
           () =>
             applySnapshot(snapshot, candidate, epoch, {
-              pluginLifecycle: {
-                pluginIds: params.pluginIds,
-                reason: params.reason,
-                operationId,
-                ...(params.waitForDrain
-                  ? { waitForDrain: true, drainSignal: params.drainSignal }
-                  : {}),
-                expectedSourceDigests: params.expectedSourceDigests,
-              },
+              pluginLifecycle: buildPluginLifecycleReloadPlan({ ...params, operationId }),
               onRuntimeCommitted: () => {
                 committed = true;
               },

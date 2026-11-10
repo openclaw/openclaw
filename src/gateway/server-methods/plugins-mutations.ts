@@ -48,6 +48,7 @@ function lifecycleHandler<T>(
     lifecycle: PluginLifecycleOptions,
     client: Parameters<GatewayRequestHandler>[0]["client"],
   ) => Promise<PluginLifecycleResult>,
+  isMaintenance: (params: T) => boolean = () => false,
 ): GatewayRequestHandler {
   return async ({
     req,
@@ -64,6 +65,8 @@ function lifecycleHandler<T>(
     }
     let captured: ReturnType<typeof capturePluginRuntimeApplications> | undefined;
     let entered = false;
+    const maintenance = isMaintenance(params);
+    let maintenanceAccepted = false;
     try {
       const applyRuntime = context.applyPluginLifecycleChange;
       if (!applyRuntime) {
@@ -80,8 +83,10 @@ function lifecycleHandler<T>(
         ) {
           throw new Error("Plugin mutation authority is no longer active.");
         }
-        signal?.throwIfAborted();
-        sessionMutationCommitGuard?.();
+        if (!maintenanceAccepted) {
+          signal?.throwIfAborted();
+          sessionMutationCommitGuard?.();
+        }
       };
       const connId = client?.connId;
       const logger: PluginLifecycleOptions["logger"] =
@@ -102,6 +107,9 @@ function lifecycleHandler<T>(
       beforePersistentApply();
       captured = capturePluginRuntimeApplications((change) => {
         beforePersistentApply();
+        // Selection, consent and eligibility have passed. The Gateway lifecycle owns
+        // accepted maintenance even when its CLI socket or invoking exec disappears.
+        maintenanceAccepted = maintenance;
         return applyCapturedRuntime({
           ...change,
           assertInvokerOwned: () => {
@@ -114,14 +122,17 @@ function lifecycleHandler<T>(
         ...(logger ? { logger } : {}),
         applyRuntime: captured.applyRuntime,
         beforePersistentApply,
-        ...(signal ? { signal } : {}),
+        ...(!maintenance && signal ? { signal } : {}),
       };
       // A request must not wait on a config reload that is draining that request.
       const { application, plugin, pluginId, pluginIds, removed, warnings } =
-        await withPluginLifecycleLeaseAsync({ signal, waitMs: 0 }, () => {
-          entered = true;
-          return run(params, lifecycle, client);
-        });
+        await withPluginLifecycleLeaseAsync(
+          { signal: maintenance ? undefined : signal, waitMs: 0 },
+          () => {
+            entered = true;
+            return run(params, lifecycle, client);
+          },
+        );
       if (!application) {
         throw new Error("Plugin lifecycle did not return a runtime application receipt.");
       }
@@ -162,6 +173,7 @@ export const pluginMutationHandlers: GatewayRequestHandlers = {
     "plugins.reload",
     validatePluginsReloadParams,
     (params, lifecycle) => reloadManagedPlugin({ ...params, ...lifecycle }),
+    (params) => params.force === true,
   ),
   "plugins.install": lifecycleHandler(
     "plugins.install",

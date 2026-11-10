@@ -190,8 +190,10 @@ it.each([
   { mode: "OPENCLAW_CONFIG_READONLY", ids: ["alpha", "beta"] },
   { mode: undefined, json: true, acceptCapabilities: false, ids: ["alpha", "beta"] },
   { mode: undefined, json: true, acceptCapabilities: true, ids: ["alpha", "beta"] },
+  { json: true, acceptCapabilities: true, ids: ["alpha", "beta"], force: true, wait: true },
+  { json: true, acceptCapabilities: true, ids: ["alpha", "beta"], force: true },
 ])(
-  "reloads CLI-selected $ids in one generation (mode=$mode, json=$json, accept=$acceptCapabilities)",
+  "reloads CLI-selected $ids in one generation (mode=$mode, json=$json, accept=$acceptCapabilities, force=$force, wait=$wait)",
   async ({
     mode,
     json = false,
@@ -199,6 +201,7 @@ it.each([
     ids,
     restartRequired = false,
     wait = false,
+    force = false,
   }) => {
     resolveGateway.mockResolvedValue(gateway);
     const receipt = {
@@ -225,6 +228,7 @@ it.each([
         "alpha",
         ...(json ? ["--json"] : []),
         ...(wait ? ["--wait"] : []),
+        ...(force ? ["--force"] : []),
         ...(acceptCapabilities ? ["--accept-capabilities"] : []),
       );
       if (json && !acceptCapabilities) {
@@ -235,7 +239,11 @@ it.each([
     });
     expect(gateway).toHaveBeenCalledExactlyOnceWith(
       "plugins.reload",
-      { plugins: ids.map((pluginId) => ({ pluginId })), ...(wait ? { waitForDrain: true } : {}) },
+      {
+        plugins: ids.map((pluginId) => ({ pluginId })),
+        ...(wait ? { waitForDrain: true } : {}),
+        ...(force ? { force: true } : {}),
+      },
       acceptCapabilities ? expect.any(Function) : undefined,
     );
     expect(promptYesNoMock).not.toHaveBeenCalled();

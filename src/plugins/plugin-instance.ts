@@ -64,7 +64,7 @@ export class PluginInstance {
   private captureModuleRecovery?: () => PluginModuleLoaderRecovery;
   private moduleSourceExists?: false | ((source: string) => boolean);
   private accepting = true;
-  private readonly retainedWork = new Set<object>();
+  private readonly retainedWork = new Map<object, object | undefined>();
   private readonly referenceDiagnostics = new PluginReferenceDiagnostics();
   private readonly calls = new Map<object, PluginInstanceCall>();
   private callsExpired = false;
@@ -234,14 +234,19 @@ export class PluginInstance {
   }
 
   /** Track finite host work without granting invocation authority or joining disposal. */
-  retainWork(reason: PluginRetentionReason = "unknown"): PluginWorkRelease {
+  retainWork(reason: PluginRetentionReason = "unknown", hostOwner?: object): PluginWorkRelease {
     const token = {};
-    this.retainedWork.add(token);
+    this.retainedWork.set(token, hostOwner);
     return this.referenceDiagnostics.workRelease(token, this.activeCall()?.token, reason, () => {
       if (this.retainedWork.delete(token)) {
         this.waiters.forEach((wake) => wake());
       }
     });
+  }
+
+  /** Exact host custody associated with live work tokens, never diagnostic correlation IDs. */
+  retainedWorkOwners(): ReadonlySet<object> {
+    return new Set([...this.retainedWork.values()].filter((owner) => owner !== undefined));
   }
 
   /** Observe live holds without changing admission, release, or plugin execution. */
@@ -251,7 +256,7 @@ export class PluginInstance {
     return this.referenceDiagnostics.snapshot(
       this,
       this.owner?.registry,
-      [this.retainedWork, this.consumers.keys(), this.calls.keys()],
+      [this.retainedWork.keys(), this.consumers.keys(), this.calls.keys()],
       options,
     );
   }

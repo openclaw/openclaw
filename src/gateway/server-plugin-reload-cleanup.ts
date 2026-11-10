@@ -88,9 +88,14 @@ export function createPluginReloadCleanup({
   retainRetirement,
   replacementOperation,
   waitForDrain = false,
+  prepareForceDrain,
 }: {
   replacementOperation?: import("../plugins/plugin-instance.js").PluginReplacementOperation;
   waitForDrain?: boolean;
+  prepareForceDrain?: (
+    instances: readonly import("../plugins/plugin-instance-scope.js").PluginInstanceHandle[],
+    signal: AbortSignal,
+  ) => Promise<void>;
   previousRegistry: PluginRegistry;
   changedPluginIds: Set<string>;
   port: number;
@@ -381,7 +386,7 @@ export function createPluginReloadCleanup({
             holds,
             includeCalls,
             drainBudgetSeconds: admittedWorkTimeoutMs / 1_000,
-            cancellable: waitForDrain,
+            cancellable: waitForDrain && !prepareForceDrain,
           })
         : "Waiting for admitted plugin cleanup before replacing it.";
     reportStatus({
@@ -393,8 +398,9 @@ export function createPluginReloadCleanup({
     log.info(reason);
     logRetainedReferences(observedInstances, "queued", log);
     try {
-      await observeDrain("retained plugin work", signal, deadlineAtMs, (current) =>
-        Promise.all([
+      await observeDrain("retained plugin work", signal, deadlineAtMs, async (current) => {
+        await prepareForceDrain?.(observedInstances, current);
+        await Promise.all([
           ...instances.map((instance) =>
             includeConsumers
               ? instance.waitForIdle(current)
@@ -413,8 +419,8 @@ export function createPluginReloadCleanup({
               );
             }
           }),
-        ]),
-      );
+        ]);
+      });
     } catch (error) {
       if (error instanceof PluginHostCleanupTimeoutError) {
         logRetainedReferences(observedInstances, "timeout", log);

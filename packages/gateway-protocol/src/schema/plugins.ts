@@ -725,6 +725,7 @@ export const PluginsReloadParamsSchema = closedObject({
     uniqueItems: true,
   }),
   waitForDrain: Type.Optional(Type.Boolean()),
+  force: Type.Optional(Type.Boolean()),
   acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
 });
 export const PluginsReloadResultSchema = closedObject({

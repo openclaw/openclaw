@@ -265,4 +265,43 @@ describe("plugin lifecycle invoker ownership", () => {
       },
     );
   });
+  it.each([false, true])(
+    "force reload survives caller cancellation but not revocation=%s",
+    async (revoked) => {
+      const controller = new AbortController();
+      let current = true;
+      const publish = vi.fn();
+      managementMocks.reload.mockImplementation(async (options: ManagedMutationOptions) => ({
+        application: await expectDefined(
+          options.applyRuntime,
+          "managed runtime apply",
+        )({
+          config: {},
+          pluginIds: ["workboard"],
+          reason: "reload",
+        }),
+      }));
+      applyRuntime.mockImplementation(
+        async (change: Parameters<NonNullable<ManagedMutationOptions["applyRuntime"]>>[0]) => {
+          controller.abort();
+          current = !revoked;
+          change.assertInvokerOwned?.();
+          publish();
+          return application;
+        },
+      );
+      const result = await callHandler(
+        "plugins.reload",
+        { plugins: [{ pluginId: "workboard" }], force: true },
+        {
+          signal: controller.signal,
+          sessionMutationCommitGuard: () => controller.signal.throwIfAborted(),
+          hasCurrentClientAuthority: () => current,
+        },
+      );
+      expect(result.ok).toBe(!revoked);
+      expect(publish).toHaveBeenCalledTimes(revoked ? 0 : 1);
+      expect(managementMocks.reload.mock.calls[0]?.[0].signal).toBeUndefined();
+    },
+  );
 });
