@@ -223,7 +223,7 @@ function createPublicationBackend(
     assertMemoryShadowIdentity(databasePath, input.fileIdentity);
   }
   // Each agent run binds its own backend; shadow runs use the private writer queue.
-  // Staged sources avoid per-fragment SQLite I/O; past a budget they spill to a private file.
+  // Staged sources avoid per-fragment SQLite I/O; past a budget they overflow to a TEMP table.
   let staged:
     | ({
         stage: MemoryPublicationStage;
@@ -482,7 +482,7 @@ function createPublicationBackend(
       }
       if (command.type === "stage.start" || command.type === "cache.stage.start") {
         discard();
-        const stage = new MemoryPublicationStage();
+        const stage = new MemoryPublicationStage(db);
         staged =
           command.type === "stage.start"
             ? { ...command.input, kind: "source", stage }
