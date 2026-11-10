@@ -788,7 +788,7 @@ async function cliPackageFixture() {
         size_in_bytes: bytes.length,
         expired: false,
         expires_at: "2099-01-01T00:00:00Z",
-        workflow_run: { id: 101, head_sha: f.params.sourceSha },
+        workflow_run: { id: 101, head_sha: f.params.sourceSha, head_branch: f.source.f.branch },
       });
     }
     if (url.pathname.endsWith("/runs/101/attempts/1")) {
