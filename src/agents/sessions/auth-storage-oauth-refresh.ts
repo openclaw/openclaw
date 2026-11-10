@@ -6,7 +6,6 @@ import {
   normalizeOAuthRefreshCredential,
   refreshSerializedOAuthCredential,
 } from "../auth-profiles/oauth-refresh-fence.js";
-import { isOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import type { OAuthCredential as AuthProfileOAuthCredential } from "../auth-profiles/types.js";
 import { AuthStoragePersistenceError } from "./auth-storage-error.js";
 import {
@@ -14,12 +13,7 @@ import {
   getAuthStorageOAuthProviderRegistry,
   resolveAuthStoragePluginOAuthCredential,
 } from "./auth-storage-oauth-registry.js";
-import type {
-  AuthCredential,
-  AuthStorageData,
-  LockResult,
-  OAuthCredential,
-} from "./auth-storage-types.js";
+import type { AuthStorageData, LockResult, OAuthCredential } from "./auth-storage-types.js";
 
 function mergeResolvedOAuthCredential(
   credential: AuthProfileOAuthCredential,
@@ -36,16 +30,6 @@ function mergeResolvedOAuthCredential(
         },
       }
     : null;
-}
-
-export function isAuthStorageOAuthRefreshFence(
-  provider: string,
-  credential: AuthCredential | undefined,
-): boolean {
-  return (
-    credential?.type === "oauth" &&
-    isOAuthRefreshFence(normalizeOAuthRefreshCredential(credential, provider))
-  );
 }
 
 export async function refreshAuthStorageOAuthCredential(params: {

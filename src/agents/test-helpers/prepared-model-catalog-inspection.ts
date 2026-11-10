@@ -18,6 +18,7 @@ export type CatalogInspectionTask = Omit<PreparedModelCatalogWorkerTask, "value"
     expectedCredential?: string;
     failCatalog?: boolean;
     copyProbePath?: string;
+    probeModelRegistry?: boolean;
     observeConfigSnapshots?: boolean;
     collectConfigCaptures?: boolean;
   };
@@ -26,6 +27,8 @@ export type CatalogInspectionTask = Omit<PreparedModelCatalogWorkerTask, "value"
 export type CatalogInspection = {
   sqliteCopies: number;
   copyHookObserved?: boolean;
+  modelRegistryConstructions: number;
+  modelRegistryHookObserved?: boolean;
   registeredAgentId?: string;
   foreignReleased?: boolean;
   runtimeFactsAbsent: boolean;

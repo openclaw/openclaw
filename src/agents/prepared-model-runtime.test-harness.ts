@@ -387,11 +387,25 @@ vi.mock("./model-discovery-context.js", async (importOriginal) => {
   return { resolveModelWorkspaceDir, resolveModelPluginMetadataSnapshot: () => undefined };
 });
 
-vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: (...args: unknown[]) =>
-    preparedModelRuntimeMocks.ensureOpenClawModelsJson(...args),
-  planOpenClawModelsJsonSource: (...args: unknown[]) =>
-    preparedModelRuntimeMocks.planOpenClawModelsJsonSource(...args),
+vi.mock("./models-config.prepared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models-config.prepared.js")>()),
+  // Lifecycle fixtures observe the prepared writer's captured config and directory.
+  ensureOpenClawModelsJson: (
+    context: import("./models-config.plan.js").PreparedModelsConfigContext,
+  ) =>
+    preparedModelRuntimeMocks.ensureOpenClawModelsJson(
+      context.discoveryAuthConfig,
+      context.agentDir,
+      context,
+    ),
+  planOpenClawModelsJsonSource: (
+    context: import("./models-config.plan.js").PreparedModelsConfigContext,
+  ) =>
+    preparedModelRuntimeMocks.planOpenClawModelsJsonSource(
+      context.discoveryAuthConfig,
+      context.agentDir,
+      context,
+    ),
 }));
 
 // mock-isolation: lifecycle fixtures supply prepared catalog facts without loading provider discovery.

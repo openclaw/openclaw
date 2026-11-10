@@ -6,7 +6,12 @@ import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
+import {
+  ensureOpenClawModelsJson,
+  planOpenClawModelsJsonSource,
+  prepareModelsConfigContext,
+  resolveModelsConfigInput,
+} from "./models-config.prepared.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
 import type {
   PreparedModelRuntimeAgentFacts,
@@ -14,7 +19,7 @@ import type {
 } from "./prepared-model-runtime.catalog-contract.js";
 import {
   materializePreparedModelCatalog,
-  prepareFullCatalogFacts,
+  prepareCatalogPublicationFacts,
 } from "./prepared-model-runtime.full-catalog.js";
 import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
@@ -50,7 +55,7 @@ export async function prepareScopedReadOnlyModelCatalog(
     false,
     catalogMode === "live" ? { providerDiscoveryProviderIds } : {},
   );
-  const { modelCatalog, configuredRuntimeModels } = await prepareFullCatalogFacts(
+  const { modelCatalog, configuredRuntimeModels } = await prepareCatalogPublicationFacts(
     agentFactsForInput,
     pluginGeneration,
     catalogMode,
@@ -119,10 +124,15 @@ export async function prepareAgentCatalogSource(
   };
   const prepareSource = async () => {
     if (!persist) {
-      const source = await planOpenClawModelsJsonSource(input.config, input.agentDir, {
-        ...options,
-        ...(sourceOptions.authStore ? { authStore: sourceOptions.authStore } : {}),
-      });
+      const source = await planOpenClawModelsJsonSource(
+        prepareModelsConfigContext(
+          resolveModelsConfigInput(input.config),
+          process.env,
+          input.agentDir,
+          options,
+        ),
+        sourceOptions.authStore,
+      );
       return {
         modelsJsonContents: source.modelsJsonContents,
         pluginCatalogs: source.pluginCatalogs,
@@ -131,9 +141,12 @@ export async function prepareAgentCatalogSource(
     }
     if (!input.readOnly) {
       const { publishedSource } = await ensureOpenClawModelsJson(
-        input.config,
-        input.agentDir,
-        options,
+        prepareModelsConfigContext(
+          resolveModelsConfigInput(input.config),
+          process.env,
+          input.agentDir,
+          options,
+        ),
       );
       if (publishedSource) {
         return { ...publishedSource, providerOutcomes: resultOutcomes() };

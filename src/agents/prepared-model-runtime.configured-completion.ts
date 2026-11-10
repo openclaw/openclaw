@@ -1,5 +1,6 @@
 import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import type { ModelRegistry as ModelLookup } from "../llm/model-registry.js";
 import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { indexFirstByKey } from "../shared/dedupe-by-key.js";
@@ -32,7 +33,7 @@ export function completeConfiguredRuntimeModels(
     PreparedModelRuntimePluginGeneration,
     "pluginMetadataSnapshot" | "pluginRegistry"
   >,
-  modelRegistry: ModelRegistry,
+  modelRegistry: ModelLookup,
 ): readonly PreparedConfiguredRuntimeModel[] {
   if (!pluginGeneration.pluginRegistry) {
     return agentFacts.configuredRuntimeModels;

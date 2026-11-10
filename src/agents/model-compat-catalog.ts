@@ -45,10 +45,17 @@ export function modelTransportRoutesMatch(
 ): boolean {
   const catalogApi = normalizeApi(catalogRoute.api);
   const configuredApi = normalizeApi(configuredRoute.api) || catalogApi;
-  const catalogBaseUrl = normalizeBaseUrl(catalogRoute.baseUrl, catalogApi);
+  if (configuredApi !== catalogApi) {
+    return false;
+  }
+  // Catalog overlays commonly carry the same endpoint; parsing it again creates
+  // URL objects for every row without adding route evidence.
+  if (configuredRoute.baseUrl === catalogRoute.baseUrl) {
+    return true;
+  }
+  const configuredBaseUrl = normalizeBaseUrl(configuredRoute.baseUrl, configuredApi);
   return (
-    configuredApi === catalogApi &&
-    (normalizeBaseUrl(configuredRoute.baseUrl, configuredApi) || catalogBaseUrl) === catalogBaseUrl
+    !configuredBaseUrl || configuredBaseUrl === normalizeBaseUrl(catalogRoute.baseUrl, catalogApi)
   );
 }
 

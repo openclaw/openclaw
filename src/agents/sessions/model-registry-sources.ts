@@ -111,3 +111,46 @@ export interface CustomModelsResult {
 export function emptyCustomModelsResult(error?: string): CustomModelsResult {
   return { providers: {}, error };
 }
+
+export function storeModelRegistryProviderRequestConfig(
+  providerRequestConfigs: Map<string, ProviderRequestConfig>,
+  providerName: string,
+  config: {
+    baseUrl?: string;
+    models?: readonly { baseUrl?: string }[];
+    apiKey?: string;
+    auth?: ProviderAuthMode;
+    headers?: Record<string, string>;
+    authHeader?: boolean;
+  },
+): void {
+  if (!config.apiKey && !config.auth && !config.headers && !config.authHeader) {
+    return;
+  }
+
+  providerRequestConfigs.set(providerName, {
+    // File-authored endpoints authorize these settings; generated destinations do not.
+    // Route-less runtime registrations retain their explicit caller-owned scope.
+    baseUrls: config.baseUrl
+      ? [config.baseUrl, ...(config.models ?? []).flatMap((model) => model.baseUrl ?? [])]
+      : undefined,
+    apiKey: config.apiKey,
+    auth: config.auth,
+    headers: config.headers,
+    authHeader: config.authHeader,
+  });
+}
+
+export function storeModelRegistryHeaders(
+  modelRequestHeaders: Map<string, Record<string, string>>,
+  providerName: string,
+  modelId: string,
+  headers?: Record<string, string>,
+): void {
+  const key = JSON.stringify([providerName, modelId]);
+  if (!headers || Object.keys(headers).length === 0) {
+    modelRequestHeaders.delete(key);
+    return;
+  }
+  modelRequestHeaders.set(key, headers);
+}

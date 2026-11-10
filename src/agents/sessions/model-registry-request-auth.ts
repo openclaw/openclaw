@@ -101,23 +101,3 @@ export async function resolveModelRegistryProviderApiKey(params: {
   const providerApiKey = params.readProviderConfig()?.apiKey;
   return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
 }
-
-/** Registry availability describes host credentials, never a native runtime's command. */
-export function hasModelRegistryConfiguredAuth(params: {
-  model: Model;
-  providerConfig: ProviderRequestConfig | undefined;
-  authStorage: AuthStorage;
-}): boolean {
-  const { model, providerConfig, authStorage } = params;
-  if (providerConfig?.auth === "native-command") {
-    return false;
-  }
-  if (providerConfig?.auth === "none") {
-    return model.api === "openai-completions";
-  }
-  return (
-    authStorage.hasAuth(model.provider) ||
-    providerConfig?.auth === "aws-sdk" ||
-    providerConfig?.apiKey !== undefined
-  );
-}

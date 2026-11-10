@@ -58,6 +58,7 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
     );
   const providerResolvers: Parameters<typeof createProviderHookRuntime>[0] = {
     isPluginProvidersLoadInFlight: () => false,
+    resolveRetainedProviderLiteral: () => undefined,
     resolvePluginProviderRegistryCore: (params) => {
       const providers = selectProviders(params);
       if (providers.length === 0) {

@@ -21,8 +21,8 @@ import {
   PROVIDER_ID,
   writeFixtureFiles,
 } from "./prepared-model-catalog-worker.test-support.js";
-import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import { prepareFullCatalogFacts } from "./prepared-model-runtime.session.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const { makeTempDir, retireAfterTest, waitForWorkers } = usePreparedCatalogWorkerFixtures();

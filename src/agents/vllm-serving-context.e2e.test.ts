@@ -9,10 +9,10 @@ import { resolveExplicitModelWithRegistry } from "./embedded-agent-runner/model.
 import { resolveEmbeddedRuntimeModelPolicy } from "./embedded-agent-runner/run/setup.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
-import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
+import { prepareFullCatalogFacts } from "./prepared-model-runtime.session.js";
 
 type ModelCase = [
   id: string,

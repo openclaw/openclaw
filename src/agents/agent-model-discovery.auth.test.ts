@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -18,7 +18,13 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import {
+  createFailedOAuthRefreshFence,
+  createOAuthRefreshFence,
+} from "./auth-profiles/oauth-refresh-marker.js";
 import { writePersistedAuthProfileStoreRaw } from "./auth-profiles/sqlite.js";
+import { createReadonlyAuthStorage } from "./sessions/auth-storage-readonly.js";
+import { AuthStorage, type AuthStorageData } from "./sessions/auth-storage.js";
 
 vi.mock("./model-auth-env-vars.js", () => ({
   listProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
@@ -76,6 +82,56 @@ function writeAuthProfilesSqlite(agentDir: string, store: AuthProfileStore): voi
 }
 
 describe("discoverAuthStorageFacts auth storage", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([(data: AuthStorageData) => AuthStorage.inMemory(data), createReadonlyAuthStorage])(
+    "keeps catalog credentials detached and fences hidden without refreshing",
+    (create) => {
+      vi.stubEnv("OPENAI_API_KEY", "");
+      const pending = createOAuthRefreshFence({
+        profileId: "fixture:default",
+        credential: {
+          type: "oauth",
+          provider: "fixture",
+          access: "access",
+          refresh: "refresh",
+          expires: 1,
+        },
+      });
+      const data: AuthStorageData = {
+        openai: pending,
+        failed: createFailedOAuthRefreshFence(pending),
+        expired: { type: "oauth", access: "old", refresh: "old-refresh", expires: 1 },
+        native: {
+          type: "api_key",
+          key: "marker",
+          nativeAuth: { runtime: "fixture", mode: "oauth" },
+        },
+      };
+      const first = create(data);
+      const second = create(data);
+      const native = first.get("native")!;
+      if (native.type !== "api_key") {
+        throw new Error("missing native credential");
+      }
+      native.nativeAuth!.runtime = "changed";
+      expect(data.native).toMatchObject({ nativeAuth: { runtime: "fixture" } });
+      expect(second.get("native")).toMatchObject({ nativeAuth: { runtime: "fixture" } });
+      expect(first.get("native")).toBe(native);
+      for (const provider of ["openai", "failed"]) {
+        expect(first.get(provider)).toBeUndefined();
+        expect(first.hasAuth(provider)).toBe(false);
+      }
+      expect(first.hasAuth("expired")).toBe(true);
+      vi.stubEnv("OPENAI_API_KEY", "synthetic-env");
+      expect(first.hasAuth("openai")).toBe(true);
+      expect(first.get("openai")).toBeUndefined();
+      const providers = first.getOAuthProviders();
+      providers.length = 0;
+      expect(first.getOAuthProviders().length).toBeGreaterThan(0);
+    },
+  );
+
   it("converts runtime auth profiles into agent discovery credentials", () => {
     const credentials = resolveAgentCredentialMapFromStore(
       createAuthProfileStoreFixture({

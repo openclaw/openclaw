@@ -186,7 +186,6 @@ src/agents/model-selection-shared.ts
 src/agents/models.profiles.live.test.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
-src/agents/sessions/model-registry.ts
 src/agents/subagents/announce/subagent-announce-delivery.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
 src/agents/subagents/registry/subagent-registry-lifecycle.test.ts

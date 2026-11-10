@@ -75,7 +75,7 @@ import {
 import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
+import { createReadonlyAuthStorage } from "./sessions/auth-storage-readonly.js";
 
 type WorkerGeneration = {
   config: Readonly<{
@@ -308,13 +308,14 @@ async function runCatalogRequest(
     }
     const { prepareAgentCatalogSource } =
       await import("./prepared-model-runtime.scoped-catalog.js");
-    const { prepareFullCatalogFacts } = await import("./prepared-model-runtime.full-catalog.js");
+    const { prepareCatalogPublicationFacts } =
+      await import("./prepared-model-runtime.full-catalog.js");
     const startupProviderIds = new Set(value.providerIds.map(normalizeProviderId));
     const exactAgentFacts = {
       ...value.catalogFacts,
       input: value.input,
       env: value.input.env,
-      templateAuthStorage: AuthStorage.inMemory(credentials),
+      templateAuthStorage: createReadonlyAuthStorage(credentials),
       credentials,
       providerIds: [
         ...new Set(request.providerIds ?? [...value.providerIds, ...Object.keys(credentials)]),
@@ -416,7 +417,7 @@ async function runCatalogRequest(
         providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
       },
     );
-    const facts = await prepareFullCatalogFacts(
+    const facts = await prepareCatalogPublicationFacts(
       exactAgentFacts,
       catalogGeneration,
       "live",
