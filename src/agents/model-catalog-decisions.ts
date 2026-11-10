@@ -670,6 +670,13 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     cliRuntimeBindings,
     pluginRegistry: params.pluginRegistry,
     isCurrent,
+    assertCurrent: () => {
+      if (!isCurrent()) {
+        throw new PreparedModelRuntimePublicationSupersededError(
+          "Model catalog changed while selecting runtimes",
+        );
+      }
+    },
     observationConfig: params.observationConfig,
   };
 }
