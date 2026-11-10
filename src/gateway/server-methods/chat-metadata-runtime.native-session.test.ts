@@ -1,6 +1,7 @@
 import { describe, expect, onTestFinished, test } from "vitest";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -11,6 +12,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createChatMetadataHarness,
   createChatMetadataOwner,
+  createDraftChatMetadataScope,
 } from "./chat-metadata-runtime.test-support.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
 
@@ -43,6 +45,64 @@ function nativeRegistry(
 }
 
 describe("gateway chat metadata native session ownership", () => {
+  test("keeps configured worker model switches selectable without admitting personal accounts", () => {
+    const cfg = nativeConfig();
+    cfg.cloudWorkers = {
+      requiredProfile: "dedicated",
+      profiles: {
+        dedicated: { provider: "device", settings: { device: "paired", inference: "worker" } },
+      },
+    };
+    cfg.models = {
+      providers: {
+        openai: {
+          baseUrl: "https://models.example.test/v1",
+          models: [sol, luna].map((model) => modelDefinition(model.id)),
+        },
+      },
+    };
+    const models = [sol, luna].map((model) =>
+      Object.assign({}, model, {
+        available: false,
+        unavailableReason: "missing-auth" as const,
+      }),
+    );
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:switched",
+      workerInference: "worker" as const,
+      sessionEntry: { modelOverride: luna.id, agentRuntimeOverride: "openclaw" },
+    };
+    expect(projectSessionModelCatalog(scope, models, cfg, undefined)).toEqual([sol, luna]);
+    expect(projectSessionModelCatalog(scope, models, cfg, undefined, "admitted")).toEqual([
+      sol,
+      { ...luna, available: true },
+    ]);
+    const optional = structuredClone(cfg);
+    delete optional.cloudWorkers!.requiredProfile;
+    expect(projectSessionModelCatalog(scope, models, optional, undefined)).toEqual(models);
+    const account = createDraftChatMetadataScope("worker-picker");
+    expect(
+      projectSessionModelCatalog(
+        { ...scope, draftAccountSelection: account.params.draftAccountSelection },
+        models,
+        cfg,
+        undefined,
+      ),
+    ).toEqual(models);
+    expect(
+      projectSessionModelCatalog(
+        {
+          ...scope,
+          sessionEntry: { ...scope.sessionEntry, authProfileOverride: "openai:personal" },
+        },
+        models,
+        cfg,
+        undefined,
+      ),
+    ).toEqual(models);
+  });
+
   test("projects only ambient worker-owned auth failures as available", () => {
     const models = [sol, luna].map((model) =>
       Object.assign({}, model, { available: false, unavailableReason: "missing-auth" as const }),

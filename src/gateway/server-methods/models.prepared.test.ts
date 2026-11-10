@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { apiKey, harnessRegistry } from "../../agents/model-catalog-fixtures.test-support.js";
 import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import {
@@ -48,6 +49,61 @@ function modelsReader(
     return call?.[1] as ModelsListResult | undefined;
   };
 }
+
+it("lists configured required-worker models without requiring Gateway credentials", async () => {
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "worker-model-picker-", env: WITHOUT_OPENAI_ENV_AUTH },
+    async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "openai/worker-default",
+            models: { "openai/worker-default": {}, "openai/worker-alternative": {} },
+          },
+          entries: { main: {} },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://models.example.test/v1",
+              api: "openai-completions",
+              models: ["worker-default", "worker-alternative"].map((id) => modelDefinition(id)),
+            },
+          },
+        },
+        cloudWorkers: {
+          requiredProfile: "dedicated",
+          profiles: {
+            dedicated: { provider: "device", settings: { device: "paired", inference: "worker" } },
+          },
+        },
+      };
+      const context = createModelsListTestContext({
+        cfg,
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+        catalog: ["worker-default", "worker-alternative"].map((id) =>
+          providerCatalogEntry("openai", id),
+        ),
+      });
+      const read = (view: "configured" | "provider-config") =>
+        modelsReader(context, { agentId: "main", view })();
+      const draft = await read("configured");
+      expect(draft?.models.map((model) => model.id)).toEqual([
+        "worker-default",
+        "worker-alternative",
+      ]);
+      for (const model of draft!.models) {
+        // Worker routing defers auth to admission; it does not assert credentials are ready.
+        expect(model).not.toHaveProperty("available");
+        expect(model).not.toHaveProperty("unavailableReason");
+      }
+      for (const model of (await read("provider-config"))!.models) {
+        expect(model).toMatchObject({ available: false, unavailableReason: "missing-auth" });
+      }
+    },
+  );
+});
 
 it("retains the model-list projection until its catalog facts change", async () => {
   await withOpenClawTestState(
