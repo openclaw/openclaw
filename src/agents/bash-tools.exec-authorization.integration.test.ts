@@ -163,6 +163,27 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     }
   });
 
+  it("blocks commands hidden behind CR, VT, or FF before spawning while ordinary text still runs", async () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: {},
+    });
+    const exec = tool(reviewer(), "allowlist");
+    const control = await exec.execute("ordinary-whitespace", { command: "true \t# note\npwd" });
+    expect(control.details).toMatchObject({ status: "completed", exitCode: 0, aggregated: root });
+    boundary.spawn.mockClear();
+    const marker = path.join(root, "control-byte-marker");
+    for (const separator of ["\r", "\v", "\f"]) {
+      // The Bash parser read `#;touch …` as a comment; bash ran it after `true<byte>#`.
+      await expect(
+        exec.execute("control-byte", { command: `true${separator}#;touch ${marker}` }),
+      ).rejects.toThrow(/unsupported control characters/);
+      expect(boundary.spawn).not.toHaveBeenCalled();
+      expect(fs.existsSync(marker)).toBe(false);
+    }
+  });
+
   it("executes static assignments and blocks recursive assignments before process creation", async () => {
     const echoPath = fs.realpathSync("/bin/echo");
     saveExecApprovals({

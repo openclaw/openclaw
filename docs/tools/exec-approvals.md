@@ -491,24 +491,19 @@ APIs still accept the legacy shape as input and normalize it before saving. See
 Shell chains such as `echo ok && pwd` still need every top-level segment
 to satisfy allowlist rules.
 
-The `exec` tool rejects POSIX shell text containing raw carriage returns, vertical
-tabs, or form feeds before approval handling. This includes quoted text and
-decoded shell-wrapper payloads. Remove these bytes from the command; ordinary
-spaces, tabs, and line feeds remain eligible for automatic allowlist matching.
-Commands with syntax the parser cannot fully analyze cannot satisfy automatic
-allowlist matching. OpenClaw still checks recovered commands for protected
-operations before normal approval handling. Commands over 128 KiB or beyond the
-parser work limit are rejected; write large content with a file tool or script
-file, or simplify the command.
-Windows Gateway and node exec accept ordinary CRLF line endings in PowerShell
-and CMD commands, respectively. Other carriage returns remain unsupported.
-
 Examples:
 
 - `rg`
 - `~/path/to/**/bin/peekaboo`
 - `~/.local/bin/*`
 - `/opt/homebrew/bin/rg`
+
+Ordinary spaces, tabs, and line feeds remain eligible for automatic allowlist
+matching. Commands with syntax the parser cannot fully analyze cannot satisfy
+automatic allowlist matching, but OpenClaw still checks the commands it recovers
+for protected operations before normal approval handling. Some commands are
+rejected before allowlist matching in every security mode; see
+[Exec tool](/tools/exec#parameters).
 
 ### Restricting arguments with argPattern
 

@@ -351,17 +351,17 @@ function rejectIncompleteCommandAnalysis(
 ): void {
   if (unsafeKind === "incomplete-analysis") {
     throw new Error(
-      "exec cannot run a shell command that exceeds the command explanation work limit. Simplify the command, or write large content with a file tool or script file so its complete syntax can be inspected before execution.",
+      "exec cannot run a shell command that exceeds the command explanation work limit: it is longer than 131,072 characters, nests more than two shell wrappers such as bash -c, or is too complex to inspect. Split or simplify the command, or write large content with a file tool or script file.",
     );
   }
   if (unsafeKind === "unsupported-control-character") {
     throw new Error(
-      "exec cannot run a shell command containing unsupported control characters. Remove them so the complete syntax can be inspected before execution.",
+      "exec cannot run a shell command containing unsupported control characters: a raw carriage return, vertical tab, or form feed, even inside quotes. The shell and OpenClaw's command inspector read these bytes differently, so the command cannot be inspected safely. Remove them, convert CRLF line endings to LF (Windows hosts accept CRLF), or write the bytes as escape sequences such as printf '\\r'.",
     );
   }
   if (unsafeKind === "parser-failure") {
     throw new Error(
-      "exec cannot inspect shell commands because the command parser is unavailable or failed. Check the OpenClaw installation or simplify the command and retry.",
+      "exec cannot inspect this shell command because the Bash command parser failed to load or to parse it, and exec does not run commands it cannot inspect. The next exec call retries loading the parser. If only this command fails, simplify it. If every command fails, restart OpenClaw, then reinstall or update it if that does not help.",
     );
   }
 }
