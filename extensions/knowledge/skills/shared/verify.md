@@ -19,9 +19,8 @@ readback.
 
 ## 2. Investigate exceptions only
 
-- `knowledge_record({id, view: "content"})`: each intended link in `links`
-  must be `status: "resolved"` with the expected `id`. `linksTruncated: true`
-  means the check is incomplete.
+- A failed `expectedLinks` check names the link that does not resolve. Fix the
+  target in the body and verify again.
 - `knowledge_connections` with `links`/`backlinks` for missing neighbors.
   Follow `nextOffset`; restart if `snapshot` changes.
 
@@ -34,12 +33,11 @@ Structure passing does not prove meaning. Review:
   `knowledge_evidence_read({id, path, sha256, startLine, endLine})`; follow
   `nextCursor`. `evidence.verified` checks bytes, not truth or speaker identity.
 
-Keep reads bounded: `view: "summary"` for identity checks; `includeEvidence:
-true` with small `evidenceLimit`/`maxEvidenceChars` only when reviewing
-provenance. Don't fetch every body or original just to confirm publication; review prose
+Keep reads bounded: a small `maxChars` for identity checks; `includeEvidence:
+true` only when reviewing provenance. Don't fetch every body or original just to confirm publication; review prose
 from the drafts you published, and read a saved body only when a check fails or
 an existing page's merged result needs judgment.
-Responses cap at 24 KiB; follow returned offsets and check `omitted`.
+Follow returned offsets; `omitted` names evidence previews left out to fit.
 
 Retrieval: confirm one exact lookup and one distinctive keyword search. An
 unavailable index (`total: null`) is not an empty vault.

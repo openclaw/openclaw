@@ -42,7 +42,7 @@ current fingerprint. Then enumerate exactly one starting set:
   `since`/`timeField`. Keep only claims that are actually about the subject.
 
 State the scope in the report. Read each claim you will change with
-`knowledge_record` and `metadataView: "full"`. Its `subject_hint`, when
+`knowledge_record`. Its `subjectHint`, when
 present, is the saver's own description of what the claim is about and the
 strongest clue to its subject. Group the claims by what they are about (one
 feature, PR, commit, decision thread, person or preference) before choosing

@@ -189,8 +189,8 @@ it("flush save follows delegated owner-private and conversation audiences", asyn
       "utf8",
     ),
   ).toMatch(/Conversation durable fact/);
-  expect((await f.service.record({ id: privateReceipt.id }, f.tool)).record).toBe(null);
-  expect((await f.service.record({ id: conversationReceipt.id }, f.tool)).record!.id).toBe(
+  expect((await f.service.record_detail({ id: privateReceipt.id }, f.tool)).record).toBe(null);
+  expect((await f.service.record_detail({ id: conversationReceipt.id }, f.tool)).record!.id).toBe(
     conversationReceipt.id,
   );
 });

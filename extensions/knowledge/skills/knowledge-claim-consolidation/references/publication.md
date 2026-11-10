@@ -14,8 +14,8 @@
    explicit reconciliation. Legacy individual writes are not in this registry;
    "missing" does not prove the source was never ingested. Same content under a
    different source key is not automatically semantically deduplicated. Reuse verified existing evidence/pages when possible.
-3. For edits read the entire body and observed revision/hash; request
-   `includeMetadata: true` if changing domain fields. Preserve unrelated prose.
+3. For edits read the entire body and observed revision/hash; the read includes
+   domain fields, aliases, tags and dependencies. Preserve unrelated prose.
    Omit `fields` to preserve them; supplying `fields` replaces the complete object.
    Only use fields allowed by the selected ontology. `save_page` also supports
    aliases, tags and dependencies: omitted preserves, supplied replaces, empty
@@ -42,8 +42,7 @@ rejected with section sizes and connected candidates. Extract sections with
 
 Record, revision and recovery reads remain paginated. Follow returned offsets;
 for recovery use file offset plus contentField/charOffset and compare field hashes.
-With detail: "full", a search hit with snippet.matchLocated=false is an opening
-excerpt, not a located match; full-record matching/ranking still apply. Read the
+A search snippet is a short excerpt, not the whole match context. Read the
 record for context.
 
 ## Retain the source

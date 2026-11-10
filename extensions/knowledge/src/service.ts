@@ -395,7 +395,7 @@ export function createKnowledgeService(
           runtime.client.call("recall", access, input),
         );
       },
-      connections: call("connections"),
+      connections_detail: call("connections"),
       resume: (input, context) =>
         use(context, true, (runtime, access) =>
           runtime.client.call("resume", access, { requestId: input.requestId }),
@@ -516,7 +516,7 @@ export function createKnowledgeService(
       },
       grep: call("search"),
       lookup: call("lookup"),
-      records: call("records", false, () => ({
+      records_detail: call("records", false, () => ({
         facets: { kinds: {}, origins: {} },
         records: [],
         total: 0,
@@ -524,7 +524,7 @@ export function createKnowledgeService(
         nextOffset: null,
         freshness: queryFreshness(now()),
       })),
-      record: call("record"),
+      record_detail: call("record"),
       ontology: call("ontology"),
       diagnostics: call("diagnostics", false, () => ({
         issues: [],
@@ -565,9 +565,7 @@ export function createKnowledgeService(
         input: unknown,
         context: FeatureInvocationContext,
       ) => Promise<unknown>;
-      // The response-only detail selector belongs to the agent tool adapter.
-      const { detail: _detail, ...payload } = input.input as Record<string, unknown>;
-      const output = await handler(payload, context);
+      const output = await handler(input.input, context);
       if (!Check(operation.output, output)) {
         throw new Error(`Invalid output from ${input.operation}.`);
       }

@@ -10,7 +10,7 @@ declare global {
   }
 }
 
-type Detail = FeatureOutput<FullOutputContract, "record">;
+type Detail = FeatureOutput<FullOutputContract, "record_detail">;
 type FileEvidence = NonNullable<Detail["evidence"]>[number];
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string) => {
   const n = document.createElement(tag);
@@ -198,7 +198,7 @@ export function evidenceView(
       more.disabled = true;
       expansion.count = Math.max(expansion.count, offset! + 20);
       try {
-        const page = await feature.invoke("record", {
+        const page = await feature.invoke("record_detail", {
           id,
           view: "summary",
           includeEvidence: true,

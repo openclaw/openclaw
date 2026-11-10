@@ -52,7 +52,9 @@ async function fixture(options = {}) {
       as(agent),
     );
   const titles = async (agent: any) =>
-    (await service.records({}, as(agent))).records.map((r) => r.title).toSorted(defaultOrder);
+    (await service.records_detail({}, as(agent))).records
+      .map((r) => r.title)
+      .toSorted(defaultOrder);
   const snapshot = () => service.stores_snapshot({}, admin);
   const change = async (agent: any, requested: any, expectedRevision?: string) => {
     const input = {
@@ -169,7 +171,7 @@ it("passive discovery, including operator provider reads, never creates storage"
   expect(snap.stores.every((s) => s.state === "unprovisioned")).toBeTruthy();
   expect((await f.service.status({}, f.reader)).writesEnabled).toBe(false);
   expect((await f.service.status({}, f.as("main"))).writesEnabled).toBe(true);
-  expect(((await query(f, "records")) as Output<"records">).total).toBe(0);
+  expect(((await query(f, "records_detail")) as Output<"records_detail">).total).toBe(0);
   expect(((await query(f, "status")) as Output<"status">).store).toBe("unprovisioned");
   expect(await f.storesDir()).toStrictEqual([]);
 });
@@ -266,7 +268,7 @@ it("share existing: same identity and records; members read and update through o
   await f.save("research", "Research addition");
   expect(await f.titles("main")).toStrictEqual(["Before sharing", "Research addition"]);
   // Writer attribution follows the publishing agent, not the viewer.
-  const records = (await f.service.records({}, f.as("main"))).records;
+  const records = (await f.service.records_detail({}, f.as("main"))).records;
   expect(records.find((r) => r.title === "Research addition")!.writtenByAgentId).toBe("research");
   expect(records.find((r) => r.title === "Before sharing")!.writtenByAgentId).toBe("main");
   // Configuration holds membership; nothing wrote an agent path.
@@ -448,9 +450,9 @@ it("a crash between the config write and registry settlement reconciles to one o
   expect(
     (await restarted.stores_change_status({ requestId: input.requestId }, f.admin)).outcome,
   ).toBe("applied");
-  expect((await restarted.records({}, f.as("research"))).records.map((r) => r.title)).toStrictEqual(
-    ["Seed"],
-  );
+  expect(
+    (await restarted.records_detail({}, f.as("research"))).records.map((r) => r.title),
+  ).toStrictEqual(["Seed"]);
 });
 
 it("a journaled change whose write never landed settles as not applied after restart", async () => {
@@ -613,7 +615,7 @@ it("the plugin instance disposes Knowledge through api.lifecycle.onDispose", asy
     throw new Error("expected a registered disposer");
   }
   await dispose();
-  await expect(service.records({}, toolContext(host.api))).rejects.toThrow(/reloaded/);
+  await expect(service.records_detail({}, toolContext(host.api))).rejects.toThrow(/reloaded/);
 });
 
 it("restart failures carry a stable retryable code and their reason", async () => {
@@ -646,20 +648,23 @@ it("restart failures carry a stable retryable code and their reason", async () =
 it("operator proxy is operator-only and validates inner operations", async () => {
   const f = await fixture();
   await f.save("research", "Visible to operator");
-  const rows = (await query(f, "records")) as Output<"records">;
+  const rows = (await query(f, "records_detail")) as Output<"records_detail">;
   expect(rows.records.map((r) => r.title)).toStrictEqual(["Visible to operator"]);
   expect(
-    (await f.service.records({}, f.reader)).total,
+    (await f.service.records_detail({}, f.reader)).total,
     "default operator view is the default agent",
   ).toBe(0);
   await expect(
-    f.service.agent_query({ agent: "research", operation: "records", input: {} }, f.as("main")),
+    f.service.agent_query(
+      { agent: "research", operation: "records_detail", input: {} },
+      f.as("main"),
+    ),
   ).rejects.toThrow(/operator/);
   for (const operation of ["save_page", "stores_snapshot"]) {
     await expect(query(f, operation)).rejects.toThrow(/Unknown query/);
   }
   await expect(
-    f.service.agent_query({ agent: "ghost", operation: "records", input: {} }, f.reader),
+    f.service.agent_query({ agent: "ghost", operation: "records_detail", input: {} }, f.reader),
   ).rejects.toThrow(/Unknown agent/);
   await expect(query(f, "records", { bogus: 1 })).rejects.toThrow(/Invalid input/);
 });
@@ -679,7 +684,9 @@ it("recovery keeps a shared store bound to its data even when other edits confli
   f.api.runtime.config.mutateConfigFile = original;
   expect(result.outcome).toBe("conflict");
   expect(
-    (await createKnowledgeService(f.api).records({}, f.as("research"))).records.map((x) => x.title),
+    (await createKnowledgeService(f.api).records_detail({}, f.as("research"))).records.map(
+      (x) => x.title,
+    ),
   ).toStrictEqual(["Seed"]);
   expect((await f.storesDir()).length, "no empty replacement store").toBe(1);
 });
@@ -692,10 +699,12 @@ it("an interrupted sentinel write is completed; a sentinel naming another regist
   // Exclusive create succeeded, then the process died before writing the ID.
   await writeFile(sentinel, "");
   const restarted = createKnowledgeService(f.api);
-  expect((await restarted.records({}, f.as("main"))).total).toBe(1);
+  expect((await restarted.records_detail({}, f.as("main"))).total).toBe(1);
   expect(await readFile(sentinel, "utf8")).toBe(id);
   await writeFile(sentinel, "another-registry\n");
-  await expect(createKnowledgeService(f.api).records({}, f.as("main"))).rejects.toThrow(/registry/);
+  await expect(createKnowledgeService(f.api).records_detail({}, f.as("main"))).rejects.toThrow(
+    /registry/,
+  );
 });
 
 it("several agents without a default: operators must choose; tools are unaffected", async () => {
@@ -708,6 +717,6 @@ it("several agents without a default: operators must choose; tools are unaffecte
   const snap = await f.snapshot();
   expect(snap.defaultAgent).toBe(undefined);
   await expect(f.service.status({}, f.reader)).rejects.toThrow(/choose which agent/);
-  expect(((await query(f, "records")) as Output<"records">).total).toBe(1);
+  expect(((await query(f, "records_detail")) as Output<"records_detail">).total).toBe(1);
   expect((await f.service.status({}, f.as("main"))).store).toBe("unprovisioned");
 });

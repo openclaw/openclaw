@@ -87,7 +87,9 @@ import {
   LeanSourceCheckOutput,
   LeanStatusOutput,
   LeanVerifyOutput,
-  withDetail,
+  LeanConnectionsOutput,
+  AgentConnectionsInput,
+  AgentRecordInput,
 } from "./tool-result-contract.js";
 
 const empty = Type.Object({}, { additionalProperties: false });
@@ -178,6 +180,11 @@ const RecordsOutput = Type.Object({
     }),
   ),
 });
+// Agent tool inputs select data, never response shape: the UI-only *_detail
+// operations keep the presentation options.
+const AgentRecordsInput = Type.Omit(RecordsInput, ["includeCards", "includeEndpoints"], {
+  additionalProperties: false,
+});
 // Agent tools return a lean projection by default (see tool-results.ts); every
 // other caller, and an agent asking for full detail, gets the complete output.
 const receipt = Type.Union([LeanReceipt, Receipt]);
@@ -187,32 +194,32 @@ export const contract = defineFeatureContract({
     timeline: {
       kind: "query",
       description:
-        "Chronological structured records, optionally scoped to an entity page ID and date range. Defaults to occurrence time; choose recorded_at/updated_at for when Knowledge changed or due_at for commitments. No dates inferred from prose or ingestion. Explicit source-event claims fold matching meeting pages. group=source with entity returns its Timeline: one row per dated source with their relationship note and claim count. Unknown dates excluded. Agents get compact items (day, id, title for pages, type, revision, 16-character hash, summary, claim count); detail=full adds paths, entity IDs, evidence counts, links and freshness. Follow nextOffset with the same filters and returned snapshot; restart on change.",
-      input: withDetail(TimelineInput),
+        "Chronological structured records, optionally scoped to an entity page ID and date range. Defaults to occurrence time; choose recorded_at/updated_at for when Knowledge changed or due_at for commitments. No dates inferred from prose or ingestion. Explicit source-event claims fold matching meeting pages. group=source with entity returns its Timeline: one row per dated source with their relationship note and claim count. Unknown dates excluded. Agents get compact items (day, id, title for pages, type, revision, 16-character hash, summary, claim count). Follow nextOffset with the same filters and returned snapshot; restart on change.",
+      input: TimelineInput,
       output: Type.Union([LeanChronicleOutput, ChronicleOutput]),
       tool: { name: "knowledge_timeline", label: "Read knowledge timeline" },
     },
     chronicle_day: {
       kind: "query",
       description:
-        "Events and dated assertions on a YYYY-MM-DD day, or its Monday–Sunday week. Timestamp days use timezone (IANA, default UTC); date-only records stay on their authored calendar day. Optional entity ID/kind filters. Structured dates only. Items match knowledge_timeline (detail=full for complete items). Page using nextOffset and snapshot.",
-      input: withDetail(DayInput),
+        "Events and dated assertions on a YYYY-MM-DD day, or its Monday–Sunday week. Timestamp days use timezone (IANA, default UTC); date-only records stay on their authored calendar day. Optional entity ID/kind filters. Structured dates only. Items match knowledge_timeline. Page using nextOffset and snapshot.",
+      input: DayInput,
       output: Type.Union([LeanChronicleOutput, ChronicleOutput]),
       tool: { name: "knowledge_chronicle_day", label: "What happened on this day" },
     },
     chronicle_since: {
       kind: "query",
       description:
-        "Structured events and dated assertions occurring on/after since, optionally through until, oldest first. This is world time, not newly imported content; use timeline timeField=recorded_at/updated_at for storage time. Dates use UTC query boundaries. Items match knowledge_timeline (detail=full for complete items). Page with nextOffset and snapshot.",
-      input: withDetail(SinceInput),
+        "Structured events and dated assertions occurring on/after since, optionally through until, oldest first. This is world time, not newly imported content; use timeline timeField=recorded_at/updated_at for storage time. Dates use UTC query boundaries. Items match knowledge_timeline. Page with nextOffset and snapshot.",
+      input: SinceInput,
       output: Type.Union([LeanChronicleOutput, ChronicleOutput]),
       tool: { name: "knowledge_chronicle_since", label: "What happened since" },
     },
     chronicle_last_seen: {
       kind: "query",
       description:
-        "Find the latest dated context for an entity before an occurrence cutoff, at or before occurredOnOrBefore (default now). A dated mention is not proof of a meeting or physical interaction. Null means no eligible dated record, not proof of no contact; a message then explains the scope. Undated prose is not inferred. detail=full adds the selection and freshness.",
-      input: withDetail(LastSeenInput),
+        "Find the latest dated context for an entity before an occurrence cutoff, at or before occurredOnOrBefore (default now). A dated mention is not proof of a meeting or physical interaction. Null means no eligible dated record, not proof of no contact; a message then explains the scope. Undated prose is not inferred.",
+      input: LastSeenInput,
       output: Type.Union([LeanLastSeenOutput, LastSeenOutput]),
       tool: { name: "knowledge_chronicle_last_seen", label: "Latest dated entity context" },
     },
@@ -227,8 +234,8 @@ export const contract = defineFeatureContract({
     verify: {
       kind: "query",
       description:
-        "Verify up to 100 published records in one bounded structural check: current eligibility, retained evidence, references, reconciled indexing and supplied expectations. Expected revision and owner/dates/source_page/from/to/label compare exactly, expectedHash as the full hash or a 16+ character prefix; null asserts absence, omitted skips. expectedEntities/expectedDependencies require membership, allowing extras. expectedLinks requires authored links resolving to supplied IDs, optionally at an exact resolver href; automatic backlinks do not count. Derive expectations from intended work, not saved output. Returns counts and exceptions only (20/page, max 50); follow nextOffset with unchanged records and snapshot. detail=full adds checkedAt and the scope message. Does not evaluate meaning, speaker attribution, chronology, quote wording or source completeness.",
-      input: withDetail(VerifyInput),
+        "Verify up to 100 published records in one bounded structural check: current eligibility, retained evidence, references, reconciled indexing and supplied expectations. Expected revision and owner/dates/source_page/from/to/label compare exactly, expectedHash as the full hash or a 16+ character prefix; null asserts absence, omitted skips. expectedEntities/expectedDependencies require membership, allowing extras. expectedLinks requires authored links resolving to supplied IDs, optionally at an exact resolver href; automatic backlinks do not count. Derive expectations from intended work, not saved output. Returns counts and exceptions only (20/page, max 50); follow nextOffset with unchanged records and snapshot. Does not evaluate meaning, speaker attribution, chronology, quote wording or source completeness.",
+      input: VerifyInput,
       output: Type.Union([LeanVerifyOutput, VerifyOutput]),
       tool: { name: "knowledge_verify", label: "Verify knowledge publication" },
     },
@@ -413,11 +420,19 @@ export const contract = defineFeatureContract({
     connections: {
       kind: "query",
       description:
-        "Inspect connections: incoming/outgoing typed relationships, dependents, claims, authored Markdown links and derived backlinks. Default compact rows: direction, id, revision and 16-character hash; pages add title/type, claims add kind, day, text, linked page titles and source, relationships add from/to. Use view=full for complete summaries, metadata and evidence previews, includeCards for card metadata (full only), includeEndpoints for deduplicated endpoint identities. Read knowledge_record for complete provenance. A backlink is derived navigation, not an authored reverse link. Default 20 rows, max 100; complete responses are byte-bounded and may return fewer. Follow nextOffset and compare snapshot (returned while more pages remain), keeping filters/view unchanged. Access and active eligibility precede counts/pagination. historical=true includes inactive/superseded, never withdrawn records.",
-      input: ConnectionsInput,
-      output: ConnectionsOutput,
+        "Inspect a record's connections: typed incoming/outgoing relationships, dependents, claims, authored Markdown links and derived backlinks. One row per connection: direction, id, revision and 16-character hash; pages add title/type, claims add kind, day, text (truncated past 4,000 characters), linked page titles and source, relationships add from/to. Lifecycle, assertion origin and uncertainty appear only when notable. A backlink is derived navigation, not an authored reverse link. Read knowledge_record for provenance. Default 20 rows, max 100, byte-bounded and may return fewer. Follow nextOffset with unchanged filters and compare snapshot (returned when paging). historical=true includes inactive/superseded, never withdrawn records.",
+      input: AgentConnectionsInput,
+      output: LeanConnectionsOutput,
       tool: { name: "knowledge_connections", label: "Inspect knowledge connections" },
     },
+    connections_detail: {
+      kind: "query",
+      description:
+        "Control UI connections: the knowledge_connections rows, or with view=full complete record summaries, evidence previews, claim cards (includeCards) and endpoint summaries (includeEndpoints).",
+      input: ConnectionsInput,
+      output: ConnectionsOutput,
+    },
+
     resume: {
       kind: "action",
       description:
@@ -502,48 +517,64 @@ export const contract = defineFeatureContract({
     status: {
       kind: "query",
       description:
-        "Read availability and counts for the authorized scope of this agent's knowledge store: vault, agent, store state, writesEnabled, record count and the ontology fingerprint writes need (scope only when not private, issues only when present). Write receipts also return the fingerprint. detail=full adds limits, instance and freshness fields.",
-      input: withDetail(empty),
+        "Read availability and counts for the authorized scope of this agent's knowledge store: vault, agent, store state, writesEnabled, record count and the ontology fingerprint writes need (scope only when not private, issues only when present). Write receipts also return the fingerprint.",
+      input: empty,
       output: Type.Union([LeanStatusOutput, StatusOutput]),
       tool: { name: "knowledge_status", label: "Knowledge status" },
     },
     grep: {
       kind: "query",
       description:
-        "Find records by words in titles, aliases and bodies. Use for discovery when the exact identity is unknown. Rank authorized valid knowledge by title/alias/body keywords with SQLite FTS5. Default: all word tokens, active records. Saved pages need no approval. mode=any ORs literal words; mode=phrase matches their order. No raw FTS/regex operators. lifecycle=superseded/all includes history, never withdrawn records. An active search also matches superseded wording and lists the current replacement after direct matches, with via naming the earlier revision that matched. Filters apply before ranking. Agents get compact hits (id, title for pages, type, revision, 16-character hash, short snippet; default limit 10); detail=full adds paths, citations, body line locators, score, attribution, evidence and freshness. index (present only when unavailable) and total=null mean failed retrieval, not no matches. Compare snapshot across pages; restart on changes. Not exhaustive inventory: use knowledge_records. No embeddings.",
-      input: withDetail(SearchInput),
+        "Find records by words in titles, aliases and bodies. Use for discovery when the exact identity is unknown. Rank authorized valid knowledge by title/alias/body keywords with SQLite FTS5. Default: all word tokens, active records. Saved pages need no approval. mode=any ORs literal words; mode=phrase matches their order. No raw FTS/regex operators. lifecycle=superseded/all includes history, never withdrawn records. An active search also matches superseded wording and lists the current replacement after direct matches, with via naming the earlier revision that matched. Filters apply before ranking. Agents get compact hits (id, title for pages, type, revision, 16-character hash, short snippet; default limit 10). index (present only when unavailable) and total=null mean failed retrieval, not no matches. Compare snapshot across pages; restart on changes. Not exhaustive inventory: use knowledge_records. No embeddings.",
+      input: SearchInput,
       output: Type.Union([LeanSearchOutput, SearchOutput]),
       tool: { name: "knowledge_grep", label: "Search knowledge" },
     },
     lookup: {
       kind: "query",
       description:
-        "Resolve a known exact ID, full title or alias. This is not keyword search; use knowledge_grep for discovery and after a missing result. No keyword-search fallback. Resolve that exact identity in the trusted scope; returns found, ambiguous or missing without choosing an ambiguous identity. Names/aliases normalize Unicode, case and whitespace; IDs are case-sensitive. Active records by default, with no approval step; historical filters are explicit. Invalid, withdrawn and unavailable dependencies are excluded. Independent of keyword indexing. Agents get id, title, type, revision and 16-character hash per hit; detail=full adds snippets, citations and freshness. Use knowledge_record for full inspection and knowledge_records for exhaustive listing.",
-      input: withDetail(LookupInput),
+        "Resolve a known exact ID, full title or alias. This is not keyword search; use knowledge_grep for discovery and after a missing result. No keyword-search fallback. Resolve that exact identity in the trusted scope; returns found, ambiguous or missing without choosing an ambiguous identity. Names/aliases normalize Unicode, case and whitespace; IDs are case-sensitive. Active records by default, with no approval step; historical filters are explicit. Invalid, withdrawn and unavailable dependencies are excluded. Independent of keyword indexing. Agents get id, title, type, revision and 16-character hash per hit. Use knowledge_record for full inspection and knowledge_records for exhaustive listing.",
+      input: LookupInput,
       output: Type.Union([LeanLookupOutput, LookupOutput]),
       tool: { name: "knowledge_lookup", label: "Resolve knowledge identity" },
     },
     records: {
       kind: "query",
       description:
-        "List current eligible authorized records exhaustively using pagination, with optional kind, ontology type/alias, or ID/title/alias filtering. lifecycle=all is an explicit historical inventory including inactive/invalid records; originals remain available by exact record/history inspection. Agents get rows: id, revision, 16-character hash, title/type for pages and from/to for relationships; claims show their title as text, or with includeCards their bounded card text, day, linked page titles and source. includeEndpoints adds deduplicated current eligible relationship endpoints for this page from the same authorized scan. detail=full returns complete summaries, cards and freshness. Responses are bounded by bytes and nested values and may return fewer rows than requested; follow nextOffset, not offset+limit. Oversized individual cards fall back to clickable summaries; use knowledge_record for full content.",
-      input: withDetail(RecordsInput),
-      output: Type.Union([LeanRecordsOutput, RecordsOutput]),
+        "List current eligible authorized records exhaustively with pagination, optionally filtered by kind, ontology type/alias, ID/title/alias text, dates or assertion origin. Rows: id, revision, 16-character hash; pages add title/type, claims add kind, day, text, linked page titles and source, relationships add from/to. lifecycle=all is an explicit historical inventory including inactive/invalid records. Responses are byte-bounded and may return fewer rows than requested; follow nextOffset, not offset+limit.",
+      input: AgentRecordsInput,
+      output: LeanRecordsOutput,
       tool: { name: "knowledge_records", label: "Browse knowledge" },
     },
+    records_detail: {
+      kind: "query",
+      description:
+        "Control UI inventory: complete record summaries, with claim cards (includeCards) and relationship endpoint summaries (includeEndpoints).",
+      input: RecordsInput,
+      output: RecordsOutput,
+    },
+
     record: {
       kind: "query",
       description:
-        "Read one saved record by stable ID. Read source passages with knowledge_evidence_read. Default returns id, revision, full hash and, for pages, title, type, aliases, non-empty domain fields and body; for claims, kind, date, text, linked pages, source, owner and attribution; partial identity and supersession when present. maxChars (default 12,000) bounds this whole response; follow nextOffset with offset. Options add only what they name: metadataView=full adds complete frontmatter as metadata, includeEvidence adds evidence, includeReferences adds connected rows and body links, view=raw returns raw Markdown instead of body. detail=full returns the complete response described next. Use knowledge_verify for aggregate structural checks. metadataView=full for arbitrary ontology fields and complete frontmatter before replacing fields; none for text only. Legacy includeMetadata true/false means full/none; cannot combine selectors. includeEvidence=true for verified citation locators and excerpts (4,000 chars total); paginate evidenceOffset/evidenceLimit with nextEvidenceOffset. includeReferences=true for paged connected summaries. view=summary omits body; raw returns original Markdown instead. Complete JSON is byte-bounded: follow content.nextOffset, nextReferenceOffset and nextEvidenceOffset; compare record hashes across pages. omitted lists supplemental previews excluded to fit; use connections, attachments or paged raw for complete detail. Oversized metadata/evidence errors explicitly; raw+metadataView=none without evidence/references is the text fallback. Missing/duplicate IDs return null. Never edit from truncated body.",
-      input: withDetail(RecordInput),
-      output: Type.Union([LeanRecordOutput, RecordOutput]),
+        "Read one saved record by stable ID: id, revision, full hash; pages add title, type, aliases, tags, dependencies, non-empty domain fields and body; claims add kind, date, due date, owner, linked pages, source, attribution and text; partial identity, supersession and merge redirects appear when present. maxChars (default 12,000) bounds the whole response; follow nextOffset with offset and compare hashes. includeEvidence=true adds citation locators and short excerpts (follow nextEvidenceOffset with evidenceOffset); read full passages with knowledge_evidence_read. Use knowledge_verify for structural and link checks and knowledge_connections for neighbors. Missing/duplicate IDs return null. Never edit from a truncated body.",
+      input: AgentRecordInput,
+      output: LeanRecordOutput,
       tool: { name: "knowledge_record", label: "Inspect knowledge" },
     },
+    record_detail: {
+      kind: "query",
+      description:
+        "Control UI record read: the complete record with selectable view (content/summary/raw), metadata (compact/full/none), verified evidence, connected summaries and resolved links, each paged and byte-bounded.",
+      input: RecordInput,
+      output: RecordOutput,
+    },
+
     ontology: {
       kind: "query",
       description:
-        "Inspect authorized ontology with progressive detail. Default catalog lists types with kind and description (50/page) plus the full fingerprint writes need; detail=full adds labels, aliases, primitives, counts and provenance. Use view=definitions with name for structured authoring fields, endpoint constraints and provenance (10/page); no serialized duplicate. includeRecords adds up to 20 examples/type; use knowledge_records for exhaustive records. view=sources lists source paths; add sourcePath for YAML only when debugging/editing a source, bounded by maxChars (12,000 default). view=diagnostics pages issues. Follow nextOffset using the same view/filters; source offsets are characters, other offsets are items. Behavior flags describe definitions, not implemented workflows.",
-      input: withDetail(OntologyInput),
+        "Inspect authorized ontology with progressive detail. Default catalog lists types with kind and description (50/page) plus the full fingerprint writes need. Use view=definitions with name for structured authoring fields, endpoint constraints and provenance (10/page); no serialized duplicate. includeRecords adds up to 20 examples/type; use knowledge_records for exhaustive records. view=sources lists source paths; add sourcePath for YAML only when debugging/editing a source, bounded by maxChars (12,000 default). view=diagnostics pages issues. Follow nextOffset using the same view/filters; source offsets are characters, other offsets are items. Behavior flags describe definitions, not implemented workflows.",
+      input: OntologyInput,
       output: Type.Union([LeanOntologyOutput, OntologyOutput]),
       tool: { name: "knowledge_ontology", label: "Inspect ontology" },
     },
@@ -642,10 +673,10 @@ type FullOutputs = {
   status: typeof StatusOutput;
   grep: typeof SearchOutput;
   lookup: typeof LookupOutput;
-  records: typeof RecordsOutput;
-  record: typeof RecordOutput;
   ontology: typeof OntologyOutput;
 };
+// Agent-only reads; the Control UI uses their *_detail operations.
+type AgentOnly = "record" | "records" | "connections";
 /**
  * The contract as the service implements it and as Control UI, operator and
  * command callers receive it: every operation returns its complete output.
@@ -653,7 +684,7 @@ type FullOutputs = {
  */
 export type FullOutputContract = Omit<typeof contract, "operations"> & {
   operations: {
-    [K in keyof Operations]: K extends keyof FullOutputs
+    [K in Exclude<keyof Operations, AgentOnly>]: K extends keyof FullOutputs
       ? Omit<Operations[K], "output"> & { output: FullOutputs[K] }
       : Operations[K];
   };

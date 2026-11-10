@@ -240,7 +240,7 @@ it("inspection inputs reject invalid budgets and authority selectors", () => {
     { id: "sample_person_alex", referenceLimit: 101 },
     { id: "sample_person_alex", root: "/etc" },
   ]) {
-    expect(Check(contract.operations.record.input, input)).toBe(false);
+    expect(Check(contract.operations.record_detail.input, input)).toBe(false);
   }
   for (const input of [{ view: "all" }, { limit: 0 }, { offset: -1 }, { agent: "other" }]) {
     expect(Check(contract.operations.ontology.input, input)).toBe(false);

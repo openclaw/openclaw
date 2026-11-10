@@ -133,13 +133,13 @@ it("conversation audience sees only its records, counts, evidence, ontology and 
       ["checkedAt", "queriedAt", "scannedAt", "indexedAt"].includes(k) ? undefined : v,
     );
   expect(stripTime(after)).toStrictEqual(stripTime(before));
-  expect((await f.service.record({ id: "missing-private-id" }, f.owner)).record).toBe(null);
+  expect((await f.service.record_detail({ id: "missing-private-id" }, f.owner)).record).toBe(null);
 });
 
 it("missing, foreign, and revoked tool authority fails for every operation", async () => {
   const f = await fixture();
   const missing = { ...f.owner, tool: { ...f.owner.tool, memoryAudience: undefined } };
-  await expect(f.service.records({}, missing)).rejects.toThrow(
+  await expect(f.service.records_detail({}, missing)).rejects.toThrow(
     /granted this session no memory audience.*"memory_audience_denied"/,
   );
   for (const override of [
@@ -174,11 +174,11 @@ it("another agent's audience resolves only that agent's own store", async () => 
     ...f.owner,
     tool: { ...f.owner.tool, memoryAudience: { kind: "owner-private", agentId: "other" } },
   };
-  expect((await f.service.records({}, other)).total).toBe(0);
+  expect((await f.service.records_detail({}, other)).total).toBe(0);
   expect(JSON.stringify(await f.service.grep({ query: "SENTINEL" }, other))).not.toMatch(
     /PRIVATE SENTINEL/,
   );
-  expect((await f.service.records({}, f.owner)).total > 0).toBe(true);
+  expect((await f.service.records_detail({}, f.owner)).total > 0).toBe(true);
 });
 
 it("operator scopes are explicit, selectors cannot create conversation authority", async () => {
@@ -189,17 +189,17 @@ it("operator scopes are explicit, selectors cannot create conversation authority
     { client: { connId: "x", scopes: [] } },
     { ...f.operator.action, sessionKey: "agent:main:selected" },
   ]) {
-    await expect(f.service.records({}, { ...f.operator, action })).rejects.toThrow();
+    await expect(f.service.records_detail({}, { ...f.operator, action })).rejects.toThrow();
   }
   const restricted = createKnowledgeService({ ...f.api, pluginConfig: { operatorRead: false } });
-  await expect(restricted.records({}, f.operator)).rejects.toThrow();
+  await expect(restricted.records_detail({}, f.operator)).rejects.toThrow();
   for (const fields of [
     { root: f.root },
     { agentId: "main" },
     { sessionId: f.sessionId },
     { scope: "agent-private" },
   ]) {
-    expect(Check(contract.operations.records.input, fields)).toBe(false);
+    expect(Check(contract.operations.records_detail.input, fields)).toBe(false);
   }
 });
 
@@ -210,21 +210,21 @@ it("operator browsing honors the role's agent ceiling and needs an administrator
     (...agents: string[]) =>
     (agent: string) =>
       agents.includes(agent);
-  await expect(f.service.records({}, withClient({ allowsAgent: allows("other") }))).rejects.toThrow(
-    /does not include agent "main"/,
-  );
-  await expect(f.service.records({}, withClient({ isSharedGateway: () => true }))).rejects.toThrow(
-    /requires an administrator/,
-  );
+  await expect(
+    f.service.records_detail({}, withClient({ allowsAgent: allows("other") })),
+  ).rejects.toThrow(/does not include agent "main"/);
+  await expect(
+    f.service.records_detail({}, withClient({ isSharedGateway: () => true })),
+  ).rejects.toThrow(/requires an administrator/);
   const admin = withClient({
     allowsAgent: allows("main"),
     isSharedGateway: () => true,
     scopes: ["operator.admin"],
   });
-  expect((await f.service.records({}, admin)).total > 0).toBe(true);
-  expect((await f.service.records({}, withClient({ allowsAgent: allows("main") }))).total > 0).toBe(
-    true,
-  );
+  expect((await f.service.records_detail({}, admin)).total > 0).toBe(true);
+  expect(
+    (await f.service.records_detail({}, withClient({ allowsAgent: allows("main") }))).total > 0,
+  ).toBe(true);
 });
 
 it("a role or roster change after admission refuses the operator read before disclosure", async () => {
@@ -234,10 +234,12 @@ it("a role or roster change after admission refuses the operator read before dis
   const changed = () => checks++ > 0;
   const withClient = (client: Record<string, unknown>) => operatorWith(f, client);
   await expect(
-    f.service.records({}, withClient({ allowsAgent: () => !changed() })),
+    f.service.records_detail({}, withClient({ allowsAgent: () => !changed() })),
   ).rejects.toThrow();
   checks = 0;
-  await expect(f.service.records({}, withClient({ isSharedGateway: changed }))).rejects.toThrow();
+  await expect(
+    f.service.records_detail({}, withClient({ isSharedGateway: changed })),
+  ).rejects.toThrow();
 });
 
 it("empty conversation scope returns an empty catalog, without creating files or reading private ontology", async () => {
@@ -279,15 +281,17 @@ it("identity replacement, generation rollback/mismatch, and missing manifest nev
     { format: "unknown" },
   ]) {
     await writeFile(path.join(f.root, "vault.json"), JSON.stringify({ ...f.manifest, ...change }));
-    await expect(f.service.records({}, f.owner)).rejects.toThrow(/identity/);
-    await expect(createKnowledgeService(f.api).records({}, f.owner)).rejects.toThrow(/identity/);
+    await expect(f.service.records_detail({}, f.owner)).rejects.toThrow(/identity/);
+    await expect(createKnowledgeService(f.api).records_detail({}, f.owner)).rejects.toThrow(
+      /identity/,
+    );
   }
   expect((await f.store.lookup(`store:${f.manifest.vaultId}`))!.vaultId).toBe(f.manifest.vaultId);
   const reordered = Object.fromEntries(Object.entries(f.manifest).toReversed());
   await writeFile(path.join(f.root, "vault.json"), JSON.stringify(reordered));
   expect((await createKnowledgeService(f.api).status({}, f.owner)).vault).toBe(f.manifest.vaultId);
   await rename(path.join(f.root, "vault.json"), path.join(f.root, "old-vault.json"));
-  await expect(f.service.records({}, f.owner)).rejects.toThrow(/identity/);
+  await expect(f.service.records_detail({}, f.owner)).rejects.toThrow(/identity/);
 });
 
 it("authority and identity are rechecked after asynchronous reads", async () => {
@@ -329,7 +333,7 @@ it("hardlinks, file and partition symlinks cannot expose another scope", async (
   expect(JSON.stringify(await invokeAll(f.service, f.owner))).not.toMatch(/PRIVATE SENTINEL/);
   await rename(shared, shared + "-saved");
   await symlink(path.join(f.root, "private"), shared);
-  await expect(f.service.records({}, f.owner)).rejects.toThrow(/identity/);
+  await expect(f.service.records_detail({}, f.owner)).rejects.toThrow(/identity/);
 });
 
 it("unrelated/corrupt operational databases and database links fail closed without replacement", async () => {
@@ -367,8 +371,8 @@ it("all opt-in inspection views retain conversation scope and authority", async 
     { id: "sample_person_alex", view: "raw" },
     { id: "sample_person_alex", includeMetadata: true, includeReferences: true },
   ] as const) {
-    const result = await f.service.record(input, f.owner);
-    expect(Check(contract.operations.record.output, result)).toBeTruthy();
+    const result = await f.service.record_detail(input, f.owner);
+    expect(Check(contract.operations.record_detail.output, result)).toBeTruthy();
     expect(JSON.stringify(result)).toMatch(/SHARED SENTINEL/);
     expect(JSON.stringify(result)).not.toMatch(/PRIVATE SENTINEL/);
   }

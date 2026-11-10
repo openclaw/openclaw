@@ -61,7 +61,7 @@ async function fixture() {
       occurred_at: "2026-10-05",
       ...extra,
     });
-  const record = (id: any) => call("record", { id, metadataView: "full" });
+  const record = (id: any) => call("record_detail", { id, metadataView: "full" });
   const fence = async (id: any) => {
     const r = (await record(id)).record!;
     return { id, expectedRevision: r.revision, expectedHash: r.hash };
@@ -146,14 +146,14 @@ it("reads follow the redirect without rewriting claims", async () => {
     (await f.call("lookup", { query: "discord:111" })).outcome,
     "the shared identity key no longer splits",
   ).toBe("found");
-  const connections = await f.call("connections", { id: f.survivor.id });
+  const connections = await f.call("connections_detail", { id: f.survivor.id });
   expect(
     connections.connections.some((c: any) => c.direction === "claims" && c.id === f.owned.id),
   ).toBeTruthy();
   expect(
     connections.connections.some((c: any) => c.direction === "backlinks" && c.id === f.linker.id),
   ).toBeTruthy();
-  const stale = await f.call("connections", { id: f.absorbed.id });
+  const stale = await f.call("connections_detail", { id: f.absorbed.id });
   expect(stale.redirectedFrom).toBe(f.absorbed.id);
   expect(stale.total).toBe(connections.total);
   const timeline = await f.call("timeline", { entity: f.survivor.id });
@@ -162,7 +162,7 @@ it("reads follow the redirect without rewriting claims", async () => {
     (await f.call("timeline", { entity: f.absorbed.id })).items.map((i: any) => i.record.id),
   ).toStrictEqual([f.owned.id]);
   expect(
-    (await f.call("records", { kind: "page", query: "standup participant" })).records.map(
+    (await f.call("records_detail", { kind: "page", query: "standup participant" })).records.map(
       (r: any) => r.id,
     ),
     "the merged page leaves listings",

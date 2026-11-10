@@ -98,7 +98,7 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
     direction: "claims" | (typeof railDirections)[number],
     offset: number,
   ) => {
-    const page = await feature.invoke("connections", {
+    const page = await feature.invoke("connections_detail", {
       id,
       view: "full",
       direction,

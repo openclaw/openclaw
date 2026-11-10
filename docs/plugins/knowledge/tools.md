@@ -20,19 +20,19 @@ override explicit tool denies, narrower policies, or Knowledge store access.
 
 ## Agent response shapes
 
-Agent tool calls return what an agent needs most of the time. The Control UI,
-operator inspection, and commands always receive the complete response.
+Agent tools return what an agent needs and nothing more. Their inputs select
+which data to read, never how much of each record to show, so there is no
+"full" mode. The Control UI, operator inspection, and commands receive complete
+responses through their own operations.
 
 - **List rows** (connections, records, search, lookup, timeline) carry the
   record ID, revision, and the first 16 characters of its hash. Pages add title
   and type; claims add kind, one day (occurrence, else recorded), their text
   without HTML comments (`truncated: true` past 4,000 characters), linked page
-  titles, and source page; relationships add
-  `from` and `to`. `lifecycle` and `assertionOrigin` appear only when not
-  `active` or `source`.
+  titles, and source page; relationships add `from` and `to`. `lifecycle` and
+  `assertionOrigin` appear only when not `active` or `source`.
 - **Single records** (`knowledge_record`) return the full hash, the body or claim
-  text, aliases, non-empty domain fields, and linked pages. `maxChars` bounds
-  the whole response by shortening the text window; follow `nextOffset`.
+  text, aliases, tags, dependencies, non-empty domain fields, and linked pages.
 - **Write receipts** return the record `id`, new `revision` and full `hash`,
   and the `ontologyFingerprint` the next write needs. `state` and `message`
   appear only when the receipt is not `published`; changed `items`, `impact`,
@@ -40,14 +40,6 @@ operator inspection, and commands always receive the complete response.
   complete receipt.
 - `nextOffset` appears only while another page remains, and `snapshot` only
   when paging (including the last page); coverage appears only when incomplete.
-
-Ask for the complete response with `detail: "full"` on `knowledge_record`,
-`knowledge_grep`, `knowledge_lookup`, `knowledge_records`,
-`knowledge_timeline`, the `knowledge_chronicle_*` tools, `knowledge_ontology`,
-`knowledge_status`, and `knowledge_verify`, and with `view: "full"` on
-`knowledge_connections`. On `knowledge_record`, `metadataView: "full"`,
-`includeEvidence`, `includeReferences`, and `view: "raw"` add only the
-metadata, evidence, connected rows and links, or raw Markdown they name.
 
 Every write fence (`expectedHash`) accepts the full hash or a lowercase prefix of
 at least 16 characters, so a list row's hash fences a write directly; the
@@ -80,32 +72,22 @@ See [Records and ontology](/plugins/knowledge/records-and-ontology).
 ## Reading records
 
 `knowledge_record({id})` returns the ID, revision, full hash, and lifecycle when
-not active. Pages add title, type, aliases, non-empty domain fields, and the
-body; claims add kind, date, text, linked pages, source, owner, and attribution.
-Validation issues, partial identity, supersession, and merge redirects appear
-when present. `maxChars` (default 12,000) bounds the whole response; follow
-`nextOffset` with `offset`. The options below add only what they name;
-`detail: "full"` returns the complete response, where `content.nextOffset`
-continues the body window.
+not active. Pages add title, type, aliases, tags, dependencies, non-empty domain
+fields, and the body; claims add kind, date, due date, owner, linked pages,
+source, attribution, the saver's subject hint, and text. Validation issues,
+partial identity, supersession, and merge redirects appear when present.
 
-| Option                              | Effect                                                                                        |
-| ----------------------------------- | --------------------------------------------------------------------------------------------- |
-| `view: "summary"`                   | Omit body text; inspect identity and state.                                                   |
-| `view: "raw"`                       | Original Markdown instead of the body.                                                        |
-| `metadataView: "compact"` (default) | Associations, dates, endpoints, aliases, domain fields, uncertainty; no evidence descriptors. |
-| `metadataView: "full"`              | Complete frontmatter as an object.                                                            |
-| `metadataView: "none"`              | No structured metadata.                                                                       |
-| `includeEvidence: true`             | Verified citation locators and excerpts. `maxEvidenceChars` 0–20,000 (default 4,000).         |
-| `evidenceOffset`, `evidenceLimit`   | Page citations: 20 by default, up to 100 per response. Follow `nextEvidenceOffset`.           |
-| `includeReferences: true`           | Connected summaries, 20 per page (`referenceLimit` 1–100). Follow `nextReferenceOffset`.      |
-| `offset`, `maxChars`                | Page body or raw text, 12,000 characters by default. Follow `content.nextOffset`.             |
+| Input                   | Effect                                                                                    |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| `offset`, `maxChars`    | `maxChars` (default 12,000) bounds the whole response; follow `nextOffset` with `offset`. |
+| `includeEvidence: true` | Citation locators and short excerpts (4,000 characters total).                            |
+| `evidenceOffset`        | Continue citations from `nextEvidenceOffset`, 20 per response.                            |
 
-Complete record responses are limited to 24 KiB of JSON. Pages may be shorter
-than requested; always use the returned continuation offsets. Material excluded
-to fit is named in `omitted`. Compare hashes across chunks and restart if the
-record changes. Never replace a page from an incomplete body. Missing or
-duplicate IDs return `record: null`. The legacy `includeMetadata` selector
-cannot be combined with `metadataView`.
+Compare hashes across chunks and restart if the record changes. Never replace a
+page from an incomplete body. Evidence previews left out to fit are named in
+`omitted`. Missing or duplicate IDs return `record: null`. Check authored links
+with `knowledge_verify` `expectedLinks` and list neighbors with
+`knowledge_connections`.
 
 Timeline summaries, claim cards, related statements, and evidence excerpts preserve
 UTF-16 surrogate pairs. A preview may stop one unit before its cap; later source
@@ -121,18 +103,15 @@ through that claim's ID.
 
 ## Listing and connections
 
-`knowledge_records` is the exhaustive, paginated inventory. It filters by kind,
-ontology type or alias, and ID/title/alias substring. Default listing covers
-current eligible records; `lifecycle: "all"` requests historical and invalid
-records too. Claims list their title as text; `includeCards` adds their bounded
-card text, linked pages, and source. `includeEndpoints` adds relationship
-endpoints.
+`knowledge_records` is the exhaustive, paginated inventory of
+[list rows](#agent-response-shapes). It filters by kind, ontology type or
+alias, ID/title/alias substring, dates, and assertion origin. Default listing
+covers current eligible records; `lifecycle: "all"` requests historical and
+invalid records too.
 
 `knowledge_connections({id})` returns one row per connection: its direction
-plus the [list row](#agent-response-shapes) of the connected record. Claim rows
-include their text, so a page's claims need no extra options. `view: "full"`
-returns complete record summaries and up to three evidence references;
-`includeCards: true` with full view adds claim card metadata.
+plus the list row of the connected record. Filter with `direction` and
+`historical`.
 
 | Direction              | Meaning                                              |
 | ---------------------- | ---------------------------------------------------- |
@@ -167,11 +146,11 @@ default 10 for agents and 20 otherwise), `offset`, and `lifecycle` (`active`,
 snippet. `index.state: "unavailable"` with `total: null` is a failed retrieval,
 not zero matches. An active `knowledge_grep` also returns the current
 replacement of a matching superseded record, after direct matches, with `via`
-naming the earlier record (`detail: "full"` adds `matches: ["superseded"]`). See
+naming the earlier record. See
 [Retrieval and dates](/plugins/knowledge/retrieval#superseded-wording).
 
-For bodies over 64 KiB, search previews are opening excerpts rather than located
-matches (`snippet.matchLocated: false`). Open the record to inspect content.
+For bodies over 64 KiB, search snippets are opening excerpts rather than
+located matches. Open the record to inspect content.
 
 ## Remembering claims
 

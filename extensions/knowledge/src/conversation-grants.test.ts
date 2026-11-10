@@ -54,7 +54,7 @@ async function fixture(options = {}) {
       ctx,
     );
   const titles = async (ctx: FeatureInvocationContext) =>
-    (await service.records({}, ctx)).records.map((r) => r.title).toSorted(defaultOrder);
+    (await service.records_detail({}, ctx)).records.map((r) => r.title).toSorted(defaultOrder);
   const grant = async (sessionKey: string, access: GrantChangeInput["access"], context = admin) => {
     const input = {
       expectedRevision: (await service.stores_snapshot({}, admin)).grants.revision,
@@ -212,9 +212,9 @@ it("grant changes need operator admin and the current revision, and persist in t
   expect(f.host.config.plugins.entries.knowledge.config).not.toHaveProperty("conversationGrants");
   await Promise.all(f.services.map((s: any) => s.stop()));
   const restarted = createKnowledgeService(f.api);
-  expect((await restarted.records({}, f.chat(GROUP))).records.map((r) => r.title)).toStrictEqual([
-    "Owner plan",
-  ]);
+  expect(
+    (await restarted.records_detail({}, f.chat(GROUP))).records.map((r) => r.title),
+  ).toStrictEqual(["Owner plan"]);
 });
 
 it("a memory-provider lease opened first after a restart sees the persisted grant", async () => {
@@ -248,7 +248,7 @@ it("conversations granted saves can approve automatic recall; read-only and ungr
   const f = await fixture();
   const saved = await f.save(f.owner, "Standing preference");
   const recall = async (ctx: FeatureInvocationContext) => {
-    const record = (await f.service.record({ id: saved.id }, f.owner)).record!;
+    const record = (await f.service.record_detail({ id: saved.id }, f.owner)).record!;
     return f.service.recall(
       {
         requestId: randomUUID(),
@@ -265,7 +265,7 @@ it("conversations granted saves can approve automatic recall; read-only and ungr
   await expect(recall(f.chat(GROUP))).rejects.toThrow(/read-only/);
   await f.grant(GROUP, "read-write");
   // Approval is the first call after a restart; the persisted grant still applies.
-  const record = (await f.service.record({ id: saved.id }, f.owner)).record!;
+  const record = (await f.service.record_detail({ id: saved.id }, f.owner)).record!;
   await Promise.all(f.services.map((s: any) => s.stop()));
   const restarted = createKnowledgeService(f.api);
   const approved = await restarted.recall(
@@ -279,7 +279,7 @@ it("conversations granted saves can approve automatic recall; read-only and ungr
     f.chat(GROUP + ":thread:3"),
   );
   expect(approved.state).toBe("published");
-  const raw = (await restarted.record({ id: saved.id, view: "raw" }, f.owner)).record!.raw!;
+  const raw = (await restarted.record_detail({ id: saved.id, view: "raw" }, f.owner)).record!.raw!;
   expect(raw).toContain("Prefers short answers.");
   expect(raw).toContain("approved_by: owner-private");
 });

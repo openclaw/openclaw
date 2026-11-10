@@ -28,7 +28,7 @@ it("appends a byte-stable index for owner-private sessions until the cutoff move
   expect(first.appendSystemContext).toContain("- note: Brightpath analysis playbook");
   // Neither a new record nor renaming a listed one changes the index mid-session.
   await f.save("Saved during the session");
-  const current = (await f.service.record({ id: saved.id }, f.tool)).record!;
+  const current = (await f.service.record_detail({ id: saved.id }, f.tool)).record!;
   await f.service.save_page(
     {
       requestId: randomUUID(),

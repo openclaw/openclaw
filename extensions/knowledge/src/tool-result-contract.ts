@@ -1,30 +1,18 @@
-import { Type, type Static, type TObject, type TProperties } from "typebox";
-import { RecordOutput } from "./inspection-contract.js";
+import { Type, type Static } from "typebox";
+import { ConnectionsInput } from "./connections-contract.js";
+import { RecordInput, RecordOutput } from "./inspection-contract.js";
 import { Definition, Field, text } from "./model.js";
 import { Receipt } from "./mutation-contract.js";
 import { PageBudget } from "./page-budget.js";
 import { RememberResult } from "./remember-contract.js";
 import { StoreState } from "./stores-contract.js";
-import { PageRow, Ref, Row } from "./tool-rows.js";
+import { ClaimRow, PageRow, Ref, RelationshipRow, Row } from "./tool-rows.js";
 
-// Lean agent tool outputs. Each operation's contract output is the union of its
-// lean shape and its complete shape; tool-results.ts owns the projection.
+// Agent tool outputs; tool-results.ts owns the projection. Operations the
+// Control UI also calls declare the union of this shape and the complete one.
 
 /** Maximum agent search snippet length in UTF-16 code units. */
 export const COMPACT_SNIPPET_CHARS = 200;
-
-export const Detail = Type.Optional(
-  Type.Union([Type.Literal("compact"), Type.Literal("full")], {
-    description:
-      "compact (default): the fields agents usually need. full: the complete response with every field, timestamp and explanatory message.",
-  }),
-);
-export type Detail = Static<typeof Detail>;
-
-/** Extend an input schema with the response-only detail selector. */
-export function withDetail<P extends TProperties>(schema: TObject<P>) {
-  return Type.Object({ ...schema.properties, detail: Detail }, { additionalProperties: false });
-}
 
 export const Incomplete = Type.Optional(
   Type.Object(
@@ -71,6 +59,8 @@ export const LeanRecordFields = Type.Object(
     from: Type.Optional(text(96)),
     to: Type.Optional(text(96)),
     aliases: Type.Optional(Type.Array(text(200), { maxItems: 100 })),
+    tags: Type.Optional(Type.Array(text(200), { maxItems: 100 })),
+    dependencies: Type.Optional(Type.Array(text(96), { maxItems: 100 })),
     fields: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     identity: Type.Optional(
       Type.Object(
@@ -82,10 +72,10 @@ export const LeanRecordFields = Type.Object(
     source: Type.Optional(Ref),
     attribution: Type.Optional(text(1000)),
     assertionOrigin: Type.Optional(text(30)),
+    subjectHint: Type.Optional(text(200)),
     supersededBy: Type.Optional(text(96)),
     text: Type.Optional(text(65536)),
     body: Type.Optional(text(65536)),
-    raw: Type.Optional(text(65536)),
   },
   { additionalProperties: false },
 );
@@ -99,7 +89,6 @@ export const LeanRecordOutput = Type.Object(
     mergedFrom: Type.Optional(Type.Array(Ref, { maxItems: 100 })),
     redirects: recordFields.redirects,
     // Explicit options add exactly what they name.
-    metadata: Type.Optional(Type.Unknown()),
     evidence: Type.Optional(Type.Array(LeanEvidence, { maxItems: 100 })),
     evidenceTotal: recordFields.evidenceTotal,
     evidenceSourceTotal: recordFields.evidenceSourceTotal,
@@ -147,11 +136,6 @@ export const LeanRecordOutput = Type.Object(
         { maxItems: 100 },
       ),
     ),
-    references: Type.Optional(Type.Array(Row, { maxItems: 100 })),
-    referenceTotal: recordFields.referenceTotal,
-    nextReferenceOffset: Type.Optional(Type.Integer()),
-    links: recordFields.links,
-    linksTruncated: recordFields.linksTruncated,
     omitted: recordFields.omitted,
   },
   { additionalProperties: false },
@@ -409,4 +393,58 @@ export const LeanSourceCheckOutput = Type.Object(
     message: text(1000),
   },
   { additionalProperties: false },
+);
+
+const Direction = Type.Union([
+  Type.Literal("incoming"),
+  Type.Literal("outgoing"),
+  Type.Literal("dependents"),
+  Type.Literal("claims"),
+  Type.Literal("backlinks"),
+  Type.Literal("links"),
+]);
+const directed = <T extends typeof ClaimRow | typeof RelationshipRow | typeof PageRow>(row: T) =>
+  Type.Object({ direction: Direction, ...row.properties }, { additionalProperties: false });
+export const LeanConnectionsOutput = Type.Object(
+  {
+    connections: Type.Array(
+      Type.Union([directed(ClaimRow), directed(RelationshipRow), directed(PageRow)]),
+      { maxItems: 100 },
+    ),
+    total: Type.Integer(),
+    nextOffset: Type.Union([Type.Integer(), Type.Null()]),
+    snapshot: Type.Optional(text(64)),
+    redirectedFrom: Type.Optional(text(96)),
+  },
+  { additionalProperties: false },
+);
+
+// Agent read inputs: data selection only; *_detail operations keep presentation options.
+export const AgentRecordInput = Type.Object(
+  {
+    id: RecordInput.properties.id,
+    offset: RecordInput.properties.offset,
+    maxChars: Type.Optional(
+      Type.Integer({
+        minimum: 256,
+        maximum: 65536,
+        description: "Bound for this whole response (default 12,000); follow nextOffset.",
+      }),
+    ),
+    includeEvidence: Type.Optional(
+      Type.Boolean({
+        description:
+          "Add citation locators and short excerpts for provenance review; follow nextEvidenceOffset.",
+      }),
+    ),
+    evidenceOffset: RecordInput.properties.evidenceOffset,
+  },
+  { additionalProperties: false },
+);
+export const AgentConnectionsInput = Type.Omit(
+  ConnectionsInput,
+  ["view", "includeCards", "includeEndpoints"],
+  {
+    additionalProperties: false,
+  },
 );

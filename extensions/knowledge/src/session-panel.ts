@@ -229,7 +229,7 @@ export function registerSessionPanel(host: ControlUiHost) {
         detail.hidden = false;
         detail.replaceChildren(el("p", "Loading record…"));
         try {
-          const result = await client.invoke("record", {
+          const result = await client.invoke("record_detail", {
             id,
             maxChars: 5000,
             includeMetadata: false,

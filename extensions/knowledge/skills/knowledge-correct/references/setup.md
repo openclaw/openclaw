@@ -28,8 +28,6 @@ directly or change configuration to work around it.
   alias. On `missing`, search with grep before concluding nothing exists.
 - Inspect candidates with `knowledge_record`. A matching name or email domain is a
   candidate, not proof. Never pick the first ambiguous hit.
-- With `detail: "full"`, a grep hit with `snippet.matchLocated: false` shows the
-  opening of the record, not the match.
 - Use stable IDs in tool calls. Filenames are slugs and can change.
 - Search, lookup, listing, timeline and connection rows carry `revision` and the
   first 16 characters of `hash`. That prefix is a valid `expectedHash` fence, so

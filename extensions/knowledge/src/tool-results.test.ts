@@ -131,9 +131,6 @@ it("agent write receipts carry the new revision, full hash and ontology fingerpr
     service: "knowledge",
     limits: expect.any(Object),
   });
-  expect(await s.tool("knowledge_status", { detail: "full" })).toMatchObject({
-    instanceId: expect.any(String),
-  });
 });
 
 it("connections default to one lean row per connection, with claim text", async () => {
@@ -161,7 +158,8 @@ it("connections default to one lean row per connection, with claim text", async 
     revision: 1,
     hash: prefix(s.edge.hash),
   });
-  const full = await s.tool("knowledge_connections", {
+  // The Control UI keeps its complete view through its own operation.
+  const full = await s.ui("connections_detail", {
     id: s.project.id,
     view: "full",
     includeCards: true,
@@ -214,21 +212,26 @@ it("records return identity, text and full hash; explicit options add what they 
     excerpt: expect.any(String),
   });
   expect(evidence.evidence[0].verified).toBeUndefined();
-  expect(evidence.metadata).toBeUndefined();
-  const metadata = await s.tool("knowledge_record", { id: s.claim.id, metadataView: "full" });
-  expect(metadata.metadata).toMatchObject({ claim_kind: "decision", evidence: expect.any(Array) });
-  expect(metadata.evidence).toBeUndefined();
-  const references = await s.tool("knowledge_record", { id: s.claim.id, includeReferences: true });
-  expect(references.references).toContainEqual({
-    id: s.meeting.id,
-    title: "Planning sync",
-    type: "meeting",
-    revision: 1,
-    hash: prefix(s.meeting.hash),
+  // Agent inputs select data only; presentation options belong to the Control UI.
+  for (const option of [
+    { metadataView: "full" },
+    { includeReferences: true },
+    { view: "raw" },
+    { detail: "full" },
+  ]) {
+    await expect(s.tool("knowledge_record", { id: s.claim.id, ...option })).rejects.toThrow();
+  }
+  await expect(
+    s.tool("knowledge_connections", { id: s.project.id, view: "full" }),
+  ).rejects.toThrow();
+  await expect(s.tool("knowledge_grep", { query: "option", detail: "full" })).rejects.toThrow();
+  expect(
+    await s.ui("record_detail", { id: s.claim.id, includeMetadata: true, includeReferences: true }),
+  ).toMatchObject({
+    view: "content",
+    record: { path: expect.any(String), metadata: { claim_kind: "decision" } },
+    references: expect.any(Array),
   });
-  const full = await s.tool("knowledge_record", { id: s.claim.id, detail: "full" });
-  expect(full).toMatchObject({ view: "content", record: { path: expect.any(String) } });
-  expect(await s.ui("record", { id: s.claim.id })).toMatchObject({ view: "content" });
   expect(await s.tool("knowledge_record", { id: "missing-record-id" })).toEqual({ record: null });
 });
 
@@ -275,7 +278,7 @@ it("search, lookup, timeline, records, ontology, verify and passages default to 
   expect(claimHit.title).toBeUndefined();
   expect(claimHit.snippet).not.toContain("<!--");
   expect(Object.keys(grep).toSorted()).toEqual(["hits", "resultCount", "total"]);
-  const fullGrep = await s.tool("knowledge_grep", { query: "option", detail: "full" });
+  const fullGrep = await s.ui("grep", { query: "option" });
   expect(fullGrep.hits[0]).toMatchObject({
     citation: expect.any(Object),
     score: expect.anything(),
@@ -312,7 +315,7 @@ it("search, lookup, timeline, records, ontology, verify and passages default to 
     entity: s.project.id,
     last: timeline.items[0],
   });
-  const records = await s.tool("knowledge_records", { kind: "claim", includeCards: true });
+  const records = await s.tool("knowledge_records", { kind: "claim" });
   expect(records.records).toEqual([
     {
       id: s.claim.id,
@@ -418,23 +421,25 @@ it("hashMatches accepts the full hash or a 16+ character lowercase prefix", () =
 
 it("lean agent responses are a fraction of the complete ones", async () => {
   const s = await seeded();
-  const pairs: [string, Record<string, unknown>, Record<string, unknown>][] = [
+  const pairs: [string, string, Record<string, unknown>, Record<string, unknown>?][] = [
     [
       "knowledge_connections",
+      "connections_detail",
       { id: s.project.id },
-      { id: s.project.id, view: "full", includeCards: true },
+      { view: "full", includeCards: true },
     ],
-    ["knowledge_record", { id: s.claim.id }, { id: s.claim.id, detail: "full" }],
-    ["knowledge_grep", { query: "option" }, { query: "option", detail: "full" }],
-    ["knowledge_lookup", { query: "Alex" }, { query: "Alex", detail: "full" }],
-    ["knowledge_timeline", { entity: s.project.id }, { entity: s.project.id, detail: "full" }],
-    ["knowledge_records", { includeCards: true }, { includeCards: true, detail: "full" }],
-    ["knowledge_ontology", {}, { detail: "full" }],
-    ["knowledge_status", {}, { detail: "full" }],
+    ["knowledge_record", "record_detail", { id: s.claim.id }],
+    ["knowledge_grep", "grep", { query: "option" }],
+    ["knowledge_lookup", "lookup", { query: "Alex" }],
+    ["knowledge_timeline", "timeline", { entity: s.project.id }],
+    ["knowledge_records", "records_detail", {}, { includeCards: true }],
+    ["knowledge_ontology", "ontology", {}],
+    ["knowledge_status", "status", {}],
   ];
-  for (const [name, lean, full] of pairs) {
-    const [a, b] = [await s.call(name, lean), await s.call(name, full)];
-    expect(a.chars, name).toBeLessThan(b.chars * 0.6);
+  for (const [tool, operation, input, ui = {}] of pairs) {
+    const lean = (await s.call(tool, input)).value;
+    const full = await s.ui(operation, { ...input, ...ui });
+    expect(JSON.stringify(lean).length, tool).toBeLessThan(JSON.stringify(full).length * 0.6);
   }
 });
 
@@ -463,16 +468,6 @@ it("maxChars bounds claim text too, continuing over the stored text", async () =
   expect(read).toBe(body);
 });
 
-it("operator agent queries accept the agent-only detail selector", async () => {
-  const s = await seeded();
-  const result = await s.ui("agent_query", {
-    agent: "main",
-    operation: "grep",
-    input: { query: "option", detail: "full" },
-  });
-  expect(result.hits[0]).toMatchObject({ citation: expect.any(Object) });
-});
-
 it("authored IDs of merged pages count once, as the page they resolve to", () => {
   const survivor = { id: "survivor-page", title: "Survivor", kind: "page", type: "person" };
   const lean = leanRecord(
@@ -499,7 +494,7 @@ it("authored IDs of merged pages count once, as the page they resolve to", () =>
       issues: [],
       redirects: [{ from: "absorbed-page", to: "survivor-page" }],
     } as any,
-    { id: "claim-0001" },
+    {},
   );
   expect(lean.record?.about).toStrictEqual([{ id: "survivor-page", title: "Survivor" }]);
 });

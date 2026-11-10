@@ -114,7 +114,7 @@ it("UI and tool share FTS title/alias/body retrieval, literal modes and stable c
     expect(result.index.lag).toBe(false);
     expect(result.total).toBe(1);
     expect(result.hits[0]!.matches).toStrictEqual([field]);
-    const current = (await f.service.record({ id: "record_alpha" }, f.owner)).record;
+    const current = (await f.service.record_detail({ id: "record_alpha" }, f.owner)).record;
     expect(result.hits[0]!.citation.hash).toBe(current!.hash);
     expect(result.hits[0]!.citation.revision).toBe(current!.revision);
     expect(compact.hits[0].hash).toBe(current!.hash.slice(0, 16));
@@ -158,8 +158,8 @@ it("all saved records are discoverable regardless of legacy approval metadata; l
   ).toStrictEqual(["historical_one"]);
   expect(await f.total({ query: "orbit", lifecycle: "all" })).toBe(3);
   expect(await f.outcome({ query: "candidate_one" })).toBe("found");
-  expect((await f.service.records({}, f.owner)).total).toBe(2);
-  expect((await f.service.records({ lifecycle: "all" }, f.owner)).total).toBe(3);
+  expect((await f.service.records_detail({}, f.owner)).total).toBe(2);
+  expect((await f.service.records_detail({ lifecycle: "all" }, f.owner)).total).toBe(3);
 });
 
 it("scope isolates results, counts, exact identity, snippets, corpus statistics and cached projections", async () => {
@@ -224,7 +224,7 @@ it("observed withdrawals persist across stale-file reappearance, restart and pro
   expect(await f.total({ query: "secretword" })).toBe(2);
   await writeFile(target, stale.replace("lifecycle: active", "lifecycle: withdrawn"));
   // Any normal scoped scan records the operational safeguard, not only search.
-  await f.service.records({}, f.owner);
+  await f.service.records_detail({}, f.owner);
   await writeFile(target, stale);
   f.store.withDatabase((db) => {
     for (const row of db
@@ -280,7 +280,7 @@ it("failed index updates return unavailable, not empty/stale; exact lookup and l
   expect(failed.total).toBe(null);
   expect(failed.hits).toStrictEqual([]);
   expect(await f.outcome({ query: "Known identity" })).toBe("found");
-  expect((await f.service.records({}, f.owner)).total).toBe(1);
+  expect((await f.service.records_detail({}, f.owner)).total).toBe(1);
   f.store.withDatabase((db) => db.exec("DROP TRIGGER fail_keyword"));
   expect(await f.total({ query: "newword" })).toBe(1);
   expect(await f.total({ query: "oldword" })).toBe(0);
@@ -447,7 +447,7 @@ it("published pages are immediately searchable without approval; restored genera
   expect(indexed.hits[0]!.evidence[0]!.start_line).toBe(1);
   expect(indexed.hits[0]!.attribution).toBe("User note");
   expect((await service.lookup({ query: receipt.id }, f.owner)).outcome).toBe("found");
-  const raw = (await service.record({ id: receipt.id, view: "raw" }, f.owner)).record!.raw;
+  const raw = (await service.record_detail({ id: receipt.id, view: "raw" }, f.owner)).record!.raw;
   expect(raw).not.toMatch(/acceptance:/);
   await writeFile(path.join(f.root, "vault.json"), JSON.stringify(f.manifest));
   for (const op of ["grep", "lookup"] as const) {
@@ -477,8 +477,9 @@ it("editing a legacy page removes approval metadata through journaled publicatio
   });
   const api = { ...f.api, pluginConfig: { operatorRead: true, writesEnabled: true } },
     service = createKnowledgeService(api);
-  const previous = (await service.record({ id: "legacy_record", includeMetadata: true }, f.owner))
-    .record;
+  const previous = (
+    await service.record_detail({ id: "legacy_record", includeMetadata: true }, f.owner)
+  ).record;
   const receipt = await service.save_page(
     {
       requestId: randomUUID(),
@@ -492,7 +493,7 @@ it("editing a legacy page removes approval metadata through journaled publicatio
   );
   expect(receipt.state).toBe("published");
   const current = (
-    await service.record({ id: previous!.id, view: "raw", includeMetadata: true }, f.owner)
+    await service.record_detail({ id: previous!.id, view: "raw", includeMetadata: true }, f.owner)
   ).record;
   expect(current!.raw).not.toMatch(/acceptance:/);
   // Authored metadata keys outside the contract survive the edit.

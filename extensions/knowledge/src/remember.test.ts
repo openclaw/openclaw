@@ -38,7 +38,7 @@ async function fixture() {
       owner,
     );
   const record = (id: string) =>
-    service.record({ id, includeMetadata: true, includeEvidence: true }, owner);
+    service.record_detail({ id, includeMetadata: true, includeEvidence: true }, owner);
   return { ...f, service, owner, page, remember, record };
 }
 
@@ -58,7 +58,10 @@ it("remember links a claim to a uniquely matching page and cites the retained ex
   expect(read.record!.metadata!.claim_kind).toBe("decision");
   expect(read.record!.metadata!.assertion_origin).toBe("source");
   expect(read.evidence![0]!.verified).toBe(true);
-  const claims = await f.service.connections({ id: project.id, direction: "claims" }, f.owner);
+  const claims = await f.service.connections_detail(
+    { id: project.id, direction: "claims" },
+    f.owner,
+  );
   expect(claims.connections[0]).toMatchObject({ id: out.items[0]!.id });
 });
 
@@ -102,7 +105,7 @@ it("remember replays an accepted request once and rejects changed payloads", asy
       f.owner,
     ),
   ).rejects.toThrow(/different payload/);
-  expect((await f.service.records({ kind: "claim" }, f.owner)).total).toBe(1);
+  expect((await f.service.records_detail({ kind: "claim" }, f.owner)).total).toBe(1);
   await expect(changed()).rejects.toThrow(/different payload/);
   const again = await f.remember([
     { text: "  prefers SHORT   replies. ", kind: "preference", subject: "garden pilot" },
@@ -112,7 +115,7 @@ it("remember replays an accepted request once and rejects changed payloads", asy
   expect(again.items.map((i) => i.status)).toStrictEqual(["duplicate", "inserted", "duplicate"]);
   expect(again.items[0]!.id).toBe(replay.items[0]!.id);
   expect(again.items[2]!.id).toBe(again.items[1]!.id);
-  expect((await f.service.records({ kind: "claim" }, f.owner)).total).toBe(2);
+  expect((await f.service.records_detail({ kind: "claim" }, f.owner)).total).toBe(2);
   const none = await f.remember(items);
   expect(none.receipt).toBe(null);
   expect(none.items[0]!.status).toBe("duplicate");
@@ -148,7 +151,7 @@ it("named and omitted subjects never guess competing names or create pages", asy
   await f.page("Weekly Sync", { type: "meeting" });
   const a = await f.page("Atlas"),
     b = await f.page("Atlas", { type: "person" });
-  const pages = (await f.service.records({ kind: "page" }, f.owner)).total;
+  const pages = (await f.service.records_detail({ kind: "page" }, f.owner)).total;
   const out = await f.remember([
     { text: "Atlas launched.", kind: "event", subject: "Atlas", occurred_at: "2026-10-18" },
     { text: "Nimbus is paused.", kind: "fact", subject: "Nimbus" },
@@ -174,7 +177,7 @@ it("named and omitted subjects never guess competing names or create pages", asy
   expect(out.items[0]!.candidates!.map((c) => c.id).toSorted(defaultOrder)).toStrictEqual(
     [a.id, b.id].toSorted(defaultOrder),
   );
-  expect((await f.service.records({ kind: "page" }, f.owner)).total).toBe(pages);
+  expect((await f.service.records_detail({ kind: "page" }, f.owner)).total).toBe(pages);
   expect((await f.record(out.items[1]!.id)).record!.metadata!.entities).toBe(undefined);
   expect((await f.record(out.items[0]!.id)).record!.metadata!.occurred_at).toBe("2026-10-18");
   expect(out.message).toMatch(/2 unlinked/);

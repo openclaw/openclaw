@@ -36,8 +36,9 @@ edit.
   deletes.
 - Full replacement: read the entire body first (follow `nextOffset` with
   `offset`; compare hashes across pages). Never edit from a truncated read.
-- Request `metadataView: "full"` before changing domain fields. Preserve
-  unrelated prose and metadata.
+- The record read includes domain fields, aliases, tags and dependencies; send
+  the complete set you want when changing one. Preserve unrelated prose and
+  metadata.
 
 ## Page budgets
 

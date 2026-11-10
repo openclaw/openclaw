@@ -6,7 +6,7 @@ import type { EvidenceReadOutput } from "./evidence-read-contract.js";
 import type { ReconcileEvidenceOutput } from "./evidence-reconciliation-contract.js";
 import { hashPrefix } from "./hash-fence.js";
 import type { SourceCheckOutput, VerifyOutput } from "./ingestion-contract.js";
-import type { OntologyOutput, RecordInput, RecordOutput } from "./inspection-contract.js";
+import type { OntologyOutput, RecordOutput } from "./inspection-contract.js";
 import type { Receipt } from "./mutation-contract.js";
 import type { RememberOutput } from "./remember-contract.js";
 import type { FullHit, LookupOutput, SearchOutput } from "./retrieval-contract.js";
@@ -14,7 +14,6 @@ import type { StoreState } from "./stores-contract.js";
 import { splitsPair } from "./text-window.js";
 import {
   COMPACT_SNIPPET_CHARS,
-  type Detail,
   type LeanChronicleItem,
   type LeanChronicleOutput,
   type LeanEvidence,
@@ -41,10 +40,11 @@ import {
   type Ref,
 } from "./tool-rows.js";
 
-// Agent tools return what an agent needs most of the time. Complete shapes stay
-// one explicit option away (detail/view/metadataView/includeEvidence/
-// includeReferences) or behind targeted tools (knowledge_mutation, knowledge_history).
-// Control UI, operator and command callers always receive the complete shape.
+// Agent tools return what an agent needs and nothing more; their inputs select
+// data, never response shape. Complete receipts stay behind targeted tools
+// (knowledge_mutation, knowledge_history). Control UI, operator and command
+// callers receive complete outputs, through *_detail operations where an
+// agent tool has none.
 
 /** Default page size for agent search/lookup calls that omit limit. */
 export const AGENT_HIT_LIMIT = 10;
@@ -90,7 +90,10 @@ const present = <K extends string, V>(key: K, value: V | undefined | null) =>
     ? {}
     : { [key]: value }) as Partial<Record<K, V>>;
 
-export function leanRecord(output: RecordOutput, input: RecordInput): LeanRecordOutput {
+export function leanRecord(
+  output: RecordOutput,
+  input: { maxChars?: number; includeEvidence?: boolean },
+): LeanRecordOutput {
   const r = output.record;
   const extras = {
     ...present("issues", output.issues),
@@ -115,7 +118,6 @@ export function leanRecord(output: RecordOutput, input: RecordInput): LeanRecord
   ].slice(0, 100);
   const fields = m.fields && Object.keys(m.fields).length ? m.fields : undefined;
   const date = claim ? (m.occurred_at ?? r.occurredAt ?? r.recordedAt) : undefined;
-  const fullMetadata = input.metadataView === "full" || input.includeMetadata === true;
   const lean: LeanRecordOutput = {
     record: {
       id: r.id,
@@ -128,6 +130,8 @@ export function leanRecord(output: RecordOutput, input: RecordInput): LeanRecord
       ...(r.owner ? { owner: ref(r.owner) } : {}),
       ...(r.kind === "relationship" && r.from && r.to ? { from: r.from, to: r.to } : {}),
       ...(m.aliases?.length ? { aliases: m.aliases } : {}),
+      ...(m.tags?.length ? { tags: m.tags } : {}),
+      ...(m.dependencies?.length ? { dependencies: m.dependencies } : {}),
       ...(fields ? { fields } : {}),
       ...(m.identity?.status === "partial"
         ? { identity: { status: "partial" as const, context: m.identity.context } }
@@ -138,20 +142,14 @@ export function leanRecord(output: RecordOutput, input: RecordInput): LeanRecord
       ...(r.assertionOrigin && r.assertionOrigin !== "source"
         ? { assertionOrigin: r.assertionOrigin }
         : {}),
+      ...(m.subject_hint ? { subjectHint: m.subject_hint } : {}),
       ...(m.superseded_by ? { supersededBy: m.superseded_by } : {}),
-      ...(r.raw !== undefined
-        ? { raw: r.raw }
-        : r.body === undefined
-          ? {}
-          : claim
-            ? { text: stripComments(r.body) }
-            : { body: r.body }),
+      ...(r.body === undefined ? {} : claim ? { text: stripComments(r.body) } : { body: r.body }),
     },
     ...(output.content.nextOffset === null
       ? {}
       : { nextOffset: output.content.nextOffset, totalChars: output.content.totalChars }),
     ...extras,
-    ...(fullMetadata ? { metadata: r.metadata } : {}),
     ...(input.includeEvidence
       ? {
           ...present(
@@ -195,26 +193,14 @@ export function leanRecord(output: RecordOutput, input: RecordInput): LeanRecord
           ),
         }
       : {}),
-    ...(input.includeReferences
-      ? {
-          ...present(
-            "references",
-            output.references?.map((s) => summaryRow(s)),
-          ),
-          ...present("referenceTotal", output.referenceTotal),
-          ...present("nextReferenceOffset", output.nextReferenceOffset),
-          ...present("links", output.links),
-          ...(output.linksTruncated ? { linksTruncated: true } : {}),
-        }
-      : {}),
     ...present("omitted", output.omitted),
   };
   return boundLeanRecord(lean, output, input.maxChars ?? AGENT_RECORD_MAX_CHARS);
 }
 
 // maxChars bounds the complete serialized response, including the continuation
-// fields a cut adds. The text window (page body, raw Markdown or claim text) is
-// what shrinks; requested evidence, references and metadata keep their own limits.
+// fields a cut adds. The text window (page body or claim text) is what shrinks;
+// requested evidence keeps its own limits.
 // A cut claim shows its text as stored, so offsets continue over the stored text.
 function boundLeanRecord(
   lean: LeanRecordOutput,
@@ -226,14 +212,7 @@ function boundLeanRecord(
   if (!record || size() <= maxChars) {
     return lean;
   }
-  const key =
-    record.raw !== undefined
-      ? "raw"
-      : record.body !== undefined
-        ? "body"
-        : record.text !== undefined
-          ? "text"
-          : undefined;
+  const key = record.body !== undefined ? "body" : record.text !== undefined ? "text" : undefined;
   if (!key) {
     return lean;
   }
@@ -514,20 +493,22 @@ export const leanSourceCheck = (
 export const leanReconcileEvidence = (o: Static<typeof ReconcileEvidenceOutput>) =>
   o.state === "preview" ? o : leanReceipt(o);
 
+type Connection = Awaited<
+  ReturnType<FeatureHandlers<FullOutputContract>["connections_detail"]>
+>["connections"][number];
+const isRow = (row: Connection): row is Exclude<Connection, { record: unknown }> =>
+  !("record" in row);
+
 type Handler<I, O> = (input: I, context: FeatureInvocationContext) => O | Promise<O>;
 
-/** Project one handler's output for agent tool calls unless the input asks for full detail. */
+/** Project one handler's output for agent tool calls; other callers get it complete. */
 function project<I, O, L>(
   handler: Handler<I, O>,
   lean: (output: O, input: I) => L,
-  full: (input: I) => boolean = (input) => (input as { detail?: Detail }).detail === "full",
 ): Handler<I, O | L> {
   return async (input, context) => {
-    // The response-only selector belongs to this adapter; the service never sees it.
-    const { detail: _detail, ...payload } = input as I & { detail?: Detail };
-    // SAFETY: payload is the handler's input minus the adapter-only detail key.
-    const output = await handler(payload as I, context);
-    return context.source === "tool" && !full(input) ? lean(output, input) : output;
+    const output = await handler(input, context);
+    return context.source === "tool" ? lean(output, input) : output;
   };
 }
 
@@ -542,36 +523,46 @@ function agentLimit<I extends { limit?: number }, O>(handler: Handler<I, O>): Ha
     );
 }
 
-// Receipts and passages have no detail selector: knowledge_mutation and
-// knowledge_history return complete receipts.
-const never = () => false;
-
 /**
- * Wrap the service handlers for agent tools. Every other caller, and any agent
- * call that asks for full detail, receives the service's complete output.
+ * Wrap the service handlers for agent tools and add the agent-only reads, which
+ * call their *_detail operation with the data the agent asked for.
  */
 export function leanToolResults(
   h: FeatureHandlers<FullOutputContract>,
 ): FeatureHandlers<typeof contract> {
   const receipt = <I>(handler: Handler<I, Receipt>) =>
-    project(handler, (o: Receipt) => leanReceipt(o), never);
+    project(handler, (o: Receipt) => leanReceipt(o));
   return {
     ...h,
-    record: project(h.record, leanRecord),
+    record: async (input, context) =>
+      leanRecord(
+        await h.record_detail(
+          // The agent input is a subset of the complete read's input.
+          input,
+          context,
+        ),
+        input,
+      ),
+    // Storage builds compact rows itself, inside its byte budget.
+    connections: async (input, context) => {
+      const { endpoints: _endpoints, ...output } = await h.connections_detail(input, context);
+      return { ...output, connections: output.connections.filter(isRow) };
+    },
+    records: async (input, context) =>
+      leanRecords(await h.records_detail({ ...input, includeCards: true }, context)),
     grep: agentLimit(project(h.grep, leanSearch)),
     lookup: agentLimit(project(h.lookup, leanLookup)),
     timeline: project(h.timeline, leanChronicle),
     chronicle_day: project(h.chronicle_day, leanChronicle),
     chronicle_since: project(h.chronicle_since, leanChronicle),
     chronicle_last_seen: project(h.chronicle_last_seen, leanLastSeen),
-    records: project(h.records, leanRecords),
     ontology: project(h.ontology, leanOntology),
     status: project(h.status, leanStatus),
     verify: project(h.verify, leanVerify),
-    evidence_read: project(h.evidence_read, leanEvidenceRead, never),
-    source_check: project(h.source_check, leanSourceCheck, never),
-    remember: project(h.remember, leanRemember, never),
-    reconcile_evidence: project(h.reconcile_evidence, leanReconcileEvidence, never),
+    evidence_read: project(h.evidence_read, leanEvidenceRead),
+    source_check: project(h.source_check, leanSourceCheck),
+    remember: project(h.remember, leanRemember),
+    reconcile_evidence: project(h.reconcile_evidence, leanReconcileEvidence),
     publish_batch: receipt(h.publish_batch),
     annotate: receipt(h.annotate),
     edit_body: receipt(h.edit_body),

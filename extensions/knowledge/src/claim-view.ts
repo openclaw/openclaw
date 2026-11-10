@@ -32,7 +32,7 @@ export function metadataBlock(ui: Page, id: string, n: number) {
     }
     block.dataset.loaded = "true";
     feature
-      .invoke("record", { id, view: "summary", metadataView: "full" })
+      .invoke("record_detail", { id, view: "summary", metadataView: "full" })
       .then((result) => {
         if (live(n)) {
           text.textContent =
@@ -364,7 +364,7 @@ export function renderClaim(
     loading = true;
     evidenceBody.replaceChildren(loadingPlaceholder("cards", "Loading evidence…", 1));
     try {
-      const fetched = await feature.invoke("record", {
+      const fetched = await feature.invoke("record_detail", {
         id: record.id,
         view: "summary",
         includeEvidence: true,

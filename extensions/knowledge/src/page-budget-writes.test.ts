@@ -27,7 +27,7 @@ async function fixture() {
   const save = (title: string, type: string, body: string, extra = {}) =>
     call("save_page", { requestId: randomUUID(), title, type, body, ...extra });
   const read = async (id: string, extra = {}) =>
-    (await call("record", { id, view: "summary", metadataView: "full", ...extra })).record!;
+    (await call("record_detail", { id, view: "summary", metadataView: "full", ...extra })).record!;
   const fence = async (id: string) => {
     const r = await read(id);
     return { id, expectedRevision: r.revision, expectedHash: r.hash };
@@ -246,12 +246,12 @@ it("extracts a section with its links, evidence, claim subjects and history, or 
       text.slice(start + billing.length),
   );
   const links = async (id: string) =>
-    (await f.call("connections", { id, direction: "links" })).connections
+    (await f.call("connections_detail", { id, direction: "links" })).connections
       .map((c: any) => c.id)
       .toSorted();
   expect(await links(destination.id)).toStrictEqual([ledger.id, owner.id, provider.id].toSorted());
   expect(await links(atlas.id)).toStrictEqual([destination.id, ledger.id, search.id].toSorted());
-  const carried = await f.call("record", {
+  const carried = await f.call("record_detail", {
     id: destination.id,
     includeEvidence: true,
     view: "summary",

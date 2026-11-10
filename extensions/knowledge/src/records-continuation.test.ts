@@ -54,7 +54,10 @@ it("registered inventory follows every returned offset through a large filtered 
     throw new Error("Expected registered records tool");
   }
   const call = async (input: { query: string; limit: number; offset?: number }) =>
-    (await tool.execute(randomUUID(), input)).details as FeatureOutput<typeof contract, "records">;
+    (await tool.execute(randomUUID(), input)).details as FeatureOutput<
+      typeof contract,
+      "records_detail"
+    >;
   const control = await call({ query: "Unrelated control", limit: 50 });
   expect(control.records.map((r) => r.id)).toEqual(["project_unrelated"]);
   expect(control.total).toBe(1);

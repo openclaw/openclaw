@@ -43,7 +43,7 @@ it("shared search/get/health roundtrip uses native publication, provenance and r
   await provider.close();
   await provider.close();
   await expect(provider.search({ query: "Orchid" })).rejects.toThrow(/closed/);
-  expect((await f.service.record({ id: saved.id }, f.tool)).record!.id).toBe(saved.id);
+  expect((await f.service.record_detail({ id: saved.id }, f.tool)).record!.id).toBe(saved.id);
 });
 
 it("ungranted conversation audiences never acquire private scope", async () => {
@@ -499,7 +499,7 @@ it("automatic candidates exclude withdrawn, superseded and invalid recall blocks
 
   const { provider } = await f.open();
   expect((await provider.candidates({ kind: "trigger" })).hits).toStrictEqual([]);
-  const inspected = await f.service.record({ id: invalid.id }, f.tool);
+  const inspected = await f.service.record_detail({ id: invalid.id }, f.tool);
   expect(inspected.record).toBeTruthy();
   expect(inspected.record!.valid).toBe(true);
   expect(inspected.issues.some((issue) => issue.code === "invalid-recall")).toBeTruthy();

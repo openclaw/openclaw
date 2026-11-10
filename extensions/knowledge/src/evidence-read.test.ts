@@ -118,7 +118,7 @@ it("short and empty passages expose exact identity, inclusive lines, normalizati
     original = "one 🌱\r\ntwo\r\nthree\r\n";
   const evidence = await upload(f, original),
     saved = await publish(f, [evidence]);
-  const inspected = (await f.service.record({ id: saved.id }, f.owner)).record;
+  const inspected = (await f.service.record_detail({ id: saved.id }, f.owner)).record;
   const whole = await f.read(inputFor(saved, evidence));
   checkPage(whole);
   expect(whole.record).toStrictEqual({
@@ -307,7 +307,7 @@ it("private and conversation passages cannot share access or continuation cursor
   );
   // Retain record/source identity but author valid conversation metadata.
   // Simply copying private metadata is correctly rejected before cursor checks.
-  const record = (await f.service.record({ id: saved.id, view: "raw" }, f.owner)).record;
+  const record = (await f.service.record_detail({ id: saved.id, view: "raw" }, f.owner)).record;
   const scopeRoot = path.join(f.root, "conversations", sessionId);
   const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(record!.raw!);
   expect(frontmatter).toBeTruthy();
@@ -363,7 +363,7 @@ it("withdrawal blocks new and continuing reads even after stale record restorati
   const f = await fixture(),
     evidence = await upload(f, "withdraw me ".repeat(100)),
     saved = await publish(f, [evidence]);
-  const before = (await f.service.record({ id: saved.id, view: "raw" }, f.owner)).record;
+  const before = (await f.service.record_detail({ id: saved.id, view: "raw" }, f.owner)).record;
   const input = inputFor(saved, evidence, { maxChars: 256 }),
     first = await f.read(input);
   await f.service.withdraw({ ...fence(before), reason: "Synthetic withdrawal" }, f.owner);
@@ -448,11 +448,11 @@ it("annotation-only identity and attribution sources are readable and downloadab
       },
     },
   ] satisfies AnnotateInput["annotations"][]) {
-    const before = (await f.service.record({ id: saved.id }, f.owner)).record;
+    const before = (await f.service.record_detail({ id: saved.id }, f.owner)).record;
     const input = { ...fence(before), reason: "Synthetic annotation coverage", annotations };
     await f.service.annotate(input, f.owner);
     // A direct Markdown edit may keep only the nested citation.
-    const { record } = await f.service.record({ id: saved.id, view: "raw" }, f.owner);
+    const { record } = await f.service.record_detail({ id: saved.id, view: "raw" }, f.owner);
     const edited = record!.raw!.replace(/^evidence:\n(?:[ -].*\n)*/m, "evidence: []\n");
     expect(edited).not.toBe(record!.raw);
     await writeFile(path.join(f.root, "private", record!.path), edited);

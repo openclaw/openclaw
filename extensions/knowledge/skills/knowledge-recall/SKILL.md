@@ -22,15 +22,13 @@ Read [shared conventions](references/conventions.md). This workflow is read-only
    exists. Preserve `ambiguous` as ambiguity and inspect candidates rather than
    choosing one.
 3. Inspect relevant hits with `knowledge_record`. Read enough context to support
-   the answer. Identity, aliases, domain fields and linked pages are included by
-   default; request `includeEvidence: true` for source locators, excerpts and
-   attribution support, and `metadataView: "full"` for complete frontmatter.
-   Connection rows already carry each claim's text, day, linked pages and
-   source; request `view: "full"` only for richer metadata/evidence.
+   the answer. Identity, aliases, domain fields and linked pages are included;
+   request `includeEvidence: true` for source locators, excerpts and
+   attribution support. Connection rows carry each claim's text, day, linked
+   pages and source.
    Follow body/evidence/connection pagination as needed. Compare the hit's
    revision and 16-character hash with the readback's revision and hash prefix. Restart on changes rather than combine
-   incompatible revisions. Use `includeReferences` only for declared structured
-   connections; prose links do not populate that list automatically.
+   incompatible revisions.
 4. Answer from the retrieved passages. In Control UI chat, cite readable titles
    linked to the dedicated Knowledge record page using the shared conventions'
    chat-link contract. Retain relevant source locators and propagate original
@@ -79,6 +77,5 @@ The tool verifies bytes and line bounds, not the truth of an interpretation.
 Use knowledge_attachment for binary originals. Never infer complete review from
 an excerpt or a successful structural verifier.
 
-With detail: "full", query freshness distinguishes queriedAt from scannedAt;
-keyword results also have indexedAt. A reused scan retains its observation time. Compare snapshot
-values only across pages with unchanged query filters and eligibility.
+Compare snapshot values only across pages with unchanged query filters and
+eligibility.

@@ -147,11 +147,10 @@ existing tools, not a separate ingestion engine.
   A changed snapshot means restart. This replaces repetitive structural readbacks,
   including supplied link-target identity checks, not source reading or semantic
   checks. Investigate exceptions before marking complete.
-- For identity/revision checks use `knowledge_record({id, view: "summary"})`.
-  Defaults return identity, revision, full hash, aliases, domain fields and linked
-  pages, without evidence arrays. `metadataView: "full"` adds complete
-  frontmatter as `metadata`; `"none"` returns text only. Request `includeEvidence: true` for provenance/attribution review and keep
-  previews bounded (for example `evidenceLimit: 3, maxEvidenceChars: 1000`).
+- For identity/revision checks use `knowledge_record({id, maxChars: 1000})`.
+  It returns identity, revision, full hash, aliases, tags, dependencies, domain
+  fields and linked pages, without evidence. Request `includeEvidence: true` for
+  provenance/attribution review.
   Do not fetch every body or download
   every original merely to confirm publication. Full source reads remain required
   when substantive verification needs them.
@@ -160,15 +159,12 @@ existing tools, not a separate ingestion engine.
   independently. `maxChars` bounds a whole default record response, and record
   and connection responses stay within 24 KiB; use returned offsets, not
   requested lengths. Compare record hashes
-  across chunks and restart if changed. Inspect `omitted` for excluded previews;
-  use connections, attachments or paged `view: "raw", metadataView: "none"`
-  without evidence/references for complete detail. A preview is not the complete source.
-- For a failed expectation or link-specific investigation, inspect
-  `knowledge_record({id, includeReferences: true})`: each intended inline
-  page link in `links` must have `status: "resolved"` and the expected stable `id`,
-  not merely a matching label. Repair missing/ambiguous targets using observed
-  paths. `linksTruncated: true` means this check is incomplete; do not claim all
-  links verified from the bounded result.
+  across chunks and restart if changed. `omitted` names evidence previews left
+  out to fit; read passages with `knowledge_evidence_read` and originals with
+  `knowledge_attachment`. A preview is not the complete source.
+- Check intended inline page links with `knowledge_verify` `expectedLinks`; a
+  failure names the link whose target is missing or ambiguous. Repair it using
+  the intended stable ID, not merely a matching label.
 - For graph discovery or failed checks, inspect
   `knowledge_connections({id, direction: "links"})` and
   `knowledge_connections({id, direction: "backlinks"})` for the expected distinct

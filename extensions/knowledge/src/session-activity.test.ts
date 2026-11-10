@@ -55,9 +55,9 @@ it("session reads and writes survive service reload; retries, inspector reads, r
   };
   const receipt = await service.save_page(input, ctx);
   await service.save_page(input, context(api)); // new tool call retry must not reattribute a write
-  await service.record({ id: receipt.id }, context(api));
+  await service.record_detail({ id: receipt.id }, context(api));
   await service.grep({ query: "panel" }, context(api));
-  await service.record({ id: receipt.id }, op); // inspection is not agent activity
+  await service.record_detail({ id: receipt.id }, op); // inspection is not agent activity
   const query = { sessionKey: o.sessionKey, sessionId: o.sessionId };
   const result = await service.session_activity(query, op);
   expect(Check(contract.operations.session_activity.output, result)).toBeTruthy();
@@ -92,7 +92,7 @@ it("session reads and writes survive service reload; retries, inspector reads, r
   );
   expect(page.items[0]!.sequence > older.items[0]!.sequence).toBeTruthy();
   expect((await service.session_activity({ ...query, filter: "write" }, op)).items.length).toBe(1);
-  const record = await service.record({ id: receipt.id }, op);
+  const record = await service.record_detail({ id: receipt.id }, op);
   await service.withdraw(
     {
       requestId: randomUUID(),

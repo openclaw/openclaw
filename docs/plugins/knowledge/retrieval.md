@@ -58,18 +58,21 @@ finds the current answer.
 - Replacements come after every direct match, ranked by the earlier record's
   BM25 score, then ID. A record that is already a direct match, or reached from
   a better-ranked earlier record, appears once.
-- `via` identifies the earlier record that matched by ID and revision. With
-  `detail: "full"`, these hits also have `matches: ["superseded"]`,
-  `score: null` (so a memory search with `minScore` leaves them out), an opening
-  excerpt (`snippet.matchLocated: false`), a citation for the current record, and
-  the earlier record's title, path, and hash in `via`.
+- `via` identifies the earlier record that matched by ID and revision. In the
+  complete hits the Control UI receives, these hits also have
+  `matches: ["superseded"]`, `score: null` (so a memory search with `minScore`
+  leaves them out), an opening excerpt (`snippet.matchLocated: false`), a
+  citation for the current record, and the earlier record's title, path, and
+  hash in `via`.
 - `total`, `offset`, and `nextOffset` count direct and replacement hits
   together. `lifecycle: "superseded"` and `"all"` return superseded records
   directly and do not follow replacements.
 
 ## Results and citations
 
-Each hit has a summary, lifecycle, matched fields, attribution and assertion
+Agent tools receive [list rows](/plugins/knowledge/tools#agent-response-shapes)
+with a short snippet. Complete hits, as the Control UI receives them, have a
+summary, lifecycle, matched fields, attribution and assertion
 origin, and the stable ID, path, revision, and SHA-256 of the observed Markdown.
 
 - Snippets are at most 480 UTF-16 characters with zero-based start/end offsets.
@@ -179,6 +182,6 @@ ranges without claiming an exact instant.
   24 KiB response budget.
 - Follow `nextOffset` with unchanged filters and the returned `snapshot`.
 
-With `detail: "full"`, query responses report `freshness.queriedAt`,
+Complete query responses (Control UI) report `freshness.queriedAt`,
 `freshness.scannedAt`, and, for keyword queries, `freshness.indexedAt`. An older `scannedAt` means the scan was
 reused while files were unchanged, not that results are stale.
