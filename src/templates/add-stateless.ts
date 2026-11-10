@@ -52,6 +52,7 @@ import {
   rollbackStatelessTemplateMcpServers,
   type PersistedTemplateMcpServerRef,
 } from "./mcp.js";
+import type { PersistedTemplatePackageRef } from "./package-extension-provenance.js";
 import {
   TemplatePackageInstallError,
   installTemplatePackages,
@@ -60,7 +61,6 @@ import {
   type TemplateSkillInstallConsent,
 } from "./packages.js";
 import type { TemplatePluginRuntimeOptions } from "./plugin-runtime.js";
-import type { PersistedTemplatePackageRef } from "./provenance.js";
 import type { TemplateMutationStateOptions } from "./state-mutation-options.js";
 import { TEMPLATE_OUTPUT_STABILITY, type TemplateAddPlan } from "./types.js";
 import { createTemplateWorkspaceFiles, type PersistedTemplateWorkspaceFile } from "./workspace.js";

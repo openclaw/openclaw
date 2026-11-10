@@ -971,7 +971,7 @@ pr_git() {
   fi
   if [ "$1" = --no-lazy-fetch ] &&
     [ "$(command jq -r .priorCi.unsupportedNoLazy "$FIXTURE_STATE")" = true ]; then return 129; fi
-  if [ "$1" = fetch ] && [ "\${2:-}" = --no-tags ] && [ "\${3:-}" = --no-write-fetch-head ] &&
+  if [[ " $* " == *" fetch "*" --no-write-fetch-head \${MERGE_REPO_URL:-unset} "* ]] &&
     [ "$(command jq -r .priorCi.revokeAdminOnMainFetch "$FIXTURE_STATE")" = true ]; then
     command git "$@" || return
     command node -e 'const fs=require("node:fs");const path=process.env.FIXTURE_STATE;const state=JSON.parse(fs.readFileSync(path,"utf8"));state.priorCi.membership="member";state.priorCi.revokeAdminOnMainFetch=false;state.priorCi.adminRevokedDuringMainFetch=true;fs.writeFileSync(path,JSON.stringify(state));'

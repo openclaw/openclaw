@@ -23,11 +23,14 @@ import { prepareOpenClawStateReadSource } from "../../state/openclaw-state-worke
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { isCandidateAdmissionContextCovered } from "./schema-preflight.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import { assertUpdatePostgresOwnerReleasable } from "./update-command-database-backup.js";
 import type { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
+import { parksForegroundUpdateBeforeActivation } from "./update-command-handoff.js";
 import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
+import type { PreManagedServiceStop } from "./update-command-service.js";
 
 export async function preflightUpdateCandidatePlugins(
   execution: Pick<MutableUpdateExecutionParams, "channel" | "opts" | "updateStepTimeoutMs">,
@@ -70,6 +73,8 @@ export async function validateUpdateCandidateWithProgress(
     writeOptions: ReturnType<
       ReturnType<typeof createUpdateCommandExecutionGuards>["captureWriteOptions"]
     >;
+    /** The service the updater will stop before activation, if any. */
+    ownerService?: Pick<PreManagedServiceStop, "running" | "serviceUpdateVerdict">;
   },
   execution: {
     packageUpdateNodeRunner?: string;
@@ -79,6 +84,15 @@ export async function validateUpdateCandidateWithProgress(
   },
   run: UpdateCommandOptions["run"],
 ) {
+  const { ownerService, ...candidate } = params;
+  await assertUpdatePostgresOwnerReleasable({
+    config: params.config,
+    env: params.env,
+    hasRun: Boolean(run),
+    parksBeforeActivation: parksForegroundUpdateBeforeActivation(run),
+    service: ownerService,
+  });
+  params.assertCurrent();
   // Canary owns size-aware snapshot and per-check budgets. Only the admitted
   // operator deadline may limit their combined duration; keep its cancellation
   // and process settlement through the progress writer and raw canary children.
@@ -119,7 +133,7 @@ export async function validateUpdateCandidateWithProgress(
         }
         const validate = () =>
           validateUpdateCandidateCanary({
-            ...params,
+            ...candidate,
             sourceBundledPlugins: params.sourcePackageRoot
               ? {
                   packageRoot: params.sourcePackageRoot,

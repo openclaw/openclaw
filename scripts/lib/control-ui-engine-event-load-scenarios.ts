@@ -1827,24 +1827,29 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
     await frames(page);
     // Exercise an actual Latest command, rather than skipping an affordance
     // whose reactive visibility may still be settling after the retained-pane switch.
-    const scrollable = await page
-      .locator(`${pane} .chat-thread`)
-      .evaluate((thread) => thread.scrollHeight - thread.clientHeight > 8);
-    evidence.foregroundLatestActivated = scrollable;
-    if (scrollable) {
-      await page.locator(`${pane} .chat-thread`).press("PageUp");
-      const latest = page.locator(`${pane} .chat-scroll-to-bottom`);
-      await latest.waitFor({ state: "visible" });
-      await latest.press("Enter");
-    }
-    await page
-      .locator(`${pane} .chat-text`)
-      .getByText("Event load foreground completed.", { exact: true })
-      .waitFor();
-    // Mounted final text can precede a completed Latest journey. Require both
-    // visible content and the physical end to remain stable across three frames.
-    await page
-      .waitForFunction(
+    let latestStage = "page-up";
+    try {
+      const scrollable = await page
+        .locator(`${pane} .chat-thread`)
+        .evaluate((thread) => thread.scrollHeight - thread.clientHeight > 8);
+      evidence.foregroundLatestActivated = scrollable;
+      if (scrollable) {
+        await page.locator(`${pane} .chat-thread`).press("PageUp");
+        const latest = page.locator(`${pane} .chat-scroll-to-bottom`);
+        latestStage = "visible-latest";
+        await latest.waitFor({ state: "visible" });
+        latestStage = "activate-latest";
+        await latest.press("Enter");
+      }
+      latestStage = "final-text";
+      await page
+        .locator(`${pane} .chat-text`)
+        .getByText("Event load foreground completed.", { exact: true })
+        .waitFor();
+      // Mounted final text can precede a completed Latest journey. Require both
+      // visible content and the physical end to remain stable across three frames.
+      latestStage = "settle-end";
+      await page.waitForFunction(
         ({ position }) => {
           const thread = document.querySelector<HTMLElement>(
             ".chat-pane-cache__pane--active .chat-thread",
@@ -1878,38 +1883,39 @@ export async function verifyEngineEventLoad(page: Page, count: number, toolCount
         },
         { position: { geometry: "", stable: 0 } },
         { polling: "raf" },
-      )
-      .catch(async (error: unknown) => {
-        const geometry = await page.evaluate(() => {
-          const thread = document.querySelector<HTMLElement>(
-            ".chat-pane-cache__pane--active .chat-thread",
-          );
-          const final = [...(thread?.querySelectorAll<HTMLElement>(".chat-text") ?? [])].find(
-            (element) => element.textContent?.trim() === "Event load foreground completed.",
-          );
-          const bounds = final?.getBoundingClientRect();
-          return {
-            scrollTop: thread?.scrollTop,
-            scrollHeight: thread?.scrollHeight,
-            clientHeight: thread?.clientHeight,
-            endDistance: thread
-              ? thread.scrollHeight - thread.clientHeight - thread.scrollTop
-              : null,
-            viewport: thread?.getBoundingClientRect().toJSON(),
-            final: bounds?.toJSON(),
-            finalVisible: final?.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
-            tail: [...(thread?.children ?? [])].slice(-4).map((child) => ({
-              tag: child.tagName,
-              class: child.className,
-              bounds: child.getBoundingClientRect().toJSON(),
-            })),
-          };
-        });
-        throw new Error(
-          `Latest did not settle at the transcript end: ${JSON.stringify(geometry)}`,
-          { cause: error },
+      );
+    } catch (error) {
+      const geometry = await page.evaluate((stage) => {
+        const thread = document.querySelector<HTMLElement>(
+          ".chat-pane-cache__pane--active .chat-thread",
         );
+        const final = [...(thread?.querySelectorAll<HTMLElement>(".chat-text") ?? [])].find(
+          (element) => element.textContent?.trim() === "Event load foreground completed.",
+        );
+        const bounds = final?.getBoundingClientRect();
+        return {
+          stage,
+          scrollTop: thread?.scrollTop,
+          scrollHeight: thread?.scrollHeight,
+          clientHeight: thread?.clientHeight,
+          endDistance: thread ? thread.scrollHeight - thread.clientHeight - thread.scrollTop : null,
+          viewport: thread?.getBoundingClientRect().toJSON(),
+          final: bounds?.toJSON(),
+          finalRowKey: final
+            ?.closest("[data-virtual-row-key]")
+            ?.getAttribute("data-virtual-row-key"),
+          finalVisible: final?.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+          tail: [...(thread?.children ?? [])].slice(-4).map((child) => ({
+            tag: child.tagName,
+            class: child.className,
+            bounds: child.getBoundingClientRect().toJSON(),
+          })),
+        };
+      }, latestStage);
+      throw new Error(`Latest did not settle at the transcript end: ${JSON.stringify(geometry)}`, {
+        cause: error,
       });
+    }
     evidence.foregroundFinalVisible = true;
     evidence.foregroundLatestAtEnd = true;
     const context = await getControlUiContextHandle(page);

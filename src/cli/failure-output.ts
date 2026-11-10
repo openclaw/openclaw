@@ -5,7 +5,7 @@ import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
-import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import { extractErrorCode, formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import {
@@ -293,6 +293,10 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     }
     if (stateRefusal) {
       return [`[openclaw] ${options.title}`, reason(stateRefusal)];
+    }
+    // Engine selection throws config read failures unprinted; Doctor cannot read the file either.
+    if (extractErrorCode(options.error) === "CONFIG_READ_FAILED") {
+      return [`[openclaw] ${options.title}`, reason(options.error)];
     }
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)

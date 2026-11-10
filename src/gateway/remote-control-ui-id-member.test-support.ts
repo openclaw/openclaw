@@ -67,6 +67,7 @@ export async function createIdRelayMember(params: {
   setDeviceTokenBindingOwner({
     lookup: (id, role) => claw.authority.tokenBinding(id, role),
     record: (id, role, key) => claw.authority.bindToken(id, role, key),
+    forget: (tokens) => claw.authority.unbindTokens(tokens),
     reportMismatch() {},
   });
   setOpenClawIdTunnelPrincipalResolver((key) => claw.authority.resolvePeer(key));

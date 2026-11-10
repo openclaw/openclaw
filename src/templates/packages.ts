@@ -18,6 +18,7 @@ import {
   type ClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
 import { readTemplatePackageRefsForAdd } from "./add-state-write.js";
+import type { PersistedTemplatePackageRef } from "./package-extension-provenance.js";
 import type { InstallTemplatePackagesOptions } from "./package-install-options.js";
 import { packageFromAction } from "./package-plan-action.js";
 import { matchesPlannedPluginProbe } from "./package-plugin-probe-match.js";
@@ -28,7 +29,6 @@ import {
   sourceHostPluginConflict,
 } from "./plugin-capability-probe.js";
 import { runTemplatePluginBatch } from "./plugin-runtime.js";
-import type { PersistedTemplatePackageRef } from "./provenance.js";
 import type { TemplateAddPlan } from "./types.js";
 
 export { preflightTemplatePackage } from "./package-preflight.js";

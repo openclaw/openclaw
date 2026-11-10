@@ -3,13 +3,16 @@ import { listAuditEvents } from "../../audit/audit-event-store.js";
 import { writeRepairJournal } from "../../commands/doctor-session-incognito-key-repair-state.js";
 import { repairReservedIncognitoSessionKeys } from "../../commands/doctor-session-incognito-key-repair.js";
 import { sessionSqlFixture } from "../../commands/doctor-session-sqlite.sql.test-support.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
+import { readTemplatePackageRefsForAdd } from "../../templates/add-state-write.js";
 import { readAllTemplateCronRefsInDatabase } from "../../templates/cron-records.js";
+import { readTemplateInventory } from "../../templates/inventory-read.js";
 import { installDatabaseProcessRole, withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
@@ -88,6 +91,76 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           updatedAtMs: 20,
         },
       ]);
+    });
+
+    it("reads Template rollback owners with exact package filters and stable ordering", async () => {
+      const filters = {
+        agentId: "alpha",
+        kind: "plugin",
+        source: "clawhub",
+        ref: "@owner/audit' OR '1'='1",
+        version: "2.0.1",
+        integrity: `sha256:${"a".repeat(64)}`,
+        status: "pending",
+      } as const;
+      const seed = (agentIds: string[]) =>
+        withEngineStoreAdmission(() =>
+          runOpenClawStateWriteTransaction(({ db }) => {
+            for (const agentId of agentIds) {
+              const status = agentId === "alpha" ? "pending" : "complete";
+              sessionSqlFixture(db)`INSERT INTO template_package_refs
+            (agent_id, package_kind, package_source, package_ref, package_version,
+             package_integrity, schema_version, template_name, package_status,
+             relationship, origin, independent_owner, installed_at_ms, updated_at_ms)
+            VALUES (${agentId}, 'plugin', 'clawhub', ${filters.ref}, '2.0.1', ${filters.integrity},
+              'openclaw.templatePackageRef.v1', 'package-fixture', ${status},
+              'referenced', 'template-introduced', 0, 100, 100)`.run();
+            }
+          }),
+        );
+      seed(["zeta", "alpha"]);
+      // The real rollback owner query must retain other agents' matching package claims.
+      const read = (query: Parameters<typeof readTemplatePackageRefsForAdd>[0]) =>
+        withEngineStoreAdmission(() => ({ pending: readTemplatePackageRefsForAdd(query) })).pending;
+      expect((await read({})).map((row) => row.agentId)).toEqual(["alpha", "zeta"]);
+      expect(await read(filters)).toEqual([
+        expect.objectContaining({
+          agentId: "alpha",
+          ref: filters.ref,
+          status: "pending",
+          independentOwner: false,
+        }),
+      ]);
+      for (const [key, value] of Object.entries({
+        agentId: "missing",
+        kind: "skill",
+        ref: "@owner/missing",
+        version: "9.0.0",
+        integrity: "sha256:missing",
+        status: "complete",
+      })) {
+        expect(await read({ ...filters, [key]: value }), key).toEqual([]);
+      }
+      expect(
+        await read({
+          kind: "plugin",
+          source: "clawhub",
+          ref: filters.ref,
+          version: filters.version,
+          integrity: filters.integrity,
+        }),
+      ).toHaveLength(2);
+      await withOpenClawStateDatabaseReadSnapshot(async () => {
+        expect((await readTemplateInventory()).packages).toHaveLength(2);
+        seed(["beta"]);
+        // An owner committed after inspection must still prevent destructive rollback.
+        expect((await read({ ref: filters.ref })).map((row) => row.agentId)).toEqual([
+          "alpha",
+          "beta",
+          "zeta",
+        ]);
+        expect((await readTemplateInventory()).packages).toHaveLength(2);
+      });
     });
 
     it("resumes Doctor's journal and rewrites scalar and JSON shared-state keys", async () => {

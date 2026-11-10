@@ -2,8 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { parseRegistryNpmSpec, type NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import {
   resolvePluginNpmGenerationProjectDir,

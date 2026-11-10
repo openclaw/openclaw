@@ -767,7 +767,7 @@ it("reuses raw compiler symbols across graph phases without freezing forwarded b
         return observed;
       },
     });
-    const scan = (body: string) =>
+    const scan = (body: string, observer?: InspectOptions[5]) =>
       inspectDatabaseWorkerBoundaries(
         process.cwd(),
         new Map(
@@ -786,8 +786,26 @@ export function ${first}() { return read(); }`,
         undefined,
         undefined,
         false,
+        observer,
       );
-    expectClosed(scan("readKernel(); return readKernel();"));
+    const phases: string[] = [];
+    expectClosed(
+      scan("readKernel(); return readKernel();", (phase) => {
+        phases.push(phase);
+        throw new Error("observer failed");
+      }),
+    );
+    expect(phases).toEqual([
+      "inputs",
+      "project",
+      "sources-registration",
+      "closure-expansion",
+      "binding-forwarding",
+      "reference-prefetch",
+      "caller-classification",
+      "graph-classification",
+      "close",
+    ]);
     expect(scan("readKernel(); missing(() => readKernel());").operations.has(kernelFile)).toBe(
       false,
     );
