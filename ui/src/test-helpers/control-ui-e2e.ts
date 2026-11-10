@@ -2073,7 +2073,8 @@ function installControlUiMockGateway(
         event: "connect.challenge",
         payload: {
           nonce: "control-ui-e2e-nonce",
-          ts: Date.now(),
+          // Playwright can expose fractional Date.now() inside virtual timer callbacks.
+          ts: Math.trunc(Date.now()),
           capabilities: scenario.connectCapabilities,
         },
         type: "event",
