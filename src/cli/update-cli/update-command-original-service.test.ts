@@ -577,14 +577,6 @@ it.for([
       });
     }
     if (scenario === "pin-migration-pending") {
-      expect(execution?.result.steps).toContainEqual(
-        expect.objectContaining({
-          advisory: expect.objectContaining({
-            message:
-              "runtime pins not yet migrated; preserved the current runtime; the post-update Doctor step migrates them",
-          }),
-        }),
-      );
       expect(execution?.originalManagedServiceRuntime?.definition.runtimePin).toBeUndefined();
       expect(mocks.nativeInstall).not.toHaveBeenCalled();
     }

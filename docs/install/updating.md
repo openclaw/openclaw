@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+After candidate Doctor migrates runtime-pin metadata, activation reads that
+completed intent before rebinding the managed Gateway. Missing metadata at the
+start of an update no longer forces a restart of the old installation against
+newly migrated state. Existing native definition and runtime-intent checks still
+protect operator changes. This requires the installed updater to contain the fix.
+
 Private plugin projection materializes eligible external data-suffixed file links
 at their logical in-package filenames before recording the final code-link
 inventory. Both the alias and its inventoried canonical target must have one of
