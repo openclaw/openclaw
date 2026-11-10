@@ -79,11 +79,14 @@ export async function runCliRecovery<TAttempt>(params: {
   const onForkSuccessorPersisted = (sessionId: string) => {
     retryableSessionId = sessionId;
   };
-  const failTerminal = async (error: unknown): Promise<never> => {
-    // Record only after every eligible recovery path is exhausted.
+  const logTerminalFailure = (error: unknown): void => {
     cliBackendLog.warn(
       `cli terminal failure: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - context.started} runId=${runParams.runId} error=${formatErrorMessageForDisplay(error)}`,
     );
+  };
+  const failTerminal = async (error: unknown): Promise<never> => {
+    // Record only after every eligible recovery path is exhausted.
+    logTerminalFailure(error);
     await params.onTerminalFailure(error);
     throw error;
   };
@@ -101,6 +104,10 @@ export async function runCliRecovery<TAttempt>(params: {
       retryableSessionId !== reusableCliSessionId,
     );
     if (deliveredFailure) {
+      // A delivered failure returns before failTerminal, so record the cause
+      // here with the same fields. The delivered-failure path already ran the
+      // failed agent-end hook, so onTerminalFailure must not run again.
+      logTerminalFailure(err);
       return deliveredFailure;
     }
     runParams.assertCurrent?.();
@@ -162,6 +169,9 @@ export async function runCliRecovery<TAttempt>(params: {
           retryableSessionId !== reusableCliSessionId,
         );
         if (deliveredRetryFailure) {
+          // Same as the initial delivered failure: record the cause once with
+          // the same fields, without running the terminal hook a second time.
+          logTerminalFailure(retryError);
           return deliveredRetryFailure;
         }
         if (!forkResume) {
