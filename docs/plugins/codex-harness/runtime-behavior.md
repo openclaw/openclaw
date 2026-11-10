@@ -61,10 +61,12 @@ before the next turn; transient per-turn restrictions use a temporary
 restricted thread and preserve the existing binding for later resume.
 
 `sessions_yield`, `sessions_spawn`, and message-tool-only source replies stay
-direct because they are turn-control or delegation contracts. Guidance still
-prefers Codex's native `spawn_agent` as the primary Codex subagent surface,
-while explicit OpenClaw or ACP delegation remains directly callable through
-`sessions_spawn`. In Codex Code Mode, generic OpenClaw
+direct because they are turn-control or delegation contracts. Guidance uses
+Codex's native `spawn_agent` for work using only Codex-native tools. New work
+requiring OpenClaw tools goes through the available managed `sessions_spawn`
+route from the start; existing native children stay with native collaboration.
+See [dynamic tools](/plugins/codex-harness-reference/dynamic-tools) for runtime
+selection. In Codex Code Mode, generic OpenClaw
 dynamic-tool results are JSON text rather than JavaScript objects, so parse
 JSON-looking results before reading fields. Codex also serializes nested
 dynamic calls; submit several `sessions_spawn` calls in a bounded loop rather
