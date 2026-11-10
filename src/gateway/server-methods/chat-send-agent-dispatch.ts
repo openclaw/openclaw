@@ -632,17 +632,17 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               suppressFinal: runtimeFailed,
             });
           }
-          const hasTerminalAgentError =
-            hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply);
+          const hasFinalError = hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply);
+          await dispatchErrorLifecycle.settleTerminalPersistence();
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
-            if (hasTerminalAgentError) {
+            if (hasFinalError) {
               dispatchErrorLifecycle.broadcastError({
                 errorMessage: returnedAgentErrorMessage,
                 errorKind: runtimeClassification === "timeout" ? "timeout" : undefined,
                 stopReason: runtimeOutcome?.stopReason,
               });
             }
-            const returnedAgentError = hasTerminalAgentError
+            const returnedAgentError = hasFinalError
               ? errorShape(
                   ErrorCodes.UNAVAILABLE,
                   returnedAgentErrorMessage ?? "agent returned an error payload",
@@ -654,8 +654,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               session: captureAgentJobSession(sessionBinding),
               entry: {
                 ts: Date.now(),
-                ok: !hasTerminalAgentError,
-                payload: hasTerminalAgentError
+                ok: !hasFinalError,
+                payload: hasFinalError
                   ? {
                       runId: clientRunId,
                       status: runtimeClassification === "timeout" ? "timeout" : "error",

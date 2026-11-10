@@ -383,7 +383,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         });
         broadcastError({ errorMessage, errorKind, stopReason: terminationFields.stopReason });
       };
-      if (pendingDispatchLifecycleError) {
+      if (pendingDispatchLifecycleError || params.isReplyDispatchRun?.()) {
         // agent.wait consumes the cached terminal immediately. Commit the lifecycle
         // first so registry completion cannot race it with a later start timestamp.
         publishDispatchError = publish;
@@ -393,7 +393,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     }
   };
 
-  const finalize = async () => {
+  const settleTerminalPersistence = async () => {
     if (params.isReplyDispatchRun?.() && activeRunAbort.entry) {
       // Accepted lifecycle delivery still needs this exact registration and run context.
       await waitForChatAbortTerminalPersistence(activeRunAbort.entry).catch((error: unknown) => {
@@ -402,6 +402,10 @@ export function createChatSendDispatchErrorLifecycle(params: {
         );
       });
     }
+  };
+
+  const finalize = async () => {
+    await settleTerminalPersistence();
     const dispatchError = pendingDispatchLifecycleError;
     // Commands and reply-dispatch runtimes have already published their terminal.
     // Native agent events keep ownership until their own terminal delivery completes.
@@ -509,6 +513,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     broadcastError,
     finalize,
     handleError,
+    settleTerminalPersistence,
     handleSettlementError(error: unknown) {
       context.logGateway.warn("webchat dispatch settlement failed: " + formatForLog(error));
     },
