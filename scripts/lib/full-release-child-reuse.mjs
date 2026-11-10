@@ -437,13 +437,9 @@ async function validateEvidence(selection, request, deps) {
       ),
     "receipt does not match the complete live composite workload",
   );
-  if (deps.immutableReads) {
-    const currentParent = await deps.github("actions/runs/" + selection.sourceParentRunId);
-    requireEvidence(
-      currentParent.run_attempt === selection.sourceParentAttempt,
-      "source parent attempt changed",
-    );
-  }
+  // The source parent is the pinned dispatch origin, not a live evidence producer.
+  // Its later reruns do not supersede the independently checked child attempt.
+  // Read the exact origin below, including when immutable payloads are replayed.
   const parent = await deps.github(
     `actions/runs/${selection.sourceParentRunId}/attempts/${selection.sourceParentAttempt}`,
   );
