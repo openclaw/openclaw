@@ -2,6 +2,7 @@
 // shared module graphs. Keep the owned list explicit so full and focused runs agree.
 export const cliProcessTestFiles = [
   "src/agents/agent-command-local.test.ts",
+  "src/gateway/server-database-engine.postgres.test.ts",
   "src/worker/native-worker.integration.test.ts",
   "src/worker/native-worker.bundle.integration.test.ts",
   "src/cli/directory-cli.test.ts",
