@@ -26,7 +26,6 @@ import {
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
   ensureConfiguredBindingRouteReady,
-  readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
@@ -590,8 +589,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       allowLegacyConversationAllowFromForGroup,
       groupPolicy,
       dmPolicy,
-      readStoreAllowFrom: () =>
-        readChannelAllowFromStore("imessage", process.env, accountInfo.accountId),
       historyLimit,
       groupHistories,
       echoCache: sentMessageCache,

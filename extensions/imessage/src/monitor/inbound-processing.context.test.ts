@@ -49,7 +49,7 @@ describe("iMessage inbound context and admission", () => {
     expect(actual).toMatchObject({ fromLabel, ctxPayload });
     expect(actual.ctxPayload.CommandSource).toBeUndefined();
   });
-  it("treats a failed pairing read as an empty allowlist", async () => {
+  it("fails closed when a pairing-store read rejects", async () => {
     await expect(
       resolveDecision({
         allowFrom: [],
@@ -58,7 +58,7 @@ describe("iMessage inbound context and admission", () => {
           throw new Error("pairing store unavailable");
         },
       }),
-    ).resolves.toEqual({ kind: "pairing", senderId: "+15555550123" });
+    ).rejects.toThrow("pairing store unavailable");
   });
 
   it("does not auto-authorize DM commands in open mode without allowlists", async () => {
