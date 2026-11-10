@@ -524,12 +524,20 @@ it("Doctor never chooses among several eligible fallback accounts for an already
       provider: "backup",
       order: ["backup:other", "backup:main"],
     });
+    const lint = await maybeRepairCronInferenceBindings({ cfg, shouldRepair: false });
+    // Lint must not promise that --fix records an ambiguous fallback.
+    expect(lint.warnings.join("\n")).toContain(
+      "several accounts are eligible (backup:main, backup:other). Choose one with openclaw automations edit doctor-ambiguous --fallbacks backup/gpt-4.1@<profileId>",
+    );
+    expect(lint.warnings.join("\n")).not.toContain("Run openclaw doctor --fix to record them");
     const fixed = await withDoctorConfigMaintenance(() =>
       maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
     );
     const warnings = fixed.warnings.join("\n");
     expect(warnings).toContain("several accounts are eligible (backup:main, backup:other)");
-    expect(warnings).toContain("--fallbacks backup/gpt-4.1@<profileId>");
+    expect(warnings).toContain(
+      "automations edit doctor-ambiguous --fallbacks backup/gpt-4.1@<profileId>",
+    );
     const [unchanged] = (await loadCronJobsStore(storePath)).jobs;
     expect(unchanged?.inferenceBinding).toEqual(job.inferenceBinding);
     const result = await run(unchanged!);
@@ -565,3 +573,98 @@ it("honors an explicit fallback account written as model@profile", async () => {
     expect(hits.backup).toEqual(["Bearer key-backup-other"]);
   });
 });
+
+it.each(["explicit fallback account", "fallback outside the primary model allowlist"] as const)(
+  "Gateway records a %s and the run uses it",
+  async (kind) => {
+    await withFallbackFixture(async ({ cfg, hits, storePath }) => {
+      if (kind === "fallback outside the primary model allowlist") {
+        // Fallback candidates are not subject to the primary's allowlist at run time; capture
+        // must apply the same rule.
+        cfg.agents!.defaults!.modelPolicy = { allow: ["openai/gpt-4.1"] };
+        setRuntimeConfigSnapshot(cfg);
+      }
+      const { CronService } = await import("./service.js");
+      const { createNoopLogger } = await import("./service.test-harness.js");
+      const { createTestGatewayScheduler } =
+        await import("../test-utils/gateway-scheduler-clock.js");
+      const { createDirectChatContext } =
+        await import("../gateway/server-chat.agent-events.test-helpers.js");
+      const { cronHandlers } = await import("../gateway/server-methods/cron.js");
+      const finished: Array<{ status?: string; error?: string }> = [];
+      const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        storePath,
+        cronEnabled: false,
+        defaultAgentId: "main",
+        log: createNoopLogger(),
+        enqueueSystemEvent() {},
+        onEvent(event) {
+          if (event.action === "finished") {
+            finished.push(event);
+          }
+        },
+        runIsolatedAgentJob: async (params) => {
+          await resetPreparedModelRuntimeSnapshotsForTest();
+          clearRuntimeAuthProfileStoreSnapshots();
+          return runCronIsolatedAgentTurn({
+            ...params,
+            cfg,
+            deps: {},
+            sessionKey: `cron:${params.job.id}`,
+          });
+        },
+      });
+      try {
+        const params = {
+          name: kind,
+          enabled: false,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "agentTurn",
+            message: "Reply.",
+            model: "openai/gpt-4.1@openai:primary",
+            ...(kind === "explicit fallback account"
+              ? { fallbacks: ["backup/gpt-4.1@backup:other"] }
+              : {}),
+            lightContext: true,
+            toolsAllow: [],
+          },
+          delivery: { mode: "none" },
+        };
+        const respond = vi.fn();
+        await cronHandlers["cron.add"]!({
+          req: { type: "req", id: "fallback-add", method: "cron.add", params },
+          params,
+          respond,
+          context: createDirectChatContext({
+            cron,
+            cronStorePath: storePath,
+            getRuntimeConfig: () => cfg,
+          }),
+          client: null,
+          isWebchatConnect: () => false,
+        });
+        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
+        const created = respond.mock.calls[0]?.[1] as { id?: unknown } | undefined;
+        const id = String(created?.id);
+        const [stored] = (await loadCronJobsStore(storePath)).jobs;
+        expect(stored?.inferenceBinding?.fallbackAccounts).toMatchObject([
+          kind === "explicit fallback account"
+            ? { provider: "backup", profileId: "backup:other", source: "user" }
+            : { provider: "backup", profileId: "backup:main", source: "auto" },
+        ]);
+        await expect(cron.run(id, "force")).resolves.toEqual({ ok: true, ran: true });
+        expect(finished[0]?.status, finished[0]?.error).toBe("ok");
+        expect(hits.backup).toEqual([
+          kind === "explicit fallback account" ? "Bearer key-backup-other" : "Bearer key-backup",
+        ]);
+      } finally {
+        cron.stop();
+        await cron.waitForIdle();
+      }
+    });
+  },
+);

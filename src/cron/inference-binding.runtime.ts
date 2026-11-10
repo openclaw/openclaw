@@ -53,6 +53,11 @@ export async function captureCronInferenceBinding(params: {
   recordedRuntime?: string;
   authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
   retainAuthorization?: (authority: AuthProfileAuthorization) => void;
+  /**
+   * A fallback candidate the run's chain already resolved. It skips primary model selection, so
+   * the primary's model allowlist does not apply to it, as at run time.
+   */
+  fallbackCandidate?: { provider: string; model: string; profileId?: string };
 }): Promise<CronInferenceBinding | null | undefined> {
   const owner = await resolveCronModelSelectionOwner({
     cfg: params.cfg,
@@ -60,18 +65,25 @@ export async function captureCronInferenceBinding(params: {
     requiredAgentId: params.agentId,
   });
   const { config: cfg, agentId, agentDir, workspaceDir } = owner;
-  const model = await resolveCronModelSelection({
-    cfg,
-    owner,
-    agentConfigOverride: resolveAgentConfig(cfg, agentId),
-    agentId,
-    agentDir,
-    workspaceDir,
-    payloadModel: params.model,
-    // Only a persistent execution target supplies model overrides; creator auth stays separate.
-    sessionEntry: params.executionSessionEntry ?? {},
-    isGmailHook: params.isGmailHook === true,
-  });
+  const model = params.fallbackCandidate
+    ? {
+        ok: true as const,
+        provider: params.fallbackCandidate.provider,
+        model: params.fallbackCandidate.model,
+        configuredProfileId: params.fallbackCandidate.profileId,
+      }
+    : await resolveCronModelSelection({
+        cfg,
+        owner,
+        agentConfigOverride: resolveAgentConfig(cfg, agentId),
+        agentId,
+        agentDir,
+        workspaceDir,
+        payloadModel: params.model,
+        // Only a persistent execution target supplies model overrides; creator auth stays separate.
+        sessionEntry: params.executionSessionEntry ?? {},
+        isGmailHook: params.isGmailHook === true,
+      });
   if (!model.ok) {
     throw new Error(model.error);
   }
@@ -380,7 +392,7 @@ export async function resolveCronFallbackProviderModels(
 }
 
 /** Shared (non-personal) stored accounts whose credential can serve `provider`. */
-async function listEligibleSharedAccounts(
+export async function listEligibleSharedCronAccounts(
   cfg: OpenClawConfig,
   agentId: string,
   provider: string,
@@ -434,7 +446,7 @@ export async function captureCronFallbackInferenceAccounts(
     try {
       let profileId = explicitProfileId;
       if (!profileId && params.requireUnambiguous) {
-        const eligible = await listEligibleSharedAccounts(params.cfg, params.agentId, provider);
+        const eligible = await listEligibleSharedCronAccounts(params.cfg, params.agentId, provider);
         if (eligible.length !== 1) {
           unrecorded.push({
             provider,
@@ -451,7 +463,11 @@ export async function captureCronFallbackInferenceAccounts(
       const captured = await captureCronInferenceBinding({
         cfg: params.cfg,
         agentId: params.agentId,
-        model: profileId ? `${model}@${profileId}` : model,
+        fallbackCandidate: {
+          provider,
+          model: model.slice(provider.length + 1),
+          ...(profileId ? { profileId } : {}),
+        },
         isGmailHook: params.isGmailHook,
         runtimeSessionEntry: params.runtimeSessionEntry,
         recordedRuntime: params.recordedAccounts?.find((account) => account.provider === provider)

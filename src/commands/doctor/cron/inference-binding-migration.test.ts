@@ -436,6 +436,173 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
   });
 });
 
+it("adding fallback accounts to a bound job keeps valid approvals usable and stale or revoked authority unusable", async () => {
+  await withAccounts(async (state) => {
+    const cfg = config(state, {
+      systemAgent: { agentId: "main" },
+      model: { primary: "openai/gpt-5.5", fallbacks: ["backup/model"] },
+    });
+    Object.assign(cfg, {
+      agents: { ...cfg.agents, ownership: "explicit" },
+      auth: {
+        profiles: {
+          "openai:default": { provider: "openai", mode: "oauth" as const },
+          "backup:main": { provider: "backup", mode: "api_key" as const },
+        },
+      },
+      models: {
+        providers: {
+          backup: {
+            api: "openai-completions",
+            auth: "api-key",
+            baseUrl: "https://backup.invalid.test/v1",
+            models: [configuredModel("model")],
+          },
+        },
+      },
+    });
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    await upsertAuthProfileWithLockOrThrow(oauthProfile("openai:default", "synthetic-access"));
+    await saveProfiles(apiProfile("backup:main", "synthetic-backup"));
+    const binding = await captureCronInferenceBinding({
+      cfg,
+      agentId: "main",
+      model: "openai/gpt-5.5@openai:default",
+    });
+    expect(binding).toMatchObject({ provider: "openai", profileId: "openai:default" });
+    expect(binding?.fallbackAccounts).toBeUndefined();
+    const sourceFor = (job: CronStoredJob, revision: string): CronStoredJob["operatorSource"] => ({
+      executionRevision: revision,
+      source: {
+        version: 1,
+        agentId: "main",
+        sessionKey: "agent:main:bound",
+        sessionId: "bound-session",
+        lifecycleRevision: "bound-lifecycle",
+        sourceRunId: `turn-${job.id}`,
+        snapshot: {
+          profileId: "synthetic-owner",
+          scopes: ["operator.admin"],
+          assignedRole: null,
+          githubLogin: null,
+          grant: null,
+          aliasBindingIds: [],
+          authPolicy: {
+            generation: "",
+            grantGeneration: "synthetic-generation",
+            role: "operator",
+            authMethod: "token",
+          },
+          controlUiAdmin: true,
+          localOperator: false,
+          sourceIngress: "control-ui",
+        },
+      },
+    });
+    // Bound on 10.10/11.x: a recorded primary account, no fallback accounts yet.
+    const bound = (id: string): CronStoredJob => ({
+      ...makeAccountJob(id, "openai/gpt-5.5@openai:default"),
+      enabled: true,
+      sessionKey: "agent:main:bound",
+      sessionTarget: "session:agent:main:bound",
+      owner: { agentId: "main", sessionKey: "agent:main:bound", accountId: "default" },
+      inferenceBinding: binding ?? undefined,
+    });
+    const current = bound("current");
+    current.operatorSource = sourceFor(current, resolveCronOperatorExecutionRevision(current));
+    const stale = bound("stale");
+    stale.operatorSource = sourceFor(stale, "stale-revision");
+    const storePath = state.statePath("cron", "jobs.json");
+    await saveJobs(storePath, current, stale);
+    stateDb
+      .openOpenClawStateDatabase()
+      .db.exec(
+        `INSERT INTO operator_approvals (cursor_id, approval_id, resolution_ref, kind, status, presentation_json, reviewer_device_ids_json, audience_session_keys_json, runtime_epoch, created_at_ms, expires_at_ms, updated_at_ms, decision, terminal_reason, resolved_at_ms, resolver_kind) VALUES (1, 'kept-approval', '${"a".repeat(43)}', 'exec', 'allowed', '{}', '[]', '[]', 'synthetic-epoch', 1, 3, 2, 'allow-always', 'user', 2, 'device'), (2, 'revoked-approval', '${"b".repeat(43)}', 'exec', 'allowed', '{}', '[]', '[]', 'synthetic-epoch', 1, 3, 2, 'allow-always', 'user', 2, 'device')`,
+      );
+    const kept = { agentId: "main", cronJobId: "current", operationBinding: "kept-operation" };
+    const revoked = {
+      agentId: "main",
+      cronJobId: "current",
+      operationBinding: "revoked-operation",
+    };
+    for (const [operation, approvalId] of [
+      [kept, "kept-approval"],
+      [revoked, "revoked-approval"],
+    ] as const) {
+      stateDb.runOpenClawStateWriteTransaction((db) =>
+        mintCronStandingGrantLocked(db, {
+          ...operation,
+          approvalId,
+          jobConfigRevision: resolveCronJobConfigRevision(current),
+          nowMs: 2,
+          expiresAtMs: null,
+        }),
+      );
+    }
+    const grantFor = (operation: string) =>
+      stateDb
+        .openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT * FROM operator_approval_standing_grants WHERE cron_job_id = 'current' AND operation_binding = ?",
+        )
+        .get(operation)!;
+    // An approval revoked before the upgrade must stay revoked after Doctor migrates references.
+    await grants.revokeCronStandingGrant({
+      grantId: String(grantFor("revoked-operation").grant_id),
+      revokedBy: "synthetic-operator",
+    });
+
+    await repair(state.configPath);
+    const [repairedCurrent, repairedStale] = await readJobs(storePath);
+    expect(repairedCurrent?.inferenceBinding).toMatchObject({
+      provider: "openai",
+      profileId: "openai:default",
+      fallbackAccounts: [{ provider: "backup", profileId: "backup:main", source: "auto" }],
+    });
+    // The recorded primary account is never rewritten.
+    const { fallbackAccounts: _added, ...primary } = repairedCurrent!.inferenceBinding!;
+    expect(primary).toEqual(binding);
+    // A current operator source follows the definition; a stale one is not revived.
+    expect(repairedCurrent!.operatorSource).toEqual({
+      ...current.operatorSource,
+      executionRevision: resolveCronOperatorExecutionRevision(repairedCurrent!),
+    });
+    expect(repairedStale!.operatorSource).toEqual(stale.operatorSource);
+    expect(repairedStale!.operatorSource!.executionRevision).not.toBe(
+      resolveCronOperatorExecutionRevision(repairedStale!),
+    );
+
+    const revision = resolveCronJobConfigRevision(repairedCurrent!);
+    expect(revision).not.toBe(resolveCronJobConfigRevision(current));
+    const handle = receipts.claimCronRunReceiptForTest(storePath, repairedCurrent!, Date.now());
+    // The valid approval authorizes the effect under the migrated definition.
+    expect(
+      await grants.validateCronStandingGrant({ ...kept, jobConfigRevision: revision, handle }),
+    ).toMatchObject({ outcome: "consumed" });
+    // The approval revoked before the upgrade still refuses the effect.
+    expect(
+      await grants.validateCronStandingGrant({ ...revoked, jobConfigRevision: revision, handle }),
+    ).toMatchObject({ outcome: "revoked" });
+    // The pre-migration revision no longer authorizes anything.
+    expect(
+      await grants.validateCronStandingGrant({
+        ...kept,
+        jobConfigRevision: resolveCronJobConfigRevision(current),
+        handle,
+      }),
+    ).not.toMatchObject({ outcome: "consumed" });
+    // Revoking after the migration takes effect immediately.
+    await grants.revokeCronStandingGrant({
+      grantId: String(grantFor("kept-operation").grant_id),
+      revokedBy: "synthetic-operator",
+    });
+    expect(
+      await grants.validateCronStandingGrant({ ...kept, jobConfigRevision: revision, handle }),
+    ).toMatchObject({ outcome: "revoked" });
+  });
+});
+
 const session = (id: string, overrides: Partial<SessionEntry>) =>
   replaceSessionEntry(
     { agentId: "main", sessionKey: `agent:main:cron:${id}` },

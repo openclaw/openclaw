@@ -37,6 +37,7 @@ import {
 } from "../../../cron/inference-binding.js";
 import {
   captureCronFallbackInferenceAccounts,
+  listEligibleSharedCronAccounts,
   resolveCronFallbackProviderModels,
 } from "../../../cron/inference-binding.runtime.js";
 import {
@@ -66,6 +67,7 @@ async function recordCronFallbackAccountsForDoctor(params: {
   cfg: OpenClawConfig;
   agentId: string;
   label: string;
+  jobId: string;
   model?: string;
   fallbacks?: string[];
   isGmailHook: boolean;
@@ -91,7 +93,22 @@ async function recordCronFallbackAccountsForDoctor(params: {
     return undefined;
   }
   if (!params.shouldRepair) {
-    return { binding: params.binding, providers: missing.map(({ provider }) => provider) };
+    // Lint says what --fix would do: candidates it can't fill name the accounts to choose from.
+    const fixable: string[] = [];
+    for (const candidate of missing) {
+      const eligible =
+        params.requireUnambiguous && !candidate.profileId
+          ? await listEligibleSharedCronAccounts(params.cfg, params.agentId, candidate.provider)
+          : [];
+      if (eligible.length > 1) {
+        params.warnings.push(
+          `Automation ${params.label}: fallback ${candidate.model} has no recorded inference account and is refused; several accounts are eligible (${eligible.join(", ")}). Choose one with openclaw automations edit ${params.jobId} --fallbacks ${candidate.model}@<profileId>.`,
+        );
+      } else {
+        fixable.push(candidate.provider);
+      }
+    }
+    return fixable.length > 0 ? { binding: params.binding, providers: fixable } : undefined;
   }
   const { accounts, unrecorded } = await captureCronFallbackInferenceAccounts({
     ...chainParams,
@@ -109,7 +126,7 @@ async function recordCronFallbackAccountsForDoctor(params: {
   for (const fallback of unrecorded) {
     if (!known.some((account) => account.provider === fallback.provider)) {
       params.warnings.push(
-        `Automation ${params.label}: fallback ${fallback.model} has no recorded inference account and is refused: ${fallback.reason}.`,
+        `Automation ${params.label}: fallback ${fallback.model} has no recorded inference account and is refused: ${fallback.reason.replace("<jobId>", params.jobId)}.`,
       );
     }
   }
@@ -184,6 +201,7 @@ export async function maybeRepairCronInferenceBindings(params: {
             cfg: captureConfig(params.cfg),
             agentId,
             label,
+            jobId: quoteCliArg(stored.id),
             model: job.payload.model,
             fallbacks: job.payload.fallbacks,
             isGmailHook: job.payload.externalContentSource === "gmail",
@@ -540,6 +558,7 @@ export async function maybeRepairCronInferenceBindings(params: {
           cfg: config,
           agentId,
           label,
+          jobId: quoteCliArg(stored.id),
           model: job.payload.model,
           fallbacks: job.payload.fallbacks,
           isGmailHook: job.payload.externalContentSource === "gmail",
