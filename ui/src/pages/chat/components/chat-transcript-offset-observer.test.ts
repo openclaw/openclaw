@@ -13,6 +13,7 @@ import {
   isTranscriptProgrammaticScroll,
   observeTranscriptOffset,
   scrollTranscriptOffset,
+  scrollTranscriptToEnd,
   TranscriptOffsetState,
 } from "./chat-transcript-offset-observer.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
@@ -22,6 +23,50 @@ import {
   resetTranscriptTestDom,
   resizeObservers,
 } from "./chat-transcript.test-support.ts";
+
+it("waits for measured rows before renewing a growing end destination", () => {
+  const element = document.createElement("div");
+  Object.defineProperties(element, {
+    clientHeight: { value: 300 },
+    scrollHeight: { value: 1540 },
+  });
+  const state = new TranscriptOffsetState();
+  const command = { target: "end", behavior: "smooth", offset: 1000 } as const;
+  state.scrollCommand = command;
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 0,
+    getScrollElement: () => element,
+    estimateSize: () => 120,
+    scrollToFn: () => {},
+    observeElementRect: () => () => {},
+    observeElementOffset: () => () => {},
+  });
+  virtualizer.scrollElement = element;
+  const scroll = vi.spyOn(virtualizer, "scrollToEnd").mockImplementation(() => {});
+  const prepare = vi.fn<Parameters<typeof scrollTranscriptToEnd>[6]>();
+  const cancel = vi.fn();
+  scrollTranscriptToEnd(
+    state,
+    virtualizer,
+    { source: "auto", behavior: "instant" },
+    cancel,
+    vi.fn(),
+    new TranscriptEndAnchor(() => {}),
+    prepare,
+    true,
+  );
+  expect(scroll).not.toHaveBeenCalled();
+  expect(cancel).not.toHaveBeenCalled();
+  expect(state.scrollCommand).toBe(command);
+  expect(prepare).toHaveBeenCalledOnce();
+  const [ready, isCurrent, native] = prepare.mock.calls[0]!;
+  expect(native).toBe(true);
+  expect(isCurrent()).toBe(true);
+  ready();
+  expect(scroll).toHaveBeenCalledExactlyOnceWith({ behavior: "smooth" });
+  state.scrollCommand = null;
+  expect(isCurrent()).toBe(false);
+});
 
 function createWheelForecastObserver() {
   const element = document.createElement("div");

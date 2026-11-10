@@ -1,2 +1,2 @@
-# Regression coverage for bidirectional forecasting, native wheel consumption, measured-only anchoring, and avoiding redundant table layout reads; net growth in PR #196173.
-350
+# Regression coverage for forecasts, wheel consumption, anchoring, end renewal, table layout, and zero-height receipts: 402 added lines plus 71 inherited lines over main's ceiling (e6afc3c54002).
+473

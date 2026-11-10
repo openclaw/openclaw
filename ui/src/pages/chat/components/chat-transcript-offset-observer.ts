@@ -119,14 +119,18 @@ export function scrollTranscriptToEnd(
   preparingEnd: boolean,
 ): void {
   if (source === "auto" && preparingEnd && state.scrollCommand?.target === "end") {
-    // The stream can outlive virtual-core's finite scroll journey. Renew a
-    // grown destination without restarting its already measured preparation.
+    // The stream can outlive virtual-core's finite scroll journey. New rows
+    // must finish measurement before renewing its destination, too.
     const command = state.scrollCommand;
     if (
       command.offset !== undefined &&
       command.offset !== maxTranscriptScrollOffset(instance.scrollElement)
     ) {
-      instance.scrollToEnd({ behavior: command.behavior });
+      prepareEnd(
+        () => instance.scrollToEnd({ behavior: command.behavior }),
+        () => state.scrollCommand === command,
+        true,
+      );
     }
     return;
   }
