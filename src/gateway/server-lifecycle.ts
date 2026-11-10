@@ -1,3 +1,4 @@
+import { disposeGatewayDelegationCredentials } from "./trusted-proxy-delegation.js";
 import { closeAuthProfileUsage } from "../agents/auth-profiles/usage-lifecycle.js";
 import { prepareSandboxRegistryClose } from "../agents/sandbox/registry-lifecycle.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
@@ -413,6 +414,7 @@ export async function prepareGatewayLifecycle(params: {
     const notice = resolveGatewayShutdownNotice(options);
     markGatewaySuspendExiting();
     authRateLimiter.dispose();
+    disposeGatewayDelegationCredentials();
     browserAuthRateLimiter.dispose();
     talkClose.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();

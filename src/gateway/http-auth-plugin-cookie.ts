@@ -30,6 +30,7 @@ import {
 } from "./ingress-attribution.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { hasGatewayDelegationClaim } from "./trusted-proxy-delegation.js";
 
 type CookieRequestAuth = NonNullable<ReturnType<typeof authorizeControlUiPluginCookieRequest>>;
 
@@ -64,6 +65,9 @@ function readControlUiPluginCookieRequest(
   // boundary. Cross-site sandbox descendants need an ambient cookie, so this
   // handoff is read-only; mutations stay on explicit Gateway auth surfaces.
   const cfg = getRuntimeConfig();
+  if (hasGatewayDelegationClaim(req, cfg.gateway?.auth?.trustedProxy?.userHeader)) {
+    return null;
+  }
   const grants = resolveControlUiPluginAuthCookieGrants(req, {
     requestPath: params.requestPath,
     generation: resolveControlUiPluginAuthCookieGeneration(params.authGeneration, cfg),

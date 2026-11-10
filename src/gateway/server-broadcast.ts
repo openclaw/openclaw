@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { projectHealthSummary } from "./health/presentation.js";
+import { isGatewayAuthPolicyCurrent } from "./auth-policy.js";
 import type { HealthSummary } from "./health/types.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import { acceptsPresenceDeltas, preparePresenceDelivery } from "./presence-delivery.js";
@@ -41,6 +42,7 @@ import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constan
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
 import { prepareSessionEventMetrics } from "./session-event-metrics.js";
 import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
@@ -683,6 +685,14 @@ export function createGatewayBroadcaster(params: {
       // Targeted frames ride the same per-client sequence as fanout frames:
       // an unstamped frame is invisible to the client's gap detector, so a
       // drop between two targeted sends would go unnoticed forever.
+      if (c.authPolicy?.delegation && !isGatewayAuthPolicyCurrent(c.authPolicy)) {
+        invalidateGatewayPolicyClient(c, {
+          reason: "gateway-policy-changed",
+          code: 4001,
+          message: "gateway policy changed",
+        });
+        continue;
+      }
       clientSeq.set(c, nextSeq);
       delivery.recordReceipt(state, sessionKeys, live, publication);
       state.inFlight += 1;

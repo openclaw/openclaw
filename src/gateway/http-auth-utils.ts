@@ -69,6 +69,7 @@ import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-se
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { createProfileSessionEntryFilter } from "./session-sharing-read.js";
+import { GATEWAY_DELEGATION_DENIED, hasGatewayDelegationClaim } from "./trusted-proxy-delegation.js";
 
 export { getBearerToken, getHeader } from "./http-header-value.js";
 
@@ -173,6 +174,10 @@ async function checkHttpOperatorCredentials(
 ): Promise<HttpOperatorCredentialResult> {
   const { auth, token } = params;
   const remoteIngress = getRemoteControlUiIngressContext(params.req);
+  const delegationClaim = hasGatewayDelegationClaim(params.req, auth.trustedProxy?.userHeader);
+  if (delegationClaim && (remoteIngress || auth.mode !== "trusted-proxy")) {
+    return { authResult: { ok: false, reason: GATEWAY_DELEGATION_DENIED } };
+  }
   if (remoteIngress) {
     assertRemoteControlUiIngressCurrent(remoteIngress);
     return {
@@ -216,6 +221,7 @@ async function checkHttpOperatorCredentials(
     if (
       !authResult.ok &&
       authResult.reason !== PROXY_ATTRIBUTION_REQUIRED_REASON &&
+      !delegationClaim &&
       canUseDeviceTokenFallback &&
       token
     ) {
@@ -473,6 +479,10 @@ export function setControlUiPluginAuthCookieForRequest(
   authenticatedScopes: readonly string[],
   authenticatedProfileId?: string,
 ): ControlUiPluginTabAuthGrant[] {
+  if (hasGatewayDelegationClaim(req, cfg.gateway?.auth?.trustedProxy?.userHeader)) {
+    // OCE must authorize every request; do not export an ambient native grant.
+    return [];
+  }
   const grants = listControlUiPluginTabAuthGrants(authenticatedScopes);
   if (grants.length > 0) {
     return setControlUiPluginAuthCookie(res, grants, {
@@ -593,6 +603,7 @@ export async function checkGatewayHttpRequestAuth(
     requestAuth: {
       hasCurrentClientAuthority: () =>
         hasCurrentClientAuthority() &&
+        authenticatedProfile.hasCurrentProfileAuthority?.() !== false &&
         hasCurrentGatewayOperatorAccess(authenticatedProfile.operatorAccessAuthority),
       authMethod: authResult.method,
       ...(authResult.user ? { user: authResult.user } : {}),

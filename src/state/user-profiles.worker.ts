@@ -21,6 +21,7 @@ import {
   readSelectedUserModelAccount,
 } from "./user-model-accounts.js";
 import { ensureEnterpriseGitHubProfile } from "./user-profile-enterprise-github-write.worker.js";
+import { ensureDelegatedUserProfile } from "./user-profile-delegation.worker.js";
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
@@ -91,6 +92,11 @@ function accountWrite<Input extends { profileId: string }, Output>(
 }
 
 const userProfileWriteOperations = {
+  "userProfiles.ensureDelegated": createUserProfileWriteOperation(
+    "userProfiles.ensureDelegated",
+    (input: Parameters<typeof ensureDelegatedUserProfile>[0], owned) =>
+      ensureDelegatedUserProfile(input, owned),
+  ),
   "userProfiles.setRole": createUserProfileWriteOperation(
     "userProfiles.setRole",
     (input: { profileId: string; role: string | null }, owned) =>
