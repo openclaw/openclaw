@@ -1,4 +1,5 @@
 import { normalizeAgentId } from "../routing/session-key.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 
 export function templateAgentCopyNumber(baseId: string, agentId: string): number {
   const prefix = `${normalizeAgentId(baseId)}-`;
@@ -15,7 +16,8 @@ export function selectNextTemplateAgentId(
   existingAgentIds: Iterable<string>,
 ): string {
   const normalizedBase = normalizeAgentId(baseId);
-  let highest = 0;
+  // System agent IDs are taken even without a configured entry.
+  let highest = isReservedSystemAgentId(normalizedBase) ? 1 : 0;
   for (const existingId of existingAgentIds) {
     const normalized = normalizeAgentId(existingId);
     if (normalized === normalizedBase) {

@@ -276,14 +276,17 @@ Template release requires `--acknowledge-clawhub-risk` when adding it. Template
 approval never approves its skill or plugin dependencies: their existing trust
 acknowledgments and `--accept-capabilities` checks still apply independently.
 
-Each Add chooses an unused agent ID. The CLI reports that ID so you can open
-or configure the agent afterward. The Control UI opens the new agent's chat
-and starts with "What can you do?" after a successful Add.
+Each Add chooses an unused agent ID. Reserved system agent IDs such as
+`openclaw` count as used, so a Template that declares one is added as
+`openclaw-2`. The CLI reports that ID so you can open or configure the agent
+afterward. The Control UI opens the new agent's chat and starts with
+"What can you do?" after a successful Add.
 
 `--dry-run --json` remains available for automation or local-source inspection.
 `--agent-id` and `--workspace` override the default destination with an
-unused ID or new path. Ordinary Add does not require a separate plan or
-review token. Exceptional trust warnings can still require explicit consent.
+unused, non-reserved ID or new path. Ordinary Add does not require a separate
+plan or review token. Exceptional trust warnings can still require explicit
+consent.
 
 For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
 to use the default unused ID.

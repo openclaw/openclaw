@@ -6,6 +6,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { templateAgentCopyNumber, selectNextTemplateAgentId } from "./add-agent-id.js";
 import { templateOwnedAgentConfig } from "./agent-config-ownership.js";
@@ -122,6 +123,16 @@ export async function buildTemplateAddPlan(params: {
       ),
     );
   }
+  const reservedAgentId = isReservedSystemAgentId(finalId);
+  if (reservedAgentId) {
+    blockers.push(
+      blocker(
+        "reserved_agent_id",
+        "$.agent.id",
+        `Agent id ${JSON.stringify(finalId)} is reserved for a system agent; choose another agent id.`,
+      ),
+    );
+  }
   const existingAgentIds = new Set(context.existingAgentIds ?? []);
   const agentBlocked = existingAgentIds.has(finalId);
   const openClawAgentSettings = params.openClawProfile?.agent ?? {};
@@ -149,7 +160,7 @@ export async function buildTemplateAddPlan(params: {
     action: "create",
     target: `agents.entries[${JSON.stringify(finalId)}]`,
     details: { ...agentConfig, expectedState: "absent" },
-    blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
+    blocked: agentBlocked || reservedAgentId || !AGENT_ID_PATTERN.test(finalId),
   });
   const agentCapability = templateAgentCapabilityChange(finalId, openClawAgentSettings);
   if (agentCapability) {
