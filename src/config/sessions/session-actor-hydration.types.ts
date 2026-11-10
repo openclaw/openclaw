@@ -21,6 +21,7 @@ export type SessionActorStoredState = {
   entryRows: Map<string, ResolvedSessionEntryRow | undefined>;
   window: SessionEntryWindowRow | undefined;
   hasBoard: boolean;
+  /** Unconsumed custody only; consumed source receipts use indexed SQLite reads. */
   pendingInputs: Map<string, SessionPendingInputRow>;
   completions: Map<string, Selectable<DB["session_input_completions"]>>;
   /** Only a complete cache can prove that a durable completion is absent. */

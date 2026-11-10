@@ -140,6 +140,8 @@ export function hydrateSessionActorState(
                   "=",
                   eb.ref("session_nodes.current_session_id"),
                 )
+                // Consumed source bodies stay durable, not resident in every actor.
+                .where("consumed_event_id", "is", null)
                 .orderBy("accepted_at")
                 .orderBy("input_id"),
               ["accepted_at", "input_id"],

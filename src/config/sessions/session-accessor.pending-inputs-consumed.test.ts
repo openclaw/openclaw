@@ -6,6 +6,7 @@ import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -31,6 +32,7 @@ import {
 } from "./session-accessor.pending-inputs.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { createSessionActorFactory } from "./session-actor-durable.js";
 import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
@@ -45,6 +47,30 @@ describe("committed pending input release", () => {
   });
   const options = () => toDatabaseOptions(resolveSqliteScope(scope()));
   const database = () => openOpenClawAgentDatabase(options());
+  const actorPendingInputs = async () => {
+    const current = database();
+    const identity = readOpenClawAgentDatabaseIdentity(current);
+    if (typeof identity.identity !== "string") {
+      throw new Error("Expected a durable input fixture");
+    }
+    const actor = await createSessionActorFactory({ ...options(), path: current.path }).acquire(
+      {
+        sessionKey: scope().sessionKey,
+        database: {
+          kind: "file",
+          physicalIdentity: identity.identity,
+          birthtime: identity.birthtime,
+          nativeLocation: current.path,
+        },
+      },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    try {
+      return (await actor.read({ assertCurrent() {}, authorize() {} })).pendingInputs;
+    } finally {
+      await actor.release();
+    }
+  };
   const receipts: SessionPendingInputReceipt[] = [];
   const message = (id: string, content = "Synthetic accepted input") => ({
     role: "user" as const,
@@ -224,7 +250,9 @@ describe("committed pending input release", () => {
     )!;
     receipts.push(aggregate);
     expect((await listSessionPendingInputs(scope())).total).toBe(2);
+    expect(await actorPendingInputs()).toHaveLength(2);
     const appended = await promote(aggregate);
+    expect(await actorPendingInputs()).toEqual([]);
     expect(appended).toMatchObject({ appended: true, messageId: aggregate.inputId });
     expect(
       (await readSessionSubmittedInput(scope(), "collect-c:user"))?.["__openclaw"],
@@ -252,6 +280,7 @@ describe("committed pending input release", () => {
     rotateAgentEventLifecycleGeneration();
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    expect(await actorPendingInputs()).toEqual([]);
     expect(await readSessionSubmittedInput(scope(), "collect-a:user")).toEqual(first.message);
     expect(await readSessionSubmittedInput(scope(), "collect-b:user")).toEqual(second.message);
     const duplicate = await stage("collect-a", {
@@ -262,6 +291,7 @@ describe("committed pending input release", () => {
       inputId: first.inputId,
       message: first.message,
     });
+    expect(await actorPendingInputs()).toEqual([]);
     expect(() => promote(duplicate)).toThrow("already been consumed");
     await expect(
       stage("collect-a", { message: message("collect-a", "Changed input") }),

@@ -183,7 +183,9 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
           }),
         options,
       );
-      expect(counter.counts.reads, reads.join("\n")).toBe(0);
+      // Staging an absent active key must check retained receipts before inserting.
+      expect(counter.counts.reads, reads.join("\n")).toBe(1);
+      expect(reads[0]).toContain('from "session_pending_inputs"');
       const postimage = projectSessionActorHotState(working);
       expect(postimage.pendingInputs).toMatchObject([
         { input_id: "accepted-input", state: "queued" },
