@@ -51,9 +51,81 @@ export {
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
 
-// Anthropic gates OAuth models with claude_code_version_too_old. Keep this floor
-// at the published Claude Code release (2.1.280); older or absent CLIs must not downgrade it.
+// Starting Claude Code identity for OAuth requests. Anthropic gates newer models
+// with claude_code_version_too_old and names the required version; the transport
+// adopts that answer (see raiseClaudeCodeVersionFloor), so new models never
+// require changing this value. A newer installed CLI also wins.
 export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.280";
+
+// Process-wide: the requirement is per Anthropic, not per session or credential.
+// A restart forgets it and costs one rejected request to learn again.
+let learnedClaudeCodeVersion: string | undefined;
+
+function parseClaudeCodeVersion(value: string | undefined): number[] | undefined {
+  const match = value?.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  const parts = match?.slice(1).map(Number);
+  return parts?.every(Number.isSafeInteger) ? parts : undefined;
+}
+
+function isNewerClaudeCodeVersion(candidate: string | undefined, current: string): boolean {
+  const next = parseClaudeCodeVersion(candidate);
+  const base = parseClaudeCodeVersion(current);
+  if (!next || !base) {
+    return false;
+  }
+  const index = next.findIndex((part, i) => part !== base[i]);
+  return index !== -1 && next[index]! > base[index]!;
+}
+
+function currentClaudeCodeVersionFloor(): string {
+  return learnedClaudeCodeVersion ?? ANTHROPIC_CLAUDE_CODE_VERSION;
+}
+
+/**
+ * Read the Claude Code version Anthropic requires from a
+ * claude_code_version_too_old rejection (SDK APIError or transport error body).
+ */
+export function readRequiredClaudeCodeVersion(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+  const record = error as { status?: unknown; error?: unknown; errorBody?: unknown };
+  if (record.status !== 400) {
+    return undefined;
+  }
+  const body = record.errorBody ?? record.error;
+  const payload =
+    typeof body === "object" && body !== null && "error" in body
+      ? (body as { error?: unknown }).error
+      : body;
+  if (typeof payload !== "object" || payload === null) {
+    return undefined;
+  }
+  const { message, details } = payload as { message?: unknown; details?: unknown };
+  const code =
+    typeof details === "object" && details !== null
+      ? (details as { error_code?: unknown }).error_code
+      : undefined;
+  if (code !== "claude_code_version_too_old" || typeof message !== "string") {
+    return undefined;
+  }
+  const required = message.match(/version (\d+\.\d+\.\d+) or newer is required/)?.[1];
+  return parseClaudeCodeVersion(required) ? required : undefined;
+}
+
+/** Adopt a version Anthropic required; true when it raised the floor and a retry can help. */
+export function raiseClaudeCodeVersionFloor(required: string): boolean {
+  if (!isNewerClaudeCodeVersion(required, currentClaudeCodeVersionFloor())) {
+    return false;
+  }
+  learnedClaudeCodeVersion = required;
+  return true;
+}
+
+/** Test seam: forget the learned requirement. */
+export function resetLearnedClaudeCodeVersionForTest(): void {
+  learnedClaudeCodeVersion = undefined;
+}
 
 /** Build OAuth headers and the matching billing identity from one request snapshot. */
 export function buildAnthropicClaudeCodeIdentity(
@@ -75,22 +147,10 @@ export function buildAnthropicClaudeCodeIdentity(
       }
     }
   }
-  let version = ANTHROPIC_CLAUDE_CODE_VERSION;
+  let version = currentClaudeCodeVersionFloor();
   const candidate = headers.get("user-agent")?.match(/^claude-cli\/(\d+\.\d+\.\d+)$/)?.[1];
-  if (candidate) {
-    const components = candidate.split(".").map(Number);
-    const minimum = version.split(".").map(Number);
-    const differing = components.findIndex((component, index) => component !== minimum[index]);
-    const component = components[differing];
-    const minimumComponent = minimum[differing];
-    if (
-      components.every(Number.isSafeInteger) &&
-      component !== undefined &&
-      minimumComponent !== undefined &&
-      component > minimumComponent
-    ) {
-      version = candidate;
-    }
+  if (isNewerClaudeCodeVersion(candidate, version)) {
+    version = candidate!;
   }
   headers.set("user-agent", `claude-cli/${version}`);
   return { headers: headersToRecord(headers), version };
