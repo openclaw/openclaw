@@ -135,6 +135,9 @@ describe("approved by", () => {
         "Phone loses access now, and so do the devices it approved: Tablet. To restore access, approve them from another device or use your recovery kit.",
       ),
     );
+    expect(phone()?.querySelector('[role="note"] p:last-child')?.textContent).toBe(
+      "To restore access, approve them from another device or use your recovery kit.",
+    );
     button(phone(), "Remove access for Phone")?.click();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("openclawId.authority", expect.anything()),

@@ -1,6 +1,13 @@
 .openclaw-id-owner-dialog {
   --openclaw-modal-width: 560px;
   --overlay-modal-radius: 18px;
+  --overlay-modal-shadow:
+    0 0 0 1px rgba(45, 45, 43, 0.08), 0 28px 64px -18px rgba(30, 30, 28, 0.34),
+    0 2px 6px rgba(30, 30, 28, 0.06);
+  --icon-button-glyph: 16px;
+  --icon-button-stroke: 2px;
+  --icon-button-radius: 9px;
+  --icon-button-color: light-dark(rgb(139, 138, 132), var(--muted));
 }
 
 .openclaw-id-owner-dialog--approval {
@@ -25,13 +32,15 @@
 }
 
 .openclaw-id-devices .openclaw-id-devices__title {
+  display: flex;
+  align-items: center;
   margin: 0;
   padding-inline-end: 32px;
   min-height: 24px;
   color: var(--text-strong);
   font-size: calc(17px * var(--control-ui-text-scale, 1));
   font-weight: 600;
-  line-height: 1.4;
+  line-height: 1.3;
   letter-spacing: -0.01em;
 }
 
@@ -39,7 +48,6 @@
   position: absolute;
   inset-block-start: 14px;
   inset-inline-end: 14px;
-  color: var(--muted);
 }
 
 .openclaw-id-devices__description {
@@ -54,17 +62,13 @@
 }
 
 .openclaw-id-devices__error details {
-  margin-top: 12px;
+  margin-top: 4px;
   color: var(--muted);
   font-size: calc(12px * var(--control-ui-text-scale, 1));
 }
 
 .openclaw-id-owner-dialog--devices .openclaw-id-devices__error {
   margin-top: 18px;
-}
-
-.openclaw-id-owner-dialog--devices .openclaw-id-devices__error details {
-  margin-top: 4px;
 }
 
 .openclaw-id-devices summary {
@@ -78,15 +82,22 @@
 
 .openclaw-id-devices .btn {
   min-height: 36px;
-  padding: 7px 15px;
+  padding: 0 15px;
   border-radius: 10px;
   font-size: inherit;
 }
 
 .openclaw-id-devices .btn--sm {
   min-height: 32px;
-  padding: 5px 10px;
+  padding: 6px 10px;
+  border-radius: 12.5px;
   font-size: calc(12px * var(--control-ui-text-scale, 1));
+}
+
+.openclaw-id-devices__footer .btn {
+  padding: 8px 14px;
+  border-radius: 12.5px;
+  font-size: calc(13px * var(--control-ui-text-scale, 1));
 }
 
 .openclaw-id-devices .exec-approval-actions {
@@ -99,6 +110,10 @@
 
 .openclaw-id-approval__request {
   margin-top: 14px;
+}
+
+.openclaw-id-approval__request .openclaw-id-devices__error {
+  margin-top: 4px;
 }
 
 .openclaw-id-approval__request + .openclaw-id-approval__request {
@@ -118,17 +133,21 @@
   justify-content: center;
   min-height: 72px;
   margin-top: 18px;
-  padding: 12px;
   border-radius: 14px;
-  background: color-mix(in srgb, var(--text) 6%, var(--overlay-modal-surface));
+  background: color-mix(in srgb, var(--text) 5%, var(--bg-content));
   color: var(--text-strong);
   font: 600 calc(30px * var(--control-ui-text-scale, 1)) / 1 var(--mono);
   letter-spacing: 0.14em;
   white-space: pre-wrap;
 }
 
+.openclaw-id-approval__number > span:not(.openclaw-id-approval__waiting) {
+  margin-inline-end: -0.14em;
+  word-spacing: -0.28em;
+}
+
 .openclaw-id-approval__number--inactive {
-  opacity: 0.5;
+  opacity: 0.42;
   text-decoration: line-through;
   text-decoration-thickness: 2px;
 }
@@ -140,7 +159,13 @@
   font: 400 calc(13px * var(--control-ui-text-scale, 1)) / 1.4 var(--font-body);
   letter-spacing: 0;
   color: var(--muted);
-  text-align: center;
+  text-align: start;
+}
+
+.openclaw-id-approval__waiting .btn__spinner {
+  width: 16px;
+  height: 16px;
+  margin-inline-end: -0.14em;
 }
 
 .openclaw-id-approval__expiry {
@@ -148,6 +173,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  min-height: 40px;
   margin-top: 20px;
   color: var(--text-strong);
   font-size: calc(13px * var(--control-ui-text-scale, 1));
@@ -158,7 +184,7 @@
 .openclaw-id-approval__expiry small {
   display: block;
   margin-top: 2px;
-  color: var(--muted);
+  color: light-dark(rgb(139, 138, 132), var(--muted));
   font-size: calc(12px * var(--control-ui-text-scale, 1));
   font-weight: 400;
 }
@@ -167,18 +193,21 @@
   width: 72px;
   height: 36px;
   flex: none;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 10px;
   padding: 0 10px;
-  background: var(--overlay-modal-surface);
+  background: light-dark(white, var(--overlay-modal-surface));
+  box-shadow: inset 0 0 0 1px light-dark(rgba(45, 45, 43, 0.14), var(--border));
   color: var(--text-strong);
   font: inherit;
   text-align: center;
 }
 
-.openclaw-id-approval__expiry input:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.openclaw-id-approval__expiry input:focus {
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px var(--accent),
+    0 0 0 3px var(--accent-subtle);
 }
 
 .openclaw-id-devices__list {
@@ -273,9 +302,25 @@
 }
 
 .openclaw-id-devices__confirmation p {
-  margin: 0 0 10px;
+  margin: 0;
   overflow-wrap: anywhere;
   font-size: calc(12.5px * var(--control-ui-text-scale, 1));
+}
+
+.openclaw-id-devices__confirmation p + p {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.openclaw-id-devices .openclaw-id-devices__confirmation openclaw-modal-actions {
+  margin-top: 10px;
+  flex-wrap: nowrap;
+}
+
+.openclaw-id-devices .openclaw-id-devices__confirmation .btn {
+  max-width: none;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .openclaw-id-devices .openclaw-id-devices__confirm-revoke {
@@ -293,7 +338,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 20px;
   min-height: 36px;
   margin-top: 14px;
 }
@@ -324,7 +369,8 @@
 .openclaw-id-devices__kit dd {
   margin: 0;
   overflow-wrap: anywhere;
-  font-family: var(--mono);
+  font: 500 calc(12px * var(--control-ui-text-scale, 1)) / 1.4 var(--mono);
+  letter-spacing: 0.01em;
   color: var(--text-strong);
 }
 
@@ -396,7 +442,9 @@
 }
 
 .openclaw-id-approval__details {
-  margin-top: 24px;
+  min-height: 40px;
+  margin-top: 20px;
+  align-content: center;
   color: var(--muted);
   font-size: calc(12px * var(--control-ui-text-scale, 1));
 }

@@ -24,7 +24,7 @@ import type {
   OpenClawIdPeopleLink,
 } from "../../lib/openclaw-id/types.ts";
 import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { IconButton } from "../solid/icon-button.tsx";
 import { Icon } from "../solid/icon.tsx";
@@ -66,6 +66,23 @@ function DeviceRow(props: {
 }) {
   let rowElement: HTMLDivElement | undefined;
   onSettled(() => props.registerElement(rowElement!));
+  const explanation = createMemo(() => {
+    const message =
+      props.approved.length > 0
+        ? t("openclawId.revokeCascade", {
+            device: props.device.label,
+            devices: props.approved.map((device) => device.label).join(", "),
+          })
+        : t("openclawId.revokeOne", { device: props.device.label });
+    // Separate the final recovery sentence without rewriting localized copy or device names.
+    const sentences = [
+      ...new Intl.Segmenter(getLocale(), { granularity: "sentence" }).segment(message),
+    ];
+    const recoveryStart = sentences.at(-1)?.index ?? 0;
+    return recoveryStart
+      ? [message.slice(0, recoveryStart), message.slice(recoveryStart)]
+      : [message];
+  });
   return (
     <div
       ref={(element) => {
@@ -113,14 +130,9 @@ function DeviceRow(props: {
           }
         >
           <div class="openclaw-id-devices__confirmation">
-            <p role="note">
-              {props.approved.length > 0
-                ? t("openclawId.revokeCascade", {
-                    device: props.device.label,
-                    devices: props.approved.map((device) => device.label).join(", "),
-                  })
-                : t("openclawId.revokeOne", { device: props.device.label })}
-            </p>
+            <div role="note">
+              <For each={explanation()}>{(sentence) => <p>{sentence}</p>}</For>
+            </div>
             <openclaw-modal-actions>
               <button
                 type="button"
