@@ -445,6 +445,9 @@ it.each([
 it.each([false, true])(
   "parks the managed Gateway before repairing source artifacts (stop refusal=%s)",
   async (failStop) => {
+    // Keep wall-clock deadlines aligned with the controlled monotonic budget.
+    const startedAt = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => startedAt + native.elapsedMs);
     native.contend = false;
     native.failStop = failStop;
     const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance");
