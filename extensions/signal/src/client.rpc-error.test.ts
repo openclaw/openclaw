@@ -92,7 +92,7 @@ for (const transport of ["http", "unix"] as const) {
           expect(text).toContain(`retryAfterSeconds=${retry}`);
         }
         if (captcha) {
-          expect(text).toContain("captcha challenge present");
+          expect(text).toMatch(/captcha.*complete signal-cli's rate-limit challenge and retry/);
         }
         for (const logged of [text, JSON.stringify(error), inspect(error)]) {
           expect(logged).not.toContain(token);

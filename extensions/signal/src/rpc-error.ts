@@ -25,7 +25,7 @@ export class SignalRpcError extends Error {
     }
     // A proof-required message can echo the token. Render only its presence, not remote text.
     const detail = hasCaptchaChallenge
-      ? "captcha challenge present"
+      ? "captcha challenge present; complete signal-cli's rate-limit challenge and retry"
       : (safeMessage ?? (typeof error.message === "string" ? error.message : "Signal RPC error"));
     const retryHint =
       retryAfterSeconds === undefined ? "" : `; retryAfterSeconds=${retryAfterSeconds}`;
