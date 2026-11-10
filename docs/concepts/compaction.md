@@ -307,7 +307,10 @@ with their results, and preserves the system instructions and current request.
 An oversized historical turn may be omitted in full. This fallback does not
 rewrite saved messages or count a failed attempt as successful compaction.
 It shows a notice even with compaction notifications disabled; resend any
-essential details from omitted history. The bound applies to selected history,
+essential details from omitted history. When a context engine owns assembly
+and its projection fits the byte budget, no history is omitted for the turn
+and no notice is shown: the notice follows the turn's actual assembled
+context, not the stored byte count alone. The bound applies to selected history,
 not the fixed instructions, tool definitions, or current request.
 
 For direct Anthropic API-key routes, cleared turn-scoped runtime-context contents
