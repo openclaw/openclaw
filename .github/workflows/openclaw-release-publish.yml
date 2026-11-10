@@ -106,6 +106,11 @@ on:
           - beta
           - stable
           - full
+      defer_clawhub:
+        description: Recovery only; defer ClawHub dispatch while resuming an authenticated already-published core (release remains incomplete)
+        required: false
+        default: false
+        type: boolean
       wait_for_clawhub:
         description: Wait for and auto-approve ClawHub staging; public verification follows terminal parent success
         required: true
@@ -166,6 +171,8 @@ jobs:
           FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
           OPENCLAW_NPM_RESUME_RUN_ID: ${{ inputs.openclaw_npm_resume_run_id }}
+          DEFER_CLAWHUB: ${{ inputs.defer_clawhub && 'true' || 'false' }}
+          WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
           FINALIZE_RELEASE_BEFORE_DOCKER: ${{ inputs.finalize_release_before_docker }}
           PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
@@ -255,6 +262,10 @@ jobs:
           fi
           if [[ -n "${OPENCLAW_NPM_RESUME_RUN_ID}" && "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
             echo "openclaw_npm_resume_run_id requires publish_openclaw_npm=true." >&2
+            exit 1
+          fi
+          if [[ "${DEFER_CLAWHUB:-false}" == "true" && ( -z "${OPENCLAW_NPM_RESUME_RUN_ID}" || "${PUBLISH_OPENCLAW_NPM}" != "true" || -n "${PREPARED_PLUGINS}" || "${WAIT_FOR_CLAWHUB}" == "true" ) ]]; then
+            echo "defer_clawhub requires direct core resume with openclaw_npm_resume_run_id and wait_for_clawhub=false." >&2
             exit 1
           fi
           if [[ "${FINALIZE_RELEASE_BEFORE_DOCKER:-false}" == "true" && ( "${PUBLISH_OPENCLAW_NPM}" != "true" || -n "${PREPARED_PLUGINS:-}" ) ]]; then
@@ -547,6 +558,7 @@ jobs:
           import { appendFileSync, readFileSync } from 'node:fs';
           import { preparedDockerEvidenceFromFullRelease } from './.release-validation-tooling/scripts/docker-release-artifacts.mjs';
           import { validatePreparedNpmArtifactDescriptor } from './.release-validation-tooling/scripts/plugin-npm-prepared-release.mjs';
+          import { retainedPublicationArtifactSource } from './.release-validation-tooling/scripts/lib/release-evidence-identity.mjs';
           const env = process.env;
           const manifest = JSON.parse(readFileSync(`${env.RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json`, 'utf8'));
           const prepared = preparedDockerEvidenceFromFullRelease({ manifest, sourceSha: env.EXPECTED_SHA, runId: env.FULL_RELEASE_VALIDATION_RUN_ID, runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT });
@@ -559,8 +571,10 @@ jobs:
               throw new Error('Candidate-owned all-plugin publication requires the original FRV npm artifact; repacking is not allowed.');
             }
             if (descriptor) {
+              // Strict authentication above binds retained artifacts to their original producer, not recovery tooling.
+              const producerSha = retainedPublicationArtifactSource(manifest)?.workflow.sha ?? manifest.workflowSha;
               const npm = validatePreparedNpmArtifactDescriptor(descriptor, {
-                repository: env.GITHUB_REPOSITORY, sourceSha: env.EXPECTED_SHA, workflowSha: manifest.workflowSha,
+                repository: env.GITHUB_REPOSITORY, sourceSha: env.EXPECTED_SHA, workflowSha: producerSha,
               });
               appendFileSync(env.GITHUB_OUTPUT, `plugin_npm_artifact=${JSON.stringify(npm)}\n`);
             }
@@ -1309,6 +1323,7 @@ jobs:
       RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
       PLUGINS: ${{ inputs.plugins }}
       WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
+      DEFER_CLAWHUB: ${{ inputs.defer_clawhub && 'true' || 'false' }}
       NPM_TELEGRAM_RUN_ID: ${{ inputs.npm_telegram_run_id }}
       RELEASE_EVIDENCE_MODE: ${{ inputs.release_evidence_mode }}
       FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -1553,7 +1568,7 @@ jobs:
           if [[ -n "${PLUGINS// }" ]]; then
             plan_args+=(--plugins "${PLUGINS}")
           fi
-          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" || "${DEFER_CLAWHUB:-false}" == "true" ]]; then
             plan_args+=(--skip-clawhub)
           fi
           if [[ -n "${PREPARED_PLUGINS}" ]]; then
@@ -1749,7 +1764,9 @@ jobs:
             echo "- Release tag: \`${RELEASE_TAG}\`"
             echo "- Release SHA: \`${TARGET_SHA}\`"
             echo "- Release approval: this workflow job"
-            if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
+            if [[ "${DEFER_CLAWHUB:-false}" == "true" ]]; then
+              echo "- ClawHub: deferred to independent recovery; full release remains incomplete"
+            elif [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
               echo "- ClawHub: skipped by release track"
             else
               echo "- ClawHub: dispatched in parallel"
@@ -1788,6 +1805,10 @@ jobs:
             guard_existing_public_release
           fi
           resolve_openclaw_npm_publish_state
+          if [[ "${DEFER_CLAWHUB:-false}" == "true" && "${openclaw_npm_already_published}" != "true" ]]; then
+            echo "defer_clawhub requires an authenticated already-published core." >&2
+            exit 1
+          fi
           resolve_clawhub_release_plan
 
           bootstrap_workflow_sha=""
@@ -1897,6 +1918,7 @@ jobs:
             parentWorkflow: '.github/workflows/openclaw-release-publish.yml',
             toolingRef: env.GITHUB_REF_NAME, toolingFullRef: env.GITHUB_REF,
             toolingSha: env.GITHUB_WORKFLOW_SHA, candidateSha: env.TARGET_SHA,
+            ...(env.DEFER_CLAWHUB === 'true' ? { clawHubDeferred: true } : {}),
             normalClawHubRunId: env.NORMAL_CLAWHUB_RUN_ID || null,
             normalClawHubRunAttempt: env.NORMAL_CLAWHUB_RUN_ID ? '1' : null,
           }) + '\n', { flag: 'wx' });
@@ -2089,7 +2111,10 @@ jobs:
           resolve_clawhub_release_plan
           failed=0
           clawhub_failed=0
-          clawhub_authorized=true
+          clawhub_authorized=false
+          if [[ -n "${plugin_clawhub_run_id}" ]]; then
+            clawhub_authorized=true
+          fi
           release_target_current=true
           if ! (verify_release_tag_target); then
             failed=1

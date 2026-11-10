@@ -83,6 +83,7 @@ export function buildPersistedUserTurnMetadata(
     ...(input.mentions?.length
       ? { humanMentions: input.mentions.map((mention) => ({ ...mention })) }
       : {}),
+    ...(input.humanAddressed ? { humanAddressed: true } : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyPreviewText
       ? {
@@ -195,6 +196,10 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
   if (preparedMeta?.humanMentions !== undefined && contentUnchanged) {
     runtimeMeta.humanMentions = preparedMeta.humanMentions;
   }
+  delete runtimeMeta.humanAddressed;
+  if (preparedMeta?.humanAddressed === true) {
+    runtimeMeta.humanAddressed = true;
+  }
   delete nextMessage["__openclaw"];
   if (Object.keys(runtimeMeta).length > 0) {
     nextMessage["__openclaw"] = runtimeMeta;
@@ -270,6 +275,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     : undefined;
   const originalTransport = originalMeta?.transport;
   const steerTargetRunId = normalizePersistedSteerTargetRunId(originalMeta?.steerTargetRunId);
+  const humanAddressed = originalMeta?.humanAddressed === true;
   const lateMedia = originalMeta?.lateMedia === true;
   const originalMedia = originalMeta?.media;
   const media = Array.isArray(originalMedia) ? structuredClone(originalMedia) : undefined;
@@ -328,6 +334,11 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   delete protectedMeta.steerTargetRunId;
   if (steerTargetRunId) {
     protectedMeta.steerTargetRunId = steerTargetRunId;
+  }
+  // Admission already skipped the agent turn; a rewrite cannot make the row disturb an active one.
+  delete protectedMeta.humanAddressed;
+  if (humanAddressed) {
+    protectedMeta.humanAddressed = true;
   }
   const protectedMessage: PersistedUserTurnMessage = {
     ...nextUserMessage,

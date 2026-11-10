@@ -49,13 +49,10 @@ suite.define(() => {
       const initialLeft = await page
         .locator(".chat-footer textarea")
         .evaluate((element) => element.getBoundingClientRect().left);
-      const motion = page.evaluate(async () => {
+      const motion = await page.evaluateHandle(() => {
         const samples: number[] = [];
         const positions: number[] = [];
-        const deadline = performance.now() + 5000;
-        while (performance.now() < deadline) {
-          await new Promise(requestAnimationFrame);
-          const frame = document.querySelector(".chat-main__conversation-frame");
+        const sample = (frame: Element | null) => {
           const width = frame
             ? Number.parseFloat(getComputedStyle(frame).getPropertyValue("--chat-details-space")) ||
               0
@@ -65,18 +62,60 @@ suite.define(() => {
           if (composer) {
             positions.push(composer.getBoundingClientRect().left);
           }
-          if (width >= 313) {
-            break;
+          return width;
+        };
+        // CI can skip every middle frame. Sample the actual transition timeline
+        // when it starts, then restore playback for the final geometry check.
+        const captureTransition = (event: Event) => {
+          if (
+            !(event instanceof TransitionEvent) ||
+            event.propertyName !== "--chat-details-space" ||
+            !(event.target instanceof Element) ||
+            !event.target.matches(".chat-main__conversation-frame")
+          ) {
+            return;
           }
-        }
-        return { samples, positions };
+          const animation = event.target
+            .getAnimations()
+            .find(
+              (entry) =>
+                entry instanceof CSSTransition && entry.transitionProperty === event.propertyName,
+            );
+          if (!animation?.effect) {
+            return;
+          }
+          const currentTime = animation.currentTime;
+          animation.pause();
+          animation.currentTime = Number(animation.effect.getTiming().duration) / 2;
+          sample(event.target);
+          animation.currentTime = currentTime;
+          animation.play();
+        };
+        document.addEventListener("transitionrun", captureTransition);
+        return {
+          result: (async () => {
+            const deadline = performance.now() + 5000;
+            try {
+              while (performance.now() < deadline) {
+                await new Promise(requestAnimationFrame);
+                if (sample(document.querySelector(".chat-main__conversation-frame")) >= 313) {
+                  break;
+                }
+              }
+            } finally {
+              document.removeEventListener("transitionrun", captureTransition);
+            }
+            return { samples, positions };
+          })(),
+        };
       });
       if (initialWidth < 1700) {
         await page.setViewportSize({ width: 1700, height: 1000 });
       } else {
         await gateway.resolveDeferred("sessions.create");
       }
-      const { samples, positions } = await motion;
+      const { samples, positions } = await motion.evaluate(({ result }) => result);
+      await motion.dispose();
       if (captureUiProofEnabled) {
         await page.screenshot({ path: path.join(suite.artifactDir, reducedMotion + "-after.png") });
       }

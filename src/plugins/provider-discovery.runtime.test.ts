@@ -142,6 +142,7 @@ const runtimePluginIds = () => mocks.resolvePluginProvidersCore.mock.calls[0]?.[
 describe("resolvePluginDiscoveryProvidersRuntime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolvePluginProvidersCore.mockReturnValue([]);
     mockManifestPlugins([createManifestPlugin("deepseek")]);
     mocks.resolvePluginMetadataSnapshot.mockImplementation(
       (params?: { pluginMetadataSnapshot?: unknown }) =>
@@ -220,6 +221,32 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       }).map(({ id }) => id),
     ).toEqual(["deepseek"]);
   });
+
+  it.each([false, true])(
+    "loads full registration only for uncovered runtime catalogs (sibling covered: %s)",
+    (siblingCovered) => {
+      const manifest = createManifestPlugin("fixture");
+      manifest.providers = ["fixture", "sibling"];
+      manifest.modelCatalog = { discovery: { fixture: "runtime", sibling: "refreshable" } };
+      mockManifestPlugins([manifest]);
+      const entries = [createProvider("fixture", "catalog")];
+      if (siblingCovered) {
+        entries.push(createProvider("sibling", "catalog"));
+      }
+      mocks.loadSource.mockReturnValue(entries);
+      mocks.resolvePluginProvidersCore.mockReturnValue([]);
+
+      const providers = discoverProviders({ onlyPluginIds: ["fixture"] });
+
+      expect(providers.map(({ catalog }) => catalog)).toEqual(
+        entries.map(({ catalog }) => catalog),
+      );
+      expect(runtimePluginIds()).toEqual(["fixture"]);
+      expect(mocks.resolvePluginProvidersCore.mock.calls[0]?.[0]?.registryScope).toBe(
+        siblingCovered ? "loaded" : undefined,
+      );
+    },
+  );
 
   it("keeps unscoped discovery bounded for mixed live and static-only entries", () => {
     const codexEntryProvider = createProvider("codex", "catalog");

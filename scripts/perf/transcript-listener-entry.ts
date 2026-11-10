@@ -49,6 +49,10 @@ registerHooks({
 });
 const { SessionManager } = await import("../../src/agents/sessions/session-manager.ts");
 const { AgentSession } = await import("../../src/agents/sessions/agent-session.ts");
+const { Agent } = await import("../../packages/agent-core/src/agent.ts");
+const { ModelRegistry } = await import("../../src/agents/sessions/model-registry.ts");
+const { ContextEngineFactoryResources } =
+  await import("../../src/context-engine/registry.resources.ts");
 const profiler = new Session();
 profiler.connect();
 let sampling = false;
@@ -72,6 +76,9 @@ process.on("message", (message: unknown) => {
     global.gc();
     const managers = queryObjects(SessionManager, { format: "count" });
     const sessions = queryObjects(AgentSession, { format: "count" });
+    const agents = queryObjects(Agent, { format: "count" });
+    const registries = queryObjects(ModelRegistry, { format: "count" });
+    const factoryResources = queryObjects(ContextEngineFactoryResources, { format: "count" });
     global.gc();
     const listeners = Reflect.get(
       globalThis,
@@ -82,6 +89,9 @@ process.on("message", (message: unknown) => {
       listeners: listeners?.size ?? 0,
       managers,
       sessions,
+      agents,
+      registries,
+      factoryResources,
       heapUsed: process.memoryUsage().heapUsed,
       cpuMs: (cpu.user + cpu.system) / 1000,
       elapsedMs,

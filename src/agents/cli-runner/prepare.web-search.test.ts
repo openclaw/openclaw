@@ -48,7 +48,7 @@ vi.mock("../openclaw-tools.js", () => ({
     config.tools?.web?.search?.enabled === false ? [messageTool] : [searchTool, messageTool],
 }));
 // mock-isolation: Observe node-only execution without assembling unrelated coding tools.
-vi.mock("../agent-tools.js", () => ({
+vi.mock("../agent-tools.async.js", () => ({
   createOpenClawCodingToolsInternalAsync: async ({ exec }: { exec?: ExecTarget }) => [
     execTool(exec),
   ],

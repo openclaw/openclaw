@@ -6,6 +6,8 @@
  * allocation-instrumented timings are diagnostic, separate from the uninstrumented gate.
  * --scenario send-now --action wait|send-now --iterations 100 --hold-ms 50 measures
  * a real Agent's held-tool boundary through the controller's indexed RPC source.
+ * --scenario send-now-fallback uses the real timeout/withdrawal and follow-up queue owners.
+ * Its 1ms delivery deadline accelerates the 120s default; --hold-ms bounds remaining work.
  * Use wait/wait unchanged runs as A/A controls, then interleave wait/send-now.
  * This owner workload has resident session shape, not a large physical database,
  * filesystem stress, WebSocket authorization, or an external provider.
@@ -47,13 +49,21 @@ if (values["baseline-dir"]) {
   process.env.OPENCLAW_BENCH_BASELINE_DIR = path.resolve(values["baseline-dir"]);
   await import("./worker-retained-heap-preload.ts");
 }
+const fallback = values.scenario === "send-now-fallback";
+const sendNow = values.scenario === "send-now" || fallback;
 const sourceRoot = values["baseline-dir"] ?? fileURLToPath(new URL("../../", import.meta.url));
 const sourceHashes = Object.fromEntries(
   [
     ...["steer", "mailbox-source", "message-injection-failure"].map(
       (owner) => `src/sessions/session-controller.${owner}.ts`,
     ),
-    ...(values.scenario === "send-now"
+    ...(fallback
+      ? [
+          "src/agents/embedded-agent-runner/run/attempt-queue-message.ts",
+          "src/auto-reply/reply/queue/enqueue.ts",
+        ]
+      : []),
+    ...(sendNow
       ? [
           "agent",
           "agent-loop",
@@ -64,14 +74,18 @@ const sourceHashes = Object.fromEntries(
       : []),
   ].map((owner) => [
     owner,
-    existsSync(path.join(sourceRoot, owner))
-      ? createHash("sha256")
-          .update(readFileSync(path.join(sourceRoot, owner)))
-          .digest("hex")
-      : "absent",
+    createHash("sha256")
+      .update(
+        readFileSync(
+          existsSync(path.join(sourceRoot, owner))
+            ? path.join(sourceRoot, owner)
+            : fileURLToPath(new URL(`../../${owner}`, import.meta.url)),
+        ),
+      )
+      .digest("hex"),
   ]),
 );
-if (values.scenario === "send-now") {
+if (sendNow) {
   await measureSendNow();
 } else {
   assert.equal(values.scenario, "withdrawal");
@@ -218,6 +232,13 @@ async function measureSendNow() {
   const holdMs = Number(values["hold-ms"]);
   assert(Number.isSafeInteger(iterations) && iterations > 0);
   assert(Number.isSafeInteger(holdMs) && holdMs > 0);
+  const { createPendingSteerToolControl, steerActiveSessionWithOptionalDeliveryWait } =
+    await import("../../src/agents/embedded-agent-runner/run/attempt-queue-message.js");
+  const { setSteeringMessageIdentity } =
+    await import("../../src/agents/sessions/steering-message-identity.js");
+  const { registerQueuedUserMessageRetirement } =
+    await import("../../src/agents/sessions/queued-user-message-retirement.js");
+  const { enqueueFollowupRun } = await import("../../src/auto-reply/reply/queue/enqueue.js");
   const { Type } = await import("typebox");
   const { Agent } = await import("../../packages/agent-core/src/agent.js");
   const { createAssistantMessageEventStream } = await import("@openclaw/ai/event-stream");
@@ -230,8 +251,11 @@ async function measureSendNow() {
     await import("../../src/sessions/session-controller.steer.js");
   const { captureReplyMessageInjectionTarget } =
     await import("../../src/sessions/session-controller.message-injection.js");
-  const { reserveSessionControllerSource, retireSessionControllerInput } =
-    await import("../../src/sessions/session-controller.mailbox.js");
+  const {
+    reserveSessionControllerSource,
+    retireSessionControllerInput,
+    bindSessionControllerSource,
+  } = await import("../../src/sessions/session-controller.mailbox.js");
   const { getRpcSourceForGateway, registerRpcSource } =
     await import("../../src/sessions/session-controller.rpc-sources.js");
   const model = {
@@ -255,7 +279,15 @@ async function measureSendNow() {
     registerRpcSource(runId, { input, adapter: {} });
     return input;
   });
-  const counts = { lookups: 0, interrupts: 0, interruptedResults: 0, consumed: 0, continued: 0 };
+  const counts = {
+    lookups: 0,
+    interrupts: 0,
+    interruptedResults: 0,
+    consumed: 0,
+    continued: 0,
+    fallbackQueued: 0,
+    followupTurns: 0,
+  };
   async function run(index: number, measured: boolean) {
     const started = createDeferredCore();
     const consumed = createDeferredCore();
@@ -298,9 +330,9 @@ async function measureSendNow() {
       },
       streamFn: (_model, context) => {
         requestCount++;
-        if (requestCount === 2) {
+        if (requestCount === 2 || (fallback && requestCount === 3)) {
           try {
-            assert(
+            assert.equal(
               context.messages.some(
                 (entry) =>
                   entry.role === "user" &&
@@ -310,11 +342,12 @@ async function measureSendNow() {
                         (block) => block.type === "text" && block.text === message.content,
                       ))),
               ),
+              !fallback || toolAborted || requestCount === 3,
             );
             const result = context.messages.find((entry) => entry.role === "toolResult");
             assert(result?.role === "toolResult");
-            assert.equal(result.isError, values.action === "send-now");
-            if (values.action === "send-now") {
+            assert.equal(result.isError, toolAborted);
+            if (toolAborted && requestCount === 2) {
               assert.deepEqual(result.content, [
                 { type: "text", text: "Synthetic tool settled" },
                 { type: "text", text: "Interrupted by the user to send a pending message." },
@@ -356,10 +389,32 @@ async function measureSendNow() {
     const runId = `measured-${index}`;
     const operation = createReplyOperation({ sessionKey, sessionId: runId, resetTriggered: false });
     operation.setPhase("running");
+    const activeSession: Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[0] = {
+      agent,
+      steer: async (_text, _images, _recorder, _media, _order, identity) => {
+        setSteeringMessageIdentity(message, identity);
+        registerQueuedUserMessageRetirement(message, () => true);
+        agent.steer(message);
+      },
+      subscribe: (listener) =>
+        agent.subscribe((event) => {
+          if (event.type !== "agent_end") {
+            listener(event);
+          }
+        }),
+    };
+    let queueAttempts = 0;
     const queueMessage = async (
       _text: string,
       options?: import("../../src/sessions/session-controller.backend-contracts.js").ReplyBackendQueueMessageOptions,
     ) => {
+      if (fallback) {
+        await steerActiveSessionWithOptionalDeliveryWait(activeSession, message.content, {
+          ...options,
+          deliveryTimeoutMs: queueAttempts++ === 0 ? 1 : 120_000,
+        });
+        return;
+      }
       agent.steer(message);
       options?.onQueueAccepted?.(true);
       await delivered.promise;
@@ -377,19 +432,21 @@ async function measureSendNow() {
           authority.assertCurrent();
           await queueMessage(text, options);
         },
-        steerNow: {
-          read: () =>
-            agent.hasPendingSteeringMessage((pending) => pending === message)
-              ? { status: "available", tools: ["held_tool"] }
-              : undefined,
-          send: () => {
-            if (!agent.hasPendingSteeringMessage((pending) => pending === message)) {
-              return { status: "settled", tools: [] };
-            }
-            const result = agent.interruptTools();
-            return { status: result.status, tools: result.tools.map((tool) => tool.toolName) };
-          },
-        },
+        steerNow: fallback
+          ? createPendingSteerToolControl({ agent }, () => !operation.result)
+          : {
+              read: () =>
+                agent.hasPendingSteeringMessage((pending) => pending === message)
+                  ? { status: "available", tools: ["held_tool"] }
+                  : undefined,
+              send: () => {
+                if (!agent.hasPendingSteeringMessage((pending) => pending === message)) {
+                  return { status: "settled", tools: [] };
+                }
+                const result = agent.interruptTools();
+                return { status: result.status, tools: result.tools.map((tool) => tool.toolName) };
+              },
+            },
       },
     });
     const input = reserveSessionControllerSource(sessionKey, {
@@ -402,14 +459,56 @@ async function measureSendNow() {
       await started.promise;
       const target = captureReplyMessageInjectionTarget(operation);
       assert(target);
-      const attempt = await beginSessionControllerSteer({
-        input,
-        target,
-        text: message.content,
-        options: { waitForTranscriptCommit: true },
-      });
+      const start = (assertCurrent?: () => void): ReturnType<typeof beginSessionControllerSteer> =>
+        beginSessionControllerSteer({
+          input,
+          target,
+          text: message.content,
+          retry: start,
+          retryWithdrawnSteer: assertCurrent !== undefined,
+          options: { waitForTranscriptCommit: true, assertCurrent },
+        });
+      const attempt = await start();
       assert(attempt);
       assert(await attempt.acceptance);
+      if (fallback) {
+        assert.equal((await attempt.outcome).status, "rejected");
+        assert(!agent.hasPendingSteeringMessage((pending) => pending === message));
+        const followup = {
+          prompt: message.content,
+          enqueuedAt: Date.now(),
+          run: {
+            agentId: "main",
+            agentDir: output,
+            sessionId: runId,
+            sessionFile: path.join(output, "synthetic.json"),
+            workspaceDir: output,
+            config: {},
+            provider: model.provider,
+            model: model.id,
+            timeoutMs: 10000,
+            blockReplyBreak: "text_end" as const,
+          },
+        };
+        bindSessionControllerSource(input, followup);
+        assert(
+          enqueueFollowupRun(
+            sessionKey,
+            followup,
+            { mode: "followup", debounceMs: 0 },
+            "none",
+            async () => {
+              if (measured) {
+                counts.followupTurns++;
+              }
+              await agent.prompt(message);
+            },
+          ),
+        );
+        if (measured) {
+          counts.fallbackQueued++;
+        }
+      }
       const iterationCpu = process.cpuUsage();
       const before = performance.now();
       const selected = getRpcSourceForGateway(runId, undefined);
@@ -418,26 +517,39 @@ async function measureSendNow() {
         counts.lookups++;
       }
       if (values.action === "send-now") {
-        const result = sendSessionControllerSteerNow(input);
-        assert.equal(result.status, "interrupted");
-        assert.deepEqual(sendSessionControllerSteerNow(input), result);
-        if (measured) {
+        const result = await sendSessionControllerSteerNow(input);
+        assert(["interrupted", ...(fallback ? ["settled"] : [])].includes(result.status));
+        const repeated = await sendSessionControllerSteerNow(input);
+        assert(repeated.status === result.status || repeated.status === "settled");
+        if (measured && result.status === "interrupted") {
           counts.interrupts++;
         }
       }
       const effectMs = performance.now() - before;
+      if (fallback && !toolAborted) {
+        await work;
+        operation.complete();
+      }
       await consumed.promise;
       const settlementMs = performance.now() - before;
-      assert.deepEqual(await attempt.outcome, { status: "accepted" });
+      if (!fallback) {
+        assert.deepEqual(await attempt.outcome, { status: "accepted" });
+      }
       await work;
+      if (fallback) {
+        await input.settlement.promise;
+      }
       if (providerAssertionError) {
         throw new Error("Synthetic provider boundary assertion failed", {
           cause: providerAssertionError,
         });
       }
       const iterationUsage = process.cpuUsage(iterationCpu);
-      assert.equal(toolAborted, values.action === "send-now");
-      assert.equal(requestCount, 2);
+      if (!fallback) {
+        assert.equal(toolAborted, values.action === "send-now");
+      }
+      assert.equal(agent.state.messages.filter((entry) => entry === message).length, 1);
+      assert.equal(requestCount, fallback && !toolAborted ? 3 : 2);
       assert.equal(agent.signal?.aborted ?? false, false);
       const final = agent.state.messages.at(-1);
       assert(final?.role === "assistant");

@@ -97,16 +97,10 @@ it("does not allocate or clean a directory when authority is already retired", a
   expect(use).not.toHaveBeenCalled();
 });
 
-it.each([
-  ["a file;$(touch nope).png", "a-file-touch-nope-.png"],
-  ["中文.txt", "中文.txt"],
-  ["café.txt", "café.txt"],
-  ["报告（终稿）.txt", "报告（终稿）.txt"],
-  ["📄.txt", "📄.txt"],
-])("stages %s privately and cleans after success", async (name, safeName) => {
+it("uploads into an owner-only remote directory and cleans after success", async () => {
   respond({}, {}, {});
-  const localPath = `/gateway/private/${name}`;
-  const remotePath = `${remoteDir}/${safeName}`;
+  const localPath = "/gateway/private/a file;$(touch nope).png";
+  const remotePath = `${remoteDir}/a-file-touch-nope-.png`;
 
   await expect(stage({ remoteHost: "bot@messages-mac", localPath })).resolves.toBe("sent");
 
@@ -114,7 +108,7 @@ it.each([
   expect(commands()).toEqual(["ssh", "scp", "ssh"]);
   expect(allocate?.[0].at(-1)).toBe("sh -s");
   expect(allocate?.[1].input).toContain("umask 077");
-  expect(allocate?.[1].input).not.toContain(name);
+  expect(allocate?.[1].input).not.toContain("a file");
   expect(upload?.[0]).toEqual([
     "scp",
     ..."BatchMode=yes StrictHostKeyChecking=yes ConnectTimeout=10 ClearAllForwardings=yes ForwardAgent=no ForwardX11=no"

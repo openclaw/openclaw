@@ -284,7 +284,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         ...payload,
         isError: true,
       });
-      expect(result).toEqual({ ...payload, isError: !complete });
+      expect(result).toEqual(complete ? { ...payload, isError: false } : undefined);
     },
   );
 });

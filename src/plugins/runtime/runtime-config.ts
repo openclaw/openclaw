@@ -1,5 +1,5 @@
-import { getRuntimeConfig } from "../../config/io.runtime.js";
 import { cloneConfigWithResolutionFacts } from "../../config/resolution-facts.js";
+import { readRuntimeConfig as getRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeConfig(): PluginRuntime["config"] {

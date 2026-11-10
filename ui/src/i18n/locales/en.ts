@@ -1554,7 +1554,6 @@ const startupEnglish = {
       billingProblem: "{provider} reports a billing problem",
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
-      failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
