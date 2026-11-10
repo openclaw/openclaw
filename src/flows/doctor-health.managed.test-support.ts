@@ -68,8 +68,19 @@ type DoctorManagedRepairOutcome =
   | "restart-unhealthy"
   | "ancestor-blocked";
 
+function usesCurrentAgentSchema(outcome: DoctorManagedRepairOutcome) {
+  return (
+    outcome === "interactive-declined" ||
+    outcome.startsWith("clean-") ||
+    outcome.startsWith("update-") ||
+    outcome === "archive-verification"
+  );
+}
+
 export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManagedRepairOutcome[]) {
-  const fixture = useDoctorHealthFixture();
+  const fixture = useDoctorHealthFixture(
+    outcomes.some(usesCurrentAgentSchema) ? ["main", "research"] : [],
+  );
   it.each(outcomes)(
     "coordinates the matching managed writer through multi-agent repair: %s",
     (outcome) => runManagedRepair(outcome, fixture),
@@ -80,6 +91,7 @@ async function runManagedRepair(
   outcome: DoctorManagedRepairOutcome,
   {
     materializeSharedStateDatabase,
+    materializeCurrentAgentDatabases,
     openHistoricalAgentDatabase,
   }: ReturnType<typeof useDoctorHealthFixture>,
 ) {
@@ -92,7 +104,7 @@ async function runManagedRepair(
     const declined = outcome === "interactive-declined";
     const clean = declined || outcome.startsWith("clean-") || outcome.startsWith("update-");
     const archiveVerification = is("archive-verification", "update-parent-stopped");
-    const current = clean || archiveVerification;
+    const current = usesCurrentAgentSchema(outcome);
     const inspectionOnly = outcome === "clean-force-inspect";
     const force = outcome.startsWith("clean-force-");
     const entries = {
@@ -131,6 +143,9 @@ async function runManagedRepair(
         path.join(state.workspaceDir, "openclaw-workspace-state.json"),
         JSON.stringify({ version: 1, setupCompletedAt: "2026-07-15T00:00:00.000Z" }),
       );
+    }
+    if (current) {
+      materializeCurrentAgentDatabases(env);
     }
     const open = current ? openOpenClawAgentDatabase : openHistoricalAgentDatabase;
     const initial = open({ agentId: "main", env });
