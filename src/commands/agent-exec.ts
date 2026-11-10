@@ -5,12 +5,15 @@ import path from "node:path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
-import { stopOneShotBrowserBridges, withOneShotBrowserBridgeScope } from "../agents/sandbox/browser-bridges.js";
 import { createAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
 import {
   recordAgentCleanupFailure,
   createAgentCleanupScope,
 } from "../agents/run-cleanup-timeout.js";
+import {
+  stopOneShotBrowserBridges,
+  withOneShotBrowserBridgeScope,
+} from "../agents/sandbox/browser-bridges.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { EmbeddedStateLockHandle } from "../infra/embedded-state-lock.js";
@@ -375,6 +378,11 @@ async function runAgentExecCommand(
   const recordCleanupError = (error: unknown) => {
     cleanupError = error;
   };
+  try {
+    await stopOneShotBrowserBridges();
+  } catch (error) {
+    cleanupError ??= error;
+  }
   const stopAudit = async () => await stopLocalAuditWriter?.();
   await (temporaryDatabaseScope ? temporaryDatabaseScope.run(stopAudit) : stopAudit()).catch(
     () => undefined,
@@ -428,11 +436,6 @@ async function runAgentExecCommand(
       cleanupError ??= error;
     }
   }
-  try {
-    await stopOneShotBrowserBridges();
-  } catch (error) {
-    cleanupError ??= error;
-  }
   if (cleanupError) {
     recordAgentCleanupFailure();
     const cleanupFailure = new Error(
@@ -469,7 +472,6 @@ async function runAgentExecCommand(
   }
   return commandResult;
 }
-
 
 /** Run an embedded CLI turn with its own browser-bridge ownership context. */
 export function agentExecCommand(

@@ -8,6 +8,12 @@ import {
   createAgentCleanupScope,
 } from "../agents/run-cleanup-timeout.js";
 import {
+  BROWSER_BRIDGES,
+  trackOneShotBrowserBridge,
+  type CachedBrowserBridge,
+} from "../agents/sandbox/browser-bridges.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
+import {
   deleteSessionEntryLifecycle,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -18,6 +24,7 @@ import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
+import * as browserBridgeApi from "../plugin-sdk/browser-bridge.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   withOpenClawAgentDatabaseAsync,
@@ -71,6 +78,71 @@ async function expectLock(lockPath: string) {
     role: "agent-embedded",
   });
 }
+
+describe("agent exec browser bridge cleanup ordering", () => {
+  afterEach(() => {
+    BROWSER_BRIDGES.clear();
+    clearRuntimeConfigSnapshot();
+  });
+
+  function registerBridge(): void {
+    const bridge = {
+      bridge: { server: { id: "one-shot-bridge" } },
+      containerName: "one-shot-test",
+    } as unknown as CachedBrowserBridge;
+    BROWSER_BRIDGES.set("one-shot", bridge);
+    trackOneShotBrowserBridge("one-shot", bridge);
+  }
+
+  it("stops the bridge under run configuration before releasing retained state lock", async () => {
+    const { stateDir, lockPath } = stateFixture();
+    const ambient = { browser: { enabled: false } };
+    setRuntimeConfigSnapshot(ambient);
+    const stop = vi
+      .spyOn(browserBridgeApi, "stopBrowserBridgeServer")
+      .mockImplementation(async () => {
+        expect(getRuntimeConfigSnapshot()?.browser?.enabled).toBe(true);
+        await expectLock(lockPath);
+      });
+
+    const result = await runExec(
+      "inspect",
+      {
+        stateDir,
+        configOverride: [JSON.stringify({ browser: { enabled: true } })],
+      },
+      createTestRuntime(),
+      async () => {
+        registerBridge();
+        return success();
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(getRuntimeConfigSnapshot()?.browser?.enabled).toBe(false);
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(BROWSER_BRIDGES.has("one-shot")).toBe(false);
+  });
+
+  it("retains state and lock if browser bridge shutdown is uncertain", async () => {
+    const { stateDir, lockPath } = stateFixture();
+    const run = vi
+      .spyOn(browserBridgeApi, "stopBrowserBridgeServer")
+      .mockRejectedValue(new Error("synthetic bridge teardown failure"));
+
+    const result = await runExec("inspect", { stateDir }, createTestRuntime(), async () => {
+      await fs.writeFile(path.join(stateDir, "owned-work"), "retained");
+      registerBridge();
+      return success();
+    });
+    expect(run).toHaveBeenCalledOnce();
+    expect(result.exitCode).toBe(1);
+    expect(result.envelope.error).toMatchObject({ kind: "cleanup" });
+    await expectLock(lockPath);
+    await expect(fs.readFile(path.join(stateDir, "owned-work"), "utf8")).resolves.toBe("retained");
+  });
+});
 
 describe("agent exec retained-state ownership", () => {
   it.each([false, true])(
