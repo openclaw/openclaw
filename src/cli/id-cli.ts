@@ -5,6 +5,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { password } from "@clack/prompts";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import type { Command } from "commander";
+import type {
+  Ed25519PublicKey,
+  IrohEndpointKey,
+} from "../../packages/openclaw-id-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { describeRebind, displayKey, signRebind, type RebindPreparation } from "./id-cli-rebind.js";
@@ -35,19 +39,24 @@ type KeysStatus = {
   link?: { linked?: boolean; hostname?: string };
 };
 type PeopleLink = {
-  binding?: { bindingSeq: number; kSrv: string; kGw: string; publishedBindingSeq: number };
+  binding?: {
+    bindingSeq: number;
+    kSrv: IrohEndpointKey;
+    kGw: Ed25519PublicKey;
+    publishedBindingSeq: number;
+  };
   publication?: { state?: string; code?: string };
 };
 
 async function readPeopleLink(opts: IdCliOpts): Promise<PeopleLink | undefined> {
-  const result = (await callGatewayFromCli(
+  const raw = await callGatewayFromCli(
     "openclawId.people",
     opts,
     {},
-    {
-      scopes: ["operator.read"],
-    },
-  )) as { link?: PeopleLink };
+    { scopes: ["operator.read"] },
+  );
+  // SAFETY: openclawId.people answers { link } with the owner link view (owner-link-view.ts).
+  const result = raw as { link?: PeopleLink };
   return result.link;
 }
 
@@ -78,14 +87,14 @@ function write(opts: IdCliOpts, json: unknown, text: string) {
 }
 
 async function runStatus(opts: IdCliOpts) {
-  const status = (await callGatewayFromCli(
+  const raw = await callGatewayFromCli(
     "openclawId.status",
     opts,
     {},
-    {
-      scopes: ["operator.read"],
-    },
-  )) as KeysStatus;
+    { scopes: ["operator.read"] },
+  );
+  // SAFETY: openclawId.status answers the status shape KeysStatus reads a subset of.
+  const status = raw as KeysStatus;
   const link = status.link?.linked ? await readPeopleLink(opts) : undefined;
   const lines = [describeKeysState(status.status)];
   if (status.link?.hostname) {
@@ -94,9 +103,8 @@ async function runStatus(opts: IdCliOpts) {
   if (link?.binding) {
     lines.push(
       `Binding: ${link.binding.bindingSeq} (Discovery has ${link.binding.publishedBindingSeq})`,
-      // SAFETY: the Gateway reports the bound keys in their canonical text form.
-      `Endpoint key: ${await displayKey(link.binding.kSrv as `iroh:${string}`)}`,
-      `Gateway key: ${await displayKey(link.binding.kGw as `ed25519:${string}`)}`,
+      `Endpoint key: ${await displayKey(link.binding.kSrv)}`,
+      `Gateway key: ${await displayKey(link.binding.kGw)}`,
     );
   }
   if (link?.publication?.state) {
@@ -147,13 +155,9 @@ async function runRebind(opts: RebindOpts) {
       return;
     }
   }
+  const raw = await authority(opts, { action: "rebind_commit", binding: signed.binding });
   // SAFETY: rebind_commit answers { ok, bindingSeq }.
-  const committed = (await authority(opts, {
-    action: "rebind_commit",
-    binding: signed.binding,
-  })) as {
-    bindingSeq: number;
-  };
+  const committed = raw as { bindingSeq: number };
   const published = await waitForPublication(opts, committed.bindingSeq);
   write(
     opts,
