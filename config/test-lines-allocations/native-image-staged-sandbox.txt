@@ -1,2 +1,2 @@
 # A staged sandbox copy stays readable when a workspace also prepares turn attachments.
-31
+32
