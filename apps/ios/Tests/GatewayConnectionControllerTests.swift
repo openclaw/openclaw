@@ -324,6 +324,24 @@ private func pendingHandoffDiagnostic(
         #expect(!appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == nil)
     }
+
+    @Test @MainActor func `node echo of an operator rate limit stops reconnect attempts`() throws {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let rateLimited = GatewayConnectAuthError(
+            message: "too many failed authentication attempts",
+            detailCode: "AUTH_RATE_LIMITED",
+            canRetryWithDeviceToken: false)
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: rateLimited))
+        appModel.applyOperatorGatewayConnectionProblem(problem)
+        #expect(appModel.gatewayAutoReconnectEnabled)
+
+        let applied = appModel._test_applyNodeGatewayConnectionError(rateLimited)
+
+        #expect(applied == problem)
+        #expect(!appModel.gatewayAutoReconnectEnabled)
+        #expect(!appModel.gatewayPairingPaused)
+    }
 }
 
 @Suite(.serialized) struct GatewayConnectionControllerTests {
