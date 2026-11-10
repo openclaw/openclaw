@@ -128,7 +128,6 @@ final class LocalSocketServer: @unchecked Sendable {
     private let logger: Logger
     private let socketPath: String
     private let acceptClient: @Sendable (Int32) -> (client: Int32, error: Int32)
-    private let resourceBackoff: @Sendable () async throws -> Void
     private let stateLock = NSLock()
     private var openedSocket: OpenedSocket?
     private var acceptTask: Task<Void, Never>?
@@ -142,15 +141,11 @@ final class LocalSocketServer: @unchecked Sendable {
         acceptClient: @escaping @Sendable (Int32) -> (client: Int32, error: Int32) = { fd in
             let client = Darwin.accept(fd, nil, nil)
             return (client, client < 0 ? errno : 0)
-        },
-        resourceBackoff: @escaping @Sendable () async throws -> Void = {
-            try await Task.sleep(for: .milliseconds(100))
         })
     {
         self.socketPath = socketPath
         self.logger = logger
         self.acceptClient = acceptClient
-        self.resourceBackoff = resourceBackoff
     }
 
     var isListening: Bool {
@@ -267,7 +262,7 @@ final class LocalSocketServer: @unchecked Sendable {
                 {
                     // Avoid spinning while descriptors or memory are short, or no connection is ready.
                     do {
-                        try await self.resourceBackoff()
+                        try await Task.sleep(for: .milliseconds(100))
                     } catch {
                         break
                     }

@@ -4,66 +4,100 @@ import OSLog
 import Testing
 @testable import OpenClaw
 
+@Suite(.testWaitLimit)
 struct LocalSocketServerTests {
     @Test(arguments: [EINTR, ECONNABORTED, EMFILE, ENFILE, ENOMEM, EAGAIN])
-    func transientAcceptErrorsRetry(error: Int32) async throws {
-        let observations = try await Self.runAcceptScript(firstError: error)
-        #expect(observations.calls == 2)
-        #expect(observations.backoffs == ([EMFILE, ENFILE, ENOMEM, EAGAIN].contains(error) ? 1 : 0))
+    func transientAcceptErrorsRecoverClientRequests(error: Int32) async throws {
+        let script = AcceptScript(firstError: error)
+        try await Self.withServer(acceptClient: { script.accept($0) }) { server, socketPath in
+            try #require(await server.start(handler: { handle in
+                do {
+                    try configureSocketTimeouts(handle.fileDescriptor, timeoutMs: 1000)
+                    let request = try readLineFromSocket(handle.fileDescriptor, maxBytes: 128)
+                    #expect(request == "\"ping\"")
+                    try handle.write(contentsOf: Data("\"pong\"\n".utf8))
+                } catch {
+                    Issue.record(error)
+                }
+            }, onUnexpectedStop: { Issue.record("Listener stopped after a recoverable error") }))
+            let response = try await ExecApprovalsSocketTestSupport.roundTrip(
+                socketPath: socketPath, message: "ping", response: String.self)
+            #expect(response == "pong")
+            #expect(server.isListening)
+        }
+    }
+
+    @Test
+    func stopDuringResourceShortageReleasesSocket() async throws {
+        let failed = AsyncTestGate()
+        try await Self.withServer(acceptClient: { _ in
+            // Keep resource pressure active; the listener uses its real backoff until stopped.
+            failed.open()
+            return (-1, EMFILE)
+        }) { server, socketPath in
+            try #require(await server.start(handler: { _ in }, onUnexpectedStop: {
+                Issue.record("Resource shortage stopped the listener unexpectedly")
+            }))
+            try await failed.wait("resource shortage")
+            await server.stop().value
+            #expect(!server.isListening)
+            #expect(try ExecApprovalsSocketPathGuard.pathKind(at: socketPath) == .missing)
+            let replacement = LocalSocketServer(
+                socketPath: socketPath, logger: Logger(subsystem: "ai.openclaw.tests", category: "LocalSocketServer"))
+            let restarted = await replacement.start(handler: { _ in }, onUnexpectedStop: {})
+            await replacement.stop().value
+            #expect(restarted)
+        }
     }
 
     @Test
     func fatalAcceptErrorStopsListener() async throws {
-        let observations = try await Self.runAcceptScript(firstError: EBADF)
-        #expect(observations.calls == 1)
-        #expect(observations.backoffs == 0)
+        let stopped = AsyncTestGate()
+        try await Self.withServer(acceptClient: { _ in (-1, EBADF) }) { server, socketPath in
+            try #require(await server.start(handler: { _ in }, onUnexpectedStop: { stopped.open() }))
+            try await stopped.wait("fatal accept error shutdown")
+            #expect(!server.isListening)
+            #expect(try ExecApprovalsSocketPathGuard.pathKind(at: socketPath) == .missing)
+        }
     }
 
-    private static func runAcceptScript(firstError: Int32) async throws -> (calls: Int, backoffs: Int) {
+    private static func withServer(
+        acceptClient: @escaping @Sendable (Int32) -> (client: Int32, error: Int32),
+        operation: (LocalSocketServer, String) async throws -> Void) async throws
+    {
         let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let script = AcceptScript(firstError: firstError)
-        let stopped = AsyncTestGate()
+        let socketPath = root.appendingPathComponent("listener.sock").path
         let server = LocalSocketServer(
-            socketPath: root.appendingPathComponent("listener.sock").path,
+            socketPath: socketPath,
             logger: Logger(subsystem: "ai.openclaw.tests", category: "LocalSocketServer"),
-            acceptClient: { fd in script.accept(fd) },
-            resourceBackoff: { script.recordBackoff() })
-        let started = await server.start(handler: { _ in }, onUnexpectedStop: { stopped.open() })
-        if started {
-            await stopped.wait()
+            acceptClient: acceptClient)
+        do {
+            try await operation(server, socketPath)
+        } catch {
+            await server.stop().value
+            throw error
         }
         await server.stop().value
-        try #require(started)
-        #expect(!server.isListening)
-        return script.observations
     }
 }
 
 private final class AcceptScript: @unchecked Sendable {
     private let lock = NSLock()
-    private let firstError: Int32
-    private var calls = 0
-    private var backoffs = 0
+    private var firstError: Int32?
 
     init(firstError: Int32) {
         self.firstError = firstError
     }
 
-    func accept(_: Int32) -> (client: Int32, error: Int32) {
-        self.lock.withLock {
-            self.calls += 1
-            // A terminal error after the injected error makes both the original
-            // and repaired loops finish without timers or a blocking accept.
-            return (-1, self.calls == 1 ? self.firstError : EBADF)
+    func accept(_ fd: Int32) -> (client: Int32, error: Int32) {
+        if let error = self.lock.withLock({
+            defer { self.firstError = nil }
+            return self.firstError
+        }) {
+            return (-1, error)
         }
-    }
-
-    func recordBackoff() {
-        self.lock.withLock { self.backoffs += 1 }
-    }
-
-    var observations: (calls: Int, backoffs: Int) {
-        self.lock.withLock { (self.calls, self.backoffs) }
+        let client = Darwin.accept(fd, nil, nil)
+        return (client, client < 0 ? errno : 0)
     }
 }
