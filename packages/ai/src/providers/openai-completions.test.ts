@@ -474,7 +474,7 @@ describe("OpenAI-compatible completions params", () => {
     const serialized = JSON.stringify(messages);
     expect(serialized).not.toContain("OPENCLAW_CACHE_BOUNDARY");
     expect(serialized).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
-    // The breakpoint still lands on the stable prefix, and nothing is relocated.
+    // Opening turns checkpoint both the stable prefix and shared guidance without relocating facts.
     expect(messages[0]).toEqual({
       role: "system",
       content: [
@@ -485,7 +485,12 @@ describe("OpenAI-compatible completions params", () => {
         },
         {
           type: "text",
-          text: "\nReactions guidance\n## Runtime\nRuntime: session=alpha",
+          text: "\nReactions guidance",
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: "\n## Runtime\nRuntime: session=alpha",
         },
       ],
     });

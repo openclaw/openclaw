@@ -385,6 +385,15 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: ["test/unknown-boundary.test.ts"],
       preset: "full",
     },
+    {
+      configs: ["test/vitest/vitest.commands.config.ts"],
+      files: ["src/commands/doctor-maintenance.stopped-systemd.test.ts"],
+      sibling: {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        includePatterns: ["src/flows/doctor-health.update-schema.test.ts"],
+      },
+      preset: "runtime",
+    },
     { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
     { configs: [gatewayDatabaseConfig], files: null, preset: "full" },
     { configs: [gatewayDatabaseConfig], files: undefined, preset: "full" },
@@ -454,6 +463,19 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     { extra: [], args: [], jobArgs: undefined, preset: "runtime" },
+    {
+      targets: [
+        "src/flows/doctor-health.update-schema.test.ts",
+        "src/commands/doctor-config-preflight.container-upgrade.test.ts",
+        "src/commands/doctor-maintenance.schema-preflight.test.ts",
+        "src/commands/doctor-maintenance.stopped-systemd.test.ts",
+        "src/commands/doctor-plugin-package-consent.test.ts",
+        "test/scripts/type-suppression-inventory.test.ts",
+      ],
+      args: [],
+      jobArgs: undefined,
+      preset: "runtime",
+    },
     {
       targets: [
         "src/config/io.load-async.test.ts",
