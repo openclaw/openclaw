@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
@@ -91,6 +92,7 @@ function earlyRuntimeInput(
     scheduler,
     getCronStorePath: () => "/synthetic/cron/jobs.json",
     getRuntimeConfig: () => ({}) as never,
+    getPluginMetadataSnapshot: () => undefined,
     ...overrides,
   };
 }
@@ -167,6 +169,7 @@ describe("startGatewayEarlyRuntime", () => {
 
   it("registers skills changes before readiness and joins discovery during maintenance", async () => {
     const config = { skills: { load: { watch: false } } };
+    let metadata = createEmptyPluginMetadataSnapshot("/initial");
     const scanStarted = createDeferredCore();
     const scanFinished = createDeferredCore();
     mocks.refreshSkillsDiscovery.mockImplementationOnce(async () => {
@@ -174,16 +177,24 @@ describe("startGatewayEarlyRuntime", () => {
       await scanFinished.promise;
     });
 
-    const earlyRuntime = await startRuntime({ getRuntimeConfig: () => config });
+    const earlyRuntime = await startRuntime({
+      getRuntimeConfig: () => config,
+      getPluginMetadataSnapshot: () => metadata,
+    });
     expect(mocks.refreshSkillsDiscovery).not.toHaveBeenCalled();
     expect(mocks.registerSkillsChangeListener).toHaveBeenCalledOnce();
+    // Delayed discovery reads the current owner, not early-startup metadata.
+    metadata = createEmptyPluginMetadataSnapshot("/replacement");
     const starting = earlyRuntime.startMaintenance({});
     await scanStarted.promise;
     expect(mocks.startGatewayMaintenanceTimers).not.toHaveBeenCalled();
     scanFinished.resolve();
     await starting;
 
-    expect(mocks.refreshSkillsDiscovery).toHaveBeenCalledExactlyOnceWith({ config });
+    expect(mocks.refreshSkillsDiscovery).toHaveBeenCalledExactlyOnceWith({
+      config,
+      pluginMetadataSnapshot: metadata,
+    });
     expect(mocks.startGatewayDiscovery.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
       mocks.setSkillsRemoteRegistry.mock.invocationCallOrder[0] ?? -Infinity,
     );

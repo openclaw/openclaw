@@ -618,6 +618,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           const hasTerminalAgentError =
             dispatchResult.collaborativeSteeringRefused ||
             (hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply));
+          await dispatchErrorLifecycle.settleTerminalPersistence();
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             if (hasTerminalAgentError && !dispatchResult.collaborativeSteeringRefused) {
               await dispatchErrorLifecycle.recordUnstartedFailure({

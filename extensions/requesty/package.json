@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/requesty-provider",
-  "version": "2026.11.2",
+  "version": "2026.11.3",
   "description": "OpenClaw Requesty provider plugin.",
   "type": "module",
   "devDependencies": {

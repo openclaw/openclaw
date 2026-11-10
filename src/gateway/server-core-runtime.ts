@@ -166,6 +166,7 @@ export async function startGatewayCoreRuntime(input: {
             nodeRegistry,
             swapDiscovery: kernel.swapDiscovery,
             pluginRegistry: pluginRuntime.registry,
+            getPluginMetadataSnapshot: () => runtime.pluginMetadataSnapshot,
             broadcast,
             maintenance: {
               nodeSendToAllSubscribed,
