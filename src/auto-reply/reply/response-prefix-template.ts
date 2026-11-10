@@ -57,7 +57,7 @@ export function resolveModelResponsePrefixContext(params: {
 }
 
 /** Strips the provider prefix, date suffix, and trailing -latest tag for display. */
-export function extractShortModelName(fullModel: string): string {
+function extractShortModelName(fullModel: string): string {
   const slash = fullModel.lastIndexOf("/");
   const modelPart = slash >= 0 ? fullModel.slice(slash + 1) : fullModel;
 

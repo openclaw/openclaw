@@ -1301,7 +1301,7 @@ it.each([false, true])("respects a prepared catalog absence: %s", (preparedAbsen
 it.each<{
   name: string;
   options: Parameters<typeof createOpenClawTools>[0];
-  action: Record<string, unknown>;
+  action: { target?: string; message: string };
   expected: Record<string, unknown>;
 }>([
   {
@@ -1342,7 +1342,7 @@ it.each<{
     expected: { responsePrefixContext: { provider: "p", model: "m", thinkingLevel: "high" } },
   },
 ])("forwards $name through createOpenClawTools", async ({ options, action, expected }) => {
-  mockSendResult({ channel: "slack", to: String(action.target ?? "channel:C123") });
+  mockSendResult({ channel: "slack", to: action.target ?? "channel:C123" });
   registerPlugins(createChannelPlugin({ id: "slack", actions: ["send"] }));
   const tool = createOpenClawTools({ config: {}, agentChannel: "slack", ...options }).find(
     (candidate) => candidate.name === "message",
