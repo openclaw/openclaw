@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import { createSignal } from "solid-js";
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
@@ -12,6 +11,7 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubManualIntersectionObserver } from "./chat-media-observer.test-support.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
+import { projectMessageMedia } from "./chat-message-media-projection.ts";
 import {
   imageResponse,
   managedSource as managedImageSource,
@@ -21,7 +21,6 @@ import {
 import {
   isChatMediaResourceCurrent,
   observeChatMediaResource,
-  projectMessageMedia,
   releaseChatMediaResourceOwner,
   schedulePairingQrExpiryRefresh,
   type ImageBlock,
