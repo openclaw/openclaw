@@ -12,6 +12,7 @@ const ADVERTISED_HEAD = /^ref: refs\/heads\/(.+)\tHEAD\r?$(?:\n([a-f0-9]{40,64})
 export async function fetchRemoteDefault(
   repoRoot: string,
   options: NonNullable<Parameters<typeof runGit>[2]>,
+  remote = "origin",
 ): Promise<ResolvedWorktreeBase & { branch: string }> {
   const cached = await runGit(
     repoRoot,
@@ -21,7 +22,7 @@ export async function fetchRemoteDefault(
   if (cached.cleanup === "uncertain") {
     throw new CommandProcessCleanupError();
   }
-  const advertised = await runGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"], {
+  const advertised = await runGit(repoRoot, ["ls-remote", "--symref", remote, "HEAD"], {
     ...options,
     timeoutMs: 30_000,
   });
@@ -70,7 +71,7 @@ export async function fetchRemoteDefault(
       "--no-tags",
       "--refmap=",
       ...(cachedCommit ? [`--negotiation-tip=${cachedCommit}`] : []),
-      "origin",
+      remote,
       `+refs/heads/${branch}:${remoteRef}`,
     ];
     const fetchOptions = { ...options, timeoutMs: 60_000 };
