@@ -156,26 +156,29 @@ describe("buildSandboxCreateArgs", () => {
     }
 
     it("admits a bind under a configured root with no dangerous override", () => {
-      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/shared"] }, [
-        "/srv/shared/team:/team:rw",
-      ]);
+      const cfg = createSandboxConfig({
+        allowedBindSources: ["/srv/shared"],
+        binds: ["/srv/shared/team:/team:rw"],
+      });
       expect(cfg.dangerouslyAllowExternalBindSources).toBeUndefined();
       expect(() => buildWithOwnRoots("openclaw-sbx-allowlisted", cfg)).not.toThrow();
     });
 
     it("keeps every non-allowlisted source blocked while an allowlist is in force", () => {
-      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/shared"] }, [
-        "/opt/external:/data:rw",
-      ]);
+      const cfg = createSandboxConfig({
+        allowedBindSources: ["/srv/shared"],
+        binds: ["/opt/external:/data:rw"],
+      });
       expect(() => buildWithOwnRoots("openclaw-sbx-allowlist-other", cfg)).toThrow(
         /outside allowed roots.*allowedBindSources/,
       );
     });
 
     it("leaves the gate off when the caller supplies no roots at all", () => {
-      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/shared"] }, [
-        "/opt/external:/data:rw",
-      ]);
+      const cfg = createSandboxConfig({
+        allowedBindSources: ["/srv/shared"],
+        binds: ["/opt/external:/data:rw"],
+      });
       expect(() =>
         buildSandboxCreateArgs({
           name: "openclaw-sbx-gate-off",
@@ -186,9 +189,10 @@ describe("buildSandboxCreateArgs", () => {
     });
 
     it("rejects a configured filesystem root at the runtime boundary", () => {
-      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/.."] }, [
-        "/srv/shared/team:/team:rw",
-      ]);
+      const cfg = createSandboxConfig({
+        allowedBindSources: ["/srv/.."],
+        binds: ["/srv/shared/team:/team:rw"],
+      });
       expect(() => buildWithOwnRoots("openclaw-sbx-root-allowlist", cfg)).toThrow(
         /names a filesystem root/,
       );
@@ -199,9 +203,10 @@ describe("buildSandboxCreateArgs", () => {
       () => {
         const rootAlias = path.join(tempDirs.make("bind-root-alias-"), "root");
         fs.symlinkSync("/", rootAlias, "dir");
-        const cfg = createSandboxConfig({ allowedBindSources: [rootAlias] }, [
-          "/srv/shared/team:/team:rw",
-        ]);
+        const cfg = createSandboxConfig({
+          allowedBindSources: [rootAlias],
+          binds: ["/srv/shared/team:/team:rw"],
+        });
         expect(() => buildWithOwnRoots("openclaw-sbx-root-alias", cfg)).toThrow(
           /resolves to filesystem root/,
         );

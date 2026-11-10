@@ -288,9 +288,8 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
   ] as const)(
     "preserves the container and refuses it when $revoked is revoked (hot=$hot, requireCurrentConfig=$requireCurrentConfig)",
     async ({ revoked, hot, requireCurrentConfig }) => {
-      const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
       const sharedDir = tempDirs.make("openclaw-docker-shared-");
-      const cfg = createSandboxConfig([], [`${sharedDir}:/team:rw`], "rw", {});
+      cfg = createSandboxConfig([], [`${sharedDir}:/team:rw`], "rw", {});
       const grantedDocker =
         revoked === "allowedBindSources"
           ? { ...cfg.docker, allowedBindSources: [sharedDir] }
@@ -338,9 +337,8 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
   );
 
   it("reuses a hot container while its named root is still allowed", async () => {
-    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
     const sharedDir = tempDirs.make("openclaw-docker-shared-");
-    const cfg = createSandboxConfig(["1.1.1.1"], [`${sharedDir}:/team:rw`], "rw", {});
+    cfg = createSandboxConfig(["1.1.1.1"], [`${sharedDir}:/team:rw`], "rw", {});
     cfg.docker.allowedBindSources = [sharedDir];
     const staleHash = await computeTestSandboxHash({
       docker: { ...cfg.docker, dns: ["8.8.8.8"] },
