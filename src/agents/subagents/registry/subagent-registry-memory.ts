@@ -265,9 +265,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     row: SubagentRunRecord,
     source: SubagentCompletionCustody["authority"],
     requesterRunInstance?: OperationalRunInstanceRef,
-    requesterCompletion: SubagentCompletionCustody["requesterCompletion"] = requesterRunInstance
-      ? { runId: requesterRunInstance.runId }
-      : undefined,
+    requesterCompletion?: SubagentCompletionCustody["requesterCompletion"],
   ) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
@@ -283,11 +281,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     this.releaseCompletionAuthority(entry);
     this.requiredCompletionEntries.add(key);
     this.retiredCompletionEntries.delete(key);
+    // Spawn records identify the requester before a claim captures its operational instance.
+    // Completion tracking does not grant that requester execution authority.
+    const requesterRunId = requesterRunInstance?.runId ?? entry.requesterTurnRunId;
     const custody: SubagentCompletionCustody = {
       authority: source,
       entry,
       requesterRunInstance,
-      requesterCompletion,
+      requesterCompletion:
+        requesterCompletion ?? (requesterRunId ? { runId: requesterRunId } : undefined),
       stop: () => source.signal.removeEventListener("abort", revoked),
     };
     const revoked = () => this.releaseCompletionAuthority(custody.entry);

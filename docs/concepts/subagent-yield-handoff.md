@@ -65,8 +65,9 @@ collector that yields now gets. Only a run with no recorded outcome settles as a
 `reason: "yielded_without_result"`. A declared message wait retains its requester
 dependency after its pause notice is consumed. When that requester finishes or
 is released, the completion owner closes the wait with a recorded error, using
-the requester's committed session state. Completion follows an adopted execution
-of the same requester task and retains its committed end when a later turn replaces
+the requester's committed session state. Completion tracks the spawning requester
+from registration, follows an adopted execution of the same task, and retains its
+committed end when a later turn replaces
 the session row. Unrelated pause notices and tool-handoff turns do not
 abandon the waiting child. The sweeper also reconciles waits whose requester ended
 before the child parked.

@@ -456,7 +456,12 @@ it.for(["resume", "followup", "failed-reload"] as const)(
                 ["error", "forbidden", "uncertain", "not_delivered"].includes(
                   String(outcome.status),
                 ),
-                "Retained send replay must not fail before target execution",
+                "Retained send replay must not fail before target execution: " +
+                  JSON.stringify({
+                    status: outcome.status,
+                    reason: outcome.reason,
+                    error: outcome.error,
+                  }),
               ).toBe(false);
               return Promise.all([completed.promise, childAnnouncement.promise]);
             }),
@@ -563,7 +568,16 @@ it.for(["resume", "followup", "failed-reload"] as const)(
         .soft(effects, "Only a healthy reload permits the original continuation")
         .toBe(failReload ? 0 : 1);
       if (failReload) {
-        expect(target).toMatchObject({ runId: original.runId, pauseReason: "sessions_yield" });
+        expect(
+          target,
+          JSON.stringify({
+            runId: target?.runId,
+            requesterTurnRunId: target?.requesterTurnRunId,
+            endedReason: target?.endedReason,
+            pauseReason: target?.pauseReason,
+            outcome: target?.execution.outcome,
+          }),
+        ).toMatchObject({ runId: original.runId, pauseReason: "sessions_yield" });
       } else if (mode === "resume") {
         expect.soft(target).toMatchObject({
           taskRunId: original.taskRunId ?? original.runId,
