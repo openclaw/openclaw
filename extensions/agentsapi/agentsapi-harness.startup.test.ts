@@ -11,7 +11,10 @@ const { createSession } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
 }));
 // Only the initial completed turn is stubbed; stalled continuations use the real session owner.
-vi.mock("./agentsapi-session.js", () => ({ createAgentsApiSession: createSession }));
+vi.mock("./agentsapi-session.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agentsapi-session.js")>()),
+  createAgentsApiSession: createSession,
+}));
 vi.mock("./agentsapi-prompt.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agentsapi-prompt.js")>()),
   buildAgentsApiInstructions: async () => "Fixture instructions",
