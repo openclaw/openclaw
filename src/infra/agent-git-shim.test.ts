@@ -88,6 +88,7 @@ it.skipIf(process.platform === "win32")(
         ["cat-file", "-p", `${missing}:file.txt`],
         ["rev-parse", `${missing}:file.txt`],
         ["rev-parse", `${missing}^{tree}`],
+        ["rev-parse", "--default", `${"0".repeat(40)}^{tree}`, `${missing}:file.txt`],
       ];
       const cases: [string, string, ...string[]][] = [
         ...pythonCommands,
@@ -160,7 +161,7 @@ PY`,
         if (["show", "diff", "blame", "format-patch"].includes(args[0])) {
           expect(result.stdout).toContain("remote content");
         } else if (args[0] === "rev-parse") {
-          expect(result.stdout.trim()).toBe(args[1].endsWith("^{tree}") ? tree : blob);
+          expect(result.stdout.trim()).toBe(args.includes(`${missing}^{tree}`) ? tree : blob);
         } else if (args[0] === "cat-file" && args.includes(`${missing}:file.txt`)) {
           expect(result.stdout).toContain("remote content");
         } else if (["restore", "checkout", "cherry-pick"].includes(args[0])) {
@@ -182,6 +183,9 @@ PY`,
           encoding: "utf8",
         });
       await fs.writeFile(path.join(linked, missing), "literal filename\n");
+      const unusedDefault = invoke("rev-parse", "--default", `${"0".repeat(40)}^{tree}`, "HEAD");
+      expect(unusedDefault.status, unusedDefault.stderr).toBe(0);
+      expect(unusedDefault.stdout.trim()).toBe(base);
       for (const args of [
         ["rev-parse", missing],
         ["rev-parse", "--git-path", `${missing}:cache`],
