@@ -117,6 +117,7 @@ export async function runAnthropicStreamLifecycle(params: {
     );
     await notifyProviderHttpResponse({ options: prepared.options, response, model });
     await prepared.checkResponse?.(response);
+    let terminalStopReason: string | undefined;
     await (async () => {
       const reducerOptions = prepared.options ?? {};
       const isOAuthToken = prepared.isOAuthToken;
@@ -533,6 +534,7 @@ export async function runAnthropicStreamLifecycle(params: {
             const usage = asOptionalObjectRecord(event.usage);
             if (typeof delta?.stop_reason === "string" && delta.stop_reason) {
               sawStopReason = true;
+              terminalStopReason = delta.stop_reason;
               const iteration = Array.isArray(usage?.iterations)
                 ? asOptionalObjectRecord(usage.iterations.at(-1))
                 : undefined;
@@ -571,7 +573,12 @@ export async function runAnthropicStreamLifecycle(params: {
           throw new Error(output.errorMessage ?? "An unknown error occurred");
         }
         if ([...blockIndexes.values()].some((index) => blocks[index]?.type === "toolCall")) {
-          throw new Error("Provider completed stream with an incomplete tool call");
+          // An output cap that cuts a tool call is a configuration limit, not a provider defect.
+          throw new Error(
+            terminalStopReason === "max_tokens"
+              ? `Provider completed stream with an incomplete tool call: output token limit reached (max_tokens ${wireBody.max_tokens}); raise the model's maxTokens`
+              : "Provider completed stream with an incomplete tool call",
+          );
         }
         // Proxies may omit message_stop, but EOF cannot complete a started response
         // without a terminal fact. Preserve their existing empty/ping-only behavior.
