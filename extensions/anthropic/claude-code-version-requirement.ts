@@ -1,22 +1,28 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { parseClaudeCodeVersion } from "./cli-shared.js";
 
 type StoredRequirement = { version: string; learnedAt: number };
+
+/** The two plugin-state operations this owner needs; the plugin passes its keyed store. */
+export type ClaudeCodeVersionStore = {
+  lookup(key: string): Promise<StoredRequirement | undefined>;
+  register(key: string, value: StoredRequirement): Promise<unknown>;
+};
 
 const KEY = "anthropic-oauth";
 
 function newer(a: string | undefined, b: string | undefined): string | undefined {
   const pa = parseClaudeCodeVersion(a)?.split(".").map(Number);
   const pb = parseClaudeCodeVersion(b)?.split(".").map(Number);
-  if (!pa) {
-    return pb ? b : undefined;
+  if (!pa || !pb) {
+    return pa ? a : pb ? b : undefined;
   }
-  if (!pb) {
-    return a;
+  for (const [index, part] of pa.entries()) {
+    const other = pb[index] ?? 0;
+    if (part !== other) {
+      return part > other ? a : b;
+    }
   }
-  const index = pa.findIndex((part, i) => part !== pb[i]);
-  return index !== -1 && pb[index]! > pa[index]! ? b : a;
+  return a;
 }
 
 /**
@@ -24,19 +30,16 @@ function newer(a: string | undefined, b: string | undefined): string | undefined
  * state so a restarted Gateway or a new CLI process starts at it instead of
  * being rejected once more. Combined with the installed CLI version, newest wins.
  */
-export function createClaudeCodeVersionRequirement(
-  api: OpenClawPluginApi,
-  resolveInstalledVersion: () => Promise<string | undefined>,
-) {
-  let store: PluginStateKeyedStore<StoredRequirement, 2> | undefined;
-  const open = () =>
-    (store ??= api.runtime.state.openKeyedStoreV2<StoredRequirement>({
-      namespace: "claude-code-version",
-      maxEntries: 1,
-    }));
+export function createClaudeCodeVersionRequirement(params: {
+  openStore: () => ClaudeCodeVersionStore;
+  resolveInstalledVersion: () => Promise<string | undefined>;
+  warn: (message: string) => void;
+}) {
+  let store: ClaudeCodeVersionStore | undefined;
+  const open = () => (store ??= params.openStore());
   let learned: Promise<string | undefined> | undefined;
   const warn = (error: unknown) =>
-    api.logger.warn?.(`anthropic: Claude Code version requirement state: ${String(error)}`);
+    params.warn(`anthropic: Claude Code version requirement state: ${String(error)}`);
   const readLearned = () =>
     (learned ??= Promise.resolve()
       .then(() => open().lookup(KEY))
@@ -48,7 +51,7 @@ export function createClaudeCodeVersionRequirement(
         },
       ));
   return {
-    resolveVersion: async () => newer(await resolveInstalledVersion(), await readLearned()),
+    resolveVersion: async () => newer(await params.resolveInstalledVersion(), await readLearned()),
     record: (version: string) => {
       learned = Promise.resolve(version);
       void Promise.resolve()

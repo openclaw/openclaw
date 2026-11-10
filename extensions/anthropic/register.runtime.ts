@@ -641,7 +641,12 @@ export function buildAnthropicProvider(): ProviderPlugin {
 
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   const version = createClaudeCodeVersionProbe(api);
-  const identity = createClaudeCodeVersionRequirement(api, version.resolveVersion);
+  const identity = createClaudeCodeVersionRequirement({
+    openStore: () =>
+      api.runtime.state.openKeyedStoreV2({ namespace: "claude-code-version", maxEntries: 1 }),
+    resolveInstalledVersion: version.resolveVersion,
+    warn: (message) => api.logger.warn?.(message),
+  });
   api.registerCliBackend(buildAnthropicCliBackend(version));
   api.registerProvider({
     ...buildAnthropicProvider(),

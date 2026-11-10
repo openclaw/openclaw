@@ -20,6 +20,7 @@ import {
   supportsClaudeNativeXhighEffort,
   usesClaude5RequestContract,
 } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { clampThinkingLevel } from "../model-utils.js";
 import type { AnthropicEffort } from "../provider-options.js";
@@ -73,8 +74,13 @@ function isNewerClaudeCodeVersion(candidate: string | undefined, current: string
   if (!next || !base) {
     return false;
   }
-  const index = next.findIndex((part, i) => part !== base[i]);
-  return index !== -1 && next[index]! > base[index]!;
+  for (const [index, part] of next.entries()) {
+    const other = base[index] ?? 0;
+    if (part !== other) {
+      return part > other;
+    }
+  }
+  return false;
 }
 
 function currentClaudeCodeVersionFloor(): string {
@@ -86,30 +92,19 @@ function currentClaudeCodeVersionFloor(): string {
  * claude_code_version_too_old rejection (SDK APIError or transport error body).
  */
 export function readRequiredClaudeCodeVersion(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null) {
+  if (!isRecord(error) || error.status !== 400) {
     return undefined;
   }
-  const record = error as { status?: unknown; error?: unknown; errorBody?: unknown };
-  if (record.status !== 400) {
+  const body = error.errorBody ?? error.error;
+  const payload = isRecord(body) && isRecord(body.error) ? body.error : body;
+  if (!isRecord(payload) || typeof payload.message !== "string") {
     return undefined;
   }
-  const body = record.errorBody ?? record.error;
-  const payload =
-    typeof body === "object" && body !== null && "error" in body
-      ? (body as { error?: unknown }).error
-      : body;
-  if (typeof payload !== "object" || payload === null) {
+  const details = payload.details;
+  if (!isRecord(details) || details.error_code !== "claude_code_version_too_old") {
     return undefined;
   }
-  const { message, details } = payload as { message?: unknown; details?: unknown };
-  const code =
-    typeof details === "object" && details !== null
-      ? (details as { error_code?: unknown }).error_code
-      : undefined;
-  if (code !== "claude_code_version_too_old" || typeof message !== "string") {
-    return undefined;
-  }
-  const required = message.match(/version (\d+\.\d+\.\d+) or newer is required/)?.[1];
+  const required = payload.message.match(/version (\d+\.\d+\.\d+) or newer is required/)?.[1];
   return parseClaudeCodeVersion(required) ? required : undefined;
 }
 
@@ -147,11 +142,9 @@ export function buildAnthropicClaudeCodeIdentity(
       }
     }
   }
-  let version = currentClaudeCodeVersionFloor();
+  const floor = currentClaudeCodeVersionFloor();
   const candidate = headers.get("user-agent")?.match(/^claude-cli\/(\d+\.\d+\.\d+)$/)?.[1];
-  if (isNewerClaudeCodeVersion(candidate, version)) {
-    version = candidate!;
-  }
+  const version = candidate && isNewerClaudeCodeVersion(candidate, floor) ? candidate : floor;
   headers.set("user-agent", `claude-cli/${version}`);
   return { headers: headersToRecord(headers), version };
 }
