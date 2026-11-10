@@ -298,33 +298,11 @@ export async function prepareProjectCheckoutDefaultBase(
   input: { target: string; url: string },
   options: ProjectCloneOptions,
 ): Promise<{ baseRef: string; baseCommit: string }> {
-  const cached = await runProjectCheckoutGit(input, options, [
-    "symbolic-ref",
-    "--quiet",
-    "refs/remotes/origin/HEAD",
-  ]);
+  const filter = await readProjectCheckoutFilter(input, options);
   return await withProjectCheckoutTransport(input, options, async (staging, stagingOptions) => {
-    const seed = async (args: string[]) =>
-      requireGitCommandOutput(
-        "git prepare project default base",
-        await runProjectCheckoutGit({ target: staging }, stagingOptions, args),
-      );
-    // Only the cached default is needed for the existing remote-failure fallback.
-    if (cached.termination === "exit" && cached.code === 0) {
-      const ref = cached.stdout.trim();
-      const commit = await runProjectCheckoutGit(
-        input,
-        options,
-        ["rev-parse", "--verify", `${ref}^{commit}`],
-        { env: { GIT_NO_LAZY_FETCH: "1" } },
-      );
-      if (commit.termination === "exit" && commit.code === 0) {
-        await seed(["update-ref", ref, commit.stdout.trim()]);
-      }
-      await seed(["symbolic-ref", "refs/remotes/origin/HEAD", ref]);
-    }
+    // The resolver owns source-ref publication; only transport uses clean metadata.
     const base = await fetchRemoteDefault(
-      staging,
+      input.target,
       {
         env: {
           ...cloneCommandEnv(input.url, options.token, options.env ?? process.env),
@@ -335,7 +313,7 @@ export async function prepareProjectCheckoutDefaultBase(
         beforeRun: options.assertCurrent,
         startRun: options.startRun,
       },
-      input.url,
+      { cwd: staging, remote: input.url, filter },
     );
     await ensureProjectCheckoutCommit({ ...input, commit: base.commit }, options);
     if (base.warning) {
