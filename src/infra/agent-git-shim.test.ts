@@ -64,6 +64,7 @@ it.skipIf(process.platform === "win32")(
       git(root, "init", "--initial-branch=main", origin);
       git(origin, "config", "uploadpack.allowFilter", "true");
       await fs.writeFile(path.join(origin, "file.txt"), "base content\n");
+      await fs.writeFile(path.join(origin, "space name.txt"), "base content\n");
       git(origin, "add", ".");
       git(origin, "commit", "-m", "base");
       for (let index = 0; index < 12; index++) {
@@ -74,6 +75,7 @@ it.skipIf(process.platform === "win32")(
       git(seed, "fetch", "--unshallow", "origin");
       expect(git(seed, "rev-parse", "--is-shallow-repository")).toBe("false");
       await fs.writeFile(path.join(origin, "file.txt"), "remote content\n");
+      await fs.writeFile(path.join(origin, "space name.txt"), "remote content\n");
       git(origin, "commit", "-am", "remote change");
       const missing = git(origin, "rev-parse", "HEAD");
       const blob = git(origin, "rev-parse", "HEAD:file.txt");
@@ -87,6 +89,7 @@ it.skipIf(process.platform === "win32")(
         ["show", `${missing}:file.txt`],
         ["cat-file", "-p", `${missing}:file.txt`],
         ["rev-parse", `${missing}:file.txt`],
+        ["rev-parse", `${missing}:space name.txt`],
         ["rev-parse", `${missing}^{tree}`],
         ["rev-parse", "--default", `${"0".repeat(40)}^{tree}`, `${missing}:file.txt`],
       ];
@@ -94,6 +97,7 @@ it.skipIf(process.platform === "win32")(
         ...pythonCommands,
         ["rev-parse", `${base}...${missing}`],
         ["rev-parse", `${"0".repeat(40)}..${missing}^{tree}`],
+        ["rev-parse", "--revs-only", `${missing}:absent.txt`, `${"0".repeat(40)}^{tree}`],
         ["show", "--cc", `${missing}:file.txt`],
         ["rev-list", "--header", missing, "--max-count=1"],
         ["show", "-U", missing],
@@ -166,6 +170,8 @@ PY`,
           expect(result.stdout.trim()).toBe(`${missing}\n${base}\n^${base}`);
         } else if (args[1] === `${"0".repeat(40)}..${missing}^{tree}`) {
           expect(result.stdout.trim()).toBe(`${tree}\n^${"0".repeat(40)}`);
+        } else if (args.includes(`${missing}:absent.txt`)) {
+          expect(result.stdout.trim()).toBe("");
         } else if (args[0] === "rev-parse") {
           expect(result.stdout.trim()).toBe(args.includes(`${missing}^{tree}`) ? tree : blob);
         } else if (args[0] === "cat-file" && args.includes(`${missing}:file.txt`)) {
@@ -173,7 +179,7 @@ PY`,
         } else if (["restore", "checkout", "cherry-pick"].includes(args[0])) {
           expect(await fs.readFile(path.join(linked, "file.txt"), "utf8")).toBe("remote content\n");
         } else if (args[0] === "ls-tree") {
-          expect(result.stdout.trim()).toBe("file.txt");
+          expect(result.stdout.trim()).toBe("file.txt\nspace name.txt");
         } else if (["log", "merge-base"].includes(args[0])) {
           expect(result.stdout.trim()).toBe(base);
         } else {
@@ -194,6 +200,11 @@ PY`,
       expect(unusedDefault.stdout.trim()).toBe(base);
       for (const args of [
         ["rev-parse", missing],
+        ["rev-parse", "--revs-only", "HEAD", "file.txt", `${"0".repeat(40)}^{tree}`],
+        ["rev-parse", "--revs-only", "HEAD^{commit}", "file.txt", `${"0".repeat(40)}^{tree}`],
+        ["rev-parse", "--revs-only", "HEAD", "", `${"0".repeat(40)}^{tree}`],
+        ["rev-parse", "--revs-only", "HEAD:absent.txt", `${"0".repeat(40)}^{tree}`],
+        ["rev-parse", "--revs-only", "HEAD", "file\nname", `${"0".repeat(40)}^{tree}`],
         ["rev-parse", `${"0".repeat(40)}..HEAD`],
         ["rev-parse", `${"0".repeat(40)}..HEAD^{tree}`],
         ["rev-parse", `^${"0".repeat(40)}`],

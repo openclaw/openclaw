@@ -68,9 +68,13 @@ is_probe() {
         for arg do case $arg in -e|-t) return 0 ;; esac; done
         return 1 ;;
       rev-parse)
+        # Batch records are line-delimited; newline arguments retain native handling.
         prepare_history=1
         shift
-        for arg do case $arg in --verify) return 0 ;; esac; done
+        for arg do
+          case $arg in --verify) return 0 ;; *'
+'*) prepare_history= ;; esac
+        done
         return 1 ;;
       merge-base)
         prepare_history=1
@@ -107,6 +111,30 @@ query_repository() {
     blobless) git "$@" config --get-regexp '^remote\\..*\\.partialclonefilter$' '^blob:none$' >/dev/null 2>&1 ;;
     objects) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec git "$@" cat-file --batch-check='%(objectname) %(objecttype)' 2>/dev/null ;;
     resolve) GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= exec git "$@" rev-parse --verify --end-of-options "$revision" 2>/dev/null ;;
+    revisions)
+      marker='HEAD^{commit}'
+      while :; do
+        case $revisions in *"$marker"*) marker="$marker^{commit}" ;; *) break ;; esac
+      done
+      set -- "$@" rev-parse --revs-only --no-flags --symbolic --end-of-options
+      while IFS= read -r expression; do set -- "$@" "$expression"; done <<EOF
+$revisions
+EOF
+      resolved=$(GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" "$marker" 2>/dev/null) || return 1
+      [ "\${resolved##*
+}" = "$marker" ] ;;
+    revision)
+      if [ -z "$revision_marker" ]; then
+        revision_format=$(git "$@" rev-parse --show-object-format 2>/dev/null) || return 1
+        case $revision_format in
+          sha256) revision_marker=0000000000000000000000000000000000000000000000000000000000000000 ;;
+          *) revision_marker=0000000000000000000000000000000000000000 ;;
+        esac
+      fi
+      resolved=$(GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" rev-parse --revs-only --no-flags --end-of-options "$revision" "$revision_marker" 2>/dev/null) || return 1
+      # A path consumes the marker too; a valid revision leaves it as the last ID.
+      [ "\${resolved##*
+}" = "$revision_marker" ] ;;
     fetch)
       GIT_NO_LAZY_FETCH=1 git "$@" -c fetch.negotiationAlgorithm=consecutive fetch --filter=blob:none --no-tags --no-write-fetch-head --no-auto-maintenance --recurse-submodules=no origin --stdin <<EOF
 $missing
@@ -114,8 +142,30 @@ EOF
       ;;
   esac
 }
+append_revision_roots() {
+  arg=$1
+  traverse=
+  case \${arg%%:*} in
+    *...*) left=\${arg%%...*}; right=\${arg#*...}; traverse=1 ;;
+    *..*) left=\${arg%%..*}; right=\${arg#*..} ;;
+    *) left=$arg; right= ;;
+  esac
+  for revision in "$left" "$right"; do
+    revision=\${revision#^}
+    # Plain endpoints print IDs; three-dot ranges traverse both endpoints.
+    if [ "$verb" = rev-parse ]; then
+      case $revision in *:*|*^*|*~*) ;; *) [ "$traverse" = 1 ] || continue ;; esac
+    fi
+    revision=\${revision%%:*}
+    revision=\${revision%%[~^]*}
+    case $revision in ''|*[[:space:]]*) continue ;; esac
+    revisions="$revisions$revision
+"
+  done
+}
 revision_roots() {
   revisions=
+  revision_separator=
   shift "$global_count"
   verb=$1; shift
   while [ "$#" -gt 0 ]; do
@@ -144,37 +194,23 @@ revision_roots() {
       -*) continue ;;
       *) [ "$verb" != restore ] || continue ;;
     esac
-    traverse=
-    case \${arg%%:*} in
-      *...*) left=\${arg%%...*}; right=\${arg#*...}; traverse=1 ;;
-      *..*) left=\${arg%%..*}; right=\${arg#*..} ;;
-      *) left=$arg; right= ;;
-    esac
-    for revision in "$left" "$right"; do
-      revision=\${revision#^}
-      # Plain endpoints print IDs; three-dot ranges traverse both endpoints.
-      if [ "$verb" = rev-parse ]; then
-        case $revision in *:*|*^*|*~*) ;; *) [ "$traverse" = 1 ] || continue ;; esac
-      fi
-      revision=\${revision%%:*}
-      revision=\${revision%%[~^]*}
-      case $revision in ''|*[[:space:]]*) continue ;; esac
-      revisions="$revisions$revision
-"
-    done
+    if [ "$verb" = rev-parse ]; then
+      revisions="$revisions$revision_separator$arg"
+      revision_separator='
+'
+    else
+      append_revision_roots "$arg"
+    fi
   done
 }
-prepare_commits() {
-  [ "$no_lazy_fetch" != 1 ] || return 0
-  case \${GIT_NO_LAZY_FETCH:-} in 1|true|yes|on) return 0 ;; esac
-  revision_roots "$@"
+prepare_roots() {
+  missing=
   [ -n "$revisions" ] || return 0
   # Inspect raw types so present blob/tree arguments remain ordinary content reads.
   objects=$(query_repository objects "$@" <<EOF
 $revisions
 EOF
   ) || return 0
-  missing=
   while read -r revision kind; do
     [ "$kind" = missing ] || continue
     oid=$(query_repository resolve "$@") || continue
@@ -193,6 +229,28 @@ EOF
   query_repository fetch "$@" && return 0
   echo 'OpenClaw: could not fetch the requested object from origin with history negotiation; command not run. Fetch it explicitly from the remote that owns it, then retry.' >&2
   return 1
+}
+prepare_commits() {
+  revision_marker=
+  [ "$no_lazy_fetch" != 1 ] || return 0
+  case \${GIT_NO_LAZY_FETCH:-} in 1|true|yes|on) return 0 ;; esac
+  revision_roots "$@"
+  [ "$verb" = rev-parse ] || { prepare_roots "$@"; return $?; }
+  [ -n "$revisions" ] || return 0
+  query_repository revisions "$@" && return 0
+  expressions=$revisions
+  while IFS= read -r revision; do
+    query_repository revision "$@" && continue
+    expression=$revision
+    revisions=
+    append_revision_roots "$expression"
+    prepare_roots "$@" || return 1
+    [ -n "$missing" ] || break
+    revision=$expression
+    query_repository revision "$@" || break
+  done <<EOF
+$expressions
+EOF
 }
 check_shared_shallow() {
   # Both the primary checkout and its linked worktrees share this shallow file.
