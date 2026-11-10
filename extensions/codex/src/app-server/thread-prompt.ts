@@ -75,12 +75,12 @@ export function buildCodexConversationTurnInstructions(
   );
   return [
     "## OpenClaw conversation instructions",
-    "Instructions in the following openclaw_conversation_instructions block supersede earlier versions of this block delivered as developer instructions.",
-    "<openclaw_conversation_instructions>",
+    "Instructions in the following conversation_instructions block supersede earlier versions of this block delivered as developer instructions.",
+    "<conversation_instructions>",
     splitCodexExtraSystemPrompt(params).turn ??
       "No additional conversation instructions for this turn.",
     `Current OpenClaw tool bindings for this turn (accepted declarations alone do not grant execution): ${availableNames.length ? availableNames.toSorted().join(", ") : "none"}.`,
-    "</openclaw_conversation_instructions>",
+    "</conversation_instructions>",
   ].join("\n\n");
 }
 
