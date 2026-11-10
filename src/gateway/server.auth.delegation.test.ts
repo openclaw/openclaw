@@ -10,6 +10,8 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-bootstrap-contract.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-user-avatar-route.js";
 import { seedApprovedOperatorReadPairing } from "./server.auth.control-ui.fixtures.test-support.js";
@@ -231,6 +233,33 @@ test("delegated browsers retain profile identity and enforce scopes and current 
         const savedToken = savedDevice?.tokens?.operator?.token;
         expect(savedToken).toBeTruthy();
         const paired = { identityPath: seeded.identityPath, token: savedToken! };
+        // A real competing writer makes first-use profile persistence fail. Even a valid
+        // admin device must not bypass that failure. Keep the production SQLite timeout.
+        const blockingWriter = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath());
+        blockingWriter.exec("BEGIN IMMEDIATE");
+        try {
+          expect(
+            (await readHttp(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, "d", "operator.admin")).status,
+          ).toBe(401);
+          const unavailable = await connect("d", "operator.admin", key, paired);
+          expect(unavailable.connected.ok).toBe(false);
+          expect(unavailable.connected.error?.code).toBe("UNAVAILABLE");
+          expect(unavailable.auth?.deviceToken).toBeUndefined();
+        } finally {
+          blockingWriter.exec("ROLLBACK");
+          blockingWriter.close();
+        }
+        expect(
+          (await readHttp(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, "d", "operator.admin")).status,
+        ).toBe(200);
+        const recovered = await connect("d", "operator.admin");
+        expect(recovered.connected.ok).toBe(true);
+        const recoveredSelf = await rpcReq<UsersSelfResult>(recovered.ws, "users.self", {});
+        expect(recoveredSelf.ok).toBe(true);
+        const recoveredAgain = await connect("d", "operator.admin");
+        expect(
+          (await rpcReq<UsersSelfResult>(recoveredAgain.ws, "users.self", {})).payload?.profile.id,
+        ).toBe(recoveredSelf.payload!.profile.id);
         const bounded = await connect("a", "operator.sessions.write", key, paired);
         expect(bounded.connected.ok).toBe(true);
         expect(bounded.auth?.scopes).toEqual(["operator.sessions.write"]);

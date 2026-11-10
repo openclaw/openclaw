@@ -74,12 +74,15 @@ it("admits the delegated person on HTTP and WS independently of the static roste
 });
 
 it("refuses invalid delegation and alternate credentials", async () => {
-  const { cfg, request } = fixture();
+  const { cfg, request, key, subject } = fixture();
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth });
   const cases = [
     request({ "x-occ-browser-key": undefined }),
     request({ "x-occ-browser-key": randomBytes(32).toString("hex") }),
     request({ "x-occ-identity": "oce:v1:malformed" }),
+    // Node joins repeated custom HTTP headers; neither identity nor credential may be ambiguous.
+    request({ "x-occ-identity": `${subject}, ${subject}` }),
+    request({ "x-occ-browser-key": `${key}, ${key}` }),
     request({ "x-openclaw-scopes": "operator.admin,operator.sessions.write" }),
     request({ "x-openclaw-scopes": undefined }),
     request({}, "203.0.113.20"),
