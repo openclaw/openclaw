@@ -1,0 +1,3 @@
+# Public conversation unavailable: twelve regression-test lines in the existing
+# denied-access matrix protect primary login placement, retained shell, and hidden reload.
+12
