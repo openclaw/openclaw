@@ -13,6 +13,7 @@ it.each([
   ["김민수", "민", "민"],
   ["Kim 민수 Lee", "Lee", "Lee"],
   ["José García".normalize("NFD"), "garcia", "García".normalize("NFD")],
+  ["ΝΙΚΟΣ", "κος", "ΚΟΣ"],
 ])("bolds the matched text of %j for %j", async (name, query, expected) => {
   const container = document.body.appendChild(document.createElement("div"));
   onTestFinished(() => container.remove());

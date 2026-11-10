@@ -7,24 +7,12 @@ export function matchQuery(text: string, query: string): RegExpExecArray | null 
   return needle ? new RegExp(escapeRegExp(needle), "iu").exec(text) : null;
 }
 
-const foldChar = (char: string) => char.normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase();
+const stripMarks = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "");
 
-/**
- * Literal, case- and accent-insensitive match reported as source offsets.
- * Folding changes length (Hangul splits into jamo, decomposed accents drop),
- * so each folded unit keeps the span of the source character it came from.
- */
-export function matchFoldedQuery(
-  text: string,
-  query: string,
-): { start: number; end: number } | null {
-  let needle = "";
-  for (const char of query.trim()) {
-    needle += foldChar(char);
-  }
-  if (!needle) {
-    return null;
-  }
+/** Case- and accent-insensitive search key; lowercases the whole string so final sigma stays contextual. */
+export const foldSearchText = (value: string) => stripMarks(value).toLocaleLowerCase();
+
+function foldWithSpans(text: string, foldChar: (char: string) => string) {
   let folded = "";
   const starts: number[] = [];
   const ends: number[] = [];
@@ -44,6 +32,29 @@ export function matchFoldedQuery(
     }
     offset = next;
   }
+  return { folded, starts, ends };
+}
+
+/**
+ * Literal match on foldSearchText keys, reported as source offsets.
+ * Folding changes length (Hangul splits into jamo, decomposed accents drop),
+ * so each folded unit keeps the span of the source character it came from.
+ */
+export function matchFoldedQuery(
+  text: string,
+  query: string,
+): { start: number; end: number } | null {
+  const needle = foldSearchText(query.trim());
+  if (!needle) {
+    return null;
+  }
+  const stripped = foldWithSpans(text, stripMarks);
+  const lowered = stripped.folded.toLocaleLowerCase();
+  // Whole-string lowercasing keeps the spans unless it changes the length.
+  const { folded, starts, ends } =
+    lowered.length === stripped.folded.length
+      ? { ...stripped, folded: lowered }
+      : foldWithSpans(text, (char) => foldSearchText(char));
   const index = folded.indexOf(needle);
   if (index < 0) {
     return null;

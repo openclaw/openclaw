@@ -13,6 +13,7 @@ describe("matchFoldedQuery", () => {
     ["김민수", "민", "민"],
     ["Kim 민수 Lee", "Lee", "Lee"],
     ["Ada", "  a  ", "A"],
+    ["ΝΙΚΟΣ", "κος", "ΚΟΣ"],
   ])("maps the match in %j for %j back to source text", (text, query, expected) => {
     expect(highlight(text, query)).toBe(expected);
   });

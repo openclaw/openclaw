@@ -8,7 +8,7 @@ import { SessionOwnerChip } from "../../components/solid/session-owner-chip.tsx"
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCreatedActor } from "../../lib/session-owner.ts";
-import { matchFoldedQuery } from "../../lib/text-match.ts";
+import { foldSearchText as fold, matchFoldedQuery } from "../../lib/text-match.ts";
 import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
 
 export type DashboardAuthorOption = {
@@ -20,8 +20,6 @@ export type DashboardAuthorOption = {
 
 // The author search earns its place only once the list is long.
 const AUTHOR_SEARCH_MIN = 8;
-
-const fold = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase();
 
 function authorDisplayName(author: { id: string; label: string }, selfId?: string) {
   return author.id === selfId ? t("dashboardsPage.you") : author.label;
