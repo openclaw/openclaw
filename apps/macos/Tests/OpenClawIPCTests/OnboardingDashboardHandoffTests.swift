@@ -116,7 +116,20 @@ private func transientVerificationErrorResponse(id: String) -> Data {
 @Suite(.serialized)
 @MainActor
 struct OnboardingDashboardHandoffTests {
-    @Test func `fresh inference connection finishes onboarding once`() {
+    @Test func `saving a primary route clears browser completion and restores AI verification`() {
+        let state = AppState(preview: true)
+        state.connectionMode = .remote
+        let view = OnboardingView(state: state, aiSetupRouteIdentityProvider: { nil })
+        view.savedBrowserGatewayName = "Fixture browser Gateway"
+        #expect(!view.pageOrder.contains(view.aiPageIndex))
+        view.didSaveRemoteConnection()
+        #expect(view.savedBrowserGatewayName == nil)
+        #expect(view.pageOrder.contains(view.aiPageIndex))
+        #expect(!view.aiSetup.connected)
+        view.configuredGatewayProbe.invalidate()
+    }
+
+    @Test func `fresh inference waits for the optional native steps before finishing once`() {
         let state = AppState(preview: true)
         state.connectionMode = .local
         var handoffs: [OnboardingDashboardHandoff] = []
@@ -127,6 +140,9 @@ struct OnboardingDashboardHandoffTests {
         view.prepareSystemAgentHandoff()
         view.aiSetup.onConnected?()
 
+        #expect(!view.finishState.didFinish)
+        #expect(handoffs.isEmpty)
+        #expect(view.finish())
         #expect(view.finishState.didFinish)
         // Fresh connections own the remaining first-run steps via the custodian.
         #expect(handoffs == [.custodianOnboarding])
@@ -252,6 +268,9 @@ struct OnboardingDashboardHandoffTests {
             #expect(OnboardingSystemAgentResumeStore.activationOwner(for: "local", defaults: defaults) == nil)
         } else {
             #expect(view.aiSetup.connected)
+            #expect(!view.finishState.didFinish)
+            #expect(handoffs.isEmpty)
+            #expect(view.finish())
             #expect(view.finishState.didFinish)
             #expect(handoffs == [utility ? .custodianOnboarding : .dashboard])
             #expect(OnboardingSystemAgentResumeStore.pendingState(for: "local", defaults: defaults) == .none)
@@ -306,6 +325,9 @@ struct OnboardingDashboardHandoffTests {
 
         #expect(view.aiSetup.connected)
         #expect(view.aiSetup.selectedKind == "existing-model")
+        #expect(!view.finishState.didFinish)
+        #expect(handoffs.isEmpty)
+        #expect(view.finish())
         #expect(view.finishState.didFinish)
         #expect(handoffs == [.dashboard])
         #expect(!view.finish())
@@ -558,6 +580,9 @@ struct OnboardingDashboardHandoffTests {
         } else {
             #expect(aiSetup.connected)
             #expect(!aiSetup.verifiedExistingInference)
+            #expect(!view.finishState.didFinish)
+            #expect(handoffs.isEmpty)
+            #expect(view.finish())
             #expect(view.finishState.didFinish)
             #expect(handoffs == [.custodianOnboarding])
             #expect(OnboardingSystemAgentResumeStore.pendingState(
