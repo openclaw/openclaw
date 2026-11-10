@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256File } from "@openclaw/fs-safe/durability";
 import { root, type Root } from "@openclaw/fs-safe/root";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import {
+  isRecord,
+  isStringArray,
+  isStringRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -46,17 +50,18 @@ const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
 const GENERATED_IGNORE_MODE_MASK = process.platform === "win32" ? 0o200 : 0o7777;
 
 type SyncedSkillsManifest = {
+  destinations: Record<string, string>;
   entryKeys: string[];
   skillRootsFingerprint: string;
   skillsVersion: number;
+  sourceVersion: number;
 };
 
 const syncedSkillsUsageCache = new Map<
   string,
   {
-    destinations: Map<string, string>;
+    manifest: SyncedSkillsManifest;
     manifestKey: string;
-    sourceVersion: number;
     skillUsagePaths: SkillUsagePath[];
   }
 >();
@@ -70,23 +75,31 @@ function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null 
     !isRecord(value) ||
     typeof value.skillsVersion !== "number" ||
     !Number.isFinite(value.skillsVersion) ||
+    typeof value.sourceVersion !== "number" ||
+    !Number.isFinite(value.sourceVersion) ||
     typeof value.skillRootsFingerprint !== "string" ||
-    !isStringArray(value.entryKeys)
+    !isStringArray(value.entryKeys) ||
+    !isStringRecord(value.destinations)
   ) {
     return null;
   }
   return {
+    destinations: value.destinations,
     entryKeys: value.entryKeys,
     skillRootsFingerprint: value.skillRootsFingerprint,
     skillsVersion: value.skillsVersion,
+    sourceVersion: value.sourceVersion,
   };
 }
 
-function resolveSyncedSkillsManifestKey(manifest: SyncedSkillsManifest): string {
+function resolveSyncedSkillsManifestKey(
+  manifest: Omit<SyncedSkillsManifest, "destinations">,
+): string {
   return JSON.stringify([
     manifest.skillsVersion,
     manifest.skillRootsFingerprint,
     manifest.entryKeys,
+    manifest.sourceVersion,
   ]);
 }
 
@@ -237,6 +250,7 @@ export async function syncWorkspaceSkills(params: {
   bundledSkillsDir?: string;
   pluginSkillsDir?: string;
   skillsSnapshot?: SkillSnapshot;
+  readOnlyTarget?: boolean;
   assertCurrent?: () => void;
 }): Promise<SkillUsagePath[]> {
   const assertCurrent = params.assertCurrent
@@ -306,6 +320,7 @@ export async function syncWorkspaceSkills(params: {
               .toSorted(),
             skillRootsFingerprint,
             skillsVersion: skillsSnapshot.version,
+            sourceVersion: getSkillsResourceVersion(sourceWorkspace),
           })
         : undefined;
     const cachedUsage = syncedSkillsUsageCache.get(targetSkillsDir);
@@ -313,10 +328,9 @@ export async function syncWorkspaceSkills(params: {
     if (
       expectedManifestKey &&
       manifestKey === expectedManifestKey &&
-      cachedUsage?.manifestKey === manifestKey &&
-      cachedUsage.sourceVersion === getSkillsResourceVersion(sourceWorkspace)
+      cachedUsage?.manifestKey === manifestKey
     ) {
-      return cachedUsage.skillUsagePaths.map((entry) => ({ ...entry }));
+      return cachedUsage.skillUsagePaths;
     }
 
     const loadOptions = {
@@ -396,20 +410,22 @@ export async function syncWorkspaceSkills(params: {
     phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_remove");
     await target.remove(SYNCED_SKILLS_MANIFEST_NAME, { force: true });
     assertCurrent?.();
-    const previousUsage =
-      cachedUsage &&
-      manifest?.skillRootsFingerprint === skillRootsFingerprint &&
-      cachedUsage.manifestKey === manifestKey
-        ? cachedUsage
-        : undefined;
+    // Remote mirrors may return guest-written manifests; only protected mounts can reuse them.
+    const previousManifest =
+      cachedUsage && cachedUsage.manifestKey === manifestKey
+        ? cachedUsage.manifest
+        : params.readOnlyTarget
+          ? manifest
+          : undefined;
     syncedSkillsUsageCache.delete(targetSkillsDir);
     const preservedDestinations = new Set(
       plans.flatMap((plan) => {
         const destination = plan.destinationPath ? path.basename(plan.destinationPath) : null;
         return destination &&
-          previousUsage?.destinations.get(plan.identity) === destination &&
-          manifest?.skillsVersion === skillsVersion &&
-          previousUsage.sourceVersion === sourceVersion
+          previousManifest?.skillRootsFingerprint === skillRootsFingerprint &&
+          previousManifest.destinations[plan.identity] === destination &&
+          previousManifest.skillsVersion === skillsVersion &&
+          previousManifest.sourceVersion === sourceVersion
           ? [destination]
           : [];
       }),
@@ -500,9 +516,17 @@ export async function syncWorkspaceSkills(params: {
     }
     if (!copyFailed) {
       const nextManifest: SyncedSkillsManifest = {
+        destinations: Object.fromEntries(
+          plans.flatMap((plan) =>
+            plan.destinationPath
+              ? [[plan.identity, path.basename(plan.destinationPath)] as const]
+              : [],
+          ),
+        ),
         entryKeys: plans.map((plan) => plan.identity).toSorted(),
         skillRootsFingerprint,
         skillsVersion,
+        sourceVersion,
       };
       assertCurrent?.();
       phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_write");
@@ -512,15 +536,8 @@ export async function syncWorkspaceSkills(params: {
       });
       assertCurrent?.();
       syncedSkillsUsageCache.set(targetSkillsDir, {
-        destinations: new Map(
-          plans.flatMap((plan) =>
-            plan.destinationPath
-              ? [[plan.identity, path.basename(plan.destinationPath)] as const]
-              : [],
-          ),
-        ),
+        manifest: nextManifest,
         manifestKey: resolveSyncedSkillsManifestKey(nextManifest),
-        sourceVersion,
         skillUsagePaths,
       });
       pruneMapToMaxSize(syncedSkillsUsageCache, 100);

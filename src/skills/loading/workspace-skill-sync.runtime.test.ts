@@ -287,6 +287,35 @@ describe("syncWorkspaceSkills", () => {
     expect((await fs.stat(ignorePath)).mode & 0o200).toBe(0o200);
   });
 
+  it.each([true, false])(
+    "handles usage eviction with readOnlyTarget=%s and resource revisions",
+    async (readOnlyTarget) => {
+      const { source, target } = await setupSkills(["alpha"]);
+      await writeFiles(skillPath(source, "alpha"), { "resource.txt": "before" });
+      const skillsSnapshot = await buildSnapshot(source);
+      await sync(source, target, { skillsSnapshot });
+      for (let index = 0; index < 100; index++) {
+        await sync(source, path.join(target, String(index)), { skillsSnapshot });
+      }
+      const phases: string[] = [];
+      await withDiagnosticsTimelineObserver(
+        (phase) => {
+          phases.push(phase);
+          return () => {};
+        },
+        () => sync(source, target, { skillsSnapshot, readOnlyTarget }),
+      );
+      expect(phases.includes("attempt.setup.sandbox.layout.skills_sync.copy_tree")).toBe(
+        !readOnlyTarget,
+      );
+      expect(await readText(skillPath(target, "alpha", "resource.txt"))).toBe("before");
+      await fs.writeFile(skillPath(source, "alpha", "resource.txt"), "after!");
+      markSkillsSupportingFilesChanged({ workspaceDir: source });
+      await sync(source, target, { skillsSnapshot, readOnlyTarget });
+      expect(await readText(skillPath(target, "alpha", "resource.txt"))).toBe("after!");
+    },
+  );
+
   it("keeps generated skills out of Git discovery across sync, cached reuse and refresh", async () => {
     const workspace = await newDir("git-workspace");
     const target = path.join(workspace, ".openclaw", "sandbox-skills");

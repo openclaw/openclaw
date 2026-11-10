@@ -155,6 +155,7 @@ async function ensureSandboxWorkspaceLayout(
       const skillUsagePaths = await syncWorkspaceSkills({
         sourceWorkspaceDir: agentWorkspaceDir,
         targetWorkspaceDir,
+        readOnlyTarget: cfg.backend === "docker" || cfg.backend === "podman",
         config,
         agentId,
         eligibility,
