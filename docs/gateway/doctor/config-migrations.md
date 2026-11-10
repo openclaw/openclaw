@@ -369,6 +369,12 @@ subagent model (including selections inherited from `agents.defaults`), or by
 listing both spellings in one model map or allowlist. Both routes keep working.
 The same rule applies to `google-gemini-cli/*` refs.
 
+Refs outside agent scopes, such as `channels.modelByChannel` overrides and hook
+mapping models, take their runtime from `agents.defaults.models`, so Doctor pins
+the runtime on the migrated entry there. Because that pin reaches every agent, an
+agent that selects the same model directly also keeps the legacy refs as written,
+with a warning.
+
 ## Command-owner target kinds
 
 Doctor preserves `commands.ownerAllowFrom` target kinds declared by channel plugins.

@@ -320,7 +320,7 @@ describe("canonical model-reference migration", () => {
 
     expect(result.channels?.modelByChannel?.discord?.["123"]).toBe("claude-cli/claude-opus-4-7");
     expect(runtime(result, "anthropic", "claude-opus-4-7", "main")?.id).not.toBe("claude-cli");
-    expect(warnings).toHaveLength(1);
+    expect(warnings).toEqual([expect.stringMatching(/claude-opus-4-7 both directly/)]);
   });
 
   it("still migrates other legacy CLI providers beside a retained Claude CLI route", () => {
