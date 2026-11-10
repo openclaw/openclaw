@@ -17,7 +17,9 @@ import {
 import { resolveSignalTarget } from "./aliases.js";
 import { SignalChannelConfigSchema } from "./config-schema.js";
 import { signalDoctor } from "./doctor.js";
+import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
+import { looksLikeUuid } from "./uuid.js";
 
 const SIGNAL_CHANNEL = "signal" as const;
 
@@ -34,7 +36,20 @@ const signalConfigAdapterBase = createScopedChannelConfigAdapter<ResolvedSignalA
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     normalizeStringifiedEntries(allowFrom)
-      .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
+      .map((entry) => {
+        if (entry === "*") {
+          return "*";
+        }
+        // Approvers known by UUID (e.g. when their phone number is hidden) must
+        // stay uuid:-prefixed so command senders and the approval allowlist agree
+        // with normalizeSignalApproverId, instead of being mangled into a phone
+        // number by normalizeE164.
+        const normalized = normalizeSignalMessagingTarget(entry);
+        if (normalized && looksLikeUuid(normalized)) {
+          return `uuid:${normalized}`;
+        }
+        return normalizeE164(entry.replace(/^signal:/i, ""));
+      })
       .filter(Boolean),
 });
 
