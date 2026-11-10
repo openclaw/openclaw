@@ -23,8 +23,6 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
-import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
@@ -51,6 +49,7 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
 import { projectSessionModelContextEntries, buildInitialContext } from "./session-manager-codec.js";
+import { readSessionManagerCompaction } from "./session-manager-compaction-read.js";
 import {
   sessionManagerOpenCompaction,
   sessionManagerOpenTranscriptCohort,
@@ -79,7 +78,10 @@ import type {
   SessionManagerPersistenceTarget,
   SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
-import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
+import {
+  sessionManagerFromCompactionSource,
+  sessionManagerReadTranscriptBranch,
+} from "./session-manager-view-types.js";
 import {
   appendSessionTranscriptNote,
   withSessionManagerWrite,
@@ -478,29 +480,36 @@ export class SessionManager extends SessionManagerBranching {
   /** @internal Read complete current context and compaction facts in one owner snapshot. */
   static async [sessionManagerOpenCompaction](
     target: SessionTranscriptRuntimeTarget,
-    options: { cwd?: string; signal?: AbortSignal } = {},
+    options: { cwd?: string; signal?: AbortSignal; metadataOnly?: boolean } = {},
   ) {
-    const { cwd, signal } = options;
-    const limits = { compaction: true } as const;
-    const hydration = withSessionTranscriptHydrationCaller("compaction", () =>
-      prepareSessionTranscriptHydration(target, limits, signal),
-    );
-    const prepared = await hydration.read({ compaction: true });
-    if (prepared.kind !== "bounded" || !prepared.compaction) {
-      throw new Error("Expected a prepared compaction transcript");
-    }
-    const context = prepared.snapshot;
+    const { compaction, context } = await readSessionManagerCompaction(target, options);
     const header = findSessionTranscriptHeader(context.events);
+    const cwd = options.cwd ?? header?.cwd ?? process.cwd();
     return {
-      ...prepared.compaction,
+      ...compaction,
       eventCount: context.totalEvents,
-      sessionManager: new SessionManager(
-        cwd ?? header?.cwd ?? process.cwd(),
-        prepared.compaction.sessionTarget,
-        context.events,
-        { ...context, limits },
-      ),
+      metadataOnly: options.metadataOnly === true && context.truncated,
+      sessionManager: new SessionManager(cwd, compaction.sessionTarget, context.events, context),
     };
+  }
+
+  /** @internal The read worker supplies only the exact retained tail, under the original version. */
+  static [sessionManagerFromCompactionSource](
+    target: SessionTranscriptRuntimeTarget,
+    entries: readonly unknown[],
+    version: SessionTranscriptContextVersion,
+    cwd: string,
+  ): SessionManager {
+    const manager = new SessionManager(cwd, target, entries, undefined, version);
+    // This view may append a prepared compaction, but cannot rewrite an omitted prefix.
+    manager.boundedContextIncomplete = true;
+    manager.boundedContextLimits = { compaction: true };
+    const ids = [...manager.byId.keys()];
+    manager.adoptSelectedTranscriptPath(
+      manager.appendParentId,
+      ids.map((id, index) => [id, ids[index - 1] ?? null]),
+    );
+    return manager;
   }
 
   /** @deprecated Await openAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */

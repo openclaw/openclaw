@@ -1,44 +1,33 @@
-/** Extension that safeguards compaction with structured summaries and quality repair. */
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   capCompactionSummary,
   fitCompactionSummary,
-  formatRequiredAskContext,
   MAX_COMPACTION_SUMMARY_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+/** Extension that safeguards compaction with structured summaries and quality repair. */
 import {
   clearCompactionPendingAskSection,
   computeFileLists,
-  extractCurrentCompactionUserRequest,
-  extractCompactionMessageText as extractMessageText,
-  formatCompactionUserLabel,
   formatFileOperations,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
-import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
-import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import { recoverCompactionSafeguardFailure } from "../compaction-summary-refusal.js";
 import { summarizeCompactionHistory } from "../compaction.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
-import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import {
   buildSessionContext as buildCoreSessionContext,
   type AgentMessage,
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
-import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
 import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
+import { getPreparedCompaction } from "../sessions/prepared-compaction.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
-import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { resolveCompactionInstructions } from "./compaction-instructions.js";
 import {
   budgetCompactionSummary,
@@ -61,9 +50,14 @@ import {
   setCompactionSafeguardCancellation,
 } from "./compaction-safeguard-runtime.js";
 import {
-  collectToolFailures,
-  formatToolFailuresSection,
-} from "./compaction-safeguard-tool-failures.js";
+  arraySafeguardSource,
+  materializeSafeguardSource,
+  prepareCompactionSafeguardSource,
+  splitPreservedRecentTurns,
+  buildPreservedTurnsSection,
+  buildSplitTurnContextSection,
+  type ContextSection,
+} from "./compaction-safeguard-source.js";
 import { readWorkspaceContextForSummary } from "./compaction-workspace-context.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
@@ -73,14 +67,10 @@ const SPLIT_TURN_SECTION_HEADING = "**Turn Context (split turn):**";
 // Split-turn context supplements the generated summary and must not claim its
 // guaranteed half of the final artifact before common finalization runs.
 const MAX_SPLIT_TURN_CONTEXT_CHARS = Math.floor(MAX_COMPACTION_SUMMARY_CHARS / 2);
-const SPLIT_TURN_TRUNCATED_MARKER = "[Earlier split-turn messages truncated]\n";
-const PRESERVED_TURNS_TRUNCATED_MARKER = "[Earlier preserved messages truncated]\n";
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
-const MAX_RECENT_TURN_TEXT_CHARS = 600;
-const MAX_PRESERVED_TOOL_RESULT_CHARS = 160;
 const compactionSafeguardDeps = {
   summarizeCompactionHistory,
 };
@@ -142,24 +132,6 @@ function readSessionBranch(
 function projectBranchEntries(entries: CoreSessionTreeEntry[]): AgentMessage[] {
   return buildCoreSessionContext(entries).messages as AgentMessage[];
 }
-
-function containsRealConversation(messages: AgentMessage[]): boolean {
-  return messages.some((message, index, allMessages) =>
-    isRealConversationMessage(message, allMessages, index),
-  );
-}
-
-/**
- * Build the reserved suffix that follows the summary body. Both the provider
- * and LLM paths use this so diagnostic sections survive truncation.
- */
-type ContextSection = {
-  text: string;
-  segmentStarts: number[];
-  // Keep producer loss attached to the bounded artifact so every finalizer path
-  // emits the same redacted diagnostic when the section already dropped context.
-  truncatedLoss?: CompactionLoss;
-};
 
 async function resolveModelAuth(
   ctx: ExtensionContext,
@@ -232,219 +204,6 @@ function resolveQualityGuardMaxRetries(value: number | undefined): number {
   );
 }
 
-function formatNonTextPlaceholder(content: unknown): string | null {
-  if (content == null || typeof content === "string") {
-    return null;
-  }
-  if (!Array.isArray(content)) {
-    return "[non-text content]";
-  }
-  const typeCounts = new Map<string, number>();
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typeRaw = (block as { type?: unknown }).type;
-    const type = typeof typeRaw === "string" && typeRaw.trim().length > 0 ? typeRaw : "unknown";
-    if (type === "text") {
-      continue;
-    }
-    typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
-  }
-  return typeCounts.size > 0
-    ? `[non-text content: ${Array.from(typeCounts, ([type, count]) =>
-        count > 1 ? `${type} x${count}` : type,
-      ).join(", ")}]`
-    : null;
-}
-
-function splitPreservedRecentTurns(params: {
-  messages: AgentMessage[];
-  recentTurnsPreserve: number;
-}): { summarizableMessages: AgentMessage[]; preservedMessages: AgentMessage[] } {
-  const preserveTurns = params.recentTurnsPreserve;
-  if (preserveTurns <= 0) {
-    return { summarizableMessages: params.messages, preservedMessages: [] };
-  }
-  const conversationIndexes = params.messages.flatMap((message, index) =>
-    message.role === "user" || message.role === "assistant" ? [index] : [],
-  );
-  if (conversationIndexes.length === 0) {
-    return { summarizableMessages: params.messages, preservedMessages: [] };
-  }
-
-  const userIndexes = conversationIndexes.filter(
-    (index) => params.messages[index]?.role === "user",
-  );
-  const boundaryStartIndex = userIndexes.at(-preserveTurns);
-  const preservedIndexSet = new Set(
-    boundaryStartIndex === undefined
-      ? userIndexes
-      : conversationIndexes.filter((index) => index >= boundaryStartIndex),
-  );
-  if (boundaryStartIndex === undefined) {
-    for (const index of conversationIndexes.toReversed()) {
-      preservedIndexSet.add(index);
-      if (preservedIndexSet.size >= preserveTurns * 2) {
-        break;
-      }
-    }
-  }
-  const preservedToolCallIds = new Set<string>();
-  for (const index of preservedIndexSet) {
-    const message = params.messages[index];
-    if (message?.role === "assistant") {
-      for (const toolCall of extractToolCallsFromAssistant(message)) {
-        preservedToolCallIds.add(toolCall.id);
-      }
-    }
-  }
-  if (preservedToolCallIds.size > 0) {
-    const preservedStartIndex = conversationIndexes.find((index) => preservedIndexSet.has(index))!;
-    for (let index = preservedStartIndex; index < params.messages.length; index += 1) {
-      const message = params.messages[index];
-      if (message?.role !== "toolResult") {
-        continue;
-      }
-      const toolResultId = extractToolResultId(message);
-      if (toolResultId && preservedToolCallIds.has(toolResultId)) {
-        preservedIndexSet.add(index);
-      }
-    }
-  }
-  const summarizableMessages: AgentMessage[] = [];
-  const preservedMessages: AgentMessage[] = [];
-  for (const [index, message] of params.messages.entries()) {
-    (preservedIndexSet.has(index) ? preservedMessages : summarizableMessages).push(message);
-  }
-  // Preserving recent assistant turns can orphan downstream toolResult messages.
-  // Repair pairings here so compaction summarization doesn't trip strict providers.
-  return {
-    summarizableMessages: sanitizeToolUseResultPairing(summarizableMessages),
-    preservedMessages,
-  };
-}
-
-function formatContextMessage(message: AgentMessage): string | null {
-  let roleLabel: string;
-  if (message.role === "assistant") {
-    roleLabel = "Assistant";
-  } else if (message.role === "user") {
-    roleLabel = formatCompactionUserLabel(message);
-  } else if (message.role === "toolResult") {
-    const toolName = (message as { toolName?: unknown }).toolName;
-    const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
-    roleLabel = `Tool result (${safeToolName})`;
-  } else {
-    return null;
-  }
-  const rendered = [
-    extractMessageText(message),
-    formatNonTextPlaceholder((message as { content?: unknown }).content),
-  ]
-    .filter(Boolean)
-    .join("\n");
-  if (!rendered) {
-    return null;
-  }
-  // Tool output is bulk the summary already distills; keep only a head excerpt
-  // so it cannot crowd generated facts out of the bounded artifact.
-  const limit =
-    message.role === "toolResult" ? MAX_PRESERVED_TOOL_RESULT_CHARS : MAX_RECENT_TURN_TEXT_CHARS;
-  const trimmed =
-    rendered.length <= limit
-      ? rendered
-      : message.role === "toolResult"
-        ? `${truncateUtf16Safe(rendered, limit)} [${rendered.length - limit} more chars omitted at compaction]`
-        : `${truncateUtf16Safe(rendered, limit)}...`;
-  return `- ${roleLabel}: ${trimmed}`;
-}
-
-function formatContextSegments(messages: AgentMessage[]): string[] {
-  const frames = classifyToolUseResultPairing(messages);
-  // A call-bearing assistant and all occurrence-matched results are one context
-  // atom; keeping remainder messages separate lets later terminal text survive.
-  const toolSegments = new Map<AgentMessage, AgentMessage[]>(
-    frames.map((frame) => [
-      frame.assistant,
-      [
-        frame.assistant,
-        ...frame.occurrences.flatMap((occurrence) =>
-          occurrence.sourceResult ? [occurrence.sourceResult] : [],
-        ),
-      ],
-    ]),
-  );
-  return messages.flatMap((message) => {
-    if (message.role === "toolResult") {
-      // Paired results render with their assistant message; unclaimed results
-      // are unsafe context because their owning call is absent or ambiguous.
-      return [];
-    }
-    const lines = (toolSegments.get(message) ?? [message])
-      .map(formatContextMessage)
-      .filter((line): line is string => Boolean(line));
-    return lines.length > 0 ? [lines.join("\n")] : [];
-  });
-}
-
-function formatBoundedContextSection(params: {
-  messages: AgentMessage[];
-  heading: string;
-  truncatedMarker: string;
-  truncatedLoss: CompactionLoss;
-}): ContextSection {
-  const segments = formatContextSegments(params.messages);
-  if (segments.length === 0) {
-    return { text: "", segmentStarts: [] };
-  }
-
-  let prefix = `${params.heading}\n`;
-  let retained = segments;
-  const truncated = !(prefix.length + segments.join("\n").length <= MAX_SPLIT_TURN_CONTEXT_CHARS);
-  if (truncated) {
-    prefix += params.truncatedMarker;
-    retained = [];
-    let usedChars = prefix.length;
-    for (const segment of segments.toReversed()) {
-      const segmentChars = segment.length + (retained.length > 0 ? 1 : 0);
-      if (usedChars + segmentChars > MAX_SPLIT_TURN_CONTEXT_CHARS) {
-        break;
-      }
-      retained.unshift(segment);
-      usedChars += segmentChars;
-    }
-  }
-  let offset = prefix.length;
-  return {
-    text: `${prefix}${retained.join("\n")}`,
-    segmentStarts: retained.map((segment) => {
-      const start = offset;
-      offset += segment.length + 1;
-      return start;
-    }),
-    ...(truncated ? { truncatedLoss: params.truncatedLoss } : {}),
-  };
-}
-
-function buildPreservedTurnsSection(messages: AgentMessage[]): ContextSection {
-  return formatBoundedContextSection({
-    messages,
-    heading: "\n\n## Recent turns preserved verbatim",
-    truncatedMarker: PRESERVED_TURNS_TRUNCATED_MARKER,
-    truncatedLoss: "preserved-turn-head",
-  });
-}
-
-function buildSplitTurnContextSection(messages: AgentMessage[]): ContextSection {
-  return formatBoundedContextSection({
-    messages,
-    heading: "**Turn Context (split turn):**\n",
-    truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
-    truncatedLoss: "split-turn-head",
-  });
-}
-
 function formatGeneratedSplitTurnSection(summary: string, onTruncated: () => void): string {
   const heading = `${SPLIT_TURN_SECTION_HEADING}\n\n`;
   const summaryBudget = MAX_SPLIT_TURN_CONTEXT_CHARS - heading.length;
@@ -467,12 +226,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       streamFn,
     } = event;
     const previousSummary = normalizeLegacySplitTurnSummary(preparation.previousSummary?.trim());
-    let baseMessagesToSummarize = stripRuntimeContextCustomMessages(
-      preparation.messagesToSummarize,
-    );
-    let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(
-      preparation.turnPrefixMessages ?? [],
-    );
+    const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+    const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
+    const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
     const { requestSelection, latestUnresolvedUserRequest } = preparation;
     const reconcileRequestSelection = (summary: string) =>
       requestSelection?.state === "none" ? clearCompactionPendingAskSection(summary) : summary;
@@ -481,42 +237,43 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       setCompactionSafeguardCancellation(ctx.sessionManager, reason, error);
       return { cancel: true as const };
     };
-    let hasRealConversation: boolean;
+    const bounded = getPreparedCompaction(ctx.sessionManager);
+    let rawSource: ReturnType<typeof prepareCompactionSafeguardSource> | undefined;
+    let source: Omit<
+      ReturnType<typeof prepareCompactionSafeguardSource>,
+      "history" | "turnPrefix" | "reconciliation"
+    >;
     try {
-      if (!containsRealConversation([...baseMessagesToSummarize, ...baseTurnPrefixMessages])) {
-        // Safety net for a preparation that dropped real conversation from the
-        // range it covers: summarize that boundary-scoped range instead. It is
-        // never the raw branch, which re-read every reset and prior compaction.
-        const rangeMessages = stripRuntimeContextCustomMessages(
-          collectPreparationRangeMessages(ctx.sessionManager, preparation.firstKeptEntryId),
+      rawSource = bounded
+        ? undefined
+        : prepareCompactionSafeguardSource({
+            history: arraySafeguardSource(preparation.messagesToSummarize),
+            turnPrefix: arraySafeguardSource(preparation.turnPrefixMessages ?? []),
+            preparationRange: () =>
+              arraySafeguardSource(
+                collectPreparationRangeMessages(ctx.sessionManager, preparation.firstKeptEntryId),
+              ),
+            currentContext: () => projectBranchEntries(readSessionBranch(ctx.sessionManager)),
+            isSplitTurn: preparation.isSplitTurn,
+            previousSummary,
+            requestSelection,
+            latestUnresolvedUserRequest,
+            recentTurnsPreserve,
+            qualityGuardEnabled,
+          });
+      source = bounded ? bounded.safeguard : rawSource!;
+      if (source.usedRangeFallback) {
+        log.info(
+          "Compaction safeguard: summarizing the boundary-scoped preparation range after compaction preparation omitted real conversation content.",
         );
-        if (containsRealConversation(rangeMessages)) {
-          log.info(
-            "Compaction safeguard: summarizing the boundary-scoped preparation range after compaction preparation omitted real conversation content.",
-          );
-          baseMessagesToSummarize = rangeMessages;
-          baseTurnPrefixMessages = [];
-        }
       }
-      // A prepared window of pure tool traffic is still real work when the current
-      // context anchors it (a kept user turn or a prior compaction summary); only a
-      // context with no real conversation at all gets the anti-loop boundary below.
-      hasRealConversation =
-        containsRealConversation([...baseMessagesToSummarize, ...baseTurnPrefixMessages]) ||
-        containsRealConversation(
-          stripRuntimeContextCustomMessages(
-            // Project the current boundary; raw branch history would re-summarize
-            // messages hidden by earlier resets and compactions.
-            projectBranchEntries(readSessionBranch(ctx.sessionManager)),
-          ),
-        );
     } catch (error) {
       log.warn(
         `Compaction safeguard: session history inspection failed; preserving history: ${formatErrorMessage(error)}`,
       );
       return cancelCompaction("session history inspection failed", error);
     }
-    if (!hasRealConversation) {
+    if (!source.hasRealConversation) {
       // Canceling an empty preparation re-triggers compaction on the next response (#41981).
       // A compaction boundary suppresses immediate retries until another assistant turn.
       log.info(
@@ -533,15 +290,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
-    const toolFailures = collectToolFailures([
-      ...baseMessagesToSummarize,
-      ...baseTurnPrefixMessages,
-    ]);
-    const toolFailureSection = formatToolFailuresSection(toolFailures);
+    const { toolFailureSection } = source;
+    const baseMessagesToSummarize = rawSource ? materializeSafeguardSource(rawSource.history) : [];
 
-    // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
-    // Fall back to runtime.model which is explicitly passed when building extension paths.
-    const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
     const customInstructions = resolveCompactionInstructions(
       eventInstructions,
       runtime?.customInstructions,
@@ -551,10 +302,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       identifierInstructions: runtime?.identifierInstructions,
     };
     const identifierPolicy = runtime?.identifierPolicy ?? "strict";
-    const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
     const providerId = runtime?.provider;
-    const turnPrefixMessages = baseTurnPrefixMessages;
-    const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
+    const turnPrefixMessages = rawSource ? materializeSafeguardSource(rawSource.turnPrefix) : [];
     const structuredInstructions = buildCompactionStructureInstructions(
       customInstructions,
       summarizationInstructions,
@@ -692,15 +441,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             previousSummary,
           });
           if (typeof providerResult === "string" && providerResult.trim()) {
-            const { preservedMessages } = splitPreservedRecentTurns({
-              messages: baseMessagesToSummarize,
-              recentTurnsPreserve,
-            });
             const finalized = await finalizeSummaryText(reconcileRequestSelection(providerResult), {
               splitTurnSection: preparation.isSplitTurn
                 ? buildSplitTurnContextSection(turnPrefixMessages)
                 : undefined,
-              preservedTurnsSection: buildPreservedTurnsSection(preservedMessages),
+              preservedTurnsSection: source.preservedTurnsSection,
             });
             return compactionResult(finalized.summary);
           }
@@ -760,47 +505,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       };
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
 
-      const oracleMessages = [...baseMessagesToSummarize, ...turnPrefixMessages];
-      const splitUserAsk = preparation.isSplitTurn
-        ? extractCurrentCompactionUserRequest(turnPrefixMessages, extractMessageText)
-        : null;
-      const latestUserAsk = requestSelection
-        ? requestSelection.state === "unresolved"
-          ? requestSelection.request
-          : null
-        : extractCurrentCompactionUserRequest(oracleMessages, extractMessageText);
-      const latestAskInRetainedTurn = splitUserAsk !== null && splitUserAsk === latestUserAsk;
-      const identifiers = extractOpaqueIdentifiers(
-        oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
-      );
       const {
-        summarizableMessages: summaryTargetMessages,
-        preservedMessages: preservedRecentMessages,
-      } = splitPreservedRecentTurns({
-        messages: baseMessagesToSummarize,
-        recentTurnsPreserve,
-      });
-      const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
-      const latestPreparedAsk = extractCurrentCompactionUserRequest(
-        baseMessagesToSummarize,
-        extractMessageText,
-      );
-      const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
-      const includePreservedContext =
-        !latestUnresolvedUserRequest &&
-        qualityGuardEnabled &&
-        latestPreparedAsk === latestUserAsk &&
-        !preservedTurnsSectionLocal.text.includes(requiredAskContext);
-      // Retained excerpts supplement the handoff; they cannot update an older decision
-      // by themselves. Reconcile the complete prepared window whenever there is a
-      // summary to update or non-preserved/split-turn work to summarize.
+        latestUserAsk,
+        latestAskInRetainedTurn,
+        identifiers,
+        requiredAskContext,
+        preservedTurnsSection: preservedTurnsSectionLocal,
+      } = source;
       const reconciliationMessages =
-        previousSummary ||
-        includePreservedContext ||
-        summaryTargetMessages.length > 0 ||
-        turnPrefixMessages.length > 0
-          ? oracleMessages
-          : [];
+        bounded?.reconciliation ?? materializeSafeguardSource(rawSource!.reconciliation);
 
       let correctiveInstructions = "";
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
@@ -832,7 +545,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
           historySummary = reconcileRequestSelection(historySummary);
 
-          if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
+          if (
+            preparation.isSplitTurn &&
+            (bounded?.turnPrefix.length ?? turnPrefixMessages.length) > 0
+          ) {
             const splitTurnFocusLabel = "Additional context from /compact";
             const splitTurnFocus = wrapUntrustedInstructionBlock(
               splitTurnFocusLabel,
@@ -840,7 +556,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             );
             const prefixSummary = await compactionSafeguardDeps.summarizeCompactionHistory({
               ...llmSummaryParams,
-              messages: turnPrefixMessages,
+              messages: bounded?.turnPrefix ?? turnPrefixMessages,
               summaryPrompt: { kind: "turn-prefix" },
               customInstructions: [splitTurnFocus, correctiveInstructions]
                 .filter(Boolean)

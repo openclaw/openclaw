@@ -70,6 +70,10 @@ import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-trans
 import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type {
+  SessionCompactionSourceRequest,
+  SessionCompactionSourceConsumer,
+} from "./session-compaction-source.types.js";
+import type {
   SessionEntryListWorkerInput,
   SessionEntryListWorkerResult,
   SessionEntryReadWorkerInput,
@@ -279,6 +283,7 @@ type TrajectoryEventsWorkerInput = {
 };
 
 export type SessionHistoryWorkerInput =
+  | SessionCompactionSourceRequest
   | SessionRetirementReadWorkerInput
   | TrajectoryRetentionWorkerInput
   | TrajectoryEventsWorkerInput
@@ -371,6 +376,7 @@ export type SessionHistoryWorkerPreparedInput =
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues &
   SessionTranscriptHydrationWorkerValues & {
+    "compaction-source": { kind: "compaction-source" };
     "session-retirement-read": {
       kind: "session-retirement-read";
       result: SessionRetirementReadResult;
@@ -554,6 +560,12 @@ type CancellableSessionHistoryReader<
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
   SessionTranscriptHydrationReaders & {
+    withCompactionSource: (
+      input: Omit<SessionCompactionSourceRequest, "kind" | "database">,
+      consume: SessionCompactionSourceConsumer,
+      signal?: AbortSignal,
+      timeoutMs?: number,
+    ) => Promise<string | undefined>;
     readRetirement: CancellableSessionHistoryReader<"session-retirement-read", "result">;
     readTrajectoryEvents: CancellableSessionHistoryReader<"trajectory-events", "events">;
     readTrajectoryRetention: (

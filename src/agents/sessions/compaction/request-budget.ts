@@ -29,7 +29,7 @@ export type CompactionRequestConstraints = Readonly<{
 
 const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
 
-function estimateVariableRequestTokens(messages: AgentMessage[], prompt: string): number {
+function estimateVariableRequestTokens(messages: Iterable<AgentMessage>, prompt: string): number {
   const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
   return estimateTokens({ messages, prompt }) - estimateTokens({ messages: [], prompt: "" });
 }
@@ -124,31 +124,33 @@ export function withCompactionQueuedContext(
 }
 
 export function estimateCompactionHistoryTokens(
-  messages: AgentMessage[],
+  messages: Iterable<AgentMessage>,
   budget?: CompactionRequestBudget,
 ): number {
-  // A key identifies overlapping input, not proof that its content is replaced.
-  // A retained carrier can reuse a larger canonical user, so charge the larger representation.
-  const pending =
-    budget?.pendingTokens && budget.pendingUserIdempotencyKey
-      ? messages.findLast(
-          (message) =>
-            message.role === "user" &&
-            "idempotencyKey" in message &&
-            message.idempotencyKey === budget.pendingUserIdempotencyKey,
-        )
-      : undefined;
-  const overlap = pending
-    ? Math.min(
-        estimateCompactionHistoryTokens([pending]),
-        budget?.pendingUserTokens ?? budget?.pendingTokens ?? 0,
-      )
-    : 0;
-  return estimateVariableRequestTokens(messages, "") - overlap;
+  let overlap = 0;
+  function* observed() {
+    for (const message of messages) {
+      if (
+        budget?.pendingTokens &&
+        budget.pendingUserIdempotencyKey &&
+        message.role === "user" &&
+        "idempotencyKey" in message &&
+        message.idempotencyKey === budget.pendingUserIdempotencyKey
+      ) {
+        overlap = Math.min(
+          estimateVariableRequestTokens([message], ""),
+          budget.pendingUserTokens ?? budget.pendingTokens,
+        );
+      }
+      yield message;
+    }
+  }
+  const total = estimateVariableRequestTokens(observed(), "");
+  return total - overlap;
 }
 
 export function estimateCompactedRequestTokens(
-  messages: AgentMessage[],
+  messages: Iterable<AgentMessage>,
   budget: CompactionRequestBudget,
 ): number {
   return (
@@ -157,7 +159,7 @@ export function estimateCompactedRequestTokens(
 }
 
 export function assertCompactionRequestCanFit(
-  messages: AgentMessage[],
+  messages: Iterable<AgentMessage>,
   budget: CompactionRequestBudget | undefined,
   hasCompactableHistory: boolean,
 ): void {
@@ -177,7 +179,7 @@ export function assertCompactionRequestCanFit(
 
 export function resolveCompactionRetentionBudget(
   budget: CompactionRequestBudget,
-  messages: AgentMessage[],
+  messages: Iterable<AgentMessage>,
 ) {
   const preferredTokens =
     budget.contextWindow - budget.reserveTokens - budget.fixedTokens - budget.pendingTokens;

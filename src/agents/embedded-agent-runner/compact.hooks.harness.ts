@@ -501,6 +501,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
 }> {
   vi.resetModules();
   if (options.durableSession) {
+    vi.doUnmock("./bounded-compaction-session.js");
     vi.doUnmock("./server-endpoint-compaction.js");
     vi.doUnmock("../sessions/model-registry-runtime.js");
     vi.doUnmock("../sessions/resource-loader.js");
@@ -512,6 +513,13 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   }
 
   if (!options.durableSession) {
+    // This fixture supplies in-memory session messages; durable worker preparation has its own integration coverage.
+    vi.doMock("./bounded-compaction-session.js", async () => ({
+      ...(await vi.importActual<typeof import("./bounded-compaction-session.js")>(
+        "./bounded-compaction-session.js",
+      )),
+      usesBoundedCompactionSource: () => false,
+    }));
     vi.doMock("./server-endpoint-compaction.js", () => ({
       attemptServerEndpointCompaction: attemptServerEndpointCompactionMock,
     }));

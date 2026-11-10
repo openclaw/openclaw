@@ -240,7 +240,11 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
     ? params.fixedTokenPressure.systemTokens + MESSAGE_BOUNDARY_OVERHEAD_TOKENS
     : estimateRenderedPromptTokens({ systemPrompt: params.systemPrompt, prompt: "" });
   // Apply the safety margin once to the complete request before provider tokenization.
-  return (request: { messages: AgentMessage[]; prompt: string; imageCount?: number }): number => {
+  return (request: {
+    messages: Iterable<AgentMessage>;
+    prompt: string;
+    imageCount?: number;
+  }): number => {
     let messageTokens = 0;
     const completions = new Map<string, { estimated: number; measured: number }>();
     for (const message of request.messages) {

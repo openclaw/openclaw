@@ -8,8 +8,12 @@ import { projectSessionEntryMessage } from "../session/session.js";
 import {
   classifyToolUseResultPairing,
   extractToolCallsFromAssistant,
+  extractToolResultId,
+  isSyntheticMissingToolResult,
+  SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../session/tool-result-pairing.js";
 import type { SessionTreeEntry } from "../types.js";
+import type { CompactionEntrySource } from "./compaction-entry-source.js";
 import {
   formatCompactionUserLabel,
   getCompactionContent,
@@ -111,8 +115,21 @@ export function findTurnStartIndex(
   entryIndex: number,
   startIndex: number,
 ): number {
+  return findTurnStartIndexFromSource(
+    { length: entries.length, metadata: (index) => entries[index], get: (index) => entries[index] },
+    entryIndex,
+    startIndex,
+  );
+}
+
+/** Indexed variant for planners that hydrate only the entry being visited. */
+export function findTurnStartIndexFromSource(
+  entries: CompactionEntrySource,
+  entryIndex: number,
+  startIndex: number,
+): number {
   for (let i = entryIndex; i >= startIndex; i--) {
-    const entry = entries[i];
+    const entry = entries.get(i);
     if (entry && isTurnStartEntry(entry)) {
       return i;
     }
@@ -131,6 +148,56 @@ export interface CompactionRetentionConstraints {
     maxTokens: number;
     reserveTokens: number;
     estimateTokens: (message: AgentMessage) => number;
+  };
+}
+
+/**
+ * Payload-free classifier input. Preserve only ownership facts (including legacy
+ * name fallback and synthetic-result replacement), never call arguments, result
+ * content/details, or provider replay data. The classifier remains the single
+ * owner of occurrence matching; these message shells are not model messages.
+ */
+function toolPairingFact(message: AgentMessage): AgentMessage | undefined {
+  if (message.role === "toolResult") {
+    const synthetic = isSyntheticMissingToolResult(message);
+    return {
+      role: "toolResult",
+      toolCallId: extractToolResultId(message) ?? "",
+      toolName: message.toolName,
+      content: [],
+      isError: synthetic,
+      details: synthetic ? { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true } : undefined,
+      timestamp: 0,
+    };
+  }
+  if (message.role !== "assistant") {
+    return undefined;
+  }
+  const calls = extractToolCallsFromAssistant(message);
+  if (calls.length === 0) {
+    return undefined;
+  }
+  return {
+    role: "assistant",
+    content: calls.map(({ id, name }) => ({
+      type: "toolCall",
+      id,
+      name: name ?? "",
+      arguments: {},
+    })),
+    api: "compaction-pairing",
+    provider: "compaction-pairing",
+    model: "",
+    stopReason: message.stopReason,
+    timestamp: 0,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
   };
 }
 
@@ -191,6 +258,23 @@ export function findCutPoint(
   endIndex: number,
   keepRecentTokens: number,
   constraints?: CompactionRetentionConstraints,
+) {
+  return findCutPointFromSource(
+    { length: entries.length, metadata: (index) => entries[index], get: (index) => entries[index] },
+    startIndex,
+    endIndex,
+    keepRecentTokens,
+    constraints,
+  );
+}
+
+/** Plan a cut without retaining hydrated entries from the indexed source. */
+export function findCutPointFromSource(
+  entries: CompactionEntrySource,
+  startIndex: number,
+  endIndex: number,
+  keepRecentTokens: number,
+  constraints?: CompactionRetentionConstraints,
 ): {
   /** Index of the first entry retained after compaction. */
   firstKeptEntryIndex: number;
@@ -204,10 +288,18 @@ export function findCutPoint(
   // retained tail. Keep that eager validation without storing every cut point.
   let cutIndex: number | undefined;
   let lastAllowedCut = endIndex - 1;
-  const toolMessages: AgentMessage[] = [];
+  const toolPairingFacts: AgentMessage[] = [];
   const toolEntryIndexes: number[] = [];
+  const turnStarts: number[] = [];
   for (let i = startIndex; i < endIndex; i++) {
-    const entry = entries[i];
+    const navigation = entries.metadata(i);
+    // Ordinary message navigation owns roles and tool occurrence identities. Custom
+    // carriers still need their details; persisted custom/branch timestamps also
+    // retain their existing projection validation.
+    const entry =
+      navigation?.type === "message" && navigation.message.role !== "custom"
+        ? navigation
+        : entries.get(i);
     const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
     if (
       entry &&
@@ -219,18 +311,19 @@ export function findCutPoint(
     if (message && isCutPointMessage(message)) {
       cutIndex = i;
     }
-    if (
-      message?.role === "toolResult" ||
-      (message?.role === "assistant" && extractToolCallsFromAssistant(message).length > 0)
-    ) {
-      toolMessages.push(message);
+    if (message && isTurnStartMessage(message)) {
+      turnStarts.push(i);
+    }
+    const fact = message ? toolPairingFact(message) : undefined;
+    if (fact) {
+      toolPairingFacts.push(fact);
       toolEntryIndexes.push(i);
     }
   }
   if (cutIndex === undefined) {
     return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
   }
-  const resolveCutPoint = createToolPairCutResolver(toolMessages, toolEntryIndexes);
+  const resolveCutPoint = createToolPairCutResolver(toolPairingFacts, toolEntryIndexes);
   cutIndex = resolveCutPoint(cutIndex);
   lastAllowedCut = resolveCutPoint(lastAllowedCut);
   let accumulatedTokens = 0;
@@ -238,7 +331,7 @@ export function findCutPoint(
   // The latest valid cut also handles an oversized trailing tool result that
   // exhausts the budget before the reverse walk reaches its preceding boundary.
   for (let i = endIndex - 1; i >= startIndex; i--) {
-    const entry = entries[i];
+    const entry = entries.get(i);
     if (!entry) {
       continue;
     }
@@ -260,7 +353,7 @@ export function findCutPoint(
     let fittingCut = endIndex;
     let tailLimit = retention.maxTokens;
     for (let i = endIndex - 1; i >= cutIndex; i--) {
-      const entry = entries[i];
+      const entry = entries.get(i);
       const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
       retainedTokens += message ? retention.estimateTokens(message) : 0;
       if (retainedTokens > tailLimit) {
@@ -287,13 +380,13 @@ export function findCutPoint(
   }
   // Decide the split from the selected message, before retaining the metadata in front of it:
   // a bootstrap marker before a user message must not make the previous turn a split-turn prefix.
-  const cutEntry = entries[cutIndex];
+  const cutEntry = entries.get(cutIndex);
   if (!cutEntry) {
     throw new Error("compaction cut point does not reference a session entry");
   }
   const startsTurn = isTurnStartEntry(cutEntry);
   while (cutIndex > startIndex) {
-    const prevEntry = entries[cutIndex - 1];
+    const prevEntry = entries.get(cutIndex - 1);
     if (!prevEntry) {
       break;
     }
@@ -306,7 +399,9 @@ export function findCutPoint(
     }
     cutIndex--;
   }
-  const turnStartIndex = startsTurn ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
+  const turnStartIndex = startsTurn
+    ? -1
+    : (turnStarts.findLast((index) => index <= cutIndex) ?? -1);
 
   return {
     firstKeptEntryIndex: cutIndex,

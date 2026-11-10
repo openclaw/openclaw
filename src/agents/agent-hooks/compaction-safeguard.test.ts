@@ -887,6 +887,9 @@ it.each([false, true])(
     );
     expect(summary).toContain(recover ? "range summary" : "tool window summary");
     const messages = mockCallArg(summarize).messages;
+    if (!Array.isArray(messages)) {
+      throw new Error("Legacy array compaction unexpectedly used a worker source");
+    }
     expect(messages.map((message) => message.role)).toEqual(
       recover ? ["user", "assistant", "toolResult"] : ["assistant", "toolResult"],
     );

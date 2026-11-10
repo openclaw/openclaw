@@ -42,10 +42,16 @@ import {
 } from "../sessions/agent-session-compaction.js";
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
+import { setPreparedCompaction } from "../sessions/prepared-compaction.js";
 import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
+import {
+  type BoundedCompactionSession,
+  withBoundedCompactionSession,
+  usesBoundedCompactionSource,
+} from "./bounded-compaction-session.js";
 import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
@@ -73,7 +79,10 @@ import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
-export async function executePreparedCompactionSession(runtime: PreparedCompactionRuntime) {
+export async function executePreparedCompactionSession(
+  runtime: PreparedCompactionRuntime,
+  bounded?: BoundedCompactionSession,
+): Promise<import("./types.js").EmbeddedAgentCompactResult> {
   const {
     params,
     diagId,
@@ -131,10 +140,36 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
+    const settingsManager =
+      bounded?.settingsManager ??
+      createPreparedEmbeddedAgentSettingsManager({
+        sessionId: params.sessionId,
+        cwd: effectiveCwd,
+        agentDir,
+        cfg: params.config,
+        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
+          config: params.config,
+          env: process.env,
+          workspaceDir: effectiveWorkspace,
+        }),
+        contextTokenBudget,
+      });
+    if (!bounded && !memoryTranscript && usesBoundedCompactionSource(runtime)) {
+      return await withBoundedCompactionSession(
+        runtime,
+        sessionTarget,
+        assertActive,
+        settingsManager,
+        accountingRecorder,
+        executePreparedCompactionSession,
+      );
+    }
+
     // Exclude obsolete history without clipping the current context or previous summary.
     const preparedSessionManager =
+      bounded?.manager ??
       memoryTranscript?.sessionManager ??
-      preparedSession?.sessionManager ??
+      (preparedSession?.metadataOnly ? undefined : preparedSession?.sessionManager) ??
       (await SessionManager.openAsync(
         sessionTarget,
         undefined,
@@ -159,6 +194,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         params.seedCompaction ?? accountingRecorder?.withCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;
+    if (bounded?.source) {
+      setPreparedCompaction(sessionManager, bounded.source);
+    }
     const recordUsage = accountingRecorder?.recordUsage
       ? (usage: UsageLike) => {
           const normalized = normalizeUsage(usage);
@@ -170,18 +208,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     if (recordUsage) {
       setSessionModelUsageSink(sessionManager, recordUsage);
     }
-    const settingsManager = createPreparedEmbeddedAgentSettingsManager({
-      sessionId: params.sessionId,
-      cwd: effectiveCwd,
-      agentDir,
-      cfg: params.config,
-      pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
-        config: params.config,
-        env: process.env,
-        workspaceDir: effectiveWorkspace,
-      }),
-      contextTokenBudget,
-    });
     // Sets compaction/pruning runtime state and returns extension factories
     // that must be passed to the resource loader for the safeguard to be active.
     const extensionFactories = buildEmbeddedExtensionFactories({
@@ -394,6 +420,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           : getGlobalHookRunner();
         const observedTokenCount = floorPositiveFiniteNumber(params.currentTokenCount);
         const beforeHookMetrics = buildBeforeCompactionHookMetrics({
+          prepared: bounded?.source,
           originalMessages,
           currentMessages: session.messages,
           observedTokenCount,
@@ -437,8 +464,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           beforeHookMetrics;
 
         if (
-          !session.messages.some((message, index, allMessages) =>
-            isRealConversationMessage(message, allMessages, index),
+          !(
+            bounded?.source?.hasRealConversation ??
+            session.messages.some((message, index, allMessages) =>
+              isRealConversationMessage(message, allMessages, index),
+            )
           )
         ) {
           log.info(
@@ -475,28 +505,29 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             compactionKind: "server-endpoint",
           });
         };
-        const serverResult = params.seedCompaction
-          ? undefined
-          : await attemptServerEndpointCompaction({
-              trigger,
-              streamFn: session.agent.streamFn,
-              model: effectiveModel,
-              context: { systemPrompt: systemPromptText, messages: session.messages },
-              sessionManager,
-              extraParams: effectiveExtraParams,
-              requestBudget: accountingRecorder?.requestBudget,
-              customInstructions: params.customInstructions,
-              onUsage: recordUsage,
-              onCompactionCommitted: recordServerCompaction,
-              assertActive,
-              requestOptions: {
-                apiKey: transportApiKey,
-                sessionId: params.sessionId,
-                authProfileId: runtimePlan.auth.forwardedAuthProfileId,
-                timeoutMs: compactionTimeoutMs,
-                signal: params.abortSignal,
-              },
-            });
+        const serverResult =
+          bounded || params.seedCompaction
+            ? undefined
+            : await attemptServerEndpointCompaction({
+                trigger,
+                streamFn: session.agent.streamFn,
+                model: effectiveModel,
+                context: { systemPrompt: systemPromptText, messages: session.messages },
+                sessionManager,
+                extraParams: effectiveExtraParams,
+                requestBudget: accountingRecorder?.requestBudget,
+                customInstructions: params.customInstructions,
+                onUsage: recordUsage,
+                onCompactionCommitted: recordServerCompaction,
+                assertActive,
+                requestOptions: {
+                  apiKey: transportApiKey,
+                  sessionId: params.sessionId,
+                  authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+                  timeoutMs: compactionTimeoutMs,
+                  signal: params.abortSignal,
+                },
+              });
         const activeSession = session;
         let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
         // A timeout after generation is persistence; recovery would discard a real summary.
@@ -709,5 +740,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     return fail(failure.reason, failure.error);
   } finally {
     setSessionModelUsageSink(compactionSessionManager, null);
+    if (bounded) {
+      setPreparedCompaction(compactionSessionManager, null);
+    }
   }
 }

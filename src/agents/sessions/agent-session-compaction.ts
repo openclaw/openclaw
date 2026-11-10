@@ -1,10 +1,7 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
-import {
-  capCompactionSummary,
-  compactWithoutSummary,
-} from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
@@ -46,6 +43,7 @@ import {
 } from "./compaction/request-budget.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
+import { getPreparedCompaction, resolveCompactionFallback } from "./prepared-compaction.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { getLatestCompactionEntry } from "./session-manager.js";
@@ -307,6 +305,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
     }
 
+    const bounded = getPreparedCompaction(this.sessionManager);
     const pathEntries = this.sessionManager.getBranch();
     const requestBudget = options.requestBudget;
     const pendingUserIdempotencyKey = requestBudget?.pendingTokens
@@ -332,13 +331,18 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     const retention = requestBudget
       ? resolveCompactionRetentionBudget(requestBudget, contextMessages)
       : undefined;
-    const requestTokenLimit =
-      requestBudget && retention
+    const requestTokenLimit = bounded
+      ? bounded.requestTokenLimit
+      : requestBudget && retention
         ? requestBudget.fixedTokens + requestBudget.pendingTokens + retention.maxTokens
         : undefined;
     const requestBoundaryEntryId = options.requestFromEntryId ?? pathEntries[pendingEntryIndex]?.id;
     let preparation: CompactionPreparation | undefined;
-    if (isManual && !options.requestState && !requestBudget && pendingEntryIndex < 0) {
+    if (bounded) {
+      // Only the built-in embedded factories install this source; their safeguard
+      // consumes it directly. Other AgentSession extension runners keep the array path.
+      preparation = { ...bounded.preparation, messagesToSummarize: [], turnPrefixMessages: [] };
+    } else if (isManual && !options.requestState && !requestBudget && pendingEntryIndex < 0) {
       const manualPreflight = preflightManualSessionCompaction(pathEntries, options.settings);
       if (!manualPreflight.compactable) {
         throw new Error(manualPreflight.reason);
@@ -396,7 +400,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           summary,
         },
       ]).messages;
-    if (requestBudget && requestTokenLimit !== undefined) {
+    if (!bounded && requestBudget && requestTokenLimit !== undefined) {
       const remaining =
         requestTokenLimit -
         estimateCompactedRequestTokens(projectReplacement(preparation, ""), requestBudget);
@@ -409,7 +413,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     let fromExtension = false;
     if (options.summaryOutputPolicy === "deterministic") {
       // Summary producers, including session_before_compact hooks, already failed.
-      compactionResult = unwrapCoreResult(compactWithoutSummary(preparation));
+      compactionResult = resolveCompactionFallback(preparation, bounded);
     } else if (this.currentExtensionRunner.hasHandlers("session_before_compact")) {
       const extensionResult = await this.currentExtensionRunner.emit({
         type: "session_before_compact",
@@ -455,7 +459,13 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         .join("\n\n");
       const runCoreCompaction = () =>
         compact(
-          preparation,
+          bounded
+            ? {
+                ...preparation,
+                messagesToSummarize: bounded.history,
+                turnPrefixMessages: bounded.turnPrefix,
+              }
+            : preparation,
           model,
           auth.apiKey,
           auth.headers,
@@ -483,9 +493,13 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
       compactionResult =
         !result.ok && isCompactionSummaryRefusal(result.error)
-          ? compactAfterSummaryRefusal(preparation)
+          ? compactAfterSummaryRefusal(
+              preparation,
+              bounded ? resolveCompactionFallback(preparation, bounded) : undefined,
+            )
           : unwrapCoreResult(result);
     }
+    await bounded?.release();
     options.onSummaryReady?.();
 
     if (options.signal.aborted) {

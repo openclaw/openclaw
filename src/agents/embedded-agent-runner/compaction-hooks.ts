@@ -193,11 +193,20 @@ function estimateTokenCountSafe(
 
 /** Builds before-hook metrics while tolerating providers that cannot estimate all messages. */
 export function buildBeforeCompactionHookMetrics(params: {
+  prepared?: { messageCount: number; estimatedTokens: number };
   originalMessages: AgentMessage[];
   currentMessages: AgentMessage[];
   observedTokenCount?: number;
   estimateTokensFn: (message: AgentMessage) => number;
 }) {
+  if (params.prepared) {
+    return {
+      messageCountOriginal: params.prepared.messageCount,
+      messageCountBefore: params.prepared.messageCount,
+      tokenCountOriginal: params.prepared.estimatedTokens,
+      tokenCountBefore: params.observedTokenCount ?? params.prepared.estimatedTokens,
+    };
+  }
   return {
     messageCountOriginal: params.originalMessages.length,
     tokenCountOriginal: estimateTokenCountSafe(params.originalMessages, params.estimateTokensFn),

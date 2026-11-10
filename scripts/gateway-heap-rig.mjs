@@ -10,6 +10,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
@@ -46,7 +47,10 @@ const { values } = parseArgs({
     "lazy-import-trace": { type: "boolean" },
     "turn-count": { type: "string" },
     "large-session-events": { type: "string" },
+    "seed-concurrency": { type: "string", default: "1" },
     "restart-after-seed": { type: "boolean" },
+    "reset-after-seed": { type: "boolean" },
+    "compact-before-turn": { type: "boolean" },
     "gateway-preload": { type: "string" },
     "shell-turns": { type: "boolean" },
     "idle-minutes": { type: "string" },
@@ -57,7 +61,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 41673 --snapshot-minutes 10,90 --module-census --coverage --idle-minutes 5]",
+    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 41673 --snapshot-minutes 10,90 --module-census --coverage --idle-minutes 5]\nCompaction: --sessions 1 --large-session-events 33000 --event-chars 15000 --restart-after-seed --compact-before-turn [--reset-after-seed --seed-concurrency 4]",
   );
   process.exit(0);
 }
@@ -83,6 +87,13 @@ const largeSessionEvents = values["large-session-events"]
   : undefined;
 if (largeSessionEvents && sessionCount !== 1) {
   throw new Error("--large-session-events requires --sessions 1");
+}
+if ((values["reset-after-seed"] || values["compact-before-turn"]) && !largeSessionEvents) {
+  throw new Error("Compaction comparison options require --large-session-events");
+}
+const seedConcurrency = positiveInteger(values["seed-concurrency"], "seed-concurrency");
+if (seedConcurrency > 8) {
+  throw new Error("--seed-concurrency exceeds the synthetic fixture's eight-request limit");
 }
 const eventChars = positiveInteger(values["event-chars"], "event-chars");
 if (
@@ -185,6 +196,12 @@ const env = createGatewayBenchEnv(root, configPath, {
   startupTrace: false,
   caseEnv: {
     ...turnDriver.env,
+    ...(process.env.OPENCLAW_BENCH_WORKER_MEMORY_DIR
+      ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: process.env.OPENCLAW_BENCH_WORKER_MEMORY_DIR }
+      : {}),
+    ...(process.env.OPENCLAW_BENCH_WORKER_PROFILE === "1"
+      ? { OPENCLAW_BENCH_WORKER_PROFILE: "1" }
+      : {}),
     ...(largeSessionEvents ? { MOCK_REQUEST_LOG: "" } : {}),
     OPENAI_API_KEY: "synthetic-heap-rig-not-a-real-key",
     OPENCLAW_PROFILE: `heap-rig-${port}`,
@@ -461,16 +478,27 @@ try {
           }
           largeSessionId = created.sessionId;
         }
+        if (values["compact-before-turn"]) {
+          // Injected assistant notes alone are not a real conversation. Anchor
+          // the measured compaction with an ordinary completed user/agent turn.
+          await turnDriver.runTurn(admin.rpc, 0, { agentId, sessionKey: key, kind: "text" });
+        }
         const eventCount = largeSessionEvents ?? 1;
-        for (let event = 0; event < eventCount; event++) {
-          await admin.rpc("chat.inject", {
-            sessionKey: key,
-            message: largeSessionEvents
-              ? `Synthetic history ${event}. `.padEnd(eventChars, "x")
-              : `Synthetic history ${index}. `.repeat(2048).slice(0, 32 * 1024),
-          });
-          if ((event + 1) % 500 === 0) {
-            record({ kind: "large-session-seed", completed: event + 1 });
+        // Seeding is outside the measured interval; every write still uses chat.inject.
+        for (let seedStart = 0; seedStart < eventCount; seedStart += seedConcurrency) {
+          const count = Math.min(seedConcurrency, eventCount - seedStart);
+          await Promise.all(
+            Array.from({ length: count }, (_, offset) =>
+              admin.rpc("chat.inject", {
+                sessionKey: key,
+                message: largeSessionEvents
+                  ? `Synthetic history ${seedStart + offset}. `.padEnd(eventChars, "x")
+                  : `Synthetic history ${index}. `.repeat(2048).slice(0, 32 * 1024),
+              }),
+            ),
+          );
+          if (Math.floor(seedStart / 500) !== Math.floor((seedStart + count) / 500)) {
+            record({ kind: "large-session-seed", completed: seedStart + count });
           }
         }
         if ((index + 1) % 250 === 0) {
@@ -487,8 +515,31 @@ try {
     kind: "seeded",
     totalCount: inventory.totalCount,
     historyEventsPerSession: largeSessionEvents ?? 1,
+    seedConcurrency,
     historyBytesPerSession: largeSessionEvents ? largeSessionEvents * eventChars : 32 * 1024,
   });
+  if (values["reset-after-seed"]) {
+    const { key, agentId } = sessions[0];
+    const reset = await admin.rpc("sessions.reset", {
+      key,
+      agentId,
+      reason: "new",
+      expectedSessionId: largeSessionId,
+    });
+    if (reset.entry?.sessionId !== largeSessionId) {
+      throw new Error("Archive comparison reset replaced the seeded session");
+    }
+    if (values["compact-before-turn"]) {
+      await turnDriver.runTurn(admin.rpc, 0, { agentId, sessionKey: key, kind: "text" });
+    }
+    for (let event = 0; event < 10; event++) {
+      await admin.rpc("chat.inject", {
+        sessionKey: key,
+        message: `Synthetic current history ${event}. `.padEnd(eventChars, "x"),
+      });
+    }
+    record({ kind: "seed-reset", activeHistoryEvents: 10, activeHistoryBytes: 10 * eventChars });
+  }
   if (values["restart-after-seed"]) {
     admin.close();
     admin = undefined;
@@ -546,6 +597,45 @@ try {
   }
   if (values.coverage) {
     await census("coverage-start", "workload");
+  }
+  if (values["compact-before-turn"]) {
+    const marker = `SYNTHETIC_HEAP_RIG_${turnDriver.evidence.at(-1).runId}`;
+    writeFileSync(
+      turnDriver.responseControlPath,
+      JSON.stringify({
+        text: [
+          "## Decisions\nContinue the synthetic heap investigation.",
+          "## Open TODOs\nNone.",
+          "## Constraints/Rules\nPreserve the synthetic session and exact identifiers.",
+          `## Pending user asks\nBegin the report with ${marker}.`,
+          `## Exact identifiers\n${marker}`,
+        ].join("\n"),
+        // A slow synthetic summary makes retained host payloads observable.
+        chunkDelayMs: 250,
+      }),
+    );
+    const compactStartedAt = performance.now();
+    const before = await readGatewayMemory(admin.rpc, compactStartedAt);
+    record({ kind: "compaction-start", hostLoad: loadavg(), ...before });
+    const result = await admin.rpc(
+      "sessions.compact",
+      { key: sessions[0].key, agentId: sessions[0].agentId },
+      300000,
+    );
+    record({
+      kind: "compaction-end",
+      elapsedMs: performance.now() - compactStartedAt,
+      ok: result.ok,
+      compacted: result.compacted,
+      reason: result.reason,
+      tokensBefore: result.result?.tokensBefore,
+      summaryChars: result.result?.summary?.length,
+      qualityDegraded: result.result?.details?.qualityDegraded,
+      ...(await readGatewayMemory(admin.rpc, compactStartedAt)),
+    });
+    if (result.ok !== true || result.compacted !== true) {
+      throw new Error(`Synthetic manual compaction did not complete: ${JSON.stringify(result)}`);
+    }
   }
   const startedAt = performance.now();
   const deadline = startedAt + minutes * 60000;

@@ -1,181 +1,19 @@
-import {
-  hasRuntimeContextMarker,
-  type AssistantMessage,
-  type Message,
-  type ToolCall,
-} from "@openclaw/llm-core";
+import { hasRuntimeContextMarker, type AssistantMessage, type Message } from "@openclaw/llm-core";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
 import { createToolCallOccurrenceQueue } from "../session/tool-result-pairing.js";
-import type { FileOperations } from "../types.js";
 
 export type { FileOperations } from "../types.js";
 
-function normalizeFileToolName(value: string): string {
-  const name = value.toLowerCase();
-  const separator = name.indexOf("__", name.startsWith("mcp__") ? 5 : 0);
-  return separator < 0 ? name : name.slice(separator + 2);
-}
-
-function addFilePaths(target: Set<string>, value: unknown): void {
-  for (const path of Array.isArray(value) ? value : []) {
-    if (typeof path === "string") {
-      target.add(path);
-    }
-  }
-}
-
-/** Create an empty file-operation accumulator. */
-export function createFileOps(): FileOperations {
-  return { read: new Set(), written: new Set(), edited: new Set() };
-}
-
-/** Restore file metadata recorded by an earlier compaction or branch summary. */
-export function mergeSummaryFileOperations(
-  fileOps: FileOperations,
-  details: { readFiles: string[]; modifiedFiles: string[] },
-): void {
-  addFilePaths(fileOps.read, details.readFiles);
-  addFilePaths(fileOps.edited, details.modifiedFiles);
-}
-
-/** Pair outcomes within each tool turn before collecting conservative file metadata. */
-export function extractFileOpsFromMessages(
-  messages: readonly AgentMessage[],
-  fileOps: FileOperations,
-): void {
-  const calls = createToolCallOccurrenceQueue<{ call: ToolCall; name: string }>();
-  const unchanged = new Set<ToolCall>();
-  for (const message of messages) {
-    if (message.role === "assistant") {
-      calls.clear();
-      for (const call of message.content) {
-        if (call.type === "toolCall") {
-          calls.add(call.id, { call, name: normalizeFileToolName(call.name) });
-        }
-      }
-    } else if (message.role === "toolResult") {
-      const occurrence = calls.claim(message.toolCallId);
-      const name = normalizeFileToolName(message.toolName);
-      if (
-        occurrence?.name === name &&
-        (name === "edit" || name === "write") &&
-        asRecord(message.details)?.changed === false
-      ) {
-        unchanged.add(occurrence.call);
-      }
-    } else {
-      calls.clear();
-    }
-  }
-  for (const message of messages) {
-    extractFileOpsFromMessage(message, fileOps, unchanged);
-  }
-}
-
-function extractFileOpsFromMessage(
-  message: AgentMessage,
-  fileOps: FileOperations,
-  unchanged: ReadonlySet<ToolCall>,
-): void {
-  if (message.role === "toolResult") {
-    if (normalizeFileToolName(message.toolName) !== "apply_patch") {
-      return;
-    }
-    for (const result of [message, ...(Array.isArray(message.content) ? message.content : [])]) {
-      const details = asRecord(asRecord(result)?.details);
-      const summary = asRecord(details?.summary);
-      addFilePaths(fileOps.written, summary?.added);
-      addFilePaths(fileOps.edited, summary?.modified);
-    }
-    // Deleted paths no longer exist for a continuation to inspect, so omit them.
-    return;
-  }
-
-  if (message.role !== "assistant") {
-    return;
-  }
-  for (const toolCall of message.content) {
-    if (toolCall.type !== "toolCall" || unchanged.has(toolCall)) {
-      continue;
-    }
-    const args = asRecord(toolCall.arguments);
-    const path = [args?.path, args?.file_path, args?.filePath].find(
-      (value): value is string => typeof value === "string",
-    );
-    if (!path) {
-      continue;
-    }
-    switch (normalizeFileToolName(toolCall.name)) {
-      case "read":
-        fileOps.read.add(path);
-        break;
-      case "write":
-        fileOps.written.add(path);
-        break;
-      case "edit":
-        fileOps.edited.add(path);
-        break;
-    }
-  }
-}
-
-/** Compute sorted read-only and modified file lists from accumulated operations. */
-export function computeFileLists(fileOps: FileOperations): {
-  readFiles: string[];
-  modifiedFiles: string[];
-} {
-  const modified = new Set([...fileOps.edited, ...fileOps.written]);
-  const readOnly = [...fileOps.read].filter((f) => !modified.has(f)).toSorted();
-  const modifiedFiles = [...modified].toSorted();
-  return { readFiles: readOnly, modifiedFiles };
-}
-
-// File lists ratchet across compactions (prior summary entries merge into the
-// next accumulation), so an unbounded join grows without limit in long
-// sessions. Hard caps keep the model-visible section bounded per the
-// context-budget invariant; overflow collapses to a "...and N more" line.
-const MAX_FILE_OPS_LIST_CHARS = 900;
-
-function formatBoundedFileList(tag: string, files: string[], maxChars: number): string {
-  if (files.length === 0 || maxChars <= 0) {
-    return "";
-  }
-  const openTag = `<${tag}>\n`;
-  const closeTag = `\n</${tag}>`;
-  const lines: string[] = [];
-  let usedChars = openTag.length + closeTag.length;
-
-  for (let i = 0; i < files.length; i++) {
-    const line = `${files[i]}\n`;
-    const remaining = files.length - i - 1;
-    const overflowLine = remaining > 0 ? `...and ${remaining} more\n` : "";
-    const projected = usedChars + line.length + overflowLine.length;
-    if (projected > maxChars) {
-      const overflow = `...and ${files.length - i} more\n`;
-      if (usedChars + overflow.length <= maxChars) {
-        lines.push(overflow);
-      }
-      break;
-    }
-    lines.push(line);
-    usedChars += line.length;
-  }
-
-  return lines.length > 0 ? `${openTag}${lines.join("").trimEnd()}${closeTag}` : "";
-}
-
-/** Format file lists as bounded summary metadata tags. */
-export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
-  const sections = [
-    formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS),
-    formatBoundedFileList("modified-files", modifiedFiles, MAX_FILE_OPS_LIST_CHARS),
-  ].filter(Boolean);
-  // Both 900-character lists and their separators fit the 2,000-character section cap.
-  return sections.length > 0 ? `\n\n${sections.join("\n\n")}` : "";
-}
+export {
+  createFileOps,
+  mergeSummaryFileOperations,
+  extractFileOpsFromMessages,
+  computeFileLists,
+  formatFileOperations,
+} from "./file-operations.js";
 
 /** Extract visible summary text without normalizing valid model output. */
 export function extractSummaryText(response: AssistantMessage): string | undefined {
@@ -436,7 +274,12 @@ export function clearCompactionPendingAskSection(summary: string): string {
 
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
-  return serializeConversationEntries(messages).entries.join(ENTRY_SEPARATOR);
+  const parts: string[] = [];
+  indexSerializedConversation(
+    { length: messages.length, get: (index) => messages[index] },
+    (text) => parts.push(text),
+  );
+  return parts.join(ENTRY_SEPARATOR);
 }
 
 const ENTRY_SEPARATOR = "\n\n";
@@ -456,84 +299,150 @@ function formatCallLabel(name: string, args: ReadonlyArray<readonly [string, str
     : label;
 }
 
-function serializeConversationEntries(messages: Message[]): {
-  entries: string[];
-  /** Tool-result entries rendered with the call that produced them, for sampled input. */
-  labeledResults: Map<number, string>;
-  /** External-user entries, which carry the asks, decisions and corrections. */
-  userEntries: number[];
-} {
-  const parts: string[] = [];
-  const labeledResults = new Map<number, string>();
+/** Indexed access is snapshot-scoped; implementations need not retain parsed messages. */
+export interface CompactionMessageSource {
+  length: number;
+  get(index: number): Message | undefined;
+}
+
+type SerializedEntry = {
+  messageIndex: number;
+  kind: "content" | "assistant" | "calls" | "overflow";
+  includeOmission?: boolean;
+  callLabel?: string;
+};
+
+function renderSerializedEntry(entry: SerializedEntry, message: Message, sampled: boolean): string {
+  if (entry.kind === "overflow") {
+    return OMISSION_OVERFLOW;
+  }
+  if (entry.kind === "content" && (message.role === "user" || message.role === "toolResult")) {
+    const { text, omissionText } = getCompactionContent(message.content);
+    const content = [
+      entry.includeOmission ? omissionText : "",
+      message.role === "toolResult" ? truncateForSummary(text, TOOL_RESULT_MAX_CHARS) : text,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const label =
+      message.role === "toolResult"
+        ? sampled
+          ? `Tool result of ${entry.callLabel}`
+          : "Tool result"
+        : formatCompactionUserLabel(message);
+    return `[${label}]: ${content}`;
+  }
+  if (message.role === "assistant") {
+    if (entry.kind === "assistant") {
+      return `[Assistant]: ${message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n")}`;
+    }
+    return `[Assistant tool calls]: ${message.content
+      .flatMap((block) =>
+        block.type === "toolCall"
+          ? [
+              `${block.name}(${Object.entries(block.arguments)
+                .map(([key, value]) => `${key}=${stringifyCompactionValue(value)}`)
+                .join(", ")})`,
+            ]
+          : [],
+      )
+      .join("; ")}`;
+  }
+  throw new Error("Compaction serialization source changed during its snapshot");
+}
+
+/** Index sizes and bounded call labels, not rendered conversation payloads. */
+export function createSerializedConversationSource(
+  messages: CompactionMessageSource,
+): SerializedConversationSource {
+  return indexSerializedConversation(messages);
+}
+
+function indexSerializedConversation(
+  messages: CompactionMessageSource,
+  consume?: (text: string) => void,
+): SerializedConversationSource {
+  const entries: SerializedEntry[] = [];
+  const weights: number[] = [];
   const userEntries: number[] = [];
-  // Providers may repeat a call ID; each result claims the oldest unanswered call with it.
   const callLabels = createToolCallOccurrenceQueue<string>();
   let omissionMessages = 0;
-
-  for (const msg of messages) {
-    // Carriers remain in replay for thinking-prefix binding, not in summaries
-    // where runtime-only context could become durable assistant-authored text.
-    if (hasRuntimeContextMarker(msg)) {
+  let totalChars = 0;
+  const add = (entry: SerializedEntry, message: Message, rendered?: string) => {
+    const text = rendered ?? renderSerializedEntry(entry, message, false);
+    consume?.(text);
+    totalChars += estimateStringChars(text) + (entries.length > 0 ? ENTRY_SEPARATOR.length : 0);
+    weights.push(
+      estimateStringChars(entry.callLabel ? renderSerializedEntry(entry, message, true) : text),
+    );
+    entries.push(entry);
+  };
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+    const message = messages.get(messageIndex);
+    if (!message || hasRuntimeContextMarker(message)) {
       continue;
     }
-    if (msg.role === "user" || msg.role === "toolResult") {
-      // Claim even for an empty result, so a later result with the same ID gets its own call.
-      const callLabel = msg.role === "toolResult" ? callLabels.claim(msg.toolCallId) : undefined;
-      const { text, omissionText } = getCompactionContent(msg.content);
-      // Fixed ASCII bounds additions to 8 * (82 markers + 17 wrapper) + 55 overflow = 847 bytes.
-      // Keep the aggregate outside truncation too; later omissions must never disappear silently.
+    if (message.role === "user" || message.role === "toolResult") {
+      // Empty results still claim their occurrence, matching replay ordering.
+      const callLabel =
+        message.role === "toolResult"
+          ? (callLabels.claim(message.toolCallId) ?? `${message.toolName}(...)`)
+          : undefined;
+      const { text, omissionText } = getCompactionContent(message.content);
       if (omissionText && omissionMessages++ === MAX_OMISSION_MESSAGES) {
-        parts.push(OMISSION_OVERFLOW);
+        add({ messageIndex, kind: "overflow" }, message);
       }
-      const content = [
-        omissionMessages <= MAX_OMISSION_MESSAGES ? omissionText : "",
-        msg.role === "toolResult" ? truncateForSummary(text, TOOL_RESULT_MAX_CHARS) : text,
-      ]
-        .filter(Boolean)
-        .join("\n");
-      if (!content) {
+      const includeOmission = omissionMessages <= MAX_OMISSION_MESSAGES;
+      if (!text && !(includeOmission && omissionText)) {
         continue;
       }
-      if (msg.role === "toolResult") {
-        const label = callLabel ?? `${msg.toolName}(...)`;
-        labeledResults.set(parts.length, `[Tool result of ${label}]: ${content}`);
-        parts.push(`[Tool result]: ${content}`);
-      } else {
-        if (isCompactionUserRequest(msg)) {
-          userEntries.push(parts.length);
-        }
-        parts.push(`[${formatCompactionUserLabel(msg)}]: ${content}`);
+      if (isCompactionUserRequest(message)) {
+        userEntries.push(entries.length);
       }
-    } else if (msg.role === "assistant") {
-      const textParts: string[] = [];
-      const toolCalls: string[] = [];
-      // Results answer the latest assistant turn; calls an earlier turn left
-      // unanswered (aborted, failed) must not label them.
+      add({ messageIndex, kind: "content", includeOmission, callLabel }, message);
+    } else if (message.role === "assistant") {
       callLabels.clear();
-
-      for (const block of msg.content) {
+      let hasText = false;
+      const toolCalls: string[] = [];
+      for (const block of message.content) {
         if (block.type === "text") {
-          textParts.push(block.text);
+          hasText = true;
         } else if (block.type === "toolCall") {
           const args = Object.entries(block.arguments).map(
             ([key, value]) => [key, stringifyCompactionValue(value)] as const,
           );
-          const argsStr = args.map(([key, text]) => `${key}=${text}`).join(", ");
-          toolCalls.push(`${block.name}(${argsStr})`);
           callLabels.add(block.id, formatCallLabel(block.name, args));
+          toolCalls.push(
+            `${block.name}(${args.map(([key, value]) => `${key}=${value}`).join(", ")})`,
+          );
         }
       }
-
-      if (textParts.length > 0) {
-        parts.push(`[Assistant]: ${textParts.join("\n")}`);
+      if (hasText) {
+        add({ messageIndex, kind: "assistant" }, message);
       }
       if (toolCalls.length > 0) {
-        parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
+        add(
+          { messageIndex, kind: "calls" },
+          message,
+          `[Assistant tool calls]: ${toolCalls.join("; ")}`,
+        );
       }
     }
   }
-
-  return { entries: parts, labeledResults, userEntries };
+  return {
+    count: entries.length,
+    totalChars,
+    weights,
+    userEntries,
+    render(index, sampled) {
+      const entry = entries[index];
+      const message = entry && messages.get(entry.messageIndex);
+      if (!entry || !message) {
+        throw new Error("Compaction serialization source is missing a selected message");
+      }
+      return renderSerializedEntry(entry, message, sampled);
+    },
+  };
 }
 
 /**
@@ -603,6 +512,18 @@ export interface BoundedConversation {
   trimmedEntries: number;
 }
 
+/** A snapshot's serialization facts; payloads need only be rendered when selected. */
+export interface SerializedConversationSource {
+  count: number;
+  /** Unlabelled CJK-weighted total, including separators, for the unchanged-input path. */
+  totalChars: number;
+  /** CJK-weighted entry sizes with tool-call labels, used when sampling. */
+  weights: readonly number[];
+  userEntries: readonly number[];
+  /** Render from the same snapshot used to compute the selection facts. */
+  render(index: number, sampled: boolean): string;
+}
+
 /**
  * Serialize messages for one summary request within `maxChars` CJK-weighted
  * characters. Small inputs are unchanged. Larger inputs keep, in this order:
@@ -617,22 +538,31 @@ export function serializeConversationWithinBudget(
   messages: Message[],
   maxChars: number,
 ): BoundedConversation {
-  const serialized = serializeConversationEntries(messages);
+  return serializeConversationSourceWithinBudget(
+    createSerializedConversationSource({
+      length: messages.length,
+      get: (index) => messages[index],
+    }),
+    maxChars,
+  );
+}
+
+/** Apply the same sampling policy without retaining unselected serialized payloads. */
+export function serializeConversationSourceWithinBudget(
+  source: SerializedConversationSource,
+  maxChars: number,
+): BoundedConversation {
   const separatorChars = ENTRY_SEPARATOR.length;
-  const totalChars =
-    serialized.entries.reduce((sum, entry) => sum + estimateStringChars(entry), 0) +
-    separatorChars * Math.max(0, serialized.entries.length - 1);
-  if (totalChars <= maxChars) {
+  if (source.totalChars <= maxChars) {
     return {
-      text: serialized.entries.join(ENTRY_SEPARATOR),
+      text: Array.from({ length: source.count }, (_, index) => source.render(index, false)).join(
+        ENTRY_SEPARATOR,
+      ),
       omittedEntries: 0,
       trimmedEntries: 0,
     };
   }
-  const entries = serialized.entries.map(
-    (entry, index) => serialized.labeledResults.get(index) ?? entry,
-  );
-  const weights = entries.map((entry) => estimateStringChars(entry));
+  const { weights } = source;
 
   const selected = new Map<number, string>();
   let trimmedEntries = 0;
@@ -646,13 +576,24 @@ export function serializeConversationWithinBudget(
       return true;
     }
     const leftOpen = index > 0 && !selected.has(index - 1);
-    const rightOpen = index < entries.length - 1 && !selected.has(index + 1);
+    const rightOpen = index < source.count - 1 && !selected.has(index + 1);
     const markerDelta = leftOpen && rightOpen ? 1 : !leftOpen && !rightOpen ? -1 : 0;
     const markerCost = markerDelta * OMISSION_MARKER_CHARS;
-    const entry = entries[index] ?? "";
     const entryLimit = Math.min(limit - markerCost, maxEntryChars + separatorChars);
-    let text = entry;
     let chars = (weights[index] ?? 0) + separatorChars;
+    // Reject an unaffordable entry before acquiring its payload. The trimming
+    // helper requires this minimum room independent of the entry's contents.
+    if (
+      chars > entryLimit &&
+      entryLimit - separatorChars - ELISION_MARKER_RESERVE_CHARS < MIN_TRIMMED_ENTRY_CHARS
+    ) {
+      return false;
+    }
+    if (chars <= entryLimit && usedChars + chars + markerCost > maxChars) {
+      return false;
+    }
+    const entry = source.render(index, true);
+    let text = entry;
     if (chars > entryLimit) {
       const trimmed = elideMiddleWithinWeight(entry, entryLimit - separatorChars);
       if (trimmed === undefined) {
@@ -675,12 +616,12 @@ export function serializeConversationWithinBudget(
 
   // Newest entries carry the live task, so they stay verbatim. Only the newest
   // entry may be trimmed, when it alone exceeds the tail share.
-  let tailStart = entries.length;
+  let tailStart = source.count;
   const tailLimit = Math.floor(maxChars * SUMMARY_INPUT_TAIL_SHARE);
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
+  for (let index = source.count - 1; index >= 0; index -= 1) {
     const remaining = tailLimit - usedChars;
     const verbatim = (weights[index] ?? 0) + separatorChars <= remaining;
-    if ((!verbatim && tailStart !== entries.length) || !take(index, remaining)) {
+    if ((!verbatim && tailStart !== source.count) || !take(index, remaining)) {
       break;
     }
     tailStart = index;
@@ -689,7 +630,7 @@ export function serializeConversationWithinBudget(
   // Older user messages state what was asked, decided and corrected; a fact the
   // user gave once must not depend on where the samples fall. When they do not
   // all fit, they are spread evenly across the history, newest first.
-  const olderUsers = serialized.userEntries.filter((index) => index < tailStart);
+  const olderUsers = source.userEntries.filter((index) => index < tailStart);
   if (olderUsers.length > 0) {
     const userBudget = Math.floor(maxChars * SUMMARY_INPUT_USER_SHARE);
     const userLimit = usedChars + userBudget;
@@ -745,9 +686,9 @@ export function serializeConversationWithinBudget(
   let omittedEntries = 0;
   let gap = 0;
   // The extra iteration flushes a trailing gap.
-  for (let index = 0; index <= entries.length; index += 1) {
+  for (let index = 0; index <= source.count; index += 1) {
     const text = selected.get(index);
-    if (text === undefined && index < entries.length) {
+    if (text === undefined && index < source.count) {
       gap += 1;
       continue;
     }

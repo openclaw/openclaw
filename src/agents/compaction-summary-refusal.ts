@@ -1,12 +1,18 @@
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import {
   compactWithoutSummary,
+  type CompactionResult,
+  type CompactionDetails,
   type CompactionPreparation,
 } from "../../packages/agent-core/src/harness/compaction/compaction.js";
-import { isSummaryProviderError } from "../../packages/agent-core/src/harness/types.js";
+import { ok, isSummaryProviderError } from "../../packages/agent-core/src/harness/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCompactionSafeguardCancellation } from "./agent-hooks/compaction-safeguard-runtime.js";
+import {
+  getPreparedCompaction,
+  resolveCompactionFallback,
+} from "./sessions/prepared-compaction.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
 
@@ -23,8 +29,11 @@ export function isCompactionSummaryRefusal(error: unknown): boolean {
 }
 
 /** Keep the prepared recent tail without asking another model to override a refusal. */
-export function compactAfterSummaryRefusal(preparation: CompactionPreparation) {
-  const result = compactWithoutSummary(preparation);
+export function compactAfterSummaryRefusal(
+  preparation: CompactionPreparation,
+  fallback?: CompactionResult<CompactionDetails>,
+) {
+  const result = fallback ? ok(fallback) : compactWithoutSummary(preparation);
   if (!result.ok) {
     throw new Error(
       "The summarizer refused, and recent context could not fit without a summary. " +
@@ -52,7 +61,13 @@ export function recoverCompactionSafeguardFailure(
   signal.throwIfAborted();
   if (isCompactionSummaryRefusal(error)) {
     try {
-      return { compaction: compactAfterSummaryRefusal(preparation) };
+      const prepared = getPreparedCompaction(sessionManager);
+      return {
+        compaction: compactAfterSummaryRefusal(
+          preparation,
+          prepared ? resolveCompactionFallback(preparation, prepared) : undefined,
+        ),
+      };
     } catch (recoveryError) {
       setCompactionSafeguardCancellation(
         sessionManager,

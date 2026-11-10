@@ -1,5 +1,6 @@
 // Benchmark-only observation: never loaded by the normal Gateway launcher.
 import { appendFileSync, existsSync, mkdirSync, rmdirSync, writeFileSync } from "node:fs";
+import { Session } from "node:inspector";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { GCProfiler, getHeapStatistics, writeHeapSnapshot } from "node:v8";
@@ -15,6 +16,17 @@ const output = process.env.OPENCLAW_BENCH_WORKER_MEMORY_DIR;
 const baselineOwners = process.env.OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS === "1";
 if (!output && !baselineOwners) {
   throw new Error("Transcript memory preload requires its synthetic benchmark output directory");
+}
+if (output && isMainThread) {
+  // Sample the receiving isolate too: worker streaming can still retain the
+  // complete selected transcript on the host while summarization is pending.
+  const file = path.join(output, `main-${process.pid}.jsonl`);
+  setInterval(() => {
+    appendFileSync(
+      file,
+      `${JSON.stringify({ atEpochMs: Date.now(), pid: process.pid, memory: process.memoryUsage(), cpu: process.cpuUsage() })}\n`,
+    );
+  }, 100).unref();
 }
 if (baselineOwners) {
   const owners = [
@@ -72,6 +84,9 @@ workerThreads.Worker = class extends NativeWorker {
                 ? { OPENCLAW_BENCH_WORKER_SNAPSHOTS: "1" }
                 : {}),
               ...(baselineOwners ? { OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1" } : {}),
+              ...(process.env.OPENCLAW_BENCH_WORKER_PROFILE === "1"
+                ? { OPENCLAW_BENCH_WORKER_PROFILE: "1" }
+                : {}),
             },
     });
   }
@@ -98,6 +113,7 @@ if (
   const kinds = new Set([
     "prewarm",
     "transcript-hydration",
+    "compaction-source",
     "transcript-maintenance",
     "history-page",
     "session-entry-list",
@@ -171,10 +187,13 @@ if (
         before: ReturnType<typeof sample>;
         observedPeakHeapUsed: number;
         parsedBytes: number;
+        parseCount: number;
+        parseStacks: Record<string, number>;
         majorGcCount: number;
         postMajorGcOldGenerationBytes?: number;
       }
     | undefined;
+  let cpuProfiler: Session | undefined;
   const profiler = new GCProfiler();
   profiler.start();
   const drainGc = () => {
@@ -233,6 +252,15 @@ if (
       }
       drainGc();
       const before = sample();
+      if (
+        process.env.OPENCLAW_BENCH_WORKER_PROFILE === "1" &&
+        (input.kind === "compaction-source" || input.kind === "transcript-hydration")
+      ) {
+        cpuProfiler = new Session();
+        cpuProfiler.connect();
+        cpuProfiler.post("Profiler.enable");
+        cpuProfiler.post("Profiler.start");
+      }
       active = {
         taskId: message.taskId,
         kind: kinds.has(input.kind) ? input.kind : "other",
@@ -240,6 +268,8 @@ if (
         before,
         observedPeakHeapUsed: before.heapUsed,
         parsedBytes: 0,
+        parseCount: 0,
+        parseStacks: {},
         majorGcCount: 0,
       };
     });
@@ -251,6 +281,33 @@ if (
       ]
     ) => {
       const message: unknown = args[0];
+      if (
+        active?.kind === "compaction-source" &&
+        message &&
+        typeof message === "object" &&
+        "status" in message &&
+        message.status === "request" &&
+        "value" in message &&
+        message.value &&
+        typeof message.value === "object"
+      ) {
+        const value = message.value as Record<string, unknown>;
+        if (value.kind === "prepared" && value.plan && typeof value.plan === "object") {
+          const plan = value.plan as { retained: unknown[] };
+          write({
+            kind: "compaction-prepared",
+            retainedEntries: plan.retained.length,
+            retainedJsonBytes: Buffer.byteLength(JSON.stringify(plan.retained)),
+          });
+        } else if (
+          value.kind === "serialized" &&
+          value.conversation &&
+          typeof value.conversation === "object"
+        ) {
+          const conversation = value.conversation as { text: string };
+          write({ kind: "compaction-serialized", summaryInputChars: conversation.text.length });
+        }
+      }
       if (
         active &&
         message &&
@@ -270,9 +327,28 @@ if (
           after,
           observedPeakHeapUsed: Math.max(active.observedPeakHeapUsed, after.heapUsed),
           parsedBytes: active.parsedBytes,
+          ...(process.env.OPENCLAW_BENCH_WORKER_PROFILE === "1"
+            ? { parseStacks: active.parseStacks }
+            : {}),
           majorGcCount: active.majorGcCount,
           postMajorGcOldGenerationBytes: active.postMajorGcOldGenerationBytes,
         });
+        const cpu = cpuProfiler;
+        if (cpu) {
+          const profilePath = path.join(
+            output,
+            `worker-${threadId}-task-${active.taskId}.cpuprofile`,
+          );
+          cpu.post("Profiler.stop", (error, result) => {
+            if (error) {
+              write({ kind: "profile-error", message: error.message });
+            } else {
+              writeFileSync(profilePath, JSON.stringify(result.profile));
+            }
+            cpu.disconnect();
+          });
+          cpuProfiler = undefined;
+        }
         lastKind = active.kind;
         active = undefined;
       }
@@ -301,6 +377,10 @@ if (
     const value = Reflect.apply(parse, undefined, args);
     if (active && typeof args[0] === "string" && args[0].length >= 1024) {
       active.parsedBytes += Buffer.byteLength(args[0]);
+      if (process.env.OPENCLAW_BENCH_WORKER_PROFILE === "1" && active.parseCount++ % 64 === 0) {
+        const stack = new Error().stack?.split("\n").slice(2).join("\n") ?? "unknown";
+        active.parseStacks[stack] = (active.parseStacks[stack] ?? 0) + 1;
+      }
       active.observedPeakHeapUsed = Math.max(
         active.observedPeakHeapUsed,
         process.memoryUsage().heapUsed,

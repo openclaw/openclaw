@@ -754,6 +754,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/memory-flush-session.test.ts",
   "src/agents/sessions/session-manager-hydration.test.ts",
   "src/agents/sessions/session-manager-hydration-stream.test.ts",
+  "src/agents/sessions/session-manager-compaction-source.test.ts",
   "src/agents/sessions/session-manager-incognito.test.ts",
   "src/channels/join-intro/report-channel-room-join.test.ts",
   "src/plugin-sdk/ingress-effect-once.test.ts",
