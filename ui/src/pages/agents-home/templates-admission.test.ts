@@ -296,3 +296,60 @@ it("recovers admitted Template A after creating B while A fails in the backgroun
     request.mock.calls.filter(([method]) => method === "chat.send" || method === "sessions.create"),
   ).toHaveLength(0);
 });
+
+it.each([false, true])(
+  "retires settled partial routing with its Gateway scope (background=%s)",
+  async (background) => {
+    const { request, context, setPhase } = createPage({ templatesEnabled: true });
+    const source = {
+      packageName: workflowOperator.packageName,
+      version: workflowOperator.latestVersion,
+    };
+    const plan = await readTemplateAddReviewPlan(context.gateway.snapshot.client!, source);
+    const original = request.getMockImplementation()!;
+    const saved = { agentId: "workflow-operator", sessionKey: "agent:workflow-operator:team-room" };
+    request.mockImplementation((method, params, options) =>
+      method === "templates.add.apply"
+        ? Promise.resolve({
+            ...saved,
+            status: "partial",
+            agentRetained: true,
+            initializationPending: true,
+            error: { code: "verification_failed", message: "Template verification failed" },
+          })
+        : original(method, params, options),
+    );
+    await addTemplateAgent(context, source, plan, false);
+    const composer = context.chatSubmissions.readCreateFor(saved.sessionKey)!.composer!;
+    composer.setMessage("Private retained draft");
+    const retry = composer.recovery!.retry;
+    const replacement = { sessionKey: "agent:another:team-room", admitted: false };
+    const clearReplacement = background
+      ? context.chatSubmissions.beginCreate({
+          creation: replacement,
+          message: null,
+          canDisplay: () => true,
+        })
+      : undefined;
+    expect(context.chatSubmissions.creationFor(saved.sessionKey)).toBeDefined();
+    context.gateway.snapshot.hello!.auth!.recoveryScope = "other-principal";
+    setPhase("connected");
+    expect(context.chatSubmissions.creationFor(saved.sessionKey)).toBeUndefined();
+    expect(context.chatSubmissions.readCreateFor(saved.sessionKey)).toBeUndefined();
+    expect(composer.canRecover()).toBe(false);
+    expect(composer.message).toBe("");
+    expect(composer.recovery).toBeUndefined();
+    expect(context.chatSubmissions.creation).toEqual(background ? replacement : undefined);
+    clearReplacement?.();
+    expect(context.chatSubmissions.creating).toBe(false);
+    retry();
+    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
+      1,
+    );
+    expect(
+      request.mock.calls.filter(
+        ([method]) => method === "chat.send" || method === "sessions.create",
+      ),
+    ).toHaveLength(0);
+  },
+);

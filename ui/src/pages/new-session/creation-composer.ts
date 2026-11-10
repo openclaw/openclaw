@@ -91,6 +91,7 @@ export class CreationComposer {
     readonly agentId: string,
     public incognito: boolean,
     private readonly notifyDraft: () => void,
+    private readonly retireCreation?: () => void,
   ) {
     this.gatewayUrl = context.gateway.connection.gatewayUrl;
     this.recoveryScope = context.gateway.snapshot.hello?.auth?.recoveryScope;
@@ -286,6 +287,7 @@ export class CreationComposer {
       return;
     }
     this.disposed = true;
+    this.retireCreation?.();
     this.recovery = undefined;
     for (const listener of this.invalidations) {
       listener();

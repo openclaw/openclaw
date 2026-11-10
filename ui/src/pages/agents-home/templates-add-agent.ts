@@ -61,7 +61,13 @@ export async function addTemplateAgent(
     agentId,
     exactKey: true,
   });
-  const composer = new CreationComposer(context, agentId, false, () => {});
+  const composer = new CreationComposer(
+    context,
+    agentId,
+    false,
+    () => {},
+    () => clearChat(),
+  );
   const clearChat = context.chatSubmissions.beginCreate({
     creation,
     composer,
