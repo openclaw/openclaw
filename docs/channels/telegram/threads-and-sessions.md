@@ -62,6 +62,10 @@ How forum topics map to sessions, agents, and ACP bindings.
   </Accordion>
 </AccordionGroup>
 
+## Private-topic names after reset
+
+Reset keeps the current private Telegram topic name. The pending title check is not consumed by control slash commands such as `/reset` or `/model`; the first substantive message after reset triggers it. The title generator compares that message with the existing automatically generated name and returns `KEEP` when the name still fits or `REPLACE: <title>` when the conversation has moved to a different subject. `KEEP` leaves the Telegram topic and its mirrored session title unchanged. A manually renamed topic remains protected from automatic replacement. Pending state and generated-name ownership are tracked in Telegram's existing private topic cache; this does not add a session database migration.
+
 ## Bot-created forum topics
 
 Set `requireMentionInBotThreads` on a group or topic to override mention gating only in forum topics created by the receiving bot. `false` allows unmentioned messages to start turns there; `true` requires a mention, including for replies to the bot. Omission preserves existing behavior. A topic setting wins over the selected group setting. The same paths are available under `channels.telegram.accounts.<accountId>.groups`.

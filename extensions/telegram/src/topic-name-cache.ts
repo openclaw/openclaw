@@ -15,6 +15,8 @@ const DEFAULT_TOPIC_NAME_CACHE_SCOPE = "default";
 
 type TopicEntry = {
   name: string;
+  nameSource?: "generated" | "manual";
+  labelPending?: boolean;
   creatorUserId?: number;
   iconColor?: number;
   iconCustomEmojiId?: string;
@@ -155,7 +157,14 @@ export async function updateTopicName(
   const iconCustomEmojiId = patch.iconCustomEmojiId ?? existing?.iconCustomEmojiId;
   const closed = patch.closed ?? existing?.closed;
   const creatorUserId = patch.creatorUserId ?? existing?.creatorUserId;
+  const nameChanged =
+    patch.name !== undefined && existing !== undefined && patch.name !== existing.name;
+  const nameSource = patch.nameSource ?? (nameChanged ? "manual" : existing?.nameSource);
+  const labelPending =
+    nameSource === "manual" ? false : (patch.labelPending ?? existing?.labelPending);
   const merged: TopicEntry = {
+    ...(nameSource ? { nameSource } : {}),
+    ...(labelPending !== undefined ? { labelPending } : {}),
     name: patch.name ?? existing?.name ?? "",
     updatedAt: nextUpdatedAt(scope),
     ...(iconColor !== undefined ? { iconColor } : {}),
@@ -172,6 +181,18 @@ export async function updateTopicName(
   if (evictedKey) {
     await state.persistentStore.delete(evictedKey);
   }
+}
+
+/** Naming policy reads the same persisted observation as the visible topic name. */
+export async function getTopicLabelState(
+  chatId: number | string,
+  threadId: number | string,
+  scope?: string,
+): Promise<Readonly<TopicEntry> | undefined> {
+  const state = getTopicStoreState(scope);
+  await hydrateTopicStoreState(state);
+  const entry = state.store.get(cacheKey(chatId, threadId));
+  return entry ? { ...entry } : undefined;
 }
 
 export async function getTopicName(

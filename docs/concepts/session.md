@@ -129,12 +129,16 @@ an old backup and losing later writes.
 
 ## Automatic session names
 
-Interactive chat sessions without an explicit name generate a topic title in the
-background when the Gateway dispatches their message. Naming starts alongside
-worktree and reply preparation; it does not wait for the agent’s first progress
-event and does not block the turn. The name appears when the title model finishes.
-If the title request fails while overlapping a turn, it retries once after that
-turn settles. Explicit names and manual renames are preserved.
+Interactive chat sessions without an explicit name can receive a generated
+title in the background; naming does not block the turn. For private Telegram
+DM topics, reset preserves the current topic and mirrored session title. Control
+slash commands such as `/reset` and `/model` leave its pending title check
+untouched. The first substantive message after reset triggers a Telegram-specific
+reassessment: the existing automatically generated title is kept when it still
+fits, or replaced when the conversation has moved to a different subject.
+Manually renamed Telegram topics are preserved. Pending state and generated-name
+ownership use Telegram's existing private topic cache; this behavior does not
+change title handling for other channels or add a session database migration.
 
 ## DM isolation
 

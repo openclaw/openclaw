@@ -10,6 +10,7 @@ import {
   resolveChunkMode,
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { prepareSessionEntryPatch } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -41,8 +42,9 @@ import {
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import { resolveStickerVisionSupport } from "./sticker-vision.js";
+import { resetTopicLabelPrompt, resolveResetTopicLabel } from "./topic-label-reset.js";
 import {
-  getTopicName,
+  getTopicLabelState,
   resolveTelegramTopicNameCacheScope,
   updateTopicName,
 } from "./topic-name-cache.js";
@@ -278,6 +280,10 @@ export const dispatchTelegramMessage = async (
   let shouldLabelDmTopic = false;
   let topicNameScope: string | undefined;
   let topicNameBeforeLabel: string | undefined;
+  let reassessTopicLabel = false;
+  let topicLabelSession:
+    | { sessionId: string; lifecycleRevision?: string; storePath: string }
+    | undefined;
   let turnDispatched: boolean | undefined;
   const isDmTopic =
     !dispatchContext.isGroup &&
@@ -288,7 +294,10 @@ export const dispatchTelegramMessage = async (
     try {
       const sessionKey = dispatchContext.ctxPayload.SessionKey;
       if (sessionKey) {
-        const { entry } = await loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey);
+        const { entry, storePath } = await loadFreshSessionEntry(
+          dispatchContext.route.agentId,
+          sessionKey,
+        );
         topicNameScope = resolveTelegramTopicNameCacheScope({
           cfg,
           accountId: dispatchContext.accountId,
@@ -297,7 +306,43 @@ export const dispatchTelegramMessage = async (
         topicNameBeforeLabel = dispatchContext.ctxPayload.ThreadLabel ?? entry?.topicName;
         // Reply completion is not title completion: a failed background label must
         // remain eligible on the next message while the native placeholder remains.
-        shouldLabelDmTopic = !entry?.systemSent || topicNameBeforeLabel === "New Thread";
+        const labelState = await getTopicLabelState(
+          dispatchContext.chatId,
+          dispatchContext.threadSpec.id!,
+          topicNameScope,
+        );
+        const manuallyNamed = Boolean(entry?.label?.trim()) || labelState?.nameSource === "manual";
+        const hasNamedTopic = Boolean(
+          topicNameBeforeLabel && topicNameBeforeLabel !== "New Thread",
+        );
+        if (!manuallyNamed && hasNamedTopic && !entry?.systemSent && !labelState?.labelPending) {
+          // Persist before dispatch: /model can initialize the session without being a title task.
+          await updateTopicName(
+            dispatchContext.chatId,
+            dispatchContext.threadSpec.id!,
+            {
+              name: topicNameBeforeLabel!,
+              labelPending: true,
+            },
+            topicNameScope,
+          );
+        }
+        reassessTopicLabel =
+          !manuallyNamed &&
+          hasNamedTopic &&
+          (!entry?.systemSent || labelState?.labelPending === true);
+        shouldLabelDmTopic =
+          !manuallyNamed &&
+          (!entry?.systemSent ||
+            topicNameBeforeLabel === "New Thread" ||
+            labelState?.labelPending === true);
+        if (entry?.sessionId) {
+          topicLabelSession = {
+            sessionId: entry.sessionId,
+            lifecycleRevision: entry.lifecycleRevision,
+            storePath,
+          };
+        }
       } else {
         logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
       }
@@ -450,6 +495,11 @@ export const dispatchTelegramMessage = async (
     }
     const { RawBody, BodyForAgent, Body, media } = dispatchContext.ctxPayload;
     const labelSource = RawBody?.trim() || BodyForAgent?.trim();
+    // Reset leaves this topic eligible for its first substantive title. A
+    // control command must not consume that opportunity or rename the topic.
+    if (dispatchContext.ctxPayload.CommandSource || labelSource?.startsWith("/")) {
+      return;
+    }
     const userMessage = truncateUtf16Safe(
       labelSource || formatMediaPlaceholderText(media ?? []) || Body || "",
       500,
@@ -466,38 +516,116 @@ export const dispatchTelegramMessage = async (
     const topicThreadId = dispatchContext.threadSpec.id!;
     void (async () => {
       try {
-        const label = await generateTopicLabel({
+        if (!topicLabelSession && dispatchContext.ctxPayload.SessionKey) {
+          loadFreshSessionEntry.clear();
+          const snapshot = await loadFreshSessionEntry(
+            dispatchContext.route.agentId,
+            dispatchContext.ctxPayload.SessionKey,
+          );
+          if (snapshot.entry?.sessionId) {
+            topicLabelSession = {
+              sessionId: snapshot.entry.sessionId,
+              lifecycleRevision: snapshot.entry.lifecycleRevision,
+              storePath: snapshot.storePath,
+            };
+          }
+        }
+        const response = await generateTopicLabel({
           userMessage,
-          prompt: autoTopicConfig.prompt,
-          maxLength: 128,
+          prompt: reassessTopicLabel
+            ? resetTopicLabelPrompt(topicNameBeforeLabel!)
+            : autoTopicConfig.prompt,
+          maxLength: reassessTopicLabel ? 160 : 128,
           cfg,
           agentId: dispatchContext.route.agentId,
           agentDir: resolveAgentDir(cfg, dispatchContext.route.agentId),
         });
+        const decision =
+          response &&
+          (reassessTopicLabel ? resolveResetTopicLabel(topicNameBeforeLabel!, response) : response);
+        const label = decision ? truncateUtf16Safe(decision, 128) : null;
         if (!label) {
-          logVerbose("auto-topic-label: LLM returned empty label");
+          logVerbose("auto-topic-label: LLM returned no valid label decision");
           return;
         }
         logVerbose(`auto-topic-label: generated label (len=${label.length})`);
-        const observedName = await getTopicName(
+        const observed = await getTopicLabelState(
           dispatchContext.chatId,
           topicThreadId,
           topicNameScope,
         );
-        if (observedName && observedName !== topicNameBeforeLabel) {
+        if (
+          observed?.nameSource === "manual" ||
+          (observed?.name && observed.name !== topicNameBeforeLabel)
+        ) {
           logVerbose("auto-topic-label: topic name changed, skipping rename");
           return;
         }
-        await bot.api.editForumTopic(dispatchContext.chatId, topicThreadId, { name: label });
+        loadFreshSessionEntry.clear();
+        const current = dispatchContext.ctxPayload.SessionKey
+          ? await loadFreshSessionEntry(
+              dispatchContext.route.agentId,
+              dispatchContext.ctxPayload.SessionKey,
+            )
+          : undefined;
+        if (
+          isDispatchSuperseded() ||
+          (topicLabelSession &&
+            (current?.entry?.sessionId !== topicLabelSession.sessionId ||
+              current.entry.lifecycleRevision !== topicLabelSession.lifecycleRevision ||
+              current.entry.label?.trim()))
+        ) {
+          return;
+        }
+        if (label !== topicNameBeforeLabel) {
+          await bot.api.editForumTopic(dispatchContext.chatId, topicThreadId, { name: label });
+        }
         // The Bot API returns only true; do not depend on a service-message echo
         // to retire the placeholder and prevent renaming on every later turn.
         await updateTopicName(
           dispatchContext.chatId,
           topicThreadId,
-          { name: label },
+          { name: label, nameSource: "generated", labelPending: true },
           topicNameScope,
         );
-        logVerbose(`auto-topic-label: renamed topic ${dispatchContext.chatId}/${topicThreadId}`);
+        if (topicLabelSession && dispatchContext.ctxPayload.SessionKey) {
+          const patched = await prepareSessionEntryPatch({
+            agentId: dispatchContext.route.agentId,
+            storePath: topicLabelSession.storePath,
+            sessionKey: dispatchContext.ctxPayload.SessionKey,
+            prepare: (entry) => {
+              if (
+                entry.sessionId !== topicLabelSession!.sessionId ||
+                entry.lifecycleRevision !== topicLabelSession!.lifecycleRevision ||
+                entry.label?.trim()
+              ) {
+                return null;
+              }
+              return {
+                topicName: label,
+                ...(entry.displayName === topicNameBeforeLabel ? { displayName: label } : {}),
+              };
+            },
+            preserveActivity: true,
+            requireWriteSuccess: true,
+            authority: {
+              kind: "host",
+              assertCurrent() {
+                turnAdoptionLifecycle?.abortSignal?.throwIfAborted();
+              },
+            },
+          });
+          if (!patched) {
+            return;
+          }
+        }
+        await updateTopicName(
+          dispatchContext.chatId,
+          topicThreadId,
+          { labelPending: false },
+          topicNameScope,
+        );
+        logVerbose(`auto-topic-label: settled topic ${dispatchContext.chatId}/${topicThreadId}`);
       } catch (err) {
         logVerbose(`auto-topic-label: failed: ${String(err)}`);
       }

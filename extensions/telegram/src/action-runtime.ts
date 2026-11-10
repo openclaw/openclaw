@@ -767,7 +767,7 @@ export async function handleTelegramAction(
     });
     if (result.chatId) {
       const patch = {
-        ...(name ? { name } : {}),
+        ...(name ? { name, nameSource: "manual" as const } : {}),
         ...(iconCustomEmojiId ? { iconCustomEmojiId } : {}),
       };
       if (Object.keys(patch).length > 0) {
