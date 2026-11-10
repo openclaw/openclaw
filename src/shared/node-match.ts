@@ -26,7 +26,9 @@ function normalizeNodeKey(value: string) {
   // them so decorated and plain display-name selectors stay equivalent.
   // Retain script marks only when attached to a surviving letter/number; marks
   // on stripped emoji or symbols must not become invisible selector bytes.
-  const normalized = normalizeLowercaseStringOrEmpty(value.normalize("NFC"))
+  // Lowercasing can produce decomposed marks (for example J + caron); compose afterward.
+  const normalized = normalizeLowercaseStringOrEmpty(value)
+    .normalize("NFC")
     .replace(/(?=\p{M})\p{Emoji_Component}/gu, "")
     .replace(/(?<![\p{L}\p{M}\p{N}])\p{M}+/gu, "");
   return normalized
