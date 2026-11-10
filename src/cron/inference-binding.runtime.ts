@@ -470,6 +470,11 @@ export async function captureCronFallbackInferenceAccounts(
     runtimeSessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
     /** Fallback accounts recorded before this edit keep their captured runtime. */
     recordedAccounts?: CronInferenceAccount[];
+    /**
+     * This edit submitted the fallback list itself, so each `@profile` in it is a fresh explicit
+     * selection: a recorded account for that profile is reauthorized, not kept as-is.
+     */
+    fallbacksSubmitted?: boolean;
     authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
     /**
      * Doctor on an already-bound job: without an explicit `@profile`, record a fallback only
@@ -490,8 +495,11 @@ export async function captureCronFallbackInferenceAccounts(
   } of await resolveCronFallbackProviderModels(params)) {
     const recorded = params.recordedAccounts?.find((account) => account.provider === provider);
     // An edit never re-resolves a recorded account: auth order or a replaced credential must
-    // not silently move it. Only a different explicit `@profile` adopts another account.
-    if (recorded && (!explicitProfileId || explicitProfileId === recorded.profileId)) {
+    // not silently move it. Only an `@profile` submitted in this edit adopts or reauthorizes one.
+    const explicitlySubmitted =
+      explicitProfileId !== undefined &&
+      (params.fallbacksSubmitted === true || explicitProfileId !== recorded?.profileId);
+    if (recorded && !explicitlySubmitted) {
       accounts.push(recorded);
       continue;
     }

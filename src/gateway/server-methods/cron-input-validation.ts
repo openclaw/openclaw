@@ -146,12 +146,13 @@ async function captureCronInferenceForCaller(
     /** The job's payload fallbacks; omitted fallbacks inherit the agent policy. */
     fallbacks?: string[];
     recordedFallbackAccounts?: CronInferenceAccount[];
+    fallbacksSubmitted?: boolean;
   },
   caller: InferenceCaller,
 ) {
   const personal = createPersonalAccountAuthorizer(caller);
   let authority: AuthProfileAuthorization | undefined;
-  const { fallbacks, recordedFallbackAccounts, ...captureParams } = params;
+  const { fallbacks, recordedFallbackAccounts, fallbacksSubmitted, ...captureParams } = params;
   let inferenceBinding = await captureCronInferenceBinding({
     ...captureParams,
     retainAuthorization: (captured) => {
@@ -170,6 +171,7 @@ async function captureCronInferenceForCaller(
         executionSessionEntry: params.executionSessionEntry,
         runtimeSessionEntry: params.runtimeSessionEntry,
         recordedAccounts: recordedFallbackAccounts,
+        fallbacksSubmitted,
         authorizeProfile: personal.authorizeProfile,
       });
     } catch (error) {
@@ -539,6 +541,7 @@ async function refreshRecordedFallbackAccounts(
   cfg: OpenClawConfig,
   agentId: string,
   caller: InferenceCaller,
+  fallbacksSubmitted: boolean,
 ) {
   if (nextJob.payload.kind !== "agentTurn") {
     return undefined;
@@ -563,6 +566,7 @@ async function refreshRecordedFallbackAccounts(
         executionEntry,
       }),
       recordedAccounts: binding.fallbackAccounts,
+      fallbacksSubmitted,
       authorizeProfile: personal.authorizeProfile,
     }),
     assertInferenceSelectionCurrent: personal.assertCurrent,
@@ -622,6 +626,7 @@ export async function captureCronUpdatedInferenceBinding(
         cfg,
         agentId,
         caller,
+        "fallbacks" in patch.payload!,
       );
     }
     return undefined;
@@ -648,6 +653,7 @@ export async function captureCronUpdatedInferenceBinding(
       recordedRuntime,
       fallbacks,
       recordedFallbackAccounts: nextJob.inferenceBinding?.fallbackAccounts,
+      fallbacksSubmitted: patch.payload !== undefined && "fallbacks" in patch.payload,
     },
     caller,
   );

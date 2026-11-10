@@ -552,10 +552,12 @@ type GatewayCase = {
   payload: Record<string, unknown>;
   /** A later cron.update patch, applied before the run. */
   update?: Record<string, unknown>;
-  /** Config changes between create and the update. */
-  beforeUpdate?: (cfg: OpenClawConfig) => void;
+  /** Config or credential changes between create and the update. */
+  beforeUpdate?: (cfg: OpenClawConfig) => void | Promise<void>;
   expectAccount: { profileId: string; source: "user" | "auto" };
   expectKey: string;
+  /** The update recorded a new authorization for the same profile. */
+  expectReauthorized?: boolean;
 };
 
 const gatewayCases: GatewayCase[] = [
@@ -623,6 +625,18 @@ const gatewayCases: GatewayCase[] = [
     update: { model: "openai/gpt-4.1" },
     expectAccount: { profileId: "backup:main", source: "auto" },
     expectKey: "Bearer key-backup",
+  },
+  {
+    // Resubmitting the recorded profile after its credential was replaced reauthorizes it.
+    name: "reauthorized fallback account after a credential replacement",
+    payload: { fallbacks: ["backup/gpt-4.1@backup:main"] },
+    beforeUpdate: async () => {
+      await persistAuthProfileBatch({ profiles: [apiKeyProfile("backup:main", "key-rotated")] });
+    },
+    update: { fallbacks: ["backup/gpt-4.1@backup:main"] },
+    expectAccount: { profileId: "backup:main", source: "user" },
+    expectKey: "Bearer key-rotated",
+    expectReauthorized: true,
   },
 ];
 
@@ -697,7 +711,7 @@ it.each(gatewayCases)("Gateway records the $name and the run uses it", async (te
       const id = String(created?.id);
       const [before] = (await loadCronJobsStore(storePath)).jobs;
       if (testCase.beforeUpdate) {
-        testCase.beforeUpdate(cfg);
+        await testCase.beforeUpdate(cfg);
         setRuntimeConfigSnapshot(cfg);
       }
       if (testCase.update) {
@@ -711,6 +725,12 @@ it.each(gatewayCases)("Gateway records the $name and the run uses it", async (te
         { provider: "backup", ...testCase.expectAccount },
       ]);
       // The primary account is never changed by fallback capture.
+      if (testCase.expectReauthorized !== undefined) {
+        expect(
+          stored!.inferenceBinding!.fallbackAccounts![0]!.authorizationId !==
+            before!.inferenceBinding!.fallbackAccounts![0]!.authorizationId,
+        ).toBe(testCase.expectReauthorized);
+      }
       const { fallbackAccounts: _after, ...primaryAfter } = stored!.inferenceBinding!;
       const { fallbackAccounts: _before, ...primaryBefore } = before!.inferenceBinding!;
       expect(primaryAfter).toEqual(primaryBefore);
