@@ -63,7 +63,8 @@ export type ResolvedOpenAICompletionsCompat = Omit<
     requiresTypedUnionBranches: boolean;
     configuredSupportsLongCacheRetention?: boolean;
     thinkingOffControlUndeclared: boolean;
-    seedField: OpenAICompletionsSeedField;
+    /** Absent means `seed`. */
+    seedField?: OpenAICompletionsSeedField;
   };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
