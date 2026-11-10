@@ -48,6 +48,9 @@ const providerArgs = [
   "--ascii-box-base-url",
   "https://boat.dev",
   "--ascii-box-no-env",
+  "--ascii-box-no-snapshots",
+  "--ascii-box-visibility",
+  "private",
 ];
 const childEnv = {
   ...env,

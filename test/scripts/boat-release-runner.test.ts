@@ -99,6 +99,21 @@ linuxRunnerTest("publishes only public identities and cleans up both resources",
   expect(vm).not.toMatch(/fixture-secret|fixture-private-key/);
   expect(f.run("register", { BOAT_VM_RECEIPT: vm }).status).toBe(0);
   expect(f.value("label")).toBe(JSON.parse(f.value("runner")).name);
+  for (const call of f
+    .calls()
+    .filter(
+      (args) => args[0] === "warmup" || (args[1] === "register" && !args.includes("--help")),
+    )) {
+    expect(call).toEqual(
+      expect.arrayContaining(["--ascii-box-no-env", "--ascii-box-no-snapshots"]),
+    );
+    expect(
+      call.slice(
+        call.indexOf("--ascii-box-visibility"),
+        call.indexOf("--ascii-box-visibility") + 2,
+      ),
+    ).toEqual(["--ascii-box-visibility", "private"]);
+  }
   expect(
     f.run("cleanup", { BOAT_VM_RECEIPT: vm, BOAT_RUNNER_RECEIPT: f.value("runner") }).status,
   ).toBe(0);
