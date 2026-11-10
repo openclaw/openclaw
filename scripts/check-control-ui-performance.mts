@@ -62,7 +62,9 @@ const controlUiPerformanceBudgets = {
   // Its qualification-base turn gains of 12.6–20.2% are coordinator-accepted.
   chatBootJsGzipBytes: 1_298_528,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
-  newBootJsGzipBytes: 803_364,
+  // Picker-hidden agents (#194575): CI Node 24 measures 803,504 B (+288 B) plus 64 B;
+  // Node 26 reports +331 B more for the same tree, CI measurement is authoritative.
+  newBootJsGzipBytes: 803_568,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
