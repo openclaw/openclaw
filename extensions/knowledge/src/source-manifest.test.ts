@@ -53,29 +53,26 @@ async function plan(dir: string, current: string, ...previous: string[]) {
 
 it("source manifests are deterministic, content-private, and produce overlap-aware plans", async () => {
   const dir = tempDirs.make("knowledge-source-ingest-");
+  const at = (fraction: string) => `2026-09-27T00:00:00.${fraction}Z`;
   const payload = { a: 1, ä: [{ "2": "two", "10": "ten", a: 1 }, true, null], z: 3 };
   const old = await snapshot(
     dir,
     "old",
     [
-      { id: "a", occurred_at: "2026-09-25T01:00:00-07:00", payload },
-      { id: "b", occurred_at: "2026-09-26T01:00:00-07:00", payload: { text: "old" } },
-      { id: "c", occurred_at: "2026-09-27T01:00:00-07:00", payload: { text: "deleted" } },
-      { id: "x", occurred_at: "2026-09-22T01:00:00-07:00", payload: { text: "outside" } },
+      { id: "a", occurred_at: "2026-09-26T17:00:00.000600001-07:00", payload },
+      { id: "b", occurred_at: at("000700001"), payload: { text: "old" } },
+      { id: "c", occurred_at: at("001400001"), payload: { text: "deleted" } },
+      { id: "x", occurred_at: at("000100001"), payload: { text: "outside" } },
       { id: "z", payload: { text: "no date" } },
     ],
-    ["2026-09-21T00:00:00-07:00", "2026-09-28T00:00:00-07:00", "2026-09-28T00:05:00-07:00"],
+    [at("000"), at("001500001"), at("010000001")],
   );
   const rows = [
-    { id: "a", occurred_at: "2026-09-25T08:00:00Z", payload },
-    { id: "b", occurred_at: "2026-09-26T08:00:00Z", payload: { text: "new" } },
-    { id: "d", occurred_at: "2026-09-29T08:00:00Z", payload: { text: "added" } },
+    { id: "a", occurred_at: at("000600001"), payload },
+    { id: "b", occurred_at: at("000700001"), payload: { text: "new" } },
+    { id: "d", occurred_at: at("002"), payload: { text: "added" } },
   ];
-  const window = [
-    "2026-09-25T00:00:00-07:00",
-    "2026-10-01T00:00:00-07:00",
-    "2026-10-01T00:05:00-07:00",
-  ];
+  const window = [at("000500001"), at("002500001"), at("010000002")];
   const current = await snapshot(dir, "current", rows, window);
   const result = await plan(dir, current.output, old.output);
   expect(result.items.added).toStrictEqual(["d"]);
@@ -83,11 +80,9 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   expect(result.items.unchanged).toStrictEqual(["a"]);
   expect(result.items.deleted).toStrictEqual(["c"]);
   expect(result.items.unresolved_missing).toStrictEqual(["z"]);
-  expect(result.coverage.covered).toStrictEqual([
-    { start: "2026-09-25T07:00:00.000Z", end: "2026-09-28T07:00:00.000Z" },
-  ]);
+  expect(result.coverage.covered).toStrictEqual([{ start: at("000500001"), end: at("001500001") }]);
   expect(result.coverage.uncovered).toStrictEqual([
-    { start: "2026-09-28T07:00:00.000Z", end: "2026-10-01T07:00:00.000Z" },
+    { start: at("001500001"), end: at("002500001") },
   ]);
   const content = gunzipSync(await readFile(current.output)).toString();
   expect(content).not.toMatch(/same|new|added/);
@@ -95,7 +90,7 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   expect(hash).toBe("ed2694e52b2fe820bd83b6f77118d0be33a57d9087ca71284b5705006b3d519a");
   const repeated = await snapshot(dir, "current-repeat", rows.toReversed(), window);
   expect(await readFile(repeated.output)).toStrictEqual(await readFile(current.output));
-  const newest = await plan(dir, current.output, old.output, current.output);
+  const newest = await plan(dir, current.output, current.output, old.output);
   expect(newest.items.changed).toEqual([]);
   expect(newest.items.unchanged).toEqual(["a", "b", "d"]);
   const partial = await snapshot(dir, "partial", [], window, "partial");
@@ -108,6 +103,38 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
   const scratch = tempDirs.make("knowledge-source-scratch-");
   const env = { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch };
   const options = { timeout: 10_000, env };
+  const malformed = Buffer.concat([
+    Buffer.from('{"id":"'),
+    Buffer.from([0xff]),
+    Buffer.from('"}\n'),
+  ]);
+  expect(() =>
+    run(
+      manifestScript,
+      [
+        "snapshot",
+        ...flags({
+          provider: "discord",
+          "source-key": "discord:guild:channel",
+          input: "-",
+          output: "-",
+          "coverage-start": at("000"),
+          "coverage-end": at("010"),
+        }),
+      ],
+      { ...options, input: malformed },
+    ),
+  ).toThrow(/encoded data was not valid/);
+  expect(await readdir(scratch)).toEqual([]);
+  const invalidManifest = path.join(dir, "invalid.manifest.jsonl");
+  await writeFile(
+    invalidManifest,
+    Buffer.concat([Buffer.from(content.split("\n")[0] + "\n"), malformed]),
+  );
+  expect(() => run(manifestScript, ["plan", "--current", invalidManifest], options)).toThrow(
+    /encoded data was not valid/,
+  );
+  expect(await readdir(scratch)).toEqual([]);
   expect(() =>
     run(manifestScript, ["plan", "--current", path.join(scratch, "missing.gz")], options),
   ).toThrow(/ENOENT/);

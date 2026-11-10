@@ -12,9 +12,9 @@
 
 .chat-details-desktop-body {
   --details-row-font-size: calc(13px * var(--control-ui-text-scale));
-  --details-row-line-height: 24px;
+  --details-row-line-height: calc(24px * var(--control-ui-text-scale));
   --details-meta-font-size: var(--control-ui-text-sm);
-  --details-meta-line-height: 20px;
+  --details-meta-line-height: calc(20px * var(--control-ui-text-scale));
   --details-row-padding: 4px;
   --details-row-outset: 4px;
   --details-row-height: 30px;

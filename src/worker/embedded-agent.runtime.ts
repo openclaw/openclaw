@@ -25,9 +25,9 @@ import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool
 import { projectRuntimeContextFragments } from "../agents/internal-runtime-context.js";
 import { buildExecutionHostRuntimeFacts } from "../agents/runtime-execution-facts.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
-import { AuthStorage } from "../agents/sessions/auth-storage.js";
+import { AuthStorage } from "../agents/sessions/auth-storage.core.js";
 import { convertToLlm } from "../agents/sessions/messages.js";
-import { ModelRegistry } from "../agents/sessions/model-registry.js";
+import { ModelRegistry } from "../agents/sessions/model-registry.core.js";
 import { DefaultResourceLoader } from "../agents/sessions/resource-loader.js";
 import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";

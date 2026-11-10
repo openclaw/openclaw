@@ -290,8 +290,11 @@ Behavior and limits:
   before acting.
 - Advisor needs conversation access and prompt injection permission through
   `plugins.entries.advisor.hooks`, which trusted plugins have by default.
-- Gateway info logs record review token usage and whether a correction steered
-  the run.
+- Gateway info logs record review token usage (uncached input, cache reads,
+  cache writes and output) and whether a correction steered the run. When a review
+  misses the provider cache and the provider reports cache-write tokens, its
+  context appears under cache writes rather than input. Reviews do not share the conversation's prompt-cache key, so on
+  OpenAI routes some reviews miss the cache.
 
 ## OpenClaw ID remote access
 
@@ -338,6 +341,16 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   **Remove access** for a browser. The confirmation lists any other devices that
   will also lose access. They disconnect immediately; use another approved owner
   browser or your recovery kit to restore access.
+- **Sign out of OpenClaw ID** on a remote browser ends its account session and
+  revokes the Gateway tokens issued to it, but the browser stays approved.
+  Signing back in on the same browser reconnects with the access it was
+  approved for, without a new device approval. Asking for more access than
+  that still needs approval.
+- **Settings → Devices** and `openclaw devices list` mark browsers that connect
+  through OpenClaw ID and link to **Access**. They can't be removed or have
+  their tokens revoked as devices. To end someone's access, remove them on
+  **Access**; to remove one of your own owner browsers, use **Your devices** in
+  the account menu. Nodes and other devices are managed as before.
 - There is no owner reset in this version: a claw keeps the recovery kit it was
   linked with, so store the kit safely.
 

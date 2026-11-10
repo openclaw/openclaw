@@ -27,6 +27,50 @@ export type ConfigCollectionDraftHandle = {
   openDraft(): void;
 };
 
+/**
+ * Draft source identity for a collection: an edit of one of its existing entries
+ * keeps the unfinished add draft, while any other source change still resets it.
+ */
+export function createCollectionDraftSource(source: () => unknown) {
+  let localEdit: { expected: unknown; retained: unknown } | undefined;
+  let sourceRevision = 0;
+  let sourceSnapshot: { source: unknown; revision: number } | undefined;
+  const draftSource = createMemo(() => {
+    const current = source();
+    if (localEdit && configValuesEqual(current, localEdit.expected)) {
+      return localEdit.retained;
+    }
+    // Returning to the pre-edit value is still an external context change.
+    // Keep its reset distinct from the retained source, without changing draft ownership.
+    if (localEdit) {
+      sourceRevision += 1;
+      localEdit = undefined;
+    }
+    // Unset collections use a symbol, which cannot survive JSON equality in a cloned wrapper.
+    if (
+      !sourceSnapshot ||
+      !Object.is(sourceSnapshot.source, current) ||
+      sourceSnapshot.revision !== sourceRevision
+    ) {
+      sourceSnapshot = { source: current, revision: sourceRevision };
+    }
+    return sourceSnapshot;
+  });
+  return {
+    draftSource,
+    editEntry<T>(expected: unknown, dispatch: () => T): T {
+      const previous = localEdit;
+      // The parent may synchronously render; record this exact local result before dispatch.
+      localEdit = { expected, retained: draftSource() };
+      const accepted = dispatch();
+      if (accepted === false) {
+        localEdit = previous;
+      }
+      return accepted;
+    },
+  };
+}
+
 function emptyDraft(): {
   open: boolean;
   key: string;

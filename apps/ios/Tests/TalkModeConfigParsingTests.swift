@@ -879,8 +879,19 @@ struct TalkModeManagerTests {
             ],
             [
                 "role": "assistant",
-                "__openclaw": ["idempotencyKey": "current-run"],
+                "__openclaw": ["runId": "current-run", "idempotencyKey": "native-message-key"],
                 "content": [["type": "text", "text": "current answer"]],
+            ],
+            [
+                "role": "assistant",
+                "__openclaw": ["idempotencyKey": "legacy-run"],
+                "content": [["type": "text", "text": "legacy answer"]],
+            ],
+            [
+                "role": "assistant",
+                "idempotencyKey": "current-run",
+                "__openclaw": ["runId": "other-run"],
+                "content": [["type": "text", "text": "unrelated answer"]],
             ],
         ]
 
@@ -890,6 +901,9 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_latestAssistantText(
             messages: messages,
             runId: "missing-run") == nil)
+        #expect(TalkModeManager._test_latestAssistantText(
+            messages: messages,
+            runId: "legacy-run") == "legacy answer")
     }
 
     @Test func `native Talk chat request inherits Gateway run timeout and thinking policy`() {
@@ -898,7 +912,6 @@ struct TalkModeManagerTests {
             sessionKey: "agent:main:main",
             idempotencyKey: "talk-1")
 
-        #expect(TalkModeManager.chatThinkingOverride == nil)
         #expect(request.method == "chat.send")
         #expect(request.params["message"]?.value as? String == "hello")
         #expect(request.params["sessionKey"]?.value as? String == "agent:main:main")
@@ -1041,5 +1054,232 @@ struct TalkModeManagerTests {
 
         #expect(!completed)
         #expect(!manager._test_hasIncrementalSpeechOwnership())
+    }
+}
+
+@MainActor
+struct TalkConfigRefreshTests {
+    @Test func `talk start uses the provider and voice changed on the gateway since the last start`() async throws {
+        let served = ServedTalkConfig(Self.relayTalkConfig(provider: "xai", voice: "ara"))
+        let creates = AsyncStream<Data>.makeStream()
+        defer { creates.continuation.finish() }
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let socket = GatewayTestWebSocketTask(sendHook: { [weak manager] socket, message, _ in
+            let method = GatewayWebSocketTestSupport.requestMethod(from: message)
+            guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            if method == "talk.config" {
+                try await socket.emitReceiveSuccess(.data(served.response(id: id)))
+            } else if method == "talk.session.create" {
+                if case let .string(text) = message { creates.continuation.yield(Data(text.utf8)) }
+                if case let .data(data) = message { creates.continuation.yield(data) }
+                // Stop before replying so the start never opens a provider call.
+                await manager?.stop()
+                try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
+                    id: id, code: "UNAVAILABLE", message: "Synthetic stop", details: [:])))
+            }
+        })
+        let gateway = GatewayNodeSession()
+        defer { manager.stop() }
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://talk-config-refresh.invalid")),
+                credentials: .init(),
+                connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            manager.attachGateway(gateway)
+            manager.updateGatewayConnected(true)
+            await manager.reloadConfig(gateway: gateway)
+            var requests = creates.stream.makeAsyncIterator()
+            var observed: [[String?]] = []
+            for next in [nil, Self.relayTalkConfig(provider: "openai", voice: "ember")] {
+                if let next { await served.set(next) }
+                manager._test_prepareEnabledRealtimeSessionForClose()
+                await manager.start()
+                let frame = try #require(await requests.next())
+                let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+                let params = try #require(request["params"] as? [String: Any])
+                observed.append([params["provider"] as? String, params["voice"] as? String])
+            }
+
+            #expect(observed == [["xai", "ara"], ["openai", "ember"]])
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
+    func `talk start keeps the last loaded provider when the config refresh fails`(
+        viaTalkToggle: Bool) async throws
+    {
+        let served = ServedTalkConfig(Self.relayTalkConfig(provider: "xai", voice: "ara"))
+        let creates = AsyncStream<Data>.makeStream()
+        defer { creates.continuation.finish() }
+        let previousTalkEnabled = UserDefaults.standard.object(forKey: "talk.enabled")
+        UserDefaults.standard.set(false, forKey: "talk.enabled")
+        defer { UserDefaults.standard.set(previousTalkEnabled, forKey: "talk.enabled") }
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        // The Talk toggle also reloads config beside the start's own refresh; both fail here.
+        let appModel = viaTalkToggle ? NodeAppModel(talkMode: manager) : nil
+        let socket = GatewayTestWebSocketTask(sendHook: { [weak manager] socket, message, _ in
+            let method = GatewayWebSocketTestSupport.requestMethod(from: message)
+            guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            if method == "talk.config" {
+                if await served.isFailing {
+                    try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
+                        id: id, code: "UNAVAILABLE", message: "Synthetic refresh failure", details: [:])))
+                } else {
+                    try await socket.emitReceiveSuccess(.data(served.response(id: id)))
+                }
+            } else if method == "talk.session.create" {
+                if case let .string(text) = message { creates.continuation.yield(Data(text.utf8)) }
+                if case let .data(data) = message { creates.continuation.yield(data) }
+                await manager?.stop()
+                try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
+                    id: id, code: "UNAVAILABLE", message: "Synthetic stop", details: [:])))
+            }
+        })
+        let gateway = GatewayNodeSession()
+        defer { manager.stop() }
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://talk-config-refresh-failure.invalid")),
+                credentials: .init(),
+                connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            manager.attachGateway(gateway)
+            manager.updateGatewayConnected(true)
+            await manager.reloadConfig(gateway: gateway)
+            await served.setFailing(true)
+            if let appModel {
+                appModel.setTalkEnabled(true)
+            } else {
+                manager._test_prepareEnabledRealtimeSessionForClose()
+                await manager.start()
+            }
+            var requests = creates.stream.makeAsyncIterator()
+            // Bounded wait: without the fix no create is sent; the watchdog ends the stream so the
+            // #require below fails the assertion instead of hanging.
+            let watchdog = Task {
+                try? await Task.sleep(for: .seconds(5))
+                creates.continuation.finish()
+            }
+            defer { watchdog.cancel() }
+            let frame = try #require(await requests.next())
+            let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+            let params = try #require(request["params"] as? [String: Any])
+
+            #expect([params["provider"] as? String, params["voice"] as? String] == ["xai", "ara"])
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
+    @Test func `config reload keeps the realtime prefetch until provider model or voice change`() async throws {
+        let served = ServedTalkConfig(Self.webRTCTalkConfig(voice: "marin"))
+        let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
+            let method = GatewayWebSocketTestSupport.requestMethod(from: message)
+            guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            switch method {
+            case "talk.config":
+                try await socket.emitReceiveSuccess(.data(served.response(id: id)))
+            case "talk.client.create":
+                try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
+                    "type": "res", "id": id, "ok": true, "payload": [
+                        "provider": "openai", "transport": "webrtc", "voiceSessionId": "voice-1",
+                        "clientSecret": "synthetic",
+                    ],
+                ])))
+            case "talk.client.close", "talk.session.close":
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            default:
+                return
+            }
+        })
+        let gateway = GatewayNodeSession()
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        defer { manager.stop() }
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://talk-config-prefetch.invalid")),
+                credentials: .init(),
+                connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            manager.attachGateway(gateway)
+            manager.updateGatewayConnected(true)
+            await manager.reloadConfig(gateway: gateway)
+            await manager.prefetchRealtimeSessionIfReady()
+            for _ in 0..<2000 where !manager._test_hasPrefetchedRealtimeSession() {
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            #expect(manager._test_hasPrefetchedRealtimeSession())
+
+            await manager.reloadConfig(gateway: gateway)
+            #expect(manager._test_hasPrefetchedRealtimeSession(), "An unchanged config keeps the prefetch")
+
+            await served.set(Self.webRTCTalkConfig(voice: "ember"))
+            await manager.reloadConfig(gateway: gateway)
+            #expect(!manager._test_hasPrefetchedRealtimeSession(), "A voice change drops the prefetch")
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
+    private static func relayTalkConfig(provider: String, voice: String) -> Data {
+        self.json(["talk": ["realtime": [
+            "provider": provider, "mode": "realtime", "transport": "gateway-relay", "brain": "agent-consult",
+            "providers": [provider: ["voice": voice]],
+        ]]])
+    }
+
+    private static func webRTCTalkConfig(voice: String) -> Data {
+        self.json(["talk": ["realtime": [
+            "provider": "openai", "mode": "realtime", "transport": "webrtc", "brain": "agent-consult",
+            // speakerVoice stays fixed: iOS sends `voice`, so only `voice` may decide reuse.
+            "model": "gpt-realtime-2", "voice": voice, "speakerVoice": "marin",
+        ]]])
+    }
+
+    private static func json(_ object: [String: Any]) -> Data {
+        (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
+    }
+}
+
+/// The Gateway's current `talk.config`, changeable between requests like a web config edit.
+private actor ServedTalkConfig {
+    private var config: Data
+    private(set) var isFailing = false
+
+    init(_ config: Data) {
+        self.config = config
+    }
+
+    func set(_ config: Data) {
+        self.config = config
+    }
+
+    func setFailing(_ failing: Bool) {
+        self.isFailing = failing
+    }
+
+    func response(id: String) throws -> Data {
+        let config = try JSONSerialization.jsonObject(with: self.config)
+        return try JSONSerialization.data(withJSONObject: [
+            "type": "res", "id": id, "ok": true, "payload": ["config": config],
+        ])
     }
 }

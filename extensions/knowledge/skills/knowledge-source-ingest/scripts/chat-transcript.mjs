@@ -41,7 +41,8 @@ async function run(argv) {
 
   // Reads all rows in time order. Splits on \n only: message text may contain U+2028, which readline treats as a line break.
   async function readRows(filename) {
-    const rows = (await readFile(filename, "utf8"))
+    const rows = new TextDecoder("utf-8", { fatal: true })
+      .decode(await readFile(filename))
       .split("\n")
       .filter((line) => line.trim())
       .map((line) => JSON.parse(line));
@@ -65,7 +66,7 @@ async function run(argv) {
       counts.set(name, (counts.get(name) ?? 0) + 1);
     }
     return new Map(
-      [...names].map(([id, name]) => [id, counts.get(name) > 1 ? name + "#" + id.slice(-4) : name]),
+      [...names].map(([id, name]) => [id, counts.get(name) > 1 ? name + "#" + id : name]),
     );
   }
 
@@ -86,10 +87,11 @@ async function run(argv) {
         target.occurred_at.slice(0, 10) === day
           ? clock(target.occurred_at)
           : target.occurred_at.slice(0, 10) + " " + clock(target.occurred_at);
+      const content = target.payload.deleted_at ? "[deleted]" : target.payload.content || "";
       const quote =
         target.occurred_at.slice(0, 10) === day
           ? ""
-          : ' "' + quotePreview((target.payload.content || "").replace(/\s+/g, " ")) + '"';
+          : ' "' + quotePreview(content.replace(/\s+/g, " ")) + '"';
       reply = " ↩ " + labels.get(target.payload.author_id) + " " + when + quote;
     } else if (payload.reply_to_message_id) {
       reply = " ↩ earlier message";
@@ -241,7 +243,7 @@ async function run(argv) {
   const byId = new Map(rows.map((row) => [row.id, row]));
   const days = new Map();
   for (const row of rows) {
-    if (!row.occurred_at?.endsWith("Z")) {
+    if (!row.occurred_at?.endsWith("Z") || !Number.isFinite(Date.parse(row.occurred_at))) {
       throw new Error("Row " + row.id + " needs a UTC occurred_at");
     }
     const day = row.occurred_at.slice(0, 10);

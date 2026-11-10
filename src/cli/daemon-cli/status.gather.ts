@@ -151,6 +151,7 @@ async function gatherDaemonStatusImpl(
     rpc: GatewayRpcOpts;
     probe: boolean;
     requireRpc?: boolean;
+    signal?: AbortSignal;
     deep?: boolean;
     allowExecSecretRefs?: boolean;
     pluginVersionTarget?: "running" | "restart";
@@ -391,6 +392,7 @@ async function gatherDaemonStatusImpl(
             ? localCertificate.value.fingerprintSha256
             : undefined,
           timeoutMs,
+          ...(opts.signal ? { signal: opts.signal } : {}),
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
           allowRpcConfigCredentials,

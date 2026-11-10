@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { DatabaseSearchCapabilityUnavailableError } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
-import type { EmbeddingProvider } from "./embeddings.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
 import {
@@ -56,7 +56,7 @@ describe("memory index", () => {
   };
   const serving = (manager: Manager) => manager as unknown as ServingFields;
   const provider = (manager: Manager) =>
-    (manager as unknown as { provider: EmbeddingProvider }).provider;
+    (manager as unknown as { provider: MemoryEmbeddingProvider }).provider;
   function markDirty(manager: Manager) {
     Object.assign(serving(manager), { dirty: true, memoryFullRetryDirty: true });
   }
@@ -284,7 +284,7 @@ describe("memory index", () => {
     const close = vi.fn(async () => {});
     const embed = vi.fn(async () => [1, 0, 0, 0]);
     const fields = manager as unknown as {
-      provider: EmbeddingProvider;
+      provider: MemoryEmbeddingProvider;
       providerKey: string;
       providerLifecycle: { mode: "active"; providerId: string };
       computeProviderKey: () => string;
@@ -680,7 +680,7 @@ describe("memory index", () => {
     const getSpy = interceptMaintenance(async (acquired) => {
       const fields = acquired as unknown as {
         ensureProviderInitialized: () => Promise<void>;
-        provider: EmbeddingProvider | null;
+        provider: MemoryEmbeddingProvider | null;
       };
       await fields.ensureProviderInitialized();
       if (!fields.provider) {

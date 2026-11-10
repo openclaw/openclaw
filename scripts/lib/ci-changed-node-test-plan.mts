@@ -21,6 +21,7 @@ import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   CONTRACTS_PLUGIN_VITEST_CONFIG,
   E2E_VITEST_CONFIG,
+  hasImportGraphConsumers,
   hasImportGraphImpactOnTargets,
   isRoutableChangedTarget,
   isTestFileTarget,
@@ -209,7 +210,7 @@ export function hasUiE2eAffectingChange(
       (file) =>
         !file.startsWith("ui/src/") ||
         !isUiTestTarget(file) ||
-        /\.(?:browser|node)\.test\.ts$/u.test(file) ||
+        /\.(?:browser|node)\.test\.tsx?$/u.test(file) ||
         /(?:^|\/)(?:e2e|test-helpers|test-fixtures|fixtures|__fixtures__)(?:\/|$)/u.test(file) ||
         path.posix.normalize(file) !== file ||
         !existsSync(path.join(cwd, file)) ||
@@ -217,6 +218,11 @@ export function hasUiE2eAffectingChange(
     )
   ) {
     return true;
+  }
+  // A complete reverse scan can prove an ordinary unit entry is unshared without
+  // loading every UI consumer. Unknown inventories retain the forward traversal.
+  if (!hasImportGraphConsumers(relevantPaths, cwd, { tooling: true, resolveAliases: true })) {
+    return false;
   }
   // Test entry names are not enough: a fixture or application may import one.
   // Reuse the canonical import graph rather than orphaning that consumer's proof.
@@ -1060,9 +1066,9 @@ export function packChangedNodeBoundary(shards: ChangedNodeTestShard[]): Changed
   if (!boundary) {
     return shards;
   }
-  // All 97 observed boundary test steps fit 73s, including both runtimes.
-  // Reserve 90s and retain the ordinary 150s selected-row budget.
-  const boundarySeconds = 90;
+  // Seven post-fix Bun boundary runs on two CPUs stayed below 34s.
+  // Keep the 90s Node/dual reserve and the ordinary 150s selected-row budget.
+  const boundarySeconds = process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY === "bun-all" ? 60 : 90;
   const recipient = shards
     .filter(
       (shard) =>

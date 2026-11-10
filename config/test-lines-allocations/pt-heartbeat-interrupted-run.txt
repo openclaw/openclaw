@@ -1,0 +1,3 @@
+# Stopped-service heartbeat recovery and live/unproved deferral through update Doctor.
+# Exact net regression-test LF growth; shared scalar unchanged.
+136

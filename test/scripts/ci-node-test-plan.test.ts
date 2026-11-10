@@ -2711,7 +2711,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const configs = new Set([configPath("cli"), configPath("cli-process")]);
     const restore = selectFixtureProjects((config) => configs.has(config));
     const timings = spyTimings().mockReturnValue({
-      "agentic-cli": 136,
+      "agentic-cli": 130,
     });
     const options = compactOptions("hybrid", "pull-request");
     try {
@@ -4027,6 +4027,7 @@ function expectImpacts(
 describe("CI changed Node test plan", () => {
   it.each([
     ["ui/src/main.ts", true],
+    ["src/gateway/control-ui-route-preloads.ts", true],
     ["ui/src/pages/chat/chat-gateway.test.ts", false],
     // Erased TSX header imports do not bring Gateway server code into the UI runtime.
     ["packages/gateway-client/src/index.ts", false],

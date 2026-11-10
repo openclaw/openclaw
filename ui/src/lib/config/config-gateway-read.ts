@@ -122,6 +122,7 @@ async function readConfig(
     !options.snapshotOwner.hasUnacknowledgedDraftWrite() &&
     state.configAutoSaveStatus !== "conflict" &&
     state.configAutoSaveStatus !== "rejected" &&
+    state.configAutoSaveStatus !== "deferred" &&
     (!options.background || state.configAutoSaveStatus !== "error")
   ) {
     state.lastError = null;
@@ -154,6 +155,7 @@ async function readConfig(
     if (
       !options.background &&
       !state.configFormDirty &&
+      state.configAutoSaveStatus !== "deferred" &&
       !options.snapshotOwner.hasUnacknowledgedDraftWrite()
     ) {
       if (

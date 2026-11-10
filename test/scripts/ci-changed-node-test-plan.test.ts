@@ -3,7 +3,7 @@ import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, aroundEach, describe, expect, it, vi } from "vitest";
 import { resolveTestGitCommits } from "../../.github/actions/git-owner/test-prerequisites.mjs";
 import { buildChildEnv, resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import {
@@ -37,6 +37,7 @@ import {
   resolveAffectedTestsFromImportGraph,
   resolveChangedTestTargetPlan,
 } from "../../scripts/test-projects.test-support.mts";
+import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
@@ -108,6 +109,8 @@ function toolingShard(
 }
 
 describe("selected boundary setup sharing", () => {
+  aroundEach((runTest) => withEnvAsync({ OPENCLAW_CI_TEST_RUNTIME_POLICY: "node" }, runTest));
+
   const runner = "blacksmith-8vcpu-ubuntu-2404";
   const boundary: NodeTestShard = {
     checkName: "checks-node-changed-boundary",
@@ -142,6 +145,32 @@ describe("selected boundary setup sharing", () => {
     });
     expect(plans[1]).toMatchObject({ kind: "group", plan: selected.groups[0] });
     expect(selected.groups).toHaveLength(1);
+  });
+
+  it.each([
+    ["bun-all", 90],
+    ["node", 60],
+    ["dual-all", 60],
+    [undefined, 60],
+  ] as const)("bounds boundary packing for runtime policy %s", (policy, seconds) => {
+    withEnv({ OPENCLAW_CI_TEST_RUNTIME_POLICY: policy }, () => {
+      const selected = { ...tooling(), predictedSeconds: seconds, predictedTestSeconds: seconds };
+      const packed = packChangedNodeBoundary([selected, boundary]);
+      expect(packed).toHaveLength(1);
+      expect(packed[0]?.predictedTestSeconds).toBe(150);
+      expect(packed[0]?.groups?.[0]).toEqual({
+        configs: boundary.configs,
+        requiresDist: false,
+        runner,
+        shard_name: boundary.shardName,
+      });
+      expect(packed[0]?.groups?.slice(1)).toEqual(selected.groups);
+      const overflow = [
+        { ...selected, predictedSeconds: seconds + 1, predictedTestSeconds: seconds + 1 },
+        boundary,
+      ];
+      expect(packChangedNodeBoundary(overflow)).toBe(overflow);
+    });
   });
 
   it.each([
@@ -314,6 +343,7 @@ it.each(
     ["ui/src/test-helpers/control-ui-e2e.test.ts"],
     ["ui/src/app/gateway-store.test-support.ts"],
     ["ui/src/styles/cursor-policy.browser.test.ts"],
+    ["ui/src/pages/channels/view.detail.browser.test.tsx"],
     ["ui/src/pages/activity/../activity/activity-page.test.ts"],
   ].map((paths) => ({ paths })),
 )("retains UI E2E for protected or unresolved inputs $paths", ({ paths }) => {
@@ -1488,7 +1518,10 @@ describe("CI changed Node test plan", () => {
       const shards = createChangedNodeTestShards(changedPaths, { runnerBackend });
       expect(shards).not.toBeNull();
       const groups = shards?.flatMap((shard) => shard.groups ?? []) ?? [];
-      const tooling = groups.filter((group) => !group.requiresDist);
+      const tooling = groups.filter(
+        (group) =>
+          !group.requiresDist && group.configs.includes("test/vitest/vitest.tooling.config.ts"),
+      );
       expect(tooling.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
         expectedTargets.toSorted(),
       );
@@ -1510,9 +1543,11 @@ describe("CI changed Node test plan", () => {
         );
       }
       expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
-      expect(shards).toContainEqual(
-        expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
+      const boundaryGroups = fallbackGroups(shards ?? []).filter((group) =>
+        group.configs.includes("test/vitest/vitest.boundary.config.ts"),
       );
+      expect(boundaryGroups).toHaveLength(1);
+      expect(boundaryGroups[0]?.includePatterns).toBeUndefined();
       for (const shard of shards?.filter((job) => job.groups) ?? []) {
         const encodedGroups = (shard.groups ?? []).map(
           ({ configs, env, includePatterns, shard_name, timing_key }) => ({
@@ -1826,6 +1861,7 @@ describe("CI changed Node test plan", () => {
       target,
       "test/scripts/ci-changed-node-test-plan.test.ts",
       "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/test-projects-build-admission.test.ts",
     ]);
     const qaOwners = shards?.filter((shard) =>
       shard.groups?.some((group) => group.includePatterns?.includes(target)),
@@ -1839,14 +1875,13 @@ describe("CI changed Node test plan", () => {
       configs: ["test/vitest/vitest.infra.config.ts"],
       pretestBuildMode: "private-qa",
     });
-    // Each config in the pair keeps its complete, separate include inventory.
+    // A single selected config keeps its process policy without the unrelated pair.
     const paired = groups.filter((group) => group.shard_name === "core-tooling-isolated");
     expect(paired).toHaveLength(1);
-    expect(paired[0]?.configs).toEqual([
-      "test/vitest/vitest.tooling-docker.config.ts",
-      "test/vitest/vitest.tooling-isolated.config.ts",
+    expect(paired[0]?.configs).toEqual(["test/vitest/vitest.tooling-isolated.config.ts"]);
+    expect(paired[0]?.includePatterns).toEqual([
+      "test/scripts/test-projects-build-admission.test.ts",
     ]);
-    expect(paired[0]?.includePatterns).toBeUndefined();
     expect(paired[0]?.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
     expect(shards?.find((job) => job.groups?.includes(paired[0]!))?.planConcurrency).toBe(1);
     expect(
@@ -1862,6 +1897,37 @@ describe("CI changed Node test plan", () => {
         includePatterns: [target],
       }),
     ]);
+  });
+
+  it.each([
+    ["test/scripts/control-ui-i18n.test.ts", "test/vitest/vitest.tooling-isolated.config.ts"],
+    ["test/scripts/docker-build-helper.test.ts", "test/vitest/vitest.tooling-docker.config.ts"],
+  ])("selects only the canonical tooling config for %s", (target, config) => {
+    const jobs = createSelectedNodeTestShardBundles([target]);
+    expect(jobs).not.toBeNull();
+    const groups = jobs?.flatMap((job) => job.groups ?? []);
+    expect(groups).toHaveLength(1);
+    expect(groups?.[0]).toMatchObject({
+      configs: [config],
+      includePatterns: [target],
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+    });
+    expect(jobs?.[0]?.planConcurrency).toBe(1);
+    expect(jobs?.[0]?.requiresDist).toBe(false);
+  });
+
+  it("retains separate whole inventories for a mixed tooling pair", () => {
+    const jobs = createSelectedNodeTestShardBundles([
+      "test/scripts/control-ui-i18n.test.ts",
+      "test/scripts/docker-build-helper.test.ts",
+    ]);
+    const groups = jobs?.flatMap((job) => job.groups ?? []);
+    expect(groups).toHaveLength(1);
+    expect(groups?.[0]?.configs).toEqual([
+      "test/vitest/vitest.tooling-docker.config.ts",
+      "test/vitest/vitest.tooling-isolated.config.ts",
+    ]);
+    expect(groups?.[0]?.includePatterns).toBeUndefined();
   });
 
   it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {

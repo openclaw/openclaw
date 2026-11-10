@@ -126,9 +126,6 @@ class GatewayRegistryStore(
         "Active gateway must exist in the registry"
       }
       _activeStableId.value = normalized
-      if (normalized != null && normalized !in _connectedStableIds.value) {
-        _connectedStableIds.value = _connectedStableIds.value + normalized
-      }
       persist()
     }
 
@@ -158,6 +155,11 @@ class GatewayRegistryStore(
     synchronized(mutationLock) {
       if (!mutationsAllowed) return@synchronized
       val existing = _entries.value.firstOrNull { it.stableId == stableId } ?: return
+      // Background reconnection is earned by a completed connection, not by selection: a target
+      // that only failed setup must not keep reconnecting after the user moves to another gateway.
+      if (stableId !in _connectedStableIds.value) {
+        _connectedStableIds.value = _connectedStableIds.value + stableId
+      }
       upsert(existing.copy(lastConnectedAtMs = atMs))
     }
 
