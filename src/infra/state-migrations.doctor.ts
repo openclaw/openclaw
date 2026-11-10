@@ -1600,8 +1600,18 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   const callerOAuthDir = rawOAuthDir
     ? resolveOAuthDir({ ...callerEnv, OPENCLAW_OAUTH_DIR: rawOAuthDir }, requestedSnapshot.stateDir)
     : undefined;
+  // Compare through resolved identities like the sibling endpoint check below, so an
+  // OAuth dir reached through a state-dir alias is not refused as outside the snapshot.
+  const callerOAuthDirIdentity =
+    callerOAuthDir === undefined
+      ? undefined
+      : resolveIdentityPathViaExistingAncestorSync(callerOAuthDir);
   const oauthDirOutsideSnapshot =
-    callerOAuthDir !== undefined && !isPathInside(requestedSnapshot.stateDir, callerOAuthDir);
+    callerOAuthDirIdentity !== undefined &&
+    !isPathInside(
+      resolveIdentityPathViaExistingAncestorSync(requestedSnapshot.stateDir),
+      callerOAuthDirIdentity,
+    );
   const pendingStateDirMigration = resolvePendingLegacyStateDirMigrationPaths({
     env: params.env,
     homedir: () => requestedSnapshot.homeDir,
