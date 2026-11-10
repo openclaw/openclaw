@@ -336,7 +336,7 @@ describe("createNodePluginTools", () => {
     expect(tool.resultContentSource).toBe("network");
     expect(getPluginToolMeta(tool)?.mcp?.node).toEqual({ id: "node-1" });
     expect(result.content).toEqual([
-      { type: "text", text: 'structuredContent:\n{\n  "hits": 2\n}' },
+      { type: "text", text: 'structuredContent:\n{"hits":2}' },
       { type: "image", data: "aW1hZ2UtMQ==", mimeType: "image/png" },
       { type: "text", text: "first" },
       { type: "text", text: "second" },

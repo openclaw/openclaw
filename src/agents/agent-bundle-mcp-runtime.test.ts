@@ -800,9 +800,8 @@ describe("session MCP runtime", () => {
       expect(result.content).toEqual([
         {
           type: "text",
-          text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
+          text: `structuredContent:\n${JSON.stringify(structuredContent)}`,
         },
-        { type: "text", text: "captured screenshot" },
         { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
         { type: "text", text: "[Report] https://example.com/report" },
         { type: "text", text: "memo body" },
