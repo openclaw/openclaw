@@ -299,7 +299,9 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       // Keep stat's original parent/basename metadata semantics, while its
       // boundary check validates the container-visible backing rather than a hidden host alias.
       checks: [{ target: resolved.target, options: { action: "stat files" } }],
-      script: 'set -eu\ncd -- "$1"\nLC_ALL=C stat -c "%F|%s|%y" -- "$2"',
+      // Invoke C-locale stat on parent/basename directly (no cd) so dash shells never
+      // emit "can't cd to …", which conflates missing parents with permission failures.
+      script: 'set -eu\nLC_ALL=C stat -c "%F|%s|%y" -- "$1/$2"',
       args: [anchoredTarget.canonicalParentPath, anchoredTarget.basename],
       allowFailure: true,
       signal: params.signal,
