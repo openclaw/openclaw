@@ -187,7 +187,7 @@ async function ensureSandboxWorkspaceLayout(
   if (createdSkillMountSources && localWorkspace) {
     // Finish producer-created layout before first use, so source admission does
     // not mistake protected mount directories for unsaved guest work.
-    await localWorkspace.checkpoint();
+    await localWorkspace.checkpoint({ knownMutation: true });
     assertCurrent?.();
   }
 

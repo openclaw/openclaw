@@ -1,6 +1,43 @@
+import type { Virtualizer } from "@tanstack/virtual-core";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../scroll.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
+
+/** Sample an owned end journey through the range owner's existing frame queue. */
+export function createTranscriptEndSettlement(
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  isCurrent: () => boolean,
+  rowsMeasured: (indexes: readonly number[]) => boolean,
+  retry: () => void,
+  settled: () => void,
+): () => (() => void) | void {
+  let previous: string | undefined;
+  let stableFrames = 0;
+  return () => {
+    if (!isCurrent()) {
+      previous = undefined;
+      stableFrames = 0;
+      return undefined;
+    }
+    const element = virtualizer.scrollElement;
+    const last = virtualizer.options.count - 1;
+    const max = maxTranscriptScrollOffset(element);
+    const geometry = element && `${element.scrollTop}:${max}:${element.clientHeight}`;
+    const ready =
+      element &&
+      max !== null &&
+      !virtualizer.isScrolling &&
+      Math.abs(max - element.scrollTop) <= 8 &&
+      (last < 0 || rowsMeasured([last]));
+    stableFrames = ready ? (geometry === previous ? stableFrames + 1 : 1) : 0;
+    previous = geometry ?? undefined;
+    if (stableFrames >= 3) {
+      return () => isCurrent() && settled();
+    }
+    retry();
+    return undefined;
+  };
+}
 
 /** Geometric end anchoring; the pane still owns permission to follow. */
 export class TranscriptEndAnchor {

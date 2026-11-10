@@ -25,6 +25,7 @@ export async function copyProvisionedPathsInWorker(
   const assertCurrent = () => {
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
+    options.signal?.throwIfAborted();
   };
   assertCurrent();
   const runtime = resolveGlobalSingleton<Runtime>(

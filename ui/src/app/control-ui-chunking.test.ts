@@ -887,6 +887,7 @@ describe("Control UI build chunking", () => {
       [modulePath("../pages/cron/cron-page.tsx"), "cron-page"],
       [modulePath("../pages/plugins/plugins-page.tsx"), "plugins-page"],
       [modulePath("../components/markdown-parser.ts"), "markdown-runtime"],
+      [modulePath("../components/markdown-windows-paths.ts"), "markdown-runtime"],
       [modulePath("../components/config-form.shared.ts"), "config-form-analysis-runtime"],
       [modulePath("../components/cloud-profile-icon-data.ts"), "route-controls-runtime"],
       [modulePath("../components/solid/cloud-profile-icon.tsx"), "route-controls-runtime"],

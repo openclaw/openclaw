@@ -33,6 +33,7 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
             case "workspace.manifest.equal":
             case "workspace.manifest.snapshot":
             case "workspace.manifest.document":
+            case "workspace.manifest.template":
             case "workspace.manifest.reference":
             case "workspace.manifest.parse":
             case "workspace.manifest.paths":

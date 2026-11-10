@@ -390,7 +390,10 @@ extension OpenClawChatComposer {
 
     @ViewBuilder
     var cleanCaptureAndPrimaryControls: some View {
-        if self.dictationControl != nil || self.voiceNoteControl != nil {
+        let showsTalkMicrophone = self.talkControl?.isEnabled == true &&
+            self.talkControl?.toggleMicrophone != nil
+        // Live Talk owns its microphone control in the activity strip, not the dictation slot.
+        if !showsTalkMicrophone, self.dictationControl != nil || self.voiceNoteControl != nil {
             OpenClawChatMicButton(
                 dictationControl: self.dictationControl,
                 voiceNoteControl: self.voiceNoteControl,

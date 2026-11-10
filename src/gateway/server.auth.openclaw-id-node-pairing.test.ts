@@ -1,5 +1,5 @@
 // Exercise the tunnel connect boundary with the real SQLite pairing broker.
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import http, { type IncomingMessage } from "node:http";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import { writeConfigFile } from "../config/config.js";
@@ -28,6 +28,7 @@ import { NODE_CLIENT, openWs } from "./server.auth.test-helpers.js";
 import {
   connectReq,
   createGatewaySuiteHarness,
+  rpcReq,
   installGatewayTestHooks,
   testState,
 } from "./test-helpers.js";
@@ -119,10 +120,11 @@ async function connect(
   path: string,
   commands = ["system.run"],
   caps = ["approved"],
+  ws?: Awaited<ReturnType<typeof openWs>>,
 ) {
-  const ws = await openWs(started.port, { [header]: peerKey });
+  const socket = ws ?? (await openWs(started.port, { [header]: peerKey }));
   try {
-    return await connectReq(ws, {
+    return await connectReq(socket, {
       client: { ...NODE_CLIENT, platform: "linux", displayName: description.display_name },
       role: "node",
       scopes: [],
@@ -132,7 +134,9 @@ async function connect(
       caps,
     });
   } finally {
-    ws.close();
+    if (!ws) {
+      socket.close();
+    }
   }
 }
 
@@ -299,6 +303,26 @@ test("does not approve merged operator requests or stale principals", async () =
     setOpenClawIdNodeDescriptionLookup((key) => (peers.has(key) ? description : undefined));
   }
   expect(ssh).not.toHaveBeenCalled();
+});
+
+test("refuses an unlisted node before pairing and closes a live session once its listing is removed", async () => {
+  const pendingPath = identityPath("ocid-node-unlisted");
+  const unlisted = `iroh:${"f".repeat(64)}`;
+  expect((await connect(unlisted, pendingPath)).ok).toBe(false);
+  expect(
+    await getPairedDevice(loadOrCreateDeviceIdentity({ path: pendingPath }).deviceId),
+  ).toBeNull();
+  const peer = nodePeer();
+  const ws = await openWs(started.port, { [header]: peer });
+  expect((await connect(peer, identityPath("ocid-node-live"), undefined, undefined, ws)).ok).toBe(
+    true,
+  );
+  // Discovery may still serve the node's earlier signed listing; the Gateway checks its own.
+  peers.delete(peer);
+  const closed = once(ws, "close");
+  void rpcReq(ws, "node.event", { event: "probe" }).catch(() => {});
+  expect((await closed)[0]).toBe(4001);
+  await removeNodePairings([peer]);
 });
 
 test("reconciles orphaned listing provenance while retaining current nodes", async () => {
