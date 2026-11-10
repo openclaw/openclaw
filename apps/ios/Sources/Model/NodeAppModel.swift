@@ -326,7 +326,10 @@ final class NodeAppModel {
         }
     }
 
-    var nodeStatusText: String = "Offline"
+    var nodeStatusText: String {
+        self.gatewayConnected ? "Connected" : "Offline"
+    }
+
     var operatorStatusText: String = "Offline"
     private(set) var isAppleReviewDemoModeEnabled: Bool = false
     private(set) var isScreenshotFixtureModeEnabled: Bool = false
@@ -4819,6 +4822,11 @@ extension NodeAppModel {
                 // control state owner-specific so resolving operator approval clears it cleanly.
                 self.lastGatewayProblem = nextProblem
                 self.gatewayStatusText = nextProblem.statusText
+                // Approval echoes stop the node loop; other shared pauses (rate limits, rejected
+                // credentials) must stop retries too, or the node keeps hitting a locked Gateway.
+                if nextProblem.pauseReconnect, !nextProblem.needsPairingApproval {
+                    self.gatewayAutoReconnectEnabled = false
+                }
             } else {
                 self.applyGatewayConnectionProblem(nextProblem)
             }
@@ -5079,7 +5087,6 @@ extension NodeAppModel {
         }
 
         self.gatewayStatusText = "Connected"
-        self.nodeStatusText = "Connected"
     }
 
     private func configureLocalGatewayFixtureSession(_ fixture: LocalChatFixture) {

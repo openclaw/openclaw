@@ -18,11 +18,18 @@
  * --profile cpu|heap records the Gateway itself (heap includes collected objects).
  * --fixture dependencies seeds 65,880 selected dependency files with the literal
  * .env.local, .convex/, node_modules/ include and nested .artifacts dependencies.
- * Dependency acceptance: provisionCopy <10s, >=5x owner wall/allocation reduction.
+ * Guarded-to-batched acceptance: provisionCopy <10s, >=5x owner wall/allocation.
+ * Resident-parent follow-up: provisionCopy <10s, >=5x owner wall/parent spawns,
+ * no >20% CPU/allocation regression.
  * Compare the first 100 concurrent probes at matched request count; full-window
  * probe tails also remain recorded but span very different preparation durations.
  * --dependency-proof verifies that shape and its creation ledger on later runs;
  * --ledger-snapshot ordinary|exact also verifies the later mode/chunks ledger.
+ * --resident-gib 8 retains touched memory only in the Gateway main process and
+ * forwards NODE_OPTIONS, LD_PRELOAD and MALLOC_CONF for service-runtime proofs.
+ * --advance-commit is only for a disposable synthetic repository. It commits a
+ * new tracked marker after warmup and before each measured preparation, exercising
+ * warm templates with commit-changed misses. Never pass an operator checkout.
  * --watcher-snapshots <dir> records native watch paths and post-GC main snapshots
  * before churn, with each session/worktree active, and after retirement. The same
  * agent stays live; --watcher-agent-churn separately exercises agent retirement.
@@ -90,12 +97,17 @@ const { values } = parseArgs({
     "watcher-snapshots": { type: "string" },
     "session-churn": { type: "string", default: "0" },
     "watcher-agent-churn": { type: "boolean", default: false },
+    "resident-gib": { type: "string" },
+    "advance-commit": { type: "boolean", default: false },
   },
 });
 assert(values.repo && values.output, "--repo and --output are required");
 assert(!values.profile || ["cpu", "heap"].includes(values.profile));
 assert(!values["ledger-snapshot"] || ["ordinary", "exact"].includes(values["ledger-snapshot"]));
 assert(!values["ledger-snapshot"] || !values.retain);
+assert(!values["advance-commit"] || (values.acceleration && !values["skip-warmup"]));
+const residentGiB = Number(values["resident-gib"] ?? 0);
+assert(Number.isSafeInteger(residentGiB) && residentGiB >= 0 && residentGiB <= 16);
 if (values.fixture) {
   assert(["source", "included", "dependencies"].includes(values.fixture));
   await fs.mkdir(path.resolve(values.repo), { mode: 0o700 });
@@ -183,6 +195,23 @@ if (mockPort) {
   applyMockOpenAiModelConfig(config, { mockPort, modelRef: "openai/gpt-4.1" });
 }
 await fs.writeFile(configPath, JSON.stringify(config));
+const residentPreload = path.join(output, "resident-memory.mjs");
+if (residentGiB) {
+  await fs.writeFile(
+    residentPreload,
+    `
+import { isMainThread } from "node:worker_threads";
+if (isMainThread && process.env.OPENCLAW_BENCH_RESIDENT_GIB) {
+  const gib = Number(process.env.OPENCLAW_BENCH_RESIDENT_GIB);
+  delete process.env.OPENCLAW_BENCH_RESIDENT_GIB;
+  const memory = Array.from({ length: gib }, () => Buffer.alloc(1024 ** 3, 120));
+  process.once("exit", () => {
+    if (memory.some((bytes) => bytes[0] !== 120)) throw new Error("Resident fixture changed");
+  });
+}
+`,
+  );
+}
 const mock = mockPort
   ? spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
       detached: true,
@@ -194,6 +223,7 @@ const trace = path.join(output, "git-trace.jsonl");
 const gateway = spawn(
   process.execPath,
   buildGatewayBenchChildArgs(path.resolve(values.entry), port, [
+    ...(residentGiB ? ["--import", residentPreload] : []),
     ...(values["watcher-snapshots"]
       ? ["--expose-gc", "--import", path.resolve("scripts/perf/fswatcher-retention-preload.mjs")]
       : []),
@@ -215,6 +245,14 @@ const gateway = spawn(
         GIT_TRACE2_EVENT: trace,
         DEVELOPER_DIR: process.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer",
         ...(mockPort ? { OPENAI_API_KEY: "synthetic-localhost-fixture" } : {}),
+        ...(residentGiB ? { OPENCLAW_BENCH_RESIDENT_GIB: String(residentGiB) } : {}),
+        ...(values["resident-gib"] === undefined
+          ? {}
+          : Object.fromEntries(
+              ["NODE_OPTIONS", "LD_PRELOAD", "MALLOC_CONF"].flatMap((key) =>
+                process.env[key] === undefined ? [] : [[key, process.env[key]]],
+              ),
+            )),
       },
     }),
   },
@@ -302,7 +340,31 @@ try {
   }
   await watcherCensus("baseline");
   const rows = [];
+  const commitMarker = `.provision-benchmark-${randomUUID()}`;
   for (let index = values["skip-warmup"] ? 1 : 0; index <= samples; index++) {
+    if (values["advance-commit"] && index > 0) {
+      await fs.writeFile(path.join(repo, commitMarker), `Synthetic preparation ${index}\n`);
+      const git = (...args: string[]) =>
+        execFileSync(
+          "git",
+          [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Synthetic Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-C",
+            repo,
+            ...args,
+          ],
+          { stdio: "ignore" },
+        );
+      git("add", "--", commitMarker);
+      git("commit", "-m", `Synthetic provisioning commit ${index}`);
+    }
     const loadBefore = loadavg();
     const profile = values.profile as "cpu" | "heap" | undefined;
     const profilePath = path.join(
@@ -498,6 +560,8 @@ try {
     .toSorted((a, b) => a - b);
   const result = {
     repo,
+    residentGiB,
+    advanceCommit: values["advance-commit"],
     entry: path.resolve(values.entry),
     samples,
     rows,
