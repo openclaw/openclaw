@@ -66,6 +66,36 @@ const readProfile = (profilePath: string) => fs.readFile(profilePath, "utf8");
 const removeSelectedCompletion = (stateDir: string, assertCurrent = () => {}) =>
   removeCompletionRegistrations({ stateDirs: [stateDir], preservePaths: [], assertCurrent });
 
+it.for([false, true])(
+  "preserves UTF-16 PowerShell profiles (big endian=%s)",
+  async (bigEndian, { stateDir }) => {
+    const encode = (text: string) => {
+      const bytes = Buffer.from(`\uFEFF${text}`, "utf16le");
+      return bigEndian ? bytes.swap16() : bytes;
+    };
+    const decode = (bytes: Buffer) =>
+      new TextDecoder(bigEndian ? "utf-16be" : "utf-16le").decode(bytes);
+    const user = "$global:ProfileGreeting = 'café preserved'\n";
+    const dynamic = "openclaw completion --shell powershell | Out-String | Invoke-Expression\n";
+    const profilePath = await writeProfile("powershell", "");
+    await fs.writeFile(profilePath, encode(dynamic + user));
+    await writeCompletionCache("powershell");
+    expect(await usesSlowDynamicCompletion("powershell")).toBe(true);
+    await installCompletion("powershell", true);
+    const installed = await fs.readFile(profilePath);
+    expect(installed.subarray(0, 2)).toEqual(encode("").subarray(0, 2));
+    expect(decode(installed)).toContain(user);
+    expect(decode(installed)).not.toContain(dynamic);
+    expect(await isCompletionInstalled("powershell")).toBe(true);
+    await installCompletion("powershell", true);
+    expect(await fs.readFile(profilePath)).toEqual(installed);
+    expect(await removeSelectedCompletion(stateDir)).toEqual([profilePath]);
+    const removed = await fs.readFile(profilePath);
+    expect(removed).toEqual(encode(`${user}\n`));
+    expect(await isCompletionInstalled("powershell")).toBe(false);
+  },
+);
+
 it.skipIf(process.platform === "win32")(
   "escapes terminal controls in installation messages without changing profile paths",
   async ({ homeDir }) => {
