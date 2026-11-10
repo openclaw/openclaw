@@ -42,7 +42,7 @@ openclaw-pending-session-create {
 
 /* The long discard label would squeeze the message into a sliver on phones. */
 @media (max-width: 560px) {
-  .chat-error .app-toast__content > .chat-error__discard {
+  .chat-error .app-toast__content > .chat-error__actions:has(> .chat-error__discard) {
     grid-row: auto;
     grid-column: 1 / -1;
     justify-self: start;
@@ -604,12 +604,6 @@ openclaw-pending-session-create {
   /* Footer controls use a -4px block margin. Paint containment must clear
      that overhang plus the 2px focus outline and its 3px offset. */
   overflow-clip-margin: 10px;
-}
-
-/* Message jumps need real mounted-row sizes before their target settles. */
-.chat-thread-inner[data-measuring-rows] .chat-virtual-row:not([data-prepared-row]) {
-  content-visibility: visible;
-  contain: none;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {

@@ -147,8 +147,34 @@ function recoverUtf8FileNameFromLatin1Header(value: string): string {
   return value;
 }
 
+function findDispositionParameter(value: string, name: string): string | undefined {
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index <= value.length; index++) {
+    const char = value[index];
+    if (index === value.length || (char === ";" && !quoted)) {
+      const parameter = value.slice(start, index).trim();
+      const separator = parameter.indexOf("=");
+      if (separator >= 0 && parameter.slice(0, separator).trim().toLowerCase() === name) {
+        return parameter.slice(separator + 1).trim();
+      }
+      start = index + 1;
+      continue;
+    }
+    if (quoted && escaped) {
+      escaped = false;
+    } else if (quoted && char === "\\") {
+      escaped = true;
+    } else if (char === '"') {
+      quoted = !quoted;
+    }
+  }
+  return undefined;
+}
+
 function decodeDispositionFileName(value: string): string | undefined {
-  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+  const utf8Match = findDispositionParameter(value, "filename*")?.match(/^UTF-8''(.+)$/i);
   if (utf8Match?.[1]) {
     try {
       return decodeURIComponent(utf8Match[1].trim().replace(/^"(.*)"$/, "$1"));
@@ -157,8 +183,16 @@ function decodeDispositionFileName(value: string): string | undefined {
     }
   }
 
-  const plainMatch = value.match(/filename="?([^";]+)"?/i);
-  const plainFileName = plainMatch?.[1]?.trim();
+  const plainValue = findDispositionParameter(value, "filename");
+  let plainFileName: string | undefined;
+  if (plainValue?.startsWith('"')) {
+    plainFileName = plainValue
+      .match(/^"((?:\\.|[^"\\])*)"$/s)?.[1]
+      ?.replace(/\\(.)/gs, "$1")
+      .trim();
+  } else if (plainValue && /^[^";]*$/.test(plainValue)) {
+    plainFileName = plainValue.trim();
+  }
   return plainFileName ? recoverUtf8FileNameFromLatin1Header(plainFileName) : undefined;
 }
 
