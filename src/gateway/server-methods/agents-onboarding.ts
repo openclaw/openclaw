@@ -4,6 +4,7 @@ import type {
   AgentsCreateParams,
   AgentsCreateResult,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
@@ -19,7 +20,12 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import { buildAgentOnboardingGreeting } from "../../shared/agent-onboarding.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import {
+  OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+} from "../../shared/transcript-only-openclaw-assistant.js";
 import { verifySetupInferenceConfig } from "../../system-agent/setup-inference-turn.js";
 import { TEMPLATE_AGENT_OPENING_MESSAGE } from "../../templates/conversation.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
@@ -168,6 +174,31 @@ export async function completeAgentOnboarding(
         requestingOperatorProfileId: options.client?.authenticatedUserProfile?.profileId,
         operatorRoleActor: resolveGatewayOperatorRoleActor(options.client),
         commitGuard: authority.assertCurrent,
+        ...(!prePublication
+          ? {
+              initialAssistantMessage: {
+                // This is saved conversation, not model output or a delivery-only mirror.
+                message: {
+                  ...buildAssistantMessage({
+                    model: {
+                      api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+                      provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+                      id: "onboarding",
+                    },
+                    content: [
+                      {
+                        type: "text",
+                        text: buildAgentOnboardingGreeting(cfg.agents?.entries?.[agentId]?.name),
+                      },
+                    ],
+                    stopReason: "stop",
+                    usage: buildUsageWithNoCost({}),
+                  }),
+                },
+                idempotencyKey: `agents.create:${agentId}:opening`,
+              },
+            }
+          : {}),
         onPhase: diagnostics?.mark,
         onCreatedSessionCommitted: (session) => {
           preparation.committed = session;
@@ -326,7 +357,7 @@ export async function startAgentOnboardingConversation(
               opening === "template"
                 ? TEMPLATE_AGENT_OPENING_MESSAGE
                 : [
-                    "Ask the user in plain text: What role would you like me to take on?",
+                    "A short introduction has already been saved in this agent’s conversation. Ask the user in plain text: What role would you like me to take on?",
                     "Offer these four single-agent roles: Chief of staff (coordinates work and priorities), Researcher (finds and summarizes evidence), Writer (turns notes and sources into drafts), and Reviewer (checks work against requirements). Invite the user to describe a different role if they prefer. Do not offer a team. Ask only about the role in this opening turn; do not ask for their goal or mention a later follow-up yet. End the message there and wait for their reply.",
                     "After the user replies, ask one open-ended follow-up that invites a little detail about the specific thing they want to achieve. Tailor it to their answer, but do not provide another list or hard-code the follow-up wording. Then continue normally after they answer.",
                     "This agent already exists. Do not propose creating an agent or ask the user to approve its creation.",

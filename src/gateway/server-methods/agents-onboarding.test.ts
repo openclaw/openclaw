@@ -107,9 +107,12 @@ it("rejects failed inference and settings drift before persistence", async () =>
     prepareAgentOnboarding(options, "bot-stable", { name: "New agent" }),
   ).rejects.toThrow("Gateway settings changed");
 });
-it("prepares ordinary agent chat without a canned assistant greeting", async () => {
+it("persists the ordinary greeting before a detached model turn", async () => {
   await withOpenClawTestState({ label: "created-agent-onboarding" }, async () => {
-    const runtimeConfig: OpenClawConfig = { ...cfg, agents: { entries: { main: {} } } };
+    const runtimeConfig: OpenClawConfig = {
+      ...cfg,
+      agents: { entries: { main: { name: "Scout" } } },
+    };
     const options = invocation(runtimeConfig);
     const recordCreatedSession = vi.fn();
     options.sessionMutationAuthorization = {
@@ -133,7 +136,9 @@ it("prepares ordinary agent chat without a canned assistant greeting", async () 
       .filter(isRecord)
       .filter((event) => event.type === "message")
       .map((event) => event.message);
-    expect(messages).toEqual([]);
+    expect(messages).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "Hi, I’m Scout. Happy to help." }] },
+    ]);
   });
 });
 
@@ -177,7 +182,7 @@ it("asks for one of four roles in plain text without tools", async () => {
 
   const [request, , internalOptions] = sendInternalChat.mock.calls[0]!;
   expect(request.params.message).toContain("Ask the user in plain text");
-  expect(request.params.message).not.toContain("introduction has already been saved");
+  expect(request.params.message).toContain("introduction has already been saved");
   expect(request.params.message).not.toContain("Ask User");
   expect(request.params.message).not.toContain("JSON");
   expect(request.params).toMatchObject({
