@@ -491,6 +491,21 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
       inspected.verdict.refreshDefinition
     ) {
       plan.serviceRoot = serviceRoot;
+    } else if (hasGatewayServiceDefinitionOverrides(command)) {
+      // Operator drop-ins own the service definition, so the update cannot
+      // rebind the service to the invoking root. Redirecting the update at the
+      // managed service root alone silently splits versions: the shared
+      // ~/.openclaw/npm/projects plugin generations move to the new release
+      // while the invoking CLI stays on the old one. Refuse with guidance
+      // instead of creating that state.
+      throw new GatewayServiceUpdateOwnershipError(
+        [
+          "The Gateway service definition carries operator drop-in overrides, so `openclaw update` cannot rebind the service to the invoking install root.",
+          "Updating only the managed service package root would leave this CLI on its current version while shared plugin generations migrate to the service root's new release.",
+          "Update or remove the operator drop-in, or reinstall the gateway service from the invoking install (`openclaw doctor --fix` with no launcher override), then run `openclaw update` again.",
+        ].join("\n"),
+        null,
+      );
     } else {
       plan.rootRedirect = { root: serviceRoot, previousRoot: params.root };
     }

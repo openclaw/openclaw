@@ -148,6 +148,17 @@ it.each(cases)(
         expect(pin).not.toHaveBeenCalled();
         return;
       }
+      if (definition === "managedOverrides" || definition === "managedDefinition") {
+        // Operator drop-ins own the service definition; a cross-root update
+        // cannot rebind the service, so it must refuse instead of silently
+        // redirecting at the managed service root (split-version + shared
+        // plugin generation migration away from the invoking CLI).
+        await expect(prepareUpdateCommand({ dryRun: true })).rejects.toMatchObject({
+          name: "GatewayServiceUpdateOwnershipError",
+          message: expect.stringContaining("operator drop-in"),
+        });
+        return;
+      }
       const prepared = await prepareUpdateCommand({ dryRun: true });
       const admissionRoot = resolveUpdateCommandAdmissionRoot(prepared);
       const env = await resolveUpdateCommandAdmissionEnv({ root: admissionRoot, opts: {} });
