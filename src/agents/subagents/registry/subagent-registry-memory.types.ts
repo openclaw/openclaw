@@ -7,5 +7,6 @@ export type SubagentCompletionCustody = {
   authority: NonNullable<Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>>;
   entry: SubagentRunRecord;
   requesterRunInstance?: OperationalRunInstanceRef;
+  requesterCompletionRunId?: string;
   stop: () => void;
 };

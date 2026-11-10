@@ -39,7 +39,7 @@ export async function settleUnreachableYieldedSubagentRun(params: {
       entry.requesterSessionKey,
       entry.requesterAgentId,
     );
-    const requesterRunId = subagentRuns.getRequesterRunInstance(entry)?.runId;
+    const requesterRunId = subagentRuns.getRequesterCompletionRunId(entry);
     requesterEnded =
       !requester ||
       requester.archivedAt !== undefined ||
