@@ -50,16 +50,16 @@ async function inspectProvisioning(
   if (included.length === 0) {
     return { paths: [], estimatedBytes: 0 };
   }
-  // ./ keeps leading colons literal: check-ignore rejects --literal-pathspecs itself.
-  const candidates = await runGitBuffered(sourceRoot, ["check-ignore", "--stdin", "-z"], {
+  // The inventory is untracked; skip index glob matching and use ./ to reject pathspec magic.
+  const result = await runGitBuffered(sourceRoot, ["check-ignore", "--no-index", "--stdin", "-z"], {
     input: splitNullBuffer(included)
       .map((entry) => `./${entry.toString("utf8")}\0`)
       .join(""),
   });
-  if (candidates.termination !== "exit" || (candidates.code !== 0 && candidates.code !== 1)) {
-    throw commandError("git check-ignore", candidates);
+  if (result.termination !== "exit" || (result.code !== 0 && result.code !== 1)) {
+    throw commandError("git check-ignore", result);
   }
-  const paths = splitNullBuffer(candidates.stdout).map((entry) => entry.toString("utf8").slice(2));
+  const paths = splitNullBuffer(result.stdout).map((entry) => entry.toString("utf8").slice(2));
   let estimatedBytes = 0;
   for (const relativePath of estimateBytes ? paths : []) {
     const normalized = normalizeProvisionedRelativePath(relativePath);

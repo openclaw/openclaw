@@ -373,6 +373,9 @@ describe("ManagedWorktreeService provisioned state", () => {
       for (const name of [...names, "literalZ.local", "unselected.local"]) {
         await fs.writeFile(path.join(repo, name), "bytes:" + name);
       }
+      // A tracked wildcard lookalike must not suppress the literal untracked filename.
+      await git(repo, "add", "-f", "literalZ.local");
+      await git(repo, "commit", "-m", "track wildcard lookalike");
       using commands = vi.spyOn(gitExec, "executeGitCommandBuffered");
 
       expect(
@@ -394,9 +397,9 @@ describe("ManagedWorktreeService provisioned state", () => {
         baseRef: "HEAD",
       });
       expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(names.toSorted());
-      await expect(fs.stat(path.join(created.path, "literalZ.local"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      expect(await fs.readFile(path.join(created.path, "literalZ.local"), "utf8")).toBe(
+        "bytes:literalZ.local",
+      );
       await expect(fs.stat(path.join(created.path, "unselected.local"))).rejects.toMatchObject({
         code: "ENOENT",
       });
