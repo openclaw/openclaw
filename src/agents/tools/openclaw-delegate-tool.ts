@@ -4,13 +4,10 @@ import { Type, type Static } from "typebox";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
-import {
-  isDeliverableMessageChannel,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
 import type { ResolvedExecDefaults } from "../exec-defaults.js";
 import { resolveExecDefaultsLegacy } from "../exec-defaults.legacy.js";
 import { withPreparedExecDefaults } from "../exec-defaults.preparation.js";
+import { isGatewayToolAllowedWithoutAction } from "../gateway-tool-policy.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedToolConstruction } from "../tool-construction-preparation.js";
@@ -54,6 +51,7 @@ type DelegateToolOptions = Pick<
   | "config"
   | "execSession"
   | "execOverrides"
+  | "execToolAllowed"
   | "fsPolicy"
 > & { sessionAgentId: string };
 
@@ -93,20 +91,15 @@ export function createOpenClawDelegateToolsForRun(
   const defaultSessionId = stableDelegationSessionId(sessionKey, options.sessionAgentId);
   const execPolicy = preparedExecDefaults ?? resolveExecDefaultsLegacy(execDefaultsParams(options));
   const fullPermission =
+    options.execToolAllowed === true &&
+    isGatewayToolAllowedWithoutAction("exec", options.config) &&
     options.fsPolicy?.workspaceOnly !== true &&
-    execPolicy.effectiveHost !== "sandbox" &&
+    execPolicy.effectiveHost === "gateway" &&
     execPolicy.security === "full" &&
     execPolicy.ask === "off";
   const turnSourceTo =
     options.currentMessagingTarget ?? options.currentChannelId ?? options.agentTo;
   const turnSourceThreadId = options.currentThreadTs ?? options.agentThreadId;
-  // Only messaging channels receive approval prompts; Webchat and terminal runs
-  // decide in the Control UI or the OpenClaw apps.
-  const approvalLocation = isDeliverableMessageChannel(
-    normalizeMessageChannel(options.agentChannel) ?? "",
-  )
-    ? "in this chat (approval buttons or `/approve`)"
-    : "in the Control UI or OpenClaw apps";
   const tool: AnyAgentTool = {
     name: "openclaw",
     label: "OpenClaw",
@@ -118,9 +111,7 @@ export function createOpenClawDelegateToolsForRun(
       "Gateway restart, config, channels, plugins, agents, models/providers, API keys. " +
       "Supports multiple named custom/local model endpoints; provider IDs can be user-defined, while api selects the protocol. " +
       "Setup flows use masked entry, which keeps keys out of model context; if the user already gave a key or token in chat, pass it along and OpenClaw stores it without echoing it. " +
-      (fullPermission
-        ? "Full Access applies permitted changes without asking for approval."
-        : `Changes wait for the user to approve ${approvalLocation} and return the final outcome.`),
+      "Permitted changes apply directly; other changes wait for user approval in this chat, the Control UI, or OpenClaw apps and return the final outcome.",
     parameters: OpenClawDelegateSchema,
     outputSchema: OpenClawDelegateOutputSchema,
     execute: async (_toolCallId, args, signal) => {

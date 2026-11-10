@@ -7,6 +7,7 @@ import * as caches from "../../plugins/plugin-cache.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as runtimeScope from "../../plugins/runtime/generation-scope.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
 import * as modelScope from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import * as callerScope from "./gateway-caller-context.js";
@@ -14,7 +15,10 @@ import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createOpenClawDelegateToolsForRun as createTools } from "./openclaw-delegate-tool.js";
 
 // mock-isolation: Observe delegated Gateway calls without executing privileged Gateway operations.
-vi.mock("./in-process-gateway.js", () => ({ callInProcessGatewayTool: vi.fn() }));
+vi.mock("./in-process-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./in-process-gateway.js")>()),
+  callInProcessGatewayTool: vi.fn(),
+}));
 
 const callGateway = vi.mocked(callInProcessGatewayTool);
 
@@ -25,7 +29,12 @@ beforeEach(() => {
 type Options = Omit<Parameters<typeof createTools>[0], "sessionAgentId">;
 const runSessionKey = "agent:main:main";
 function delegate(options: Options = {}) {
-  const [tool] = createTools({ sessionAgentId: "main", runSessionKey, ...options });
+  const [tool] = createTools({
+    sessionAgentId: "main",
+    runSessionKey,
+    execToolAllowed: true,
+    ...options,
+  });
   return tool ?? expect.fail("expected OpenClaw delegation tool");
 }
 function expectUnscoped() {
@@ -126,6 +135,14 @@ it.each<[string, Options, boolean]>([
     false,
   ],
   ["filesystem-restricted", { fsPolicy: { workspaceOnly: true } }, false],
+  ["remote-node exec", { execOverrides: { host: "node" } }, false],
+  ["tool-policy denied exec", { execToolAllowed: false }, false],
+  ["missing tool-policy fact", { execToolAllowed: undefined }, false],
+  [
+    "deployment-policy denied exec",
+    { config: { tools: { gatewayPolicy: { allow: ["openclaw"] } } } },
+    false,
+  ],
 ])("carries %s authority privately, not in RPC data", async (_name, options, full) => {
   const runController = new AbortController();
   const toolController = new AbortController();
@@ -148,12 +165,7 @@ it.each<[string, Options, boolean]>([
         toolController.signal,
       ),
   );
-  expect(tool.description).toContain(
-    full ? "without asking for approval" : "Changes wait for the user to approve",
-  );
-  if (options.agentChannel === "telegram") {
-    expect(tool.description).toContain("approve in this chat");
-  }
+  expect(tool.description).toContain("other changes wait for user approval");
   expect(callGateway.mock.calls[0]?.[1]).not.toHaveProperty("fullPermission");
   expect(callGateway.mock.calls[0]?.[1].delegation).not.toHaveProperty("fullPermission");
   expect(callerScope.getGatewayToolCallerIdentity()).toBeUndefined();
@@ -164,4 +176,35 @@ it("keeps setup self-delegation unavailable even when the configured user agent 
   expect(createTools({ sessionAgentId: "openclaw", config })).toEqual([]);
   expect(createTools({ sessionAgentId: "openclaw" })).toEqual([]);
   expect(callGateway).not.toHaveBeenCalled();
+});
+
+it("requires approval when the requesting agent cannot use exec", async () => {
+  let observedFullPermission: boolean | undefined;
+  callGateway.mockImplementation(async () => {
+    observedFullPermission = callerScope.getGatewayToolCallerIdentity()?.fullPermission;
+    return { reply: "Approval pending." };
+  });
+  const tools = await createOpenClawCodingToolsInternalAsync({
+    config: {
+      tools: {
+        profile: "full",
+        deny: ["exec", "process", "code_execution", "write", "edit", "apply_patch", "computer"],
+        exec: { host: "gateway", security: "full", ask: "off" },
+      },
+    },
+    agentId: "main",
+    sessionKey: runSessionKey,
+    toolConstructionPlan: {
+      includeBaseCodingTools: false,
+      includeShellTools: false,
+      includeChannelTools: false,
+      includeOpenClawTools: true,
+      includePluginTools: false,
+    },
+  });
+  const tool = tools.find((entry) => entry.name === "openclaw") ?? expect.fail("missing tool");
+  await tool.execute("deny-exec", { message: "Change config." });
+  expect(observedFullPermission).toBe(false);
+  expect(callGateway).toHaveBeenCalledOnce();
+  expect(tool.description).toContain("other changes wait for user approval");
 });

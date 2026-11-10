@@ -28,7 +28,11 @@ import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-m
 import { resolveScheduledToolCallerContext } from "../agents/scheduled-tool-policy.js";
 import { resolveCoreToolFactoryFamily } from "../agents/tool-catalog.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
-import { filterToolsByPolicy } from "../agents/tool-policy-match.js";
+import {
+  filterToolsByPolicy,
+  isRuntimeToolAllowed,
+  isToolAllowedByPolicies,
+} from "../agents/tool-policy-match.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -409,6 +413,17 @@ export async function resolveGatewayScopedTools(
       : {}),
     execSession: params.execSession,
     execOverrides: params.execOverrides,
+    execToolAllowed:
+      isRuntimeToolAllowed("exec", params.toolsAllow) &&
+      isToolAllowedByPolicies("exec", [
+        mergeAlsoAllowPolicy(profilePolicy, configuredToolPolicies.profileAlsoAllow),
+        mergeAlsoAllowPolicy(
+          providerProfilePolicy,
+          configuredToolPolicies.providerProfileAlsoAllow,
+        ),
+        ...basePolicies.slice(2),
+        ...gatewayDenyPolicies,
+      ]),
     approvalReviewerDeviceIds: params.approvalReviewerDeviceId
       ? [params.approvalReviewerDeviceId]
       : undefined,

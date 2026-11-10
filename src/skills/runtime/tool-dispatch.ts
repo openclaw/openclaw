@@ -6,6 +6,7 @@ import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { buildDeclaredToolAllowlistContext } from "../../agents/tool-policy-declared-context.js";
+import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -163,6 +164,11 @@ export async function resolveSkillDispatchTools(params: {
       }
     : undefined;
   const tools = await createOpenClawToolsAsync({
+    execToolAllowed: isToolAllowedByPolicies("exec", [
+      profilePolicyWithAlsoAllow,
+      providerProfilePolicyWithAlsoAllow,
+      ...explicitPolicyList.slice(2),
+    ]),
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
     agentChannel: channel,

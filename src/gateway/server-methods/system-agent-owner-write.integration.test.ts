@@ -50,7 +50,7 @@ it.for(["active", "revoked", "non-owner"] as const)(
         },
         tools: {
           profile: "full",
-          allow: ["openclaw"],
+          allow: ["openclaw", "exec"],
           exec: { host: "gateway", security: "full", ask: "off" },
         },
         gateway: {

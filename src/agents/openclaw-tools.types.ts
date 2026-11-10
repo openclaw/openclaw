@@ -146,6 +146,8 @@ export type OpenClawToolsOptions = {
   execSession?: ExecSessionDefaults;
   /** Effective run-local exec overrides, including prepared permission mode. */
   execOverrides?: ExecPolicyOverrides;
+  /** Whether this run's effective tool policy permits Gateway command execution. */
+  execToolAllowed?: boolean;
   /** Trusted operator devices allowed to review this run's terminal input. */
   approvalReviewerDeviceIds?: string[];
   /** Trusted account used for authorization; delivery keeps agentAccountId. */

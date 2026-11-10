@@ -444,6 +444,7 @@ export function* assembleOpenClawCodingTools(
               ask: effectiveExecPolicy.ask,
               node: options?.exec?.node ?? execConfig.node,
             },
+            execToolAllowed: isConversationToolAllowed(capabilityProfile, "exec"),
             approvalReviewerDeviceIds: options?.approvalReviewerDeviceId
               ? [options.approvalReviewerDeviceId]
               : undefined,
