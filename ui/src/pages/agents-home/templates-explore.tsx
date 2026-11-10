@@ -212,6 +212,7 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
   return (
     <openclaw-templates-explore>
       <HubPageHeader
+        actions={<TemplateUpload />}
         active="templates"
         subtitle={t("templatesCatalog.exploreDescription")}
         wide
@@ -219,7 +220,6 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
       />
       <SettingsPage wide carapace>
         <div class="agents-home">
-          <TemplateUpload />
           <section
             class="agents-home__explore plugin-catalog-results"
             data-templates-explore

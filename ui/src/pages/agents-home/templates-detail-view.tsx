@@ -298,7 +298,7 @@ export function ReviewWarning(props: {
             </div>
           )}
         </For>
-        <div class="templates-add-consent__actions">
+        <openclaw-modal-actions class="templates-add-consent__actions">
           <button
             type="button"
             class="btn"
@@ -319,7 +319,7 @@ export function ReviewWarning(props: {
           >
             {t("templatesCatalog.addAnyway")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </section>
     </Show>
   );

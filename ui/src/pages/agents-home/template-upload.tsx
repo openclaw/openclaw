@@ -1,5 +1,8 @@
+import "../../styles/template-upload.css";
 import { createSignal, For, Show } from "solid-js";
 import { MAX_TEMPLATE_UPLOAD_ARCHIVE_BYTES } from "../../../../packages/gateway-protocol/src/template-source-limits.js";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -16,6 +19,8 @@ import { ReviewWarning, TemplatePlanDisclosures } from "./templates-detail-view.
 
 export function TemplateUpload() {
   const context = useApplication();
+  let fileInput: HTMLInputElement | undefined;
+  const [filename, setFilename] = createSignal("");
   const [review, setReview] = createSignal<TemplateAddReviewPlan | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [message, setMessage] = createSignal("");
@@ -25,6 +30,7 @@ export function TemplateUpload() {
   function reset() {
     generation += 1;
     source = undefined;
+    setFilename("");
     setReview(null);
     setBusy(false);
     setMessage("");
@@ -44,6 +50,7 @@ export function TemplateUpload() {
     if (!scope || !canUpload()) {
       return;
     }
+    setFilename(file.name);
     setBusy(true);
     try {
       if (
@@ -112,59 +119,105 @@ export function TemplateUpload() {
   }
   return (
     <Show when={canUpload()}>
-      <section class="oc-card" aria-label={t("templatesCatalog.importTitle")}>
-        <h3>{t("templatesCatalog.importTitle")}</h3>
-        <p>{t("templatesCatalog.importDescription")}</p>
-        <input
-          type="file"
-          accept=".tgz"
-          aria-label={t("templatesCatalog.archiveLabel")}
-          disabled={busy()}
-          onChange={(event) => {
-            const file = event.currentTarget.files?.[0];
-            event.currentTarget.value = "";
-            if (file) {
-              void select(file);
+      <button type="button" class="btn" disabled={busy()} onClick={() => fileInput?.click()}>
+        <Icon name="plus" /> {t("templatesCatalog.importButton")}
+      </button>
+      <input
+        ref={(element) => {
+          fileInput = element;
+        }}
+        hidden
+        type="file"
+        accept=".tgz"
+        aria-label={t("templatesCatalog.archiveLabel")}
+        disabled={busy()}
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (file) {
+            void select(file);
+          }
+        }}
+      />
+      <Show when={filename()}>
+        <openclaw-modal-dialog
+          label={t("templatesCatalog.importTitle")}
+          style={{ "--openclaw-modal-width": "720px" }}
+          onModal-cancel={(event: Event) => {
+            event.preventDefault();
+            if (!busy()) {
+              reset();
             }
           }}
-        />
-        <Show when={busy()}>
-          <p role="status">{t("templatesCatalog.processingArchive")}</p>
-        </Show>
-        <Show when={message()}>
-          <p role="status">{message()}</p>
-        </Show>
-        <Show when={review()}>
-          {(plan) => (
-            <div>
-              <p>{plan().trustWarning}</p>
-              <p>{t("templatesCatalog.importAgent", { agentId: plan().target.agentId ?? "—" })}</p>
-              <code>{plan().planIntegrity}</code>
-              <Show
-                when={plan().blockers.length}
-                fallback={
-                  <ReviewWarning
-                    view={{
-                      reviewPlan: plan(),
-                      applying: busy(),
-                      onConfirmReview: install,
-                      onCancelReview: reset,
-                    }}
-                  />
-                }
+        >
+          <div class="oc-dialog template-import-dialog">
+            <DialogHeader
+              title={t("templatesCatalog.importTitle")}
+              closeDisabled={busy()}
+              onClose={reset}
+            />
+            <div class="oc-dialog__body">
+              <p>{filename()}</p>
+              <p>{t("templatesCatalog.importDescription")}</p>
+              <button
+                type="button"
+                class="btn"
+                disabled={busy()}
+                onClick={() => fileInput?.click()}
               >
-                <TemplatePlanDisclosures plan={plan()} />
-                <ul>
-                  <For each={plan().blockers}>{(item) => <li>{item.message}</li>}</For>
-                </ul>
-                <button type="button" class="btn" disabled={busy()} onClick={reset}>
-                  {t("common.cancel")}
-                </button>
+                {t("templatesCatalog.chooseAnotherArchive")}
+              </button>
+              <Show when={busy()}>
+                <p role="status">{t("templatesCatalog.processingArchive")}</p>
+              </Show>
+              <Show when={message()}>
+                <p role="status">{message()}</p>
+              </Show>
+              <Show when={review()}>
+                {(plan) => (
+                  <div>
+                    <p>{plan().trustWarning}</p>
+                    <p>
+                      {t("templatesCatalog.importAgent", { agentId: plan().target.agentId ?? "—" })}
+                    </p>
+                    <code>{plan().planIntegrity}</code>
+                    <Show
+                      when={plan().blockers.length}
+                      fallback={
+                        <ReviewWarning
+                          view={{
+                            reviewPlan: plan(),
+                            applying: busy(),
+                            onConfirmReview: install,
+                            onCancelReview: reset,
+                          }}
+                        />
+                      }
+                    >
+                      <TemplatePlanDisclosures plan={plan()} />
+                      <ul>
+                        <For each={plan().blockers}>{(item) => <li>{item.message}</li>}</For>
+                      </ul>
+                      <openclaw-modal-actions>
+                        <button type="button" class="btn" disabled={busy()} onClick={reset}>
+                          {t("common.cancel")}
+                        </button>
+                      </openclaw-modal-actions>
+                    </Show>
+                  </div>
+                )}
+              </Show>
+              <Show when={!review()}>
+                <openclaw-modal-actions>
+                  <button type="button" class="btn" disabled={busy()} onClick={reset}>
+                    {t("common.close")}
+                  </button>
+                </openclaw-modal-actions>
               </Show>
             </div>
-          )}
-        </Show>
-      </section>
+          </div>
+        </openclaw-modal-dialog>
+      </Show>
     </Show>
   );
 }

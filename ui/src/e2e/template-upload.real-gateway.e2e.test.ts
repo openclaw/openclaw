@@ -104,8 +104,8 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       expect((await page.goto(url.toString()))?.status()).toBe(200);
       await waitForControlUiGatewayReady(page);
-      const input = page.getByLabel("Template archive", { exact: true });
-      await input.waitFor();
+      const importButton = page.getByRole("button", { name: "Import", exact: true });
+      await importButton.waitFor();
       await page.getByText("Appliance care coordinator", { exact: true }).waitFor();
       const entry = await page
         .locator('script[type="module"][src*="/assets/index-"]')
@@ -128,8 +128,14 @@ suite.define(() => {
         });
         await writeFile(path.join(suite.artifactDir, name), frame.png);
       };
-      await capture("before-selection.png", input);
-      await input.setInputFiles(archive);
+      await capture("before-selection.png", importButton);
+      const picker = page.waitForEvent("filechooser");
+      await importButton.click();
+      await (await picker).setFiles(archive);
+      await page.getByRole("dialog", { name: "Import Template" }).waitFor();
+      await expect
+        .poll(() => page.getByText("upload-proof.tgz", { exact: true }).isVisible())
+        .toBe(true);
       const confirm = page.getByRole("button", { name: "Add anyway", exact: true });
       await expect.poll(() => confirm.isVisible()).toBe(true);
       await capture("review.png", confirm);

@@ -1,0 +1,9 @@
+.template-import-dialog pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.template-import-dialog code,
+.template-import-dialog p {
+  overflow-wrap: anywhere;
+}

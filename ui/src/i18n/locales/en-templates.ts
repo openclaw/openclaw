@@ -3,6 +3,8 @@ import { en } from "./en.ts";
 
 const enTemplates = {
   templatesCatalog: {
+    importButton: "Import",
+    chooseAnotherArchive: "Choose another file",
     importTitle: "Import Template",
     importDescription:
       "Choose a Template .tgz from this computer (up to 1 MiB). Review before installing.",
