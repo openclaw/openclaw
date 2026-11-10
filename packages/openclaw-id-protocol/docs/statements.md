@@ -281,8 +281,9 @@ R-signed binding verified with one. Keep both even when refusing a refresh; a la
 snapshot with a newer membership order must not erase earlier evidence that a server binding
 was retired. When the pin's K_gw changes (a re-bind), the snapshot order restarts with the
 first snapshot verified under the newer binding; the binding_seq high-water carries over. A
-marker stored before these rules is loaded through `clampFreshnessState`, capping its
-binding_seq at the pin's. This local marker is not a signed snapshot and never supplies
+marker stored before these rules has no `k_gw` and is loaded through `clampFreshnessState`:
+its binding_seq is capped at the pin's and its `(seq, issued_at)` is dropped, since it cannot
+be attributed to a key. Markers with `k_gw` are kept as stored. This local marker is not a signed snapshot and never supplies
 membership or protocol authorization.
 
 A snapshot from the future is never stored. The Gateway re-signs at least every
