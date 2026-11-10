@@ -159,7 +159,7 @@ it.each([
     action: "inspect",
     payload: {
       ok: true,
-      declared: { tools: Array.from({ length: 600 }, () => "x") },
+      declared: { tools: Array.from({ length: 1_200 }, () => "x") },
       reviewToken: "complete-review-only",
     },
   },
