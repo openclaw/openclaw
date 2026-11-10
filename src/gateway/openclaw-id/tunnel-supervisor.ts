@@ -239,7 +239,7 @@ export function createTunnelSupervisor(params: {
         }
         return;
       }
-      if (status.state === "running") {
+      if (message.type === "state" && status.state === "running") {
         setStatus({
           ...status,
           relayOnline: message.relayOnline,

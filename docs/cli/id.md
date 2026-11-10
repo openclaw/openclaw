@@ -1,0 +1,87 @@
+---
+summary: "CLI reference for `openclaw id` (OpenClaw ID remote access status, moving a claw to new keys, publishing)"
+read_when:
+  - OpenClaw ID remote access is off because a key file is missing or replaced
+  - You want to move a claw to new connection keys with its recovery kit
+title: "OpenClaw ID"
+---
+
+# `openclaw id`
+
+OpenClaw ID remote access of the Gateway on this machine (an experimental Lab, see
+[Remote access with OpenClaw ID](/concepts/experimental-features#make-a-claw-reachable)).
+Run these commands on the computer that runs the claw: the Gateway accepts `rebind` only
+from a direct-loopback client, never over the tunnel or another network.
+
+## Common options
+
+- `--url <url>`: Gateway WebSocket URL. It must be this machine's Gateway.
+- `--token <token>`: Gateway token, if required.
+- `--timeout <ms>`: RPC timeout in milliseconds; defaults to `60000`.
+- `--json`: Print the result as JSON.
+
+## Status
+
+```bash
+openclaw id status
+```
+
+Shows whether remote access is on, the claw's hostname, its binding number with the one
+Discovery has, the connection keys (endpoint key and Gateway key) as short fingerprints,
+and the last publication.
+
+When a key file is missing or holds a different key, status says so:
+
+- `keys_missing`: "Remote access is off: this claw's connection keys are missing from this
+  computer, so your devices can't reach it."
+- `key_mismatch`: "Remote access is off: the connection key on this computer isn't the one
+  your devices trust."
+
+The Gateway keeps running for everything on this computer. Only remote access is off, and
+no new key is created on its own: restore the original files under
+`<state dir>/openclaw-id/`, or move the claw to new keys.
+
+## Move to new keys
+
+```bash
+openclaw id rebind
+openclaw id rebind --kit-stdin --yes < kit.txt
+openclaw id rebind --cancel
+```
+
+Moves this claw to a new endpoint key and Gateway key with its recovery kit (`OCK1-…`).
+Use it when a key file was lost or may have leaked, after a move to a new computer without
+the key files, or to rotate keys. In the Control UI on this computer the same action is
+**Move to new keys**.
+
+1. The Gateway prepares two new keys next to the current ones.
+2. You type the recovery kit at a hidden prompt (or pipe it with `--kit-stdin`). The kit is
+   never accepted as an argument. The CLI derives the owner root key from it, checks that the
+   kit belongs to this claw, shows the old and new key fingerprints and asks you to confirm.
+3. The owner root key signs a new server binding for the new keys. The Gateway stores it,
+   restarts remote access on the new keys and publishes them to Discovery.
+
+Your owner devices, people, nodes, invites and device sign-ins all stay. Connected devices
+disconnect for a moment and reconnect by themselves. Owners get a notice that the claw moved
+to new keys.
+
+A kit for another claw is refused: "This recovery kit is for another claw (`XXXXX-XXXXX-…`).
+Use the kit made for `<hostname>`." Without the kit, the claw cannot be moved.
+
+`--yes` skips the confirmation and needs `--kit-stdin`. `--cancel` deletes the keys staged
+by a move you did not finish; running `rebind` again reuses them. If the Gateway stops after
+the move was stored but before it switched keys, it finishes the switch at its next start.
+
+A move does not review who has access. If you think a key leaked, also check **Your
+devices** and **People**.
+
+## Publish
+
+```bash
+openclaw id publish
+openclaw id publish --code <link-code>
+```
+
+Publishes the claw's descriptor and membership to Discovery now. The Gateway also retries on
+its own. A link code from `https://claws.<loaderDomain>/link` is needed only when the claw is
+not registered at Discovery yet.

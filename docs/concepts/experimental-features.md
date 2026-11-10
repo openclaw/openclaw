@@ -353,6 +353,10 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   the account menu. Nodes and other devices are managed as before.
 - There is no owner reset in this version: a claw keeps the recovery kit it was
   linked with, so store the kit safely.
+- To move a claw to new connection keys (a lost or leaked key file, a new computer
+  without the key files, or routine rotation), run `openclaw id rebind` on the
+  computer that runs it, with its recovery kit. Devices, people, nodes and invites
+  stay ([CLI](/cli/id)).
 
 ### Sign in with OpenClaw ID
 
@@ -383,7 +387,8 @@ instead of asking you to paste one.
   reports `keys_missing` or `key_mismatch`. Nothing is published or dialed with
   another key. The Gateway itself keeps running, so everything on this computer
   works as before. To bring remote access back, restore the original key files,
-  then restart the Gateway.
+  then restart the Gateway, or move the claw to new keys with its recovery kit
+  on this computer: `openclaw id rebind` ([CLI](/cli/id)).
 - The child admits a device only if the Gateway's membership lists the
   device's endpoint key, and checks that before accepting any stream. Until a
   claw is linked, nobody is admitted.
