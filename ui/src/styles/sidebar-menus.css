@@ -1297,7 +1297,7 @@
 /* Sections meet at the menu divider: a hairline on the rows' text inset. */
 .sidebar-session-menu-section + .sidebar-session-menu-section::before,
 .sidebar-session-menu-footer::before {
-  content: "";
+  content: var(--sidebar-filter-divider, "");
   display: block;
   height: 1px;
   margin: var(--space-1) var(--sidebar-filter-row-inset);
@@ -1498,6 +1498,8 @@
 /* The active page contributes its own content height, rather than inheriting
    the root's row count. The sheet cap still leaves scrolling to its option list. */
 .sidebar-session-filter-panel:has(.picker-select--sheet [aria-expanded="true"]) {
+  --sidebar-filter-divider: none;
+
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1505,7 +1507,6 @@
   .sidebar-session-menu-section {
     display: contents;
 
-    &::before,
     & > :not(.picker-select--sheet:has([aria-expanded="true"])) {
       display: none;
     }
