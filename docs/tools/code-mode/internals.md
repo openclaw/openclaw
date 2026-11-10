@@ -86,7 +86,10 @@ history cannot be reconstructed from source code or outer results.
 Thrown tool errors are catchable. Returned values may instead report failure.
 Follow the tool's result contract, and inspect possible effects before retrying.
 If guest code does not catch an error, `exec` or `wait` returns a failed tool
-result and the agent can continue normally. Follow the
+result and the agent can continue normally. A rejected program cancels its
+remaining bridge calls instead of waiting for replies it can no longer consume.
+Successful programs still drain every dispatched call. Cancellation does not
+undo actions a tool already performed. Follow the
 [tool-error guidance](/tools/code-mode/quickstart#recover-from-tool-errors) to inspect possible partial
 effects before choosing another action. Network-controlled tool output and errors
 retain their existing untrusted-content wrapping and sanitization; continuing
@@ -204,15 +207,21 @@ than the live manager's bounded hydration window. An unmatched leaf fails the
 operation rather than exposing a different branch. Subsequent operations use
 the projection, applying this run's own commits without rescanning the branch.
 
-Across admitted runs, core reuses a validated projection only when a fresh read
-matches the physical session identity, transcript rewrite generation, and ordered
-store-entry IDs. The cache retains at most 16 sessions and 8 MiB of accounted
-JSON and metadata; histories above 4,096 entries or 1,024 live keys are not cached.
-Session removal and database shutdown discard retained projections. When the
-cached IDs are a prefix of the current branch, only appended entries are replayed
-into a private copy of the projection. Divergent branches and rewrites replay
-from the beginning through the same validation and budget checks. Loaded values
-remain detached copies, and persisted bytes do not change.
+Across admitted runs, core retains the projection's transcript rewrite generation,
+leaf, and admitted raw sequence. The worker reads only the appended suffix when
+it forms a direct branch extension, bounded to 256 events and 1 MiB. An unchanged
+suffix returns no writes. Divergent branches, rewrites, and larger or non-linear
+suffixes use the canonical branch selector. Both paths validate historical
+shapes, keys, and provenance in the reader, then return only each key's final
+write or delete. The main thread applies that compact result in the attributed
+`sessions.transcript-maintenance:apply` task; superseded values never cross the
+worker boundary.
+
+The existing replay cache retains at most 16 sessions, 1,024 live keys per
+session, and 8 MiB of accounted JSON and metadata. Session removal and database
+shutdown discard retained projections. Replay encodes only surviving values and
+checks the final projection's budget; commit admission owns historical budget
+checks. Loaded values remain detached copies, and persisted bytes do not change.
 
 Only a cell that settles `completed` commits its non-empty write set. Core
 appends one `custom` entry with type `openclaw.code-mode-store` through

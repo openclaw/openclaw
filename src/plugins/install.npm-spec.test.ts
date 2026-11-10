@@ -410,6 +410,7 @@ function mockPackage(
 
 function mockPackages(packages: MockNpmPackage[]) {
   const packagesByName = new Map(packages.map((pkg) => [pkg.packageName, pkg]));
+  const packagesBySpec = new Map(packages.map((pkg) => [pkg.spec, pkg]));
   const responses = new Map<string, () => unknown>();
   for (const pkg of packages) {
     const metadata = () => ({
@@ -468,7 +469,9 @@ function mockPackages(packages: MockNpmPackage[]) {
         prunePluginLocalOpenClawPeerLinks(projectRoot);
       }
       for (const packageName of Object.keys(dependencies)) {
-        const pkg = packagesByName.get(packageName);
+        const dependencySpec = dependencies[packageName];
+        const pkg =
+          packagesBySpec.get(`${packageName}@${dependencySpec}`) ?? packagesByName.get(packageName);
         if (planner) {
           if (pkg) {
             installedPackages.push(pkg);
@@ -482,7 +485,6 @@ function mockPackages(packages: MockNpmPackage[]) {
         if (!pkg) {
           throw new Error(`unexpected managed npm dependency: ${packageName}`);
         }
-        const dependencySpec = dependencies[packageName];
         if (pkg.expectedDependencySpec && dependencySpec !== pkg.expectedDependencySpec) {
           throw new Error(
             `expected managed npm dependency ${packageName}@${pkg.expectedDependencySpec}, got ${dependencySpec ?? ""}`,

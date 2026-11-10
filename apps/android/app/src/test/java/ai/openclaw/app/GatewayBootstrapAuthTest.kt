@@ -1703,6 +1703,21 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun selectedGatewayThatHasNotConnectedIsNotKeptConnectedInTheBackground() {
+    val (_, prefs, runtime) =
+      gatewayFixture { _, _ -> GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE) }
+    val endpoint = tlsGatewayEndpoint()
+    // Manual setup registers the typed target before the first connection attempt.
+    prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+
+    runBlocking { assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "test-token-placeholder"))) }
+    waitForGatewayTrustPrompt(runtime)
+
+    assertEquals(endpoint.stableId, prefs.gatewayRegistry.activeStableId.value)
+    assertEquals(emptyList<String>(), prefs.gatewayRegistry.connectedStableIds.value)
+  }
+
+  @Test
   fun connect_showsTlsTimeoutGuidanceWhenFingerprintProbeTimesOut() {
     val (_, _, runtime) =
       gatewayFixture { _, _ -> GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT) }

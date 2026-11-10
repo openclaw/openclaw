@@ -13,7 +13,7 @@ import {
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
 import { worktreePathExists } from "./git.js";
-import { prepareWorktreeRegistryGuard } from "./registry-read.js";
+import { prepareWorktreeRegistryGuard, readRegistryWorktreeForMutation } from "./registry-read.js";
 import {
   deferFailedWorktreeRemoval,
   deferWorktreeCleanup,
@@ -35,11 +35,13 @@ import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import type {
   CreateManagedWorktreeParams,
+  ManagedWorktreeGcResult,
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
   ManagedWorktreeRunEndCleanup,
   ManagedWorktreeRunEndCleanupOutcome,
   RemoveManagedWorktreeResult,
+  WorktreeMutationGuard,
   WorktreeWorkerAuthority,
 } from "./types.js";
 
@@ -66,6 +68,12 @@ export type WorktreeCleanupOwnerPolicy = {
     signal?: AbortSignal,
   ) => Promise<T>;
 };
+
+export type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy &
+  WorktreeMutationGuard & {
+    beforeTemplateRemoval?: () => Promise<void>;
+    checkpoint?: (progress: ManagedWorktreeGcResult) => Promise<void>;
+  };
 
 export async function removeWorktreeIfLossless(
   params: Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {
@@ -298,10 +306,15 @@ export function createWorktreeGcRemoval(context: {
     if (rejected) {
       const reason =
         `Workspace result too large to apply automatically; reserved result ${rejected.resultRef}; ` +
-        `files preserved at ${rejected.projectionPath}. Reduce the change and checkpoint it, or recover manually, then run openclaw worktrees gc --retry-deferred.`;
-      await withOwnerMutation(async () =>
-        deferWorktreeGcRecord(env, record, reason, await prepareOwnerCurrent(record, retiredOwner)),
-      );
+        `files preserved at ${rejected.projectionPath}. Reduce the change and checkpoint it, or recover manually, then run openclaw worktrees gc --retry-deferred. ${rejected.message}`;
+      await withOwnerMutation(async () => {
+        const commitGuard = await prepareOwnerCurrent(record, retiredOwner);
+        // Archive preparation may have saved a new snapshot before rejecting its overlay.
+        const current = await readRegistryWorktreeForMutation({ env, id: record.id, commitGuard });
+        if (current) {
+          await deferWorktreeGcRecord(env, current, reason, commitGuard);
+        }
+      });
       progress.protect("idle", record.id, reason);
       return;
     }

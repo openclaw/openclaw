@@ -12,6 +12,8 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { withProjectCheckoutLifecycle } from "../projects/project-checkout.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
@@ -69,6 +71,34 @@ function leaseOptions(
     ...overrides,
   };
 }
+
+it("names the checkout operation holding up foreground preparation", async () => {
+  await withOpenClawTestState({ label: "checkout-owner" }, async ({ env }) => {
+    const capture = createWarnLogCapture("checkout-owner");
+    const abort = new AbortController();
+    vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => abort.abort());
+    try {
+      await withProjectCheckoutLifecycle(
+        "synthetic-project",
+        { env, operation: "worktree.maintenance.retire" },
+        async () => {
+          await expect(
+            withProjectCheckoutLifecycle(
+              "synthetic-project",
+              { env, signal: abort.signal },
+              async () => {},
+            ),
+          ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+          expect(await capture.findText("Waiting for project checkout lease")).toMatch(
+            /projects\.checkout\/synthetic-project held by worktree\.maintenance\.retire:[0-9a-f-]+; current lease expires at /,
+          );
+        },
+      );
+    } finally {
+      capture.cleanup();
+    }
+  });
+});
 
 it.each([false, true])(
   "records an uncoded native open failure during acquisition (prepare: %s)",

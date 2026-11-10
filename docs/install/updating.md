@@ -53,6 +53,56 @@ backup.
 
 ## Update implementation contract
 
+Private plugin projection materializes eligible external data-suffixed file links
+at their logical in-package filenames before recording the final code-link
+inventory. Both the alias and its inventoried canonical target must have one of
+the case-sensitive extensions `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.ini`,
+`.cfg`, `.csv`, or `.xml`; the target must be a non-executable regular file
+outside the alias's nearest package root with a regular inventoried `package.json`
+(symlink manifests do not establish this boundary). The existing guarded copy
+checks source identity, bounds bytes, refuses occupied destinations, and creates
+an independent private file. Each alias is included in snapshot space accounting.
+
+This is not general symlink flattening or file-content classification. Package
+scope metadata (`package.json`), relocation-owned files (`.modules.yaml` and
+`.bin` launchers), executable targets, code/native/unknown extensions, internal
+links, directory/dependency/host links, and dangling links keep their existing
+handling. A data-looking alias to a target with a code/native/unknown suffix is
+not eligible. Non-executable binary bytes (including ELF) with allowed data
+suffixes are eligible: this is a path/mode contract, not native-content detection.
+Data that requires symlink identity, shared writes, canonical-parent sibling lookup,
+or a suffix outside this list is not supported by this normalization. Files
+mislabeled as ordinary data are not identified by inspecting their contents.
+
+Projection uses only already inventoried entries and edges; it does not discover
+new paths or grant Doctor additional filesystem authority. Ordinary generation
+capture already detaches file aliases, so resource bytes and logical filenames,
+not original `lstat`, `readlink`, inode, or shared-write identity, are the supported
+data contract. Fix representation at this producer boundary instead of carrying
+exceptions through Doctor and each runtime consumer. Recognized native files
+retain separate identity and admission rules. After binding validation, a late
+alias retarget cannot redirect the copy: it uses the inventoried canonical target
+path, with source identity rechecked by the guarded copier. The runtime performing
+plugin projection must contain this fix; an older projector does not gain it from a receipt or new
+environment variable. Existing update/Doctor admission and rollback checks are
+unchanged.
+
+Candidate Doctor recovers interrupted legacy heartbeat runs through cron's startup
+recovery owner before converting them to automations, while holding offline
+maintenance custody. Live or unproved runtime ownership leaves the conversion and
+configuration pending with an update warning. Runs needing startup notifications
+are converted with their original run marker, history, and receipt intact so the
+Gateway can recover them and deliver their notifications without quarantining the
+retired payload. Conversion preserves pending execution facts even when it disables
+the monitor; startup still restores the recorded result without re-enabling it.
+The candidate must contain this fix; published updaters need no
+new marker or schema change.
+
+Candidate Doctor repairs retained ISO-8601 session `endedAt` strings before
+canonical session admission, preserving the original database backup and updating
+indexed timing together. This repair must be present in the candidate Doctor;
+the installed updater needs no protocol or schema change.
+
 Engine identification reads the committed SQLite engine anchor in an isolated
 read-only transaction without copying a healthy live database. Hot rollback
 journals and incomplete WAL families retain private recovery, and unreadable or
@@ -1387,6 +1437,12 @@ maintenance custody within the existing update allowance. If that wait expires,
 contention alone preserves automatic Gateway recovery; an actual data-at-risk
 refusal still blocks recovery. Doctor publishes its completion result only after
 its maintenance resources have been released.
+
+Gateway process respawn and launchd restart scheduling respect active offline
+maintenance ownership. During Doctor restoration, a busy port still refuses an
+unverified listener, but the preserved LaunchAgent is reloaded so launchd can
+retry after that listener exits. This requires the Gateway and restoring CLI to
+contain the fix; an already scheduled restart helper is not cancelled by it.
 
 Source updates also admit build-artifact ownership and runtime staging access in
 the installed checkout before stopping the Gateway. A retained

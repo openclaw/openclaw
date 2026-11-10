@@ -279,91 +279,90 @@ export async function connectOverCdpTransport(
             closeTransportSocket();
             return;
           }
-          const parsed = normalizer ? normalizer.receive(received) : received;
-          if (!parsed) {
-            return;
-          }
-          const id = parsed.id;
-          if (typeof id === "number" && id <= FIRST_INTERNAL_COMMAND_ID) {
-            const targetSessionId = pendingContextlessTargetResumes.get(id);
-            if (targetSessionId) {
-              pendingContextlessTargetResumes.delete(id);
-              sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
-            }
-            return;
-          }
-          if (typeof id === "number") {
-            pendingTargetCommands.delete(id);
-          }
-          const method = readStringField(parsed, "method");
-          const params = asOptionalRecord(parsed.params);
-          const parentSessionId = readStringField(parsed, "sessionId");
-          if (method === "Target.attachedToTarget" && !parentSessionId) {
-            const sessionId = readStringField(params, "sessionId");
-            const targetInfo = asOptionalRecord(params?.targetInfo);
-            const targetId = readStringField(targetInfo, "targetId");
-            if (
-              sessionId &&
-              targetId &&
-              readStringField(targetInfo, "browserContextId") &&
-              readStringField(targetInfo, "type") === "page"
-            ) {
-              pageTargetsBySession.set(sessionId, {
-                targetId,
-                title: readStringField(targetInfo, "title") ?? "",
-                url: readStringField(targetInfo, "url") ?? "",
-                type: "page",
-              });
-            }
-          } else if (method === "Inspector.targetCrashed" && parentSessionId) {
-            const target = pageTargetsBySession.get(parentSessionId);
-            if (target) {
-              // Playwright rejects a crashed session permanently, even if Chrome later reloads it.
-              crashedTargets.set(target.targetId, target);
-            }
-          } else if (method === "Target.targetInfoChanged" && !parentSessionId) {
-            const targetInfo = asOptionalRecord(params?.targetInfo);
-            const targetId = readStringField(targetInfo, "targetId");
-            for (const target of pageTargetsBySession.values()) {
-              if (target.targetId === targetId) {
-                target.title = readStringField(targetInfo, "title") ?? target.title;
-                target.url = readStringField(targetInfo, "url") ?? target.url;
+          const messages = normalizer ? normalizer.receive(received) : [received];
+          for (const parsed of messages) {
+            const id = parsed.id;
+            if (typeof id === "number" && id <= FIRST_INTERNAL_COMMAND_ID) {
+              const targetSessionId = pendingContextlessTargetResumes.get(id);
+              if (targetSessionId) {
+                pendingContextlessTargetResumes.delete(id);
+                sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
               }
+              continue;
             }
-          } else if (method === "Target.detachedFromTarget") {
-            const sessionId = readStringField(params, "sessionId");
-            if (sessionId) {
-              // Temporary CDP sessions cannot retire the root page's crash state.
-              if (!parentSessionId) {
-                const target = pageTargetsBySession.get(sessionId);
-                if (target) {
-                  crashedTargets.delete(target.targetId);
-                }
-                pageTargetsBySession.delete(sessionId);
-              }
-              for (const [commandId, pendingSessionId] of pendingTargetCommands) {
-                if (pendingSessionId === sessionId) {
-                  pendingTargetCommands.delete(commandId);
-                }
-              }
+            if (typeof id === "number") {
+              pendingTargetCommands.delete(id);
             }
-          } else if (method === "Target.targetDestroyed" && !parentSessionId) {
-            const targetId = readStringField(params, "targetId");
-            if (targetId) {
-              crashedTargets.delete(targetId);
-              for (const [sessionId, target] of pageTargetsBySession) {
+            const method = readStringField(parsed, "method");
+            const params = asOptionalRecord(parsed.params);
+            const parentSessionId = readStringField(parsed, "sessionId");
+            if (method === "Target.attachedToTarget" && !parentSessionId) {
+              const sessionId = readStringField(params, "sessionId");
+              const targetInfo = asOptionalRecord(params?.targetInfo);
+              const targetId = readStringField(targetInfo, "targetId");
+              if (
+                sessionId &&
+                targetId &&
+                readStringField(targetInfo, "browserContextId") &&
+                readStringField(targetInfo, "type") === "page"
+              ) {
+                pageTargetsBySession.set(sessionId, {
+                  targetId,
+                  title: readStringField(targetInfo, "title") ?? "",
+                  url: readStringField(targetInfo, "url") ?? "",
+                  type: "page",
+                });
+              }
+            } else if (method === "Inspector.targetCrashed" && parentSessionId) {
+              const target = pageTargetsBySession.get(parentSessionId);
+              if (target) {
+                // Playwright rejects a crashed session permanently, even if Chrome later reloads it.
+                crashedTargets.set(target.targetId, target);
+              }
+            } else if (method === "Target.targetInfoChanged" && !parentSessionId) {
+              const targetInfo = asOptionalRecord(params?.targetInfo);
+              const targetId = readStringField(targetInfo, "targetId");
+              for (const target of pageTargetsBySession.values()) {
                 if (target.targetId === targetId) {
+                  target.title = readStringField(targetInfo, "title") ?? target.title;
+                  target.url = readStringField(targetInfo, "url") ?? target.url;
+                }
+              }
+            } else if (method === "Target.detachedFromTarget") {
+              const sessionId = readStringField(params, "sessionId");
+              if (sessionId) {
+                // Temporary CDP sessions cannot retire the root page's crash state.
+                if (!parentSessionId) {
+                  const target = pageTargetsBySession.get(sessionId);
+                  if (target) {
+                    crashedTargets.delete(target.targetId);
+                  }
                   pageTargetsBySession.delete(sessionId);
                 }
+                for (const [commandId, pendingSessionId] of pendingTargetCommands) {
+                  if (pendingSessionId === sessionId) {
+                    pendingTargetCommands.delete(commandId);
+                  }
+                }
+              }
+            } else if (method === "Target.targetDestroyed" && !parentSessionId) {
+              const targetId = readStringField(params, "targetId");
+              if (targetId) {
+                crashedTargets.delete(targetId);
+                for (const [sessionId, target] of pageTargetsBySession) {
+                  if (target.targetId === targetId) {
+                    pageTargetsBySession.delete(sessionId);
+                  }
+                }
               }
             }
+            const contextlessParams = contextlessTargetParams(parsed);
+            if (contextlessParams) {
+              releaseContextlessTarget(contextlessParams);
+              continue;
+            }
+            scheduleMessage(parsed);
           }
-          const contextlessParams = contextlessTargetParams(parsed);
-          if (contextlessParams) {
-            releaseContextlessTarget(contextlessParams);
-            return;
-          }
-          scheduleMessage(parsed);
         } catch {
           closeTransportSocket();
         }

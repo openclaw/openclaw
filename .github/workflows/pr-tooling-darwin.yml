@@ -46,6 +46,7 @@ on:
       - "test/setup*.ts"
       - "test/test-home-policy.mts"
       - "src/test-utils/**"
+      - "!src/test-utils/**/*.test.ts"
       - "vitest.config.ts"
       - "tsconfig*.json"
       - "test/tsconfig.json"

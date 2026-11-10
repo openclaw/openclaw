@@ -456,6 +456,10 @@ openclaw-custodian-page {
   animation-delay: 300ms;
 }
 
+.custodian__catch-up {
+  color: var(--muted);
+}
+
 .custodian__error {
   display: flex;
   align-items: center;
@@ -500,8 +504,6 @@ openclaw-custodian-page {
   height: 14px;
   margin: 6px auto;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask);
   border-radius: var(--radius-full);
   animation: btn-spinner-spin 0.7s linear infinite;
 }
