@@ -83,7 +83,8 @@ final class RemindersService: RemindersServicing {
             title: reminder.title,
             dueISO: due.map { formatter.string(from: $0) },
             completed: reminder.isCompleted,
-            listName: reminder.calendar.title)
+            listName: reminder.calendar.title,
+            notes: reminder.notes)
     }
 
     static func applyDueISO(
