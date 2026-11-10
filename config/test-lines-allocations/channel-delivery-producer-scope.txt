@@ -1,2 +1,2 @@
-# Exact LF growth for closed-producer-scope delivery regressions.
-50
+# 50 closed-producer-scope regression lines, minus 3 model-picker snapshot lines consolidated.
+47

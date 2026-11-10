@@ -769,7 +769,7 @@ test("lists native CLI-bound models through Telegram polling and provider callba
   };
 
   await withTempDir("openclaw-telegram-native-model-picker-", async (fixtureRoot) => {
-    const { authCallsPath, nativeRequestsPath, authArgs, discoveryArgs } =
+    const { readCliCalls, nativeRequestsPath, authArgs, discoveryArgs } =
       await createNativeModelPickerCliFixture(fixtureRoot);
     await withServer(
       (req, res) => {
@@ -884,10 +884,7 @@ test("lists native CLI-bound models through Telegram polling and provider callba
               fixtureProviderRequests: providerRequests,
             }),
           );
-          const cliCalls = (await fs.readFile(authCallsPath, "utf8"))
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line));
+          const cliCalls = await readCliCalls();
           console.info("MODEL_INVENTORY_AUTH_PROOF", JSON.stringify(cliCalls));
           expect(cliCalls.length).toBeGreaterThan(0);
           expect(providerButton?.text).toBe("anthropic (2)");
