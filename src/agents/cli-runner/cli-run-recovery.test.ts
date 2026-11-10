@@ -75,7 +75,7 @@ describe("cli-run-recovery delivered failures", () => {
     const onTerminalFailure = vi.fn(async () => {});
     const terminalWarnings = () =>
       warn.mock.calls
-        .map(([message]) => String(message))
+        .map(([message]) => message)
         .filter((message) => message.includes("cli terminal failure:"));
     return { context, error, delivered, warn, onTerminalFailure, terminalWarnings };
   }
@@ -83,7 +83,9 @@ describe("cli-run-recovery delivered failures", () => {
   it("logs the terminal failure once when the first attempt fails after delivery", async () => {
     const { context, error, delivered, onTerminalFailure, terminalWarnings } =
       deliveredFailureRun();
-    const executeAttempt = vi.fn().mockRejectedValueOnce(error);
+    const executeAttempt = vi
+      .fn<Parameters<typeof runCliRecovery<{ done: true }>>[0]["executeAttempt"]>()
+      .mockRejectedValueOnce(error);
 
     const result = await runCliRecovery({
       context,
@@ -116,7 +118,7 @@ describe("cli-run-recovery delivered failures", () => {
       provider: "claude-cli",
     });
     const executeAttempt = vi
-      .fn()
+      .fn<Parameters<typeof runCliRecovery<{ done: true }>>[0]["executeAttempt"]>()
       .mockRejectedValueOnce(sessionExpired)
       .mockRejectedValueOnce(retryError);
     const finishDeliveredFailure = vi
@@ -141,7 +143,9 @@ describe("cli-run-recovery delivered failures", () => {
 
   it("still logs exactly once when no delivery evidence exists", async () => {
     const { context, error, onTerminalFailure, terminalWarnings } = deliveredFailureRun();
-    const executeAttempt = vi.fn().mockRejectedValueOnce(error);
+    const executeAttempt = vi
+      .fn<Parameters<typeof runCliRecovery<{ done: true }>>[0]["executeAttempt"]>()
+      .mockRejectedValueOnce(error);
 
     await expect(
       runCliRecovery({
