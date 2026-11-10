@@ -1,29 +1,24 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { closeSkillsWatchers } from "../runtime/refresh.js";
+import { writeSkill as writeFixture } from "../test-support/e2e-test-helpers.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
-import {
-  resolveWorkspaceSkillSourcePlan,
-  splitSkillSourcePlan,
-} from "./workspace-skill-sources.js";
+import { splitSkillSourcePlan } from "./workspace-skill-source-plan.js";
+import { resolveWorkspaceSkillSourcePlan } from "./workspace-skill-sources.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(async () => {
-  await closeSkillsWatchers(true);
-});
+afterEach(() => closeSkillsWatchers(true));
 
-async function writeSkill(root: string, name: string, description: string) {
-  const directory = path.join(root, name);
-  await fs.mkdir(directory, { recursive: true });
-  await fs.writeFile(
-    path.join(directory, "SKILL.md"),
-    `---\nname: ${name}\ndescription: ${description}\n---\n\nFollow the ${description} procedure.\n`,
-  );
-}
+const writeSkill = (root: string, name: string, description: string) =>
+  writeFixture({
+    dir: path.join(root, name),
+    name,
+    description,
+    body: `Follow the ${description} procedure.`,
+  });
 
 describe("Workshop discovery contract", () => {
   it("P1: resolves every precedence tier through the loader and prompt snapshot", async () => {

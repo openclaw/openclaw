@@ -99,7 +99,7 @@ it("refreshes every agent from admitted metadata without inventory fallback in a
   vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", path.join(root, "bundled"));
   pinConfigDir();
   const pluginRoot = path.join(root, "plugin");
-  const workspaceDirs = [path.join(root, "first"), path.join(root, "second")];
+  const workspaceDirs = await workspaces(root);
   const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       { id: "fixture", origin: "config", rootDir: pluginRoot, skills: ["guide"] },
@@ -108,13 +108,6 @@ it("refreshes every agent from admitted metadata without inventory fallback in a
   });
   for (const name of ["guide", "acp"]) {
     await writeSkill({ dir: path.join(pluginRoot, name), name, description: name });
-  }
-  for (const [index, workspaceDir] of workspaceDirs.entries()) {
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", `local-${index}`),
-      name: `local-${index}`,
-      description: `Workspace ${index}`,
-    });
   }
   // Only replace the thread transport; refresh and the worker execute their real owners.
   vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (input) =>
