@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { restoreCiAdaptivePriors } from "../../scripts/ci-adaptive-priors.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
 const repository = "openclaw/openclaw";
@@ -19,6 +20,20 @@ const env = {
   GITHUB_RUN_ATTEMPT: "2",
   GITHUB_TOKEN: "synthetic-test-token",
 };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function bareRepository() {
+  const root = tempDirs.make("ci-prior-tree-");
+  const git = (args: string[], input?: string) =>
+    execFileSync("git", args, {
+      cwd: root,
+      input,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+  git(["init", "--bare"]);
+  return { root, git };
+}
 
 function fixture(
   options: {
@@ -37,6 +52,8 @@ function fixture(
     conclusion?: string;
     freshConclusion?: string;
     comparison?: Record<string, unknown>;
+    checkoutRevision?: string;
+    treeResponse?: Record<string, unknown>;
   } = {},
 ) {
   const run = {
@@ -111,7 +128,9 @@ function fixture(
         updated_at: options.updatedAt ?? earlier,
         head_repository: { full_name: options.freshFork ? "contributor/fork" : repository },
       };
-    } else if (endpoint === `compare/${revision}...${consumerRevision}`) {
+    } else if (
+      endpoint === `compare/${revision}...${options.checkoutRevision ?? consumerRevision}`
+    ) {
       body = {
         status: "ahead",
         behind_by: 0,
@@ -123,6 +142,9 @@ function fixture(
         ],
         ...options.comparison,
       };
+    } else if (endpoint === `git/trees/${tree}`) {
+      expect(url.searchParams.get("recursive")).toBe("1");
+      body = options.treeResponse;
     } else if (/^actions\/artifacts\/\d+\/zip$/u.test(endpoint)) {
       return new Response(new Uint8Array(archive));
     } else {
@@ -137,6 +159,123 @@ function fixture(
 }
 
 describe("adaptive CI prior restore", () => {
+  it.each([486, 599, 600])("compares %i paths without the prior commit locally", async (count) => {
+    const { root, git } = bareRepository();
+    const blob = git(["hash-object", "-w", "--stdin"], "content");
+    const paths = Array.from({ length: count - 6 }, (_, index) => `file-${index}`);
+    const entries = [
+      ...paths.map((path) => `100644 blob ${blob}\t${path}`),
+      `100755 blob ${blob}\tmode`,
+      `120000 blob ${blob}\tlink`,
+      `160000 commit ${revision}\tmodule`,
+      `100644 blob ${blob}\tnew-name`,
+      `100644 blob ${blob}\treplace`,
+    ];
+    const headTree = git(["mktree", "--missing"], entries.join("\n") + "\n");
+    const head = git(
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit-tree",
+        headTree,
+      ],
+      "fixture\n",
+    );
+    git(["update-ref", "HEAD", head]);
+    expect(() => git(["cat-file", "-e", revision])).toThrow();
+    const leaf = (path: string, mode = "100644", type = "blob") => ({
+      path,
+      mode,
+      type,
+      sha: blob,
+    });
+    const f = fixture({
+      checkoutRevision: head,
+      comparison: { files: Array.from({ length: 300 }, () => ({ filename: "partial" })) },
+      treeResponse: {
+        sha: tree,
+        truncated: false,
+        padding: count === 486 ? "x".repeat(2 * 1024 * 1024) : "",
+        tree: [
+          ...paths.map((path) => ({ ...leaf(path), sha: "c".repeat(40) })),
+          leaf("mode"),
+          leaf("link", "120000"),
+          leaf("module", "160000", "commit"),
+          leaf("old-name"),
+          leaf("replace", "040000", "tree"),
+          leaf("replace/child"),
+        ],
+      },
+    });
+    // Same symlink bytes are unchanged; the gitlink changes its object ID.
+    const bundle = await restoreCiAdaptivePriors({
+      env,
+      repositoryRoot: root,
+      fetchImpl: f.fetchImpl,
+    });
+    if (count === 600) {
+      expect(bundle.candidates).toEqual([]);
+    } else {
+      const comparison = {
+        changedFiles: [
+          ...paths,
+          "mode",
+          "module",
+          "new-name",
+          "old-name",
+          "replace",
+          "replace/child",
+        ].toSorted(),
+        headTree,
+      };
+      expect(bundle.candidates).toMatchObject([{ comparison }, { comparison }]);
+    }
+  });
+
+  it.each([
+    { truncated: true },
+    { sha: "c".repeat(40) },
+    { tree: [{ path: "../outside", mode: "100644", type: "blob", sha: revision }] },
+    { tree: [{ path: "x", mode: "100644", type: "tree", sha: revision }] },
+    {
+      tree: Array.from({ length: 2 }, () => ({
+        path: "x",
+        mode: "100644",
+        type: "blob",
+        sha: revision,
+      })),
+    },
+    { padding: "x".repeat(32 * 1024 * 1024) },
+  ])("rejects incomplete or invalid large-diff trees ($truncated)", async (change) => {
+    const { root, git } = bareRepository();
+    const headTree = git(["mktree"], "");
+    const head = git(
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit-tree",
+        headTree,
+      ],
+      "fixture\n",
+    );
+    git(["update-ref", "HEAD", head]);
+    const restore = (treeChange: Record<string, unknown> = {}) => {
+      const f = fixture({
+        checkoutRevision: head,
+        comparison: { files: Array.from({ length: 300 }, () => ({ filename: "partial" })) },
+        treeResponse: { sha: tree, truncated: false, tree: [], ...treeChange },
+      });
+      return restoreCiAdaptivePriors({ env, repositoryRoot: root, fetchImpl: f.fetchImpl });
+    };
+    // Keep the valid diff below the path limit so only the changed guard can reject it.
+    expect((await restore()).candidates).toHaveLength(2);
+    expect((await restore(change)).candidates).toEqual([]);
+  });
+
   it("retains verified observations from a failed workflow without admitting cancelled runs", async () => {
     const failed = fixture({ conclusion: "failure" });
     expect(
@@ -197,7 +336,10 @@ describe("adaptive CI prior restore", () => {
     ["archive digest", { digestMismatch: true }],
     ["completion after cutoff", { updatedAt: later }],
     ["divergent history", { comparison: { merge_base_commit: { sha: "c".repeat(40) } } }],
-    ["wrong comparison base", { comparison: { base_commit: { sha: "c".repeat(40) } } }],
+    [
+      "wrong comparison base",
+      { comparison: { base_commit: { sha: "c".repeat(40), commit: { tree: { sha: tree } } } } },
+    ],
     ["behind comparison", { comparison: { status: "behind", behind_by: 1 } }],
     [
       "saturated comparison",

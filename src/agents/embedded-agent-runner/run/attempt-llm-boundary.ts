@@ -31,6 +31,7 @@ import {
   retainRuntimeContextMessageForPrompt,
   stripHistoricalRuntimeContextCustomMessages,
 } from "../../internal-runtime-context.js";
+import { annotateInterSessionUserMessages } from "../../replay-provenance.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { bindModelPromptProjectionAppend } from "../../sessions/model-prompt-projection-append.js";
@@ -81,6 +82,14 @@ const runtimeContextProjections = [false, true].map((escape) =>
       if (message.role === "custom" && isOpenClawSystemUpdateMessage(message)) {
         const details = systemUpdateDetailsSchema.safeParse(message.details);
         if (details.success) {
+          // Keep runtime semantics when this route cannot project operator messages.
+          if (!inHistorySystemUpdates && details.data.kind === "runtime-context") {
+            return {
+              ...message,
+              customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+              details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+            };
+          }
           const projected: UserMessage = {
             role: "user",
             content: message.content,
@@ -161,8 +170,10 @@ export function normalizeMessagesForLlmBoundary(
     options?.currentUserTimestampOverride,
   );
   const normalizedUserMessages = normalizeUserMessagesForLlmBoundary(
-    normalized.map((message, index) =>
-      projectRecordedModelPrompt(message, userTranscriptMessages?.[index]),
+    annotateInterSessionUserMessages(
+      normalized.map((message, index) =>
+        projectRecordedModelPrompt(message, userTranscriptMessages?.[index]),
+      ),
     ),
     options,
   );

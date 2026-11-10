@@ -39,6 +39,7 @@ async function mountSearch() {
     {
       id: "sample",
       displayName: "Current Failed Recovered Scope",
+      repositoryIdentity: "example/registered",
       repoRoot: "/fixture/sample",
       source: "registered" as const,
     },
@@ -102,12 +103,20 @@ describe("remote project search slot", () => {
     expect(input.disabled).toBe(false);
     expect(document.activeElement).toBe(input);
     expect(view.container.querySelector('[data-value="project:sample"]')).toBe(localRow);
-    current.resolve(result("current"));
+    current.resolve({
+      ...result("current"),
+      projects: [...result("current").projects, ...result("registered").projects],
+    });
     await waitForSolid(() =>
       expect(
         view.container.querySelector('[data-value="remote-project:example/current"]'),
       ).not.toBeNull(),
     );
+
+    expect(view.getByText("Local projects", { exact: true })).not.toBeNull();
+    expect(
+      view.container.querySelector('[data-value="remote-project:example/registered"]'),
+    ).toBeNull();
 
     request.mockRejectedValueOnce(new Error("Remote search unavailable"));
     typeQuery("failed");
@@ -137,6 +146,9 @@ describe("remote project search slot", () => {
     expect(view.container.querySelector('[data-value="project:sample"]')).toBe(localRow);
     expect(localRow.getAttribute("aria-pressed")).toBe("true");
     expect(browser.projectId).toBe("sample");
+    typeQuery("absent");
+    expect(view.container.querySelector('[data-value="project:sample"]')).toBeNull();
+    expect(view.getByText("No local projects match", { exact: true })).not.toBeNull();
   });
 
   it.each(["client", "epoch"] as const)(

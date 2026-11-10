@@ -41,12 +41,14 @@ it(
       { name: "delegated", delegated: true, queued: false },
       { name: "direct", delegated: false, queued: false },
       { name: "queued", delegated: true, queued: true },
+      { name: "collected", delegated: true, queued: false },
     ].map(({ name, delegated, queued }) => {
       const nonce = randomUUID();
       return {
         name,
         delegated,
         queued,
+        collect: name === "collected",
         predecessorPrompt: `PREDECESSOR_${nonce}`,
         predecessorCalls: 0,
         predecessorStarted: createDeferredCore(),
@@ -166,7 +168,7 @@ it(
                   runtime: "subagent",
                   context: "isolated",
                   cleanup: "keep",
-                  completionTarget: "parent",
+                  ...(scenario.collect ? { collect: true } : { completionTarget: "parent" }),
                 });
               } else if (scenario.delegated && scenario.parentCalls === 3) {
                 const receipt = toolOutput.find(
@@ -175,10 +177,27 @@ it(
                 );
                 assert(receipt && typeof receipt.runId === "string", "real spawn receipt required");
                 scenario.childRunId = receipt.runId;
-                writeToolCall(response, "sessions_yield", {});
+                if (scenario.collect) {
+                  writeToolCall(response, "agents_wait", {
+                    ids: [receipt.runId],
+                    awaitResults: true,
+                  });
+                } else {
+                  writeToolCall(response, "sessions_yield", {});
+                }
               } else if (scenario.delegated && scenario.parentCalls === 4) {
+                if (scenario.collect) {
+                  expect(toolOutput).toContainEqual(
+                    expect.objectContaining({
+                      runId: scenario.childRunId,
+                      status: "done",
+                      result: scenario.childResult,
+                    }),
+                  );
+                } else {
+                  expect(body).toContain("Active goal:");
+                }
                 expect(body).toContain(scenario.childResult);
-                expect(body).toContain("Active goal:");
                 return "Delegated item done; the remaining item is unfinished.";
               } else if (scenario.parentCalls === (scenario.delegated ? 5 : 3)) {
                 expect(body).toContain("Advance the active goal");
@@ -267,12 +286,15 @@ it(
                   scenario.releasePredecessor.resolve();
                 }
                 if (scenario.delegated) {
-                  await wait(
-                    Promise.all([scenario.childStarted.promise, scenario.yielded.promise]),
-                  );
-                  expect(scenario.parentCalls).toBe(3);
+                  await wait(scenario.childStarted.promise);
+                  if (!scenario.collect) {
+                    await wait(scenario.yielded.promise);
+                    expect(scenario.parentCalls).toBe(3);
+                  }
                   scenario.releaseChild.resolve();
-                  await wait(scenario.committed.promise);
+                  if (!scenario.collect) {
+                    await wait(scenario.committed.promise);
+                  }
                 } else {
                   expect(
                     await wait(
@@ -287,6 +309,7 @@ it(
                 expect(drained.drained, JSON.stringify(drained.snapshot.blockers)).toBe(true);
                 expect(
                   loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey })?.goal,
+                  scenario.name,
                 ).toMatchObject({
                   status: "complete",
                   continuationTurns: 1,

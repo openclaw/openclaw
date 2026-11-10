@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
 import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -8,6 +9,7 @@ type PreparationPhase =
   | "allocate"
   | "allocationWait"
   | "mutationWait"
+  | "workspaceWait"
   | "capacityWait"
   | "repository"
   | "sources"
@@ -57,6 +59,14 @@ type PreparationPhase =
 type TemplateState = "warm" | "cold" | "unavailable" | "reused";
 type TemplateDetails = {
   reason?: string;
+  missReason?:
+    | "no-generation"
+    | "commit-changed"
+    | "backend-changed"
+    | "content-changed"
+    | "invalid";
+  priorSourceCommit?: string;
+  requestedSourceCommit?: string;
   backend?: string;
   cloneBytes?: number;
   errorCode?: string;
@@ -97,7 +107,10 @@ export function setWorktreePreparationTemplate(
 export function recordWorktreePreparationFailure(phase: PreparationPhase, error: unknown) {
   const current = preparation.getStore();
   // Preserve the innermost failing phase as the error crosses enclosing waits.
-  if (current && (!current.failure || current.failure.error !== error)) {
+  if (
+    current &&
+    (!current.failure || !collectNestedErrorCandidates(error).includes(current.failure.error))
+  ) {
     current.failure = { error, phase };
   }
 }
@@ -170,7 +183,8 @@ export async function withWorktreePreparationTiming<T>(
             ? {
                 errorClass: failure instanceof Error ? failure.name : typeof failure,
                 errorPhase:
-                  current.failure && current.failure.error === failure
+                  current.failure &&
+                  collectNestedErrorCandidates(failure).includes(current.failure.error)
                     ? current.failure.phase
                     : "unattributed",
               }

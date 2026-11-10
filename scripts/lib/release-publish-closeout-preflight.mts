@@ -13,12 +13,15 @@ import {
   requirePreflightRecord,
   type PublishPreflightGh,
 } from "./release-publish-preflight-evidence.mts";
+import { classifyReleaseTrain, parseReleaseVersion } from "./release-version.mjs";
 import { verifyStableMainCloseout } from "./stable-release-closeout.mjs";
 
 export function inspectPublishReleasePage(input: {
   repo: string;
   tag: string;
   sourceSha: string;
+  toolingSha: string;
+  retiredLineReason?: string;
   runGh: PublishPreflightGh;
 }) {
   // Initial publication always renders the frozen notes, including when no
@@ -28,13 +31,28 @@ export function inspectPublishReleasePage(input: {
     ref: input.sourceSha,
     tag: input.tag,
   });
-  renderGithubReleaseNotes({
+  const version = parseReleaseVersion(notes.version);
+  let regularStableVersion: unknown;
+  if (version && classifyReleaseTrain(version) === "extended-stable") {
+    // Match the publisher parent's frozen .release-harness/package.json context,
+    // not a live dist-tag that could change before canonical readback.
+    regularStableVersion = requirePreflightRecord(
+      JSON.parse(
+        execFileSync("git", ["show", `${input.toolingSha}:package.json`], { encoding: "utf8" }),
+      ),
+      "publisher package.json",
+    ).version;
+  }
+  const target = {
     changelog: notes.section,
     version: notes.version,
     tag: input.tag,
     repository: input.repo,
     contributionRecordPath: notes.recordPath ?? undefined,
-  });
+    regularStableVersion,
+    retiredLineReason: input.retiredLineReason,
+  };
+  renderGithubReleaseNotes(target);
   const lookup = readPublishPreflightRelease(input.runGh, input.repo, input.tag);
   if (lookup.state !== "found") {
     return undefined;
@@ -53,11 +71,7 @@ export function inspectPublishReleasePage(input: {
   if (!release.draft) {
     const canonical = verifyGithubReleaseNotes({
       body,
-      changelog: notes.section,
-      version: notes.version,
-      tag: input.tag,
-      repository: input.repo,
-      contributionRecordPath: notes.recordPath ?? undefined,
+      ...target,
     });
     const assets = Array.isArray(release.assets) ? release.assets.filter(isRecord) : [];
     const hasAsset = assets.some(

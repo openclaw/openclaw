@@ -21,7 +21,7 @@ openclaw-workboard-toast .toast {
   color: var(--popover-foreground);
   box-shadow: var(--shadow-lg);
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
 }
 

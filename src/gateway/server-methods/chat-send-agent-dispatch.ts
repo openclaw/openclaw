@@ -41,6 +41,7 @@ import { broadcastChatDelta } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
 import { scheduleChatDashboardSessionTitle } from "./chat-send-background.js";
 import { readChatSendReplyPayload } from "./chat-send-command-replies.js";
+import { createChatSendDashboardReadAdmission } from "./chat-send-dashboard-authority.js";
 import {
   createChatSendDispatchErrorLifecycle,
   resolveChatSendReturnedOutcome,
@@ -231,6 +232,15 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           userTurnRecorder,
           beginCapturedMessageInjection,
         );
+        void messageInjectionAttempt?.acceptance.then(
+          (accepted) => {
+            if (accepted) {
+              const change = { sessionKey, agentId, reason: "agent.input.steering" };
+              emitSessionsChanged(context, change, { accessChanged: false });
+            }
+          },
+          () => undefined,
+        );
         injectionPhase?.mark("detail.run_admission.steer_settlement");
         acceptedMessageInjection = await settleChatSendMessageInjection(messageInjectionAttempt);
         messageInjectionAttempt = await injectionDisposition.observe(messageInjectionAttempt);
@@ -241,18 +251,11 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
       });
     },
   };
-  const dashboardReadAdmission = assertDashboardReadCurrent
-    ? {
-        agentId,
-        runId: clientRunId,
-        sessionKey,
-        // Fresh-session initialization updates this original registration's SID.
-        get sessionId() {
-          return getRpcSourceIdentity(admission.sourceRef).sessionId;
-        },
-        assertCurrent: assertDashboardReadCurrent,
-      }
-    : undefined;
+  const dashboardReadAdmission = createChatSendDashboardReadAdmission({
+    admission,
+    session,
+    assertDashboardReadCurrent,
+  });
   const phase = diagnostics.scope("dispatch");
   // Naming needs only the accepted message, not a ready workspace or reply progress.
   scheduleChatDashboardSessionTitle(
@@ -267,6 +270,11 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           // Input already owned by the sink must finalize before source admission can fail.
           if (!acceptedMessageInjection) {
             admission.assertWorkAdmissionCurrent();
+          }
+          if (request.humanAddressed) {
+            // Finalization commits the human turn, which notifies the selected people
+            // and leaves the message in the transcript as context for the next turn.
+            return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
           }
           let workspacePreparation: ReturnType<typeof prepareSessionWorkspace> | undefined;
           if (
@@ -513,7 +521,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           config: cfg,
           attributes: chatSendTraceAttributes,
         },
-      ),
+      ).catch(dispatchErrorLifecycle.captureUnstartedFailure),
     )
     .then(async (dispatchResult) => {
       diagnostics.finish(dispatchDisposition);

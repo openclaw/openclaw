@@ -76,9 +76,12 @@ Related model-config surfaces:
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
 If repeated utility-model failures stop session-observer assessments, the watching
-Control UI chat shows one warning for that run, naming the model and suggesting a
+Control UI chat shows one warning for that run when a utility model or fallback
+is explicitly configured, naming the model and suggesting a
 capable utility model or `utilityModel.fallbacks`. Missing model IDs and exhausted fallback attempts are named in the notice without including raw provider errors or auth-profile IDs. The explicit route stays selected;
-the next run tries it again. Model-free activity headlines remain available. `models status` uses the Gateway’s agent-scoped utility decision when available, rather than reconstructing private account availability from public model rows.
+the next run tries it again. Automatically selected utility models stop assessments
+without a chat warning; Gateway logs retain the failure details. Model-free activity
+headlines remain available. `models status` uses the Gateway’s agent-scoped utility decision when available, rather than reconstructing private account availability from public model rows.
 
 Title generation requests thinking off where supported. Custom OpenAI-compatible
 endpoints with an inferred Z.AI (`zai`) thinking format keep the provider's default

@@ -95,7 +95,10 @@ const pluginToolInvocationSources = resolveGlobalSingleton(
  * call entry, before the first await, so the plugin's invocation guard rechecks that caller.
  */
 export function runWithPluginToolInvocationSource<T>(run: () => Promise<T>): Promise<T> {
-  return pluginToolInvocationSources.run(captureAgentToolSourceExecutionGuard(), run);
+  const source = captureAgentToolSourceExecutionGuard();
+  return runWithAgentToolSourceExecutionScope(source, () =>
+    pluginToolInvocationSources.run(source, run),
+  );
 }
 
 /** The invocation guard's caller part; outside a plugin tool call there is none to check. */

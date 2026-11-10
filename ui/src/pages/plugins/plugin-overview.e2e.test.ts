@@ -245,6 +245,7 @@ describeControlUiE2e("Plugin overview", () => {
     const linear = {
       ...calendarPlugin,
       id: "linear",
+      catalogId: "ch_bGluZWFy",
       name: "Linear",
       packageName: "@openclaw/linear",
       description: summary,
@@ -369,7 +370,7 @@ describeControlUiE2e("Plugin overview", () => {
     };
     const { page } = await setup(
       {
-        "plugins.list": inventory([calendarPlugin]),
+        "plugins.list": inventory([plugin]),
         "plugins.catalog.get": catalog,
         "plugins.inspect": {
           ...calendarInspection,
@@ -425,7 +426,7 @@ describeControlUiE2e("Plugin overview", () => {
     expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
       "Skills",
       "Tools",
-      "MCP Server",
+      "MCP server",
     ]);
     await page.getByRole("button", { name: /calendar_search/ }).click();
     await page.getByRole("dialog", { name: "calendar_search" }).waitFor();

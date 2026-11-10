@@ -8,12 +8,9 @@ import {
   launchAgentControlFixture,
   defaultProgramArguments,
 } from "./launchd-install.test-support.js";
+import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
-import {
-  readLaunchAgentProgramArguments,
-  resolveLaunchAgentPlistPath,
-  uninstallLaunchAgent,
-} from "./launchd.js";
+import { readLaunchAgentProgramArguments, uninstallLaunchAgent } from "./launchd.js";
 
 const PLIST = resolveLaunchAgentPlistPath(ENV);
 const control = () => launchAgentControlFixture(ENV);

@@ -22,6 +22,8 @@ generated summaries remain subject to the summarizer's input and output limits.
 
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
+Compaction and branch summaries omit an edit or write from modified-file metadata when its matching tool result explicitly reports `changed: false`. An earlier change to the same path remains recorded. Missing results and errors without that explicit outcome remain conservative: an error alone does not prove that no file changed.
+
 Built-in compaction summarizes the older history in one model request, whatever the size of the session or the context window. A split turn adds one request for the turn prefix, and a failed safeguard quality audit adds one request per corrective attempt. Each request's conversation input is capped at 160,000 characters (about 40,000 tokens), or less when the summarizer's own context window is smaller. A larger history is filled in this order: the newest messages verbatim, in half of that budget; your older messages, which carry the asks, decisions and corrections, in a quarter, each trimmed to at most 2,000 characters and spread evenly across the history when they do not all fit; the oldest messages, in a tenth; and evenly spaced runs of the remaining messages, trimmed to 6,000 characters each. Each gap is marked with the number of messages left out, and the summarizer is told not to guess their content and to keep the previous summary's facts. Chinese, Japanese, and Korean (CJK) characters count by their approximate token weight. The bound applies to the summarizer input only; the transcript keeps every message.
 
 Ordinary long tool results use a 2,000-character summary-input projection, including an explicit truncation marker. It keeps the beginning and end so terminal result codes survive. Existing diagnostic-preservation rules stay in place, and short results pass through unchanged. Text in the omitted middle can still be lost; the full result remains in the transcript.
@@ -270,6 +272,31 @@ the context needed to continue. Provider refusals do not switch models.
 Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain when no earlier summary can be reused. A summary deadline or an HTTP 408 or 504 instead uses the automatic timeout fallback (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
+
+### Summary size
+
+Client-side compaction keeps at most 16,000 characters in its persisted summary
+by default, including preserved recent turns and other summary sections. Set
+`agents.defaults.compaction.maxSummaryChars` to change that ceiling, or
+`agents.entries.<id>.compaction.maxSummaryChars` to override it for one agent:
+
+```json5
+{
+  agents: {
+    defaults: { compaction: { maxSummaryChars: 48000 } },
+    entries: {
+      research: { compaction: { maxSummaryChars: 64000 } },
+    },
+  },
+}
+```
+
+Both settings accept integers from 1,000 to 200,000. An omitted per-agent setting
+inherits the default. This is a ceiling, not a target: the summary still has to
+fit the active model's token budget beside instructions, tools, and retained
+history. Larger summaries increase context usage and replay cost on subsequent
+requests. They do not increase the summarizer's input or output allowance, recover
+facts already lost from earlier summaries, or change provider-native compaction.
 
 ### Identifier preservation
 

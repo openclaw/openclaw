@@ -124,10 +124,16 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     this.resumeCatalogRead();
     const state = this.state;
     const load = state && getChatHistoryLoadState(state);
-    const resumed =
+    if (
       state &&
-      (load?.phase === "pending-presentation" || load?.phase === "pending-connection") &&
-      resumePendingChatHistoryLoad(state);
+      load?.phase === "failed" &&
+      load.retryable &&
+      chatHistoryRequests(state).subscriptionError
+    ) {
+      // An approval upgrade can fail while its weaker base subscription remains.
+      void syncSelectedSessionMessageSubscription(state, { force: true });
+    }
+    const resumed = state && resumePendingChatHistoryLoad(state);
     if (state && resumed) {
       this.deferSessionHydrationUntilTranscript(
         state.sessionKey,
@@ -151,7 +157,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     }
     this.reconcileWaitingApprovalSnapshot();
     if (chatHistoryRequests(state).subscriptionError) {
-      void syncSelectedSessionMessageSubscription(state);
+      void syncSelectedSessionMessageSubscription(state, { force: true });
     }
     const historyLoad = getChatHistoryLoadState(state);
     const startup = historyLoad.phase === "failed" && historyLoad.startup;
@@ -206,7 +212,6 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
       }
     }
     if (
-      typeof IntersectionObserver !== "function" ||
       !this.presented ||
       !this.visuallyPresented ||
       document.visibilityState === "hidden" ||
@@ -329,6 +334,9 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     if (newHistoryIntent && (this.historyAutoLoadBlocked || !this.historyObserverArmed)) {
       this.historyAutoLoadBlocked = false;
       this.historyObserverArmed = true;
+    }
+    // A row correction can retire the observer without consuming this gesture's intent.
+    if (hasUpwardIntent && this.historyObserverArmed && !this.historyObserver) {
       this.syncHistoryObserver();
     }
     // Preserve the normal at-bottom/new-message bookkeeping while layering
@@ -363,10 +371,6 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
       return;
     }
     this.historyAutoLoadBlocked = false;
-    if (typeof IntersectionObserver !== "function") {
-      void this.loadOlderMessages();
-      return;
-    }
     this.historyObserverArmed = true;
     this.syncHistoryObserver();
   }
@@ -377,9 +381,12 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     }
     const load = (async () => {
       // A sparse or overlapping page is cursor progress, not a visible result.
-      // Keep boot autofill to one page; reader actions may cross three pages,
-      // then yield so a long hidden interval cannot monopolize the connection.
-      for (let page = 0; page < (readerIntent ? 3 : 1); page += 1) {
+      // A trimmed cache needs a boundary probe before its one boot-fill page.
+      // Reader actions may cross three pages, then yield so a long hidden
+      // interval cannot monopolize the connection.
+      const pagination = this.state?.chatHistoryPagination;
+      const limit = readerIntent ? 3 : pagination?.hasMore && pagination.needsBoundary ? 2 : 1;
+      for (let page = 0; page < limit; page += 1) {
         const loaded = await this.performOlderMessagesLoad(readerIntent);
         if (loaded !== "empty") {
           return loaded;
@@ -442,7 +449,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
           result = this.takeStagedOlderPage(state);
         }
         const pagination = state.chatHistoryPagination;
-        if (!pagination.hasMore || (!readerIntent && pagination.needsBoundary)) {
+        if (!pagination.hasMore) {
           return false;
         }
         const expectedSessionId = state.currentSessionId?.trim() ?? "";

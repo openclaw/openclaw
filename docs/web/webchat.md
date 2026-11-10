@@ -39,7 +39,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history`. It includes that id on follow-up `chat.send` calls. Reconnects and page refreshes therefore continue the same stored conversation, unless the user starts or resets a session.
 - After a graceful Gateway restart, a running root conversation receives one ordinary resume input and keeps its transcript. The new turn uses current authority and delivery context, without restoring an old client or requester grant. A crash does not resume work automatically; send a message to continue. See [Restart recovery](/gateway/restart-recovery).
 - Foreground sends also include the displayed branch's leaf from the rendered history as `expectedLeafEntryId`. If another client switched branches first, Control UI parks the message for review and refreshes the transcript instead of posting it to the new branch. Reconnect and restored-outbox replays intentionally omit this precondition after reconciling current history.
-- When you change a chat setting and immediately send, Control UI shows **Applying chat settings** until that change and its session refresh finish. Later background session refreshes do not extend this wait. Opening a pane without changing a setting does not create a settings wait.
+- When you change a chat setting and immediately send, Control UI shows **Applying session settings** until that change and its session refresh finish. Later background session refreshes do not extend this wait. Opening a pane without changing a setting does not create a settings wait.
 - Control UI shows an attempted prompt immediately with its normal message footer and working indicator. Routine send latency does not add a **Queued** footer or a **Waiting for turn to start** notice. Failed sends, review holds, and connection recovery keep their visible recovery actions; unsubmitted follow-ups remain in the composer queue.
 - `chat.send` takes a key that prevents duplicate requests (Control UI uses the run id). The Gateway dedupes repeated requests that reuse the same key. Retried or duplicate in-flight submits do not create a second run when the session, message, attachments, and mention selections match. Reusing that key with different mention selections is rejected.
 - Audio uploads declared with an `audio/*` MIME type wait for the durable `chat.send` acknowledgment without the usual client request deadline, because transcription can take longer. Disconnecting still ends the wait. Native clients also preserve caller cancellation and explicitly supplied request deadlines.
@@ -60,6 +60,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 - WebChat excludes reasoning-flagged reply payloads (`isReasoning: true`) from assistant content, transcript replay text, and audio content blocks. Thinking-only payloads therefore do not surface as visible assistant messages or playable audio.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run). When session keys share a transcript, such as a cron base key and its isolated run key, the note is appended under the transcript's owner. The Control UI reconciles each note by transcript identity, so identical notes remain separate and do not become run activity or duplicate after a history reload.
 - Aborted runs can keep partial assistant output visible in the UI. Gateway persists that partial text into transcript history when buffered output exists, and marks the entry with abort metadata.
+- Accepted background image, video, and music generation hands the conversation off until its result arrives. Control UI does not mark that handoff as **Interrupted**, including after reload; actual stops and failures remain visible.
 
 ### Transcript and delivery model
 
@@ -121,8 +122,11 @@ produce partial captions. An explicit Talk transcription provider, matching
 `agents.defaults.voiceModel`, or Voice Call streaming configuration keeps the
 streaming path. Dictation is unavailable when none of the configured file
 providers or CLI commands can run.
-The microphone menu's Dictation **Configure** action opens Talk settings without
-changing the default chat model.
+Guests can dictate in a session they can write to without operator-wide read or
+Talk access. Dictation uses the configured transcription provider; guests cannot
+choose a different provider or model, read provider settings, or start Talk.
+For operators, the microphone menu's Dictation **Configure** action opens Talk
+settings without changing the default chat model.
 Loopback and private-network endpoints use the existing provider opt-in:
 `models.providers.<id>.request.allowPrivateNetwork: true`.
 
@@ -147,6 +151,8 @@ selection remain unchanged. Browser microphone capture requires a secure context
 ## Human mention delivery
 
 The Control UI binds each [selected person](/concepts/multi-user#mentioning-people) to the submitted message text. `chat.send`, the initial message on `sessions.create`, and `sessions.send` accept an optional `mentions` array of `{ profileId, start, end }` annotations. There are at most ten annotations. `start` is inclusive and `end` is exclusive, measured in UTF-16 code units. The Gateway validates their text ranges and recipients before accepting the input. Plain `@name` text and agent output do not create human mentions. Copying or quoting text does not copy its recipient selections.
+
+When the message starts with a selected person and its remaining text does not match the agent's mention patterns (see [Mentioning people](/concepts/multi-user#mentioning-people)), `chat.send` commits the human message and finishes the run without an agent turn: the `chat` terminal event carries no assistant message, the run does not steer or queue behind an active run, and the agent sees the message as transcript context on its next turn.
 
 The mention becomes eligible for an Inbox entry and optional browser push only after the original human message is newly committed to the transcript. An early `status: "started"` acknowledgment, a staged initial message, or durable pending-input custody is not that commit. A queued or remotely placed first message therefore does not notify while it is still waiting to be recorded. A later agent failure does not undo a mention whose human message was already committed.
 

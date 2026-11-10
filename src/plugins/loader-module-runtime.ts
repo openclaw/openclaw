@@ -324,6 +324,7 @@ export function createLazyPluginRuntime(params: {
   const cache = params.inspectionResources ? new WeakRef(getPluginCache()) : getPluginCache();
   type RuntimeModule = {
     createPluginRuntime?: PluginRuntimeFactory;
+    enqueueSessionEventForHost?: Parameters<typeof createRuntimeBase>[0];
   };
   const resolveRuntimeModule = (): RuntimeModule => {
     const resolution = resolvePluginRuntimeModulePathWithDiagnostics({
@@ -357,7 +358,21 @@ export function createLazyPluginRuntime(params: {
     });
   };
 
-  const base = createRuntimeBase();
+  let enqueueSessionEventForHost: RuntimeModule["enqueueSessionEventForHost"];
+  const base = createRuntimeBase((...args) => {
+    if (!enqueueSessionEventForHost) {
+      const owner = cache instanceof WeakRef ? cache.deref() : cache;
+      if (!owner) {
+        throw new PluginInventoryRetiredError();
+      }
+      const runtime = withPluginCache(owner, resolveRuntimeModule);
+      if (typeof runtime.enqueueSessionEventForHost !== "function") {
+        throw new Error("Plugin runtime module missing enqueueSessionEventForHost export");
+      }
+      enqueueSessionEventForHost = runtime.enqueueSessionEventForHost;
+    }
+    return enqueueSessionEventForHost(...args);
+  });
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
     if (resolvedRuntime) {

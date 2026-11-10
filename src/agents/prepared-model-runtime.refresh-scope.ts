@@ -41,6 +41,14 @@ export function refreshCommittedProviderCatalogs(
     if (owner.provenance !== "configured" || owner.pending || owner.needsRefresh) {
       continue;
     }
+    // Headless startup needs configured turn facts; acquire inventory when a client asks for it.
+    if (
+      !owner.catalogInventory &&
+      !owner.catalogAttempt &&
+      owner.input.config.gateway?.controlUi?.enabled === false
+    ) {
+      continue;
+    }
     owner.catalogRecovery = undefined;
     void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
       if (

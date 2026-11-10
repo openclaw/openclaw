@@ -1,8 +1,11 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readTemplateDraft } from "../templates/draft.js";
 import type { TemplateAddPlan } from "../templates/types.js";
+import { registerTemplatesCli } from "./templates-cli.js";
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn(),
@@ -39,6 +42,26 @@ const devPlan = (index: number) => (payloads()[index] as { plan: TemplateAddPlan
 
 describe("Template project CLI", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("creates isolated private proposals without starting from the Control UI", async () => {
+    const workspace = tempDirs.make("openclaw-chat-template-draft-");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const program = new Command().exitOverride();
+      program.configureOutput({ writeErr: () => undefined });
+      registerTemplatesCli(program);
+      await program.parseAsync(["templates", "draft", workspace, "--json"], { from: "user" });
+    }
+    const drafts = payloads() as Array<{ draftId: string }>;
+    expect(drafts).toHaveLength(2);
+    expect(drafts[0]!.draftId).not.toBe(drafts[1]!.draftId);
+    for (const { draftId } of drafts) {
+      const draft = await readTemplateDraft(workspace, draftId);
+      expect(JSON.parse(draft.content)).toMatchObject({
+        scope: { input: "", job: "", output: "", authority: "" },
+        files: [],
+      });
+    }
+  });
 
   it("previews a Template with ordinary sessions_spawn authority", async () => {
     await runTemplatesDevCommand("src/templates/fixtures/delegating-agent", {
@@ -81,6 +104,15 @@ describe("Template project CLI", () => {
     expect(first).toEqual(devPlan(4));
     expect(JSON.stringify(first)).not.toContain("openclaw-template-artifact-");
     expect(first.template.packageRoot).toMatch(/^template-artifact:sha256:/u);
+    await expect(runTemplatesDevCommand(root, { ...options, agentId: "" })).rejects.toThrow(
+      "__exit__:1",
+    );
+    expect(devPlan(5)).toMatchObject({
+      agent: { finalId: "" },
+      blockers: [expect.objectContaining({ code: "invalid_agent_id" })],
+      actions: expect.arrayContaining([expect.objectContaining({ kind: "agent", blocked: true })]),
+    });
+    expect(existsSync(options.workspace)).toBe(false);
   });
 
   it.for([

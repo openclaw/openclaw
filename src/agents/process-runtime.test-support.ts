@@ -5,6 +5,11 @@ export const agentProcessTestEntrypoints = {
     sourceWorkerName: "embedded-agent-runner/run.document-compaction.test-support",
     distWorkerPath: "agents/embedded-agent-runner/run.document-compaction.test-support.js",
   },
+  inlineAuthFailure: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "auth-profiles/inline-usage.postgres.test-support",
+    distWorkerPath: "agents/auth-profiles/inline-usage.postgres.test-support.js",
+  },
   durableProcesses: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "bash-process-durable.test-support",

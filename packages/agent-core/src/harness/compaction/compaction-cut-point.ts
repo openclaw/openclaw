@@ -291,6 +291,13 @@ export function findCutPoint(
     }
     cutIndex = fittingCut;
   }
+  // Decide the split from the selected message, before retaining the metadata in front of it:
+  // a bootstrap marker before a user message must not make the previous turn a split-turn prefix.
+  const cutEntry = entries[cutIndex];
+  if (!cutEntry) {
+    throw new Error("compaction cut point does not reference a session entry");
+  }
+  const startsTurn = isTurnStartEntry(cutEntry);
   while (cutIndex > startIndex) {
     const prevEntry = entries[cutIndex - 1];
     if (!prevEntry) {
@@ -305,11 +312,6 @@ export function findCutPoint(
     }
     cutIndex--;
   }
-  const cutEntry = entries[cutIndex];
-  if (!cutEntry) {
-    throw new Error("compaction cut point does not reference a session entry");
-  }
-  const startsTurn = isTurnStartEntry(cutEntry);
   const turnStartIndex = startsTurn ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
 
   return {

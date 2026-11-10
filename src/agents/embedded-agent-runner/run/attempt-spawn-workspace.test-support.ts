@@ -439,9 +439,8 @@ vi.mock("../../cache-trace.js", () => ({
 }));
 
 // mock-isolation: Exercise attempt workspace routing without constructing unrelated tools.
-vi.mock("../../agent-tools.js", () => ({
+vi.mock("../../agent-tools.async.js", () => ({
   createOpenClawCodingToolsInternalAsync: hoisted.createOpenClawCodingToolsMock,
-  resolveToolLoopDetectionConfig: () => undefined,
 }));
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
@@ -687,8 +686,7 @@ export function resetEmbeddedAttemptHarness(
     contextFiles: [],
   });
   hoisted.resolveBootstrapFilesForRunMock.mockReset().mockImplementation(async () => {
-    const context = await hoisted.resolveBootstrapContextForRunMock();
-    return context.bootstrapFiles;
+    return (await hoisted.resolveBootstrapContextForRunMock()).bootstrapFiles;
   });
   hoisted.isWorkspaceBootstrapPendingMock.mockReset().mockResolvedValue(false);
   hoisted.resolveContextInjectionModeMock.mockReset().mockReturnValue("always");
@@ -743,6 +741,10 @@ export function createDefaultEmbeddedSession(params?: {
     isStreaming: false,
     subscribe: () => () => {},
     agent: {
+      hasPendingSteeringMessage: () => false,
+      getToolInterruptionStatus: () => ({ interruptible: [], blocked: [] }),
+      interruptTools: () => ({ status: "idle", tools: [] }),
+      subscribeToolInterruptionStatus: () => () => {},
       convertToLlm,
       prompt: async (prompt, options) => {
         pendingPrompt = {
@@ -892,9 +894,6 @@ export async function createContextEngineAttemptRunner(params: {
   params.tempPaths.push(workspaceDir, agentDir);
   const seedMessages: AgentMessage[] =
     params.sessionMessages ?? ([{ role: "user", content: "seed", timestamp: 1 }] as AgentMessage[]);
-  const infoId = params.contextEngine.info?.id ?? "test-context-engine";
-  const infoName = params.contextEngine.info?.name ?? "Test Context Engine";
-  const infoVersion = params.contextEngine.info?.version ?? "0.0.1";
   const maintain =
     typeof rawMaintain === "function"
       ? rawMaintain
@@ -978,9 +977,9 @@ export async function createContextEngineAttemptRunner(params: {
           ...(maintain ? { maintain } : {}),
           info: {
             ...params.contextEngine.info,
-            id: infoId,
-            name: infoName,
-            version: infoVersion,
+            id: params.contextEngine.info?.id ?? "test-context-engine",
+            name: params.contextEngine.info?.name ?? "Test Context Engine",
+            version: params.contextEngine.info?.version ?? "0.0.1",
           },
         },
         ...params.attemptOverrides,

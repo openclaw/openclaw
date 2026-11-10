@@ -164,7 +164,7 @@ suite.define(() => {
             message: "File access denied",
           });
           const denied = page.locator(".app-toast").filter({
-            hasText: /Could not download this file:.*File access denied/,
+            hasText: /Couldn’t download this file\. Try again\..*File access denied/,
           });
           await denied.waitFor();
           await denied.getByRole("button", { name: "Dismiss", exact: true }).click();
