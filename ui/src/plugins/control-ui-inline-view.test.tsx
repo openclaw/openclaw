@@ -24,7 +24,15 @@ it("uses the latest queued visibility and remounts retained inline views on retu
           (entries, observer) =>
             callback(
               entries.flatMap((entry) => [
-                { ...entry, time: entry.time - 1, isIntersecting: false, intersectionRatio: 0 },
+                {
+                  target: entry.target,
+                  boundingClientRect: entry.boundingClientRect,
+                  intersectionRect: entry.intersectionRect,
+                  rootBounds: entry.rootBounds,
+                  time: entry.time - 1,
+                  isIntersecting: false,
+                  intersectionRatio: 0,
+                },
                 entry,
               ]),
               observer,
