@@ -231,8 +231,12 @@ function ReviewWarning(props: { view: TemplatesCatalogViewProps }) {
         >
           {(item) => (
             <div class="templates-add-consent__item">
-              <strong>{item.ref}</strong>
-              <span>{t("templatesCatalog.version", { version: item.version })}</span>
+              <strong>{item.source === "bundled" ? item.pluginId : item.ref}</strong>
+              <span>
+                {item.source === "bundled"
+                  ? `${t("templatesCatalog.dependencyBundled")} · ${item.path}`
+                  : t("templatesCatalog.version", { version: item.version })}
+              </span>
               <strong>{t("pluginConsent.grantsTitle")}</strong>
               <ul>
                 <For each={grantSummary(item.capabilityGrants)}>{(grant) => <li>{grant}</li>}</For>

@@ -426,6 +426,7 @@ describe("Template Add", () => {
   it.each([
     { kind: "plugin", bundled: false },
     { kind: "skill", bundled: false },
+    { kind: "plugin", bundled: true },
     { kind: "skill", bundled: true },
   ] as const)(
     "asks before applying a direct catalog $kind review plan (bundled=$bundled)",
@@ -442,7 +443,9 @@ describe("Template Add", () => {
       await vi.waitFor(() =>
         expect(find(".templates-add-consent")?.textContent).toContain(
           bundled
-            ? "research"
+            ? kind === "plugin"
+              ? "workflow-tools"
+              : "research"
             : kind === "plugin"
               ? "@openclaw/workflow-tools"
               : "@openclaw/research",
@@ -478,7 +481,7 @@ describe("Template Add", () => {
               kind === "plugin" ? "plugin:@openclaw/workflow-tools" : "skill:@openclaw/research",
             reviewToken: kind === "plugin" ? "review-workflow-tools" : "review-research",
             acknowledgeRiskWarning: true,
-            ...(bundled
+            ...(bundled && kind === "skill"
               ? { source: "bundled", path: "skills/research", digest: `sha256:${"b".repeat(64)}` }
               : {}),
           }),

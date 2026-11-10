@@ -206,9 +206,18 @@ export function createPage(options: PageOptions = {}) {
                 {
                   actionId: "plugin:@openclaw/workflow-tools",
                   pluginId: "workflow-tools",
-                  ref: "@openclaw/workflow-tools",
-                  version: "1.2.0",
-                  integrity: `sha256-${"A".repeat(43)}=`,
+                  ...(options.bundledReview
+                    ? {
+                        source: "bundled",
+                        path: "plugins/workflow-tools",
+                        digest: `sha256:${"a".repeat(64)}`,
+                      }
+                    : {
+                        source: "clawhub",
+                        ref: "@openclaw/workflow-tools",
+                        version: "1.2.0",
+                        integrity: `sha256-${"A".repeat(43)}=`,
+                      }),
                   ownerAction: "install",
                   declaredCapabilities: {
                     ...createPluginDeclaredSurface(),
