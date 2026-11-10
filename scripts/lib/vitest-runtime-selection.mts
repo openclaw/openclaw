@@ -4,6 +4,7 @@ import {
   loadPatternListFromEnv,
   matchesVitestCliSelection,
 } from "../../test/vitest/vitest.pattern-file.ts";
+import { boundaryTestFiles } from "../../test/vitest/vitest.unit-paths.mjs";
 import {
   includesRuntimeConfig,
   resolveVitestRuntimeConfigScopes,
@@ -71,11 +72,23 @@ const runtimeOnlyUnitFiles = new Set([
   "test/vitest-projects-config.test.ts",
 ]);
 
-// These tooling proofs use compiled harness entries, not production workers.
+// These selections need only source tooling and compiled harness entries.
 const toolingOnlyUnitFiles = new Set([
+  "src/infra/boundary-path.test.ts",
+  "src/infra/git-root.test.ts",
+  "src/infra/home-dir.test.ts",
+  "src/infra/openclaw-exec-env.test.ts",
+  "src/infra/openclaw-root.test.ts",
+  "src/infra/package-json.test.ts",
+  "src/infra/path-env.test.ts",
+  "src/infra/stable-node-path.test.ts",
+  "test/control-ui-import-boundary.test.ts",
+  "test/extension-test-boundary.test.ts",
+  "test/plugin-extension-import-boundary.test.ts",
   "test/scripts/vitest-prebuilt-ai.test.ts",
   "test/scripts/ci-changed-build-selection.test.ts",
   "test/scripts/ci-changed-node-test-plan.integration.test.ts",
+  "test/scripts/ci-ui-e2e-selection.test.ts",
   "test/scripts/vitest-worker-artifacts.batch.test.ts",
   "test/scripts/run-vitest-progress.test.ts",
   "test/scripts/run-vitest.test.ts",
@@ -119,13 +132,16 @@ export function resolveCiVitestWorkerPreset(
       plan.target !== undefined
         ? files([plan.target])
         : plan.configs?.length === 1 &&
-          Boolean(plan.includePatterns?.length) &&
+          (Boolean(plan.includePatterns?.length) ||
+            (plan.includePatterns == null &&
+              plan.configs[0] === "test/vitest/vitest.boundary.config.ts")) &&
           !plan.requiresDist &&
           plan.pretestBuildMode === undefined &&
           selection(
             plan.configs[0]!,
             [],
-            plan.env ?? {},
+            // Group include metadata replaces the parent's include file at launch.
+            { ...plan.env, OPENCLAW_VITEST_INCLUDE_FILE: undefined },
             undefined,
             plan.includePatterns ?? undefined,
           ),
@@ -144,12 +160,13 @@ function selectedFiles(
   args: string[],
   env: NodeJS.ProcessEnv,
   includePatterns?: readonly string[],
+  unfilteredFiles: readonly string[] = [],
 ) {
-  return (
-    includePatterns ??
-    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
-    collectVitestFileFilters(args)
-  ).map((file) => file.replaceAll("\\", "/").replace(/^\.\//u, ""));
+  const included = includePatterns ?? loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const files = included ?? collectVitestFileFilters(args);
+  return (included === null && files.length === 0 ? unfilteredFiles : files).map((file) =>
+    file.replaceAll("\\", "/").replace(/^\.\//u, ""),
+  );
 }
 
 export function shouldUseToolingOnlyVitestWorkers(
@@ -159,9 +176,13 @@ export function shouldUseToolingOnlyVitestWorkers(
   _testNamePattern?: string | RegExp,
   includePatterns?: readonly string[],
 ): boolean {
+  // New boundary owners stay full until their worker requirements are qualified.
+  const boundary = config === "test/vitest/vitest.boundary.config.ts";
   return (
-    config === "test/vitest/vitest.tooling.config.ts" &&
-    areToolingOnlyVitestUnitFiles(selectedFiles(args, env, includePatterns))
+    (boundary || config === "test/vitest/vitest.tooling.config.ts") &&
+    areToolingOnlyVitestUnitFiles(
+      selectedFiles(args, env, includePatterns, boundary ? boundaryTestFiles : []),
+    )
   );
 }
 

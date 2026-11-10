@@ -350,6 +350,29 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       },
       preset: "runtime",
     },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: undefined,
+      sibling: {
+        configs: ["test/vitest/vitest.tooling.config.ts"],
+        includePatterns: [
+          "test/scripts/test-projects.test.ts",
+          "test/scripts/ci-ui-e2e-selection.test.ts",
+        ],
+      },
+      preset: "tooling",
+    },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: ["src/infra/boundary-path.test.ts"],
+      preset: "tooling",
+    },
+    { configs: ["test/vitest/vitest.boundary.config.ts"], files: [], preset: "full" },
+    {
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+      files: ["test/unknown-boundary.test.ts"],
+      preset: "full",
+    },
     { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
     { configs: [gatewayDatabaseConfig], files: null, preset: "full" },
     { configs: [gatewayDatabaseConfig], files: undefined, preset: "full" },
@@ -391,7 +414,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               for (const spec of specs) {
                 const selectionArgs = [
                   spec.config,
-                  args,
+                  spec.pnpmArgs.slice(
+                    spec.pnpmArgs.indexOf(buildPrerequisites.resolveVitestCliEntry()) + 1,
+                  ),
                   spec.env,
                   undefined,
                   spec.includePatterns ?? undefined,
