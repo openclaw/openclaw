@@ -284,6 +284,7 @@ export function WorkboardBoardWidget(props: WidgetProps) {
               workboard={workboard}
               cards={otherCards()}
               surface="widget"
+              boardFilter={filter()}
             />
           ) : null}
         </div>

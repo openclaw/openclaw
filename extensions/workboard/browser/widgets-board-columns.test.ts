@@ -25,7 +25,10 @@ it("renders a board widget with that board's columns and its Other statuses lane
         active: 3,
         archived: 0,
         byStatus: {},
-        columns: { visible: ["blocked", "done"], labels: { blocked: "Needs you" } },
+        columns: {
+          visible: ["blocked", "done"],
+          labels: { blocked: "Needs you", review: "Checking" },
+        },
       },
     ],
   })) as typeof fixture.host.request;
@@ -46,5 +49,5 @@ it("renders a board widget with that board's columns and its Other statuses lane
       heading.textContent?.trim(),
     ),
   ).toEqual(["Needs you", "Done", "Other statuses"]);
-  expect(container.querySelector(".workboard-column--other")?.textContent).toContain("Review");
+  expect(container.querySelector(".workboard-column--other")?.textContent).toContain("Checking");
 });

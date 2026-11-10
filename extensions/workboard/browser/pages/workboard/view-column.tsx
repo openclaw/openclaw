@@ -502,9 +502,13 @@ export function WorkboardOtherStatusesColumn(input: {
   cards: WorkboardCard[];
   cardRefs?: ReturnType<typeof createElementRefs<HTMLElement>>;
   surface: WorkboardCardSurface;
+  /** Board whose labels apply; defaults to the page's board. */
+  boardFilter?: string;
 }) {
   const state = workboardViewState(() => input.workboard);
-  const statusLabel = createMemo(() => workboardColumnPresentation(state()).label);
+  const statusLabel = createMemo(
+    () => workboardColumnPresentation(state(), input.boardFilter).label,
+  );
   const label = () => t("workboard.otherStatuses");
   return (
     <section
