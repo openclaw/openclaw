@@ -162,6 +162,18 @@ async function publicationFixture(name = "@maker/research-brief") {
   const uploads: Buffer[] = [];
   let posts = 0;
   const identity = { publisher: "maker", revoke: false };
+  const registry = {
+    visible: true,
+    digest: "",
+    pending: false,
+    blocked: false,
+    revoke: false,
+    attemptStatus: "pending_checks",
+    attemptName: name,
+    reads: 0,
+    postThrows: false,
+    postRevoke: false,
+  };
   const write = (document = proposal) => writeFile(draft.path, JSON.stringify(document));
   await write();
   vi.stubGlobal(
@@ -178,6 +190,48 @@ async function publicationFixture(name = "@maker/research-brief") {
         }
         return Response.json({ user: { handle: identity.publisher } });
       }
+      if (request.method === "GET") {
+        registry.reads += 1;
+        if (registry.revoke) {
+          connections.delete("draft-author");
+        }
+        if (!registry.visible) {
+          return new Response("Version not found", { status: 404 });
+        }
+        if (request.url.includes("/publish/attempts/")) {
+          return Response.json({
+            attemptId: "fixture_attempt",
+            name: registry.attemptName,
+            version: "0.1.0",
+            artifactSha256: registry.digest,
+            status: registry.attemptStatus,
+            publicationStatus:
+              registry.attemptStatus === "finalized"
+                ? "published"
+                : ["blocked", "failed", "expired"].includes(registry.attemptStatus)
+                  ? registry.attemptStatus
+                  : "pending",
+          });
+        }
+        if (request.url.endsWith("/security")) {
+          return Response.json({
+            package: { name, family: "template" },
+            release: { version: "0.1.0", artifactSha256: registry.digest },
+            overview: "Fixture audit",
+            securityAuditUrl: "https://registry.example.test/audit",
+            trust: {
+              pending: registry.pending,
+              blockedFromDownload: registry.blocked,
+              stale: false,
+              reasons: [],
+            },
+          });
+        }
+        return Response.json({
+          package: { name, family: "template" },
+          version: { version: "0.1.0", artifact: { sha256: registry.digest } },
+        });
+      }
       expect(request.method).toBe("POST");
       const form = await request.formData();
       const payload = form.get("payload");
@@ -193,7 +247,19 @@ async function publicationFixture(name = "@maker/research-brief") {
         expectedArtifactSha256: digest,
       });
       uploads.push(bytes);
-      return Response.json({ ok: true, artifactSha256: digest, publicationStatus: "pending" });
+      registry.digest = digest;
+      if (registry.postRevoke) {
+        connections.delete("draft-author");
+      }
+      if (registry.postThrows) {
+        throw new TypeError("Connection closed after upload");
+      }
+      return Response.json({
+        ok: true,
+        artifactSha256: digest,
+        publicationStatus: "pending",
+        attemptId: "fixture_attempt",
+      });
     }),
   );
   return {
@@ -204,7 +270,20 @@ async function publicationFixture(name = "@maker/research-brief") {
       return posts;
     },
     identity,
+    registry,
     write,
+    check: (params: Record<string, unknown>) =>
+      requestDraft(
+        "review",
+        workspaceDir,
+        {
+          draftId: draft.draftId,
+          checkPublication: true,
+          ...params,
+        },
+        undefined,
+        connections,
+      ),
     review: (params = {}) =>
       reviewDraft(workspaceDir, { draftId: draft.draftId, ...params }, connections),
     publish: (reviewToken: string, params = {}) =>
@@ -292,6 +371,8 @@ Research public sources.
     expect(rejected[0]).toBe(false);
     expect(rejected[2]).toMatchObject({
       code: "INVALID_REQUEST",
+      retryable: true,
+      details: { templatePublication: { effect: "none", code: "draft_review_required" } },
       message: "The draft or publisher changed. Review the current files before publishing.",
     });
     expect(fixture.posts).toBe(0);
@@ -309,6 +390,151 @@ Research public sources.
     for (const file of review.files) {
       expect(await readFile(join(extracted.packageRoot, file.path), "utf8")).toBe(file.content);
     }
+  });
+
+  it("does not infer an attempt from matching public release reads without an attempt ID", async () => {
+    const fixture = await publicationFixture();
+    const review = await fixture.review();
+    expect((await fixture.publish(review.reviewToken))[0]).toBe(true);
+    const result = await requestDraft("review", fixture.workspaceDir, {
+      draftId: fixture.draft.draftId,
+      reviewToken: review.reviewToken,
+      checkPublication: true,
+    });
+    expect(result[0], JSON.stringify(result[2])).toBe(true);
+    expect(result[1]).toMatchObject({ publicationState: { status: "unconfirmed" } });
+    expect(fixture.registry.reads).toBe(0);
+    expect(fixture.posts).toBe(1);
+  });
+
+  it("rejects an attempt status check without the original review token", async () => {
+    const fixture = await publicationFixture();
+    const result = await fixture.check({ attemptId: "fixture_attempt" });
+    expect(result[0]).toBe(false);
+    expect(result[2]).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(fixture.registry.reads).toBe(0);
+    expect(fixture.posts).toBe(0);
+  });
+
+  it.each([
+    ["pending_checks", "pending"],
+    ["finalized", "published"],
+    ["blocked", "failed"],
+    ["failed", "failed"],
+    ["expired", "failed"],
+    ["not-found", "unconfirmed"],
+    ["wrong-artifact", "unconfirmed"],
+    ["wrong-name", "unconfirmed"],
+    ["blocked-public-release", "unconfirmed"],
+  ])("observes %s without resubmitting the accepted attempt", async (condition, expected) => {
+    const fixture = await publicationFixture();
+    const review = await fixture.review();
+    const accepted = await fixture.publish(review.reviewToken);
+    expect(accepted[1]).toMatchObject({
+      attemptId: "fixture_attempt",
+      publicationStatus: "pending",
+    });
+    fixture.registry.attemptStatus =
+      condition === "blocked-public-release"
+        ? "finalized"
+        : ["pending_checks", "finalized", "blocked", "failed", "expired"].includes(condition)
+          ? condition
+          : "pending_checks";
+    if (condition === "not-found") {
+      fixture.registry.visible = false;
+    }
+    if (condition === "wrong-artifact") {
+      fixture.registry.digest = "0".repeat(64);
+    }
+    if (condition === "wrong-name") {
+      fixture.registry.attemptName = "@maker/another-template";
+    }
+    if (condition === "blocked-public-release") {
+      fixture.registry.blocked = true;
+    }
+    const result = await requestDraft("review", fixture.workspaceDir, {
+      draftId: fixture.draft.draftId,
+      reviewToken: review.reviewToken,
+      checkPublication: true,
+      attemptId: "fixture_attempt",
+    });
+    expect(result[0], JSON.stringify(result[2])).toBe(true);
+    expect(result[1]).toMatchObject({ publicationState: { status: expected } });
+    expect(fixture.posts).toBe(1);
+  });
+
+  it.each(["draft", "publisher", "registry", "authority"])(
+    "does not accept status for a changed %s binding",
+    async (condition) => {
+      const fixture = await publicationFixture();
+      const review = await fixture.review();
+      if (condition === "draft") {
+        await fixture.write({ ...proposal, name: "changed-brief" });
+      }
+      if (condition === "publisher") {
+        fixture.identity.publisher = "another-person";
+      }
+      if (condition === "registry") {
+        vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://another-registry.example.test");
+      }
+      if (condition === "authority") {
+        fixture.registry.revoke = true;
+      }
+      const result = await requestDraft(
+        "review",
+        fixture.workspaceDir,
+        {
+          draftId: fixture.draft.draftId,
+          reviewToken: review.reviewToken,
+          checkPublication: true,
+        },
+        undefined,
+        new Set(condition === "authority" ? [] : ["draft-author"]),
+      );
+      expect(result[0]).toBe(false);
+      expect(fixture.posts).toBe(0);
+      expect(fixture.registry.reads).toBe(0);
+    },
+  );
+
+  it("drops a late status read when live authority is revoked", async () => {
+    const fixture = await publicationFixture();
+    const review = await fixture.review();
+    fixture.registry.revoke = true;
+    const result = await fixture.check({
+      reviewToken: review.reviewToken,
+      attemptId: "fixture_attempt",
+    });
+    expect(result[0]).toBe(false);
+    expect(result[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(fixture.posts).toBe(0);
+  });
+
+  it("does not claim no write when live authority is revoked after upload", async () => {
+    const fixture = await publicationFixture();
+    const review = await fixture.review();
+    fixture.registry.postRevoke = true;
+    const result = await fixture.publish(review.reviewToken);
+    expect(result[0]).toBe(false);
+    expect(result[2]).toMatchObject({
+      code: "FORBIDDEN",
+      retryable: false,
+      details: { templatePublication: { effect: "unconfirmed", code: "human_required" } },
+    });
+    expect(fixture.posts).toBe(1);
+  });
+
+  it("never makes an uncertain upload retryable", async () => {
+    const fixture = await publicationFixture();
+    const review = await fixture.review();
+    fixture.registry.postThrows = true;
+    const result = await fixture.publish(review.reviewToken);
+    expect(result[0]).toBe(false);
+    expect(result[2]).toMatchObject({
+      retryable: false,
+      details: { templatePublication: { effect: "unconfirmed", code: "publication_unconfirmed" } },
+    });
+    expect(fixture.posts).toBe(1);
   });
 
   it.each(["draft", "publisher", "authority"])(

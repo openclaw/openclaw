@@ -47,6 +47,10 @@ const ReviewChoices = closedObject({
 export const TemplatesDraftsReviewParamsSchema = closedObject({
   ...Target,
   choices: Type.Optional(ReviewChoices),
+  /** Observe ClawHub only; never submit or retry publication. */
+  checkPublication: Type.Optional(Type.Boolean()),
+  reviewToken: Type.Optional(Revision),
+  attemptId: Type.Optional(Type.String({ pattern: "^[a-zA-Z0-9_-]{1,128}$" })),
 });
 export const TemplatesDraftsPublishParamsSchema = closedObject({
   ...Target,
@@ -81,10 +85,15 @@ export type TemplatesDraftsReviewResult = {
   items: TemplateDraftReviewItem[];
   files: Array<{ path: string; content: string }>;
   scope: TemplateDraftDocument["scope"];
+  publicationState?:
+    | { status: "pending" | "published"; publication: TemplatesDraftsPublishResult }
+    | { status: "failed"; reason: "blocked" | "failed" | "expired" }
+    | { status: "unconfirmed" };
 };
 export type TemplatesDraftsPublishResult = {
   name: string;
   version: string;
   url: string;
   publicationStatus: "pending" | "published";
+  attemptId?: string;
 };
