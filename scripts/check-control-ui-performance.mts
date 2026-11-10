@@ -58,9 +58,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Entering-row forecasts (#196173): measured 1,300,721 B (+786 B), plus 64 B headroom.
+  // Entering-row forecasts (#196173): measured 1,300,731 B (+796 B), plus 64 B headroom.
   // Matched qualification keeps startup and New Session unchanged.
-  chatBootJsGzipBytes: 1_300_785,
+  chatBootJsGzipBytes: 1_300_795,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
   newBootJsGzipBytes: 803_364,
   startupCssRequests: 1,

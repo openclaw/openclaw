@@ -191,7 +191,12 @@ export function measureTranscriptRow(
     const size = box?.blockSize ?? measureElement(element, entry, virtualizer);
     // A deferred zero can describe a hidden pane or an earlier parked row.
     // Preserve that geometry even if the pane or row is visible again.
-    if (size !== 0 || (box?.inlineSize !== 0 && virtualizer.scrollElement?.clientHeight !== 0)) {
+    if (
+      size !== 0 ||
+      (box?.inlineSize !== 0 &&
+        virtualizer.scrollElement?.clientHeight !== 0 &&
+        element.offsetHeight === 0)
+    ) {
       return size;
     }
   }
