@@ -89,7 +89,7 @@ export async function copyProvisionedPathsLinux(
       throw error;
     }
   };
-  await using source = await openRoot(sourceRoot);
+  await using sourceRootHandle = await openRoot(sourceRoot);
   await using destinationRootHandle = await openRoot(destinationRoot);
   const copied: string[] = [];
   const batch: { path: string; target: string; fd: number; mode: number }[] = [];
@@ -255,7 +255,7 @@ export async function copyProvisionedPathsLinux(
     }
   };
   try {
-    await visit(source, destinationRootHandle, tree, "");
+    await visit(sourceRootHandle, destinationRootHandle, tree, "");
     await flush();
     return copied.toSorted();
   } finally {
