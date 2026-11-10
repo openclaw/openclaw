@@ -1,4 +1,3 @@
-// Shared scheduler reads stay independent of the lazy Cron editor and mutation helpers.
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronStatus } from "../../api/types.ts";

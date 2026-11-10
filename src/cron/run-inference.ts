@@ -39,7 +39,6 @@ export type CronRunInference = {
   dispose: () => void;
 };
 
-// Names the stored account, its captured runtime and the candidate that cannot use them.
 function incompatibleCandidateError(params: {
   binding: CronInferenceBinding;
   provider: string;

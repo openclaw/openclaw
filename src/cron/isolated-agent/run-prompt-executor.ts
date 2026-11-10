@@ -1,4 +1,3 @@
-/** Executes one isolated cron prompt with model fallback candidates. */
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import {

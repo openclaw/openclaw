@@ -104,7 +104,6 @@ export function Editor(
           getRetired={props.getActionRetired}
         />
       ) : undefined}
-      {/* Keep actions last so their sticky containing block includes job scratch. */}
       <Show when={props.canManage}>
         {(_visible) => {
           const footer = createCronEditorClearance();
@@ -168,10 +167,7 @@ function PromptSection(
       : props.form.payloadKind === "systemEvent"
         ? t("cron.form.systemEventHelp")
         : t("cron.form.agentTurnHelp");
-  // Script/command payloads are always read-only here, so they render as a highlighted
-  // code block instead of a textarea; every other kind stays an editable field. The code
-  // block carries no aria-invalid/describedby because validateCronForm skips payloadText
-  // for locked payloads, so this branch can never render a payload error.
+  // Locked payloads render as a highlighted read-only code block instead of a textarea.
   const modelError = () => props.fieldErrors.payloadModel;
   const modelOptions = createMemo(() =>
     uniqueStrings(props.modelSuggestions).map((value) => {

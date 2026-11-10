@@ -1,4 +1,3 @@
-/** Resolves model fallback chains for isolated cron runs and preflight. */
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { RunEntryModelResolve } from "../../agents/embedded-agent-runner/run-entry.types.js";
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";

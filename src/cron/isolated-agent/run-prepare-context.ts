@@ -1,4 +1,3 @@
-/** Session identity and model context planning for isolated cron runs. */
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";

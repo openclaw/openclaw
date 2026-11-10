@@ -441,7 +441,6 @@ async function updateCronJobDefinition(
   }
 }
 
-// Mutations reload the list and scheduler status so both canonical views stay current.
 async function reloadCronJobsSnapshot(state: CronState) {
   await Promise.all([
     loadCronJobsPage(state, { tableFilters: true, refresh: true }),

@@ -17,7 +17,6 @@ import { addCronJob, cancelCronEdit, startCronEdit } from "./index.ts";
 import type { CronFormState, CronState } from "./types.ts";
 
 function applyWirePatch(stored: CronStoredJob, params: unknown) {
-  // Exercise the Gateway's normalization against the serialized UI request.
   const serialized = JSON.stringify(params);
   const wire: { patch: unknown } = JSON.parse(serialized);
   const patch = normalizeCronJobPatch(wire.patch);

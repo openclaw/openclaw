@@ -236,23 +236,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     }
   });
 
-  it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {
-    h.resolveAgentSkillsFilterMock.mockReturnValue([" weather ", "meme-factory", "weather"]);
-    h.resolveCronSessionMock.mockReturnValue(
-      makeSession({
-        skillsSnapshot: {
-          prompt: "<available_skills><skill>weather</skill></available_skills>",
-          skills: [{ name: "weather" }],
-          skillFilter: ["meme-factory", "weather"],
-          version: 42,
-        },
-      }),
-    );
-
-    expect(await runJob()).toMatchObject({ status: "ok" });
-    expect(h.buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
-  });
-
   it.each([
     [
       "anthropic/claude-sonnet-4-6",

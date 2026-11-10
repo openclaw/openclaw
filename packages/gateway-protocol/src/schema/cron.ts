@@ -14,7 +14,6 @@ import {
 import { FailoverReasonSchema } from "./failover-reason.js";
 import { ChatHistoryActivitySchema } from "./logs-chat.js";
 import { NonEmptyString } from "./primitives.js";
-// Gateway Protocol schema module defines protocol validation shapes.
 import { stringLiteralUnion } from "./string-literal-union.js";
 
 /**

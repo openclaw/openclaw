@@ -1,4 +1,3 @@
-// Canonical Gateway-backed cron inventory and exact-ID/name lookup.
 import { randomUUID } from "node:crypto";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

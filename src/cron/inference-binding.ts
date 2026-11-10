@@ -104,7 +104,6 @@ export function resolveCronRuntimeSessionEntry<
   return binding?.runtime ? { agentRuntimeOverride: binding.runtime } : entry;
 }
 
-/** Names a binding's account and captured runtime for scheduled-run errors. */
 export function describeCronInferenceBinding(binding: CronInferenceBinding): string {
   return binding.runtime
     ? `account ${binding.profileId} on runtime ${binding.runtime}`

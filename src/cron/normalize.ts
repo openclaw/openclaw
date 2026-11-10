@@ -1,4 +1,3 @@
-/** Normalizes cron create/patch payloads before validation and persistence. */
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
