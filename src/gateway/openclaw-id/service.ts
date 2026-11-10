@@ -281,7 +281,7 @@ export function createOpenClawIdService(params: {
       if (keyRefusal) {
         status = { state: "keys_refused", key: "gateway", reason: keyRefusal };
         params.log.warn(
-          `openclaw-id: Gateway key refused (${keyRefusal}); remote access is off, the Gateway keeps running. Restore the original key file`,
+          `openclaw-id: Gateway key refused (${keyRefusal}); remote access is off, the Gateway keeps running. Restore the original key file, then restart the Gateway`,
         );
         return;
       }
@@ -755,6 +755,8 @@ export function createOpenClawIdService(params: {
       if (!result.ok) {
         return result;
       }
+      // A child restart before the getter runs must still find this binding (see startRuntime).
+      lastBoundEndpointKey = kSrv;
       await pushMembership();
       const publication = await publicationRetry
         .publishDirect(() => publish(enrollmentCode))

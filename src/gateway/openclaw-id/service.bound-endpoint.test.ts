@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createOpenClawIdAuthority } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
-import { linkedClaw, serviceFor, TEST_K_SRV } from "./openclaw-id.test-support.js";
+import { linkedClaw, memoryStore, serviceFor, TEST_K_SRV } from "./openclaw-id.test-support.js";
 
 // The K_srv getter each tunnel child (re)start reads, as the service passes it.
 const runtime = vi.hoisted(() => ({
@@ -57,6 +57,46 @@ describe("tunnel child restarts for a linked claw", () => {
       expect(runtime.boundEndpointKey?.()).toBe(TEST_K_SRV);
     } finally {
       await service.stop();
+    }
+  });
+
+  it("stay on the K_srv a link committed, with no restart before the authority is withdrawn", async () => {
+    const store = memoryStore();
+    let uncertain = false;
+    const flaky = {
+      read: async () => {
+        if (uncertain) {
+          throw new Error("read unavailable");
+        }
+        return store.read();
+      },
+      write: async (next: StoredClaw) => {
+        await store.write(next);
+        if (uncertain) {
+          throw new Error("acknowledgement lost");
+        }
+      },
+    };
+    let service: ReturnType<typeof serviceFor>["service"] | undefined;
+    const claw = await linkedClaw(flaky, async (authority, stateDir, input) => {
+      service = serviceFor(
+        authority,
+        { enabled: true, relayUrl: "https://relay.test/" },
+        stateDir,
+      ).service;
+      // The child starts unlinked; nothing reads the getter between the link and the withdrawal.
+      await service.reconcileRuntimePolicy();
+      return await service.commitLink("local_operator", input);
+    });
+    try {
+      uncertain = true;
+      await expect(claw.authority.recordDiscovery({ mailbox_cursor: "x" })).rejects.toThrow(
+        "uncertain",
+      );
+      expect(claw.authority.current()).toBeUndefined();
+      expect(runtime.boundEndpointKey?.()).toBe(TEST_K_SRV);
+    } finally {
+      await service?.stop();
     }
   });
 });

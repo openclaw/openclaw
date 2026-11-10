@@ -283,7 +283,7 @@ export function createTunnelSupervisor(params: {
         const reason = code === TUNNEL_EXIT_KEY_MISSING ? "keys_missing" : "key_mismatch";
         setStatus({ state: "key_refused", reason });
         params.log.warn(
-          `openclaw-id: endpoint key refused (${reason}); remote access is off, the Gateway keeps running. Restore the original key file`,
+          `openclaw-id: endpoint key refused (${reason}); remote access is off, the Gateway keeps running. Restore the original key file, then restart the Gateway`,
         );
         return;
       }

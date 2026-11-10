@@ -382,7 +382,8 @@ instead of asking you to paste one.
   after a restore that skipped the key files, remote access is off and status
   reports `keys_missing` or `key_mismatch`. Nothing is published or dialed with
   another key. The Gateway itself keeps running, so everything on this computer
-  works as before. To bring remote access back, restore the original key files.
+  works as before. To bring remote access back, restore the original key files,
+  then restart the Gateway.
 - The child admits a device only if the Gateway's membership lists the
   device's endpoint key, and checks that before accepting any stream. Until a
   claw is linked, nobody is admitted.
