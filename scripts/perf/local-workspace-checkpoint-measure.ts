@@ -1697,13 +1697,13 @@ measurement: try {
       gitDiagnostics.subscribe(observeGitOperation);
       const inspector = values.instrument === "allocation" ? new Session() : undefined;
       inspector?.connect();
+      await inspector?.post("Profiler.enable");
+      await inspector?.post("Profiler.start");
       await inspector?.post("HeapProfiler.startSampling", {
         samplingInterval: 32_768,
         includeObjectsCollectedByMajorGC: true,
         includeObjectsCollectedByMinorGC: true,
       });
-      await inspector?.post("Profiler.enable");
-      await inspector?.post("Profiler.start");
       const physicalBefore = snapshotSqliteReaderMetrics();
       const spans: Record<string, { count: number; totalMs: number }> = {};
       const loop = monitorEventLoopDelay({ resolution: 1 });
@@ -1755,13 +1755,19 @@ measurement: try {
       const cpu = process.threadCpuUsage(cpuBefore),
         total = process.cpuUsage(totalBefore);
       const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
-      const cpuProfile = await inspector?.post("Profiler.stop");
       const heapProfile = await inspector?.post("HeapProfiler.stopSampling");
+      const cpuProfile = await inspector?.post("Profiler.stop");
       inspector?.disconnect();
       if (cpuProfile) {
         fs.writeFileSync(
           path.join(output, `${values.report}.${phase}.cpuprofile`),
           JSON.stringify(cpuProfile.profile),
+        );
+      }
+      if (heapProfile) {
+        fs.writeFileSync(
+          path.join(output, `${values.report}.${phase}.heapprofile`),
+          JSON.stringify(heapProfile.profile),
         );
       }
       const sampledAllocation = (node: HeapProfiler.SamplingHeapProfileNode): number =>
@@ -1788,7 +1794,7 @@ measurement: try {
         allocatedBytes,
         sampledAllocatedBytes: heapProfile ? sampledAllocation(heapProfile.profile.head) : null,
         allocationAccounting:
-          "Main isolate during owner call, excluding correctness reads; unavailable V8 total counters serialize as null. Worker counters are reported separately; child process allocation is unmeasured.",
+          "Main isolate during owner call and measurement bookkeeping, including overlapping background work; excludes CPU-profiler setup/serialization, correctness reads and reset. Unavailable V8 total counters serialize as null. Worker counters are separate; child process allocation is unmeasured.",
         gitOperations,
         workerAllocation:
           workerAllocationBefore && workerAllocationAfter

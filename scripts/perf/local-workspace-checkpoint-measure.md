@@ -36,7 +36,13 @@ are not queried by this owner and need not be reseeded for this comparison.
 
 Run allocation separately with `--instrument allocation`. Each serial turn
 samples main-isolate allocation and a CPU profile only around the real owner call,
-before correctness reads or fixture reset. Worker counters are reported where
+before correctness reads or fixture reset. Start the CPU profiler before the heap
+sampler and stop the heap sampler first, so CPU-profiler setup and response
+serialization do not enter the allocation total. Raw `.heapprofile` and
+`.cpuprofile` artifacts are saved after both profilers stop. Allocation still
+includes small measurement bookkeeping and any overlapping main-isolate background
+work. The CPU profile includes sampler control calls; reported CPU counters bracket
+the owner call. Worker counters are reported where
 supported; unavailable V8 counters are null, not zero allocation. Process CPU
 includes Node workers but excludes native child processes; main CPU covers only
 the calling thread. A/A controls qualify host variation. A telemetry-only change
