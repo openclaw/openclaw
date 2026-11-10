@@ -4,14 +4,19 @@ import type { GatewayClient } from "../../gateway/server-methods/types.js";
 import type { PreparedSessionMutationFacts } from "../../gateway/session-sharing-policy.js";
 import { rolePolicyConfig, sharingPolicyClient } from "../../gateway/session-sharing.test-utils.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { expectCollected } from "../../test-utils/retention.js";
 import {
   readFollowupRequest,
   SessionFollowupCompletion,
 } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
-import { startSessionsSendFollowup } from "./sessions-send-followup.js";
+import {
+  dispatchSessionsSendFollowup,
+  startSessionsSendFollowup,
+} from "./sessions-send-followup.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
+import * as sendDelivery from "./sessions-send-tool.delivery.js";
 vi.mock("./sessions-send-reply-flow.js", () => ({ startSessionsSendReplyFlow: vi.fn() }));
 const mocks = vi.hoisted(() => ({
   config: vi.fn<() => OpenClawConfig>(),
@@ -186,6 +191,69 @@ describe("followup retained session authorization", () => {
     expect(close).not.toHaveBeenCalled();
     expect(completion.accepted).toBe(true);
     completion.assertExecutionCurrent(input.runId);
+  });
+
+  it("drops dispatch inputs when the retained child admission closes", async () => {
+    let heldByTarget: (() => void) | undefined;
+    const activeDelivery = vi
+      .spyOn(sendDelivery, "trySessionsSendActiveRunDelivery")
+      .mockResolvedValue({});
+    const start = vi
+      .spyOn(sendDelivery, "startSessionsSendAgentRun")
+      .mockImplementation(async (params) => {
+        heldByTarget = params.assertDispatchCurrent;
+        heldByTarget?.();
+        return { ok: false, result: { content: [], details: { status: "error" } } };
+      });
+    try {
+      const inputs = await (async () => {
+        const params: Parameters<typeof dispatchSessionsSendFollowup>[0] = {
+          cfg: mocks.config(),
+          admissionConfig: mocks.config(),
+          callGateway: async () => {
+            throw new Error("Unexpected transport call");
+          },
+          runId: input.runId,
+          sessionKey: input.targetSessionKey,
+          sessionStoreTarget: storageTarget(input.targetSessionKey),
+          sendParams: {
+            agentId: "main",
+            message: "followup",
+            inputProvenance: { kind: "inter_session", sourceSessionKey: input.requesterSessionKey },
+            sourceReplyDeliveryMode: "message_tool_only",
+          },
+        };
+        await dispatchSessionsSendFollowup(
+          params,
+          {
+            ...input,
+            callGateway: params.callGateway,
+            displayKey: input.targetSessionKey,
+            replyTimeoutMs: 0,
+            replyMode: "one-way",
+            requesterSession: { sessionId: "requester-id", lifecycleRevision: "one" },
+          },
+          {
+            message: "followup",
+            ownChild: true,
+            nativeChild: true,
+            watch: false,
+            requesterSessionKey: input.requesterSessionKey,
+            requesterAgentId: "main",
+            requesterTurnRunId: "requester-turn",
+          },
+        );
+        return new WeakRef(params);
+      })();
+      activeDelivery.mockClear();
+      start.mockClear();
+      expect(heldByTarget).toThrow("Child followup admission was closed.");
+      await expectCollected(inputs);
+      expect(heldByTarget).toThrow("Child followup admission was closed.");
+    } finally {
+      activeDelivery.mockRestore();
+      start.mockRestore();
+    }
   });
 
   it.each(["access", "archive"] as const)(
