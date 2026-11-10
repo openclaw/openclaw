@@ -377,57 +377,51 @@ export async function withSettledLocalWorkspacePath<T>(
 }
 
 /** An unchanged turn needs no filesystem effects and can leave its runtimes running. */
-export async function reuseLocalWorkspaceProjection(
+export function reuseLocalWorkspaceProjection(
   owner: LocalWorkspaceOwner,
   signal?: AbortSignal,
   beginCapture?: () => void,
 ) {
-  let finishPhase = startWorktreePreparationPhase("reuse.acquire");
-  const markPhase = (
-    phase:
-      | LocalWorkspacePausePhase
-      | "capturePreparation"
-      | "probeCanonical"
-      | "probeProjection"
-      | "release",
-  ) => {
-    finishPhase();
-    finishPhase = startWorktreePreparationPhase(`reuse.${phase}`);
-  };
-  try {
-    return await withLocalWorkspaceStore(
-      { ...owner, worktreeId: owner.worktree.id, signal },
-      async (store) => {
-        using phases = observeDiagnosticsTimelinePhases(
-          "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
-        );
-        try {
-          markPhase("operation");
-          if (store.get()?.baseline_ref) {
-            beginCapture?.();
-          }
-          return (
-            (await probeUnchangedLocalWorkspace(
-              owner,
-              store,
-              ["canonical", "projection"],
-              undefined,
-              (target) => markPhase(target === "canonical" ? "probeCanonical" : "probeProjection"),
-            )) ??
-            (await runLocalWorkspaceProjection(owner, store, (state) => state.reuse(), {
-              reason: "preparation",
-              onPhase: markPhase,
-            }))
-          );
-        } finally {
-          markPhase("release");
-          phases.mark("attempt.setup.sandbox.workspace_selection.reuse.release");
+  return withLocalWorkspaceStore(
+    { ...owner, worktreeId: owner.worktree.id, signal },
+    async (store) => {
+      using phases = observeDiagnosticsTimelinePhases(
+        "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
+      );
+      let finishPhase = startWorktreePreparationPhase("reuse.operation");
+      const markPhase = (
+        phase:
+          | LocalWorkspacePausePhase
+          | "capturePreparation"
+          | "probeCanonical"
+          | "probeProjection",
+      ) => {
+        finishPhase();
+        finishPhase = startWorktreePreparationPhase(`reuse.${phase}`);
+      };
+      try {
+        if (store.get()?.baseline_ref) {
+          beginCapture?.();
         }
-      },
-    );
-  } finally {
-    finishPhase();
-  }
+        return (
+          (await probeUnchangedLocalWorkspace(
+            owner,
+            store,
+            ["canonical", "projection"],
+            undefined,
+            (target) => markPhase(target === "canonical" ? "probeCanonical" : "probeProjection"),
+          )) ??
+          (await runLocalWorkspaceProjection(owner, store, (state) => state.reuse(), {
+            reason: "preparation",
+            onPhase: markPhase,
+          }))
+        );
+      } finally {
+        finishPhase();
+        phases.mark("attempt.setup.sandbox.workspace_selection.reuse.release");
+      }
+    },
+  );
 }
 
 /** A live probe can prove there is nothing to publish; changed bytes still require quiescence. */

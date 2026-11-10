@@ -1,54 +1,5 @@
 # Native checkpoint pause comparison
 
-## Acquisition and synchronous reuse
-
-`--mode preparation --serial-turns --burst 1` measures the actual
-`prepareLocalSandboxWorkspace` caller, including `reuse.acquire`. It does not
-substitute a standalone `synchronize("projection")` operation. Each process reports
-first creation (or `first-reuse` when reopening an existing fixture), unchanged
-turns, one changed guest file, a subsequent unchanged turn, 200 mixed guest edits,
-and another unchanged turn. The diagnostics spans separate acquisition from
-nested reconciliation phases. These spans overlap; do not sum parent and child.
-
-For a simple generated serial fixture, the driver validates all accepted bytes,
-then restores only its own mutations through the real preparation owner outside
-measurement. `--reuse-fixture` can reopen that fixture in a fresh process without
-an upfront reconciliation. It rejects combinations with imported source,
-acceleration, owner switches, or restart scenarios. First reuse includes cold
-process/worker state; the OS page cache is not evicted. First creation is reported
-separately and is never pooled with reuse.
-
-```sh
-node --expose-gc --import ./scripts/tsx.mjs scripts/perf/local-workspace-checkpoint-measure.ts \
-  --source-root /owned-proof/base --mode preparation --serial-turns \
-  --output /owned-proof/fixture-62000 --files 62000 --file-bytes 17742 \
-  --requests 3 --burst 1 --report seed.json
-# Reopen serially in fresh processes with identical arguments:
-# --reuse-fixture --report AA1.json, AA2.json, then counterbalanced A/B arms.
-```
-
-Use 240,000 files of 17,742 bytes for a separate 4.26 GB scale diagnostic when
-capacity permits; this remains below the existing 4 GiB eligible-byte limit. Record the actual filesystem and host load. This serial mode
-uses host-written synthetic guest edits and no registered native runtime, so
-empty pause arrays do not establish native guest freeze latency. Its 10,001
-session rows exercise selected-session resolution; unrelated transcript bytes
-are not queried by this owner and need not be reseeded for this comparison.
-
-Run allocation separately with `--instrument allocation`. Each serial turn
-samples main-isolate allocation and a CPU profile only around the real owner call,
-before correctness reads or fixture reset. Start the CPU profiler before the heap
-sampler and stop the heap sampler first, so CPU-profiler setup and response
-serialization do not enter the allocation total. Raw `.heapprofile` and
-`.cpuprofile` artifacts are saved after both profilers stop. Allocation still
-includes small measurement bookkeeping and any overlapping main-isolate background
-work. The CPU profile includes sampler control calls; reported CPU counters bracket
-the owner call. Worker counters are reported where
-supported; unavailable V8 counters are null, not zero allocation. Process CPU
-includes Node workers but excludes native child processes; main CPU covers only
-the calling thread. A/A controls qualify host variation. A telemetry-only change
-has no expected latency speedup: compare attribution and accepted bytes, and
-report overhead relative to the controls.
-
 ## Ordinary reconciliation
 
 Use `--mode reconcile --reconcile-target canonical` to export guest changes through

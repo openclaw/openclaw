@@ -8,7 +8,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { LocalWorkspacePausePhase } from "../sandbox/local-workspace-quiescence.js";
 
 type PreparationPhase =
-  | `reuse.${LocalWorkspacePausePhase | "acquire" | "probeCanonical" | "probeProjection" | "capturePreparation" | "release"}`
+  | `reuse.${LocalWorkspacePausePhase | "probeCanonical" | "probeProjection" | "capturePreparation"}`
   | "allocate"
   | "allocationWait"
   | "mutationWait"

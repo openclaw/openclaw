@@ -346,8 +346,9 @@ cancellation and authority checks. Reuse waits for reconciliation before returni
 the workspace, so the next command sees imported host edits and unresolved
 conflicts cannot be bypassed. The `managed worktree preparation` log records
 exclusive `reuse.*` entries in `phaseDurationsMs` and `reuseDominantPhase`, covering
-custody acquisition, both unchanged probes, capture preparation, reconciliation
-phases, and release. These timings include work performed while guests run;
+both unchanged probes, capture preparation, and reconciliation phases. Custody
+waits remain in the existing `workspaceWait` field. These timings include work
+performed while guests run;
 they are not pause durations. OpenClaw records pending results and
 rollback journals in SQLite. Imports into the private checkout keep runtimes paused
 through settlement. New shell calls and command preparation wait for an active

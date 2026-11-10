@@ -92,7 +92,6 @@ export async function proveWorkspaceWaitAttribution(owner: LocalWorkspaceOwner) 
     });
   }
   expect(events.some((event) => event.details?.template === "reused")).toBe(true);
-  expect(events.some((event) => event.details?.["reuse.acquire"] === 100)).toBe(true);
 }
 
 export async function proveConcurrentWorkspacePreparation(owner: LocalWorkspaceOwner) {
@@ -341,7 +340,6 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
     "reuse.preflight": expect.any(Number),
     "reuse.acceptance": expect.any(Number),
     "reuse.cleanup": expect.any(Number),
-    "reuse.release": expect.any(Number),
     reuseDominantPhase: expect.stringMatching(/^reuse\./),
   });
   await writeText(canonical, "added.txt", "admitted host file\n");

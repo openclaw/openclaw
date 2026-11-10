@@ -65,10 +65,7 @@
  * sentinel through canonical reconciliation before warmup; never run concurrently.
  * --serial-turns --mode preparation --burst 1 --requests 3 measures first creation,
  * three unchanged turns, one guest edit, an unchanged turn, 200 mixed guest edits,
- * and a final unchanged turn. Simple generated serial fixtures reset their mutations
- * after validation; --reuse-fixture reopens them with a separate first-reuse sample.
- * Serial allocation profiles surround each owner call, excluding correctness reads.
- * --fixture-source <directory> imports a retained
+ * and a final unchanged turn. --fixture-source <directory> imports a retained
  * synthetic deep workspace into a new owned Git repository. Original files stay untouched.
  * --freeze-source <new-directory> freezes all tracked source plus working changes;
  * add --revision <sha> for an exact committed source. Both arms use this benchmark.
@@ -367,7 +364,10 @@ const dockerHost = fileReads
     }).trim()
   : undefined;
 const serialTurns = values["serial-turns"];
-assert(!serialTurns || (values.mode === "preparation" && Number(values.burst) === 1));
+assert(
+  !serialTurns ||
+    (values.mode === "preparation" && Number(values.burst) === 1 && !values["reuse-fixture"]),
+);
 assert(!values["fixture-source"] || serialTurns);
 assert(!values["owner-switch"] || serialTurns);
 assert(!values["fresh-only"] || serialTurns);
@@ -425,16 +425,6 @@ assert(
       values["fresh-only"] &&
       values.acceleration),
 );
-const reusableSerial =
-  serialTurns &&
-  !values["fixture-source"] &&
-  !values["owner-switch"] &&
-  !values["restart-stage"] &&
-  !values["fresh-only"] &&
-  !values.acceleration &&
-  !values["agent-db-fixture"] &&
-  siblingWorktrees === 0;
-assert(!serialTurns || !values["reuse-fixture"] || reusableSerial);
 const reuseFixture = values["reuse-fixture"] || resumeOwnerSwitch;
 assert(!reuseFixture || values.mode === "preparation" || fileReads || turnLoop);
 const requests = Number(values.requests),
@@ -993,7 +983,7 @@ if (reuseFixture && !resumeOwnerSwitch) {
     );
   }
 }
-if (reuseFixture && !serialTurns) {
+if (reuseFixture && !resumeOwnerSwitch) {
   fs.writeFileSync(path.join(canonical, "file-0.txt"), "synthetic 0\n".padEnd(fileBytes, "."));
 }
 if (gatewayMode && !reuseFixture) {
@@ -1695,15 +1685,6 @@ measurement: try {
         gitOperations[operation] = (gitOperations[operation] ?? 0) + 1;
       };
       gitDiagnostics.subscribe(observeGitOperation);
-      const inspector = values.instrument === "allocation" ? new Session() : undefined;
-      inspector?.connect();
-      await inspector?.post("Profiler.enable");
-      await inspector?.post("Profiler.start");
-      await inspector?.post("HeapProfiler.startSampling", {
-        samplingInterval: 32_768,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
       const physicalBefore = snapshotSqliteReaderMetrics();
       const spans: Record<string, { count: number; totalMs: number }> = {};
       const loop = monitorEventLoopDelay({ resolution: 1 });
@@ -1742,7 +1723,6 @@ measurement: try {
         () => withWorktreePreparationTiming("sandbox", prepare),
       ).catch(async (error: unknown) => {
         gitDiagnostics.unsubscribe(observeGitOperation);
-        inspector?.disconnect();
         if (contenderStarted) {
           await Promise.allSettled([contender]);
         }
@@ -1755,23 +1735,6 @@ measurement: try {
       const cpu = process.threadCpuUsage(cpuBefore),
         total = process.cpuUsage(totalBefore);
       const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
-      const heapProfile = await inspector?.post("HeapProfiler.stopSampling");
-      const cpuProfile = await inspector?.post("Profiler.stop");
-      inspector?.disconnect();
-      if (cpuProfile) {
-        fs.writeFileSync(
-          path.join(output, `${values.report}.${phase}.cpuprofile`),
-          JSON.stringify(cpuProfile.profile),
-        );
-      }
-      if (heapProfile) {
-        fs.writeFileSync(
-          path.join(output, `${values.report}.${phase}.heapprofile`),
-          JSON.stringify(heapProfile.profile),
-        );
-      }
-      const sampledAllocation = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-        node.selfSize + node.children.reduce((sum, child) => sum + sampledAllocation(child), 0);
       loop.disable();
       gitDiagnostics.unsubscribe(observeGitOperation);
       const readMetrics = snapshotSqliteReaderMetrics().map((metric) => {
@@ -1792,9 +1755,6 @@ measurement: try {
         mainCpuMs: (cpu.user + cpu.system) / 1000,
         processCpuMs: (total.user + total.system) / 1000,
         allocatedBytes,
-        sampledAllocatedBytes: heapProfile ? sampledAllocation(heapProfile.profile.head) : null,
-        allocationAccounting:
-          "Main isolate during owner call and measurement bookkeeping, including overlapping background work; excludes CPU-profiler setup/serialization, correctness reads and reset. Unavailable V8 total counters serialize as null. Worker counters are separate; child process allocation is unmeasured.",
         gitOperations,
         workerAllocation:
           workerAllocationBefore && workerAllocationAfter
@@ -1864,9 +1824,6 @@ measurement: try {
     };
     if (resumeOwnerSwitch) {
       workspace = fs.readFileSync(path.join(output, "restart-projection.txt"), "utf8");
-    } else if (reuseFixture) {
-      workspace = fs.readFileSync(path.join(output, "serial-projection.txt"), "utf8");
-      await measureTurn("first-reuse");
     } else {
       await measureTurn("first");
     }
@@ -2139,38 +2096,8 @@ measurement: try {
       }
     }
     const sourceFile = path.join(root, "checkpoint-source.json");
-    if (reusableSerial) {
-      // Restore only this scenario's own edits through the real acceptance owner, after timing.
-      for (const entry of mutations.keys()) {
-        const original = path.join(repo, entry),
-          target = path.join(canonical, entry);
-        if (fs.existsSync(original)) {
-          fs.copyFileSync(original, target);
-        } else {
-          fs.rmSync(target, { force: true });
-        }
-      }
-      await prepareWorkspace();
-      for (const entry of mutations.keys()) {
-        const original = path.join(repo, entry);
-        for (const directory of [canonical, workspace!]) {
-          if (fs.existsSync(original)) {
-            assert.deepEqual(readFixtureEntry(directory, entry), readFixtureEntry(repo, entry));
-          } else {
-            assert(!fs.existsSync(path.join(directory, entry)), `Fixture reset retained ${entry}`);
-          }
-        }
-      }
-      fs.writeFileSync(path.join(output, "serial-projection.txt"), workspace!);
-    }
     const result = {
       mode: "serial-preparation",
-      harnessSha256,
-      instrument: values.instrument,
-      reusedFixture: reuseFixture,
-      resetAfterMeasurement: reusableSerial,
-      pauseAccounting:
-        "No registered native runtime in serial preparation; empty pause samples do not qualify guest freeze latency",
       fixture: {
         files: inventory.length,
         bytes: initialBytes,
