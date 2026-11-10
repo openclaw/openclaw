@@ -214,7 +214,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           if (outcome !== "applied" && outcome !== "applied-restart-required") {
             throw new Error(
               "Ordinary agent admission was saved but runtime application was not confirmed (" +
-                outcome +
+                (typeof outcome === "string" ? outcome : JSON.stringify(outcome)) +
                 "); inspect config.get before retrying.",
             );
           }
@@ -245,7 +245,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           // ordinary agent must be retained even when installation authority expires.
           if (outcome !== "applied" && outcome !== "applied-restart-required") {
             throw new Error(
-              `Template agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); inspect config.get before retrying.`,
+              `Template agent configuration was saved but its application to the active Gateway was not confirmed (${typeof outcome === "string" ? outcome : JSON.stringify(outcome)}); inspect config.get before retrying.`,
             );
           }
           return outcome;
