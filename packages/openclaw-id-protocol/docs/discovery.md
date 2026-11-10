@@ -135,8 +135,9 @@ descriptor as one row. The request is signed by the same K_gw (a reset keeps it)
 
 ### Re-bind
 
-**Status: proposed (openclaw-bec).** The acceptance rule in the first two points is what
-Discovery does today; the owner-account code is new.
+**Status: proposed (openclaw-bec).** The one write, the new K_gw's own signature and the
+snapshot order restart are implemented in Discovery (discovery#11); the owner-account code
+waits on a product decision.
 
 After a re-bind on the machine (enrollment.md), the Gateway publishes a descriptor with the
 same root and a binding at a higher binding_seq that names a new K_srv and K_gw.
@@ -146,8 +147,9 @@ same root and a binding at a higher binding_seq that names a new K_srv and K_gw.
   (`stale_binding`); an equal binding_seq must be the identical binding (`conflict`). The new
   K_srv must not belong to another claw (`conflict`).
 - **Who may publish it.** A descriptor that keeps the stored K_gw must be signed by it. A
-  descriptor that names a new K_gw is signed by that new K_gw, because the old one may be lost.
-- **Owner-account code (new).** A descriptor that names a new K_gw must also carry `code`, a
+  descriptor that names a new K_gw must be signed by that new K_gw (the old one may be lost,
+  and the Gateway proves it holds the key it moves to); the old K_gw cannot move the claw.
+- **Owner-account code (proposed, pending decision).** A descriptor that names a new K_gw must also carry `code`, a
   one-time enrollment code from the claw's owner account (`createEnrollmentCode`). A wrong
   account, used or expired code is `code_invalid`. Without it, anyone holding a leaked kit could
   move the claw to keys of their choosing at Discovery and lock the machine out, since an owner
@@ -162,7 +164,8 @@ same root and a binding at a higher binding_seq that names a new K_srv and K_gw.
 - **Snapshot order restarts.** The snapshot stored with a new K_gw replaces the old one
   without the (`seq`, `issued_at`) comparison: the old one was signed by the retired key,
   which may have signed an inflated `seq` or a future `issued_at`. Later snapshots are ordered
-  against it as before.
+  against it as before. Resending exactly the stored snapshot (a retry after a lost response)
+  is accepted.
 - **After the switch.** The stored K_gw becomes the new one: the old K_gw's Gateway sessions
   are closed and its requests are treated like an unknown key (404). The relay admits the new
   K_srv and no longer the old one.

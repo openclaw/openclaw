@@ -82,10 +82,11 @@ devices) offer the expiry as an optional field.
 
 ### Re-bind: moving a claw to new machine keys (proposed, openclaw-bec)
 
-**Status: proposed for review, not implemented.** Nothing below exists in the Gateway yet. The
-pieces it relies on already exist: pins follow an R-signed ServerBinding at a higher
-binding_seq (this package), and Discovery accepts a descriptor signed by the K_gw its new
-binding names (Discovery `main`).
+**Status: proposed; implementation in review.** The key rule is #196380, the ceremony and
+`openclaw id rebind` are #196388, and Discovery's one write is discovery#11. Still open: the
+owner-account code at Discovery, a cap on a retired K_gw's binding_seq, and the binding_seq
+after a backup restore. Pins already follow an R-signed ServerBinding at a higher binding_seq
+(this package).
 
 A re-bind moves a claw to new machine keys under the **same** root R: R signs a new
 ServerBinding with binding_seq + 1, naming a new K_srv and a new K_gw. Nothing else changes:
@@ -145,7 +146,9 @@ Gateway cannot start at all, that is a separate repair.
 
 #### Steps
 
-1. **Prepare** (`rebind_prepare`, local_operator). Requires a linked claw. Creates the staged
+1. **Prepare** (`rebind_prepare`, local_operator). Requires a linked claw whose registration
+   at Discovery is settled: a registration whose receipt was lost can be recovered only with
+   the K_gw Discovery registered, so a re-bind waits for it (`registration_unsettled`). Creates the staged
    keys if they do not exist yet: K_gw' in `openclaw-id/gateway.key.next` (by the Gateway) and
    K_srv' in `openclaw-id/endpoint.key.next` (by the tunnel child in a one-shot `stage` run;
    the Gateway never reads a K_srv file). Returns `{ claw_id, hostname, root_pub, k_srv, k_gw,
@@ -176,18 +179,24 @@ Gateway cannot start at all, that is a separate repair.
    cannot reach the claw. The Gateway also mails owners a `rebind` notice (discovery.md,
    "Mailbox").
 
+Prepare, commit and cancel run one at a time on the Gateway: staging, commit and cancel touch
+the same key files. Cancel never deletes a staged key the stored binding names.
+
 Events: `restart_tunnel`, `publish_rebind`, `notify_owners: rebind`. No `disconnect` or `invalidate_tokens`: nobody lost access.
 
-#### Key files at every start (fail closed, openclaw-aab)
+#### Key files at every start (openclaw-aab)
 
 A linked Gateway never creates a machine key. The stored binding names the current K_srv and
 K_gw, and at every start:
 
-1. The key file holds the named key: use it, and delete a leftover `.next` file.
+1. The key file holds the named key: use it. A staged `.next` file stays: it belongs to a
+   re-bind that is prepared but not committed, and `rebind --cancel` deletes it.
 2. Otherwise the `.next` file holds it: rename it over the key file (this finishes an
    interrupted re-bind) and use it.
 3. Otherwise: refuse that key, with the reason `keys_missing` (no file) or `key_mismatch`
-   (another key). Status and the Control UI point to the re-bind. The rest of the Gateway runs.
+   (another key). Only remote access stops (status `keys_refused`); the Gateway keeps running
+   for everything on the machine, and nothing in startup or Doctor treats this as fatal.
+   Status and the Control UI point to the re-bind.
 
 "Holds the named key" means the public key derived from the file's seed equals the one the
 binding names; a planted `.next` file with any other seed is never promoted.
@@ -195,8 +204,9 @@ binding names; a planted `.next` file with any other seed is never promoted.
 The Gateway applies this to K_gw. The tunnel child applies it to K_srv: its start message
 carries the K_srv the binding names, and it exits with a code the supervisor does not retry.
 A refused K_srv means no tunnel. A refused K_gw means nothing is signed with K_gw: no
-publication, snapshot or Discovery request. An intact key keeps working, so with K_srv lost
-and K_gw intact the Gateway can still publish the local ceremonies (owner reset, re-bind).
+publication, snapshot or Discovery request, and the tunnel does not start either, so remote
+access is off as a whole. An intact K_gw keeps signing, so with K_srv lost and K_gw intact the
+Gateway can still publish local membership changes.
 An unlinked Gateway creates keys as it does today.
 
 #### What stays, and why
