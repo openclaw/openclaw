@@ -244,6 +244,10 @@ prepare_swift_package_root() {
   ln -s "$ROOT_DIR/apps/macos/Tests" "$SWIFT_PACKAGE_ROOT/Tests"
   ln -s "$ROOT_DIR/apps/shared" "$SWIFT_PACKAGE_CONTAINER/apps/shared"
   ln -s "$ROOT_DIR/apps/swabble" "$SWIFT_PACKAGE_CONTAINER/apps/swabble"
+  if [[ "${OPENCLAW_IROH_NATIVE:-0}" == "1" ]]; then
+    mkdir -p "$SWIFT_PACKAGE_CONTAINER/crates"
+    ln -s "$ROOT_DIR/crates/openclaw-iroh-ffi" "$SWIFT_PACKAGE_CONTAINER/crates/openclaw-iroh-ffi"
+  fi
   MLX_TTS_HELPER_ROOT="$SWIFT_PACKAGE_CONTAINER/apps/macos-mlx-tts"
   mkdir -p "$MLX_TTS_HELPER_ROOT"
   cp "$ROOT_DIR/apps/macos-mlx-tts/Package.swift" "$MLX_TTS_HELPER_ROOT/Package.swift"

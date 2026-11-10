@@ -2012,33 +2012,52 @@ try {
     },
   );
 
-  it("runs no SwiftPM operation before the locked lock-file resolve", () => {
-    // Any earlier resolve on a reused scratch path can float pins before the lock guard snapshots.
-    const root = tempDirs.make("openclaw-swift-first-resolve-");
-    for (const app of ["macos", "macos-mlx-tts"]) {
-      writeFiles(path.join(root, "apps", app), {
-        "Package.swift": "// fixture\n",
-        "Package.resolved": "locked\n",
-      });
-    }
-    const invocations = path.join(root, "swift-invocations");
-    const result = runHelper(`
+  it.each([false, true])(
+    "stages native inputs before the locked lock-file resolve (native %s)",
+    (native) => {
+      // Any earlier resolve on a reused scratch path can float pins before the lock guard snapshots.
+      const root = tempDirs.make("openclaw-swift-first-resolve-");
+      for (const app of ["macos", "macos-mlx-tts"]) {
+        writeFiles(path.join(root, "apps", app), {
+          "Package.swift": "// fixture\n",
+          "Package.resolved": "locked\n",
+        });
+      }
+      if (native) {
+        writeFiles(root, { "crates/openclaw-iroh-ffi/Package.swift": "// native fixture\n" });
+      }
+      const invocations = path.join(root, "swift-invocations");
+      const result = runHelper(`
       set -euo pipefail
+      ${native ? "export OPENCLAW_IROH_NATIVE=1" : "unset OPENCLAW_IROH_NATIVE"}
       source ${JSON.stringify(swiftScriptPath)}
       ROOT_DIR=${JSON.stringify(root)}
       BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
       SWIFT_WORK_ROOT="$ROOT_DIR/work"
       PEEKABOO_LOCKED_SOURCE_COMMIT=${JSON.stringify("b".repeat(40))}
-      swift() { printf '%s\\n' "$*" >> ${JSON.stringify(invocations)}; }
+      swift() {
+        printf '%s\\n' "$*" >> ${JSON.stringify(invocations)}
+        ${
+          native
+            ? 'cat "$SWIFT_PACKAGE_CONTAINER/crates/openclaw-iroh-ffi/Package.swift" > "$ROOT_DIR/native-at-resolve"'
+            : 'test ! -e "$SWIFT_PACKAGE_CONTAINER/crates/openclaw-iroh-ffi/Package.swift"'
+        }
+      }
       create_verified_peekaboo_snapshot() { exit 0; }
       build_swift_architecture arm64
     `);
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(invocations, "utf8")).toBe(
-      `package --scratch-path ${root}/apps/macos/.build/arm64 resolve --force-resolved-versions\n`,
-    );
-  });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(invocations, "utf8")).toBe(
+        `package --scratch-path ${root}/apps/macos/.build/arm64 resolve --force-resolved-versions\n`,
+      );
+      if (native) {
+        expect(readFileSync(path.join(root, "native-at-resolve"), "utf8")).toBe(
+          "// native fixture\n",
+        );
+      }
+    },
+  );
 
   it("names every pin the edited Peekaboo resolution moved away from the committed lock", () => {
     const root = tempDirs.make("openclaw-snapshot-swift-lock-");
