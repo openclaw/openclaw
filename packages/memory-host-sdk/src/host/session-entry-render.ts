@@ -39,6 +39,7 @@ import {
 import type { MemoryEntryProvenance, MemoryOriginClass } from "./types.js";
 
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
+const SESSION_ENTRY_TEXT_CHUNK_CHARS = 256 * 1024;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
 const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
 
@@ -47,6 +48,7 @@ type SessionEntrySource = SessionFileState &
     | {
         kind: "sqlite";
         records: readonly unknown[];
+        consumeRecord?: () => unknown;
         resetRecallCutoff: SessionResetRecallCutoff;
         sessionKey?: string;
       }
@@ -233,12 +235,20 @@ export function renderSessionEntrySnapshot(
   absPath: string,
   opts: BuildSessionEntryOptions & { agentId: string; sessionId: string; storePath: string },
   snapshot: SessionEntrySnapshot,
+  consumeSnapshot = false,
 ): Promise<SessionFileEntry> {
+  const resetRecallCutoff = resolveSessionResetRecallCutoff(snapshot.events);
+  // Only the worker's uncached snapshot transfers ownership. Pop in source order so
+  // rendered text does not retain the complete projected transcript alongside it.
+  if (consumeSnapshot) {
+    snapshot.events.reverse();
+  }
   return renderSessionEntry(absPath, opts, {
     ...sqliteSessionFileState(absPath, opts, snapshot.stats, opts.updatedAtMs),
     kind: "sqlite",
     records: snapshot.events,
-    resetRecallCutoff: resolveSessionResetRecallCutoff(snapshot.events),
+    consumeRecord: consumeSnapshot ? () => snapshot.events.pop() : undefined,
+    resetRecallCutoff,
     sessionKey: snapshot.sessionKey,
   });
 }
@@ -253,6 +263,15 @@ export async function renderSessionEntry(
   const raw = source.kind === "file" ? source.raw : "";
   const sessionStoreClassification = source.kind === "file" ? source.classification : null;
   const collected: string[] = [];
+  const textChunks: string[] = [];
+  let collectedChars = 0;
+  const flushText = () => {
+    if (collected.length > 0) {
+      textChunks.push(collected.join("\n"));
+      collected.length = 0;
+      collectedChars = 0;
+    }
+  };
   const lineMap: number[] = [];
   const messageTimestampsMs: number[] = [];
   const lineProvenance: MemoryEntryProvenance[] = [];
@@ -277,15 +296,18 @@ export async function renderSessionEntry(
   let turnOrigin: MemoryOriginClass = "untrusted";
   // SQLite is fully snapshotted before yielding or invoking observers. Archives
   // retain raw line ordinals, including blank and malformed JSONL entries.
+  const recordCount = sqliteSource?.records.length ?? 0;
   for (
     let jsonlIdx = 0, lineStart = 0;
-    sqliteSource ? jsonlIdx < sqliteSource.records.length : lineStart <= raw.length;
+    sqliteSource ? jsonlIdx < recordCount : lineStart <= raw.length;
     jsonlIdx++
   ) {
     await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
     let record: unknown;
     if (sqliteSource) {
-      record = sqliteSource.records[jsonlIdx];
+      record = sqliteSource.consumeRecord
+        ? sqliteSource.consumeRecord()
+        : sqliteSource.records[jsonlIdx];
     } else {
       const newlineIndex = raw.indexOf("\n", lineStart);
       const lineEnd = newlineIndex === -1 ? raw.length : newlineIndex;
@@ -310,6 +332,8 @@ export async function renderSessionEntry(
       generatedByDreamingNarrative ||= identifiesDreamingNarrative;
       generatedByCronRun ||= identifiesCronRun;
       collected.length = 0;
+      textChunks.length = 0;
+      collectedChars = 0;
       lineMap.length = 0;
       messageTimestampsMs.length = 0;
       lineProvenance.length = 0;
@@ -377,11 +401,18 @@ export async function renderSessionEntry(
       observedAt: Math.max(0, Math.floor(timestampMs || mtimeMs)),
     };
     collected.push(...renderedLines);
+    collectedChars += renderedLines.reduce((length, line) => length + line.length + 1, 0);
+    // Flatten bounded groups: individual line ropes otherwise retain sanitized
+    // message backing strings until the complete export is joined.
+    if (collectedChars >= SESSION_ENTRY_TEXT_CHUNK_CHARS) {
+      flushText();
+    }
     lineMap.push(...renderedLines.map(() => jsonlIdx + 1));
     messageTimestampsMs.push(...renderedLines.map(() => timestampMs));
     lineProvenance.push(...renderedLines.map(() => memoryProvenance));
   }
-  const content = collected.join("\n");
+  flushText();
+  const content = textChunks.join("\n");
   const entry: SessionFileEntry = {
     path: memoryPath,
     absPath,

@@ -654,10 +654,12 @@ hand payloads to consumers without retaining them, so those payloads do not coun
 toward the output budget; IDs, metadata, padding, and frames still do. Mixed user
 records and cumulative snapshots still count. Forwarded subagent assistant
 messages and tool-result messages that the parser discards are charged a fixed
-allowance for their parent progress id.
-Child attribution alone does not earn that discount: retained stream-event text
-still counts toward the same 8 MiB output limit. Single-line limits and bounded
-frame counts remain active.
+allowance for their parent progress id. Child attribution alone does not earn
+that discount: retained stream-event text still counts toward the same 8 MiB
+output limit. Discarded stream control frames (thinking signatures and progress
+ticks, block and message stops, message deltas) are charged a fixed allowance,
+and progress ticks and stops also skip the frame count like partial-message
+envelopes. Single-line limits and bounded frame counts remain active.
 
 Input modes:
 

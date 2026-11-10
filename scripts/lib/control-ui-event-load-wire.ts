@@ -32,6 +32,9 @@ export async function createEventLoadWire(rows: EventLoadRow[]) {
   let bytes = 0;
   let backgroundFrames = 0;
   let backgroundBytes = 0;
+  let foregroundFirstEmittedAt = 0;
+  let foregroundLastEmittedAt = 0;
+  let foregroundLastSequence = 0;
   server.on("connection", (client) => {
     socket = client;
     client.on("message", (raw) => {
@@ -60,6 +63,9 @@ export async function createEventLoadWire(rows: EventLoadRow[]) {
     offeredBytes: bytes,
     offeredBackgroundFrames: backgroundFrames,
     offeredBackgroundBytes: backgroundBytes,
+    foregroundFirstEmittedAt,
+    foregroundLastEmittedAt,
+    foregroundLastSequence,
   });
   return {
     url: `ws://localhost:${address.port}/event-load`,
@@ -86,10 +92,24 @@ export async function createEventLoadWire(rows: EventLoadRow[]) {
             if (socket?.readyState !== WebSocket.OPEN || !generation) {
               return;
             }
-            const raw = JSON.stringify({ type: "event", event, payload, seq: ++sequence });
+            // Both processes run on this host; epoch-based monotonic clocks retain
+            // queue age without treating the fixture's synthetic timestamps as time.
+            const eventLoadEmittedAt = performance.timeOrigin + performance.now();
+            const raw = JSON.stringify({
+              type: "event",
+              event,
+              eventLoadEmittedAt,
+              payload,
+              seq: ++sequence,
+            });
             frames++;
             bytes += Buffer.byteLength(raw);
             const key = (payload as { sessionKey?: string }).sessionKey;
+            if (key === options.foreground) {
+              foregroundFirstEmittedAt ||= eventLoadEmittedAt;
+              foregroundLastEmittedAt = eventLoadEmittedAt;
+              foregroundLastSequence = sequence;
+            }
             if (key && key !== options.foreground) {
               backgroundFrames++;
               backgroundBytes += Buffer.byteLength(raw);
@@ -106,6 +126,10 @@ export async function createEventLoadWire(rows: EventLoadRow[]) {
       );
     },
     startBackground() {
+      // Initial live-tool preparation is outside the measured turn.
+      foregroundFirstEmittedAt = 0;
+      foregroundLastEmittedAt = 0;
+      foregroundLastSequence = 0;
       producer!.startBackground();
     },
     request(method: string, params: unknown) {

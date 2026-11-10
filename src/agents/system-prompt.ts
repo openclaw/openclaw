@@ -22,10 +22,6 @@ import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { CHANNEL_IDS } from "../channels/ids.js";
-import {
-  hasNativeApprovalPromptRuntimeCapability,
-  isKnownNativeApprovalPromptChannel,
-} from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -61,7 +57,10 @@ import type {
   ProviderSystemPromptContribution,
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
-import { buildOpenClawControlSection } from "./system-prompt-control.js";
+import {
+  buildExecApprovalPromptGuidance,
+  buildOpenClawControlSection,
+} from "./system-prompt-control.js";
 import { buildDocumentationSection } from "./system-prompt-documentation.js";
 import {
   buildAssistantOutputDirectivesSection,
@@ -124,24 +123,6 @@ function cacheStablePromptPrefix(key: string, build: () => string): string {
   stablePromptPrefixCache.set(key, value);
   pruneMapToMaxSize(stablePromptPrefixCache, SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT);
   return value;
-}
-
-function buildExecApprovalPromptGuidance(params: {
-  runtimeChannel?: string;
-  inlineButtonsEnabled?: boolean;
-  runtimeCapabilities?: readonly string[];
-}) {
-  const runtimeChannel = normalizeOptionalLowercaseString(params.runtimeChannel);
-  const usesNativeApprovalUi =
-    params.inlineButtonsEnabled ||
-    hasNativeApprovalPromptRuntimeCapability(params.runtimeCapabilities) ||
-    isKnownNativeApprovalPromptChannel(runtimeChannel);
-  const policyGuidance =
-    "For task-authorized commands, make the execution request through the available tool and let its current policy decide whether approval is needed. Request exec approval only from an actual approval-pending result; never invent approval IDs or ask for a bare /approve.";
-  if (usesNativeApprovalUi) {
-    return `${policyGuidance} exec approval-pending: native card/buttons first. Plain /approve only when tool requires chat/manual approval; copy exact "Reply with:" command.`;
-  }
-  return `${policyGuidance} exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.`;
 }
 
 function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
@@ -288,6 +269,8 @@ export function buildAgentSystemPrompt(params: {
   reasoningLevel?: ReasoningLevel;
   /** Config-derived availability of the owner /restart and /update commands. */
   restartCommandsEnabled?: boolean;
+  /** Stable configured-agent collision with the managed setup identity. */
+  openClawSetupIssue?: string;
   /** Session/config-derived availability of /reasoning and /status guidance. */
   reasoningCommandsEnabled?: boolean;
   extraSystemPrompt?: string;
@@ -495,7 +478,7 @@ export function buildAgentSystemPrompt(params: {
       : "Single global file workspace unless explicitly told otherwise.";
   const workspaceOnlyGuidance =
     params.fsWorkspaceOnly === true
-      ? `tools.fs.workspaceOnly ON: file-tool scratch/temp/meta stays in ${hasSeparateRuntimeCwd ? "working directory" : "workspace"}, preferably \`.openclaw/tmp/\`. If file tools need it later, never exec-write \`/tmp\`; use ${hasSeparateRuntimeCwd ? "working directory" : "workspace"} path.`
+      ? `tools.fs.workspaceOnly ON: outputs that file tools need to read or write later stay in ${hasSeparateRuntimeCwd ? "working directory" : "workspace"}, preferably \`.openclaw/tmp/\`. Keep TMPDIR, TMP, and TEMP at their inherited system paths; native tools need short temporary paths for Unix sockets.`
       : "";
   const directorySection = hasSeparateRuntimeCwd
     ? [
@@ -690,7 +673,13 @@ export function buildAgentSystemPrompt(params: {
     includeToolGuidance &&
       (providerSectionOverrides.tool_call_style || buildToolCallStyleSection()),
     ...careSection,
-    ...buildOpenClawControlSection({ hasOpenClaw, hasGateway, hasExec, restartCommandsEnabled }),
+    ...buildOpenClawControlSection({
+      hasOpenClaw,
+      hasGateway,
+      hasExec,
+      restartCommandsEnabled,
+      setupIssue: params.openClawSetupIssue,
+    }),
     ...skillsSection,
     ...toolGuidanceSection,
     ...memorySection,

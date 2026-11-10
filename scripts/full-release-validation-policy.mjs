@@ -421,6 +421,25 @@ export function classifyReleaseGhTransportError(error) {
   return TRANSIENT_GH_TRANSPORT_PATTERN.test(text) ? "transient" : "ambiguous";
 }
 
+export function evidenceReadRetryDelay(args, error, attempt) {
+  // Only these argument shapes are GETs; fields, input, methods, and GraphQL
+  // can mutate state and must never acquire retries through this read wrapper.
+  const isGet =
+    args[0] === "api" &&
+    /^(?:repos\/|rate_limit$)/u.test(args[1] ?? "") &&
+    (args.length === 2 || (args.length === 3 && args[2] === "--allow-escape-sequences"));
+  const diagnostic = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
+  if (
+    !isGet ||
+    attempt >= 3 ||
+    /HTTP [1-4][0-9]{2}\b/u.test(diagnostic) ||
+    classifyReleaseGhTransportError(error) !== "transient"
+  ) {
+    throw error;
+  }
+  return 2_000 * 2 ** attempt;
+}
+
 // GitHub can persistently 5xx one page size of an attempt-jobs listing (for example a
 // rerun attempt carrying forward hundreds of jobs) while smaller pages of the same
 // listing succeed. Each size reads the complete paginated listing, so results never

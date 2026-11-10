@@ -107,7 +107,7 @@
   border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--text);
-  font: 12px/1.55 var(--mono);
+  font: var(--control-ui-text-sm)/1.55 var(--mono);
   /* Memory files are prose: wrap them rather than scroll sideways on a phone. */
   white-space: pre-wrap;
   overflow-wrap: anywhere;

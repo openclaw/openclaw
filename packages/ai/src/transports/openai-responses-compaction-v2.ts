@@ -5,6 +5,7 @@ import {
   estimateTokensFromChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
 import type {
   OpenAIResponsesCompactEndpointResult,
@@ -171,7 +172,7 @@ function retainV2Users(input: ResponseInput): ResponseInput {
             }
           }
           if (low > 0) {
-            content.push({ ...part, text: part.text.slice(0, low) });
+            content.push({ ...part, text: truncateUtf16Safe(part.text, low) });
           }
         }
         remaining = 0;

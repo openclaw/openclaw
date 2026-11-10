@@ -467,8 +467,8 @@ export function formatWikiLink(params: {
   const destination = /[\s()<>]/.test(linkTarget)
     ? `<${linkTarget.replace(/[<>]/g, "\\$&")}>`
     : linkTarget;
-  // Titles are metadata: unmatched brackets or a trailing backslash must not break the link.
-  const label = params.title.replace(/[\\[\]`]/g, "\\$&");
+  // Titles are metadata: Markdown, entities, and HTML must not change their displayed text.
+  const label = params.title.replace(/[\\[\]`*_~<&]/g, "\\$&");
   return `[${label}](${destination})`;
 }
 

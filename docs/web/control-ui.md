@@ -18,6 +18,11 @@ pages and assets while bots and existing Gateway connections keep running.
 Re-enable it to resume serving; missing assets are prepared in the background.
 Changing the serving base path or asset root still requires a Gateway restart.
 
+During a Gateway restart, lazy views and background UI imports wait for the
+server to return and retry in the open tab. Restarting the same build does not
+require a page reload. If an update changes the UI build, the existing reload
+recovery keeps unsaved work protected until it is safe to replace the page.
+
 For unmatched HTTP paths, the app-shell fallback respects the request's `Accept` header. An explicit HTML rejection such as `text/html;q=0, */*` overrides the broader wildcard, so the request reaches the startup `503` or final `404` response. Headerless and wildcard-only requests retain the browser navigation fallback.
 
 It speaks **directly to the Gateway WebSocket** on the same port.
@@ -77,6 +82,18 @@ deployment settings for this Gateway. To direct them to your own workflow, set
 text replaces the instructions after the read-only heading. End the notice with
 a space and an absolute HTTP or HTTPS URL to add a **Learn more** link. For
 example, `Edit the deployment manifest and redeploy. https://example.org/gateway`.
+
+## Feedback and bug reports
+
+Open **Help** from the sidebar account menu to **Report a bug** or **Suggest a feature**.
+Connection and chat error notices also offer **Report a bug**. These links open the
+matching public GitHub issue form; they do not submit an issue.
+
+Only the issue template and a fixed **Control UI** title are prefilled. OpenClaw does
+not attach error text, diagnostics, logs, conversations, configuration, identifiers,
+credentials, or private URLs, and the links suppress the browser referrer. Review
+anything you add before submitting publicly. Use [official support](https://community.openclaw.ai/)
+for setup help and [private security reporting](https://github.com/openclaw/openclaw/security/policy) for security concerns.
 
 ## Edit a failed message
 
@@ -145,7 +162,8 @@ child.
 
 Imported conversations can remain grouped under their original session source,
 such as Beam. After conversion, they use the normal session controls, including
-rename, pin, and archive; the source group does not require another import.
+rename, pin, and archive. Their child-session disclosure opens the normal nested
+conversation tree; the source group does not require another import.
 
 ## Automatic session names
 
@@ -212,6 +230,10 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 If the New Session page fails during its initial render, the UI attempts one automatic page reload per browser tab. A repeated failure shows **Retry** instead of starting a reload loop. Automatic recovery is skipped if session storage is unavailable, the serving document cannot be reached, or unsaved work blocks reloading. Errors after the composer has rendered use in-page retry instead.
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The handoff waits for the session list and expanded child-session reads to finish or report an error; elapsed reconnect time alone does not replace saved rows. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
+
+On a warm chat reload, browsers that retain the previous page during navigation can reveal the cached sidebar and conversation together. If that cached page is slow to prepare, the usual loading layout appears instead. Missing cached content, sign-in, and route errors release the loading view immediately.
+
+After the connection and saved conversation are ready, chat fetches updates while the rest of the page loads. A slow or unavailable cache keeps the normal loading path.
 
 The saved sidebar also retains the session rows for its initial viewport, along with unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Reload starts at the top of the sidebar. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
 
@@ -585,6 +607,17 @@ ask the sender to share it again.
 Opening a file collapses the file tree to make room for its preview. Use **Toggle
 file tree** to browse another file, or **Show in Files** to reveal the current file
 in its folder with the **All** filter.
+
+The **Session files** group lists files the agent produced outside the project
+tree together with the images and attachments in the loaded transcript. Use the
+control beside its heading to switch between **List** and **Grid** and to sort by
+**Default**, **Date**, **Name**, or **Type**. Default keeps the Gateway's file
+order followed by attachments in transcript order. Date puts the most recently
+modified files and most recently sent attachments first; entries without a
+recorded time, such as artifacts, follow in default order. The grid shows image
+previews once they load and large file icons for other files; untitled images
+show their picture without a caption. The choice is remembered in this browser
+for every session's Files panel. The project tree keeps its folder structure.
 
 The **Review** file menu offers **Edit file** when the file reader confirms editing
 is available. Readable files keep **Open file** and their supported Markdown and

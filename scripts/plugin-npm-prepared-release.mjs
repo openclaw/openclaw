@@ -22,6 +22,7 @@ import {
 } from "./lib/npm-publish-plan.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { isPluginPublicationEnabled } from "./lib/plugin-publication-target.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
 import { createReleaseEvidenceReplay } from "./lib/release-evidence-replay.mjs";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 import { loadNpmEvidenceReplay, npmEvidenceBinding } from "./plugin-npm-evidence-reuse.mjs";
@@ -241,11 +242,16 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     client,
   );
   const current = authenticated.evidence.current;
-  const producerSha = current.manifest.workflowSha;
+  const producerSha =
+    retainedPublicationArtifactSource(current.manifest)?.workflow.sha ??
+    current.manifest.workflowSha;
   if (producerSha !== workflowSha) {
     requireValue(
       producerSha === sourceSha &&
-        current.workflowRefProof === "candidate-owned-admission-v1" &&
+        current.workflowRefProof ===
+          (current.manifest.receiptRecovery
+            ? "receipt-backed-recovery-v1"
+            : "candidate-owned-admission-v1") &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",
     );
@@ -277,10 +283,12 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
       "Prepared npm publisher policy differs from immutable source",
     );
   }
+  // Replay validation is asynchronous; live qualification authority is synchronous.
+  /** @type {(() => void | Promise<void>) | undefined} */
   const revalidateAuthority = params.immutableReads
     ? async () => {
         await params.immutableReads.revalidate(client);
-        await authenticated.revalidateAuthority?.();
+        authenticated.revalidateAuthority?.();
       }
     : authenticated.revalidateAuthority;
   if (revalidateOnReturn) {
@@ -888,11 +896,10 @@ export async function main(argv) {
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  try {
-    await main(process.argv.slice(2));
-  } catch (error) {
+  // Let this module finish evaluating before a lazy import cycles back to it.
+  void main(process.argv.slice(2)).catch((/** @type {unknown} */ error) => {
     console.error(error instanceof Error ? error.message : String(error));
     console.error("[plugin-npm-prepared-release] FAILED (exit 1)");
     process.exitCode = 1;
-  }
+  });
 }

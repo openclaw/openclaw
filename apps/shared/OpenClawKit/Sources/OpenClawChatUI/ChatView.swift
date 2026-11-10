@@ -6,6 +6,10 @@ import AppKit
 import UIKit
 #endif
 
+extension EnvironmentValues {
+    @Entry public var openClawChatIsObscured: Bool = false
+}
+
 enum ChatReaderUserTransition: Equatable {
     case unchanged
     case added(UUID)
@@ -111,6 +115,7 @@ public struct OpenClawChatView: View {
     private let viewModel: OpenClawChatViewModel
     private let resolveComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openClawChatIsObscured) private var isObscured
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -269,6 +274,10 @@ public struct OpenClawChatView: View {
         }
         .onChange(of: ObjectIdentifier(self.viewModel)) { _, _ in
             self.viewModel.refreshSourceContext()
+            self.viewModel.streamPacing.interval = self.isObscured ? 0.5 : 0.15
+        }
+        .onChange(of: self.isObscured, initial: true) { _, obscured in
+            self.viewModel.streamPacing.interval = obscured ? 0.5 : 0.15
         }
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
@@ -810,11 +819,21 @@ extension OpenClawChatView {
                     kind: kind,
                     playback: playback)
             })
-            .frame(
-                maxWidth: .infinity,
-                alignment: isUser ? .trailing : .leading)
         let row = VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-            bubble
+            Group {
+                #if os(iOS)
+                // Streaming revisions invalidate the transcript container. Keep completed
+                // iPhone bubbles out of that hot path unless their render inputs changed.
+                if bubble.canUseIOSRenderGate {
+                    bubble.equatable()
+                } else {
+                    bubble
+                }
+                #else
+                bubble
+                #endif
+            }
+            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
             if msg.presentationOwnsFooter {
                 ChatMessageReactions(viewModel: self.viewModel, message: msg)
             }

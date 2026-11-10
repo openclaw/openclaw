@@ -555,6 +555,7 @@ SQLite and PostgreSQL Git exports apply the same `--exclude-secrets` policy. Pos
 - `device_auth_tokens`
 - `device_bootstrap_tokens`
 - `device_identities`
+- `device_pairing_browser_requests`
 - `device_pairing_join_codes`
 - `device_pairing_paired`
 - `gateway_origin_device_tokens`
@@ -847,6 +848,13 @@ Transient filename rules apply across all selected roots, including every agent 
 If an entry disappears during traversal or before it can be opened, the archive continues with the surviving entries. Each omitted path appears in the result's `skipped` list with reason `vanished`, and in the result's `warnings` and text summary. Required source roots and staged captures must still exist; permission and I/O errors still fail the archive. Changes that could redirect a read outside the selected roots also fail. Files are opened before their archive headers are written, so a vanished file cannot leave a partial entry.
 
 Chromium singleton entries coordinate one running browser on one host and are recreated when that profile starts; the rest of the profile's `user-data/` remains in the archive. Sandbox skills workspaces are generated copies of current skill sources and are materialized again when OpenClaw prepares the next sandbox context after restore; adjacent sandbox registry and other durable state remain included.
+
+On Windows, SQLite discovery retries `EBUSY` or `EPERM` reads twice with short
+backoff and logs a warning when the retry succeeds. If a retained file still
+cannot be read, backup capture refuses with its path and error code. Check read
+permissions or close the program using that file, then retry the backup or
+update. Unreadable files are never assumed to be non-SQLite or silently skipped;
+an update must capture them safely before replacing the installation.
 
 Managed SQLite snapshots cover the shared OpenClaw database, the quarantine and
 integrity-verification store, and per-agent databases declared by configuration,
