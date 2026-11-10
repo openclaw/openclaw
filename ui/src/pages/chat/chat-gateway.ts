@@ -41,6 +41,7 @@ import {
 } from "./stream-reconciliation.ts";
 import {
   authoritativeHistoryAppliedForRun,
+  authoritativeTerminalFencedBySteer,
   normalizeFinalAssistantMessage,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
@@ -175,7 +176,17 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     typeof payload.runId === "string" &&
     payload.runId === state.chatRunId;
   const authoritativeTerminalMatches = Boolean(
-    payload.runId && authoritativeHistoryAppliedForRun(state, payload.runId) && sessionMatches,
+    payload.runId &&
+    authoritativeHistoryAppliedForRun(state, payload.runId, payload.sessionKey) &&
+    sessionMatches &&
+    // A steer persisted after the applied row fences that row: the arriving
+    // final is the post-steer answer, not a replay, so it must survive (#149153).
+    !authoritativeTerminalFencedBySteer({
+      host: state,
+      messages: state.chatMessages,
+      runId: payload.runId,
+      sessionKey: payload.sessionKey,
+    }),
   );
   if (!sessionMatches) {
     if (payload.state === "final") {

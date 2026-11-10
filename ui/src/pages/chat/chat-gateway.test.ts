@@ -1044,7 +1044,7 @@ describe("authoritative terminal history identity", () => {
           runIdBeforeApply: "run-1",
         });
         await loadChatHistory(state);
-        expect(authoritativeHistoryAppliedForRun(state, "run-1")).toBe(true);
+        expect(authoritativeHistoryAppliedForRun(state, "run-1", "main")).toBe(true);
       }
       receive(state, "final", { message: live });
       expect(state.chatMessages).toEqual([live]);
@@ -1096,7 +1096,7 @@ describe("authoritative terminal history identity", () => {
       visibleMessages: collisions,
     });
     expect(collided).toEqual(previousMessages);
-    expect(authoritativeHistoryAppliedForRun(host, "run-1")).toBe(false);
+    expect(authoritativeHistoryAppliedForRun(host, "run-1", "main")).toBe(false);
     const persisted = reconcileAuthoritativeTerminalHistory({
       host,
       previousMessages,
@@ -1104,7 +1104,7 @@ describe("authoritative terminal history identity", () => {
       visibleMessages: [...collisions, nativeTerminal],
     });
     expect(persisted).toEqual([]);
-    expect(authoritativeHistoryAppliedForRun(host, "run-1")).toBe(true);
+    expect(authoritativeHistoryAppliedForRun(host, "run-1", "main")).toBe(true);
   });
 });
 
