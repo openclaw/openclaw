@@ -47,6 +47,49 @@ globalThis.fetch = () => { throw new Error("Unexpected network access"); };
   return { image, out, result };
 }
 
+describe("meme-maker result limits", () => {
+  const invalidLimits = ["-1", "0.5", "NaN", "Infinity", ""];
+
+  it.each(invalidLimits)("rejects --limit=%s for search", async (limit) => {
+    await expect(
+      execFileAsync(testNodeExecPath, [scriptPath, "search", "choice", `--limit=${limit}`, "--json"]),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: "error: --limit must be a non-negative safe integer\n",
+    });
+  });
+
+  it.each(invalidLimits)("rejects --limit=%s for suggest", async (limit) => {
+    await expect(
+      execFileAsync(testNodeExecPath, [scriptPath, "suggest", "choice", `--limit=${limit}`, "--json"]),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: "error: --limit must be a non-negative safe integer\n",
+    });
+  });
+
+  it.each(invalidLimits)("rejects --limit=%s for refresh", async (limit) => {
+    await expect(
+      execFileAsync(testNodeExecPath, [scriptPath, "refresh", "choice", `--limit=${limit}`, "--json"]),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: "error: --limit must be a non-negative safe integer\n",
+    });
+  });
+
+  it.each([0, 1, 2])("suggest returns %i templates with --limit=%i", async (limit) => {
+    const { stdout } = await execFileAsync(testNodeExecPath, [
+      scriptPath,
+      "suggest",
+      "choice",
+      "--limit",
+      String(limit),
+      "--json",
+    ]);
+    expect(JSON.parse(stdout)).toHaveLength(limit);
+  });
+});
+
 describe("meme-maker local rendering", () => {
   it("writes a self-contained SVG with escaped, box-centered text without optional rendering dependencies", async () => {
     const { image, out, result } = renderFixture("svg", true);

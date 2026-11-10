@@ -75,6 +75,16 @@ function normalize(value) {
     .trim();
 }
 
+function resultLimit(raw, fallback) {
+  if (raw === undefined) return fallback;
+  if (raw.trim() === "") throw new Error("--limit must be a non-negative safe integer");
+  const limit = Number(raw);
+  if (!Number.isSafeInteger(limit) || limit < 0) {
+    throw new Error("--limit must be a non-negative safe integer");
+  }
+  return limit;
+}
+
 function tokens(value) {
   return normalize(value)
     .split(/\s+/)
@@ -350,7 +360,7 @@ async function renderImgflip(template, texts, flags) {
 }
 
 async function refresh(flags) {
-  const limit = Number(flags.limit || 25);
+  const limit = resultLimit(flags.limit, 25);
   const response = await fetch(IMGFLIP_GET_MEMES_URL, { headers: { "User-Agent": USER_AGENT } });
   if (!response.ok) throw new Error(`Imgflip get_memes failed ${response.status}`);
   const payload = await response.json();
@@ -381,7 +391,7 @@ async function main() {
   if (command === "search" || command === "suggest") {
     const query = rest.join(" ");
     if (!query) throw new Error(`${command} needs a query`);
-    const limit = Number(flags.limit || (command === "suggest" ? 5 : 20));
+    const limit = resultLimit(flags.limit, command === "suggest" ? 5 : 20);
     const ranked = templates
       .map((template) => ({ ...template, score: scoreTemplate(template, query) }))
       .filter((template) => template.score > 0)

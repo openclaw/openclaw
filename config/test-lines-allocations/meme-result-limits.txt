@@ -1,0 +1,2 @@
+# Parameterized CLI regression for invalid limits and zero/positive controls.
+42
