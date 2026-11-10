@@ -351,7 +351,6 @@ export function renderSidebarSessionSortMenuForMenus(
                       setSessionsShowPreview(host.sessionOrganizer, false);
                       host.setSessionSortMode("created");
                       if (!rosterMode()) {
-                        // A displayed default can hide a saved Person choice until owners return.
                         if (grouping() !== "category") {
                           setSessionsGrouping(host.sessionOrganizer, "category");
                         }
@@ -425,9 +424,7 @@ export function renderSidebarSessionSortMenuForMenus(
                 options={[
                   { value: "category", label: t("sessionsView.groupByCategory") },
                   { value: "project", label: t("chat.sidebar.catalogGroupByProject") },
-                  ...(peopleSortAvailable()
-                    ? [{ value: "person", label: t("sessionsView.groupByPerson") }]
-                    : []),
+                  { value: "person", label: t("sessionsView.groupByPerson") },
                   { value: "none", label: t("sessionsView.groupByNone") },
                 ]}
                 onChange={(value) => {

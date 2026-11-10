@@ -425,46 +425,93 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     }
   });
 
-  it.each(["roster", "owners"] as const)(
-    "preserves hidden grouping preferences across reset when %s hides them",
-    async (hiddenBy) => {
-      const { sidebar, sessions, role, query, choose } = await mountFilters(1440);
-      const original = sessions.sessions.state.result!;
-      const grouping = hiddenBy === "roster" ? "project" : "person";
-      if (hiddenBy === "roster") {
-        setSessionsGrouping(sidebar.sessionOrganizer, grouping);
-        await role("button", /^Filter & sort · /).click();
-        await choose(/^Hide empty groups:/, "Never");
-        sidebar.dismissTransientMenus();
-        sidebar.sidebarAgentsMode = "roster";
-        await sidebar.updateComplete;
-        await role("button", /^Filter & sort · /).click();
-        expect(query("#sidebar-sessions-group")).toBeNull();
-        expect(query("#sidebar-sessions-empty")).toBeNull();
-      } else {
-        await role("button", /^Filter & sort · /).click();
-        await choose("Group by: Custom groups", "Person");
-        sessions.publish({ result: { ...original, owners: original.owners!.slice(0, 1) } });
-        await expect.element(role("button", "Group by: Custom groups")).toBeVisible();
-        expect(loadStoredSidebarSessionsGrouping()).toBe("person");
-      }
-      expect(query("#sidebar-sessions-reset")).toBeNull();
-      await role("switch", "Show message preview").click();
-      await role("button", "Reset").click();
-      expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
-      expect(loadStoredSidebarSessionsGrouping()).toBe(grouping);
-      if (hiddenBy === "roster") {
-        expect(query("#sidebar-sessions-reset")).toBeNull();
-        sidebar.sidebarAgentsMode = "chip";
-        await sidebar.updateComplete;
-        await expect.element(role("button", "Hide empty groups: Never")).toBeVisible();
-      } else {
-        sessions.publish({ result: original });
-        await expect.element(role("button", "Group by: Person")).toBeVisible();
-        expect(query("#sidebar-sessions-reset")).not.toBeNull();
-      }
-    },
-  );
+  it("preserves hidden grouping preferences across reset in roster mode", async () => {
+    const { sidebar, role, query, choose } = await mountFilters(1440);
+    setSessionsGrouping(sidebar.sessionOrganizer, "project");
+    await role("button", /^Filter & sort · /).click();
+    await choose(/^Hide empty groups:/, "Never");
+    sidebar.dismissTransientMenus();
+    sidebar.sidebarAgentsMode = "roster";
+    await sidebar.updateComplete;
+    await role("button", /^Filter & sort · /).click();
+    expect(query("#sidebar-sessions-group")).toBeNull();
+    expect(query("#sidebar-sessions-empty")).toBeNull();
+    expect(query("#sidebar-sessions-reset")).toBeNull();
+    await role("switch", "Show message preview").click();
+    await role("button", "Reset").click();
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
+    expect(loadStoredSidebarSessionsGrouping()).toBe("project");
+    expect(query("#sidebar-sessions-reset")).toBeNull();
+    sidebar.sidebarAgentsMode = "chip";
+    await sidebar.updateComplete;
+    await expect.element(role("button", "Hide empty groups: Never")).toBeVisible();
+  });
+
+  it("keeps Person grouping through single, loading, empty, and same-name owner snapshots", async () => {
+    const { sidebar, sessions, role, query, choose } = await mountFilters(1440);
+    const original = sessions.sessions.state.result!;
+    const owners = original.owners!.map((owner) => ({
+      type: owner.type,
+      id: owner.id,
+      label: "Ada",
+      identity: { type: "profile" as const, id: owner.id },
+    }));
+    const rows = original.sessions.map((row, index) =>
+      Object.assign({}, row, { owner: { actor: owners[index]! } }),
+    );
+    sessions.publish({
+      result: { ...original, owners: owners.slice(0, 1), sessions: rows.slice(0, 1) },
+    });
+    await role("button", /^Filter & sort · /).click();
+    await choose("Group by: Custom groups", "Person");
+    const sectionIds = () =>
+      [...sidebar.querySelectorAll<HTMLElement>('[data-session-section^="person:"]')]
+        .map((section) => section.dataset.sessionSection!)
+        .toSorted((a, b) => a.localeCompare(b));
+    expect(sectionIds()).toEqual(["person:profile:profile-ada"]);
+    for (const snapshot of [
+      { loading: true, result: { ...original, owners: undefined, sessions: rows.slice(0, 1) } },
+      { loading: false, result: { ...original, owners: [], sessions: [] } },
+      { loading: false, result: { ...original, owners, sessions: rows } },
+    ]) {
+      sessions.publish(snapshot);
+      await expect.element(role("button", "Group by: Person")).toBeVisible();
+      expect(loadStoredSidebarSessionsGrouping()).toBe("person");
+      await expect
+        .poll(sectionIds)
+        .toEqual(
+          snapshot.result.sessions.length === 2
+            ? ["person:profile:profile-ada", "person:profile:profile-bob"]
+            : snapshot.result.sessions.length === 1
+              ? ["person:profile:profile-ada"]
+              : [],
+        );
+    }
+    await choose("Owners: All owners", "My sessions");
+    await expect.poll(sectionIds).toEqual(["person:profile:profile-ada"]);
+    expect(query('[data-session-key="agent:main:bob"]')).toBeNull();
+    await choose("Owners: My sessions", "All owners");
+    await expect
+      .poll(sectionIds)
+      .toEqual(["person:profile:profile-ada", "person:profile:profile-bob"]);
+    await role("button", /^Filter & sort · /).click();
+    sessions.publish({
+      result: {
+        ...original,
+        owners: owners.slice(0, 1),
+        sessions: rows.map((row) => Object.assign({}, row, { owner: { actor: owners[0]! } })),
+      },
+    });
+    await expect.element(role("button", "Group by: Person")).toBeVisible();
+    await expect.poll(sectionIds).toEqual(["person:profile:profile-ada"]);
+    expect(
+      query('[data-session-section="person:profile:profile-ada"]')!.querySelectorAll(
+        "[data-session-key]",
+      ),
+    ).toHaveLength(2);
+    await role("button", "Reset").click();
+    expect(loadStoredSidebarSessionsGrouping()).toBe("category");
+  });
 
   it.each([
     { ownerId: "profile-ada", selected: "My sessions", label: "My sessions" },
