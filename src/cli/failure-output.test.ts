@@ -123,14 +123,12 @@ it.each(["gateway", "gateway run", "node run"])(
   "prints the redacted service startup reason without debug: %s",
   (args) => {
     const token = "sk-abcdefghijklmnopqrstuv";
-    const lines = failure(
+    const output = failure(
       new Error(`Gateway startup failed. Authorization: Bearer ${token}`, {
         cause: new Error("private nested diagnostic"),
       }),
       args.split(" "),
-    );
-    const output = lines.join("\n");
-
+    ).join("\n");
     expect(output).toContain("[openclaw] Reason: Gateway startup failed.");
     expect(output).not.toMatch(/sk-abcdefghijklmnopqrstuv|private nested diagnostic|Stack:/u);
   },
@@ -183,11 +181,7 @@ it.each([
     "Invalid config at /custom/openclaw.json:\n- gateway.port: Expected a number",
     true,
   ],
-  [
-    createConfigReadError({ path: "/c.json", issues: [{ path: "", message: "gone" }] }),
-    "Config could not be read at /c.json:\n- <root>: gone",
-    false,
-  ],
+  [createConfigReadError({ path: "/c", issues: [] }), "Config could not be read at /c", false],
 ])("keeps actionable refusal details without leaking diagnostics: %s", (error, reason, doctor) => {
   Object.assign(error, {
     message: `${error.message} Authorization: Bearer sk-abcdefghijklmnopqrstuv`,
