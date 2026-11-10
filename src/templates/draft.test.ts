@@ -47,7 +47,7 @@ describe("agent-created Template drafts", () => {
       expect(selected).toBeDefined();
       await using prepared = await prepareTemplateDraft({
         ...target,
-        choices: { excluded: [selected!.id] },
+        choices: { name: proposal.name, description: "", excluded: [selected!.id] },
       });
       expect(
         prepared.items.filter((item) => item.kind === "skill").map((item) => item.included),

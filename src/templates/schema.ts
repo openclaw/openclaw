@@ -575,7 +575,7 @@ const manifestSchema = z
     });
   });
 
-export type TemplateDependencyReference = z.output<typeof dependencyReferenceSchema>;
+type TemplateDependencyReference = z.output<typeof dependencyReferenceSchema>;
 export type TemplateBundledDependency = {
   kind: "skill" | "plugin";
   source: "bundled";
