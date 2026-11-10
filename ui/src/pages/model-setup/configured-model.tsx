@@ -3,6 +3,7 @@ import { Show, createMemo } from "solid-js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
@@ -39,9 +40,7 @@ export function ConfiguredUtilityModel(
   return (
     <Show when={modelRef()}>
       <section class="settings-section model-setup__utility">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.utility.configured")}</h2>
-        </div>
+        <SettingsSectionHeader title={t("modelSetup.utility.configured")} />
         <div class="model-setup__row">
           <div class="model-setup__row-main">
             <strong>{modelRef()}</strong>
@@ -158,9 +157,7 @@ export function ConfiguredModel(
 
   return (
     <section class="settings-section model-setup__current" data-verify-phase={props.verify.phase}>
-      <div class="settings-section__header">
-        <h2>{t("modelSetup.verify.title")}</h2>
-      </div>
+      <SettingsSectionHeader title={t("modelSetup.verify.title")} />
       <div class="model-setup__row">
         <div class="model-setup__provider-copy">
           <Show when={providerId()} keyed>
