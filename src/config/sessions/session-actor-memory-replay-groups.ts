@@ -1,6 +1,10 @@
 import { RUNTIME_CONTEXT_CUSTOM_TYPE } from "@openclaw/llm-core";
 import { projectSessionEntryMessage } from "../../../packages/agent-core/src/harness/session/session.js";
-import { SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE } from "../../../packages/agent-core/src/operator-messages.js";
+import {
+  getOpenClawSystemUpdateKind,
+  isSystemPromptUpdateBoundary,
+  SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
+} from "../../../packages/agent-core/src/operator-messages.js";
 import { createSessionActorMemoryHistoryNavigation } from "./session-actor-memory-history-navigation.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
@@ -20,6 +24,9 @@ export function readSessionActorMemoryReplayGroups(
   const maxBytes = validateSessionTranscriptReplaySelection(selection);
   const { active } = createSessionActorMemoryHistoryNavigation(window);
   const byId = new Map(active.map((row) => [row.node?.id, row]));
+  const operatorBoundary = active.findLastIndex(
+    (row) => row.rawSeq < beforeRawSeq && isSystemPromptUpdateBoundary(row.event),
+  );
   let bytes = 0;
   const hydrate = (row: (typeof active)[number]) => {
     bytes += row.serializedBytes;
@@ -68,6 +75,12 @@ export function readSessionActorMemoryReplayGroups(
           next.event.customType !== SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE)
       ) {
         break;
+      }
+      if (
+        position < operatorBoundary &&
+        getOpenClawSystemUpdateKind(next.event) === "prompt-update"
+      ) {
+        continue;
       }
       const carrier = hydrate(next);
       if (carrier) {

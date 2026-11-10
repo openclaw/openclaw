@@ -1,9 +1,15 @@
 import { RUNTIME_CONTEXT_CUSTOM_TYPE } from "@openclaw/llm-core";
 import { sql } from "kysely";
 import { projectSessionEntryMessage } from "../../../packages/agent-core/src/harness/session/session.js";
-import { SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE } from "../../../packages/agent-core/src/operator-messages.js";
+import {
+  isSystemPromptUpdateBoundary,
+  SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
+} from "../../../packages/agent-core/src/operator-messages.js";
 import { jsonPathValue } from "../../infra/database-engine/json-values.js";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
@@ -18,7 +24,11 @@ import {
   type SessionTranscriptReplayGroup,
   type SessionTranscriptReplaySelection,
 } from "./session-transcript-replay.types.js";
-import { readTranscriptPayload, transcriptEventNavigationSql } from "./transcript-payload.js";
+import {
+  readTranscriptPayload,
+  transcriptEventModelNavigationSql,
+  transcriptEventNavigationSql,
+} from "./transcript-payload.js";
 
 /** Read requested active users and their model-adjacent carriers in one admitted snapshot. */
 export function readSessionTranscriptReplayGroupsCore(
@@ -51,6 +61,38 @@ export function readSessionTranscriptReplayGroupsCore(
         .where("active.session_id", "=", resolved.sessionId)
         .where("active.event_seq", "<", fence?.beforeRawSeq ?? Number.MAX_SAFE_INTEGER);
       const navigation = transcriptEventNavigationSql(database.db, "event");
+      const modelNavigation = transcriptEventModelNavigationSql(database.db, "event");
+      let operatorBoundary: number | undefined;
+      // Only prompt overrides need this scan; retain its fact within this read snapshot.
+      const readOperatorBoundary = () => {
+        for (const row of iterateSqliteQuerySync(
+          database.db,
+          rows
+            .select(["active.active_position", modelNavigation.as("entry")])
+            .where((eb) =>
+              eb.or([
+                eb(jsonPathValue(database.db, navigation, sql.lit("$.type")), "in", [
+                  "reset",
+                  "compaction",
+                ]),
+                eb.and([
+                  eb(jsonPathValue(database.db, navigation, sql.lit("$.type")), "=", "custom"),
+                  eb(
+                    jsonPathValue(database.db, navigation, sql.lit("$.customType")),
+                    "=",
+                    "openclaw.system-prompt",
+                  ),
+                ]),
+              ]),
+            )
+            .orderBy("active.active_position", "desc"),
+        )) {
+          if (isSystemPromptUpdateBoundary(JSON.parse(row.entry))) {
+            return row.active_position;
+          }
+        }
+        return -1;
+      };
       const metadata = rows.select([
         "active.active_position",
         "active.event_seq",
@@ -58,6 +100,7 @@ export function readSessionTranscriptReplayGroupsCore(
         jsonPathValue(database.db, navigation, sql.lit("$.type")).as("type"),
         jsonPathValue(database.db, navigation, sql.lit("$.message.role")).as("role"),
         jsonPathValue(database.db, navigation, sql.lit("$.customType")).as("customType"),
+        jsonPathValue(database.db, modelNavigation, sql.lit("$.details.kind")).as("operatorKind"),
       ]);
       const hydrate = (row: { event_seq: number; bytes: number }) => {
         bytes += row.bytes + 1;
@@ -116,6 +159,13 @@ export function readSessionTranscriptReplayGroupsCore(
               next.customType !== SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE)
           ) {
             break;
+          }
+          if (
+            next.operatorKind === "prompt-update" &&
+            next.customType === SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE &&
+            next.active_position < (operatorBoundary ??= readOperatorBoundary())
+          ) {
+            continue;
           }
           const carrier = hydrate(next);
           if (carrier) {

@@ -1,2 +1,2 @@
-# Canonical replay: worker and memory branches, admission, byte bounds, and LLM prefix preservation.
-476
+# Canonical replay: worker and memory branches, admission, byte bounds, LLM prefix preservation, and retired override parity.
+581

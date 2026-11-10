@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import { readRecentSessionConversationTextAsync } from "../../gateway/session-transcript-readers.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { contextBudgetStatusFixture } from "./context-budget.test-support.js";
@@ -16,6 +17,7 @@ import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import type { SessionSourceAssertion } from "./session-source-authority.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 import { readLatestTranscriptAssistantTextAsync as latestAssistant } from "./session-transcript-assistant-read.js";
@@ -246,6 +248,48 @@ describe("memory transcript read adapters", () => {
       );
     });
   });
+
+  it.each(["restart", "compaction", "reset"] as const)(
+    "does not revive prompt updates retired by %s while retaining runtime facts",
+    async (boundary) => {
+      const { scope } = await fixture("retired-update", "main", [
+        message("user", null, "user", "Retained input"),
+        control("custom_message", "update", "user", {
+          customType: "openclaw.system-update",
+          content: "Retired override",
+          details: { kind: "prompt-update", turnScoped: false },
+          display: false,
+        }),
+        control("custom_message", "runtime", "update", {
+          customType: "openclaw.system-update",
+          content: "Retained facts",
+          details: { kind: "runtime-context", turnScoped: true },
+          display: false,
+        }),
+        control(
+          boundary === "restart" ? "custom" : boundary,
+          "boundary",
+          "runtime",
+          boundary === "restart"
+            ? {
+                customType: "openclaw.system-prompt",
+                data: { restart: true },
+              }
+            : { reason: "reset", firstKeptEntryId: "user", summary: "Summary", tokensBefore: 10 },
+        ),
+      ]);
+      const context = await readSessionTranscriptModelContextAsync(scope, (value) => value);
+      expect(
+        buildSessionContext(context.events.filter(isIndexedSessionEntry)).messages,
+      ).not.toContainEqual(expect.objectContaining({ content: "Retired override" }));
+      await withSessionTranscriptDeltaReader(scope, async (reader) => {
+        const groups = await reader.replayGroups({ entryIds: ["user"] });
+        expect(groups[0]?.carriers).toEqual([
+          expect.objectContaining({ role: "custom", content: "Retained facts" }),
+        ]);
+      });
+    },
+  );
 
   it("reads sparse post-reset user context without custom messages during a reply append", async () => {
     const { binding, scope, append } = await fixture("snapshot", "main", [

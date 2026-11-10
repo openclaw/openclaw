@@ -310,7 +310,8 @@ Each group contains `entryId`, the canonical `message`, and its adjacent
 runtime-context and system-update `carriers` in model history. Thinking/model
 changes, custom bookkeeping, labels, and session information do not interrupt
 the group. Other messages, background-result placements, compaction, reset, and
-branch-summary boundaries do.
+branch-summary boundaries do. Prompt-update carriers retired by a later system-prefix
+restart, compaction, or reset are omitted; retained runtime-context facts remain available.
 Results follow requested ID order, with duplicates returned once. Missing,
 inactive-branch, non-user, and admission-fenced IDs are omitted. Carriers never
 come from another branch or turn. This is an identity-based read, not a text

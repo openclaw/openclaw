@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { buildSessionContext } from "../../packages/agent-core/src/harness/session/session.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptEvent,
@@ -10,6 +11,8 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { isIndexedSessionEntry } from "../config/sessions/session-entry-codec.js";
+import { readSessionTranscriptModelContextAsync } from "../config/sessions/session-transcript-context-read.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
@@ -277,6 +280,64 @@ describe("canonical transcript replay groups", () => {
       runWithSessionTranscriptReadFence({ ...receipt, generation: "stale" }, read),
     ).rejects.toThrow("admission generation changed");
   });
+
+  it.each(["restart", "compaction", "reset"] as const)(
+    "does not revive prompt updates retired by %s",
+    async (boundary) => {
+      const scope = await fixture("retired-update");
+      const user = await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: { role: "user", content: "Retained input" },
+      });
+      let parentId = user!.messageId;
+      for (const kind of ["prompt-update", "runtime-context"] as const) {
+        await appendTranscriptEvent(scope, {
+          type: "custom_message",
+          id: kind,
+          parentId,
+          customType: "openclaw.system-update",
+          content: kind === "prompt-update" ? "x".repeat(20_000) : kind,
+          details: { kind, turnScoped: false },
+          display: false,
+          timestamp: new Date(1000).toISOString(),
+        });
+        parentId = kind;
+      }
+      await expect(
+        readSessionTranscriptReplayGroups({
+          ...scope,
+          entryIds: [user!.messageId],
+          maxBytes: 2000,
+        }),
+      ).rejects.toThrow("exceeds maxBytes");
+      await appendTranscriptEvent(scope, {
+        ...(boundary === "restart"
+          ? { type: "custom", customType: "openclaw.system-prompt", data: { restart: true } }
+          : {
+              type: boundary,
+              reason: "reset",
+              firstKeptEntryId: user!.messageId,
+              summary: "Summary",
+              tokensBefore: 10,
+            }),
+        id: "boundary",
+        parentId,
+        timestamp: new Date(2000).toISOString(),
+      });
+      const context = await readSessionTranscriptModelContextAsync(scope, (value) => value);
+      expect(
+        buildSessionContext(context.events.filter(isIndexedSessionEntry)).messages,
+      ).not.toContainEqual(expect.objectContaining({ content: "x".repeat(20_000) }));
+      const groups = await readSessionTranscriptReplayGroups({
+        ...scope,
+        entryIds: [user!.messageId],
+        maxBytes: 2000,
+      });
+      expect(groups[0]?.carriers).toEqual([
+        expect.objectContaining({ role: "custom", content: "runtime-context" }),
+      ]);
+    },
+  );
 
   it("rejects the entire selection when any user or carrier exceeds the cumulative source-byte budget", async () => {
     const scope = await fixture("bounds");
