@@ -424,6 +424,7 @@ export const OpenClawSchemaShape = {
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
+      maxConcurrentRuns: z.number().int().positive().optional(),
       /** Add to new nonempty agent-tool selections before creator policy and approval. */
       defaultTools: z.array(z.string().trim().min(1)).optional(),
       /** Skip missed recurring slots at startup; one-shot catch-up is unchanged. Default: false. */
@@ -431,6 +432,7 @@ export const OpenClawSchemaShape = {
       triggers: z
         .strictObject({
           enabled: z.boolean().optional(),
+          maxConcurrentEvaluations: z.number().int().positive().optional(),
         })
         .optional(),
       /** Bearer token for cron webhook POST delivery. */

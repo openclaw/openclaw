@@ -699,7 +699,10 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
   const run = createCronCodeModeRunner(deps);
   return {
     evaluateTrigger: async (params: CronScriptInvocation): Promise<CronTriggerEvaluationResult> => {
-      if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {
+      const limit =
+        selectLiveRuntimeConfig(deps.config).cron?.triggers?.maxConcurrentEvaluations ??
+        MAX_CONCURRENT_TRIGGER_EVALS;
+      if (activeTriggerEvaluations >= limit) {
         return { kind: "busy" };
       }
       activeTriggerEvaluations += 1;

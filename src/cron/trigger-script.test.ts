@@ -528,19 +528,24 @@ it.each(["policy change", "capacity eviction"] as const)(
   },
 );
 
-it("returns busy instead of queueing a fourth concurrent evaluation", async () => {
+it.each([undefined, 1, 5])("bounds concurrent evaluations with limit %s", async (limit) => {
   const pending = createDeferred<CodeModeHeadlessResult>();
   const runHeadless = vi.fn(async () => await pending.promise);
-  const { evaluate } = createEvaluator(runHeadless);
-  const running = ["one", "two", "three"].map((jobId) => evaluate({ jobId }));
-  await vi.waitFor(() => expect(runHeadless).toHaveBeenCalledTimes(3));
-
-  const saturated = await evaluate({ jobId: "four" });
-  pending.resolve(completed({ fire: false }));
-  await Promise.all(running);
-
-  expect(saturated).toEqual({ kind: "busy" });
-  expect(runHeadless).toHaveBeenCalledTimes(3);
+  const { evaluate } = createEvaluator(runHeadless, {
+    config: { cron: { triggers: { maxConcurrentEvaluations: limit } } },
+  });
+  const capacity = limit ?? 3;
+  const running = Array.from({ length: capacity }, (_, index) => evaluate({ jobId: `${index}` }));
+  let overflow: ReturnType<typeof evaluate> | undefined;
+  try {
+    await vi.waitFor(() => expect(runHeadless).toHaveBeenCalledTimes(capacity));
+    overflow = evaluate({ jobId: "overflow" });
+  } finally {
+    pending.resolve(completed({ fire: false }));
+    await Promise.all(running);
+  }
+  await expect(overflow).resolves.toEqual({ kind: "busy" });
+  await expect(evaluate({ jobId: "released" })).resolves.toMatchObject({ kind: "evaluated" });
 });
 
 it.each(["preparation", "headless"] as const)("survives a clock jump during %s", async (phase) => {

@@ -1,5 +1,5 @@
 import { BroadcastChannel } from "node:worker_threads";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import { resolveCronMaxConcurrentRuns } from "../../config/cron-limits.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
@@ -568,7 +568,7 @@ export function runCronSchedulerInWorker(
         },
         {
           requests: input.requests ?? [],
-          maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+          maxConcurrentRuns: resolveCronMaxConcurrentRuns(snapshot.config.cronConfig),
           schedulingPaused: input.paused,
           preparingAgentIds: snapshot.config.preparingAgentIds,
           hostProcessId: snapshot.config.hostProcessId,

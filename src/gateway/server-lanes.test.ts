@@ -23,6 +23,22 @@ afterEach(async () => {
   resetCommandQueueStateForTest();
 });
 
+it.each([undefined, 1, 12])("applies cron capacity %s without starving cron", async (limit) => {
+  applyConfig({ cron: { maxConcurrentRuns: limit }, hooks: { enabled: true } });
+  for (const lane of [CommandLane.Cron, CommandLane.CronNested, CommandLane.HookDispatch]) {
+    expect(getCommandLaneSnapshot(lane).maxConcurrent).toBe(limit ?? 8);
+  }
+  const run = vi.fn(async () => {});
+  const pending = enqueueCommandInLane(CommandLane.CronNested, run);
+  try {
+    await Promise.resolve();
+    expect(run).toHaveBeenCalledOnce();
+  } finally {
+    applyConfig({});
+    await pending;
+  }
+});
+
 it("restores interrupted work at the configured agent concurrency without consuming interactive slots", async () => {
   applyConfig({ agents: { defaults: { maxConcurrent: 6 } } }, true);
   const release = createDeferred();

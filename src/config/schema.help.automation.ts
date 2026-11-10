@@ -106,6 +106,10 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
+  "cron.maxConcurrentRuns":
+    "Maximum concurrent automation runs shared by scheduled and manually requested work. Cron execution and hook dispatch lanes use the same budget. Positive integer; default: 8. Excess runs remain queued.",
+  "cron.triggers.maxConcurrentEvaluations":
+    "Maximum concurrent condition-script evaluations. Positive integer; default: 3. When busy, an unevaluated occurrence stays due for a later attempt. Does not limit script payload execution.",
   "cron.defaultTools":
     'Tools added when the automations tool creates or explicitly revises a nonempty toolsAllow list, before creator-policy checks and approval. Unset adds nothing. Use toolsAllowMode: "exact" on that request to opt out; [] remains tool-less. Existing jobs and unrelated edits are unchanged.',
   "cron.skipMissedJobs":

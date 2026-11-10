@@ -217,6 +217,17 @@ it.each(["every", "cron"] as const)(
   },
 );
 
+it.each([undefined, 1, 10])("uses configured run capacity on scheduler ticks: %s", (limit) => {
+  const scheduler = storedScheduler(
+    `configured-capacity-${limit}`,
+    jobSeries("job", 11, () => now),
+  );
+  scheduler.start(now - 1, {
+    snapshot: { config: { ...snapshot.config, cronConfig: { maxConcurrentRuns: limit } } },
+  });
+  expect(scheduler.tick(now, 1).launches).toHaveLength(limit ?? 8);
+});
+
 it("keeps startup work pending while its subscriber is paused", () => {
   const scheduler = storedScheduler("paused-start", [job("pending", now - minute)]);
   const started = scheduler.start(now, { paused: true });

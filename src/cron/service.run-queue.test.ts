@@ -585,15 +585,16 @@ it("joins a running job before restarting after scheduler cleanup fails", async 
   }
 });
 
-it("shares capacity across sibling services for timer, manual, stream, and consumed exit requests", async ({
+it("shares configured capacity across timer, manual, stream, and exit requests", async ({
   signal,
 }) => {
+  const capacity = 2;
   const clock = createGatewaySchedulerClock(NOW);
   const release = createDeferred();
   const capacityFilled = createDeferred();
   const exitAccepted = createDeferred();
   const timerRequested = createDeferred();
-  const blockers = Array.from({ length: 8 }, (_, index) => commandJob(`blocker-${index}`));
+  const blockers = Array.from({ length: capacity }, (_, index) => commandJob(`blocker-${index}`));
   const manual = commandJob("queued-manual");
   const disabled = commandJob("queued-disabled");
   const removed = commandJob("queued-removed");
@@ -618,7 +619,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
     try {
       if (job.id.startsWith("blocker-")) {
         blockersStarted += 1;
-        if (blockersStarted === 8) {
+        if (blockersStarted === capacity) {
           capacityFilled.resolve();
         }
         await release.promise;
@@ -635,6 +636,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
     service(storePath, {
       scheduler: createTestGatewayScheduler(clock.clock),
       nowMs: clock.clock.now,
+      cronConfig: { maxConcurrentRuns: capacity },
       runCommandJob,
       runIsolatedAgentJob,
     });
@@ -675,7 +677,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
         await cron.update(job.id, { enabled: false });
       }
       expect(await sibling.waitForManualRun(ack.runId, 60_000, signal)).toBe(true);
-      expect(active).toBe(8);
+      expect(active).toBe(capacity);
       expect(executed).toEqual([]);
     }
     const streamRun = sibling.run(stream.id, "force", {
@@ -715,7 +717,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
       throw new Error("Expected the accepted manual request ID");
     }
     expect(await cron.waitForManualRun(manualAck.runId, 60_000, signal)).toBe(true);
-    expect(peakActive).toBe(8);
+    expect(peakActive).toBe(capacity);
     expect(executed.map((job) => job.id).toSorted()).toEqual(
       [exit.id, manual.id, timed.id].toSorted(),
     );

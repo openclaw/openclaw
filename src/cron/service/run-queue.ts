@@ -1,4 +1,4 @@
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import { resolveCronMaxConcurrentRuns } from "../../config/cron-limits.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
@@ -332,7 +332,7 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             storeKey: state.deps.storeKey,
             nowMs: state.deps.nowMs(),
             defaultAgentId: resolveCurrentDefaultAgentId(state),
-            maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+            maxConcurrentRuns: resolveCronMaxConcurrentRuns(state.deps.cronConfig),
             schedulingPaused: state.schedulingPaused,
             preparingAgentIds: preparingCronAgentIds(state.deps.env),
             requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
