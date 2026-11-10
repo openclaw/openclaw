@@ -130,9 +130,9 @@ describe("status --deep gateway health failures", () => {
     };
   }
 
-  function runStatusDeep() {
+  function runStatusDeep(installed: boolean) {
     mocks.gateway.mockResolvedValue({
-      installed: false,
+      installed,
       loadState: { status: "not-loaded" },
       running: false,
       command: null,
@@ -141,17 +141,9 @@ describe("status --deep gateway health failures", () => {
     return statusCommand({ deep: true }, { log: vi.fn(), error: vi.fn(), exit: vi.fn() });
   }
 
-  it("reports the gateway health reason instead of a generic CLI failure", async () => {
+  it("recommends gateway start for an installed local gateway", async () => {
     mocks.scan.mockResolvedValue(createUnreachableScan());
-    await expect(runStatusDeep()).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      message: "Gateway is unreachable",
-    });
-  });
-
-  it("recommends a local start only for a local gateway", async () => {
-    mocks.scan.mockResolvedValue(createUnreachableScan("local"));
-    await expect(runStatusDeep()).rejects.toMatchObject({
+    await expect(runStatusDeep(true)).rejects.toMatchObject({
       name: "ExpectedCliError",
       message: "Gateway is unreachable",
       humanOutput:
@@ -159,9 +151,19 @@ describe("status --deep gateway health failures", () => {
     });
   });
 
+  it("recommends gateway install when no local service is installed", async () => {
+    mocks.scan.mockResolvedValue(createUnreachableScan("local"));
+    await expect(runStatusDeep(false)).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "Gateway is unreachable",
+      humanOutput:
+        "Gateway is unreachable\nRun `openclaw gateway install` to set up a managed gateway.",
+    });
+  });
+
   it("keeps the remote recovery hint target-neutral", async () => {
     mocks.scan.mockResolvedValue(createUnreachableScan("remote"));
-    await expect(runStatusDeep()).rejects.toMatchObject({
+    await expect(runStatusDeep(false)).rejects.toMatchObject({
       name: "ExpectedCliError",
       message: "Gateway is unreachable",
       humanOutput:
