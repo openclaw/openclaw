@@ -1,37 +1,40 @@
-import { note as clackNote } from "@clack/prompts";
 import { describe, expect, it } from "vitest";
 import { stripAnsi, visibleWidth } from "./ansi.js";
-import {
-  noteToStream,
-  resolveNoteColumns,
-  resolveNoteOutputColumns,
-  wrapNoteMessage,
-} from "./note.js";
+import { noteToStream, resolveNoteColumns, wrapNoteMessage } from "./note.js";
+
+function renderNote(message: string) {
+  const writes: string[] = [];
+  const output = {
+    columns: 80,
+    write(chunk: string) {
+      writes.push(chunk);
+      return true;
+    },
+  } as unknown as NodeJS.WriteStream;
+
+  noteToStream(message, "Note", output);
+  return stripAnsi(writes.join(""));
+}
 
 describe("wrapNoteMessage", () => {
-  it.each([["Unicode paragraph separator", "\u2029"]])(
-    "preserves note text across %s line endings",
-    (_label, separator) => {
-      const input = ["First paragraph.", "", "- Second paragraph."].join(separator);
-      const writes: string[] = [];
-      const output = {
-        columns: 80,
-        write(chunk: string) {
-          writes.push(chunk);
-          return true;
-        },
-      } as unknown as NodeJS.WriteStream;
+  it("preserves note whitespace across Unicode paragraph separator line endings", () => {
+    const input = ["First paragraph.", "", "- Workspace: ~/two  spaces"].join("\u2029");
+    const rendered = renderNote(input);
+    expect(rendered).toContain("First paragraph.");
+    expect(rendered).toContain("- Workspace: ~/two  spaces");
+    expect(wrapNoteMessage(input, { columns: 80 })).toBe(input.replaceAll("\u2029", "\n"));
+  });
 
-      noteToStream(input, "Note", output);
-
-      const rendered = stripAnsi(writes.join(""));
-      expect(rendered).toContain("First paragraph.");
-      expect(rendered).toContain("- Second paragraph.");
-      expect(wrapNoteMessage(input, { columns: 80 })).toBe(
-        "First paragraph.\n\n- Second paragraph.",
-      );
-    },
-  );
+  it.each([
+    [
+      "A longer introduction that wraps: /tmp/two  spaces/file",
+      "A longer introduction that\nwraps: /tmp/two  spaces/file",
+    ],
+    ["  - use  two spaces and another token", "  - use  two spaces and\n    another token"],
+    ["1234567890123456789012345\t\tx", "1234567890123456789012345 x"],
+  ])("preserves literal spaces and normalizes other separators: %s", (input, expected) => {
+    expect(wrapNoteMessage(input, { maxWidth: 30 })).toBe(expected);
+  });
 
   it("preserves long file-like underscore tokens for copy safety", () => {
     const input =
@@ -41,32 +44,15 @@ describe("wrapNoteMessage", () => {
   });
 
   it("clamps bogus TTY columns before clack wraps note text", () => {
-    expect(resolveNoteColumns(undefined)).toBe(80);
-    expect(resolveNoteColumns(0)).toBe(80);
-    expect(resolveNoteColumns(1)).toBe(80);
-    expect(resolveNoteColumns(79)).toBe(80);
-    expect(resolveNoteColumns(120)).toBe(120);
+    expect([undefined, 0, 1, 79, 120].map(resolveNoteColumns)).toEqual([80, 80, 80, 80, 120]);
   });
 
   it("widens note output columns so clack does not re-wrap copy-sensitive lines", () => {
-    const wrapped = wrapNoteMessage(
-      [
-        "- Found 1 session lock file.",
-        "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock pid=86519 (alive) age=2m47s stale=no",
-      ].join("\n"),
-      { columns: 80 },
-    );
-    const writes: string[] = [];
-    const output = {
-      columns: resolveNoteOutputColumns(wrapped, 80),
-      write(chunk: string) {
-        writes.push(chunk);
-        return true;
-      },
-    } as unknown as NodeJS.WriteStream;
-    clackNote(wrapped, "Session locks", { output });
-
-    const rendered = writes.join("");
+    const message = [
+      "- Found 1 session lock file.",
+      "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock pid=86519 (alive) age=2m47s stale=no",
+    ].join("\n");
+    const rendered = renderNote(message);
     expect(rendered).toContain(".jsonl.lock");
     expect(rendered).not.toContain(".js\n");
     expect(rendered).toContain(

@@ -25,6 +25,7 @@ const batch: DecisionBatchV2 = {
   it.each([
     "decision-models/baseten-elephant-9b-latest",
     "decision-models/baseten-mammoth-27b-latest",
+    "decision-models/baseten-joey-2b-latest",
   ])(
     "evaluates a mixed rubric with %s",
     async (id) => {

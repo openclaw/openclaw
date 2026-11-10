@@ -47,8 +47,9 @@ A newly committed visible result refreshes the destination's idle freshness, so 
 If the destination chat belongs to a different agent, the result is sent but not added to either agent’s conversation.
 Channel-native payloads without a text projection are sent without a conversation entry and record a warning.
 
-Execution context is separate: `isolated` starts without conversation history, `current` reads bounded creating-conversation context in a detached run, and `session:<key>` uses a persistent execution session. The private run transcript and tool history are not copied into the destination.
+Execution context is separate: `isolated` starts without conversation history, `current` reads bounded creating-conversation context in a child run of that conversation, and `session:<key>` uses a persistent execution session. The private run transcript and tool history are not copied into the destination.
 When a persistent execution session is already the destination conversation, its final assistant message is the result; OpenClaw does not append a second copy.
+For an announcement without an external route, committing that result also satisfies required delivery for the persistent-session run.
 
 Editing explicit delivery coordinates moves future results to that chat or topic. The captured creating-conversation binding remains immutable once recorded (an older job that names its conversation only by key records it when [bound](/cli/cron#binding-older-jobs-to-their-conversation)); changing the public `sessionKey` does not redirect implicit delivery. For an explicit external destination, starting a new session or resetting the destination chat does not stop delivery: the result goes into that chat's current session. Implicit creator-bound delivery requires the captured creating conversation to exist and match its generation before resolving a remembered external route. Implicit agent-turn announcements retain that generation through sending and recovery; routeless WebChat results also require it at commit. If the creating conversation was deleted or reset, recreate the job or configure an explicit external destination. Command and script announcements keep an already resolved route without a source-generation check, matching their existing behavior. Cancellation does not interrupt the destination's active turn. A verified matching `message` tool send suppresses automatic resend, not the conversation result.
 
@@ -83,6 +84,8 @@ services. Leaving the policy unset keeps strict behavior.
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
+When an announcement omits `delivery.accountId`, OpenClaw uses the remembered session account, then the agent's channel binding, then the channel's configured default account. Set an explicit account to override this selection.
+
 For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. Changing the agent, delivery mode, channel, account, or recipient clears the previous topic when you save. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
 
 On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
@@ -92,6 +95,10 @@ Channel announcements retry transient failures only when no payload may have rea
 When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before the scheduler falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes (`channel:<id>`, `user:<id>`, `imessage:<handle>`, `sms:<number>`) stay channel-owned target syntax, not provider selectors.
 
 For isolated jobs, chat delivery is shared: if a chat route is available, the agent can use the `message` tool even with `--no-deliver`. If the agent sends to the configured/current target, OpenClaw skips the fallback announce. Otherwise `announce`, `webhook`, and `none` only control what the runner does with the final reply after the agent turn.
+
+For Claude CLI runs, text-only announcements on channels that prefer the final
+answer use that final message, not earlier progress narration. Silence and
+structured-media delivery keep their existing rules.
 
 A send to the delivery target does not end the job's turn unless it sets `final: true`, so steps after the send, such as updating a state file, still run.
 
@@ -108,9 +115,43 @@ an active bound Gateway.` Run the job on its owning Gateway instead of copying
 connection fields into the prompt. The next send then uses the live binding,
 including current cancellation and tool-policy withdrawal.
 
-When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. If it must recover a saved route, it reads the selected agent’s session store—even when the session key is the unqualified `global` alias. Explicit delivery targets still take precedence. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
+When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. If it must recover a saved route, it reads the selected agent’s session store—even when the session key is the unqualified `global` alias. Explicit delivery targets still take precedence. When a [default destination](#default-destinations) applies to the job's creator or agent, no chat route is stored and the default is used instead. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
+
+### Default destinations
+
+Set `cron.delivery` to send every announce job that names no route of its own to one place, `cron.agents.<agentId>.delivery` to give one agent's jobs their own place, and `cron.creators.<profileId>.delivery` to give the jobs one person created their own place. For example, to send results to topic 1 of a Telegram forum unless a job says otherwise:
+
+```json5
+{
+  cron: {
+    delivery: { channel: "telegram", to: "-100123456789", threadId: 1 },
+    failureAlert: { channel: "telegram", to: "-100123456789:topic:1" },
+  },
+}
+```
+
+The job owner is its `agentId`, else the agent in its session key, else the default agent. The job creator is the Gateway profile recorded when the job was created: the operator profile that created it, or the human profile that asked an agent to create it. Jobs created before creator recording, and jobs whose creator is channel-only, unknown, an agent with no delegating human, or the system, have no creator default. Primary results resolve in this order:
+
+| Job delivery                                                                                    | Destination                                                                          |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Names a route: `channel` other than `last`, `to`, `threadId`, `accountId`, or `target: "owner"` | The job's own route (defaults ignored)                                               |
+| `announce` (or omitted) with no route, creator has `cron.creators.<profileId>.delivery`         | The creator default                                                                  |
+| `announce` (or omitted) with no route, owner agent has `cron.agents.<agentId>.delivery`         | The agent default                                                                    |
+| `announce` (or omitted) with no route, only `cron.delivery` set                                 | The Gateway default                                                                  |
+| `announce` (or omitted) with no route, no default configured                                    | Unchanged: creating conversation, remembered route, or the single configured channel |
+| `none` or `webhook`                                                                             | Unchanged: defaults never add a chat destination                                     |
+
+- The most specific default wins whole. A creator default replaces the agent and Gateway defaults, and an agent default replaces the Gateway default, instead of merging fields, because a recipient, thread, and account belong to the channel that supplied them.
+- A default replaces the creating-conversation route for route-less announce jobs in every session target, including `current` and `main`. Results then land in the default destination, not the creating chat. To keep a job in a particular chat, set its `channel` and `to`.
+- Why the creator outranks the agent: the person who set a job up chose where their results go, and that choice should follow them across whichever agent they used. An agent is a shared runtime that can serve several people, so its default is broader.
+- An agent creating a job from a chat does not pin that chat as the job's route when a default applies to the requesting person or the job's agent; the job stays route-less and follows the configured default.
+- `none` stays silent. A default does not give a `none` job a `message`-tool destination either.
+- Defaults resolve at run time. Stored jobs are never rewritten, so changing or removing a default moves future results of every job that relies on it. Jobs that already store an explicit route, including routes pinned at creation by earlier releases, keep it.
+- A default's `channel` must name an installed channel plugin; config validation rejects an unknown one, and `openclaw doctor` lists defaults whose channel plugin is not active. `cron.agents` keys that differ only by case are rejected.
+
+Failure alerts have the same layers. `cron.creators.<profileId>.failureAlert` and `cron.agents.<agentId>.failureAlert` set the route fields (`mode`, `channel`, `to`, `threadId`, `accountId`) for that person's or agent's jobs; the creator route wins, and either replaces the `cron.failureAlert` route fields whole. Threshold, cooldown, skipped-run counting, and `enabled` stay Gateway-wide in `cron.failureAlert`. Failure routes also accept an optional `threadId`. For Telegram topics, use `to: "-100123456789", threadId: 1`; the existing `to: "-100123456789:topic:1"` form still works. No migration is required. Without these optional defaults, existing delivery and creating-conversation fallback behavior is unchanged. When no failure route is configured, alerts fall back to the job's primary announce destination, which includes a configured default destination. A `none` job still gets failure alerts through a configured failure route, as before.
 
 ### Owner delivery and direct messages
 
@@ -162,8 +203,8 @@ Startup recovery reconciles incidents from saved run outcomes without sending hi
 Failure notification routes resolve in this order:
 
 1. Route fields in the job's `failureAlert` object.
-2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). A `cron.failureDestination` block is not read directly; `openclaw doctor --fix` merges it into the global object.
-3. The job's primary announce target.
+2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `threadId`, `accountId`), or over the creator's `cron.creators.<profileId>.failureAlert` route, else the owning agent's `cron.agents.<agentId>.failureAlert` route, when one exists. A `cron.failureDestination` block is not read directly; `openclaw doctor --fix` merges it into the global object.
+3. The job's primary announce target, including a configured [default destination](#default-destinations).
 
 - `job.failureAlert: false` disables execution and required-delivery failure alerts for that job. The auto-disable safety notification remains active.
 - Global `cron.failureAlert.enabled: false` disables inherited notifications. A per-job `failureAlert` object explicitly re-enables that job; `enabled: true` explicitly enables the global policy.
@@ -174,22 +215,30 @@ Failure notification routes resolve in this order:
 - `failureAlert.includeSkipped: true` opts a job or global automation alert policy into other repeated skipped-run alerts. Skipped runs keep a separate consecutive-skip counter, so they do not affect execution-error backoff.
 - `openclaw automations edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
 
-In the Control UI, custom failure alerts show stored threshold, cooldown, and mode overrides. An omitted channel displays the neutral `last` choice without storing it. Leave the threshold or cooldown blank, or choose **Inherit global setting** for alert mode, to use the Gateway's normal global and routing defaults. Cooldowns accept decimal seconds with millisecond precision, including `0` for no cooldown; for example, `1.001` seconds preserves `1001` milliseconds. Editing other job fields or cloning a job preserves its alert policy, including the skipped-run setting.
+In the Control UI, custom failure alerts show stored threshold, cooldown, and mode overrides. An omitted channel displays the neutral `last` choice without storing it. Leave the threshold or cooldown blank, or choose **Inherit global setting** for alert mode, to use the Gateway's normal global and routing defaults. Cooldowns accept decimal seconds with millisecond precision, including `0` for no cooldown; for example, `1.001` seconds preserves `1001` milliseconds. Editing other job fields or cloning a job preserves its alert policy, including its explicit thread/topic and skipped-run settings. Changing the destination clears a carried topic unless the same change supplies a replacement, matching normal delivery.
 
 A required completion-delivery failure is distinct from an execution failure: a run can record `status: "ok"` with `completionStatus: "failed"`. It does not increment the execution-failure streak or backoff. A delivery-failure alert can notify through a resolved alternate failure destination without waiting for `failureAlert.after`. Repeated delivery failures also form one incident. Alerts for changed failures, including the first delivery failure after an execution alert, honor the shared job/global `failureAlert.cooldownMs` (default 1 hour); suppressed alerts still leave the delivery failure in run history. Skipped runs and quiet trigger checks do not clear a delivery incident or its cooldown; successful completion does. The scheduler never retries the already-failed primary route for an alert.
 
 Chat failure notifications include the run start time in the agent's configured user timezone. When `gateway.publicOrigin` is configured and the Control UI is enabled, they also include an `Inspect` link to the automation run. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field and construct their own links.
 Chat notifications show normalized failure causes or allowlisted producer facts for known command and script failures. Arbitrary commands, paths, provider bodies, secrets, delivery errors, skip reasons, diagnostics, and stack/error text remain in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
 
+Billing and upstream-service failure notifications also explain the next step:
+resolve billing with the provider account owner, retry after a service failure,
+or choose another provider for the automation.
+
 #### Owner-conversation repair
 
-Repair is on by default. Upgrading changes what you see for owned automations that alert in chat: the first failure alert of a streak becomes a repair request in the conversation that created the job, and the alert is the fallback. A job with `failureAlert: false` gets neither.
+Repair is on by default for owned automations with inherited failure destinations: the first failure alert of a streak becomes a repair request in the conversation that created the job, and the alert is the fallback. A job with `failureAlert: false` gets neither.
 
-When a job created from a conversation (it has an owner session) reaches its execution-failure alert threshold and the alert would go to chat (`announce` mode), OpenClaw sends a repair request to that owner conversation instead of the alert. The request names the job and includes its schedule, name, payload, and last error; the name, payload, and error are marked as untrusted data. Command jobs and on-exit or stream schedules are operator-only and alert as before.
+An explicitly selected job-level failure destination bypasses repair: setting `channel`, `to`, or `accountId` in `job.failureAlert` or `job.delivery.failureDestination` sends the alert directly to the resolved failure route, even when the job has an owner conversation. No separate repair opt-out key is needed. Destinations inherited from the primary announce route or global `cron.failureAlert` keep repair-first behavior. Overrides that only tune `after`, `cooldownMs`, or `includeSkipped`, or only select `mode`, do not bypass repair. Explicit destinations still honor alert opt-outs, thresholds, cooldowns, quick-retry holds, and incident deduplication. Terminal one-shot failures still bypass the threshold as described above.
 
-The conversation handles the request as an ordinary agent turn, as if it had received a message: it runs in that conversation's session, with its transcript, workspace, and tool policy, and the reply goes to the conversation's own route, including its thread or topic. Heartbeat settings do not apply. For recurring jobs, a transient outage gets no reply, a problem it can fix in the workspace (for example the helper script or instructions file the job follows) gets fixed with a one-line note, and otherwise it asks you for exactly what it needs. For a terminal one-shot failure, the agent does the still-needed work or schedules a corrected automation, stays silent if the work is no longer needed, or asks you for what is missing. The request does not carry your sender identity, so owner-only tools such as automation control stay unavailable; changing the job itself happens in your reply turn.
+When an eligible job created from a conversation (it has an owner session) reaches its execution-failure alert threshold and the inherited alert would go to chat (`announce` mode), OpenClaw sends a repair request to that owner conversation instead of the alert. The request names the job and includes its schedule, name, payload, and last error; the name, payload, and error are marked as untrusted data. Command jobs and on-exit or stream schedules are operator-only and alert as before.
+
+The conversation handles the request as a system turn: it runs in that conversation's session, with its transcript, workspace, and tool policy, and the reply goes to the conversation's own route, including its thread or topic. Heartbeat settings do not apply. For recurring jobs, a transient outage gets no reply, a problem it can fix in the workspace (for example the helper script or instructions file the job follows) gets fixed with a one-line note, and otherwise it asks you for exactly what it needs. For a terminal one-shot failure, the agent does the still-needed work or schedules a corrected automation, stays silent if the work is no longer needed, or asks you for what is missing. The repair turn acts for the job's requester, the same person or operator the job's own runs act for. When that requester is still an owner, the turn keeps owner-only tools such as automation control, so it can read the job's runs and update the job it repairs; OpenClaw rechecks owner status before each owner-only action. When the requester is not an owner, or no longer is, the turn can only read the automations that conversation can see. A job that records no requester uses the conversation owner's current access. Scheduler notices about a job, such as the auto-disable notice, follow the same rule.
 
 The scheduler's repair instructions stay in the model transcript, not the chat feed. Chat shows only the agent's repair note or request for help; pending inputs, live updates, and reloaded history omit the internal request.
+When the scheduler's brief permits `NO_REPLY`, a silent repair is accepted without
+an empty-reply error in WebChat. Public provenance labels do not grant that permission.
 
 Each failure streak gets at most one repair request, even if its cause changes later. The alert is sent as before when the job has no owner conversation or is excluded from repair. If a one-shot's repair request cannot start, the normal failure alert is sent instead. Recurring jobs keep running while the repair turn works. A failed run only verifies the repair if it started after the repair turn finished; earlier runs still count toward the failure streak but do not trigger the unsuccessful-repair alert. If the repair turn exceeds its normal agent timeout, the next failure sends the alert instead. Later alerts in the streak follow the usual cooldown. A successful run clears the streak silently. Existing incidents recorded before settlement tracking was added keep the previous behavior: the next failure after the request can alert.
 

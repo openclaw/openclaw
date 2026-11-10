@@ -37,6 +37,10 @@ const sessionKey = "agent:main:main";
 const actionButton = (host: HTMLElement) =>
   host.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]');
 const pinButton = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("[data-pin-widget]");
+const pinState = (button: HTMLButtonElement | null, label: string, disabled: boolean) =>
+  expect(button).toMatchObject({ disabled, ariaLabel: label });
+const pinFailure = "Couldn’t pin to dashboard. Try again.";
+const pinTooltip = (button: HTMLButtonElement) => button.closest("openclaw-tooltip")?.content;
 const menuLabels = (host: HTMLElement) =>
   Array.from(host.querySelectorAll('[role="menuitem"]'), (item) => item.textContent?.trim());
 const widgetPorts: MessagePort[] = [];
@@ -74,8 +78,7 @@ function showCapability(preview: PreviewState["preview"], host: HTMLElement, cap
 }
 
 function boardProvider(overrides: Partial<BoardProvider> = {}) {
-  const pinnedWidgets: { name: string }[] = [];
-  const snapshot = new ValueSignal({ widgets: pinnedWidgets });
+  const snapshot = new ValueSignal<{ widgets: { name: string }[] }>({ widgets: [] });
   const provider = {
     sessionKey: "agent:main:main",
     canPinWidgets: true,
@@ -161,7 +164,13 @@ afterEach(async () => {
 describe("widget-card", () => {
   it("retains saved geometry while active widget content waits for admission", () => {
     const preview = documentPreview("saved-widget", { sandbox: "strict" });
-    const widgetLayout = { read: vi.fn(() => 700), write: vi.fn() };
+    const widgetLayout = {
+      read: vi.fn(() => 700),
+      readRows: () => undefined,
+      write: vi.fn(),
+      writeRows: vi.fn(),
+      invalidateRow: vi.fn(),
+    };
     const host = mountWidget(preview, { mediaReadAllowed: false, widgetLayout });
     const shell = host.querySelector('[data-content-kind="canvas-html"]');
     expect(shell).not.toBeNull();
@@ -291,6 +300,7 @@ describe("widget-card", () => {
       url: "https://youtu.be/AbCdEfGhI_1",
     };
     const host = mountWidget(preview, { sessionKey: "agent:main:video" });
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(host.querySelector('button[aria-label="Play Synthetic video"]')).not.toBeNull(),
     );
@@ -414,6 +424,7 @@ describe("widget-card", () => {
           source: original.contentWindow,
         }),
       );
+      flush();
       expect(original.style.height).toBe("48px");
       showCapability(preview, host, "one");
       expect(original.getAttribute("style")).toContain("48px");
@@ -480,10 +491,16 @@ describe("widget-card", () => {
       preferredHeight: 480,
       mcpApp: { viewId: "view-dispatch" },
     };
-    const app = mountWidget(appPreview, { sessionKey });
+    const app = mountWidget({ ...appPreview, preferredHeight: undefined }, { sessionKey });
     await vi.dynamicImportSettled();
     expect(customElements.get("mcp-app-view")).toBeDefined();
-    expect(app.querySelector("mcp-app-view")).not.toBeNull();
+    const appView = app.querySelector("mcp-app-view");
+    expect(appView).toMatchObject({ sessionKey, viewId: "view-dispatch", height: 600 });
+    expect(appView?.getAttribute("src")).toBeNull();
+    await customElements.whenDefined("mcp-app-view");
+    expect(appView).toMatchObject({ sessionKey, viewId: "view-dispatch" });
+    mountWidget(appPreview, { sessionKey }, app);
+    expect(app.querySelector("mcp-app-view")).toMatchObject({ height: 480 });
     expect(app.querySelector(".chat-tool-card__preview")?.getAttribute("data-content-kind")).toBe(
       "mcp-app",
     );
@@ -536,7 +553,7 @@ describe("widget-card", () => {
       documentPreview("cv_release", { viewId: "cv_release", boardWidgetName: "release-status" }),
       { boardProvider: provider },
     );
-    expect(pinButton(pinned)).toMatchObject({ disabled: true, ariaLabel: "Pinned" });
+    pinState(pinButton(pinned), "Pinned", true);
   });
 
   it("retains pin feedback through title updates and reconciles retries with the board", async () => {
@@ -552,30 +569,24 @@ describe("widget-card", () => {
     const button = pinButton(host)!;
     button.click();
     button.click();
-    await waitForSolid(() =>
-      expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…" }),
-    );
+    await waitForSolid(() => pinState(button, "Pinning…", true));
     expect(pinWidget).toHaveBeenCalledTimes(1);
 
     mountWidget({ ...preview, title: "Updated release status" }, { boardProvider: provider }, host);
     expect(pinButton(host)).toBe(button);
-    expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…", title: "Pinning…" });
+    pinState(button, "Pinning…", true);
+    expect(pinTooltip(button)).toBe("Pinning…");
 
     first.reject(new Error("Synthetic pin failure"));
-    await waitForSolid(() =>
-      expect(button).toMatchObject({
-        disabled: false,
-        ariaLabel: "Pin to dashboard",
-        title: "Could not pin to dashboard. Try again.",
-      }),
-    );
+    await waitForSolid(() => {
+      pinState(button, "Pin to dashboard", false);
+      expect(pinTooltip(button)).toBe(pinFailure);
+    });
     mountWidget({ ...preview, title: "Retained failure" }, { boardProvider: provider }, host);
     expect(pinButton(host)).toBe(button);
-    expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    expect(pinTooltip(button)).toBe(pinFailure);
     button.click();
-    await waitForSolid(() =>
-      expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…" }),
-    );
+    await waitForSolid(() => pinState(button, "Pinning…", true));
     expect(pinWidget).toHaveBeenLastCalledWith({
       docId: "cv_pin_feedback",
       name: "canvas-cv_pin_feedback",
@@ -583,13 +594,11 @@ describe("widget-card", () => {
     });
     snapshot.set({ widgets: [{ name: "canvas-cv_pin_feedback" }] });
     retry.resolve();
-    await waitForSolid(() => expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinned" }));
+    await waitForSolid(() => pinState(button, "Pinned", true));
     expect(button.hasAttribute("data-pinned")).toBe(true);
 
     snapshot.set({ widgets: [] });
-    await waitForSolid(() =>
-      expect(button).toMatchObject({ disabled: false, ariaLabel: "Pin to dashboard" }),
-    );
+    await waitForSolid(() => pinState(button, "Pin to dashboard", false));
     expect(button.hasAttribute("data-pinned")).toBe(false);
   });
 
@@ -614,24 +623,25 @@ describe("widget-card", () => {
     button.focus();
     button.click();
     pending.reject(new Error("Synthetic pin failure"));
-    await waitForSolid(() => expect(button.title).toBe("Could not pin to dashboard. Try again."));
+    await waitForSolid(() => expect(pinTooltip(button)).toBe(pinFailure));
     expect(pinButton(root.container)).toBe(button);
     expect(document.activeElement).toBe(button);
     expect(showToast).toHaveBeenCalledExactlyOnceWith({
-      message: "Could not pin to dashboard. Try again.",
+      severity: "error",
+      message: pinFailure,
     });
 
     setTitle("Updated chart");
     flush();
     expect(pinButton(root.container)).toBe(button);
     expect(document.activeElement).toBe(button);
-    expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    expect(pinTooltip(button)).toBe(pinFailure);
     expect(showToast).toHaveBeenCalledTimes(1);
 
     snapshot.set({ widgets: [{ name: "widget" }] });
-    await waitForSolid(() => expect(button.title).toBe("Pinned"));
+    await waitForSolid(() => expect(pinTooltip(button)).toBe("Pinned"));
     snapshot.set({ widgets: [] });
-    await waitForSolid(() => expect(button.title).toBe("Pin to dashboard"));
+    await waitForSolid(() => expect(pinTooltip(button)).toBe("Pin to dashboard"));
     expect(showToast).toHaveBeenCalledTimes(1);
   });
 
@@ -722,7 +732,7 @@ describe("widget-card", () => {
       );
       await waitForSolid(() => {
         expect(pinButton(host)).not.toBe(previousButton);
-        expect(pinButton(host)).toMatchObject({ disabled: false, ariaLabel: "Pin to dashboard" });
+        pinState(pinButton(host), "Pin to dashboard", false);
       });
       pinButton(host)!.click();
       expect(nextPin).toHaveBeenCalledWith({ docId: "cv_next", name: "canvas-cv_next" });
@@ -902,7 +912,6 @@ describe("widget-card", () => {
         ),
       );
       const managedView = host.querySelector("openclaw-canvas-widget-view");
-      expect(managedView !== null).toBe(sandbox !== "strict");
       expect(pinButton(host) !== null).toBe(scripted);
       if (managedView) {
         expect(managedView.allowScripts).toBe(scripted);

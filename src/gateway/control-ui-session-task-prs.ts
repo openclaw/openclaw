@@ -10,9 +10,7 @@ import type { ControlUiSessionTaskPullRequest } from "./control-ui-contract.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { hasEntry, type EntryRow, type Lookup, type Row } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import type { createSessionListEntryFilter } from "./session-sharing.js";
-
-type PublicationFilter = ReturnType<typeof createSessionListEntryFilter>;
+type PublicationFilter = ((row: EntryRow) => boolean) | undefined;
 
 type PublicationNode = {
   query: Lookup;
@@ -25,19 +23,54 @@ type PublicationRow = Pick<EntryRow, "agentId" | "key" | "storeTarget" | "genera
 };
 // Lineage revisions own structural facts, never a viewer's permission to consume them.
 const nodesByRevision = new WeakMap<object, Map<EntryRow["generation"], PublicationNode>>();
-// Display rows retire with sharing publications, independently of long-lived lineage.
-const rowsByRevision = new WeakMap<object, Map<PublicationNode, Row>>();
+// Exact owner publications retire rows without evicting unrelated task audiences.
+const rowsByProjection = new WeakMap<
+  SessionRowProjection,
+  Map<string, WeakMap<PublicationNode, Row>>
+>();
+
+function publicationRows(projection: SessionRowProjection) {
+  if (!projection.sharingRevision) {
+    return undefined;
+  }
+  let rows = rowsByProjection.get(projection);
+  if (!rows) {
+    const retained = new Map<string, WeakMap<PublicationNode, Row>>();
+    projection.onFactsChange((change) => {
+      if (change.kind === "reset") {
+        retained.clear();
+      } else {
+        retained.delete(change.key);
+      }
+    });
+    projection.onSelectionChange((change) => {
+      if (change.kind === "reset") {
+        retained.clear();
+      }
+    });
+    rowsByProjection.set(projection, retained);
+    rows = retained;
+  }
+  return rows;
+}
 
 function readPublicationRow(
   projection: SessionRowProjection,
   node: PublicationNode,
-  rows: Map<PublicationNode, Row> | undefined,
+  rows: ReturnType<typeof publicationRows>,
 ) {
-  let row = rows?.get(node);
+  let row = rows?.get(node.query.key)?.get(node);
   if (!row) {
     row = projection.capture(node.query);
     if (row) {
-      rows?.set(node, row);
+      if (rows) {
+        let keyed = rows.get(node.query.key);
+        if (!keyed) {
+          keyed = new WeakMap();
+          rows.set(node.query.key, keyed);
+        }
+        keyed.set(node, row);
+      }
     }
   }
   if (row && (row.sharingEntry !== row.storedEntry || row.entryAcquisitionPending)) {
@@ -51,7 +84,7 @@ function allowsPublicationRow(row: Row | undefined, allows: PublicationFilter): 
     hasEntry(row) &&
     !row.entry.incognito &&
     !isIncognitoSessionKey(row.key) &&
-    allows?.(row.key, row.entry) !== false
+    allows?.(row) !== false
   );
 }
 
@@ -63,8 +96,7 @@ function selectTaskPublicationSessions(
 ) {
   const revision = projection.readTaskPublicationRevision();
   const nodes = getOrCreateWeakOwnerMap(nodesByRevision, revision);
-  const sharing = projection.sharingRevision;
-  const rows = sharing ? getOrCreateWeakOwnerMap(rowsByRevision, sharing) : undefined;
+  const rows = publicationRows(projection);
   const prepare = (row: PublicationRow): PublicationNode => {
     const retained = nodes.get(row.generation);
     if (retained) {
@@ -131,8 +163,7 @@ export function prepareTaskPublicationSessions(
       const allows = getAllows();
       void projection.state;
       if (prepared.revision === projection.readTaskPublicationRevision()) {
-        const sharing = projection.sharingRevision;
-        const rows = sharing ? getOrCreateWeakOwnerMap(rowsByRevision, sharing) : undefined;
+        const rows = publicationRows(projection);
         const unchanged = prepared.visits.every(({ node, duplicate, included }) => {
           const row = readPublicationRow(projection, node, rows);
           return duplicate || allowsPublicationRow(row, allows) === included;

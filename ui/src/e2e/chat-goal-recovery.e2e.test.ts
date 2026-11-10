@@ -53,9 +53,12 @@ suite.define(() => {
       await exactButton(page, "Edit goal").click();
       const objective = page.locator(".agent-chat__composer-combobox textarea");
       const save = exactButton(page, "Save goal");
-      const invalid = page.getByText("Goal update is invalid. Check the objective and try again.", {
-        exact: true,
-      });
+      const invalid = page.getByText(
+        "Couldn’t update the goal. Check the objective and try again.",
+        {
+          exact: true,
+        },
+      );
       await objective.fill("x".repeat(16_001));
       await save.click();
       await expect
@@ -83,6 +86,7 @@ suite.define(() => {
         goal: committed,
       });
       await expect.poll(() => save.count()).toBe(0);
+      await page.clock.install();
       // Release the Goal refresh after the ACK to exercise the losing read order.
       const lists = await gateway.deferNext("sessions.list");
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -90,6 +94,7 @@ suite.define(() => {
         agentId: "main",
         reason: "goal",
       });
+      await page.clock.fastForward(5_001);
       await gateway.waitForRequest("sessions.list", { after: lists });
       await gateway.resolveDeferred("sessions.list");
       await expect
@@ -142,7 +147,9 @@ suite.define(() => {
         await original.click();
         if (legacyScope) {
           await page
-            .getByText("Goal update was not sent because its recovery request could not be saved.")
+            .getByText(
+              "Couldn’t save the recovery request. Free browser storage and try again. Your goal update wasn’t sent.",
+            )
             .waitFor();
           expect(await gateway.getRequests(method)).toHaveLength(0);
           expect(

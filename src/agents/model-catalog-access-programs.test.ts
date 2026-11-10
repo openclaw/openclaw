@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
-import { resolveModelCatalogAccessPrograms } from "./model-catalog-access-programs.js";
+import {
+  projectModelCatalogAccessPrograms,
+  resolveCyberAccessProgramForProvider,
+  resolveModelCatalogAccessPrograms,
+} from "./model-catalog-access-programs.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 const route = {
@@ -115,4 +119,53 @@ it("uses native-owned observations only while native account ownership is curren
       runtimeId: "codex",
     }),
   ).toBeUndefined();
+});
+
+it.each(["openclaw", "codex"])(
+  "publishes a Standard baseline without Daybreak entitlement for %s",
+  (runtimeId) => {
+    const params = {
+      snapshot: { ...snapshot, providerOutcomes: [] },
+      entry,
+      evaluation,
+      runtimeId,
+      isCurrent: () => true,
+    };
+    expect(projectModelCatalogAccessPrograms({ ...params, config: {} })).toEqual({
+      cyberAccessProgramDefault: "standard",
+    });
+    expect(
+      projectModelCatalogAccessPrograms({
+        ...params,
+        config: {
+          agents: { defaults: { params: { accessPrograms: { cyber: "daybreak_blue" } } } },
+        },
+      }),
+    ).toEqual({ cyberAccessProgramDefault: "daybreak_blue" });
+    expect(
+      projectModelCatalogAccessPrograms({
+        ...params,
+        entry: { ...entry, provider: "other" },
+        config: {},
+      }),
+    ).toEqual({});
+    expect(
+      projectModelCatalogAccessPrograms({
+        ...params,
+        config: { agents: { defaults: { params: { accessPrograms: {} } } } },
+      }),
+    ).toEqual({});
+  },
+);
+
+it.each([
+  ["daybreak_blue", "anthropic", "standard"],
+  ["daybreak_red", "claude-cli", "standard"],
+  ["daybreak_blue", "OpenAI", "daybreak_blue"],
+  // Codex CLI is still an OpenAI model; its runtime keeps the explicit unsupported error.
+  ["daybreak_blue", "codex-cli", "daybreak_blue"],
+  ["standard", "anthropic", "standard"],
+  [undefined, "anthropic", undefined],
+] as const)("applies saved Access %s on %s as %s", (program, provider, expected) => {
+  expect(resolveCyberAccessProgramForProvider(program, provider).program).toBe(expected);
 });

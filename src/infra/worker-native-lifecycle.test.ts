@@ -161,7 +161,7 @@ function startSupervisor() {
 function createRequest(
   id: number,
   extra: Pick<NativeWorkerRequest & { type: "create" }, "resource" | "taskPort"> = {},
-): NativeWorkerRequest {
+): Extract<NativeWorkerRequest, { type: "create" }> {
   return {
     type: "create",
     id,
@@ -173,7 +173,7 @@ function createRequest(
   };
 }
 
-it("keeps the supervisor alive when a resource attachment endpoint is rejected synchronously", async () => {
+it("keeps the supervisor usable after resource attachment and worker entry failures", async () => {
   const supervisor = startSupervisor();
   const types = (id: number) =>
     supervisor.replies.filter((reply) => reply.id === id).map((reply) => reply.type);
@@ -195,20 +195,28 @@ it("keeps the supervisor alive when a resource attachment endpoint is rejected s
   await supervisor.until(() => types(1).includes("stop-error"));
   task.port1.close();
 
-  expect(supervisor.exitCode()).toBeUndefined();
   expect(types(1)).toEqual(["created", "error", "execution-exit", "stop-error"]);
   const failure = supervisor.replies.find((reply) => reply.id === 1 && reply.type === "error");
   expect(failure).toMatchObject({
     error: { name: "RangeError", message: expect.stringContaining("70000") },
   });
 
-  supervisor.post(createRequest(2));
-  await supervisor.until(() => types(2).includes("created"));
-  supervisor.post({ type: "post", id: 2, value: "ping", transferList: [] });
-  await supervisor.until(() => types(2).includes("message"));
-  supervisor.post({ type: "stop", id: 2 });
+  const missingEntry = new URL("./missing-native-worker.mjs", import.meta.url).href;
+  supervisor.post({ ...createRequest(2), filename: { kind: "url", value: missingEntry } });
   await supervisor.until(() => types(2).includes("stopped"));
+  expect(
+    supervisor.replies.find((reply) => reply.id === 2 && reply.type === "error"),
+  ).toMatchObject({
+    error: { message: expect.stringContaining("missing-native-worker.mjs") },
+  });
+
+  supervisor.post(createRequest(3));
+  supervisor.post({ type: "post", id: 3, value: "ping", transferList: [] });
+  await supervisor.until(() => types(3).includes("message"));
+  supervisor.post({ type: "stop", id: 3 });
+  await supervisor.until(() => types(3).includes("stopped"));
 
   expect(supervisor.exitCode()).toBeUndefined();
-  expect(supervisor.replies).toContainEqual({ type: "message", id: 2, value: "ping" });
+  expect(supervisor.replies).toContainEqual({ type: "message", id: 3, value: "ping" });
+  expect(types(3)).toEqual(["created", "message", "stopped"]);
 }, 30_000);

@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { EdgeTTS } from "node-edge-tts";
 import {
   createDebugProxyCaptureReaderAsync,
@@ -6,13 +6,16 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { isTtsProviderConfigured, resolveTtsConfig } from "openclaw/plugin-sdk/tts-runtime";
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  isTtsProviderConfigured,
+  isTtsProviderConfiguredAsync,
+  resolveTtsConfig,
+} from "openclaw/plugin-sdk/tts-runtime";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
 
 const provider = buildMicrosoftSpeechProvider();
-
 async function listVoicesThroughProvider(body: unknown, status = 200) {
   globalThis.fetch = vi
     .fn<typeof fetch>()
@@ -20,7 +23,7 @@ async function listVoicesThroughProvider(body: unknown, status = 200) {
   return await provider.listVoices?.({ providerConfig: {} });
 }
 
-describe("listMicrosoftVoices", () => {
+describe("Microsoft speech provider", () => {
   beforeEach(async () => {
     const state = await createOpenClawTestState({ layout: "state-only" });
     // Returned cleanup runs after the proxy's afterEach teardown.
@@ -34,11 +37,9 @@ describe("listMicrosoftVoices", () => {
 
   it("skips malformed rows without discarding valid voices", async () => {
     const fetchSpy = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard");
+    const malformedRows = [null, "unexpected", [], { ShortName: 42 }];
     const voices = await listVoicesThroughProvider([
-      null,
-      "unexpected",
-      [],
-      { ShortName: 42 },
+      ...malformedRows,
       {
         ShortName: "en-US-AvaNeural",
         FriendlyName: "Microsoft Ava Online (Natural) - English (United States)",
@@ -50,7 +51,6 @@ describe("listMicrosoftVoices", () => {
         },
       },
     ]);
-
     expect(voices).toEqual([
       {
         id: "en-US-AvaNeural",
@@ -85,48 +85,73 @@ describe("listMicrosoftVoices", () => {
       );
     }
   });
-});
 
-it("supports the public synchronous TTS readiness API through the compatibility window", () => {
-  const cfg = { tts: { providers: { microsoft: { enabled: true } } } };
-
-  expect(isTtsProviderConfigured(resolveTtsConfig(cfg), provider, cfg)).toBe(true);
-});
-
-it("maps the default voice to Chinese for CJK input", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only" });
-  onTestFinished(() => state.cleanup());
-  const edgeSpy = vi.spyOn(EdgeTTS.prototype, "ttsPromise").mockImplementation(async function (
-    this: EdgeTTS,
-    _text,
-    outputPath,
-  ) {
-    expect(this).toMatchObject({
-      voice: "zh-CN-XiaoxiaoNeural",
-      lang: "zh-CN",
-      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-      saveSubtitles: false,
-      timeout: 1000,
-    });
-    writeFileSync(outputPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-  });
-  onTestFinished(() => edgeSpy.mockRestore());
-
-  const text = "你好，这是一个测试 hello";
-  await provider.synthesize({
-    text,
-    cfg: {},
-    providerConfig: {},
-    providerOverrides: {},
-    timeoutMs: 1000,
-    target: "audio-file",
-  });
-
-  expect(edgeSpy).toHaveBeenCalledExactlyOnceWith(
-    text,
-    expect.stringMatching(/speech[.]mp3.*[.]part$/),
+  it.each(["success", "failure"] as const)(
+    "maps the default voice to Chinese and cleans CJK synthesis files after %s",
+    async (outcome) => {
+      const audioBuffer = Buffer.from([0xff, 0xfb, 0x90, 0x00]);
+      const failure = new Error("Edge TTS test failure");
+      const edgeSpy = vi.spyOn(EdgeTTS.prototype, "ttsPromise").mockImplementation(async function (
+        this: EdgeTTS,
+        _text,
+        outputPath,
+      ) {
+        expect(this).toMatchObject({
+          voice: "zh-CN-XiaoxiaoNeural",
+          lang: "zh-CN",
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+          saveSubtitles: false,
+          timeout: 1000,
+        });
+        writeFileSync(outputPath, audioBuffer);
+        if (outcome === "failure") {
+          throw failure;
+        }
+      });
+      const text = "你好，这是一个测试 hello";
+      const synthesis = provider.synthesize({
+        text,
+        cfg: {},
+        providerConfig: {},
+        timeoutMs: 1000,
+        target: "audio-file",
+      });
+      if (outcome === "failure") {
+        await expect(synthesis).rejects.toBe(failure);
+      } else {
+        await expect(synthesis).resolves.toMatchObject({
+          audioBuffer,
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+          fileExtension: ".mp3",
+        });
+      }
+      expect(edgeSpy).toHaveBeenCalledExactlyOnceWith(
+        text,
+        expect.stringMatching(/speech[.]mp3.*[.]part$/),
+      );
+      const call = edgeSpy.mock.calls[0];
+      assert(call);
+      const outputPath = call[1];
+      const workspace = outputPath.match(/^(.*[/\\]tts-microsoft-[^/\\]+)[/\\]/)?.[1];
+      assert(workspace, "Expected a Microsoft TTS workspace");
+      expect([outputPath, workspace].filter(existsSync)).toEqual([]);
+    },
   );
 });
+
+it.each([
+  [{ enabled: true }, true],
+  [{ enabled: false }, false],
+  [{}, true],
+] as const)(
+  "supports public synchronous and async TTS readiness APIs through the compatibility window (%j)",
+  async (microsoft, expected) => {
+    const cfg = { tts: { providers: { microsoft } } };
+    const config = resolveTtsConfig(cfg);
+    expect(isTtsProviderConfigured(config, provider, cfg)).toBe(expected);
+    expect(await isTtsProviderConfiguredAsync(config, provider, cfg)).toBe(expected);
+  },
+);
 
 it("preserves inherited Microsoft Talk settings and filters blank request overrides", () => {
   const params = { voiceId: " ", outputFormat: " ogg-24khz-16bit-mono-opus " };

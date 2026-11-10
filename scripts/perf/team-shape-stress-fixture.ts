@@ -53,16 +53,20 @@ export async function generateTeamShapeStressFixture(options: {
   seed: number;
   now: number;
   sessions?: number;
+  agents?: number;
   transcriptMiB?: number;
+  longTranscriptEntries?: number;
+  authAvailabilityStorm?: boolean;
   worktreeFiles?: number;
   worktreeFileBytes?: number;
   worktreeLocalOrigin?: boolean;
+  oldgenWorkload?: boolean;
 }) {
   const sessions = options.sessions ?? 10_800;
   if (!Number.isSafeInteger(sessions) || sessions < 100) {
     throw new Error("Stress fixtures require an integer session count >= 100");
   }
-  return generateTeamShapeFixture(
+  const generated = await generateTeamShapeFixture(
     parseTeamShapeOptions([
       "--state-dir",
       options.stateDir,
@@ -74,16 +78,21 @@ export async function generateTeamShapeStressFixture(options: {
       String(options.now),
       "--sessions",
       String(sessions),
+      "--agents",
+      String(options.agents ?? 4),
       "--runs",
       String(Math.floor((sessions * 4_300) / 10_800)),
       "--settled-runs",
       "--team-stress",
+      ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),
       "--transcript-mib",
       String(options.transcriptMiB ?? 128),
+      "--long-transcript-entries",
+      String(options.longTranscriptEntries ?? 0),
       "--worktree-files",
-      String(options.worktreeFiles ?? 0),
+      String(options.worktreeFiles ?? (options.oldgenWorkload ? 62_000 : 0)),
       "--worktree-file-bytes",
-      String(options.worktreeFileBytes ?? 0),
+      String(options.worktreeFileBytes ?? (options.oldgenWorkload ? 18_432 : 0)),
       ...(options.worktreeLocalOrigin ? ["--worktree-local-origin"] : []),
       "--projects",
       "4",
@@ -93,4 +102,9 @@ export async function generateTeamShapeStressFixture(options: {
       "40",
     ]),
   );
+  if (options.oldgenWorkload) {
+    const { seedOldGenerationFixture } = await import("./2312-oldgen-fixture.ts");
+    await seedOldGenerationFixture(options.stateDir, generated.env);
+  }
+  return generated;
 }

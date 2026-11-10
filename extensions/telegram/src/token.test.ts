@@ -12,6 +12,7 @@ import { telegramSetupPlugin } from "../setup-plugin-api.js";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 import { resolveTelegramToken } from "./token.js";
+import * as tokenRuntime from "./token.js";
 
 const config = telegramSetupPlugin.config;
 let workspace: TempWorkspaceSync | undefined;
@@ -25,9 +26,35 @@ function createTokenFile(fileName: string, contents: string): string {
   return tokenFile;
 }
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   workspace?.cleanup();
   workspace = undefined;
+});
+
+it("stops duplicate-token inspection at the requested owner and observes later credential changes", () => {
+  const alerts = createTokenFile("alerts.txt", "123:alerts");
+  const ops = createTokenFile("ops.txt", "456:ops");
+  const work = createTokenFile("work.txt", "789:work");
+  const cfg = telegramConfig({
+    defaultAccount: "alerts",
+    accounts: {
+      alerts: { tokenFile: alerts },
+      ops: { tokenFile: ops },
+      work: { tokenFile: work },
+    },
+  });
+  const reads = vi.spyOn(tokenRuntime, "readTelegramTokenFile");
+
+  expect(inspectTelegramAccount({ cfg, accountId: "alerts" }).configured).toBe(true);
+  expect(reads.mock.calls.map(([file]) => file)).toEqual([alerts, alerts]);
+
+  fs.writeFileSync(ops, "123:alerts");
+  expect(inspectTelegramAccount({ cfg, accountId: "ops" })).toMatchObject({
+    configured: false,
+    stateReason:
+      'Duplicate Telegram bot token: account "ops" shares a token with account "alerts". Keep one owner account per bot token.',
+  });
 });
 function telegramConfig(
   telegram: NonNullable<OpenClawConfig["channels"]>["telegram"],

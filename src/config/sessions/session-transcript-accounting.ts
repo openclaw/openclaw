@@ -24,7 +24,7 @@ export function readSessionTranscriptAccountingFromProjection(
         snapshot,
         withRecentSessionTranscriptActiveEventsInSnapshot(
           projection,
-          params.usageEventLimit ?? SQLITE_USAGE_TAIL_MAX_EVENTS,
+          SQLITE_USAGE_TAIL_MAX_EVENTS,
           (visit) => readSessionTranscriptAccountingTail(visit, params),
         ),
       );

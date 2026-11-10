@@ -11,16 +11,18 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { chatEvent } from "./chat-flow-fixtures.test-support.ts";
+import { textContent } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat waiting on subagents" });
 
 suite.define(() => {
-  it("updates compact Details from observers without reading child histories", async () => {
+  it("shows native subagents in compact Details without reading child histories", async () => {
     const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactParent
-      ? createControlUiE2eArtifactDir("subagent-details-observer", artifactParent)
+      ? createControlUiE2eArtifactDir("subagent-details-native", artifactParent)
       : undefined;
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1000, height: 900 } },
@@ -56,6 +58,7 @@ suite.define(() => {
               key: "agent:main:dependency-" + index,
               sessionId: "dependency-" + index,
               kind: "direct",
+              classification: "subagent",
               label,
               status: "running",
               hasActiveRun: true,
@@ -92,9 +95,12 @@ suite.define(() => {
         if ((await summary.getAttribute("aria-expanded")) !== "true") {
           await summary.click();
         }
-        const activity = group.locator(".chat-subagent-activity");
-        const rows = activity.locator(".chat-subagent-activity__row");
+        const activity = group.locator(".chat-details-subagents");
+        const rows = activity.locator("button[data-subagent-session-key]");
         await expect.poll(() => rows.count()).toBe(4);
+        for (const label of titles) {
+          await rows.getByText(label, { exact: true }).waitFor();
+        }
         const capture = async (name: string) => {
           if (!artifactDir) {
             return;
@@ -105,32 +111,8 @@ suite.define(() => {
           await writeFile(path.join(artifactDir, name), frame.png);
         };
         await capture("initial-wide.png");
-        const emit = (text: string, runId = "child-run-0", revision = 1) =>
-          gateway.emitGatewayEvent("session.observer", {
-            sessionKey: children[0]!.key,
-            sessionId: children[0]!.sessionId,
-            agentId: "main",
-            runId,
-            revision,
-            updatedAt: now + revision,
-            health: "on-track",
-            headline: text,
-          });
-        await emit("Verifying the Android dependency graph.");
-        await rows
-          .first()
-          .getByText("Verifying the Android dependency graph.", { exact: true })
-          .waitFor();
-        await emit("This is from an obsolete run.", "old-run");
-        expect(await rows.first().textContent()).not.toContain("obsolete");
-        await emit("Checking CocoaPods and Gradle compatibility.", "child-run-0", 2);
-        await rows
-          .first()
-          .getByText("Checking CocoaPods and Gradle compatibility.", { exact: true })
-          .waitFor();
-        await capture("live-wide.png");
         expect(await activity.locator(".chat-reading-indicator").count()).toBe(0);
-        expect(await pane.locator(".chat-thread openclaw-chat-subagent-activity").count()).toBe(0);
+        expect(await pane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         await closeChatDetails(pane);
         for (const child of children) {
           expect(await gateway.getRequests("chat.history", { sessionKey: child.key })).toHaveLength(
@@ -216,12 +198,9 @@ suite.define(() => {
             role: "toolResult",
             toolCallId: "launch",
             toolName: "sessions_spawn",
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ status: "accepted", childSessionKey: child.key }, null, 2),
-              },
-            ],
+            content: textContent(
+              JSON.stringify({ status: "accepted", childSessionKey: child.key }, null, 2),
+            ),
             timestamp: now - 8_400,
             __openclaw: { id: "launch-result", seq: 4, runId },
           },
@@ -322,9 +301,7 @@ suite.define(() => {
         const childReadsAfterClose = (await childHistoryReads()).length;
         await observeChild(1, 1, "Verifying the API response");
         expect(await childHistoryReads()).toHaveLength(childReadsAfterClose);
-        expect(
-          await activePane.locator(".chat-thread openclaw-chat-subagent-activity").count(),
-        ).toBe(0);
+        expect(await activePane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         expect(await indicator.textContent()).not.toContain("Backend implementation");
         // The ordinary launch tool remains readable and navigable; only the separate
         // transcript activity presentation is gone.
@@ -455,12 +432,10 @@ suite.define(() => {
         });
         const historyReads = (await gateway.getRequests("chat.history")).length;
         await page.clock.setFixedTime(now + 63_000);
-        await gateway.emitGatewayEvent("chat", {
-          sessionKey: parent.key,
-          runId,
-          state: "final",
-          yielded: true,
-        });
+        await gateway.emitGatewayEvent(
+          "chat",
+          chatEvent(runId, parent.key, "final", { yielded: true }),
+        );
         await gateway.waitForRequest("chat.history", { after: historyReads });
         // Both before and after captures follow the same committed transcript boundary.
         await page
@@ -480,11 +455,22 @@ suite.define(() => {
             ]);
           }
         };
-        await runningCount.waitFor();
+        // While it waits, the line names the session it waits on, linked to that session.
+        const waitingOn = indicator.locator(".chat-subagent-wait a");
+        await waitingOn.waitFor();
+        expect(await waitingOn.getAttribute("href")).toMatch(
+          /\/chat\/main\/implementation-child$/u,
+        );
         expect(await indicator.count()).toBe(1);
         expect(await indicator.locator(".chat-reading-indicator").count()).toBe(0);
         expect(await indicator.locator("openclaw-working-phrase").count()).toBe(0);
-        expect(await indicator.textContent()).not.toContain("Backend implementation");
+        await expect
+          .poll(async () =>
+            (await indicator.locator(".chat-subagent-wait").textContent())
+              ?.replace(/\s+/gu, " ")
+              .trim(),
+          )
+          .toBe("Waiting on Backend implementation · 1m 13s");
         expect(await activePane.locator(".agent-chat__composer-run-status--waiting").count()).toBe(
           0,
         );
@@ -519,10 +505,10 @@ suite.define(() => {
           waitingParent,
           "run-start",
         );
-        // The count opens the collection; opening a child does not navigate the parent.
+        // The Subagents panel opens the collection; opening a child does not navigate the parent.
         const selectedTitle = activePane.locator(".chat-pane__session-title-text").first();
         const detailTitle = panel.locator(".subagents-desktop__child-name");
-        await runningCount.click();
+        await selectChatLayoutAction(activePane, "Subagents");
         await panelRow.waitFor();
         await expect
           .poll(() => panelRow.textContent())
@@ -563,7 +549,7 @@ suite.define(() => {
             },
           ]),
         );
-        await runningCount.waitFor();
+        await waitingOn.getByText("Backend implementation refreshed", { exact: true }).waitFor();
         const refreshedDetails = await openChatDetails(activePane);
         const refreshedGroup = refreshedDetails.locator('[data-details-group="subagents"]');
         if (
@@ -606,9 +592,9 @@ suite.define(() => {
           session: restartedChild,
           ancestorSessions: [waitingAgain],
         });
-        // A later batch restores the footer count without reopening the panel.
+        // A later batch restores the wait without reopening the panel.
         // An explicit open still hydrates its independent roster.
-        await runningCount.waitFor();
+        await waitingOn.waitFor();
         expect(await indicator.count()).toBe(1);
         expect(await panel.isVisible()).toBe(false);
         await selectChatLayoutAction(activePane, "Subagents");
@@ -722,17 +708,13 @@ suite.define(() => {
           session: finishedChild,
           ancestorSessions: [finishedParent],
         });
-        // One closing line for the request: 77s since it was asked, not the
-        // resumed run's own 2s, with both runs' tokens.
+        // One closing line for the request with both runs' tokens; run duration
+        // belongs to the Worked summary, never a separate "Done in" line.
         const recap = activePane.locator(".chat-turn-recap");
         await recap.waitFor();
         expect(
           await recap.locator(":scope > span:not(.chat-turn-recap__claw)").allTextContents(),
-        ).toEqual([
-          "4.4k output tokens",
-          "·",
-          expect.stringMatching(/^Done in 1 minute,? 17 seconds$/),
-        ]);
+        ).toEqual(["4.4k output tokens"]);
         expect(await block.locator(".chat-turn-recap").count()).toBe(1);
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         // Completed duration and child navigation remain available in Subagents.

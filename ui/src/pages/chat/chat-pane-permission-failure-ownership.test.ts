@@ -12,7 +12,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { renderControls } from "./chat-pane-session-controls.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
@@ -22,17 +22,7 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 
 function permissionPicker(state: ChatPageHost, selectedSession: GatewaySessionRow | undefined) {
-  return renderChatPaneComposerControls({
-    state,
-    selectedSession,
-    agentDefaultModel: undefined,
-    modelAccess: { allowed: true, requiredScope: "operator.write" },
-    effortAccess: { allowed: true, requiredScope: "operator.write" },
-    contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-    permissionAccess: { allowed: true, requiredScope: "operator.write" },
-    canSelectFull: true,
-    onModelSetup: vi.fn(),
-  }).permissionPicker;
+  return renderControls(state, { selectedSession }).permissionPicker;
 }
 
 function permissionSession(
@@ -53,11 +43,12 @@ function sessionList(...sessions: GatewaySessionRow[]) {
   return { ...createSessionsListResult(), sessions };
 }
 
-function expectPicker(trigger: HTMLButtonElement, mode: string, disabled: boolean) {
+function expectPicker(trigger: HTMLButtonElement, mode: string, pending: boolean) {
   expect(trigger.getAttribute("aria-label")).toContain(
     t(`chat.permissionControls.modes.${mode}.label`),
   );
-  expect(trigger.disabled).toBe(disabled);
+  expect(trigger.disabled).toBe(false);
+  expect(trigger.getAttribute("aria-busy")).toBe(pending ? "true" : null);
 }
 
 function expectErrors(state: ChatPageHost, error: string | null) {
@@ -161,8 +152,10 @@ describe("chat permission failure ownership", () => {
         recoveryUnavailable = recovery !== "immediate";
         pending.reject(new Error("saved mode could not be applied to the active run"));
         await selection;
-        expect(state.chatError).toContain("Failed to update permissions");
-        expect(state.chatError).toContain("saved mode could not be applied to the active run");
+        expect(state.chatError).toBe(t("chat.permissionControls.updateFailed"));
+        expect(state.lastErrorDetail).toEqual(
+          new Error("saved mode could not be applied to the active run"),
+        );
         expect(state.lastError).toBe(state.chatError);
         if (recovery !== "immediate") {
           draw();
@@ -399,7 +392,8 @@ describe("chat permission failure ownership", () => {
         expect(selectedChatSessionRow(state)).toBeUndefined();
         expectErrors(state, null);
       } else {
-        expect(state.chatError).toContain("Permission update rejected");
+        expect(state.chatError).toBe(t("chat.permissionControls.updateFailed"));
+        expect(state.lastErrorDetail).toEqual(new Error("Permission update rejected"));
         expect(state.lastError).toBe(state.chatError);
       }
     } finally {

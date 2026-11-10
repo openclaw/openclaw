@@ -1,3 +1,4 @@
+import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
@@ -46,6 +47,8 @@ export type ChromeCdpDiagnostic =
       wsUrl?: string;
       message: string;
       elapsedMs: number;
+      /** Nothing is listening, as distinct from a listener that has not answered yet. */
+      connectionRefused?: true;
     };
 
 export type ChromeVersion = {
@@ -68,6 +71,13 @@ export function safeChromeCdpErrorMessage(error: unknown): string {
     return redactSensitiveText(`${message}: ${causeMessage}`);
   }
   return redactSensitiveText(message || "unknown error");
+}
+
+function isConnectionRefused(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, ({ cause, errors }) => [
+    cause,
+    ...(Array.isArray(errors) ? errors : []),
+  ]).some((candidate) => extractErrorCode(candidate) === "ECONNREFUSED");
 }
 
 async function readChromeVersion(
@@ -127,17 +137,6 @@ export async function readChromeVersionWithCredentialFallback(
   }
 }
 
-type CdpHealthDiagnostic =
-  | { ok: true; version?: ChromeVersion }
-  | {
-      ok: false;
-      code:
-        | "websocket_handshake_failed"
-        | "websocket_health_command_failed"
-        | "websocket_health_command_timeout";
-      message: string;
-    };
-
 function readObjectString(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -155,7 +154,7 @@ async function diagnoseCdpHealthCommand(
   timeoutMs = CHROME_WS_READY_TIMEOUT_MS,
   lookup?: CdpEndpointPin["lookup"],
   signal?: AbortSignal,
-): Promise<CdpHealthDiagnostic> {
+) {
   signal?.throwIfAborted();
   const timeout = normalizeBrowserTimerDelayMs(timeoutMs);
   const timerDelayMs = normalizeBrowserTimerDelayMs(timeout + Math.min(25, timeout));
@@ -183,10 +182,10 @@ async function diagnoseCdpHealthCommand(
       },
     );
     return result && typeof result === "object"
-      ? { ok: true, version: chromeVersionFromCdpResult(result) }
+      ? { ok: true as const, version: chromeVersionFromCdpResult(result) }
       : {
-          ok: false,
-          code: "websocket_health_command_failed",
+          ok: false as const,
+          code: "websocket_health_command_failed" as const,
           message: "Browser.getVersion returned no result object",
         };
   } catch (error) {
@@ -209,31 +208,29 @@ async function diagnoseCdpHealthCommand(
             : kind === "protocol"
               ? "Browser.getVersion returned no result object"
               : safeChromeCdpErrorMessage(error),
-    };
+      error,
+    } as const;
   } finally {
     clearTimeout(timer);
   }
 }
 
-function classifyChromeVersionError(error: unknown): {
-  code: ChromeCdpDiagnosticCode;
-  message: string;
-} {
+function classifyChromeVersionError(error: unknown) {
   const message = safeChromeCdpErrorMessage(error);
   if (error instanceof BrowserCdpEndpointBlockedError) {
-    return { code: "ssrf_blocked", message };
+    return { code: "ssrf_blocked", message } as const;
   }
   if (/^HTTP \d+/.test(message)) {
-    return { code: "http_status_failed", message };
+    return { code: "http_status_failed", message } as const;
   }
   if (
     error instanceof SyntaxError ||
     message.includes("cdp-version: malformed JSON response") ||
     message.includes("non-object JSON")
   ) {
-    return { code: "invalid_json", message };
+    return { code: "invalid_json", message } as const;
   }
-  return { code: "http_unreachable", message };
+  return { code: "http_unreachable", message } as const;
 }
 
 export function formatChromeCdpDiagnostic(diagnostic: ChromeCdpDiagnostic): string {
@@ -277,6 +274,7 @@ export async function diagnoseChromeCdp(
     code: ChromeCdpDiagnosticCode,
     message: string,
     wsUrl?: string,
+    error?: unknown,
   ): ChromeCdpDiagnostic => ({
     ok: false,
     cdpUrl,
@@ -284,6 +282,7 @@ export async function diagnoseChromeCdp(
     code,
     message: redactSensitiveText(message),
     elapsedMs: elapsedSince(startedAt),
+    ...(isConnectionRefused(error) ? { connectionRefused: true as const } : {}),
   });
   const diagnoseEndpoint = async (
     wsUrl: string,
@@ -300,7 +299,7 @@ export async function diagnoseChromeCdp(
           browser: version?.Browser ?? health.version?.Browser,
           elapsedMs: elapsedSince(startedAt),
         }
-      : failure(health.code, health.message, wsUrl);
+      : failure(health.code, health.message, wsUrl, health.error);
   };
   let configuredPin: CdpEndpointPin | undefined;
   try {
@@ -332,7 +331,7 @@ export async function diagnoseChromeCdp(
       return await diagnoseEndpoint(cdpUrl, configuredPin?.lookup);
     }
     const classified = classifyChromeVersionError(err);
-    return failure(classified.code, classified.message);
+    return failure(classified.code, classified.message, undefined, err);
   }
 
   signal?.throwIfAborted();

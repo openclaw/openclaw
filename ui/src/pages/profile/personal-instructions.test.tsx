@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -28,12 +29,19 @@ const hello = {
   policy: { hasMultipleSessionSharingIdentities: true },
   auth: { role: "operator", scopes: ["operator.read"] },
 } satisfies NonNullable<ApplicationGatewaySnapshot["hello"]>;
+// mock-isolation: reload confirmations resolve without mounting the shared dialog.
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 beforeEach(() => i18n.setLocale("en"));
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function mount(request: GatewayBrowserClient["request"], signedIn = true, multipleProfiles = true) {
+function mount(
+  request: GatewayBrowserClient["request"],
+  signedIn = true,
+  multipleProfiles = true,
+  scopes: string[] = hello.auth.scopes,
+) {
   const harness = createConnectedContext(
     request,
     signedIn ? { id: "profile-1", name: "Ada" } : null,
@@ -41,6 +49,7 @@ function mount(request: GatewayBrowserClient["request"], signedIn = true, multip
   const { context } = harness;
   harness.emitHello({
     ...hello,
+    auth: { ...hello.auth, scopes },
     policy: { hasMultipleSessionSharingIdentities: multipleProfiles },
   });
   context.agents.state.agentsList = makeBootRoster({
@@ -68,8 +77,8 @@ function replies(...results: (Partial<PersonalFile> | Promise<PersonalFile> | Er
   }
   return request;
 }
-async function loaded(request = replies({})) {
-  const harness = mount(request);
+async function loaded(request = replies({}), scopes: string[] = hello.auth.scopes) {
+  const harness = mount(request, true, true, scopes);
   await idle(harness.element);
   return { ...harness, request };
 }
@@ -115,25 +124,28 @@ async function input(element: HTMLElement, content: string) {
   flush();
 }
 
-it("creates the signed-in personal file", async () => {
-  const initial = { ...file, content: "", hash: null, missing: true };
-  const content = "New file";
-  const request = replies(initial, { content, hash: "hash-2" });
-  const { element } = await loaded(request);
-  expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
-  expect(button(element, "Save").disabled).toBe(true);
-  expect(button(element, "Reload")).toBeUndefined();
-  const editor = textarea(element);
-  expect(editor?.getAttribute("aria-label")).toBe("Personal instructions");
-  expect(editor?.getAttribute("aria-describedby")).toBe("personal-instructions-guidance");
-  expect(element.textContent).toContain("created when you save");
-  await input(element, "x".repeat(4001));
-  expect(button(element, "Save").disabled).toBe(true);
-  expect(alert(element)?.textContent).toContain("4,000");
-  await save(element, content);
-  expectSave(request, content, initial.hash);
-  expect(element.textContent).toContain("Saved");
-});
+it.each(["operator.read", "operator.sessions.read"])(
+  "creates the signed-in personal file with %s",
+  async (scope) => {
+    const initial = { ...file, content: "", hash: null, missing: true };
+    const content = "New file";
+    const request = replies(initial, { content, hash: "hash-2" });
+    const { element } = await loaded(request, [scope]);
+    expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
+    expect(button(element, "Save").disabled).toBe(true);
+    expect(button(element, "Reload")).toBeUndefined();
+    const editor = textarea(element);
+    expect(editor?.getAttribute("aria-label")).toBe("Personal instructions");
+    expect(editor?.getAttribute("aria-describedby")).toBe("personal-instructions-guidance");
+    expect(element.textContent).toContain("created when you save");
+    await input(element, "x".repeat(4001));
+    expect(button(element, "Save").disabled).toBe(true);
+    expect(alert(element)?.textContent).toContain("4,000");
+    await save(element, content);
+    expectSave(request, content, initial.hash);
+    expect(element.textContent).toContain("Saved");
+  },
+);
 
 it.each([
   [false, true],
@@ -146,11 +158,31 @@ it.each([
     await idle(element);
     expect(request).not.toHaveBeenCalled();
     expect(textarea(element)).toBeNull();
+    if (!signedIn) {
+      expect(element.textContent).toContain(
+        "Sign in with your personal profile to edit your instructions.",
+      );
+      expect(element.textContent).not.toContain("operator.");
+    }
     if (!multipleProfiles) {
       expect(element.textContent?.trim()).toBe("");
     }
   },
 );
+
+it("asks a signed-in person for access instead of another sign-in", async () => {
+  const request = vi.fn();
+  const { element } = mount(request, true, true, []);
+  await waitForSolid(() => {
+    expect(element.textContent).toContain(
+      "You need permission to view your own sessions to edit your instructions.",
+    );
+  });
+  expect(element.textContent).not.toContain("Sign in");
+  expect(element.textContent).not.toContain("operator.");
+  expect(textarea(element)).toBeNull();
+  expect(request).not.toHaveBeenCalled();
+});
 
 it("preserves a conflicting draft, confirms reload, and keeps it when reload fails", async () => {
   const request = replies(
@@ -163,17 +195,17 @@ it("preserves a conflicting draft, confirms reload, and keeps it when reload fai
   await save(element, "My draft");
   expect(value(element)).toBe("My draft");
   expect(alert(element)?.textContent).toContain("changed since read");
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const confirm = vi.mocked(showConfirmDialog).mockResolvedValue(false);
   button(element, "Reload").click();
   await idle(element);
   expect(request).toHaveBeenCalledTimes(2);
-  confirm.mockReturnValue(true);
+  confirm.mockResolvedValue(true);
   button(element, "Reload").click();
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
   await idle(element);
   expect(value(element)).toBe("My draft");
   button(element, "Reload").click();
-  await idle(element);
-  expect(value(element)).toBe("External edit");
+  await vi.waitFor(() => expect(value(element)).toBe("External edit"));
   expect(button(element, "Reload")).toBeUndefined();
 });
 

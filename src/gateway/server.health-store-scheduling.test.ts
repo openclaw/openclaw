@@ -8,6 +8,7 @@ import { expect, test, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { spyOnSessionStoreSummaries } from "../config/sessions/session-store-summary.test-support.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../state/openclaw-agent-db.js";
 import type { StatusSummary } from "../status/summary.js";
@@ -78,6 +79,10 @@ test.each(["separate", "shared"] as const)(
         rpcReq<StatusSummary>(ws, "status", { includeChannelSummary: false });
       await health();
       await requestHealth();
+      // The post-connect passive refresh runs independently of the explicit probe.
+      await Promise.all(
+        vi.mocked(collector.collectGatewayHealthSnapshot).mock.results.map(({ value }) => value),
+      );
       sqliteSummaries.mockClear();
       const projection = expectDefined(
         vi.mocked(collector.collectGatewayHealthSnapshot).mock.calls.at(-1)?.[0]
@@ -85,17 +90,14 @@ test.each(["separate", "shared"] as const)(
         "registered Gateway resident session projection",
       );
       const originalRead = projection.selectEntries;
-      let updatedAt = 300;
-      const changeResidentSession = async () => {
-        // Scheduling proof needs a changed row in every physical store.
-        for (const agentId of agentIds) {
-          writeSession(agentId, "session0", updatedAt++);
-        }
+      const resetResidentSummaries = async () => {
+        // Cold-scan scheduling follows topology refresh; row deltas retain the index.
+        sessionChanges.emit({ all: true, scope: "config" });
         await projection.prepareSelection();
       };
       let inserted = false;
       for (const method of ["health", "status"] as const) {
-        await changeResidentSession();
+        await resetResidentSummaries();
         let reads = 0;
         let httpAtRead: number | undefined;
         let traffic: Promise<void> | undefined;
@@ -159,7 +161,7 @@ test.each(["separate", "shared"] as const)(
           [health, new Error("invalid session state"), false],
           [statusSummary, busy, false],
         ] as const) {
-          await changeResidentSession();
+          await resetResidentSummaries();
           read.mockImplementationOnce(() => {
             throw error;
           });
@@ -168,7 +170,7 @@ test.each(["separate", "shared"] as const)(
         expect((await statusSummary()).payload?.sessions.count).toBe(146);
       }
       if (layout === "separate") {
-        await changeResidentSession();
+        await resetResidentSummaries();
         const read = vi.spyOn(projection, "selectEntries").mockImplementation((...args) => {
           const rows = originalRead(...args);
           readWorkMs += 20;
@@ -195,6 +197,7 @@ test.each(["separate", "shared"] as const)(
           expect((await health()).payload?.agents.at(-1)?.sessions.count).toBe(0);
           expect(read).toHaveBeenCalledTimes(12);
           read.mockClear();
+          await resetResidentSummaries();
           const statusResponse = await statusSummary();
           expect(statusResponse.payload?.sessions.count).toBe(132);
           expect(

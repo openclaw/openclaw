@@ -17,4 +17,6 @@ export type SessionsProps = Omit<
 } & Partial<Pick<View, OptionalFields>> & {
     sessionMenu: { key: string } | null;
     commandPending?: boolean;
+    /** Phone width renders list rows and the sort controls the table headers own elsewhere. */
+    phoneLayout?: boolean;
   };

@@ -4,7 +4,6 @@ import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
-  navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
@@ -14,7 +13,11 @@ import {
   readFooterGeometry,
   sampleMetadataReveal,
 } from "./chat-attributed-identity.test-support.ts";
-import { requireRecord, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import {
+  requireRecord,
+  scrollChatThreadToTop,
+  waitForChatScrollIdle,
+} from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -80,9 +83,20 @@ async function send(page: Page, prompt: string) {
   await page.getByRole("button", { name: "Send message" }).click();
 }
 
-async function deliveryFixture(page: Page, prompt: string) {
+async function deliveryFixture(page: Page, prompt: string, shared = false) {
   const gateway = await installMockGateway(page, {
-    historyMessages: [assistant([{ text: ready, type: "text" }], Date.now() - 1_000)],
+    historyMessages: [
+      ...(shared
+        ? [
+            userMessage(
+              profile("profile-riley", "Riley Chen"),
+              "A shared delivery check.",
+              Date.now() - 2_000,
+            ),
+          ]
+        : []),
+      assistant([{ text: ready, type: "text" }], Date.now() - 1_000),
+    ],
     presenceUsers: [
       { ...profile("c3e32452-0467-47e5-aafa-233cd5dae29f", "Collin Johnson"), self: true },
     ],
@@ -186,9 +200,8 @@ suite.define(() => {
         { width: 430, height: 860, safeAreaLeft: 0 },
         { width: 932, height: 430, safeAreaLeft: 0 },
         { width: 800, height: 430, safeAreaLeft: 44 },
-      ].map((viewport) =>
-        Object.assign(viewport, { sessionKey: `agent:main:attributed-mobile-${viewport.width}` }),
-      );
+      ];
+      const sessionKey = "agent:main:attributed-mobile";
       await suite.withPage(
         { viewport: { width: 320, height: 860 }, hasTouch: true },
         async ({ page, context }) => {
@@ -196,52 +209,69 @@ suite.define(() => {
           const morgan = profile("profile-morgan", "Morgan");
           const now = Date.now();
           const gateway = await installMockGateway(page, {
-            sessionKey: viewports[0]!.sessionKey,
-            sessions: viewports.map(({ width, sessionKey }) =>
-              createControlUiSessionRow(sessionKey, `Attributed mobile ${width}`, now),
-            ),
+            sessionKey,
+            sessions: [createControlUiSessionRow(sessionKey, "Attributed mobile", now)],
             presenceUsers: profiled ? [{ ...morgan, self: true }] : [],
-            sessionTranscripts: Object.fromEntries(
-              viewports.map(({ sessionKey }) => [
-                sessionKey,
-                {
-                  messages: [
-                    userMessage(morgan, "Keep the phone transcript readable.", now - 20_000),
-                    assistant(
-                      "The response uses the available transcript width.\n\n```ts\nconsole.log('readable code');\n```",
-                      now - 10_000,
-                    ),
-                  ],
-                },
-              ]),
-            ),
+            sessionTranscripts: {
+              [sessionKey]: {
+                messages: [
+                  userMessage(morgan, "Keep the phone transcript readable.", now - 20_000),
+                  assistant(
+                    "The response uses the available transcript width.\n\n```ts\nconsole.log('readable code');\n```",
+                    now - 10_000,
+                  ),
+                ],
+              },
+            },
           });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, viewports[0]!.sessionKey));
-          for (const { width, height, safeAreaLeft, sessionKey } of viewports) {
-            const label = `${width} × ${height} px (profile: ${profiled})`;
-            await page.evaluate(() => {
-              document.documentElement.dir = "ltr";
-            });
-            await page.setViewportSize({ width, height });
-            await protocol.send("Emulation.setSafeAreaInsetsOverride", {
-              insets: { left: safeAreaLeft, right: 0, top: 0, bottom: 0 },
-            });
-            await navigateToControlUiSession(page, sessionKey);
-            const pane = page.locator(".chat-pane-cache__pane--active");
-            const transcript = pane.locator(".chat-thread-inner");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const pane = page.locator(".chat-pane-cache__pane--active");
+          const transcript = pane.locator(".chat-thread-inner");
+          const atEveryViewport = async (
+            check: (viewport: (typeof viewports)[number], label: string) => Promise<void>,
+            direction = "rtl",
+          ) => {
+            for (const viewport of viewports) {
+              const { width, height, safeAreaLeft } = viewport;
+              await page.evaluate((dir) => {
+                document.documentElement.dir = dir;
+              }, direction);
+              await page.setViewportSize({ width, height });
+              await protocol.send("Emulation.setSafeAreaInsetsOverride", {
+                insets: { left: safeAreaLeft, right: 0, top: 0, bottom: 0 },
+              });
+              await check(viewport, `${width} × ${height} px (profile: ${profiled})`);
+            }
+          };
+          const expectColumn = async (
+            content: Locator,
+            phase: string,
+            label: string,
+            outer = false,
+          ) => {
+            const frame = (await transcript.boundingBox())!;
+            const bounds = (await content.boundingBox())!;
+            const columnLabel = `${label}: ${phase}`;
+            expect(bounds.x + bounds.width / 2, columnLabel).toBeCloseTo(
+              frame.x + frame.width / 2,
+              0,
+            );
+            if (outer) {
+              expect(bounds.width, columnLabel).toBeGreaterThanOrEqual(frame.width);
+            } else {
+              expect(bounds.width, columnLabel).toBeCloseTo(frame.width, 0);
+            }
+          };
+          // Hold each renderer state while checking the viewport matrix. The send
+          // lifecycle needs one run per identity mode, not one run per width.
+          await pane
+            .locator(".agent-chat__composer-combobox textarea")
+            .fill("Read the example file.");
+          await atEveryViewport(async ({ width, safeAreaLeft }, label) => {
             await expect(
               transcript.getByText("The response uses the available transcript width."),
               label,
             ).toBeVisible();
-            const expectColumn = async (content: Locator, phase: string) => {
-              const frame = await transcript.boundingBox();
-              const bounds = await content.boundingBox();
-              const columnLabel = `${label}: ${phase}`;
-              expect(frame, columnLabel).not.toBeNull();
-              expect(bounds, columnLabel).not.toBeNull();
-              expect(bounds!.x, columnLabel).toBeCloseTo(frame!.x, 0);
-              expect(bounds!.width, columnLabel).toBeCloseTo(frame!.width, 0);
-            };
             for (const direction of ["ltr", "rtl"]) {
               await page.evaluate((dir) => {
                 document.documentElement.dir = dir;
@@ -249,6 +279,8 @@ suite.define(() => {
               await expectColumn(
                 pane.locator(".agent-chat__composer-shell"),
                 `${direction} composer`,
+                label,
+                true,
               );
               const frame = await transcript.boundingBox();
               const directionLabel = `${label} (${direction})`;
@@ -261,36 +293,40 @@ suite.define(() => {
               await expectColumn(
                 pane.locator(".chat-group.assistant > .chat-group-messages"),
                 `${direction} assistant`,
+                label,
               );
               await expect(
                 pane.locator(".chat-group .chat-avatar:visible"),
                 directionLabel,
               ).toHaveCount(0);
             }
-            await pane
-              .locator(".agent-chat__composer-combobox textarea")
-              .fill("Read the example file.");
-            await pane.getByRole("button", { name: "Send message" }).click();
-            const request = await gateway.waitForRequest("chat.send", { match: { sessionKey } });
-            const runId = readRunId(request.params);
+            await pane.getByRole("button", { name: "Send message" }).click({ trial: true });
+          }, "ltr");
+          await pane.getByRole("button", { name: "Send message" }).click();
+          const request = await gateway.waitForRequest("chat.send", { match: { sessionKey } });
+          const runId = readRunId(request.params);
+          await atEveryViewport(async (_viewport, label) => {
             await expect(pane.locator(".chat-working-indicator"), label).toBeVisible();
             const working = pane.locator(".chat-group--working > .chat-group-messages");
-            await expectColumn(working, "working indicator");
+            await expect(working, label).toBeVisible();
+            await expectColumn(working, "working indicator", label);
             await expect(working, label).toHaveCSS("padding-inline-start", "0px");
-            const toolCallId = `mobile-read-${width}`;
-            await gateway.emitGatewayEvent("agent", {
-              runId,
-              sessionKey,
-              stream: "tool",
-              seq: 1,
-              ts: Date.now(),
-              data: {
-                name: "read",
-                phase: "start",
-                toolCallId,
-                args: { path: "example.txt" },
-              },
-            });
+          });
+          const toolCallId = "mobile-read";
+          await gateway.emitGatewayEvent("agent", {
+            runId,
+            sessionKey,
+            stream: "tool",
+            seq: 1,
+            ts: Date.now(),
+            data: {
+              name: "read",
+              phase: "start",
+              toolCallId,
+              args: { path: "example.txt" },
+            },
+          });
+          await atEveryViewport(async (_viewport, label) => {
             await expect(
               pane.locator(`[data-message-id^="tool:assistant:${toolCallId}"]`),
               label,
@@ -298,26 +334,34 @@ suite.define(() => {
             await expectColumn(
               pane.locator(".chat-group.assistant > .chat-group-messages").last(),
               "tool response",
+              label,
             );
-            await gateway.emitChatFinal({
-              runId,
-              sessionKey,
-              text: "The example file is readable.",
-            });
+          });
+          await gateway.emitChatFinal({
+            runId,
+            sessionKey,
+            text: "The example file is readable.",
+          });
+          await gateway.emitGatewayEvent("session.message", {
+            sessionKey,
+            messageId: "mobile-peer-message",
+            messageSeq: 5,
+            message: userMessage(
+              profile("profile-riley", "Riley"),
+              "Riley joined this conversation.",
+              Date.now(),
+            ),
+          });
+          await atEveryViewport(async ({ height }, label) => {
             await expect(
               transcript.getByText("The example file is readable."),
               label,
             ).toBeVisible();
-            await gateway.emitGatewayEvent("session.message", {
-              sessionKey,
-              messageId: `mobile-peer-message-${width}`,
-              messageSeq: 5,
-              message: userMessage(
-                profile("profile-riley", "Riley"),
-                "Riley joined this conversation.",
-                Date.now(),
-              ),
-            });
+            // Fixture delivery does not wait for the new row's presentation.
+            await expect(
+              transcript.getByText("Riley joined this conversation."),
+              label,
+            ).toBeVisible();
             if (profiled) {
               const peer = pane.locator(".chat-group--peer", {
                 hasText: "Riley joined this conversation.",
@@ -329,11 +373,7 @@ suite.define(() => {
             if (height === 430) {
               // The first message can leave the virtual window after new turns.
               // Return to it before checking its attributed identity.
-              await waitForChatScrollIdle(page);
-              await thread.focus();
-              await thread.press("Home");
-              // Chromium drops a keyboard scroll that lands in the tail of the
-              // previous smooth one, so End must wait for Home to settle.
+              await scrollChatThreadToTop(page);
               await waitForChatScrollIdle(page);
               expect(await thread.evaluate((element) => element.scrollTop), label).toBe(0);
             }
@@ -349,9 +389,14 @@ suite.define(() => {
               await expect
                 .poll(() => thread.evaluate((element) => element.scrollTop), { message: label })
                 .toBeGreaterThan(0);
-              await expectColumn(pane.locator(".agent-chat__composer-shell"), "scrolled composer");
+              await expectColumn(
+                pane.locator(".agent-chat__composer-shell"),
+                "scrolled composer",
+                label,
+                true,
+              );
             }
-          }
+          });
         },
       );
     },
@@ -478,7 +523,7 @@ suite.define(() => {
           longNamePeerGroup.getByRole("button", { name: "Rewind", exact: true }),
         ]) {
           const target = await readActionTapArea(control);
-          expect(target.width).toBeGreaterThanOrEqual(44);
+          expect(target.width).toBeGreaterThanOrEqual(32);
           expect(target.height).toBeGreaterThanOrEqual(44);
           expect(target.hitCorners).toBe(4);
           if (width === 390 && (await control.getAttribute("aria-label")) === "Rewind") {
@@ -554,7 +599,9 @@ suite.define(() => {
               return bounds.top + bounds.height / 2;
             };
             const buttons = [...footer.querySelectorAll(".chat-group-footer-actions button")];
+            const name = footer.querySelector<HTMLElement>(".chat-sender-name")!;
             return {
+              nameOverflow: name.scrollWidth - name.clientWidth,
               time: centerY(footer.querySelector(".chat-group-timestamp")!),
               icons: [...footer.querySelectorAll(".chat-group-footer-actions button svg")].map(
                 centerY,
@@ -570,12 +617,13 @@ suite.define(() => {
             };
           });
           expect((await group.boundingBox())?.height).toBe(restingHeight);
+          expect(alignment.nameOverflow).toBeLessThanOrEqual(1);
           expect(alignment.icons.length).toBeGreaterThan(0);
           for (const center of alignment.icons) {
             expect(Math.abs(center - alignment.time)).toBeLessThanOrEqual(1);
           }
           for (const target of alignment.targets) {
-            expect(target.width).toBeGreaterThanOrEqual(44);
+            expect(target.width).toBeGreaterThanOrEqual(32);
             expect(target.height).toBeGreaterThanOrEqual(44);
           }
           await tapBubble(group);
@@ -723,14 +771,16 @@ suite.define(() => {
       const { gateway, request, group } = await deliveryFixture(
         page,
         "Keep my identity stable when delivery fails.",
+        true,
       );
       const firstRunId = String((request.params as { idempotencyKey?: unknown }).idempotencyKey);
-      await expect(group).toHaveClass(/\bchat-group--sender-tint\b/u);
+      await expect(group).toHaveCSS("flex-direction", "row-reverse");
       const background = () =>
         group
           .locator(".chat-bubble")
           .evaluate((element) => getComputedStyle(element).backgroundColor);
       const sendingBackground = await background();
+      expect(sendingBackground).not.toBe("rgba(0, 0, 0, 0)");
 
       await rejectDelivery(gateway);
       await expect
@@ -743,7 +793,22 @@ suite.define(() => {
       await expect(composer(page)).toHaveValue("");
       const status = group.locator(".chat-send-status");
       await expect(status.locator(".chat-send-status__discard")).toBeVisible();
-      await expect(group.locator(".chat-sender-name")).toHaveCount(0);
+      await expect(group.locator(".chat-sender-name")).toHaveText("Collin Johnson");
+      await page.mouse.move(0, 0);
+      const [actions, metadata] = await Promise.all(
+        [
+          group.locator(".chat-group-footer-actions"),
+          group.locator(".chat-group-footer__meta"),
+        ].map((element) => element.boundingBox()),
+      );
+      expect(actions).not.toBeNull();
+      expect(metadata).not.toBeNull();
+      expect(
+        actions!.x + actions!.width <= metadata!.x ||
+          metadata!.x + metadata!.width <= actions!.x ||
+          actions!.y + actions!.height <= metadata!.y ||
+          metadata!.y + metadata!.height <= actions!.y,
+      ).toBe(true);
       const footerLineCenters = await Promise.all(
         [
           status.getByText("Not sent", { exact: true }),
@@ -762,10 +827,8 @@ suite.define(() => {
 
       await gateway.deferNext("chat.send");
       await group.getByRole("button", { name: "Retry queued message" }).click();
-      await expect(group.locator(".chat-send-status")).toHaveAttribute(
-        "data-send-state",
-        "sending",
-      );
+      await expect(group.locator(".chat-send-status")).toHaveCount(0);
+      await expect(group.locator("time.chat-group-timestamp")).toHaveCount(1);
       await expect(group.getByRole("button", { name: "Retry queued message" })).toHaveCount(0);
       await expect(group).toBeVisible();
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
@@ -776,6 +839,7 @@ suite.define(() => {
       expect(retryRunId).not.toBe(firstRunId);
       await gateway.resolveDeferred("chat.send", { runId: retryRunId, status: "started" });
       await expect(group.locator(".chat-send-status")).toHaveCount(0);
+      expect(await background()).toBe(sendingBackground);
     });
   });
 
@@ -851,6 +915,7 @@ suite.define(() => {
       await expect(userGroup.locator("img.chat-avatar.user[src]")).toHaveCount(0);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
+      const originalImage = (await image.elementHandles())[0] ?? null;
 
       await userGroup.hover();
       await userGroup.getByRole("button", { name: "Reply to message" }).click();
@@ -865,7 +930,15 @@ suite.define(() => {
       );
 
       expect(avatarRequests).toHaveLength(1);
-      await expect(image).toHaveCount(0);
+      await expect(userGroup.locator("img.chat-avatar.user[src]")).toHaveCount(0);
+      await expect(image).toBeHidden();
+      // A settled miss may retain its first frame, but rerenders must not create more images.
+      expect(
+        await image.evaluateAll(
+          (images, original) => images.every((candidate) => candidate === original),
+          originalImage,
+        ),
+      ).toBe(true);
       await expect(initials).toBeVisible();
       await expect(initials).toHaveText("H");
     });

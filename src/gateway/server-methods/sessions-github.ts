@@ -1,9 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   ErrorCodes,
   type GatewayCoreRequestParams,
   errorShape,
   validateSessionGitHubPublishParams,
   validateSessionGitHubActionParams,
+  validateSessionGitHubReadinessParams,
   validateSessionGitHubOptionsParams,
   validateSessionGitHubStatusParams,
   validateSessionGitHubConfirmParams,
@@ -14,6 +17,7 @@ import { GitHubIdentityError } from "../../agents/github-read-identity.js";
 import { canRefreshGitHubPublicationBase } from "../../agents/sandbox/github-publication.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { githubAccountAvatarUrl } from "../../shared/github-account-avatar.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
 import { createControlUiSessionPrRead } from "../control-ui-session-pr-read.js";
 import { performSessionGitHubPreparation } from "../github-pr-workspace-preparation.js";
@@ -22,15 +26,21 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationOptionsIdentity,
-  hasSupportedGitHubPublicationTarget,
+  qualifyGitHubPublicationSource,
   prepareGitHubPublicationSession,
-  type PublicationSessionIdentity,
 } from "../github-publication-availability.js";
 import { refreshManagedWorkspaceBase } from "../github-publication-base-refresh.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { performSessionGitHubInspection } from "../github-publication-inspect.js";
+import { readGitHubPublicationReadiness } from "../github-publication-readiness.js";
 import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
-import { prepareGitHubPublicationRequesterV2 } from "../github-publication-requester.js";
+import {
+  prepareGitHubPublicationRequesterV2,
+  prepareGitHubPublicationTaskRequester,
+} from "../github-publication-requester.js";
+import type { PublicationSessionIdentity } from "../github-publication-session.types.js";
+import { readSharedGitHubPublication } from "../github-publication-shared-read.js";
+import { prepareGitHubPublicationTaskWorkspace } from "../github-publication-task-workspace.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -41,6 +51,7 @@ import {
   preparePersonalGitHubSessionActionV2,
 } from "./github-personal-authorization.js";
 import { respondError } from "./response.js";
+import { prepareSessionCreateRequestedCwd } from "./session-create-root.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
@@ -56,6 +67,7 @@ const sessionGitHubFailureMessages = {
   "sessions.github.action":
     "GitHub pull request action failed; inspect its current state before retrying.",
   "sessions.github.options": "GitHub publication options are unavailable.",
+  "sessions.github.readiness": "GitHub publication readiness is unavailable.",
   "sessions.github.status": "GitHub publication status is unavailable.",
   "sessions.github.confirm": "GitHub publication confirmation failed.",
 };
@@ -206,9 +218,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         throw new Error("The base refresh session is unavailable.");
       }
       if (loaded.entry.worktree?.githubPullRequest) {
-        throw new Error(
-          "This workspace continues an existing PR. Use prepare_pr with its URL to prepare its current source and review base.",
-        );
+        await performSessionGitHubPreparation({ ...options, params });
+        return;
       }
       const session = { agentId: loaded.agentId, sessionKey: loaded.canonicalKey };
       const admitted = await prepareGitHubPublicationRequesterV2(options, session);
@@ -242,10 +253,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             identity,
             sandbox,
             signal: options.signal,
-            assertCurrent: () => {
-              assertCurrent();
-              assertOwned();
-            },
+            assertCurrent: assertOwned,
             conflictsResolved: params.conflictsResolved,
             baseCommit: params.baseCommit,
           }),
@@ -283,6 +291,9 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       }
       const agentId = caller?.agentId ?? params.agentId;
       if (params.selection?.source === "personal") {
+        if (params.workspacePath !== undefined) {
+          throw new Error("workspacePath requires the local agent publication handoff.");
+        }
         if (!params.sessionKey) {
           throw new Error("My GitHub publication requires an explicit session.");
         }
@@ -301,6 +312,26 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       using selectedSession = await prepareGitHubPublicationSession(sessionKey, {
         agentId,
         assertCurrent: () => sessionMutationAuthorization?.assertCurrent(),
+        fields:
+          params.workspacePath === undefined
+            ? undefined
+            : [
+                "sessionId",
+                "lifecycleRevision",
+                "archivedAt",
+                "repositoryWorkspaceId",
+                "projectId",
+                "worktree",
+                "owner",
+                "createdActor",
+                "visibility",
+                "incognito",
+                "spawnDepth",
+                "inheritedToolAllow",
+                "inheritedToolDeny",
+                "delegatedToolPolicy",
+                "permissionMode",
+              ],
       });
       const loaded = selectedSession.loaded;
       if (!loaded.entry?.sessionId) {
@@ -319,6 +350,102 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       const admitted = await prepareGitHubPublicationRequesterV2(options, session);
       using _ = { [Symbol.dispose]: () => admitted.release() };
 
+      let task: { agentId: string; sessionKey: string } | undefined;
+      if (params.workspacePath !== undefined) {
+        if (!caller || caller.workspacePrAdoptionSessionId !== loaded.entry.sessionId) {
+          throw new Error("Local checkout publication requires an agent handoff.");
+        }
+        let ownedCheckout = false;
+        if (loaded.entry.worktree) {
+          using owner = await resolveLocalWorkspaceOwner({
+            ...session,
+            cfg: context.getRuntimeConfig(),
+            assertCurrent: () => {
+              selectedSession.readCurrent();
+              admitted.requester.assertCurrent();
+            },
+          });
+          const requestedPath = path.isAbsolute(params.workspacePath)
+            ? await fs.realpath(params.workspacePath)
+            : undefined;
+          owner?.assertCurrent();
+          // Existing custody admits this checkout without granting arbitrary host paths.
+          ownedCheckout = Boolean(owner && requestedPath && owner.worktree.path === requestedPath);
+        }
+        if (!ownedCheckout) {
+          const source = await prepareSessionCreateRequestedCwd({
+            cfg: context.getRuntimeConfig(),
+            requestedCwd: params.workspacePath,
+            clientPresent: true,
+            clientScopes: admitted.requester.snapshot.scopes,
+          });
+          admitted.requester.assertCurrent();
+          if (!source.ok) {
+            throw new Error(source.error.message);
+          }
+          const placements = context.workerSessionPlacementService;
+          if (!placements?.withLocalWorkspaceReservation) {
+            throw new Error("Workspace preparation is unavailable during Gateway startup.");
+          }
+          task = await placements.withLocalWorkspaceReservation(
+            { ...session, sessionId: loaded.entry.sessionId },
+            (assertOwned) =>
+              prepareGitHubPublicationTaskWorkspace({
+                options,
+                parent: { ...loaded, entry: loaded.entry! },
+                requester: admitted.requester,
+                source: source.value!,
+                idempotencyKey: params.idempotencyKey,
+                policy: caller.workspacePublicationPolicy,
+                assertCurrent: () => {
+                  selectedSession.readCurrent();
+                  assertOwned();
+                },
+              }),
+          );
+        }
+      } else {
+        const receipt = await readSharedGitHubPublication(
+          {
+            ...session,
+            sessionId: loaded.entry.sessionId,
+            lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
+          },
+          { idempotencyKey: params.idempotencyKey },
+          () => selectedSession.readCurrent(),
+        );
+        admitted.requester.assertCurrent();
+        if (receipt && receipt.session_key !== session.sessionKey) {
+          task = { agentId: receipt.agent_id, sessionKey: receipt.session_key };
+        }
+      }
+      if (task) {
+        const runId = caller?.workspacePublicationRunId ?? caller?.operationalRunInstance?.runId;
+        const taskRequester = await prepareGitHubPublicationTaskRequester(
+          admitted.requester,
+          task,
+          {
+            ...session,
+            sessionId: loaded.entry.sessionId,
+            lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
+            ...(runId ? { runId } : {}),
+          },
+          context.getCommittedRuntimeConfig ?? context.getRuntimeConfig,
+        );
+        using taskLifetime = {
+          requester: taskRequester.requester,
+          [Symbol.dispose]: taskRequester.release,
+        };
+        const result = await coordinator.requestForSessionV2({
+          ...params,
+          ...task,
+          requester: taskLifetime.requester,
+        });
+        admitted.requester.assertCurrent();
+        selectedSession.readCurrent();
+        respond(true, result);
+        return;
+      }
       const result = await coordinator.requestForSessionV2({
         ...params,
         ...session,
@@ -329,6 +456,24 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       });
       sessionMutationAuthorization?.assertCurrent();
       respond(true, result);
+    },
+  ),
+  "sessions.github.readiness": defineSessionGitHubMethod(
+    "sessions.github.readiness",
+    validateSessionGitHubReadinessParams,
+    async (options) => {
+      const deadline = new AbortController();
+      const result = await raceWithTimeout(
+        () => readGitHubPublicationReadiness(options, options.params, deadline.signal),
+        GITHUB_OPTIONS_TIMEOUT_MS,
+        () => {
+          const error = new GitHubOptionsTimeoutError();
+          deadline.abort(error);
+          throw error;
+        },
+        { ref: false },
+      );
+      options.respond(true, result);
     },
   ),
   "sessions.github.options": defineSessionGitHubMethod(
@@ -386,13 +531,16 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
               }
             : null;
           if (shared && read.sessionScoped) {
-            if (
-              !(await hasSupportedGitHubPublicationTarget(
-                session,
-                assertResponseCurrent,
-                read.currentSessionRead,
-              ))
-            ) {
+            const source = await qualifyGitHubPublicationSource(
+              session,
+              assertResponseCurrent,
+              read.currentSessionRead,
+            );
+            if (!source.ok) {
+              throw source.cause;
+            }
+            source.assertCurrent();
+            if (source.target.kind !== "supported") {
               shared = null;
               sharedUnavailableReason = "unsupported_workspace";
             }
@@ -402,9 +550,19 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
             action && personalSnapshot
               ? service!.revalidateStatus(action, personalSnapshot)
               : personalSnapshot;
+          // Personal publication accounts are always issued by github.com.
+          const avatarUrls = {
+            ...(shared && identity?.host
+              ? { shared: githubAccountAvatarUrl(identity.host, shared.accountId) }
+              : {}),
+            ...(personal?.account
+              ? { personal: githubAccountAvatarUrl("github.com", personal.account.accountId) }
+              : {}),
+          };
           options.respond(true, {
             personal,
             shared,
+            ...(Object.keys(avatarUrls).length ? { avatarUrls } : {}),
             ...(identity?.stale || personal?.stale ? { stale: true } : {}),
             ...(sharedUnavailableReason ? { sharedUnavailableReason } : {}),
             pendingPersonal,

@@ -25,6 +25,7 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { holdReconcileAck } from "./session-transcript-reconcile.test-support.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
@@ -145,7 +146,7 @@ it.each([
       await waitForSessionTranscriptIndexReconcile(options);
       const database = openOpenClawAgentDatabase(options);
       fixtures.markRebuild(database.db);
-      const held = fixtures.holdReconcileAck(observer, "plan-start");
+      const held = holdReconcileAck(observer, "plan-start");
       resume = held.release;
       startSessionTranscriptIndexReconcile(options);
       await held.paused;
@@ -302,7 +303,7 @@ it("settles pending sessions after background failure without retracting publish
     database.db
       .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 1")
       .run(broken.sessionId);
-    const held = fixtures.holdReconcileAck(observer, "plan-finish", scope.sessionId);
+    const held = holdReconcileAck(observer, "plan-finish", scope.sessionId);
     const terminal = createDeferred<"done" | "failed">();
     const observeTask = observer.onTask;
     observer.onTask = (task) => {
@@ -365,7 +366,7 @@ it.each(["rewrite", "replacement", "json-update"] as const)(
       for (const target of [scope, unrelated]) {
         fixtures.markRebuild(database.db, target.sessionId);
       }
-      const held = fixtures.holdReconcileAck(observer, "plan-start", unrelated.sessionId);
+      const held = holdReconcileAck(observer, "plan-start", unrelated.sessionId);
       release = held.release;
       startSessionTranscriptIndexReconcile({ ...options, preferredSessionId: unrelated.sessionId });
       await held.paused;

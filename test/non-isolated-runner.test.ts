@@ -56,7 +56,12 @@ function childEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-const fixtureWorkers = createVitestWorkerRun(childEnv());
+const fixtureWorkers = createVitestWorkerRun(
+  childEnv(),
+  undefined,
+  undefined,
+  resolveTestNodeExecPath(),
+);
 afterAll(() => fixtureWorkers.dispose());
 try {
   await fixtureWorkers.prepare();
@@ -130,14 +135,36 @@ it("starts with an empty, attribute-free body and native default focus", () => {
 function fixtureFiles(fixtureRoot: string): Record<string, string> {
   const sourcePath = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
   const payloadImports = `import { createRequire } from "node:module";
-import { queryObjects } from "node:v8";
-const { ManualPayload, AutoPayload } = createRequire(import.meta.url)("./mock-payloads.cjs");`;
+import { expectCollected, expectLiveObjects } from ${sourcePath("test-utils/retention.ts")};
+const { ManualPayload, AutoPayload, manualRefs, autoRefs } = createRequire(import.meta.url)("./mock-payloads.cjs");`;
 
   return {
     "runner.ts": `import Runner from ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))};
 import { expect, vi, type RunnerTestFile } from "vitest";
 const resetModules = vi.resetModules;
 export default class FixtureRunner extends Runner {
+  private readonly domImport = Promise.withResolvers<void>();
+  private readonly domCollection = Promise.withResolvers<void>();
+
+  override async onCollectStart(file: RunnerTestFile) {
+    const held = file.filepath.endsWith("09-j-test-api-mock-only.test.ts");
+    // Reproduce Vitest's unawaited queue notification without a real timer.
+    if (held) await this.domImport.promise;
+    super.onCollectStart(file);
+    if (held) this.domCollection.resolve();
+  }
+
+  override async importFile(...args: Parameters<Runner["importFile"]>) {
+    try {
+      return await super.importFile(...args);
+    } finally {
+      if (args[1] === "collect" && args[0].endsWith("09-j-test-api-mock-only.test.ts")) {
+        this.domImport.resolve();
+        await this.domCollection.promise;
+      }
+    }
+  }
+
   override async onAfterRunFiles(files: RunnerTestFile[]) {
     const generation = files.some(file => file.filepath.endsWith("99-mcp-b-retained-owner.test.ts"))
       ? "?mcp-retirement-generation"
@@ -147,6 +174,11 @@ export default class FixtureRunner extends Runner {
       : Runner.prototype.onAfterRunFiles;
     await cleanup.call(this, files);
     expect(vi.resetModules, "file cleanup restores the native module reset").toBe(resetModules);
+    if (files.some(file => file.filepath.includes("00-resource-free-"))) {
+      for (const name of ["agentDatabaseReaders", "agentDatabaseAsyncResources"]) {
+        expect(Object.hasOwn(globalThis, Symbol.for("openclaw." + name)), "empty file cleanup must not initialize " + name).toBe(false);
+      }
+    }
   }
 }
 `,
@@ -166,6 +198,22 @@ it("applies the first file's mock before loading its production importer", async
     await import(${sourcePath("infra/openclaw-root.ts")});
   expect(resolveOpenClawPackageRootSync({ cwd: root })).toBe(root);
   await expect(resolveOpenClawPackageRoot({ cwd: root })).resolves.toBe(root);
+});
+`,
+    "00-resource-free-node.test.ts": `/* @vitest-environment node */
+import { expect, it } from "vitest";
+it("runs a node file without initializing agent database owners", () => {
+  for (const name of ["agentDatabaseReaders", "agentDatabaseAsyncResources"]) {
+    expect(Object.hasOwn(globalThis, Symbol.for("openclaw." + name))).toBe(false);
+  }
+});
+`,
+    "00-resource-free-jsdom.test.ts": `/* @vitest-environment jsdom */
+import { expect, it } from "vitest";
+it("runs a jsdom file without initializing agent database owners", () => {
+  for (const name of ["agentDatabaseReaders", "agentDatabaseAsyncResources"]) {
+    expect(Object.hasOwn(globalThis, Symbol.for("openclaw." + name))).toBe(false);
+  }
 });
 `,
     "01-dep.ts": 'export function flavor(): string {\n  return "real";\n}\n',
@@ -383,14 +431,18 @@ it("starts from unrouted, unpatched console state", () => {
   spy.mockRestore();
 });
 `,
-    // Native require keeps only the constructors stable across module resets.
+    // Native require keeps weak instance registries stable across module resets.
     // Plain factory closures avoid vi.fn's separate process-lifetime mock set.
-    // Each census collects and traverses the heap. Run this chain after the
-    // collection-failure pair, before unrelated fixtures grow the shared heap;
-    // keep both presence and release checks without pre-allocation scans.
-    "mock-payloads.cjs": `class ManualPayload { value = "manual"; }
-class AutoPayload extends Date {}
-module.exports = { ManualPayload, AutoPayload };
+    // Keep both presence and release checks across the collection-failure pair.
+    "mock-payloads.cjs": `const manualRefs = [], autoRefs = [];
+class ManualPayload {
+  value = "manual";
+  constructor() { manualRefs.push(new WeakRef(this)); }
+}
+class AutoPayload extends Date {
+  constructor(...args) { super(...args); autoRefs.push(new WeakRef(this)); }
+}
+module.exports = { ManualPayload, AutoPayload, manualRefs, autoRefs };
 `,
     "07-manual-dep.ts": `export function flavor() { return "real"; }
 export const untouched = "original";
@@ -404,13 +456,13 @@ vi.mock("./07-manual-dep.js", () => {
 it("creates a file-owned manual mock payload", async () => {
   const { flavor } = await import("./07-manual-dep.js");
   expect(flavor()).toBe("manual");
-  expect(queryObjects(ManualPayload)).toBe(1);
+  await expectLiveObjects(manualRefs, 1);
 });
 `,
     "01-d-manual-release.test.ts": `import { expect, it } from "vitest";
 ${payloadImports}
 it("releases the previous file manual mock payload", async () => {
-  expect(queryObjects(ManualPayload)).toBe(0);
+  await expectCollected(...manualRefs);
   const { flavor, untouched } = await import("./07-manual-dep.js");
   expect(flavor()).toBe("real");
   expect(untouched).toBe("original");
@@ -446,13 +498,13 @@ vi.mock("./08-auto-dep.js");
 it("creates a file-owned automock payload", async () => {
   const { payload } = await import("./08-auto-dep.js");
   expect(payload.getTime()).toBe(1234);
-  expect(queryObjects(AutoPayload)).toBe(1);
+  await expectLiveObjects(autoRefs, 1);
 });
 `,
     "01-h-auto-release.test.ts": `import { expect, it } from "vitest";
 ${payloadImports}
 it("releases the previous file automock payload", async () => {
-  expect(queryObjects(AutoPayload)).toBe(0);
+  await expectCollected(...autoRefs);
   const { payload } = await import("./08-auto-dep.js");
   expect(payload.getTime()).toBe(1234);
 });
@@ -570,8 +622,8 @@ async function assertCompletion(
 
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 80,
-    numPassedTests: 79,
+    numTotalTests: 82,
+    numPassedTests: 81,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,

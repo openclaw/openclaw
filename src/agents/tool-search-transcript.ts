@@ -1,15 +1,24 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { transferMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { copyInternalToolResultState } from "./runtime/internal-hooks.js";
 import { toToolSearchJsonSafe } from "./tool-search-json.js";
 
 function freezeJsonSnapshot(value: unknown): unknown {
   if (value === null || typeof value !== "object") {
     return value;
   }
-  for (const nested of Object.values(value)) {
-    freezeJsonSnapshot(nested);
+  if (Array.isArray(value)) {
+    for (const nested of value) {
+      freezeJsonSnapshot(nested);
+    }
+  } else {
+    // JSON decoding owns this graph; enumerate it without a values array per object.
+    for (const key in value) {
+      if (Object.hasOwn(value, key)) {
+        freezeJsonSnapshot(Reflect.get(value, key));
+      }
+    }
   }
   return Object.freeze(value);
 }

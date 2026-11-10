@@ -25,6 +25,7 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
+import { getMessageDerivations } from "./message-derivations.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 import { readLiveDiffStat } from "./tool-call-diff.ts";
 import { readPreparedActivity } from "./tool-call-grouping.ts";
@@ -136,6 +137,11 @@ export function resolveToolCardOutcome(
   if (card.toolOutput?.outcome === "unknown") {
     return isToolCardError(card) ? "failed" : "unknown";
   }
+  if (card.activity?.unpairedCall) {
+    return runActive === true && card.live === true && card.completed !== true
+      ? "running"
+      : "unrecorded";
+  }
   if (card.activity) {
     const { status, phase } = card.activity;
     if (status === "failed" || status === "blocked") {
@@ -159,7 +165,18 @@ export function resolveToolCardOutcome(
   if (card.completed === true || (card.live !== true && card.outputText !== undefined)) {
     return "succeeded";
   }
-  return "unknown";
+  return "unrecorded";
+}
+
+/** Preserve view incompleteness when adapting card outcomes to shared activity. */
+export function projectToolCardActivityOutcome(
+  outcome: ToolCardOutcome,
+): Pick<NonNullable<ToolCard["activity"]>, "status" | "unpairedCall"> {
+  return outcome === "unrecorded"
+    ? { unpairedCall: true }
+    : {
+        status: outcome === "succeeded" ? "completed" : outcome === "unknown" ? undefined : outcome,
+      };
 }
 
 export function extractToolPreview(outputText: string | undefined): CanvasToolPreview | undefined {
@@ -498,18 +515,17 @@ function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-const toolCardsByMessage = new WeakMap<object, ToolCard[]>();
-
 export function extractToolCardsCached(message: unknown): ToolCard[] {
   if (!message || typeof message !== "object") {
     return extractToolCards(message);
   }
-  const cached = toolCardsByMessage.get(message);
+  const facts = getMessageDerivations(message);
+  const cached = facts.toolCards;
   if (cached) {
     return cached;
   }
   const cards = extractToolCards(message);
-  toolCardsByMessage.set(message, cards);
+  facts.toolCards = cards;
   return cards;
 }
 

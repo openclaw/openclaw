@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureMethodCall } from "../../../../test/helpers/capture-method-call.js";
 import {
@@ -21,11 +22,13 @@ import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { readToolEffectReceipt } from "../../tool-effect-receipt.js";
 import { managedWorktrees, ManagedWorktreeService } from "../../worktrees/service.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { activateSubagentRegistry } from "../registry/subagent-registry.js";
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import type {
   BoundParent,
   SpawnBoundaryOptions,
 } from "./subagent-spawn.participants.test-support.js";
+import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
 import { createBoundSpawnInvocation } from "./subagent-spawn.production-boundary.test-support.js";
 
 const whenIdle = (bound: BoundParent, run: () => void | Promise<void> = () => {}) =>
@@ -124,6 +127,8 @@ export function registerManagedWorktreeSpawnCases(
           ownedBound = await createBoundParent();
           signal.throwIfAborted();
           ownedGateway = await createBoundGateway(ownedBound);
+          vi.mocked(ownedGateway.runtime.lifecycle.waitForAgent).mockRestore();
+          await activateSubagentRegistry(ownedBound.resolveGatewayContext);
           signal.throwIfAborted();
           const allocate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
           const allocation = vi
@@ -165,6 +170,7 @@ export function registerManagedWorktreeSpawnCases(
           expect(subagentRuns.size).toBe(0);
           expect(runEmbeddedAgent).not.toHaveBeenCalled();
         }
+        const invocation = new AbortController();
         spawn = createBoundSpawnInvocation(bound, {
           visible: false,
           context: "isolated",
@@ -176,12 +182,14 @@ export function registerManagedWorktreeSpawnCases(
           ...(cleanup === "keep"
             ? { completionTarget: "parent" }
             : { expectsCompletionMessage: false }),
-        })();
+        })("spawn-managed-worktree", invocation.signal);
         const spawned = await withinTest(spawn, signal);
         expect(spawned.details, JSON.stringify(spawned)).toMatchObject({
           status: "accepted",
           context: "isolated",
         });
+        // Accepted workspace preparation belongs to the child, even after the invocation ends.
+        invocation.abort(new Error("Spawn invocation ended"));
         const details = expectDefined(
           normalizeAcceptedSessionSpawnResult(spawned),
           "accepted spawn",
@@ -202,7 +210,27 @@ export function registerManagedWorktreeSpawnCases(
           );
         await enter(preparationStarted.promise, "workspace preparation");
         releasePreparation.resolve();
-        await enter(modelStarted.promise, "model entry");
+        try {
+          await enter(modelStarted.promise, "model entry");
+        } catch (cause) {
+          if (signal.aborted) {
+            throw cause;
+          }
+          const receipt = asOptionalRecord(bound.context.dedupe.get(`agent:${details.runId}`));
+          const error = asOptionalRecord(receipt?.error);
+          const original = asOptionalRecord(error?.cause);
+          // Inspect only terminal errors from this synthetic child before teardown retires it.
+          const diagnostic = {
+            ...readBoundExecutionState(bound, details.runId),
+            errorMessage:
+              typeof error?.message === "string" ? error.message.slice(0, 1_000) : undefined,
+            causeMessage:
+              typeof original?.message === "string" ? original.message.slice(0, 1_000) : undefined,
+          };
+          throw new Error(`Child ended before model entry: ${JSON.stringify(diagnostic)}`, {
+            cause,
+          });
+        }
         const child = loadSessionEntry(childScope);
         const checkout = expectDefined(
           await managedWorktrees.findLiveByOwner("session", childSessionKey),

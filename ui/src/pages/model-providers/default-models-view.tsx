@@ -68,6 +68,7 @@ export type DefaultModelsViewProps = {
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
 const UTILITY_MODEL_PICKER_ID = "model-providers-utility-model";
 const UTILITY_MODEL_HELP_ID = "model-providers-utility-help";
+const DECISION_MODEL_HELP_ID = "model-providers-decision-help";
 const THINKING_HELP_ID = "model-providers-thinking-help";
 const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
 const TRANSLATED_THINKING_LEVELS = new Set(["off", "low", "medium", "high"]);
@@ -87,7 +88,7 @@ function modelOption(
   return {
     value: ref,
     label: model.name || ref,
-    ...(auth ? { detail: [auth.label, auth.detail].filter(Boolean).join(" · ") } : {}),
+    ...(auth ? { description: [auth.label, auth.detail].filter(Boolean).join(" · ") } : {}),
     ...(model.available === false ? { disabled: true } : {}),
     ...(model.provider ? { provider: model.provider } : {}),
   };
@@ -115,7 +116,7 @@ function HelpTitle(params: {
               }
             }}
           >
-            <Icon name="info" />
+            <Icon name="circleQuestionMark" />
           </button>
           <div slot="content" class="settings-section__help-panel">
             <For each={params.paragraphs}>{(text) => <p>{text}</p>}</For>
@@ -301,6 +302,7 @@ function FallbackModel(props: {
       }
       control={
         <ModelPicker
+          windowed
           label={props.label}
           value={props.fallbacks[0] ?? ""}
           options={options()}
@@ -427,93 +429,47 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           ? `${t("quickSettings.model.fastModes.auto")} · ${automatic?.label ?? ref}`
           : t("quickSettings.model.fastModes.auto"),
         provider: automatic?.provider,
-        detail:
+        description:
           ref === null
             ? t("modelProviders.defaults.automaticUnavailable")
             : selected === AUTOMATIC_UTILITY_VALUE && route
-              ? [automatic?.detail, route.label].filter(Boolean).join(" · ")
-              : automatic?.detail,
+              ? [automatic?.description, route.label].filter(Boolean).join(" · ")
+              : automatic?.description,
       },
       { value: "", label: t("modelProviders.defaults.disabled") },
     ];
     for (const option of options()) {
-      const detail =
+      const description =
         option.value === selected && route
-          ? [option.detail, route.label].filter(Boolean).join(" · ")
-          : option.detail;
-      choices.push(detail === option.detail ? option : Object.assign({}, option, { detail }));
+          ? [option.description, route.label].filter(Boolean).join(" · ")
+          : option.description;
+      choices.push(
+        description === option.description ? option : Object.assign({}, option, { description }),
+      );
     }
     return choices;
   });
 
+  // Discovery reports on the heading line, so the rows below it never move.
+  const catalogProgress = <CatalogProgress {...props} />;
   return (
     <SettingsSection
       title={t("modelProviders.defaults.title")}
       description={t("modelProviders.defaults.subtitle")}
+      actions={catalogProgress}
     >
       <div class="model-providers__defaults">
-        {!props.loading && props.models.length === 0 ? (
-          <div class="callout warning">{t("modelProviders.defaults.noModels")}</div>
-        ) : undefined}
         <SettingsRow
           title={t("modelProviders.defaults.primary")}
           control={
             <ModelPicker
+              windowed
               label={t("modelProviders.defaults.primary")}
               value={primary()}
               options={primaryOptions()}
               disabled={props.models.length === 0 || saving()}
               title={title()}
               onChange={props.onPrimaryChange}
-            />
-          }
-        />
-        <SettingsRow
-          title={
-            <HelpTitle
-              title={t("modelProviders.defaults.utility")}
-              label={t("modelProviders.defaults.utilityHelpLabel")}
-              triggerId={UTILITY_MODEL_HELP_ID}
-              paragraphs={[
-                t("modelProviders.defaults.utilityHelpPurpose"),
-                t("modelProviders.defaults.utilityHelpAutomatic"),
-              ]}
-            />
-          }
-          control={
-            <ModelPicker
-              id={UTILITY_MODEL_PICKER_ID}
-              label={t("modelProviders.defaults.utility")}
-              value={utilityValue()}
-              options={utilityOptions()}
-              disabled={modelControlsDisabled() || saving()}
-              title={title() || utilityRoute()?.detail || ""}
-              onChange={(value) =>
-                props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
-              }
-            />
-          }
-        />
-        <FallbackModel
-          label={t("modelProviders.defaults.utilityFallback")}
-          fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
-          primary={modelSettingPrimary(props.selection.utilityModel)}
-          options={options()}
-          disabled={modelControlsDisabled() || saving() || utilityValue() === ""}
-          title={title()}
-          onChange={props.onUtilityFallbackChange}
-        />
-        <SettingsRow
-          title={t("chat.modelControls.decisionLabel")}
-          description={t("chat.modelControls.decisionHelp")}
-          control={
-            <DecisionModelPicker
-              id={"model-providers-decision-model"}
-              models={props.decisionModels}
-              value={props.selection.decisionModel}
-              disabled={!props.canMutate || saving()}
-              title={title()}
-              onChange={props.onDecisionChange}
             />
           }
         />
@@ -548,7 +504,62 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           }}
           onReset={props.onFastModeReset}
         />
-        <CatalogProgress {...props} />
+        <SettingsRow
+          title={
+            <HelpTitle
+              title={t("modelProviders.defaults.utility")}
+              label={t("modelProviders.defaults.utilityHelpLabel")}
+              triggerId={UTILITY_MODEL_HELP_ID}
+              paragraphs={[
+                t("modelProviders.defaults.utilityHelpPurpose"),
+                t("modelProviders.defaults.utilityHelpAutomatic"),
+              ]}
+            />
+          }
+          control={
+            <ModelPicker
+              windowed
+              id={UTILITY_MODEL_PICKER_ID}
+              label={t("modelProviders.defaults.utility")}
+              value={utilityValue()}
+              options={utilityOptions()}
+              disabled={modelControlsDisabled() || saving()}
+              title={title() || utilityRoute()?.detail || ""}
+              onChange={(value) =>
+                props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
+              }
+            />
+          }
+        />
+        <FallbackModel
+          label={t("modelProviders.defaults.utilityFallback")}
+          fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
+          primary={modelSettingPrimary(props.selection.utilityModel)}
+          options={options()}
+          disabled={modelControlsDisabled() || saving() || utilityValue() === ""}
+          title={title()}
+          onChange={props.onUtilityFallbackChange}
+        />
+        <SettingsRow
+          title={
+            <HelpTitle
+              title={t("chat.modelControls.decisionLabel")}
+              label={t("modelProviders.defaults.decisionHelpLabel")}
+              triggerId={DECISION_MODEL_HELP_ID}
+              paragraphs={[t("chat.modelControls.decisionHelp")]}
+            />
+          }
+          control={
+            <DecisionModelPicker
+              id={"model-providers-decision-model"}
+              models={props.decisionModels}
+              value={props.selection.decisionModel}
+              disabled={!props.canMutate || saving()}
+              title={title()}
+              onChange={props.onDecisionChange}
+            />
+          }
+        />
         {props.canMutate ? renderMutationMessage(props.message) : undefined}
       </div>
     </SettingsSection>

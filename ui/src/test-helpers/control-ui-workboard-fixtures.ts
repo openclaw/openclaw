@@ -1,16 +1,14 @@
 import type { CronJob } from "../api/types.ts";
 import { createBoardWidget } from "../lib/board/widget.test-support.ts";
-import {
-  createControlUiChatHistoryMessage as chatHistoryMessage,
-  createControlUiMockSessionRow as sessionRow,
-} from "./control-ui-session-fixtures.ts";
+import { createControlUiChatHistoryMessage as chatHistoryMessage } from "./control-ui-chat-history-fixtures.ts";
+import { createControlUiMockSessionRow as sessionRow } from "./control-ui-session-fixtures.ts";
 import { buildWorkboardProgressResponses } from "./control-ui-workboard-progress-fixtures.ts";
 import {
   buildWorkboardStateCells,
   buildWorkboardStateSessions,
   MATRIX_STATES,
 } from "./control-ui-workboard-states.ts";
-import { cronListResponseFixture } from "./cron.ts";
+import { cronJobsListResponse, cronListResponseFixture } from "./cron.ts";
 
 export function buildWorkboardMocks(
   baseTime: number,
@@ -565,15 +563,11 @@ export function buildWorkboardMocks(
           },
         ],
       },
-      "cron.list": cronListResponseFixture({
-        jobs: [automationJob],
-        snapshotRevision: "workboard-mock-cron",
-        total: 1,
-        offset: 0,
-        limit: 50,
-        hasMore: false,
-        nextOffset: null,
-      }),
+      "cron.list": cronListResponseFixture(
+        cronJobsListResponse([automationJob], {
+          snapshotRevision: "workboard-mock-cron",
+        }),
+      ),
 
       "board.get": {
         sessionKey,

@@ -6,9 +6,9 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { createStatusGatewayProbeBudget } from "../commands/status.gateway-probe-budget.js";
 import { resolveGatewayProbeSnapshot } from "../commands/status.scan.shared.js";
 import {
-  seedDeviceAuthToken,
-  seedOriginDeviceToken,
-} from "../infra/device-auth-store.test-support.js";
+  storeDeviceAuthToken as seedDeviceAuthToken,
+  storeOriginDeviceToken as seedOriginDeviceToken,
+} from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -88,9 +88,9 @@ function withAuth(tokens: StoredTokens, run: (fixture: AuthFixture) => Promise<v
     const { deviceId } = loadOrCreateDeviceIdentity({ env });
     const lookup = { deviceId, role: "operator", env };
     if (tokens.legacy) {
-      seedDeviceAuthToken({ ...lookup, token: tokens.legacy });
+      await seedDeviceAuthToken({ ...lookup, token: tokens.legacy });
     }
-    seedOriginDeviceToken({
+    await seedOriginDeviceToken({
       ...lookup,
       gatewayScope: gatewayOriginScope(tokens.scope ?? loopbackUrl),
       token: tokens.origin,

@@ -95,10 +95,9 @@ suite.define(() => {
       const releasePreviewReads = await holdOutboxPreviewReads(page);
       await page.reload();
       await waitForControlUiGatewayReady(page);
-      await paneFor(page)
-        .locator(".chat-send-status")
-        .getByText("Queued", { exact: true })
-        .waitFor();
+      const retainedTurn = paneFor(page).locator(".chat-group.user", { hasText: message });
+      await retainedTurn.locator("time.chat-group-timestamp").waitFor();
+      expect(await retainedTurn.locator(".chat-send-status").count()).toBe(0);
       await expectRequestCountStable(gateway, "chat.send", 0);
       // Automatic replay waits for a private copy of the complete Blob payload.
       expect(await releasePreviewReads()).toBeGreaterThan(0);
@@ -169,9 +168,8 @@ suite.define(() => {
       await expect.poll(() => payloadCount(page)).toBe(1);
       await expect.poll(() => composerFor(page).inputValue()).toBe("");
       await expectRequestCountStable(gateway, "chat.send", 0);
-      const reloaded = page.waitForEvent("domcontentloaded");
       await context.setOffline(false);
-      await reloaded;
+      await page.reload({ waitUntil: "domcontentloaded" });
       await gateway.setOnline(true);
       const sent = await gateway.waitForRequest("chat.send");
       expectAttachmentSend(sent.params, { message, idempotencyKey: queued.sendRunId });
@@ -260,7 +258,10 @@ suite.define(() => {
           .poll(async () => (await readQueue(removedDuplicate))[0]?.attachmentPayload?.key)
           .not.toBe(original.attachmentPayload?.key);
         await expect.poll(() => payloadCount(page)).toBe(3);
+        // Routine replay is quiet; discard remains available when delivery needs reconnecting.
+        await disconnect(removedDuplicate, removalGateway);
         await paneFor(removedDuplicate)
+          .locator('.chat-send-status[data-send-state="waiting-reconnect"]')
           .getByRole("button", { name: "Discard", exact: true })
           .click();
         await expect.poll(() => payloadCount(page)).toBe(2);

@@ -398,6 +398,7 @@ process.stdout.write(JSON.stringify(version === "2026.9.2" ? { openclaw: packed 
   }
   const expectedChunkEnv = "OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK=";
   for (const [index, args] of invocations.entries()) {
+    expect(args[args.indexOf("--cgroupns") + 1]).toBe("private");
     expect(args.find((arg) => arg.startsWith(expectedChunkEnv))).toBe(
       expectedChunkEnv + summary.sources[index].source.expectedMissingChunk,
     );

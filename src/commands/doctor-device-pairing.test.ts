@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearDeviceAuthToken, loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import {
-  seedDeviceAuthToken,
-  readDeviceAuthTokenForTest,
-} from "../infra/device-auth-store.test-support.js";
+  clearDeviceAuthToken,
+  loadDeviceAuthToken,
+  storeDeviceAuthToken as seedDeviceAuthToken,
+  loadDeviceAuthToken as readDeviceAuthTokenForTest,
+} from "../infra/device-auth-store.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -79,6 +81,7 @@ function pairedDevice(overrides: Partial<GatewayPairedDevice> = {}) {
 }
 
 describe("collectDevicePairingHealthFindings", () => {
+  const unreadablePath = path.join(os.homedir(), ".openclaw", "client", "credentials.sqlite");
   let collectDevicePairingHealthFindings: typeof import("./doctor-device-pairing.js").collectDevicePairingHealthFindings;
   const collect = (mode: "local" | "remote", healthOk = false) =>
     collectDevicePairingHealthFindings({ cfg: { gateway: { mode } }, healthOk });
@@ -209,7 +212,7 @@ describe("collectDevicePairingHealthFindings", () => {
         legacyDeviceAuthContents,
       );
       const auth = { env: state.env, deviceId: "synthetic-device", role: "operator" };
-      const readToken = () => readDeviceAuthTokenForTest(auth)?.token;
+      const readToken = async () => (await readDeviceAuthTokenForTest(auth))?.token;
       const migrate = () =>
         migrateLegacyDeviceAuth({
           detected: detectLegacyDeviceAuth({
@@ -220,32 +223,30 @@ describe("collectDevicePairingHealthFindings", () => {
           env: state.env,
         });
       expect((await migrate()).warnings).toEqual([]);
-      expect(readToken()).toBe(expectedToken);
+      expect(await readToken()).toBe(expectedToken);
       await expect(loadDeviceAuthToken(auth)).resolves.toMatchObject({ token: expectedToken });
       const findings = await collect("remote");
       expect(findings).toEqual([]);
       expect(await fs.readFile(sourcePath, "utf8")).toBe(legacyDeviceAuthContents);
-      expect(readToken()).toBe(expectedToken);
+      expect(await readToken()).toBe(expectedToken);
       expect(await clearDeviceAuthToken(auth)).toBe(true);
       expect((await migrate()).changes).toEqual([]);
-      expect(readToken()).toBeUndefined();
+      expect(await readToken()).toBeUndefined();
       expect(await fs.readFile(sourcePath, "utf8")).toBe(legacyDeviceAuthContents);
     });
   });
 
   it("warns when the local cached device token predates the gateway rotation", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(1);
-      try {
-        seedDeviceAuthToken({
-          deviceId: identity.deviceId,
-          role: "operator",
-          token: "stale-local-token",
-          scopes: ["operator.read"],
-        });
-      } finally {
-        now.mockRestore();
-      }
+      const now = vi.spyOn(Date, "now").mockReturnValueOnce(1);
+      const stored = seedDeviceAuthToken({
+        deviceId: identity.deviceId,
+        role: "operator",
+        token: "stale-local-token",
+        scopes: ["operator.read"],
+      });
+      now.mockRestore();
+      await stored;
 
       const rotated = await rotateDeviceToken({
         deviceId: identity.deviceId,
@@ -262,16 +263,50 @@ describe("collectDevicePairingHealthFindings", () => {
     });
   });
 
-  it("preserves pairing diagnostics when the token inventory read rejects", async () => {
-    await withApprovedOperatorPairing(async () => {
-      using inventory = vi
-        .spyOn(await import("../infra/device-auth-store.js"), "loadDeviceAuthTokens")
-        .mockRejectedValueOnce(new Error("synthetic inventory failure"));
+  it.each([
+    {
+      name: "device identity",
+      stub: async () =>
+        vi
+          .spyOn(
+            await import("../infra/device-identity-async.js"),
+            "loadDeviceIdentityIfPresentAsync",
+          )
+          .mockRejectedValueOnce(new Error("synthetic identity failure")),
+      message: "Could not read the local device identity",
+    },
+    {
+      name: "token inventory",
+      stub: async () =>
+        vi
+          .spyOn(await import("../infra/device-auth-store.js"), "loadDeviceAuthTokens")
+          .mockRejectedValueOnce(
+            new Error(`EACCES: permission denied, realpath '${unreadablePath}'`),
+          ),
+      message: `Could not read the local device auth token inventory, so local device token scopes were not checked: EACCES: permission denied, realpath '${path.join("~", ".openclaw", "client", "credentials.sqlite")}'`,
+    },
+  ] as const)(
+    "reports an unreadable local $name instead of a clean device check",
+    async ({ stub, message }) => {
+      await withApprovedOperatorPairing(async () => {
+        using rejected = await stub();
 
-      await expect(collect("local")).resolves.toEqual([]);
-      expect(inventory).toHaveBeenCalledOnce();
-    });
-  });
+        const findings = await collect("local");
+        expect(findings).toEqual([
+          expect.objectContaining({
+            severity: "warning",
+            category: "fix-now",
+            path: "identity.device-auth",
+            requirement: "local-device-auth-unreadable",
+            message: expect.stringContaining(message),
+            fixHint: expect.stringContaining("openclaw devices list"),
+          }),
+        ]);
+        expect(findings[0]?.message).not.toContain(unreadablePath);
+        expect(rejected).toHaveBeenCalledOnce();
+      });
+    },
+  );
 
   it.each([
     { role: "node", tokenScopes: ["operator.read"], recoveryOption: " --no-scopes" },
@@ -299,7 +334,7 @@ describe("collectDevicePairingHealthFindings", () => {
 
   it("does not suggest rotating local auth for a role that is no longer approved", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {
-      seedDeviceAuthToken({
+      await seedDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "node",
         token: "stale-node-token",
@@ -374,7 +409,7 @@ describe("collectDevicePairingHealthFindings", () => {
 
   it("does not duplicate missing-token warnings when local cache exists for an approved role", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {
-      seedDeviceAuthToken({
+      await seedDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "operator",
         token: "stale-local-token",

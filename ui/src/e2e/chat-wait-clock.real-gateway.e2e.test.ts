@@ -133,6 +133,17 @@ async function clocks(parent: Locator) {
     })),
   );
 }
+async function waitForClocks(parent: Locator) {
+  let measured: Awaited<ReturnType<typeof clocks>> = [];
+  // The outer status can be visible before its elapsed-clock content mounts.
+  await expect
+    .poll(async () => {
+      measured = await clocks(parent);
+      return measured.length > 0 && measured.every((clock) => clock.text !== "");
+    })
+    .toBe(true);
+  return measured;
+}
 function assertClocks(measured: Awaited<ReturnType<typeof clocks>>, endedAt: number) {
   expect(measured.length).toBeGreaterThan(0);
   for (const clock of measured) {
@@ -278,7 +289,8 @@ suite.define(() => {
             2,
           );
           expect(updated.child.startedAt).toBe(initial.child.startedAt);
-          const updatedClocks = await clocks(parent);
+          const updatedClocks = await waitForClocks(parent);
+          assertClocks(updatedClocks, updated.parent.endedAt!);
           proof.updated = {
             parent: lifecycle(updated.parent),
             child: lifecycle(updated.child),
@@ -307,7 +319,8 @@ suite.define(() => {
           expect(reloaded.child.startedAt).toBe(initial.child.startedAt);
           expect(history.sessionInfo).toBeDefined();
           expect(history.sessionInfo!.endedAt).toBe(updated.parent.endedAt);
-          const reloadedClocks = await clocks(parent);
+          const reloadedClocks = await waitForClocks(parent);
+          assertClocks(reloadedClocks, updated.parent.endedAt!);
           proof.reloaded = {
             parent: lifecycle(reloaded.parent),
             child: lifecycle(reloaded.child),
@@ -318,8 +331,6 @@ suite.define(() => {
             waiting,
             parent.getByRole("paragraph").filter({ hasText: fixture.updateReply }),
           ]);
-          assertClocks(updatedClocks, updated.parent.endedAt!);
-          assertClocks(reloadedClocks, updated.parent.endedAt!);
           expect(reloadedClocks).toHaveLength(updatedClocks.length);
 
           proof.stage = "actual child completion and parent resume";

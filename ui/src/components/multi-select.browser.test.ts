@@ -234,6 +234,20 @@ it("selects the visible highlight when a catalog refresh shortens the open list"
   await pressKey(element, "Enter");
   expect(props.onChange).toHaveBeenCalledExactlyOnceWith([sonnet, opus]);
 });
+it("finds and selects a model by its displayed description", async () => {
+  const { element, props } = await createMultiSelect({
+    options: [{ value: "fixture/backup", label: "Backup", description: "Cafe\u0301 endpoint" }],
+    value: [],
+    allowCustom: false,
+  });
+  await typeText(element, "Café");
+  expect(values(element, "option")).toEqual(["fixture/backup"]);
+  expect(element.querySelector(".picker-select__description")?.textContent).toBe(
+    "Cafe\u0301 endpoint",
+  );
+  await pressKey(element, "Enter");
+  expect(props.onChange).toHaveBeenCalledExactlyOnceWith(["fixture/backup"]);
+});
 it("leaves composing input untouched until the operator confirms the completed value", async () => {
   const { element, props } = await createMultiSelect();
   await typeText(element, "local/模型");
@@ -259,6 +273,9 @@ it("stays inert while disabled", async () => {
   expect(isOpen(element)).toBe(false);
   expect(props.onOpen).not.toHaveBeenCalled();
 });
+
+// Geometry assertions measure the settled list, not the Select entry scale.
+document.documentElement.style.setProperty("--select-enter-duration", "0s");
 
 it("keeps the scroll position when the pointer highlights a clipped edge row", async () => {
   const { element } = await createMultiSelect({

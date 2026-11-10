@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createProviderConfigFixture } from "../config/runtime-snapshot.test-fixtures.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -255,15 +256,7 @@ describe("secrets runtime provider and media surfaces", () => {
   it("patches env shorthand model refs into the pinned runtime config", async () => {
     const config = asConfig({
       agents: { entries: { main: {} } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "$OPENAI_API_KEY",
-            models: [],
-          },
-        },
-      },
+      models: createProviderConfigFixture("$OPENAI_API_KEY").models,
     });
     const initial = await prepareSecretsRuntimeSnapshot({
       config,
@@ -414,11 +407,7 @@ describe("secrets runtime provider and media surfaces", () => {
                 request: {
                   auth: {
                     mode: "authorization-bearer",
-                    token: {
-                      source: "env",
-                      provider: "default",
-                      id: "MEDIA_INFERRED_AUDIO_TOKEN",
-                    },
+                    token: envTokenRef("MEDIA_INFERRED_AUDIO_TOKEN"),
                   },
                 },
               },
@@ -597,8 +586,8 @@ describe("secrets runtime provider and media surfaces", () => {
     });
 
     expect(snapshot.config.models?.providers?.["llama-cpp"]?.apiKey).toEqual(missingRef);
-    expect(snapshot.degradedOwners).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ ownerId: "memory-provider:main" })]),
+    expect(snapshot.degradedOwners).not.toContainEqual(
+      expect.objectContaining({ ownerId: "memory-provider:main" }),
     );
     activateSecretsRuntimeSnapshot(snapshot);
     await expect(
@@ -648,10 +637,8 @@ describe("secrets runtime provider and media surfaces", () => {
         allowUnavailableSecretOwners: true,
       });
       expect(snapshot.config.models?.providers?.[provider]?.apiKey).toEqual(missingRef);
-      expect(snapshot.degradedOwners).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ ownerKind: "provider", ownerId: provider }),
-        ]),
+      expect(snapshot.degradedOwners).toContainEqual(
+        expect.objectContaining({ ownerKind: "provider", ownerId: provider }),
       );
       activateSecretsRuntimeSnapshot(snapshot);
       await expect(

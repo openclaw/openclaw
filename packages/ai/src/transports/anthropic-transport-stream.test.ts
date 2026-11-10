@@ -10,6 +10,7 @@ import {
   type AiInlineContentBlock,
 } from "../host.js";
 import { anthropicServerSideFallbackCases } from "../providers/anthropic-server-fallback.test-support.js";
+import { makeStallingStream } from "../providers/provider-stream.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import type { AnthropicTransportOptions } from "./anthropic-transport-options.js";
@@ -116,13 +117,8 @@ function createOpenRawSseResponse(params: {
   onCancel: (reason: unknown) => void | Promise<void>;
 }): Response {
   const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(params.body));
-    },
-    cancel(reason) {
-      return params.onCancel(reason);
-    },
+  const stream = makeStallingStream([encoder.encode(params.body)], (reason) => {
+    return params.onCancel(reason);
   });
   return new Response(stream, {
     status: 200,
@@ -570,13 +566,8 @@ describe("anthropic transport stream", () => {
     let cancelReason: unknown;
     guardedFetchMock.mockResolvedValueOnce(
       new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(encoder.encode("partial failure detail"));
-          },
-          cancel(reason) {
-            cancelReason = reason;
-          },
+        makeStallingStream([encoder.encode("partial failure detail")], (reason) => {
+          cancelReason = reason;
         }),
         { status: 500 },
       ),
@@ -603,13 +594,8 @@ describe("anthropic transport stream", () => {
     let cancelCalled = false;
     guardedFetchMock.mockResolvedValueOnce(
       new Response(
-        new ReadableStream<Uint8Array>({
-          start(streamController) {
-            streamController.enqueue(encoder.encode("x".repeat(16 * 1024 * 1024 + 1)));
-          },
-          cancel() {
-            cancelCalled = true;
-          },
+        makeStallingStream([encoder.encode("x".repeat(16 * 1024 * 1024 + 1))], () => {
+          cancelCalled = true;
         }),
         { status: 200, headers: { "content-type": "text/event-stream" } },
       ),

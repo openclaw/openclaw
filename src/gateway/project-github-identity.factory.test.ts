@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGitHubToolIdentityStatus } from "../agents/github-tool-identity.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createFactoryGitHubReadClaim } from "./factory-github-proof.test-support.js";
 import { prepareGatewayProjectGitHubIdentity } from "./project-github-identity.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
@@ -27,17 +28,7 @@ const apiBaseUrl = `https://api.${host}`;
 const admissionPath = "/__factory__/github/repository-admission";
 const admissionRequest = `GET ${admissionPath}`;
 const issueUrl = `${apiBaseUrl}/repos/example/project/issues/1`;
-const claim = {
-  purpose: "session-item-read" as const,
-  binding: {
-    kind: "session" as const,
-    agentId: "main",
-    sessionKey: "agent:main:room",
-    sessionId: "session-1",
-    lifecycleRevision: "revision-1",
-    requestDigest: "synthetic-item-digest",
-  },
-};
+const claim = createFactoryGitHubReadClaim("synthetic-item-digest");
 const permissions = { contents: "read" as const, metadata: "read" as const };
 function client(): GatewayClient {
   return {

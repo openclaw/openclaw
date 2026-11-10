@@ -1,4 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal.js";
+import type { OpenClawIdTunnelPrincipal } from "../gateway/openclaw-id/tunnel-principal.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 
 /** Creator-owned logical target; physical process custody belongs to the sandbox registry. */
@@ -18,6 +20,7 @@ export type CronStreamSandboxTarget = {
   configLabel: string;
   operator?: {
     profileId: string;
+    openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
     scopes: string[];
     assignedRole: string | null;
     githubLogin: string | null;
@@ -42,6 +45,7 @@ const TARGET_FIELDS = new Set([
   "operator",
 ]);
 const OPERATOR_FIELDS = new Set([
+  "openclawIdPrincipal",
   "profileId",
   "scopes",
   "assignedRole",
@@ -90,6 +94,13 @@ export function parseCronStreamSandboxTarget(value: unknown): CronStreamSandboxT
     ) {
       return undefined;
     }
+    const principal =
+      input.openclawIdPrincipal === undefined
+        ? undefined
+        : openClawIdRecoveryPrincipalSchema.safeParse(input.openclawIdPrincipal);
+    if (principal && !principal.success) {
+      return undefined;
+    }
     const grant = input.gatewayAccessGrant;
     let gatewayAccessGrant: GatewayAccessGrantRef | null = null;
     if (grant !== null) {
@@ -105,6 +116,7 @@ export function parseCronStreamSandboxTarget(value: unknown): CronStreamSandboxT
     }
     operator = {
       profileId: input.profileId,
+      ...(principal?.success ? { openclawIdPrincipal: principal.data } : {}),
       scopes: [...input.scopes],
       assignedRole: input.assignedRole,
       githubLogin: input.githubLogin,

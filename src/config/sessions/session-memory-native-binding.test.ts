@@ -22,7 +22,7 @@ import {
   loadSessionEntry,
 } from "./session-accessor.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { withSessionActorStorage } from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 
 type Binding = {
   version: 1;

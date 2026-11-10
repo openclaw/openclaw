@@ -534,6 +534,7 @@ class GatewayBootstrapAuthTest {
       neutralizeColdStartAutoConnect(runtime)
       prefs.setManualTls(false)
       val endpoint = gatewayEndpoint()
+      prefs.saveGatewayTlsFingerprint(endpoint.stableId, "ab".repeat(32))
       installControlPageGateway(authMethod = "device-token")
       assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "setup-shared-secret")))
       val page =
@@ -542,6 +543,8 @@ class GatewayBootstrapAuthTest {
             page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
           }
         }!!
+      // Manual local cleartext ignores a saved pin; the page must reflect the admitted transport.
+      assertNull(page.tlsFingerprintSha256)
       val identityStore = DeviceIdentityStore.withPrefs(app, prefs)
       val identity = identityStore.loadOrCreate()
       val tokens = DeviceAuthStore(prefs)
@@ -1697,6 +1700,21 @@ class GatewayBootstrapAuthTest {
     val tls = readField<GatewayTlsParams>(desired, "tls")
     assertEquals(manualFingerprint, tls.expectedFingerprint)
     assertEquals(manualFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+  }
+
+  @Test
+  fun selectedGatewayThatHasNotConnectedIsNotKeptConnectedInTheBackground() {
+    val (_, prefs, runtime) =
+      gatewayFixture { _, _ -> GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE) }
+    val endpoint = tlsGatewayEndpoint()
+    // Manual setup registers the typed target before the first connection attempt.
+    prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+
+    runBlocking { assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "test-token-placeholder"))) }
+    waitForGatewayTrustPrompt(runtime)
+
+    assertEquals(endpoint.stableId, prefs.gatewayRegistry.activeStableId.value)
+    assertEquals(emptyList<String>(), prefs.gatewayRegistry.connectedStableIds.value)
   }
 
   @Test

@@ -12,6 +12,10 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { getOpenClawSystemUpdateKind } from "../../internal-runtime-context.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import {
+  sessionManagerReadToolResultProjectionEntries,
+  sessionManagerReadTranscriptBranch,
+} from "../../sessions/session-manager-view-types.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { declarePromptToolPin } from "../prompt-cache-observability.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
@@ -178,7 +182,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       state: sessionPromptState,
       routeKey: promptRouteKey,
       enabled: transcriptPolicy.inHistorySystemUpdates === true,
-      entries: sessionManager.getBranch(),
+      getEntries: () => sessionManager[sessionManagerReadTranscriptBranch](),
     })
   ) {
     await retireSystemPromptUpdates();
@@ -195,7 +199,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
             state: sessionPromptState,
             routeKey: promptRouteKey,
             systemPrompt: freshSystemPrompt,
-            entries: sessionManager.getBranch(),
+            entries: sessionManager[sessionManagerReadTranscriptBranch](),
+            historyBoundaryCount: sessionManager.getBoundaryCount(),
           });
           // Keep an attempt's restart visible through subsequent continuation preparations.
           if (prepared.restart || state.systemPromptSeries === undefined) {
@@ -222,6 +227,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     stableStringify([
       attempt.config?.tools,
       attempt.config?.agents?.entries?.[sessionAgentId]?.tools,
+      attempt.config?.plugins,
+      attempt.config?.desktop,
     ]),
   );
   const pinTools = usesSystemPromptSeries
@@ -231,7 +238,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           state: sessionPromptState,
           routeKey: promptRouteKey,
           toolPolicy: toolPolicyDigest,
-          entries: sessionManager.getBranch(),
+          entries: sessionManager[sessionManagerReadTranscriptBranch](),
+          historyBoundaryCount: sessionManager.getBoundaryCount(),
           tools,
         });
         if (sessionPromptState.pendingToolSurface !== pending) {
@@ -322,7 +330,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   if (!input.isRawModelRun) {
     restoreCacheTtlToolResultProjections(
       toolResultPromptProjectionState,
-      sessionManager.getToolResultProjectionEntries(),
+      sessionManager[sessionManagerReadToolResultProjectionEntries](),
     );
   }
   const settleTracker = createEmbeddedAttemptSessionSettleTracker(activeSession);

@@ -1,9 +1,18 @@
-import { action, affects, createMemo, createSignal, onSettled, refresh } from "solid-js";
+import {
+  action,
+  affects,
+  createMemo,
+  createOptimisticStore,
+  createSignal,
+  onSettled,
+  refresh,
+} from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelDefaultsSaveField } from "./config-mutation.ts";
 import type { ModelProvidersData } from "./load.ts";
+import { showProfileActionError } from "./profiles-view.tsx";
 
-export type ModelProviderMutationScope = {
+type ModelProviderMutationScope = {
   client: GatewayBrowserClient | null;
   connectionEpoch: number;
   agentId: string;
@@ -28,11 +37,12 @@ export function createModelProviderMutationPresentation(deps: {
   const configObject = createMemo(deps.readConfigObject);
   const presentation = createMemo(() => {
     const owner = scope();
+    const [saving, setSaving] = createOptimisticStore<Record<string, boolean>>({});
     const [defaultsSaving, setDefaultsSaving] = createSignal<{
       field: ModelDefaultsSaveField;
       retired: Promise<void>;
     } | null>(null);
-    return { owner, defaultsSaving, setDefaultsSaving };
+    return { owner, defaultsSaving, setDefaultsSaving, saving, setSaving };
   });
   const isCurrent = (view: ReturnType<typeof presentation>, retired: Promise<void>) =>
     deps.isCurrent(view.owner) && retired === lifetime.promise;
@@ -62,51 +72,81 @@ export function createModelProviderMutationPresentation(deps: {
     }
   });
 
-  async function run<T>(
-    kind: "apiKey" | ModelDefaultsSaveField,
-    operation: (onAdmitted: () => void) => Promise<T>,
-    reportError: (error: unknown) => void,
-  ): Promise<T | undefined> {
-    const view = presentation();
-    const retired = lifetime.promise;
-    const defaultsSave = kind === "apiKey" ? null : { field: kind, retired };
-    try {
-      const pending = operation(() => {
-        if (defaultsSave && isCurrent(view, retired)) {
-          // Publish the initiating field with admission, before the owner's busy frame.
-          view.setDefaultsSaving(defaultsSave);
-        }
+  const presentLogout = action(function* (
+    view: ReturnType<typeof presentation>,
+    cardId: string,
+    completion: Promise<void>,
+    retired: Promise<void>,
+  ) {
+    if (isCurrent(view, retired)) {
+      view.setSaving((saving) => {
+        saving[cardId] = true;
       });
-      // Let owner publication and any just-opened modal settle before joining.
+      affects(authStatus);
+    }
+    yield Promise.race([completion, retired]);
+    if (isCurrent(view, retired)) {
+      // The logout owner already refreshed the accepted authentication facts.
+      yield refresh(authStatus);
+    }
+  });
+
+  return {
+    async logoutStarted(receipt: { cardId: string; completion: Promise<void> }) {
+      const view = presentation();
+      const retired = lifetime.promise;
+      // Let confirmation teardown and owner publication settle before joining.
       await new Promise<void>((resolve) => {
         onSettled(resolve);
       });
-      await present(view, kind, pending, retired);
-      return await pending;
-    } catch (error) {
-      if (isCurrent(view, retired)) {
-        reportError(error);
+      try {
+        await presentLogout(view, receipt.cardId, receipt.completion, retired);
+      } catch (error) {
+        if (isCurrent(view, retired)) {
+          showProfileActionError(error);
+        }
       }
-      return undefined;
-    } finally {
-      if (defaultsSave && isCurrent(view, retired) && view.defaultsSaving() === defaultsSave) {
-        view.setDefaultsSaving(null);
-      }
-    }
-  }
-
-  return {
-    scope,
-    isCurrent: deps.isCurrent,
+    },
+    logoutSaving: () => presentation().saving,
     authStatus,
     configObject,
-    retirement: () => lifetime.promise,
     retire() {
       presentation().setDefaultsSaving(null);
       lifetime.resolve();
       lifetime = Promise.withResolvers<void>();
     },
-    run,
+    async run<T>(
+      kind: "apiKey" | ModelDefaultsSaveField,
+      operation: (onAdmitted: () => void) => Promise<T>,
+      reportError: (error: unknown) => void,
+    ): Promise<T | undefined> {
+      const view = presentation();
+      const retired = lifetime.promise;
+      const defaultsSave = kind === "apiKey" ? null : { field: kind, retired };
+      try {
+        const pending = operation(() => {
+          if (defaultsSave && isCurrent(view, retired)) {
+            // Publish the initiating field with admission, before the owner's busy frame.
+            view.setDefaultsSaving(defaultsSave);
+          }
+        });
+        // Let owner publication and any just-opened modal settle before joining.
+        await new Promise<void>((resolve) => {
+          onSettled(resolve);
+        });
+        await present(view, kind, pending, retired);
+        return await pending;
+      } catch (error) {
+        if (isCurrent(view, retired)) {
+          reportError(error);
+        }
+        return undefined;
+      } finally {
+        if (defaultsSave && isCurrent(view, retired) && view.defaultsSaving() === defaultsSave) {
+          view.setDefaultsSaving(null);
+        }
+      }
+    },
     defaultsSaving: () => currentDefaultsSave() !== null,
     defaultsSavingField: () => currentDefaultsSave()?.field ?? null,
   };

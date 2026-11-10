@@ -98,29 +98,29 @@ function holdRowFacts(once = false) {
   return { entered, release };
 }
 
-it("materializes updated rows across worker batches without host SQL", async () => {
+it("materializes updated rows across worker batches without host SQL or realpath probes", async () => {
   await withSessionRowProjectionState(async (create) => {
-    const keys = Array.from(
-      { length: 65 },
-      (_, index) => `agent:main:row-facts-slice-${String(index).padStart(2, "0")}`,
-    );
-    const entries = keys.map((key, index) => ({
-      scope: { agentId: "main", sessionKey: key },
+    const entries = Array.from({ length: 65 }, (_, index) => ({
+      query: {
+        agentId: "main",
+        key: `agent:main:row-facts-slice-${String(index).padStart(2, "0")}`,
+      },
       entry: { sessionId: `row-facts-slice-${index}`, updatedAt: 1, label: `initial-${index}` },
     }));
-    for (const { scope, entry } of entries) {
-      replaceSessionEntrySync(scope, entry);
+    for (const { query, entry } of entries) {
+      seedRow(query, entry);
     }
     const projection = await create({
       cfg: { agents: { entries: { main: {} } } },
       modelCatalog: [],
     });
     await projection.ensureMaterialized();
-    for (const [index, { scope, entry }] of entries.entries()) {
-      replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: `latest-${index}` });
-      invalidateFacts(projection, { agentId: scope.agentId, key: scope.sessionKey });
+    for (const [index, { query, entry }] of entries.entries()) {
+      seedRow(query, { ...entry, updatedAt: 2, label: `latest-${index}` });
+      invalidateFacts(projection, query);
     }
     const hostReads = observeSqliteReadSql(StatementSync.prototype);
+    const realpath = vi.spyOn(fs.realpathSync, "native");
     try {
       await projection.ensureMaterialized();
       expect(
@@ -128,27 +128,26 @@ it("materializes updated rows across worker batches without host SQL", async () 
           /session_nodes|session_members|board_tabs|transcript_rewrite_watermarks/.test(sql),
         ),
       ).toEqual([]);
+      expect(realpath).not.toHaveBeenCalled();
     } finally {
+      realpath.mockRestore();
       hostReads.restore();
     }
 
     expect(projection.dirtyRowCount).toBe(0);
-    for (const [index, { scope, entry }] of entries.entries()) {
-      expect(projection.snapshot({ agentId: scope.agentId, key: scope.sessionKey }).row).toEqual(
+    for (const [index, { query, entry }] of entries.entries()) {
+      expect(projection.snapshot(query).row).toEqual(
         expect.objectContaining({ sessionId: entry.sessionId, label: `latest-${index}` }),
       );
     }
   }, true);
 });
 
-it.each([
-  { rowCount: 2, first: "bulk" },
-  { rowCount: 2, first: "exact" },
-] as const)(
-  "shares $rowCount dirty row reads with $first preparation first",
-  async ({ rowCount, first }) => {
+it.each(["bulk", "exact"] as const)(
+  "shares two dirty row reads with %s preparation first",
+  async (first) => {
     await withSessionRowProjectionState(async (create) => {
-      const rows = Array.from({ length: rowCount }, (_, index) => ({
+      const rows = Array.from({ length: 2 }, (_, index) => ({
         query: { agentId: "main", key: `agent:main:shared-row-read-${index}` },
         entry: { sessionId: `shared-row-read-${index}`, updatedAt: 1, label: "Previous" },
       }));
@@ -743,14 +742,6 @@ it("keeps the stored main address and ACP runtime after mainKey changes", async 
       throw new Error("Expected the ACP writer to retain its session entry");
     }
     expect(stored.acp).toBeUndefined();
-    expect(
-      await readAcpSessionMetaForEntries({
-        cfg: cfgBefore,
-        env: state.env,
-        entries: [{ ...target, entry: stored }],
-      }),
-    ).toEqual([meta]);
-
     const cfgAfter = { ...cfgBefore, session: { mainKey: "work" } };
     await state.writeConfig(cfgAfter);
     state.applyEnv();

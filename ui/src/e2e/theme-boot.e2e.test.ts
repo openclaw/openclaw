@@ -1,6 +1,11 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { resolveRenderedColors } from "../test-helpers/rendered-colors.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -92,13 +97,34 @@ async function assertThemeFrames(
   expect(stable).toEqual(expected);
   expect(surfaces.length).toBeGreaterThan(0);
   expect(frames.length).toBeGreaterThan(0);
+  const colors = await page.evaluate(
+    resolveRenderedColors,
+    Object.fromEntries([
+      ...surfaces.map((color, index) => [`surface-${index}`, color]),
+      ...frames.flatMap((frame, index) => [
+        [`html-${index}`, frame.html],
+        [`body-${index}`, frame.body],
+      ]),
+    ]),
+  );
+  const matchesSurface = (name: string) =>
+    surfaces.some((_, index) => {
+      const surface = colors[`surface-${index}`]!;
+      const frame = colors[name]!;
+      return (
+        frame.red === surface.red &&
+        frame.green === surface.green &&
+        frame.blue === surface.blue &&
+        frame.alpha === surface.alpha
+      );
+    });
   expect(
     frames.filter(
-      (frame) =>
+      (frame, index) =>
         frame.theme !== expected.theme ||
         frame.mode !== expected.mode ||
-        !surfaces.includes(frame.html) ||
-        !surfaces.includes(frame.body),
+        !matchesSurface(`html-${index}`) ||
+        !matchesSurface(`body-${index}`),
     ),
     `Every painted frame must use the resolved palette: ${JSON.stringify({ stable, surfaces })}`,
   ).toEqual([]);
@@ -197,9 +223,34 @@ async function checkStartup({
           await gateway.waitForRequest("users.prefs.get");
           await page.locator(".agent-chat__composer-combobox textarea").waitFor();
           await twoFrames(page);
+          if (reload) {
+            await evaluateControlUiContext(page, (app) => {
+              const records: Array<string | null> = [];
+              const observer = new MutationObserver((entries) => {
+                records.push(...entries.map((entry) => entry.attributeName));
+              });
+              observer.observe(document.documentElement, { attributes: true });
+              const completed = new Promise<Array<string | null>>((resolve) => {
+                const stop = app.theme.subscribe(() => {
+                  stop();
+                  queueMicrotask(() => {
+                    records.push(...observer.takeRecords().map((record) => record.attributeName));
+                    observer.disconnect();
+                    resolve(records);
+                  });
+                });
+              });
+              Reflect.set(window, "themeReloadAppearanceWrites", completed);
+            });
+          }
           await gateway.resolveDeferred("users.prefs.get", profileResponse);
         }
         await ready(page);
+        if (reload && saved) {
+          expect(
+            await page.evaluate(() => Reflect.get(window, "themeReloadAppearanceWrites")),
+          ).toEqual([]);
+        }
         await assertThemeFrames(page, expectedAppearance);
       }
     },
@@ -208,6 +259,82 @@ async function checkStartup({
 }
 
 suite.define(() => {
+  it("recovers the saved theme after an initial preference read failure without reconnecting", async () => {
+    await suite.withPage(
+      { colorScheme: "light", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const profileResponse = {
+          status: "ok",
+          entries: {
+            "ui.theme": "knot",
+            "ui.themeMode": "dark",
+            "ui.fontUi": "jetbrains-mono",
+            "ui.fontChat": "lora",
+          },
+        };
+        const gateway = await installMockGateway(page, {
+          ...scenario,
+          awaitInitialRoster: false,
+          heldMethods: ["users.prefs.get"],
+          methodResponses: { "users.prefs.get": profileResponse },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/appearance`);
+        await gateway.waitForRequest("users.prefs.get");
+        await gateway.rejectDeferred("users.prefs.get", {
+          code: "UNAVAILABLE",
+          message: "Synthetic temporary profile read failure",
+        });
+        const read = () =>
+          page.evaluate(() => ({
+            theme: document.documentElement.dataset.theme,
+            mode: document.documentElement.dataset.themeMode,
+          }));
+        const capture = async (name: string) => {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator("openclaw-app"),
+            [page.locator(".settings-theme-card--claw")],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
+        };
+        await expect.poll(read).toEqual({ theme: "light", mode: "light" });
+        await capture("failed-read");
+        await expect
+          .poll(async () => (await gateway.getRequests("users.prefs.get")).length, {
+            timeout: 5_000,
+          })
+          .toBe(2);
+        await expect.poll(read).toEqual({ theme: "openknot", mode: "dark" });
+        await expect
+          .poll(() =>
+            evaluateControlUiContext(page, (app) => ({
+              fontUi: app.theme.settings.fontUi,
+              fontChat: app.theme.settings.fontChat,
+            })),
+          )
+          .toEqual({ fontUi: "jetbrains-mono", fontChat: "lora" });
+        await expect
+          .poll(() =>
+            page.evaluate(() => ({
+              ui: getComputedStyle(document.body).fontFamily,
+              chat: getComputedStyle(document.querySelector(".settings-typography-preview__prose")!)
+                .fontFamily,
+            })),
+          )
+          .toMatchObject({
+            ui: expect.stringContaining("JetBrains Mono"),
+            chat: expect.stringContaining("Lora"),
+          });
+        await expect
+          .poll(() => page.locator(".settings-theme-card--knot").getAttribute("class"))
+          .toContain("settings-theme-card--active");
+        expect(await gateway.getRequests("connect")).toHaveLength(1);
+        await capture("recovered");
+      },
+    );
+  });
+
   it("refreshes browser and status-bar colors on live theme, mode, accent, and breakpoint changes", async () => {
     await suite.withPage(
       { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
@@ -317,6 +444,7 @@ suite.define(() => {
         };
         const pendingGateway = await installMockGateway(pendingPage, {
           ...scenario,
+          awaitInitialRoster: false,
           heldMethods: ["users.prefs.get"],
           methodResponses: {
             "config.get": configResponse(nextConfig, "pending-tab"),

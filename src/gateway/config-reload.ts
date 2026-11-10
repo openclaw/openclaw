@@ -37,13 +37,8 @@ import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   runAfterPluginLifecycleCommit,
   runOutsidePluginLifecycleLease,
-  withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
 } from "../plugins/plugin-lifecycle-lease.js";
-import {
-  captureGatewayRootWorkAdmissionContinuationScope,
-  runOutsideGatewayRootWorkAdmission,
-  runWithGatewayReloadWaitingRoot,
-} from "../process/gateway-work-admission.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
@@ -51,6 +46,7 @@ import {
   candidateApplications,
   createObservedCandidate,
   isConfigReloadSuperseded,
+  runWithCandidateWaitingRoots,
   settleCandidateApplications,
   transferCandidateApplications,
 } from "./config-reload-candidates.js";
@@ -130,21 +126,31 @@ export function startGatewayConfigReloader(
     run: (ownership: GatewayConfigReloadTransactionOwnership) => Promise<T>,
   ): Promise<T> =>
     runOutsidePluginLifecycleLease(() =>
-      withPluginLifecycleLease({ signal: lifecycle.signal, processBound: true }, async (lease) => {
-        // Restart preparation outlives its requesting mutation but still owns a process lease.
-        const current = {
-          ...ownership,
-          assertInvokerOwned: () => lease.assertCurrent(),
-          checkpoint: () => checkpointOwned(() => lease.assertCurrent()),
-        };
-        await current.checkpoint();
-        return run(current);
-      }),
+      withPluginLifecycleLeaseAsync(
+        { signal: lifecycle.signal, processBound: true },
+        async (lease) => {
+          // Restart preparation outlives its requesting mutation but still owns a process lease.
+          const current = {
+            ...ownership,
+            assertInvokerOwned: () => lease.assertCurrent(),
+            checkpoint: async () => {
+              await lease.assertOwned();
+              await checkpointOwned(() => lease.assertCurrent());
+            },
+          };
+          await current.checkpoint();
+          return run(current);
+        },
+      ),
     );
   let watcherReload: Promise<void> | undefined;
   const activeReloads = new Set<Promise<unknown>>();
   let pluginOperationTail: Promise<unknown> = Promise.resolve();
   let missingConfigRetries = 0;
+  // Observation, source acceptance, and runtime application advance independently.
+  // These slots own queued, running, and retry work; receipts follow candidates
+  // only while their saved values survive. A failed receipt does not undo persistence,
+  // and restart intent can outlive the write that requested it.
   let pendingInProcessConfig: GatewayConfigReloadCandidate | null = null;
   let activeConfigCandidate: GatewayConfigReloadCandidate | null = null;
   let retryCandidate: GatewayConfigReloadCandidate | null = null;
@@ -302,8 +308,22 @@ export function startGatewayConfigReloader(
     };
     let nextPluginInstallRecords = currentPluginInstallRecords;
     let committedRuntimeConfig: OpenClawConfig | null = null;
-    // The reload queue serializes application. New observations belong to the next pass.
-    const isCurrent = () => !stopped;
+    const isCurrent = () => {
+      if (stopped) {
+        return false;
+      }
+      const pendingWrite = pendingInProcessConfig;
+      // A watcher can see the rename before its RPC writer publishes the receipt.
+      // Let that exact write own precommit reload so drain excludes its waiting root.
+      return !(
+        committedRuntimeConfig === null &&
+        !pluginLifecycle &&
+        candidate?.origin !== "write" &&
+        pendingWrite?.origin === "write" &&
+        (pendingWrite.application || pendingWrite.carriedApplications?.length) &&
+        configSourceSnapshotsMatch(sourceSnapshot, pendingWrite.snapshot)
+      );
+    };
     const assertInvokerOwned = () => {
       // Published work must finish its cleanup and receipt even if its invoker closes.
       if (!committedRuntimeConfig) {
@@ -618,28 +638,6 @@ export function startGatewayConfigReloader(
       applicationStatus = await applyRuntime(plan, nextConfig, ownership, nextSourceConfig);
     } catch (error) {
       ownership.rollbackRuntimeEnv();
-      if (
-        !plan.pluginLifecycle &&
-        error instanceof PluginRuntimeApplicationError &&
-        error.details.phase === "drain" &&
-        !error.details.committed &&
-        error.cause instanceof PluginAdmittedWorkTimeoutError
-      ) {
-        pluginDrainRetry = new AbortController();
-        const retrySignal = AbortSignal.any([lifecycle.signal, pluginDrainRetry.signal]);
-        void Promise.all(
-          error.cause.instances.map((instance) => instance.waitForIdle(retrySignal)),
-        ).then(
-          () => {
-            if (!retrySignal.aborted) {
-              schedule();
-            }
-          },
-          () => {
-            // Cancellation ends this retry observation, not the serving plugin's work.
-          },
-        );
-      }
       throw error;
     }
     await checkpoint();
@@ -664,28 +662,13 @@ export function startGatewayConfigReloader(
     }
   };
 
-  const runWithCandidateWaitingRoots = <T>(
-    run: () => Promise<T>,
-    candidate?: GatewayConfigReloadCandidate | null,
-  ): Promise<T> => {
-    const invoke =
-      captureGatewayRootWorkAdmissionContinuationScope()?.run ?? runOutsideGatewayRootWorkAdmission;
-    let transaction = () => invoke(run);
-    for (const application of candidateApplications(candidate)) {
-      const continuation = application.runTransaction;
-      if (continuation) {
-        const next = transaction;
-        transaction = () => continuation(() => runWithGatewayReloadWaitingRoot(next));
-      }
-    }
-    return transaction();
-  };
-
   const runAcceptedTransaction = async (
     run: () => Promise<void>,
     candidate?: GatewayConfigReloadCandidate,
   ) => {
-    const runTransaction = candidate?.application?.runTransaction ?? opts.runTransaction;
+    // Writer continuations identify roots waiting for this receipt, not the reload's
+    // lifecycle owner. Always restore the Gateway context before borrowing those roots.
+    const runTransaction = opts.runTransaction;
     const transaction = () => runWithCandidateWaitingRoots(run, candidate);
     await runOutsideSetupCredentialAccess(() =>
       runTransaction ? runTransaction(transaction) : transaction(),
@@ -815,10 +798,6 @@ export function startGatewayConfigReloader(
             retryCandidate = pendingWrite;
           }
           throw err;
-        } finally {
-          if (activeConfigCandidate === pendingWrite) {
-            activeConfigCandidate = null;
-          }
         }
         return;
       }
@@ -889,19 +868,17 @@ export function startGatewayConfigReloader(
       }
       acceptedSourceSnapshot = undefined;
       if (!snapshot.valid) {
+        const issues = formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true });
         if (newObservedRawHash) {
           await appendExternalAudit({
             detectedBy: "watch",
             previousHash: previousObservedRawHash,
             nextHash: observedRawHash,
             valid: false,
-            issues: capConfigAuditIssues(
-              formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }),
-            ),
+            issues: capConfigAuditIssues(issues),
           });
         }
-        const issues = formatConfigIssueLines(snapshot.issues, "").join(", ");
-        opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+        opts.log.warn(`config reload skipped (invalid config): ${issues.join(", ")}`);
         await appliedRevision.flush(currentConfig);
         return;
       }
@@ -982,6 +959,30 @@ export function startGatewayConfigReloader(
       }
       if (superseded) {
         opts.log.info(`config reload superseded: ${String(err)}`);
+      } else if (
+        err instanceof PluginRuntimeApplicationError &&
+        err.details.phase === "drain" &&
+        !err.details.committed &&
+        err.cause instanceof PluginAdmittedWorkTimeoutError
+      ) {
+        // The failed receipt lets a writing turn finish and release its retained work.
+        pluginDrainRetry = new AbortController();
+        const retrySignal = AbortSignal.any([lifecycle.signal, pluginDrainRetry.signal]);
+        void Promise.all(
+          err.cause.instances.map((instance) => instance.waitForIdle(retrySignal)),
+        ).then(
+          () => {
+            if (!retrySignal.aborted) {
+              schedule();
+            }
+          },
+          () => {
+            // Cancellation ends this retry observation, not the serving plugin's work.
+          },
+        );
+        opts.log.info(
+          `config reload deferred: ${String(err)}; retrying automatically after admitted work and cleanup settle`,
+        );
       } else {
         opts.log.error(`config reload failed: ${String(err)}`);
       }
@@ -1014,11 +1015,15 @@ export function startGatewayConfigReloader(
     // must use the same order, including when its timer inherited a writer's context.
     // Reload's protected writes stay in this process; package installers own separate leases.
     const reload = runOutsidePluginLifecycleLease(() =>
-      withPluginLifecycleLease({ signal: lifecycle.signal, processBound: true }, async (lease) => {
-        enteredReload = true;
-        leaseRetryDelayMs = 0;
-        await runReload(() => lease.assertCurrent());
-      }),
+      withPluginLifecycleLeaseAsync(
+        { signal: lifecycle.signal, processBound: true },
+        async (lease) => {
+          enteredReload = true;
+          leaseRetryDelayMs = 0;
+          await lease.assertOwned();
+          await runReload(() => lease.assertCurrent());
+        },
+      ),
     ).catch((error: unknown) => {
       if (stopped) {
         return;

@@ -10,6 +10,7 @@ import {
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
 import { sha256 as digest, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import {
   captureWorkspaceManifest,
@@ -27,6 +28,7 @@ import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.tes
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const adapterUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.manifestWorker);
 const limitsUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.inventoryLimits).href;
+useAgedWorkspaceHashClock();
 afterEach(() => vi.restoreAllMocks());
 
 const encode = (entries: WorkerWorkspaceManifestEntry[], baseCommit: string | null = null) => {
@@ -204,12 +206,14 @@ it("captures eligible files outside the Gateway thread and returns the canonical
   const root = await fs.realpath(tempDirs.make("workspace-worker-capture-"));
   const content = "worker computation";
   await fs.writeFile(path.join(root, "input.txt"), content);
+  await fs.writeFile(path.join(root, "dist"), "generated output");
   await fs.mkdir(path.join(root, "preserved", "node_modules"), { recursive: true });
   const selection = {
     root,
     baseCommit: null,
-    includePaths: new Set(["input.txt", "preserved"]),
+    includePaths: new Set(["input.txt", "preserved", "dist"]),
     preserveDirectories: new Set(["preserved"]),
+    gitIgnore: { paths: new Set(["dist"]), retainedPaths: new Set(["input.txt", "preserved"]) },
   };
   const lstat = fs.lstat.bind(fs);
   vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {

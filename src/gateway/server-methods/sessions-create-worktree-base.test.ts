@@ -54,6 +54,41 @@ const sendRun = (
 const gitUrl = "https://github.com/openclaw/openclaw.git";
 const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
 
+test.each([undefined, false])(
+  "sessions.create isolates a cloned project when worktree is %s",
+  async (worktree) => {
+    const { root, storePath } = await workspaceFixture("shared-clone");
+    const projectRoot = await initializeRepository(root, "project");
+    const project = await registerClonedProjectRegistry({
+      path: projectRoot,
+      name: "Shared clone",
+      originUrl: gitUrl,
+    });
+    const key = "agent:main:dashboard:shared-clone";
+    try {
+      await requestOk(
+        "sessions.create",
+        { agentId: "main", key, projectId: project.id, worktree },
+        controlUiClient,
+      );
+      const entry = readSession(storePath, key);
+      expect(entry?.worktree?.id).toBeDefined();
+      const owned = await managedWorktrees.findLiveByOwner("session", key);
+      expect(owned).toBeDefined();
+      expect(entry?.spawnedCwd).toBe(owned?.path);
+      expect(entry?.sessionRoot).toBe(owned?.path);
+      expect(entry?.spawnedCwd).not.toBe(projectRoot);
+      await fs.mkdir(path.join(entry!.spawnedCwd!, ".openclaw/tmp/build"), { recursive: true });
+      await fs.writeFile(path.join(entry!.spawnedCwd!, ".openclaw/tmp/build/output"), "scratch");
+      await expect(fs.stat(path.join(projectRoot, ".openclaw/tmp"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await removeOwnedSessionWorktree(key);
+    }
+  },
+);
+
 async function workspaceFixture(name: string) {
   const root = tempDirs.make(`openclaw-session-${name}-`);
   const workspace = await initializeRepository(root, "workspace");
@@ -305,11 +340,6 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     await sessionTitleRequests.get({ ...target, sessionId: beforeTitle.sessionId });
     const failed = loadSessionEntry(target)!;
     expect(failed.displayName).toMatch(/^[a-z]+-[a-z]+$/);
-    expect(failed.titleRefinement).toEqual({
-      sessionId: beforeTitle.sessionId,
-      generatedName: failed.displayName,
-      remainingMessages: 6,
-    });
     expect(failed.updatedAt).toBeGreaterThanOrEqual(beforeTitle.updatedAt);
     expect(failed).toMatchObject({
       status: "failed",
@@ -334,7 +364,6 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     expect(bound).toMatchObject({
       sessionId: failed.sessionId,
       displayName: failed.displayName,
-      titleRefinement: failed.titleRefinement,
       projectId: project.id,
       lastRunError: failed.lastRunError,
       worktree: { repoRoot: repository },

@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { commandResult } from "../agents/github-identity.test-support.js";
 import { parseRemoteWorkspaceManifestEnvelope } from "../gateway/worker-environments/workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "../gateway/worker-environments/workspace-hash-memo.test-support.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import * as gitExec from "../infra/git-exec.js";
 import * as exec from "../process/exec.js";
@@ -27,6 +28,7 @@ import {
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useAgedWorkspaceHashClock();
 const command = ["node", "-e", REMOTE_WORKSPACE_MANIFEST_JS];
 afterEach(() => vi.restoreAllMocks());
 
@@ -102,6 +104,7 @@ describe("resident node manifest capture", () => {
     const { manifestRef: emptyRef } = manifestFixture();
     const memo = new Map<string, string>();
     const native = await captureManifest({
+      mode: "all",
       workspaceDir,
       manifestHome: home,
       baseCommit: null,
@@ -136,23 +139,41 @@ describe("resident node manifest capture", () => {
     }
   });
 
-  it("keeps Git eligibility and prior ignored paths identical without a manifest child", async () => {
+  it("keeps initial Git admission distinct from authored checkpoint results without a manifest child", async () => {
     const { capture, workspaceDir, runStandalone } = await fixture();
     const homeDir = path.dirname(workspaceDir);
     const baseCommit = "a".repeat(40);
-    await fs.writeFile(path.join(workspaceDir, ".gitignore"), "*.ignored\n");
+    await fs.writeFile(path.join(workspaceDir, ".gitignore"), "*.ignored\ndist/\n.artifacts/\n");
     await fs.writeFile(path.join(workspaceDir, "keep.ignored"), "retained");
-    await fs.writeFile(path.join(workspaceDir, "skip.ignored"), "excluded");
+    await fs.writeFile(path.join(workspaceDir, "new.ignored"), "private");
+    await fs.mkdir(path.join(workspaceDir, ".artifacts"));
+    await fs.writeFile(path.join(workspaceDir, ".artifacts", "proof.txt"), "authored");
     await fs.writeFile(path.join(workspaceDir, "new.txt"), "new");
     expect(
       (await exec.runCommandWithTimeout(["git", "init", "-q", workspaceDir], { timeoutMs: 10_000 }))
         .code,
     ).toBe(0);
+    await fs.mkdir(path.join(workspaceDir, "dist"));
+    await fs.writeFile(path.join(workspaceDir, "dist", "output.js"), "generated");
+    const initial = await runStandalone([baseCommit, "eligible"], homeDir);
+    expect(initial.code, initial.stderr).toBe(0);
+    expect(
+      (await readWorkspaceManifest(homeDir, initial.stdout.trim())).manifest.entries.map(
+        (entry) => entry.path,
+      ),
+    ).toEqual([".gitignore", "new.txt"]);
     const { rawManifest } = manifestFixture([fileEntry("keep.ignored", Buffer.from("retained"))], {
       baseCommit,
     });
     const digest = await writeManifest(homeDir, rawManifest);
-    const args = [baseCommit, "eligible", digest];
+    const eligible = await runStandalone([baseCommit, "eligible", digest], homeDir);
+    expect(eligible.code, eligible.stderr).toBe(0);
+    expect(
+      (await readWorkspaceManifest(homeDir, eligible.stdout.trim())).manifest.entries.map(
+        (entry) => entry.path,
+      ),
+    ).toEqual([".gitignore", "keep.ignored", "new.txt"]);
+    const args = [baseCommit, "all", digest];
     const child = await runStandalone(args, homeDir);
     expect(child.code, child.stderr).toBe(0);
     rejectChild();
@@ -160,6 +181,7 @@ describe("resident node manifest capture", () => {
     expect(native.stdout).toBe(child.stdout);
     const { manifest } = await readWorkspaceManifest(homeDir, native.stdout.trim());
     expect(manifest.entries.map((entry) => entry.path)).toEqual([
+      ".artifacts/proof.txt",
       ".gitignore",
       "keep.ignored",
       "new.txt",

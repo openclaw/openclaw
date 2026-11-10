@@ -85,19 +85,21 @@ conversation history. The Control UI does not consume that event; it calls the
 
 ## Surface behavior
 
-| Surface           | Behavior                                                                                                                                                                                                                                                                                                                                             |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                                                                                                                            |
-| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                                                                                                                          |
-| Control UI / web  | Routes `/btw` and `/side` to Side chat. The read-only thread is keyed by session, rehydrates from Gateway memory, and preserves a failed question for Retry. Hiding the panel preserves its thread and draft. Closing its desktop side-panel tab waits for a confirmed reset; **Clear side chat** remains available in the main panel and on mobile. |
+| Surface           | Behavior                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TUI               | Rendered inline in the chat log, visibly distinct from a normal reply, dismissible with `Enter` or `Esc`.                                                                                                                                                                                                                                                                   |
+| External channels | Delivered as a clearly labeled one-off reply (Telegram, WhatsApp, Discord have no local ephemeral overlay).                                                                                                                                                                                                                                                                 |
+| Control UI / web  | Routes `/btw` and `/side` to Side chat. The read-only thread is private to each person within a session, rehydrates from Gateway memory, and preserves a failed question for Retry. Hiding the panel preserves its thread and draft. Closing its desktop side-panel tab waits for a confirmed reset; **Clear side chat** remains available in the main panel and on mobile. |
 
 ## Selection popup (Control UI)
 
 Highlighting text inside a chat message in the Control UI opens a small
-selection popup with one action:
+selection popup with **Add to chat**, **Ask in side chat**, and **New session**:
 
 - **Ask in side chat** opens Side chat and pre-fills its composer with a quoted
   draft so you can type your own question about the selection.
+- **New session** opens the new-session launcher with the selection attached
+  instead; that starts an ordinary session rather than a side question.
 
 The action follows normal `/btw` semantics: the question and answer stay out
 of session history and the main run is left untouched.

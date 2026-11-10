@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { acquireSessionActorStorage } from "../../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../../../config/sessions/session-actor-storage-binding.js";
@@ -22,12 +22,14 @@ import type { InternalSessionEntry, SessionEntry } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildDashboardSessionTitleSource } from "../../../gateway/dashboard-session-title.js";
 import type { FreshChildSession } from "../../../gateway/in-process-session-run.js";
+import type { ProjectRequester } from "../../../gateway/project-access.js";
 import {
   normalizeTrustedGroupMetadata,
   resolveAgentSessionGroup,
   type TrustedGroupMetadata,
 } from "../../../gateway/server-methods/agent-subagent-registration.js";
 import type { PreparedGatewaySessionLifecycle } from "../../../gateway/session-create-service.types.js";
+import { isSessionVisibilityAllowed } from "../../../gateway/session-sharing-policy.js";
 import type { GatewaySessionStoreTargetWithStore } from "../../../gateway/session-utils-store.types.js";
 import {
   prepareSessionWorktreeCreation,
@@ -51,10 +53,24 @@ import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import { withSubagentSessionSource } from "./subagent-session-source.js";
 import type { SpawnSubagentParams } from "./subagent-spawn-contract.js";
 import type { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
-import { emitSessionLifecycleEvent, upsertSessionEntryCore } from "./subagent-spawn.runtime.js";
+import {
+  emitSessionLifecycleEvent,
+  getRuntimeConfig,
+  upsertSessionEntryCore,
+} from "./subagent-spawn.runtime.js";
+
+type InitialSubagentSession = {
+  status: "ok";
+  storePath: string;
+  controllerTarget: SessionTarget;
+  entry?: SessionEntry;
+  freshChild?: FreshChildSession;
+};
 
 export async function createInitialSubagentSession(input: {
   cfg: OpenClawConfig;
+  /** Operator (or creator role) the spawn acts for; bounds projectId and inherited sources. */
+  projectRequester: ProjectRequester;
   requesterAgentId: string;
   targetAgentId: string;
   childSessionKey: string;
@@ -66,6 +82,8 @@ export async function createInitialSubagentSession(input: {
   gitContributorProfileId?: string;
   expectedParentSessionId?: string;
   assertActive?: SessionSourceAssertion;
+  signal?: AbortSignal;
+  onCreated?: (session: InitialSubagentSession) => void;
   creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
   completionOwnerSessionKey: string;
   spawnedWorkspaceDir?: string;
@@ -91,16 +109,7 @@ export async function createInitialSubagentSession(input: {
   blind?: boolean;
   outputSchema?: Record<string, unknown>;
   firstAdmission?: { delivery?: DeliveryContext; group: TrustedGroupMetadata };
-}): Promise<
-  | {
-      status: "ok";
-      storePath: string;
-      controllerTarget: SessionTarget;
-      entry?: SessionEntry;
-      freshChild?: FreshChildSession;
-    }
-  | { status: "error"; error: string }
-> {
+}): Promise<InitialSubagentSession | { status: "error"; error: string }> {
   const params = {
     ...input,
     assertActive: composeSessionSourceAssertion([
@@ -154,6 +163,16 @@ export async function createInitialSubagentSession(input: {
           const parentTarget = params.parentTarget;
           // Request preparation joined participant writes and captured this complete row.
           const parentEntry = parentTarget.store[parentTarget.canonicalKey];
+          const assertDraftCreationAllowed = () => {
+            if (
+              parentEntry?.visibility === "draft" &&
+              !isSessionVisibilityAllowed(getRuntimeConfig(), "draft")
+            ) {
+              throw new Error(
+                "session visibility is disabled: draft. Continue in the existing Draft or ask an administrator to enable Draft creation.",
+              );
+            }
+          };
           if (params.firstAdmission) {
             const group = resolveAgentSessionGroup({
               sessionKey: params.childSessionKey,
@@ -177,6 +196,7 @@ export async function createInitialSubagentSession(input: {
             expectedParentSessionId: params.expectedParentSessionId,
             senderIsOwner: params.senderIsOwner,
           });
+          assertDraftCreationAllowed();
           if (params.incognito) {
             const assertCurrent = () => {
               params.assertActive?.();
@@ -224,7 +244,12 @@ export async function createInitialSubagentSession(input: {
               throw new Error("projectId cannot be combined with cwd");
             }
             const project = projectId
-              ? await resolveSessionProjectRoot(params.cfg, projectId, true)
+              ? await resolveSessionProjectRoot(
+                  params.cfg,
+                  projectId,
+                  true,
+                  params.projectRequester,
+                )
               : undefined;
             params.assertActive?.();
             if (project && !project.ok) {
@@ -244,6 +269,7 @@ export async function createInitialSubagentSession(input: {
                 !projectId && !params.spawnedCwd && parentTarget.agentId === params.targetAgentId
                   ? params.requesterInternalKey
                   : undefined,
+              projectRequester: params.projectRequester,
               name: params.worktree.worktreeName,
               baseRef: params.worktree.worktreeBaseRef,
               deferWorktree: true,
@@ -251,6 +277,7 @@ export async function createInitialSubagentSession(input: {
               titleSource: buildDashboardSessionTitleSource({ message: params.worktree.task }),
               useRequestedTitleSelection: false,
               runSetupScript: false,
+              signal: params.signal,
               commitGuard: composeSessionSourceAssertion([params.assertActive]),
               onTitleError: (error) => console.warn("subagent worktree title failed", error),
               onTitleStateChanged: () =>
@@ -295,6 +322,7 @@ export async function createInitialSubagentSession(input: {
                   ...childSessionIdentity,
                   // Stamp after all request patches so model input cannot create a grant.
                   ...parentLineage,
+                  ...(parentEntry?.visibility === "draft" ? { visibility: "draft" as const } : {}),
                   ...(parentEntry?.skillLibrarySelections
                     ? {
                         // Committed pins belong to the admitted turn, even if the parent refreshes.
@@ -320,37 +348,44 @@ export async function createInitialSubagentSession(input: {
                   }),
                 },
                 sessionEntryCommitGuardOptions(
-                  composeSessionSourceAssertion([params.assertActive, assertSourceCurrent]),
+                  composeSessionSourceAssertion([
+                    params.assertActive,
+                    assertSourceCurrent,
+                    assertDraftCreationAllowed,
+                  ]),
                 ),
               );
-            return childMemory
+            const entry = childMemory
               ? await runWithSessionActorStorage(childMemory, write)
               : await write();
+            const session: InitialSubagentSession = {
+              status: "ok",
+              storePath: physicalStorePath,
+              controllerTarget: captureSessionTarget({
+                storeScope: storePath,
+                sessionKey: params.childSessionKey,
+                agentId: params.targetAgentId,
+                incarnation: entry?.sessionId,
+              }),
+              entry: entry ?? undefined,
+              ...(params.firstAdmission && entry
+                ? {
+                    freshChild: {
+                      agentId: params.targetAgentId,
+                      // Lifecycle admission uses the store selector, not the physical database path.
+                      storePath,
+                      entry,
+                    },
+                  }
+                : {}),
+            };
+            // Retain exact-child cleanup before source settlement can reject a committed write.
+            params.onCreated?.(session);
+            return session;
           };
-          const entry = preparedWorktree?.withCommit
+          return preparedWorktree?.withCommit
             ? await preparedWorktree.withCommit(commit)
             : await commit();
-          return {
-            status: "ok" as const,
-            storePath: physicalStorePath,
-            controllerTarget: captureSessionTarget({
-              storeScope: storePath,
-              sessionKey: params.childSessionKey,
-              agentId: params.targetAgentId,
-              incarnation: entry?.sessionId,
-            }),
-            entry: entry ?? undefined,
-            ...(params.firstAdmission && entry
-              ? {
-                  freshChild: {
-                    agentId: params.targetAgentId,
-                    // Lifecycle admission uses the store selector, not the physical database path.
-                    storePath,
-                    entry,
-                  },
-                }
-              : {}),
-          };
         } finally {
           await childMemory?.actor.release();
         }

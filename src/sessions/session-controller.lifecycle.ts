@@ -34,6 +34,7 @@ import { assertAgentControllerAdmissionOpen } from "./session-controller.lifecyc
 import {
   createLifecycleDiagnosticOperation,
   type SessionLifecycleDiagnosticLabel,
+  type SessionLifecycleDiagnosticWaitDurations,
 } from "./session-controller.lifecycle-diagnostics.js";
 import {
   runAfterRetiringSessionSources,
@@ -115,7 +116,6 @@ export {
   startSessionControllerInterruption,
   interruptSessionControllerEffects,
   captureSessionWorkRunInterruptions,
-  getCompetingSessionWorkAdmissionRelease,
   getTerminalSessionWorkAdmissionRelease,
 } from "./session-controller.lifecycle-work.js";
 export { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "./session-controller.contracts.js";
@@ -125,6 +125,7 @@ export async function runSessionMutation<T>(
   params: {
     requiredSessionId?: string;
     diagnosticLabel?: SessionLifecycleDiagnosticLabel;
+    diagnosticSubphaseDurationsMs?: Readonly<SessionLifecycleDiagnosticWaitDurations>;
     prepare?: (owner: {
       closeWorkAdmissions: (reason: Error) => void;
       operations: readonly ReplyOperation[];
@@ -211,6 +212,7 @@ export async function runSessionMutation<T>(
       targets.flatMap((target) => target.aliases.map((alias) => `${target.storeScope}\0${alias}`)),
     signal,
     mutationKind: params.diagnosticLabel ?? params.kind,
+    subphaseDurationsMs: params.diagnosticSubphaseDurationsMs,
   });
   const mutation: Mutation = {
     diagnostic,
@@ -487,6 +489,7 @@ export async function beginSessionEffect(
       const wasAcquired = effect.phase === "acquired";
       effect.phase = "released";
       effect.handoffs.clear();
+      effect.admissionTransitions?.clear();
       state.effects.delete(effect);
       releaseTarget(entry, target);
       effect.validated.resolve();
@@ -659,6 +662,17 @@ export async function beginSessionEffect(
     ref.release();
     throw error;
   }
+}
+
+/** Ingress consumes this before reserving a receipt, before asynchronous preparation can yield. */
+export function readSessionControllerAdmissionError(params: TargetInput): Error | undefined {
+  for (const entry of matchingEntries(targetFrom(params))) {
+    const closure = entry.lifecycle?.closures.values().next().value;
+    if (closure) {
+      return closure.reason;
+    }
+  }
+  return undefined;
 }
 
 export function closeSessionControllerAdmission(

@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { withMockedPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { createNpmFreshnessBypassArgs, createNpmProjectInstallEnv } from "./npm-install-env.js";
 
 const FROZEN_NOW = new Date("2026-05-18T19:55:00.000Z");
@@ -30,17 +30,13 @@ const EXPECTED_PROJECT_ENV = {
   npm_config_save: "false",
 };
 
-function createIsolatedNpmConfigEnv(dir: string): NodeJS.ProcessEnv {
-  const home = path.join(dir, "home");
-  const globalconfig = path.join(dir, "global-npmrc");
-  fsSync.mkdirSync(home, { recursive: true });
-  fsSync.writeFileSync(globalconfig, "", "utf-8");
-  return { HOME: home, NPM_CONFIG_GLOBALCONFIG: globalconfig };
-}
-
 function withNpmConfig(run: (dir: string, env: NodeJS.ProcessEnv) => void) {
   return withTempDir("openclaw-npm-config-", async (dir) => {
-    run(dir, createIsolatedNpmConfigEnv(dir));
+    const home = path.join(dir, "home");
+    const globalconfig = path.join(dir, "global-npmrc");
+    fsSync.mkdirSync(home);
+    fsSync.writeFileSync(globalconfig, "");
+    run(dir, { HOME: home, NPM_CONFIG_GLOBALCONFIG: globalconfig });
   });
 }
 
@@ -51,89 +47,68 @@ function expectBefore(env: NodeJS.ProcessEnv, dir: string, npmConfigPrefix?: str
 }
 
 describe("npm project install env", () => {
-  afterEach(() => vi.useRealTimers());
-  it.each([["NPM_CONFIG_FETCH_RETRIES", "0"]])(
-    "preserves explicit network config %s without a competing default",
-    (key, value) => {
-      const env = createNpmProjectInstallEnv({ [key]: value });
-
-      expect(env[key]).toBe(value);
-      expect(
-        Object.keys(env).filter((candidate) => candidate.toLowerCase() === key.toLowerCase()),
-      ).toEqual([key]);
-    },
-  );
-
-  it("uses an absolute POSIX script shell for npm lifecycle scripts", () => {
-    withMockedPlatform("linux", () => {
-      const existsSyncSpy = vi
-        .spyOn(fsSync, "existsSync")
-        .mockImplementation((candidate) => candidate === "/bin/sh");
-      withRestoredMocks([existsSyncSpy], () => {
-        expect(createNpmProjectInstallEnv({ PATH: "/tmp/openclaw-npm-global/bin" })).toEqual({
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  it("preserves explicit network config without a competing default", () => {
+    const key = "NPM_CONFIG_FETCH_RETRIES";
+    const env = createNpmProjectInstallEnv({ [key]: "0" });
+    expect(env[key]).toBe("0");
+    expect(Object.keys(env).filter((name) => name.toLowerCase() === key.toLowerCase())).toEqual([
+      key,
+    ]);
+  });
+  it.each([undefined, "NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"])(
+    "uses a POSIX lifecycle shell unless %s overrides it",
+    (key) => {
+      withMockedPlatform("linux", () => {
+        vi.spyOn(fsSync, "existsSync").mockImplementation((candidate) => candidate === "/bin/sh");
+        const input = key ? { [key]: "/custom/sh" } : { PATH: "/tmp/openclaw-npm-global/bin" };
+        expect(createNpmProjectInstallEnv(input)).toEqual({
           ...EXPECTED_PROJECT_ENV,
-          NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
-          PATH: "/tmp/openclaw-npm-global/bin",
+          ...(key ? input : { ...input, NPM_CONFIG_SCRIPT_SHELL: "/bin/sh" }),
         });
       });
-    });
-  });
-
-  it.each(["NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"])("preserves %s", (key) => {
-    withMockedPlatform("linux", () => {
-      expect(createNpmProjectInstallEnv({ [key]: "/custom/sh" })).toEqual({
-        ...EXPECTED_PROJECT_ENV,
-        [key]: "/custom/sh",
-      });
-    });
-  });
+    },
+  );
 
   it("uses release-age args by default", () => {
     expect(createNpmFreshnessBypassArgs({}, FROZEN_NOW)).toEqual(["--min-release-age=0"]);
   });
 
-  it.each(["~/.npmrc", "${HOME}/.npmrc"])("expands userconfig %s", async (userconfig) => {
-    await withNpmConfig((dir, baseEnv) => {
-      // Keep user config outside the project scope so path expansion must succeed.
-      writePolicy(path.join(dir, "home", ".npmrc"));
-
-      expectBefore({ ...baseEnv, NPM_CONFIG_USERCONFIG: userconfig }, dir);
-    });
-  });
-
-  it("uses before args for npm default globalconfig before policies", async () => {
-    await withTempDir("openclaw-npm-prefix-", async (dir) => {
-      const home = path.join(dir, "home");
-      fsSync.mkdirSync(home, { recursive: true });
-      writePolicy(path.join(dir, "etc", "npmrc"));
-
-      expectBefore({ HOME: home, NPM_CONFIG_PREFIX: dir }, dir);
-    });
-  });
-
-  it("uses before args for command project npmrc before policies", async () => {
+  it.each([
+    ["user", "~/.npmrc"],
+    ["user", "${HOME}/.npmrc"],
+    ["global", undefined],
+    ["project", undefined],
+    ["scoped", undefined],
+  ])("uses before policy from %s config (%s)", async (source, userconfig) => {
     vi.useFakeTimers({ now: FROZEN_NOW, toFake: ["Date"] });
-    await withNpmConfig((dir, baseEnv) => {
-      writePolicy(path.join(dir, ".npmrc"));
-
-      expectBefore(baseEnv, dir);
-
-      const env = createNpmProjectInstallEnv(baseEnv, { npmConfigCwd: dir });
-      expect(env).toMatchObject({
-        npm_config_min_release_age: "",
-        npm_config_before: FROZEN_NOW.toISOString(),
-      });
-    });
-  });
-
-  it("prefers scoped npm prefix policy over parent npm prefix policy", async () => {
-    await withNpmConfig((dir, baseEnv) => {
-      const scopedPrefix = path.join(dir, "scoped-prefix");
-      const parentPrefix = path.join(dir, "parent-prefix");
-      writePolicy(path.join(scopedPrefix, "etc", "npmrc"));
-      writePolicy(path.join(parentPrefix, "etc", "npmrc"), "min-release-age=7");
-
-      expectBefore({ ...baseEnv, NPM_CONFIG_PREFIX: parentPrefix }, dir, scopedPrefix);
+    await withNpmConfig((dir, env) => {
+      let npmConfigPrefix: string | undefined;
+      if (source === "user") {
+        writePolicy(path.join(dir, "home", ".npmrc"));
+        env.NPM_CONFIG_USERCONFIG = userconfig;
+      } else if (source === "global") {
+        delete env.NPM_CONFIG_GLOBALCONFIG;
+        env.NPM_CONFIG_PREFIX = dir;
+        writePolicy(path.join(dir, "etc", "npmrc"));
+      } else if (source === "scoped") {
+        npmConfigPrefix = path.join(dir, "scoped-prefix");
+        env.NPM_CONFIG_PREFIX = path.join(dir, "parent-prefix");
+        writePolicy(path.join(npmConfigPrefix, "etc", "npmrc"));
+        writePolicy(path.join(env.NPM_CONFIG_PREFIX, "etc", "npmrc"), "min-release-age=7");
+      } else {
+        writePolicy(path.join(dir, ".npmrc"));
+      }
+      expectBefore(env, dir, npmConfigPrefix);
+      if (source === "project") {
+        expect(createNpmProjectInstallEnv(env, { npmConfigCwd: dir })).toMatchObject({
+          npm_config_min_release_age: "",
+          npm_config_before: FROZEN_NOW.toISOString(),
+        });
+      }
     });
   });
 });

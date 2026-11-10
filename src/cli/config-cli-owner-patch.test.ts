@@ -1,9 +1,51 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { buildConfigOwnerPatch } from "./config-cli-owner-patch.js";
+import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
+import { bindConfigOwner } from "./config-cli-owner-patch.js";
 
-describe("buildConfigOwnerPatch", () => {
-  it("sends only the change, with array replacement and deletion as explicit intent", () => {
+let lastCommitted: unknown;
+
+// Commits one change through a synthetic owner and returns the config.patch request it sent.
+async function commitThroughOwner(
+  change: { previous: OpenClawConfig; next: OpenClawConfig },
+  hash?: string,
+  patchResponse: Record<string, unknown> = {},
+) {
+  const env = { OPENCLAW_CONFIG_PATH: path.resolve("synthetic-owner", "openclaw.json") };
+  const sent: Record<string, unknown>[] = [];
+  const requestOwner = async <R>(method: string, params: Record<string, unknown>): Promise<R> => {
+    if (method !== "config.get") {
+      sent.push(params);
+    }
+    // SAFETY: both synthetic responses match the fields the binder reads.
+    return (method === "config.get" ? { path: resolveConfigPath(env), hash } : patchResponse) as R;
+  };
+  const commit = await withDatabaseEngineSelection(
+    { effectiveEngines: resolveDatabaseFamilyEngines({}) },
+    () => bindConfigOwner(requestOwner, env),
+  );
+  lastCommitted = await commit(change);
+  return sent[0] as { raw: string; baseHash?: string; replacePaths?: string[] };
+}
+
+describe("bindConfigOwner", () => {
+  it("returns the owner's billing-route warnings with the restart hint", async () => {
+    const warning = "Billing route changed for agents.defaults.subagents.model (agent main).";
+    await commitThroughOwner(
+      { previous: {}, next: { gateway: { reload: { mode: "off" } } } },
+      "base-hash",
+      { restart: { scheduled: true }, billingRouteWarnings: [warning] },
+    );
+    expect(lastCommitted).toEqual({
+      hint: "The Gateway is restarting to apply it.",
+      warnings: [warning],
+    });
+  });
+
+  it("sends only the change, with array replacement and deletion as explicit intent", async () => {
     const previous: OpenClawConfig = {
       gateway: { reload: { mode: "hybrid" }, nodes: { commands: { allow: ["a", "b"] } } },
       agents: { entries: { main: { skills: ["notes"] } } },
@@ -14,7 +56,7 @@ describe("buildConfigOwnerPatch", () => {
       agents: { entries: {} },
       tools: { toolSearch: false },
     };
-    const request = buildConfigOwnerPatch({ previous, next }, "base-hash");
+    const request = await commitThroughOwner({ previous, next }, "base-hash");
     // v2026.10.7 Gateways accept routed writes but close config.patch over these fields.
     const stableConfigPatchFields = new Set([
       "raw",
@@ -39,16 +81,13 @@ describe("buildConfigOwnerPatch", () => {
     ]);
   });
 
-  it("refuses a change the Gateway's merge patch cannot reproduce", () => {
-    expect(() =>
-      buildConfigOwnerPatch(
-        {
-          previous: {},
-          // An authored null is not a value a merge patch can carry; null means delete.
-          next: JSON.parse('{"gateway":{"remote":{"url":null}}}'),
-        },
-        undefined,
-      ),
-    ).toThrow("cannot be expressed as a Gateway config patch");
+  it("refuses a change the Gateway's merge patch cannot reproduce", async () => {
+    await expect(
+      commitThroughOwner({
+        previous: {},
+        // An authored null is not a value a merge patch can carry; null means delete.
+        next: JSON.parse('{"gateway":{"remote":{"url":null}}}'),
+      }),
+    ).rejects.toThrow("cannot be expressed as a Gateway config patch");
   });
 });

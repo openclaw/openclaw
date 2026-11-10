@@ -148,7 +148,7 @@ async function proxyReconnect(
   await page.clock.resume();
   await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(expectedSocketCount);
   await waitForControlUiGatewayReady(page);
-  await page.locator(".sidebar-shell__footer .gateway-status").waitFor({ state: "detached" });
+  await page.locator(".sidebar-shell__connection .gateway-status").waitFor({ state: "detached" });
 }
 
 async function usageBadges(page: Page): Promise<string[]> {
@@ -218,21 +218,21 @@ suite.define(() => {
       const beforeFailure = await requestCount(gateway, "sessions.usage");
       await gateway.emitGatewayEvent("chat.metadata.changed", metadata("main", true));
       await expect
-        .poll(() => page.locator(".usage-cache-warning.warning").textContent())
+        .poll(() => page.locator(".usage-cache-warning.warn").textContent())
         .toContain("Automatic checks paused");
       expect(await page.locator(".usage-loading-card").count()).toBe(0);
       expect(await requestCount(gateway, "sessions.usage")).toBe(beforeFailure);
       await page.evaluate(() => window.dispatchEvent(new Event("focus")));
       await waitForRequestCount(gateway, "sessions.usage", beforeFailure + 1);
       await expect.poll(() => page.locator(".usage-loading-card").count()).toBe(0);
-      await expect.poll(() => page.locator(".usage-cache-warning.warning").count()).toBe(1);
+      await expect.poll(() => page.locator(".usage-cache-warning.warn").count()).toBe(1);
       await gateway.emitGatewayEvent("chat.metadata.changed", metadata("other"));
       expect((await gateway.getRequests("sessions.usage")).at(-1)?.params).toMatchObject({
         agentScope: "all",
       });
       await waitForRequestCount(gateway, "sessions.usage", beforeFailure + 2);
       await expect.poll(() => page.locator(".usage-loading-card").count()).toBe(0);
-      await expect.poll(() => page.locator(".usage-cache-warning.warning").count()).toBe(1);
+      await expect.poll(() => page.locator(".usage-cache-warning.warn").count()).toBe(1);
       const refresh = refreshButton(page);
       await gateway.setMethodResponse("sessions.usage", partialSessions);
       await refresh.click();
@@ -322,7 +322,9 @@ suite.define(() => {
       await waitForRequestCount(gateway, "sessions.usage", 2);
 
       await gateway.setMethodResponse("sessions.usage", currentInstanceResult);
-      await page.getByRole("button", { name: "Current instance", exact: true }).click();
+      await page.getByRole("button", { name: "Display", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Sessions", exact: true }).click();
+      await page.getByRole("menuitemradio", { name: "Current instance", exact: true }).click();
       await gateway.resolveDeferred("sessions.usage", staleFamilyResult);
       await expect.poll(() => refreshButton(page).isEnabled()).toBe(true);
 

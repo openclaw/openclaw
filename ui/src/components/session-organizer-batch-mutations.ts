@@ -5,6 +5,8 @@ import {
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   readSessionMethodAccess,
@@ -20,6 +22,8 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import type { SessionOrganizerDependencies } from "./session-organizer.ts";
 import { formatBatchSessionRemovalError } from "./session-workspace-recovery.runtime.ts";
+
+registerSessionOrganizationSharedEnglish();
 
 export type SessionActionRow = Pick<
   SidebarRecentSession,
@@ -40,6 +44,8 @@ export type SessionActionRow = Pick<
   pinnable?: boolean;
   sidebarRoot?: boolean;
   hasArchiveDescendants?: boolean;
+  /** An enabled automation is bound to this conversation; archive and delete pause it. */
+  hasAutomation?: boolean;
   archiveGuard?: Pick<
     SessionsPatchManyParams["targets"][number],
     "expectedSidebarRoot" | "expectedCategory" | "expectedArchived" | "expectedSidebarAncestors"
@@ -130,7 +136,7 @@ export async function patchSessionRows(
   if (typeof patch.archived === "boolean" && rows.some((row) => !row.sessionId?.trim())) {
     deps.sessionData.publishSessionMutationError(
       scope,
-      "Session lifecycle action requires a durable session identity.",
+      t("sessionsView.lifecycleIdentityRequired"),
     );
     return null;
   }
@@ -279,6 +285,7 @@ export async function setSessionInvolvement(
     !requireSessionMutationAccess(deps, scope, {
       method: "sessions.setInvolvement",
       requiredScope: "operator.read",
+      sessionScope: true,
     })
   ) {
     return;

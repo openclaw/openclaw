@@ -3,9 +3,10 @@ import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-sto
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { recordSessionRowPartitionRevision } from "../infra/gateway-work-metrics.js";
 import {
   projectSessionOwner,
-  projectSessionParticipants,
+  resolveSessionProfileId,
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
 import { compareSessionEntryPairs, type SessionEntryPair } from "./session-list-order.js";
@@ -15,6 +16,7 @@ import {
   type SelectionChange,
 } from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
+import { sameSelectionFacts } from "./session-row-selection-facts.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
@@ -42,14 +44,19 @@ export function createSessionRowSelection(
       entries: SessionEntryPair[];
     }
   >();
-  // Fixed partitions bound refiltering after exact publications without retaining old rosters.
-  let partitions: Array<{ revision: object; entries: Map<string, SessionEntryPair> }> | undefined;
-  const partitionFor = (key: string) => {
+  // Archive populations own separate revisions; each winner belongs to only one partition.
+  let partitions:
+    | Array<{ archived: boolean; revision: object; entries: Map<string, SessionEntryPair> }>
+    | undefined;
+  const partitionFor = (key: string, target: IndexedTarget) => {
+    if (!partitions) {
+      return undefined;
+    }
     let hash = 0;
     for (let i = 0; i < key.length; i++) {
       hash = (Math.imul(hash, 31) + key.charCodeAt(i)) | 0;
     }
-    return partitions?.[hash & 63];
+    return partitions[(hash & 63) + (target.row.entry.archivedAt !== undefined ? 64 : 0)];
   };
   const personalInvolvements = new Map<string, Set<string>>();
   const relatedInvolvements = new Map<string, Set<string>>();
@@ -140,14 +147,10 @@ export function createSessionRowSelection(
       if (owner?.identity?.type === "profile") {
         (related ??= new Set()).add(owner.identity.id);
       }
-      const participants = (context.identityProjection?.participants ?? projectSessionParticipants)(
-        entry,
-        identities,
-        cfg,
-      );
-      for (const participant of participants.values()) {
-        if (participant.identity.type === "profile") {
-          (related ??= new Set()).add(participant.identity.id);
+      // Membership needs canonical IDs, not participant labels, avatars, or display map keys.
+      for (const { identity } of entry.participants ?? []) {
+        if (identity.type === "profile") {
+          (related ??= new Set()).add(resolveSessionProfileId(identity.id, identities));
         }
       }
       const states = (context.identityProjection?.involvement ?? projectSessionProfileInvolvements)(
@@ -197,7 +200,7 @@ export function createSessionRowSelection(
   };
   const keyFor = (row: Pick<SelectionTarget, "key" | "agentId">) =>
     sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
-  const update = (id: string, key: string, row?: SelectionTarget) => {
+  const update = (id: string, key: string, row?: SelectionTarget, changeScope?: string) => {
     let group = groups.get(key);
     const oldWinner = winners.get(key);
     const eligible =
@@ -237,6 +240,21 @@ export function createSessionRowSelection(
     } else {
       duplicates.delete(key);
     }
+    // Raw selections without an owner snapshot still need structural comparison.
+    if (
+      winner &&
+      oldWinner &&
+      winner !== oldWinner &&
+      (oldWinner.row.selectionFactsRevision && winner.row.selectionFactsRevision
+        ? rowIdentity(oldWinner.row) === rowIdentity(winner.row) &&
+          oldWinner.row.selectionFactsRevision === winner.row.selectionFactsRevision
+        : sameSelectionFacts(oldWinner.row, winner.row))
+    ) {
+      oldWinner.row = winner.row;
+      oldWinner.pair[1] = winner.row.entry;
+      group?.set(rowIdentity(winner.row), oldWinner);
+      return;
+    }
     if (winner) {
       winners.set(key, winner);
     } else {
@@ -247,14 +265,17 @@ export function createSessionRowSelection(
     }
     updateCreator(oldWinner, true);
     updateCreator(winner);
-    const partition = partitionFor(key);
+    const partition = winner && partitionFor(key, winner);
+    const previousPartition = oldWinner && partitionFor(key, oldWinner);
+    if (previousPartition && previousPartition !== partition) {
+      previousPartition.entries.delete(key);
+      previousPartition.revision = {};
+      recordSessionRowPartitionRevision(changeScope);
+    }
     if (partition) {
       partition.revision = {};
-      if (winner) {
-        partition.entries.set(key, winner.pair);
-      } else {
-        partition.entries.delete(key);
-      }
+      recordSessionRowPartitionRevision(changeScope);
+      partition.entries.set(key, winner!.pair);
     }
     if (involvementRevision) {
       // Publication records only the changed metadata; identity preparation stays in the reader.
@@ -292,7 +313,7 @@ export function createSessionRowSelection(
       update(rowIdentity(row), keyFor(row), row);
     },
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
-      update(change.id, keyFor(change), change.row);
+      update(change.id, keyFor(change), change.row, change.scope);
     },
     createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
       assertCanonical();
@@ -330,12 +351,13 @@ export function createSessionRowSelection(
     ) {
       assertCanonical();
       if (!candidates && !partitions) {
-        partitions = Array.from({ length: 64 }, () => ({
+        partitions = Array.from({ length: 128 }, (_, index) => ({
+          archived: index >= 64,
           revision: {},
           entries: new Map<string, SessionEntryPair>(),
         }));
         for (const [key, target] of winners) {
-          partitionFor(key)!.entries.set(key, target.pair);
+          partitionFor(key, target)!.entries.set(key, target.pair);
         }
       }
       return {

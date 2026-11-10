@@ -4,6 +4,7 @@ import { createServer, type RequestListener } from "node:http";
 import type { HeapProfiler } from "node:inspector";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
@@ -14,6 +15,7 @@ import {
   createGatewayBenchEnv,
   waitForInitialProbe,
 } from "../../scripts/lib/gateway-bench-runtime.ts";
+import { summarizeGatewayModuleLoads } from "../../scripts/lib/gateway-startup-module-counts.mjs";
 import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
@@ -25,6 +27,33 @@ import { runNodeScript } from "../helpers/run-node-script.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+it("counts unique loaded files across repeated module evaluations", async ({ signal }) => {
+  const root = tempDirs.make("openclaw-startup-module-counts-");
+  const output = path.join(root, "counts.jsonl");
+  const entry = path.join(root, "entry.mjs");
+  fs.writeFileSync(path.join(root, "dependency.mjs"), "export const value = 1;");
+  fs.writeFileSync(
+    entry,
+    'await import("./dependency.mjs"); await import("./dependency.mjs?generation=2");',
+  );
+  const result = await runNodeScript(
+    [
+      "--import",
+      pathToFileURL(path.resolve("scripts/lib/gateway-startup-module-counts.mjs")).href,
+      entry,
+    ],
+    { ...process.env, OPENCLAW_BENCH_MODULE_COUNTS: output },
+    undefined,
+    { signal },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(summarizeGatewayModuleLoads(fs.readFileSync(output, "utf8"))).toEqual({
+    files: 2,
+    groups: { core: 2 },
+  });
+});
+
 it("runs startup benchmark help through a symlinked script directory", async ({ signal }) => {
   const root = tempDirs.make("openclaw-bench-symlink-");
   const scripts = path.join(root, "scripts");
@@ -104,12 +133,14 @@ function gatewaySample(overrides: Partial<GatewaySample> = {}): GatewaySample {
     cpuMs: 100,
     exitCode: null,
     firstOutputMs: 1,
-    firstSessionRpc: { ms: 19, attempts: 1, lastError: null },
+    firstSessionRpc: { ms: 19, connectMs: 18, attempts: 1, lastError: null },
     gatewayReadyLogLine: "[gateway] ready",
     gatewayReadyLogMs: 20,
     healthz: startupProbe(10, "econnrefused"),
     httpListenLogLine: "[gateway] http server listening (0 plugins)",
     httpListenLogMs: 5,
+    hostLoadBefore: [1, 1, 1],
+    hostLoadAfter: [1, 1, 1],
     maxRssMb: 120,
     outputTail: "",
     readyz: startupProbe(18, "http-503"),
@@ -118,6 +149,7 @@ function gatewaySample(overrides: Partial<GatewaySample> = {}): GatewaySample {
     signal: null,
     startupTrace: {},
     startupTraceLines: [],
+    pluginMigration: { total: 0, completed: 0, warnings: 0 },
     ...overrides,
   };
 }
@@ -202,6 +234,58 @@ process.send("fixture-ready");`,
     collect(profile.head);
     expect(functionNames.has("allocateBeforeReady")).toBe(true);
     expect(functionNames.has("allocateAfterReady")).toBe(false);
+  });
+
+  it("gates both full integrity-check forms on unsealed startup fixtures", async ({ signal }) => {
+    const root = tempDirs.make("openclaw-bench-integrity-gate-");
+    const fixture = path.join(root, "fixture");
+    const seeded = await runStartup(root, signal, [
+      "--case",
+      "slowAgentDatabase",
+      "--fixture-root",
+      fixture,
+      "--seed-only",
+      "--agent-database-mib",
+      "0",
+      "--agent-gate-delay-ms",
+      "0",
+    ]);
+    expect(seeded.status, seeded.stderr).toBe(0);
+    for (const agentId of [
+      "bench-fast-01",
+      "bench-fast-02",
+      "bench-fast-03",
+      "bench-fast-04",
+      "bench-slow",
+    ]) {
+      expect(
+        fs.existsSync(
+          path.join(fixture, "state/agents", agentId, "agent/openclaw-agent.sqlite.seal"),
+        ),
+      ).toBe(false);
+    }
+    const database = path.join(fixture, "state/agents/bench-slow/agent/openclaw-agent.sqlite");
+    const checked = await runNodeScript(
+      [
+        "--import",
+        path.join(fixture, "slow-agent-preload.mjs"),
+        "--input-type=module",
+        "--eval",
+        `import { DatabaseSync } from "node:sqlite";
+const db = new DatabaseSync(${JSON.stringify(database)}, { readOnly: true });
+for (const sql of ["PRAGMA integrity_check;", "PRAGMA integrity_check(2147483647);"]) {
+  const rows = db.prepare(sql).all();
+  if (rows.length !== 1 || rows[0].integrity_check !== "ok") throw new Error("Fixture integrity failed");
+}
+db.close();`,
+      ],
+      { ...process.env },
+      undefined,
+      { cwd: root, signal, maxBuffer: 64 * 1024, requireProcessTreeExit: true },
+    );
+    expect(checked.status, checked.stderr).toBe(0);
+    expect(checked.stdout.match(/\[slow-agent-bench\] gate-start/gu)).toHaveLength(2);
+    expect(checked.stdout.match(/\[slow-agent-bench\] gate-passed/gu)).toHaveLength(2);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -325,13 +409,19 @@ server.listen(port, "127.0.0.1", () => {
   console.log("[gateway] ready (0 plugins, 0.0s)");
   console.log("startup trace: sidecars.model-runtime-build agentCount=" + (10 + sample) + " workspaceGroupCount=" + sample + " workspaceFactsMs=2.5");
   console.log("startup trace: memory.ready rssMb=32.5 heapUsedMb=16.25 externalMb=2");
+  console.log("startup trace: post-ready.startup-maintenance 1.0ms total=1.0ms");
+  const terminalPhase = gatewayConfig.gateway?.controlUi?.enabled === false ? "memory-search" : "plugins";
+  console.log("startup trace: post-ready.gateway-data." + terminalPhase + " 1.0ms total=1.0ms");
+  if (teamBoot) console.log("startup trace: plugins.runtime-post-bind 1.0ms total=1.0ms");
 });
 `,
         );
         const result = await runStartup(root, signal, [
           "--entry",
           entry,
-          ..."--case default --runs 2 --warmup 0 --output".split(" "),
+          ..."--case default --runs 2 --warmup 0 --exit-listeners --timeout-ms 5000 --output".split(
+            " ",
+          ),
           reportPath,
         ]);
         expect(result.error).toBeUndefined();
@@ -364,8 +454,13 @@ server.listen(port, "127.0.0.1", () => {
         expect(report.results).toHaveLength(1);
         expect(report.results[0].samples).toHaveLength(2);
         for (const sample of report.results[0].samples) {
-          expect(sample.firstSessionRpc).toMatchObject({ ms: expect.any(Number), attempts: 2 });
-          expect(sample.startupTraceLines).toHaveLength(2);
+          expect(sample.firstSessionRpc).toMatchObject({
+            ms: expect.any(Number),
+            connectMs: expect.any(Number),
+            attempts: 2,
+          });
+          expect(sample.firstSessionRpc.connectMs).toBeLessThan(sample.firstSessionRpc.ms);
+          expect(sample.startupTraceLines).toHaveLength(4);
         }
         expect(report.results[0].summary.startupTrace).toMatchObject({
           "sidecars.model-runtime-build.agentCount": { p50: 11.5, avg: 11.5, min: 11, max: 12 },
@@ -406,7 +501,7 @@ server.listen(port, "127.0.0.1", () => {
             bundledPluginFixturePath,
             "--fixture-root",
             teamRoot,
-            ..."--runs 1 --warmup 0 --output".split(" "),
+            ..."--runs 1 --warmup 0 --exit-listeners --timeout-ms 5000 --output".split(" "),
             reportPath,
           ]);
         for (const shutdownExitCode of [0, 23]) {
@@ -503,6 +598,21 @@ server.listen(port, "127.0.0.1", () => {
       output: "startup.json",
       runs: 2,
     });
+    if (process.platform === "win32") {
+      expect(() => parseOptions("--case teamBoot --publication-api-delay-ms 500")).toThrow("POSIX");
+      return;
+    }
+    expect(parseOptions("--case teamBoot --publication-api-delay-ms 500").cases[0]).toMatchObject({
+      publicationApiDelayMs: 500,
+    });
+    for (const args of [
+      "--case default --publication-api-delay-ms 500",
+      "--case teamBoot --publication-api-delay-ms 199",
+      "--case teamBoot --publication-api-delay-ms 801",
+      "--case teamBoot --publication-api-delay-ms 500 --publication-git-delay-ms 500",
+    ]) {
+      expect(() => parseOptions(args)).toThrow();
+    }
   });
 
   it("selects the Gateway runtime and affinity independently of the controller", () => {
@@ -576,7 +686,7 @@ server.listen(port, "127.0.0.1", () => {
         cpuMs: null,
         exitCode: 1,
         firstOutputMs: 5,
-        firstSessionRpc: { ms: null, attempts: 0, lastError: null },
+        firstSessionRpc: { ms: null, connectMs: null, attempts: 0, lastError: null },
         gatewayReadyLogLine: null,
         gatewayReadyLogMs: null,
         healthz: startupProbe(null, "econnrefused"),
@@ -625,7 +735,7 @@ server.listen(port, "127.0.0.1", () => {
     { fast: 5, slow: 9, errors: 0, valid: false },
     { fast: 5, slow: 11, errors: 1, valid: false },
   ])(
-    "enforces independent slow-agent recovery (fast=$fast, slow=$slow, errors=$errors)",
+    "enforces independent slow-agent database admission (fast=$fast, slow=$slow, errors=$errors)",
     ({ fast, slow, errors, valid }) => {
       const result = testing.summarizeCase(
         { config: {}, id: "slowAgentDatabase", name: "slow agent database" },

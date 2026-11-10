@@ -5,8 +5,8 @@ import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-sup
 import {
   controlUiBundledSettingsStorageKey,
   controlUiE2eWaitTimeoutMs,
-  installMockGateway,
 } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import { createWorkboardProof, button, makeBoard, makeCard } from "./workboard.e2e.test-support.ts";
 
@@ -72,11 +72,16 @@ suite.define(() => {
   it.each(["chromium", "webkit"] as const)(
     "loads the native bundle and preserves overlay focus and card identity in %s",
     async (engine) => {
-      const proof = createWorkboardProof(suite, "workboard-native", undefined, {
+      const proof = createWorkboardProof("workboard-native", {
         captureMode: engine,
       });
       for (const view of views) {
-        for (const theme of ["light", "dark"] as const) {
+        // Native behavior covers both layouts; visual proof keeps every theme/layout pair.
+        const themes =
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? (["light", "dark"] as const)
+            : ([view.name === "desktop" ? "light" : "dark"] as const);
+        for (const theme of themes) {
           const options = {
             colorScheme: theme,
             locale: "en-US",
@@ -100,7 +105,7 @@ suite.define(() => {
               },
               { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), theme },
             );
-            const gateway = await installMockGateway(page, {
+            const gateway = await installNativePluginMockGateway(page, {
               ...workboardUi,
               methodResponses: {
                 "workboard.boards.list": { boards: [board] },
@@ -301,7 +306,7 @@ suite.define(() => {
           cards: windowCards.toSorted((left, right) => left.position - right.position),
           statuses: ["todo"],
         });
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           ...workboardUi,
           methodResponses: {
             "workboard.boards.list": { boards: [windowBoard] },

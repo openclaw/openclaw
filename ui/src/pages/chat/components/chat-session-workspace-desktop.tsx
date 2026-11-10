@@ -9,18 +9,29 @@ import {
   isPending,
   Loading,
   Show,
+  useContext,
 } from "solid-js";
+import {
+  SESSION_FILES_DISPLAY_DEFAULTS,
+  type SessionFilesDisplay,
+} from "../../../app/settings-contract.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu } from "../../../components/solid/menu.tsx";
+import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
-import { WorkspaceTranscriptAttachments } from "./chat-session-workspace-attachments.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import {
+  createTranscriptAttachmentsView,
+  TranscriptAttachmentRow,
+  WorkspaceTranscriptAttachments,
+} from "./chat-session-workspace-attachments.tsx";
 import { WorkspaceBreadcrumb } from "./chat-session-workspace-breadcrumb.tsx";
 import {
   projectWorkspaceCatalog,
@@ -31,12 +42,18 @@ import {
 } from "./chat-session-workspace-catalog.ts";
 import { createSessionWorkspaceRead } from "./chat-session-workspace-read.ts";
 import { RailRow, WorkspaceFilename, WorkspaceRows } from "./chat-session-workspace-row.tsx";
+import {
+  orderSessionFiles,
+  type SessionFileEntry,
+} from "./chat-session-workspace-session-files.ts";
 import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import { hasTranscriptAttachments } from "./chat-transcript-attachments.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-session-workspace-desktop.css";
 import { FileDisclosure } from "./file-disclosure.tsx";
+
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 function WorkspaceGroup(props: {
   label?: string;
@@ -148,7 +165,75 @@ function ActivityMenu(props: {
   );
 }
 
+const sessionFile = (entry: SessionFileEntry) => (entry.kind === "file" ? entry.file : undefined);
+const sessionAttachment = (entry: SessionFileEntry) =>
+  entry.kind === "attachment" ? entry.entry : undefined;
+
+function SessionFilesDisplayMenu(props: {
+  display: SessionFilesDisplay;
+  onChange: (display: Partial<SessionFilesDisplay>) => void;
+}) {
+  const id = createUniqueId();
+  const views = [
+    ["list", "list", "viewList"],
+    ["grid", "layoutGrid", "viewGrid"],
+  ] as const;
+  const sorts = [
+    ["default", "sortDefault"],
+    ["date", "sortDate"],
+    ["name", "sortName"],
+    ["type", "sortType"],
+  ] as const;
+  const heading = (key: "view" | "sortBy") => (
+    <div class="oc-menu-heading">
+      <span class="oc-menu-heading__label">{t(`chat.workspaceFiles.display.${key}`)}</span>
+    </div>
+  );
+  // Entries hold JSX; build them under this owner, not inside the menu's lazy reads.
+  const items = createMemo<MenuEntry[]>(() => [
+    { kind: "content", id: "view-heading", content: heading("view") },
+    ...views.map(([view, icon, key]) => ({
+      id: `view:${view}`,
+      label: t(`chat.workspaceFiles.display.${key}`),
+      type: "radio" as const,
+      checked: props.display.view === view,
+      icon: <Icon name={icon} />,
+    })),
+    { kind: "content", id: "sort-separator", content: <div role="separator" /> },
+    { kind: "content", id: "sort-heading", content: heading("sortBy") },
+    ...sorts.map(([sort, key]) => ({
+      id: `sort:${sort}`,
+      label: t(`chat.workspaceFiles.display.${key}`),
+      type: "radio" as const,
+      checked: props.display.sort === sort,
+    })),
+  ]);
+  return (
+    <Menu
+      id={`workspace-session-display-${id}`}
+      label={t("chat.workspaceFiles.display.label")}
+      panelClass="workspace-desktop__menu"
+      triggerClass="session-panel-rail__button"
+      triggerAttributes={{ title: t("chat.workspaceFiles.display.label") }}
+      trigger={<Icon name={props.display.view === "grid" ? "layoutGrid" : "list"} />}
+      items={items()}
+      onSelect={(item) => {
+        const view = views.find(([candidate]) => item.id === `view:${candidate}`)?.[0];
+        const sort = sorts.find(([candidate]) => item.id === `sort:${candidate}`)?.[0];
+        if (view) {
+          props.onChange({ view });
+        } else if (sort) {
+          props.onChange({ sort });
+        }
+      }}
+    />
+  );
+}
+
 export function DesktopWorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
+  const presented = useContext(ContentPresentation);
+  const sessionDisplay = () =>
+    props.workspace.sessionFilesDisplay ?? SESSION_FILES_DISPLAY_DEFAULTS;
   const { read, scope } = createSessionWorkspaceRead(() => props.workspace);
   let searchField: HTMLInputElement | undefined;
   const searchValue = liveValue(() => props.workspace.browserSearch);
@@ -226,6 +311,20 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
     !props.workspace.folderView &&
     filter() === "all" &&
     hasTranscriptAttachments(props.workspace.transcriptAttachments);
+  const sessionAttachments = createTranscriptAttachmentsView(
+    () =>
+      presented() &&
+      navigation()?.treeVisible !== false &&
+      navigation()?.sessionExpanded !== false &&
+      !navigation()?.searchOpen &&
+      attachmentsVisible()
+        ? props.workspace.transcriptAttachments
+        : undefined,
+    () => "",
+  );
+  const sessionEntries = createMemo(() =>
+    orderSessionFiles(sessionFiles(), sessionAttachments.entries(), sessionDisplay().sort),
+  );
   const attachmentSearchVisible = () =>
     hasTranscriptAttachments(props.workspace.transcriptAttachments, props.workspace.browserSearch);
   const projectVisible = () =>
@@ -311,8 +410,11 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
             )}
           </Show>
           <Show when={searchTruncated()}>
-            <div class="workspace-desktop__notice" role="status">
-              {t("chat.workspaceFiles.truncated")}
+            <div class="workspace-desktop__notice">
+              <div role="status">{t("chat.workspaceFiles.searchIncomplete")}</div>
+              <button type="button" class="btn btn--sm" onClick={closeSearch}>
+                {t("chat.workspaceFiles.browseFiles")}
+              </button>
             </div>
           </Show>
           <Show
@@ -340,35 +442,56 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
               class="workspace-desktop__session"
             >
               <div
-                class="workspace-desktop__session-scroll"
+                class={[
+                  "workspace-desktop__session-scroll",
+                  { "workspace-desktop__session-scroll--grid": sessionDisplay().view === "grid" },
+                ]}
                 role="list"
+                aria-label={t("chat.workspaceFiles.desktop.sessionFiles")}
                 ref={setSessionScroll}
                 onScroll={(event) =>
                   props.workspace.onNavigationScroll?.("session", event.currentTarget.scrollTop)
                 }
               >
-                <For each={sessionFiles()} keyed={(file) => file.key}>
-                  {(file) => <RailRow file={file()} workspace={props.workspace} />}
-                </For>
-                <Show
-                  when={
-                    navigation()?.treeVisible !== false &&
-                    navigation()?.sessionExpanded !== false &&
-                    !navigation()?.searchOpen &&
-                    attachmentsVisible() &&
-                    props.workspace.transcriptAttachments
-                  }
-                >
-                  {(source) => (
-                    <WorkspaceTranscriptAttachments
-                      source={source()}
-                      query=""
-                      presentation="desktop"
-                      renderName={(name) => <WorkspaceFilename name={name} />}
-                    />
+                <sessionAttachments.Lifetime />
+                <For each={sessionEntries()} keyed={(entry) => entry.key}>
+                  {(entry) => (
+                    <Show
+                      when={sessionFile(entry())}
+                      fallback={
+                        <Show when={sessionAttachment(entry())}>
+                          {(attachment) => (
+                            <TranscriptAttachmentRow
+                              entry={attachment()}
+                              presentation="desktop"
+                              view={sessionDisplay().view}
+                              renderName={(name) => <WorkspaceFilename name={name} />}
+                            />
+                          )}
+                        </Show>
+                      }
+                    >
+                      {(file) => (
+                        <RailRow
+                          file={file()}
+                          workspace={props.workspace}
+                          view={sessionDisplay().view}
+                        />
+                      )}
+                    </Show>
                   )}
-                </Show>
+                </For>
               </div>
+              <Show when={sessionAttachments.notice()}>
+                {(message) => (
+                  <div
+                    role={sessionAttachments.source()?.error ? "alert" : "status"}
+                    class="workspace-desktop__notice"
+                  >
+                    {message()}
+                  </div>
+                )}
+              </Show>
             </WorkspaceGroup>
           </Show>
           <Show when={projectVisible()}>
@@ -499,6 +622,20 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
           </button>
         </label>
         <ActivityMenu workspace={props.workspace} filters={filters()} filter={filter()} />
+        <Show
+          when={
+            !props.workspace.folderView &&
+            !navigation()?.searchOpen &&
+            (sessionFiles().length > 0 || attachmentsVisible())
+          }
+        >
+          <div class="session-panel-rail__group">
+            <SessionFilesDisplayMenu
+              display={sessionDisplay()}
+              onChange={(display) => props.workspace.onSessionFilesDisplayChange?.(display)}
+            />
+          </div>
+        </Show>
       </div>
       <Loading on={scope()} fallback={<WorkspaceLoading />}>
         <Errored

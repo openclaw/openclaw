@@ -6,7 +6,12 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqli
 import * as manifestModelIdNormalization from "../../plugins/manifest-model-id-normalization.js";
 import { addSession, deleteSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
-import { configFor, modelDefinition, providerEntry } from "../model-auth.fixtures.test-support.js";
+import {
+  configFor,
+  createPlatformAuthRoute,
+  modelDefinition,
+  providerEntry,
+} from "../model-auth.fixtures.test-support.js";
 import * as providerModelNormalizationRuntime from "../provider-model-normalization.runtime.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
@@ -340,14 +345,7 @@ describe("compaction runtime context", () => {
       authProfileProviderForAuth: "openai",
       forwardedAuthProfileId: "openai:work",
       forwardedAuthProfileSource: "user",
-      modelRoute: {
-        provider: "openai",
-        modelId: "gpt-5.5",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        authRequirement: "api-key",
-        requestTransportOverrides: "none",
-      },
+      modelRoute: createPlatformAuthRoute(),
     } as const;
     const matching = context({
       provider: "openai",

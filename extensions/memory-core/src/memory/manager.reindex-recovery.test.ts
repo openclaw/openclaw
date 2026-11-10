@@ -5,6 +5,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   resolveSessionTranscriptsDirForAgent,
   type OpenClawConfig,
@@ -29,7 +30,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
-import type { EmbeddingProvider } from "./embeddings.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { resetMemoryDatabase } from "./manager-db.js";
@@ -68,7 +68,7 @@ type ReindexHarness = {
   cache: { enabled: boolean; maxEntries?: number };
   database: MemoryIndexDatabase;
   providerKey: string | null;
-  provider: EmbeddingProvider | null;
+  provider: MemoryEmbeddingProvider | null;
   dirty: boolean;
   memoryFullRetryDirty: boolean;
   sessionsDirty: boolean;
@@ -85,7 +85,7 @@ describe("memory manager reindex recovery", () => {
   let onEmbedBatch: ((inputs: Array<string | EmbeddingInput>) => void) | undefined;
   let batchEmbeddingCalls: string[][] = [];
 
-  function createProvider(id: string): EmbeddingProvider {
+  function createProvider(id: string): MemoryEmbeddingProvider {
     return {
       id,
       model: "mock-embed",
@@ -233,7 +233,9 @@ describe("memory manager reindex recovery", () => {
       { source: "sessions", text: "User: published session" },
     ]);
 
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_000);
+    const advanced = Date.now() + 30_000;
+    vi.spyOn(Date, "now").mockReturnValue(advanced);
+    vi.spyOn(performance, "now").mockReturnValue(advanced);
     await memoryManager.sync();
     expect(rows.all()).toEqual([
       { source: "memory", text: "replacement memory" },
@@ -998,6 +1000,7 @@ describe("memory manager reindex recovery", () => {
     // The rebuild start and the sibling's write share one controlled clock.
     const now = 2_000_000_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     // A sibling caches a vector for a chunk it has not published yet, after this
     // rebuild started and before it publishes. No published chunk carries its hash.
     const metadata = vi.spyOn(MemoryIndexDatabase.prototype, "writeMetadata");

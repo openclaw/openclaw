@@ -39,7 +39,13 @@ const Eligibility = Type.Union([Type.Literal("current"), Type.Literal("include_i
 const common = {
   ...paging,
   entity: Type.Optional(text(96)),
-  kind: Type.Optional(text(64)),
+  kind: Type.Optional(
+    Type.String({
+      maxLength: 64,
+      description:
+        "Exact record.type filter, such as decision, event, or meeting; unlike search/lookup kind (page, claim, relationship). Omit to include all eligible dated types.",
+    }),
+  ),
   eligibility: Type.Optional(Eligibility),
   includeSources: Type.Optional(Type.Boolean()),
 };
@@ -48,6 +54,12 @@ export const TimelineInput = Type.Object(
     ...common,
     ...TemporalFilters,
     order: Type.Optional(Type.Union([Type.Literal("asc"), Type.Literal("desc")])),
+    group: Type.Optional(
+      Type.Literal("source", {
+        description:
+          "Entity Timeline: one row per dated source connected to entity (required), with the note from their relationship and the entity's claim count from that source. Occurrence time only; no kind filter.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -98,6 +110,25 @@ const ChronicleItem = Type.Object({
   entities: Type.Array(text(96), { maxItems: 100 }),
   sourcePage: Type.Optional(text(96)),
   evidenceCount: Type.Integer(),
+  claims: Type.Optional(
+    Type.Integer({
+      minimum: 0,
+      description: "group=source: the entity's claims from this source.",
+    }),
+  ),
+  links: Type.Optional(
+    Type.Array(Type.Object({ href: text(2000), id: text(96) }, { additionalProperties: false }), {
+      maxItems: 100,
+      description:
+        "group=source: the summary's links that resolve to a record in this scope, as rendered hrefs.",
+    }),
+  ),
+  noteRecord: Type.Optional(
+    Type.String({
+      maxLength: 96,
+      description: "group=source: the relationship whose body is the row's summary.",
+    }),
+  ),
 });
 export const ChronicleOutput = Type.Object({
   items: Type.Array(ChronicleItem, { maxItems: 100 }),

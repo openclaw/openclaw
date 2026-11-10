@@ -1,8 +1,12 @@
-import { LiveState } from "./live-state.js";
 import type { StoreConfig } from "./real-vault.js";
+import { KnowledgeRestartError } from "./restart-error.js";
 import { StorageClient } from "./storage-client.js";
 
-const retired = () => new Error("Knowledge store runtime was retired; retry the original request.");
+const retired = () =>
+  new KnowledgeRestartError(
+    "runtime-retired",
+    "Knowledge store runtime was retired; retry the original request.",
+  );
 
 /** Everything one physical store owns at runtime: its storage worker, its
  * serialized lane and its live-state watcher. Every agent using the store
@@ -10,15 +14,13 @@ const retired = () => new Error("Knowledge store runtime was retired; retry the 
  * coordinator (spec §5.3). */
 export class StoreRuntime {
   readonly client: StorageClient;
-  readonly live: LiveState;
   private pending: Promise<void> = Promise.resolve();
   private retiredAt?: Promise<void>;
   constructor(
     readonly config: StoreConfig,
-    changed: () => void,
+    changed?: () => void,
   ) {
-    this.client = new StorageClient(config);
-    this.live = new LiveState(config.root, changed);
+    this.client = new StorageClient(config, changed);
   }
   get vaultId() {
     return this.config.vaultId;
@@ -54,12 +56,10 @@ export class StoreRuntime {
     return this.pending;
   }
 
-  /** Stop accepting work, let queued work settle, then release the worker. */
+  /** Stop accepting work, let queued work settle, then release the worker.
+   * Resolves once the worker has exited. */
   retire(): Promise<void> {
-    this.retiredAt ??= this.pending.then(() => {
-      this.live.stop();
-      this.client.close();
-    });
+    this.retiredAt ??= this.pending.then(() => this.client.close());
     return this.retiredAt;
   }
 }

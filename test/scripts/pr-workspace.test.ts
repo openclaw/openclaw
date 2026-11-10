@@ -24,14 +24,18 @@ describePosix("scripts/pr workspace preflight", () => {
         GIT_AUTHOR_EMAIL: "fixture@example.invalid",
         GIT_COMMITTER_NAME: "Fixture",
         GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+        HOME: root,
         TMPDIR: root,
         // Dependency selection must not run for this path-only command.
         OPENCLAW_PR_TOOLING_ROOT: join(root, "missing-dependencies"),
       };
       const git = (cwd: string, ...args: string[]) =>
         execFileSync("git", ["-C", cwd, ...args], { env, encoding: "utf8" }).trim();
+      const origin = join(root, "origin.git");
+      git(root, "init", "--bare", origin);
       copyPrWrapperSources(owner);
       git(owner, "init", "-q", "-b", "main");
+      git(owner, "remote", "add", "origin", origin);
       git(owner, "config", "core.hooksPath", "/dev/null");
       git(owner, "config", "commit.gpgsign", "false");
       git(owner, "add", ".");

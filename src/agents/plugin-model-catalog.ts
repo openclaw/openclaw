@@ -9,6 +9,7 @@ import { linkSync, readdirSync, renameSync, unlinkSync, type Dirent } from "node
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -695,6 +696,8 @@ export type PluginModelCatalogMetadataSnapshot = Pick<PluginMetadataSnapshot, "o
 export function resolvePluginModelCatalogOwnerPluginId(params: {
   providerId: string;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
+  /** Generated catalogs may publish a CLI backend's models (claude-cli/<model>). */
+  includeCliBackends?: boolean;
 }): string | undefined {
   const snapshot = params.pluginMetadataSnapshot;
   const owners = snapshot?.owners;
@@ -706,6 +709,7 @@ export function resolvePluginModelCatalogOwnerPluginId(params: {
     owners.modelCatalogProviders.get(providerId),
     owners.providers.get(providerId),
     owners.setupProviders.get(providerId),
+    params.includeCliBackends ? owners.cliBackends.get(providerId) : undefined,
   ].find((entry): entry is readonly string[] => Boolean(entry?.length));
   const pluginId = candidates?.length === 1 ? candidates[0] : undefined;
   if (!pluginId) {
@@ -743,25 +747,24 @@ export function filterGeneratedPluginModelCatalogProviders<T>(params: {
   );
   const providers = Object.fromEntries(
     Object.entries(params.providers).filter(
-      ([providerId]) =>
+      ([providerId, provider]) =>
         resolvePluginModelCatalogOwnerPluginId({
           providerId,
           pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+          includeCliBackends: true,
         }) === params.catalogPluginId &&
         isProviderCatalogSourceAllowed({
           provider: providerId,
           config: params.config,
           plugin,
+          sourceBaseUrl: asOptionalRecord(provider)?.baseUrl,
         }),
     ),
   );
   // Captured auth, not the retained catalog's credentials, admits deferred inventory.
-  if (
-    plugin?.activation?.onStartup === false &&
+  return plugin?.activation?.onStartup === false &&
     params.isProviderAvailable &&
     !Object.keys(providers).some(params.isProviderAvailable)
-  ) {
-    return {};
-  }
-  return providers;
+    ? {}
+    : providers;
 }

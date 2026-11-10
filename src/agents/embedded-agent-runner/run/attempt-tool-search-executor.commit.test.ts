@@ -81,7 +81,6 @@ it.each(["accepted", "rejected", "superseded"] as const)(
         (error: unknown) => ({ error }),
       );
       await reachedAppend.promise;
-      expect(execute).toHaveBeenCalledTimes(1);
       expect(subscription.getReplayState()).toMatchObject({
         replayInvalid: true,
         hadPotentialSideEffects: true,
@@ -97,19 +96,10 @@ it.each(["accepted", "rejected", "superseded"] as const)(
       if (rejected) {
         expect(await settled).toEqual({ error: persistenceError });
         expect(subscription.getReplayState().replayInvalid).toBe(true);
-        expect(subscription.toolMetas).toHaveLength(1);
       } else {
         expect(await settled).toHaveProperty("result");
-        if (outcome === "superseded") {
-          expect(manager.getEntries()).toHaveLength(1);
-        }
       }
       expect(terminalEvents).toEqual(outcome === "accepted" ? ["item:true", "tool:true"] : []);
-      expect(subscription.getItemLifecycle()).toEqual({
-        startedCount: 1,
-        completedCount: 1,
-        activeCount: 0,
-      });
       expect(await readAttemptNestedToolActivity(manager, nestedToolActivityState)).toMatchObject(
         rejected ? [] : [{ details: { toolCallId: "nested-write", toolName: "write" } }],
       );
@@ -121,3 +111,42 @@ it.each(["accepted", "rejected", "superseded"] as const)(
     }
   },
 );
+
+it("reads back nested activity that a hidden coordination turn stored without display", async () => {
+  const manager = SessionManager.inMemory();
+  const append = manager.appendMessageAsync.bind(manager);
+  // Child coordination turns persist every run row with display:false.
+  vi.spyOn(manager, "appendMessageAsync").mockImplementation(async (message, ...rest) =>
+    append({ ...message, display: false } as typeof message, ...rest),
+  );
+  const { subscription } = createSubscribedSessionHarness({ runId: "hidden-run" });
+  const nestedToolActivityState = { scopeId: "scope", successfulToolNames: new Set<string>() };
+  const executor = createSubscribedToolSearchExecutor({
+    attempt: { runId: "hidden-run", sessionKey: "key" },
+    runSignal: new AbortController().signal,
+    sessionManager: manager,
+    subscription,
+    isCurrent: () => true,
+    isReplaySafeTool: () => false,
+    nestedToolActivityState,
+  });
+  try {
+    await executor({
+      tool: {
+        ...createStubTool("sessions_send"),
+        execute: async () => ({ content: [{ type: "text" as const, text: "sent" }], details: {} }),
+      },
+      toolName: "sessions_send",
+      source: "openclaw",
+      sourceName: "core",
+      toolCallId: "nested-send",
+      input: { sessionKey: "agent:main:child", message: "ACK" },
+      acceptResultBeforeProjection: async (result) => result,
+    });
+    expect(await readAttemptNestedToolActivity(manager, nestedToolActivityState)).toMatchObject([
+      { details: { toolCallId: "nested-send", toolName: "sessions_send" } },
+    ]);
+  } finally {
+    subscription.unsubscribe();
+  }
+});

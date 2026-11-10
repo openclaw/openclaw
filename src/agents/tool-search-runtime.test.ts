@@ -12,9 +12,12 @@ import {
   SecretSurfaceUnavailableError,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
+import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   addClientToolsToToolCatalog,
@@ -242,6 +245,26 @@ describe("Tool Search terminal results", () => {
 });
 
 describe("Tool Search input schemas", () => {
+  it("keeps canonical Gemini read arguments through deferred publication and wrappers", async () => {
+    const readTool = fakeTool("read", readToolInputSchema);
+    const finalized = finalizeAgentTools({
+      tools: [readTool],
+      hookContext: { sessionId: "gemini-read" },
+      modelProvider: "google",
+      modelId: "gemini-4-argon",
+      wrapBeforeToolCallHook: false,
+      registerRunCleanup: vi.fn(),
+    });
+    const wrapped = finalized.map((tool) => copyAgentToolMetadata(tool, { ...tool }));
+    const { catalogRef, runtime } = createRuntime(wrapped);
+    const advertised = catalogRef.current?.entries[0]?.parameters;
+    expect(advertised).toHaveProperty("properties.optional.enum", ["true"]);
+
+    const input = { path: "nonexistent.txt", optional: true };
+    await expect(runtime.call("read", input)).resolves.toBeDefined();
+    expect(readTool.execute).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["10", '"10" (string)'],
     [false, "false (boolean)"],
@@ -249,10 +272,8 @@ describe("Tool Search input schemas", () => {
     [["private payload"], "[array] (array)"],
     [{ password: "private payload" }, "[object] (object)"],
   ])("explains rejected integer input %j without executing it", async (value, received) => {
-    const target = fakeTool(
-      "strict_limit",
-      Type.Object({ maxFires: Type.Integer({ minimum: 1 }) }),
-    );
+    const parameters = Type.Object({ maxFires: Type.Integer({ minimum: 1 }) });
+    const target = fakeTool("strict_limit", parameters);
     const { runtime } = createRuntime([target]);
 
     await expect(runtime.call("strict_limit", { maxFires: value })).rejects.toThrow(
@@ -374,10 +395,8 @@ describe("Tool Search input schemas", () => {
   });
 
   it("bounds oversized unexpected property names without losing validation failure", async () => {
-    const target = fakeTool(
-      "strict_keys",
-      Type.Object({ instruction: Type.String() }, { additionalProperties: false }),
-    );
+    const parameters = Type.Object({ instruction: Type.String() }, { additionalProperties: false });
+    const target = fakeTool("strict_keys", parameters);
     const { runtime } = createRuntime([target]);
     const failure = await runtime
       .call("strict_keys", {
@@ -395,60 +414,40 @@ describe("Tool Search input schemas", () => {
     expect(target.execute).not.toHaveBeenCalled();
   });
 
-  it("validates arguments after a policy hook repairs them", async () => {
-    const hook = vi.fn(async () => ({ params: { instruction: "repaired" } }));
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: hook }]),
-    );
-    const target = fakeTool(
-      "strict_instruction",
-      Type.Object({ instruction: Type.String() }, { additionalProperties: false }),
-    );
-    const { runtime } = createRuntime([target]);
-
-    await expect(runtime.call("strict_instruction", {})).resolves.toMatchObject({
-      result: { details: { input: { instruction: "repaired" } } },
-    });
-    expect(hook).toHaveBeenCalledOnce();
-    expect(target.execute).toHaveBeenCalledOnce();
-    expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ instruction: "repaired" });
-  });
-
-  it("rejects invalid hook-adjusted arguments before target execution", async () => {
-    const hook = vi.fn(async () => ({ params: { instruction: 42 } }));
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: hook }]),
-    );
-    const target = fakeTool(
-      "strict_instruction",
-      Type.Object({ instruction: Type.String() }, { additionalProperties: false }),
-    );
-    const { runtime } = createRuntime([target]);
-
-    await expect(runtime.call("strict_instruction", { instruction: "valid" })).rejects.toThrow(
-      "instruction: expected string; received 42 (number)",
-    );
-    expect(hook).toHaveBeenCalledOnce();
-    expect(target.execute).not.toHaveBeenCalled();
-  });
-
-  it("lets policy hooks block invalid arguments before schema validation", async () => {
-    const hook = vi.fn(async () => ({ block: true, blockReason: "blocked by policy" }));
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: hook }]),
-    );
-    const target = fakeTool(
-      "strict_instruction",
-      Type.Object({ instruction: Type.String() }, { additionalProperties: false }),
-    );
-    const { runtime } = createRuntime([target]);
-
-    await expect(runtime.call("strict_instruction", {})).resolves.toMatchObject({
-      result: { details: { status: "blocked", reason: "blocked by policy" } },
-    });
-    expect(hook).toHaveBeenCalledOnce();
-    expect(target.execute).not.toHaveBeenCalled();
-  });
+  it.each(["repair", "reject", "block"] as const)(
+    "validates the final arguments after a policy hook chooses to %s",
+    async (action) => {
+      const hook = vi.fn(async () =>
+        action === "block"
+          ? { block: true, blockReason: "blocked by policy" }
+          : { params: { instruction: action === "repair" ? "repaired" : 42 } },
+      );
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_tool_call", handler: hook }]),
+      );
+      const target = fakeTool(
+        "strict_instruction",
+        Type.Object({ instruction: Type.String() }, { additionalProperties: false }),
+      );
+      const { runtime } = createRuntime([target]);
+      const input = action === "reject" ? { instruction: "valid" } : {};
+      const call = runtime.call("strict_instruction", input);
+      if (action === "reject") {
+        await expect(call).rejects.toThrow("instruction: expected string; received 42 (number)");
+      } else {
+        await expect(call).resolves.toMatchObject({
+          result: {
+            details:
+              action === "repair"
+                ? { input: { instruction: "repaired" } }
+                : { status: "blocked", reason: "blocked by policy" },
+          },
+        });
+      }
+      expect(hook).toHaveBeenCalledOnce();
+      expect(target.execute).toHaveBeenCalledTimes(action === "repair" ? 1 : 0);
+    },
+  );
 
   it("does not apply a parent tool's schema to nested wrapped tool calls", async () => {
     const nested = fakeTool(
@@ -523,20 +522,16 @@ describe("Tool Search input schemas", () => {
   });
 
   it.each(["mcp"] as const)(
-    "does not traverse an untrusted %s schema during dispatch",
+    "does not validate an untrusted %s schema during dispatch",
     async (source) => {
       const target = fakeTool("external_instruction");
-      const hostileSchema = new Proxy(
-        {},
-        {
-          get: () => {
-            throw new Error("untrusted tool schema must remain deferred");
-          },
-          ownKeys: () => {
-            throw new Error("untrusted tool schema must remain deferred");
-          },
-        },
-      );
+      // The owning server validates MCP input and output; OpenClaw must not reject either.
+      const hostileSchema = {
+        type: "object",
+        required: ["never"],
+        properties: { never: { type: "string" } },
+        additionalProperties: false,
+      };
       const entry: ToolSearchCatalogEntry = {
         id: `${source}:external:external_instruction`,
         source,

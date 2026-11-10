@@ -1,9 +1,25 @@
+/**
+ * Real broadcast fanout, with byte-for-byte decoded output verification.
+ * node --import ./scripts/tsx.mjs scripts/perf/ws-compression-measure.ts \
+ *   --clients 60 --profiles 1 --batches 3000 --size 16384 --port 41649
+ * Repeat at 1/10/60 clients, alternating base/candidate order. --codec loads an
+ * alternate codec module; --transport loads an alternate transport module.
+ * --allocations runs a separate sampled-allocation pass including collected
+ * objects. Timing/GC gates use untraced passes only.
+ * Accept reduced allocation/send CPU per broadcast with identical wire bytes;
+ * unique profiles (--profiles 60) bound the no-whole-frame-sharing overhead.
+ * --streaming --clients 20 --audiences 17,1,2 grows assistant text through
+ * --size bytes across 32 updates. --cpu-profile <file> captures only measurement.
+ */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
+import type { HeapProfiler } from "node:inspector";
+import { Session } from "node:inspector/promises";
 import type { Socket } from "node:net";
+import { loadavg } from "node:os";
 import {
   constants,
   monitorEventLoopDelay,
@@ -36,17 +52,36 @@ const { values } = parseArgs({
     "warm-start-at": { type: "string" },
     "ready-file": { type: "string" },
     codec: { type: "string" },
+    transport: { type: "string" },
+    allocations: { type: "boolean", default: false },
+    streaming: { type: "boolean", default: false },
+    audiences: { type: "string" },
+    "cpu-profile": { type: "string" },
   },
 });
 const installCodec: typeof installGatewayDeflateCodec = values.codec
   ? (await import(pathToFileURL(values.codec).href)).installGatewayDeflateCodec
   : installGatewayDeflateCodec;
-function integer(label: keyof typeof values, fallback: number, min: number) {
+const createTransport: typeof createGatewayWebSocketTransport = values.transport
+  ? (await import(pathToFileURL(values.transport).href)).createGatewayWebSocketTransport
+  : createGatewayWebSocketTransport;
+function integer(
+  label: Exclude<keyof typeof values, "allocations" | "streaming">,
+  fallback: number,
+  min: number,
+) {
   return parseStrictIntegerOption({ raw: values[label], fallback, label, min });
 }
 const batches = integer("batches", 3000, 1);
 const clientCount = integer("clients", 70, 1);
-const profiles = integer("profiles", 1, 1);
+const audiences = values.audiences
+  ?.split(",")
+  .map((raw) => parseStrictIntegerOption({ raw, fallback: 1, label: "audiences", min: 1 }));
+assert(!audiences || audiences.reduce((sum, count) => sum + count, 0) === clientCount);
+const profiles = audiences?.length ?? integer("profiles", 1, 1);
+const profileIds = audiences
+  ? audiences.flatMap((count, profile) => Array<number>(count).fill(profile))
+  : Array.from({ length: clientCount }, (_, index) => index % profiles);
 const payloadSize = integer("size", 16384, 128);
 const port = integer("port", 41649, 40000);
 const warmStartAt = integer("warm-start-at", 0, 0);
@@ -55,21 +90,32 @@ assert(port <= 65535, "port must be <= 65535");
 assert(profiles <= clientCount, "profiles must be <= clients");
 assert(!startAt || !warmStartAt || startAt > warmStartAt, "start must follow warmup");
 const warmupBatches = 100;
-const event = "tick";
+const event = values.streaming ? "session.message" : "tick";
 const fixtures = Array.from({ length: 32 }, (_, index) => {
-  // Every fourth event stays below the compression threshold; the remaining
-  // events mix repeated JSON structure with deterministic varied text.
-  const size = index % 4 === 0 ? Math.min(payloadSize, 512) : payloadSize;
+  // Streaming grows a stable transcript prefix; the default corpus mixes sizes.
+  const size = values.streaming
+    ? Math.max(128, Math.floor((payloadSize * (index + 1)) / 32))
+    : index % 4 === 0
+      ? Math.min(payloadSize, 512)
+      : payloadSize;
+  const generation = values.streaming ? 0 : index;
   const rows = Array.from({ length: Math.ceil(size / 100) }, (_unusedRow, row) => ({
-    id: `synthetic-${index}-${row}`,
+    id: `synthetic-${generation}-${row}`,
     state: row % 3 === 0 ? "running" : "complete",
-    text: `line ${row}: result ${((row + 1) * (index + 17) * 2654435761) >>> 0}; ready\n`,
+    text: `line ${row}: result ${((row + 1) * (generation + 17) * 2654435761) >>> 0}; ready\n`,
   }));
-  return { fixture: index, text: JSON.stringify(rows).slice(0, size - 64) };
+  const text = JSON.stringify(rows).slice(0, size - 64);
+  return values.streaming
+    ? {
+        sessionKey: "agent:synthetic:stream",
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      }
+    : { fixture: index, text };
 });
 const fixtureJson = fixtures.map((payload) => JSON.stringify(payload));
 const clients = new GatewayClientRegistry();
 const broadcaster = createGatewayBroadcaster({ clients });
+const connIds = new Set(Array.from({ length: clientCount }, (_, index) => `synthetic-${index}`));
 const server = new WebSocketServer({
   host: "127.0.0.1",
   port,
@@ -108,6 +154,24 @@ function tails(samples: number[]) {
   };
 }
 let sendThreadCpuUs = 0;
+let sending = false;
+let explicitBufferBytes = 0;
+let explicitBufferCalls = 0;
+const allocUnsafe = Buffer.allocUnsafe.bind(Buffer);
+const allocUnsafeSlow = Buffer.allocUnsafeSlow.bind(Buffer);
+// Count explicit backing requests only during synchronous broadcast work.
+// This complements V8 sampling, which does not include native Buffer storage.
+if (values.allocations) {
+  const count = (allocate: typeof Buffer.allocUnsafe) => (size: number) => {
+    if (measuring && sending) {
+      explicitBufferBytes += size;
+      explicitBufferCalls++;
+    }
+    return allocate(size);
+  };
+  Buffer.allocUnsafe = count(allocUnsafe);
+  Buffer.allocUnsafeSlow = count(allocUnsafeSlow);
+}
 async function run(count: number, offset: number, latencies?: number[]) {
   for (let batch = 0; batch < count; batch++) {
     if (failure) {
@@ -127,7 +191,9 @@ async function run(count: number, offset: number, latencies?: number[]) {
       };
       const before = process.threadCpuUsage();
       // Production serialization creates a fresh frame for every publication.
-      broadcaster.broadcast(event, fixtures[(batch + offset) % fixtures.length]);
+      sending = true;
+      broadcaster.broadcastToConnIds(event, fixtures[(batch + offset) % fixtures.length], connIds);
+      sending = false;
       const used = process.threadCpuUsage(before);
       if (latencies) {
         sendThreadCpuUs += used.user + used.system;
@@ -168,8 +234,8 @@ try {
     streams.push(request.socket);
     clients.add({
       connId: `synthetic-${index}`,
-      preparedRecipientProfileId: `profile-${index % profiles}`,
-      socket: createGatewayWebSocketTransport(socket, request.socket, installCodec(socket)),
+      preparedRecipientProfileId: `profile-${profileIds[index]}`,
+      socket: createTransport(socket, request.socket, installCodec(socket)),
       usesSharedGatewayAuth: false,
       connect: {
         minProtocol: 3,
@@ -222,6 +288,22 @@ try {
   loop.enable();
   const latencies: number[] = [];
   await waitUntil(startAt, "measurement");
+  const inspector = new Session();
+  if (values.allocations || values["cpu-profile"]) {
+    inspector.connect();
+  }
+  if (values["cpu-profile"]) {
+    await inspector.post("Profiler.enable");
+    await inspector.post("Profiler.start");
+  }
+  if (values.allocations) {
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 4096,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+  }
+  const hostLoadBefore = loadavg();
   loop.reset();
   const wireBefore = streams.reduce((sum, socket) => sum + socket.bytesWritten, 0);
   console.log("WS_COMPRESSION_MEASURE_START");
@@ -236,12 +318,26 @@ try {
   ended = performance.now();
   const threadCpu = process.threadCpuUsage(threadBefore);
   const cpu = process.cpuUsage(cpuBefore);
+  const hostLoadAfter = loadavg();
+  const memory = process.memoryUsage();
   const wireBytes = streams.reduce((sum, socket) => sum + socket.bytesWritten, 0) - wireBefore;
   loop.disable();
   console.log("WS_COMPRESSION_MEASURE_END");
   await delay(10);
   recordGc(observer.takeRecords());
   observer.disconnect();
+  let allocatedBytes: number | undefined;
+  if (values.allocations) {
+    const { profile } = await inspector.post("HeapProfiler.stopSampling");
+    const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+      node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
+    allocatedBytes = sum(profile.head);
+  }
+  if (values["cpu-profile"]) {
+    const { profile } = await inspector.post("Profiler.stop");
+    await writeFile(values["cpu-profile"], JSON.stringify(profile));
+  }
+  inspector.disconnect();
   // Verify every decoded byte, sequence and recipient after timing. No parsing
   // or large expected-output generation is included in the measured work.
   const expectedHashes = Array.from({ length: profiles }, (_, profile) => {
@@ -257,13 +353,34 @@ try {
   });
   for (let index = 0; index < clientCount; index++) {
     assert.equal(received[index], batches + warmupBatches);
-    assert.equal(hashes[index]!.digest("hex"), expectedHashes[index % profiles]);
+    assert.equal(hashes[index]!.digest("hex"), expectedHashes[profileIds[index]!]);
   }
   const pauses = Object.values(gc).flat();
   const totalGcMs = pauses.reduce((sum, value) => sum + value, 0);
   console.log(
     JSON.stringify({
-      workload: { batches, clients: clientCount, profiles, payloadSize, warmupBatches },
+      workload: {
+        batches,
+        clients: clientCount,
+        profiles,
+        audiences,
+        streaming: values.streaming,
+        payloadSize,
+        warmupBatches,
+      },
+      mode: values.allocations ? "allocation" : "timing",
+      allocatedBytes,
+      allocatedBytesPerBroadcast:
+        allocatedBytes === undefined ? undefined : allocatedBytes / batches,
+      explicitBufferBytesPerBroadcast: values.allocations
+        ? explicitBufferBytes / batches
+        : undefined,
+      explicitBufferCallsPerBroadcast: values.allocations
+        ? explicitBufferCalls / batches
+        : undefined,
+      hostLoadBefore,
+      hostLoadAfter,
+      memory,
       warmStartedAtEpochMs,
       startedAtEpochMs,
       processAgeAtStartMs,
@@ -301,6 +418,8 @@ try {
     }),
   );
 } finally {
+  Buffer.allocUnsafe = allocUnsafe;
+  Buffer.allocUnsafeSlow = allocUnsafeSlow;
   for (const peer of peers) {
     peer.terminate();
   }

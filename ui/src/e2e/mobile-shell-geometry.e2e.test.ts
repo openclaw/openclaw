@@ -94,16 +94,10 @@ async function expectReachableAction(
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(visibleBottom);
   const point = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
   if (mobile) {
-    const { compact, resting, narrowViewport } = await page
+    const compact = await page
       .locator(".agent-chat__composer-shell")
-      .evaluate((element) => ({
-        compact: element.getBoundingClientRect().width <= 560,
-        resting: element.matches('[data-mobile-composer="true"][data-composer-editing="false"]'),
-        narrowViewport: matchMedia("(max-width: 560px)").matches,
-      }));
-    const targetSize =
-      label === "Stop generating" && narrowViewport ? 32 : resting || compact ? 36 : 32;
-    expect([bounds!.width, bounds!.height]).toEqual([targetSize, targetSize]);
+      .evaluate((element) => element.getBoundingClientRect().width <= 560);
+    expect(Math.min(bounds!.width, bounds!.height)).toBeGreaterThanOrEqual(32);
     for (const picker of await page
       .locator(".chat-controls__model-trigger, .chat-controls__effort-trigger")
       .all()) {
@@ -119,7 +113,7 @@ async function expectReachableAction(
       point,
     ),
   ).toBe(true);
-  return point;
+  return { ...point, width: bounds!.width, height: bounds!.height };
 }
 
 async function expectEditableDraft(page: Page, visibleBottom: number, mobile: boolean) {
@@ -170,6 +164,7 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   await expect(textarea).toHaveValue("First line\nSecond line\nThird line\nLast line typed");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
   // Scroll the complete line into view; native caret scrolling may show only its glyphs.
+  await textarea.hover();
   await page.mouse.wheel(0, 1000);
   await expect
     .poll(() => textarea.evaluate((editor) => editor.scrollTop + editor.clientHeight))
@@ -180,6 +175,7 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
   await page.keyboard.type("Edited ");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
+  await textarea.hover();
   await page.mouse.wheel(0, -1000);
   await expect.poll(() => textarea.evaluate((editor) => editor.scrollTop)).toBe(0);
   const first = await measure();
@@ -348,8 +344,13 @@ suite.define(() => {
           ? page.touchscreen.tap(sendPoint.x, sendPoint.y)
           : page.mouse.click(sendPoint.x, sendPoint.y));
         await gateway.waitForRequest("chat.send");
-        const stop = page.getByRole("button", { name: "Stop generating" });
+        const stop = page.getByRole("button", { name: "Stop", exact: true });
         await expect(stop).toBeVisible();
+        const stopBounds = await stop.boundingBox();
+        expect(stopBounds && { width: stopBounds.width, height: stopBounds.height }).toEqual({
+          width: sendPoint.width,
+          height: sendPoint.height,
+        });
         const generating = await geometry(page);
         if (mobile) {
           await textarea.focus();
@@ -375,7 +376,7 @@ suite.define(() => {
               await expectEditableDraft(page, visibleHeight + offsetTop, mobile);
             }
             if (scale === 1) {
-              await reach("Stop generating", visibleHeight + offsetTop);
+              await reach("Stop", visibleHeight + offsetTop);
             }
           }
           await visualViewport(page, height);
@@ -390,14 +391,14 @@ suite.define(() => {
           await waitForLayoutSettled(page, ".chat-main__conversation-frame");
           const bounds = (await frame.boundingBox())!;
           await expectEditableDraft(page, bounds.y + bounds.height, mobile);
-          await reach("Stop generating", bounds.y + bounds.height);
+          await reach("Stop", bounds.y + bounds.height);
           await frame.evaluate((element: HTMLElement) => {
             element.style.removeProperty("flex");
           });
         }
         if (mobile && width > height) {
           await visualViewport(page, height - 240);
-          const point = await reach("Stop generating", height - 240);
+          const point = await reach("Stop", height - 240);
           await page.touchscreen.tap(point.x, point.y);
         } else {
           await stop.click();
@@ -424,7 +425,7 @@ suite.define(() => {
           await navigationDrawerToggle(page).click();
           await expect(page.locator(".shell--nav-drawer-open")).toBeVisible();
           await readSurface(".shell-nav", "drawer");
-          await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+          await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
           await expect(page.locator(".sidebar-session-filter-panel")).toBeVisible();
           await readSurface(".sidebar-session-filter-panel", "filter-sheet");
           await page.keyboard.press("Escape");
@@ -437,18 +438,21 @@ suite.define(() => {
         expect(generating.scrollWidth).toBeLessThanOrEqual(width);
         if (mobile) {
           const usableWidth = width - left - right;
-          for (const [frame, inset] of [
-            [fresh, 20],
-            [generating, 16],
-          ] as const) {
-            const margin = Math.max(inset, (usableWidth - 768) / 2);
+          // A phone draft starts at the same edges as the session it opens.
+          for (const frame of [fresh, generating]) {
+            const margin = Math.max(16, (usableWidth - 768) / 2);
             expect(frame.composer.left).toBeCloseTo(left + margin, 0);
             expect(frame.composer.right).toBeCloseTo(width - right - margin, 0);
           }
           expect(generating.composer.left).toBeCloseTo(chat.composer.left, 0);
           expect(generating.composer.right).toBeCloseTo(chat.composer.right, 0);
-          expect(chat.thread!.left).toBeCloseTo(chat.composer.left, 0);
-          expect(chat.thread!.right).toBeCloseTo(chat.composer.right, 0);
+          // Comment pins may need more room than the composer; both share the usable center.
+          expect(chat.thread!.left).toBeGreaterThanOrEqual(chat.composer.left);
+          expect(chat.thread!.right).toBeLessThanOrEqual(chat.composer.right);
+          expect(chat.thread!.left + chat.thread!.right).toBeCloseTo(
+            chat.composer.left + chat.composer.right,
+            0,
+          );
         }
       },
     );

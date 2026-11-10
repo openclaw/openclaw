@@ -3,7 +3,7 @@ import { createParkedProjection } from "../../../lib/reactive/parked-projection.
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
-import { createTranscriptMemo } from "./chat-transcript-memo.ts";
+import { createTranscriptMemo, transcriptArraysEqual } from "./chat-transcript-memo.ts";
 
 const persistedMessageIds = createTranscriptMemo<Set<string | null>>();
 
@@ -30,15 +30,25 @@ export function projectRealtimeTalkConversation(
       }),
     () => presentation().read(),
   );
+  // Blocks change only when a caption opens or retires a history position, so
+  // caption text updates re-render the caption blocks, not the transcript.
+  const anchors = createMemo(() => [...new Set(entries().map((entry) => entry.afterMessageId))], {
+    equals: transcriptArraysEqual,
+  });
   return {
     hasEntries: createMemo(() => entries().length > 0),
-    content: {
-      kind: "realtime" as const,
-      assistantName: props.assistantName,
-      userName: props.userName,
-      get entries() {
-        return entries();
-      },
-    },
+    blocks: createMemo(() =>
+      anchors().map((afterMessageId) => ({
+        afterMessageId,
+        content: {
+          kind: "realtime" as const,
+          assistantName: props.assistantName,
+          userName: props.userName,
+          get entries() {
+            return entries().filter((entry) => entry.afterMessageId === afterMessageId);
+          },
+        },
+      })),
+    ),
   };
 }

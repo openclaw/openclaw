@@ -37,12 +37,12 @@ function comparePosition(a: { position: number }, b: { position: number }): numb
 }
 
 export function normalizeBoardLayout(layout: BoardLayout): BoardLayout {
-  return normalizeOwnedLayout(structuredClone(layout));
+  return normalizeOwnedBoardLayout(structuredClone(layout));
 }
 
 // Public operations take ownership once; successive operations only reorder that copy.
-/* oxlint-disable unicorn/no-array-sort -- Private helpers sort cloned layouts or fresh filtered arrays. */
-function normalizeOwnedLayout(layout: BoardLayout): BoardLayout {
+/* oxlint-disable unicorn/no-array-sort -- Owned layouts and fresh filtered arrays are safe to sort. */
+export function normalizeOwnedBoardLayout(layout: BoardLayout): BoardLayout {
   const tabs = layout.tabs.sort(comparePosition);
   tabs.forEach((tab, position) => {
     tab.position = position;
@@ -232,9 +232,11 @@ export function applyBoardOps(layout: BoardLayout, ops: readonly BoardOp[]): Boa
   const next = structuredClone(layout);
   for (const op of ops) {
     applyBoardOp(next, op);
-    normalizeOwnedLayout(next);
+    normalizeOwnedBoardLayout(next);
   }
-  return ops.length > 0 ? { tabs: next.tabs, widgets: next.widgets } : normalizeOwnedLayout(next);
+  return ops.length > 0
+    ? { tabs: next.tabs, widgets: next.widgets }
+    : normalizeOwnedBoardLayout(next);
 }
 
 export function insertBoardWidget(
@@ -258,5 +260,5 @@ export function insertBoardWidget(
   if (!existing || placement.move) {
     moveWidget(next, inserted, placement.tabId, undefined, placement.after);
   }
-  return normalizeOwnedLayout(next);
+  return normalizeOwnedBoardLayout(next);
 }

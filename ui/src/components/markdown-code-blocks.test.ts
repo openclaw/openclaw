@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
+import { mockDocumentVisibility } from "../test-helpers/mock-cleanup.ts";
 import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { MarkdownBlocks } from "./markdown-blocks-owner.ts";
 import {
@@ -30,6 +31,7 @@ const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execComma
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   restorePropertyDescriptor(document, "execCommand", originalExecCommand);
   document.body.replaceChildren();
@@ -69,12 +71,99 @@ function mockClipboard(writeText = vi.fn().mockRejectedValue(denied), fallback =
 }
 function expectCopyFailed(button: HTMLButtonElement) {
   expect(button.classList.contains("copy-failed")).toBe(true);
-  expect(button.getAttribute("aria-label")).toBe("Copy failed");
+  expect(button.getAttribute("aria-label")).toBe("Couldn’t copy. Try again.");
 }
 async function copy(button: HTMLButtonElement, elapsed = 0) {
   button.click();
   await vi.advanceTimersByTimeAsync(elapsed);
 }
+
+it.each(["visible", "hidden"] as const)(
+  "gates direct Markdown owners on tab visibility without losing pane intent (initially %s)",
+  async (initial) => {
+    const show = mockDocumentVisibility(initial);
+    const observations: Set<Element>[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        private readonly targets = new Set<Element>();
+        constructor() {
+          observations.push(this.targets);
+        }
+        observe = (target: Element) => this.targets.add(target);
+        unobserve = (target: Element) => this.targets.delete(target);
+        disconnect = () => this.targets.clear();
+      },
+    );
+    const { section, blocks } = mountBlocks();
+    const code = section.querySelector("code")!;
+    const observed = () => observations.flatMap((targets) => Array.from(targets));
+    blocks.update(true);
+    await Promise.resolve();
+    expect(observed().includes(code)).toBe(initial === "visible");
+
+    show("hidden");
+    expect(observed()).toHaveLength(0);
+    // Custodian republishes active content; it must not restart hidden work.
+    blocks.update(true);
+    blocks.update(true);
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+    show("visible");
+    await Promise.resolve();
+    expect(observed()).toContain(code);
+    expect(section.querySelector("code")).toBe(code);
+
+    show("hidden");
+    blocks.update(false);
+    show("visible");
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+
+    blocks.update(true);
+    blocks.dispose();
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+    show("hidden");
+    show("visible");
+    await Promise.resolve();
+    expect(observed()).toHaveLength(0);
+  },
+);
+
+it("follows the rendering tab when a template reader is adopted after activation", async () => {
+  const show = mockDocumentVisibility("visible");
+  const observed = new Set<Element>();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe = (target: Element) => observed.add(target);
+      unobserve = (target: Element) => observed.delete(target);
+      disconnect = () => observed.clear();
+    },
+  );
+  const template = document.createElement("template");
+  template.innerHTML =
+    '<article><div class="code-block-wrapper"><pre class="code-block-viewport"><code>const answer = 42;</code></pre></div></article>';
+  const root = template.content.firstElementChild as HTMLElement;
+  expect(root.ownerDocument).not.toBe(document);
+  expect(root.ownerDocument.defaultView).toBeNull();
+  const blocks = ownBlocks(root);
+  blocks.update(true);
+  document.body.append(root);
+  await Promise.resolve();
+  const code = root.querySelector("code")!;
+  expect(observed).toContain(code);
+
+  show("hidden");
+  expect(observed.size).toBe(0);
+  show("visible");
+  await Promise.resolve();
+  expect(observed).toContain(code);
+  expect(root.querySelector("code")).toBe(code);
+  blocks.dispose();
+  expect(observed.size).toBe(0);
+});
 
 it("reobserves retained Markdown DOM while fencing scans queued before hide or disposal", async () => {
   const observed = new Set<Element>();
@@ -129,6 +218,118 @@ it("reobserves retained Markdown DOM while fencing scans queued before hide or d
   await settleObserved(0);
 });
 
+it("suspends parked transcript Markdown measurements and resumes the same DOM", async () => {
+  vi.useFakeTimers();
+  const observers: Array<{ targets: Set<Element>; deliver: (target: Element) => void }> = [];
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      readonly targets = new Set<Element>();
+      constructor(private readonly callback: ResizeObserverCallback) {
+        observers.push(this);
+      }
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
+      deliver(target: Element) {
+        const width = target.matches(".markdown-table__viewport") ? 100 : 300;
+        this.callback(
+          [
+            {
+              target,
+              contentRect: new DOMRect(0, 0, width, 100),
+              borderBoxSize: [{ inlineSize: width, blockSize: 100 }],
+              contentBoxSize: [{ inlineSize: width, blockSize: 100 }],
+              devicePixelContentBoxSize: [],
+            },
+          ],
+          this,
+        );
+      }
+    },
+  );
+  const root = document.body.appendChild(document.createElement("div"));
+  root.className = "chat-thread";
+  const row = root.appendChild(document.createElement("div"));
+  row.className = "chat-virtual-row";
+  row.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(
+    "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
+    { codeBlockInteraction: "interactive", tableInteractions: "enabled" },
+  )}</div>`;
+  const code = row.querySelector<HTMLElement>("code")!;
+  const codeViewport = row.querySelector<HTMLElement>(".code-block-viewport")!;
+  const tableViewport = row.querySelector<HTMLElement>(".markdown-table__viewport")!;
+  const table = tableViewport.querySelector("table")!;
+  const codeWidth = vi.fn(() => 300);
+  const tableWidth = vi.fn(() => 300);
+  Object.defineProperty(code, "scrollWidth", { configurable: true, get: codeWidth });
+  Object.defineProperty(tableViewport, "scrollWidth", { configurable: true, get: tableWidth });
+  codeViewport.scrollLeft = 37;
+  const blocks = ownBlocks(root);
+  blocks.update(true);
+  const settle = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+  await settle();
+  const codeObservers = observers.filter((observer) => observer.targets.has(code));
+  const tableObservers = observers.filter((observer) => observer.targets.has(tableViewport));
+  expect(codeObservers.length).toBeGreaterThan(0);
+  expect(tableObservers.length).toBeGreaterThan(0);
+  const tableCopy = row.querySelector(".markdown-table__copy");
+  expect(tableCopy).toBeInstanceOf(HTMLButtonElement);
+
+  for (const state of ["parked", "preparing", "parked", "active"] as const) {
+    if (state === "active") {
+      row.removeAttribute("data-prepared-row");
+    } else {
+      row.setAttribute("data-prepared-row", "true");
+    }
+    if (state === "preparing") {
+      row.setAttribute("data-preparing-row", "true");
+    } else {
+      row.removeAttribute("data-preparing-row");
+    }
+    await settle();
+    codeWidth.mockClear();
+    tableWidth.mockClear();
+    for (const [target, previous] of [
+      [code, codeObservers],
+      [tableViewport, tableObservers],
+      [table, tableObservers],
+    ] as const) {
+      // A queued receipt can arrive after the parked row was unobserved.
+      const recipients =
+        state === "parked"
+          ? previous
+          : observers.filter((observer) => observer.targets.has(target));
+      expect(recipients.length).toBeGreaterThan(0);
+      recipients.forEach((observer) => observer.deliver(target));
+    }
+    vi.advanceTimersToNextFrame();
+    if (state === "parked") {
+      expect(codeWidth).not.toHaveBeenCalled();
+      expect(tableWidth).not.toHaveBeenCalled();
+    } else {
+      expect(codeWidth).toHaveBeenCalled();
+      expect(tableWidth).not.toHaveBeenCalled();
+      expect(tableViewport.closest(".markdown-table")?.classList).toContain(
+        "markdown-table--can-scroll-right",
+      );
+    }
+    expect(row.querySelector("code")).toBe(code);
+    expect(row.querySelector(".markdown-table__viewport")).toBe(tableViewport);
+    expect(row.querySelector(".markdown-table__copy")).toBe(tableCopy);
+    expect(codeViewport.scrollLeft).toBe(37);
+  }
+});
+
 it("does not remeasure settled Markdown while neighboring prose streams", async () => {
   const { container, section, blocks } = mountBlocks();
   const paragraph = document.createElement("p");
@@ -160,6 +361,45 @@ it("does not remeasure settled Markdown while neighboring prose streams", async 
   const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport")!;
   expect(viewport.id).not.toBe("");
   expect(expand.getAttribute("aria-controls")).toBe(viewport.id);
+});
+
+it("defers code overflow measurement out of resize delivery and retires it on hide", async () => {
+  vi.useFakeTimers();
+  const observations = new Map<Element, () => void>();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(private readonly callback: (entries: { target: Element }[]) => void) {}
+      observe(target: Element) {
+        observations.set(target, () => this.callback([{ target }]));
+      }
+      unobserve(target: Element) {
+        observations.delete(target);
+      }
+      disconnect() {}
+    },
+  );
+  const { container, blocks } = mountBlocks();
+  blocks.update(true);
+  await Promise.resolve();
+  const wrapper = container.querySelector<HTMLElement>(".code-block-wrapper")!;
+  const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport")!;
+  const code = viewport.querySelector("code")!;
+  Object.defineProperty(viewport, "clientWidth", { configurable: true, value: 100 });
+  const width = vi.fn(() => 300);
+  Object.defineProperty(code, "scrollWidth", { configurable: true, get: width });
+  observations.get(code)!();
+  expect(width).not.toHaveBeenCalled();
+  expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(false);
+  vi.advanceTimersToNextFrame();
+  expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(true);
+
+  width.mockReturnValue(50).mockClear();
+  observations.get(code)!();
+  blocks.update(false);
+  vi.advanceTimersToNextFrame();
+  expect(width).not.toHaveBeenCalled();
+  expect(wrapper.classList.contains("has-horizontal-overflow")).toBe(true);
 });
 
 it("splits highlighted code into bounded, balanced fragments with exact source offsets", () => {
@@ -315,6 +555,98 @@ it("shares one worker for long fences and preserves complete text through reveal
   }
 });
 
+it("reuses bounded syntax results across row owners without sharing mutable DOM or request failures", async () => {
+  vi.useFakeTimers();
+  const requests: CodeHighlightRequest[] = [];
+  const terminated = vi.fn();
+  vi.stubGlobal(
+    "Worker",
+    class extends EventTarget {
+      terminate = terminated;
+      postMessage(data: CodeHighlightRequest) {
+        requests.push(data);
+        const end = data.source.indexOf("\n") + 1;
+        const escape = (value: string) =>
+          value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent("message", {
+              data: {
+                id: data.id,
+                highlighted: data.language !== "plain" && data.language !== "error",
+                previewEnd: end,
+                chunks:
+                  data.language === "error"
+                    ? null
+                    : data.language === "plain"
+                      ? []
+                      : [
+                          {
+                            html: `<span class="hljs-comment" onclick="alert(1)">${escape(data.source.slice(0, end))}</span>`,
+                            to: end,
+                          },
+                          { html: escape(data.source.slice(end)), to: data.source.length },
+                        ],
+              },
+            }),
+          ),
+        );
+      }
+    },
+  );
+  const visit = async (source: string, language = "ts") => {
+    const before = requests.length;
+    const root = document.body.appendChild(document.createElement("section"));
+    root.innerHTML =
+      '<div class="code-block-wrapper"><div class="code-block-viewport"><pre><code></code></pre></div></div>';
+    const code = root.querySelector("code")!;
+    code.textContent = source;
+    code.setAttribute("data-code-highlight", language);
+    const blocks = new MarkdownBlocks(root);
+    try {
+      blocks.update(true);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(code.textContent).toBe(source);
+      expect(code.querySelector("[onclick]")).toBeNull();
+      expect(code.querySelector("span")?.textContent).toBe(
+        language === "plain" || language === "error"
+          ? undefined
+          : source.slice(0, source.indexOf("\n") + 1),
+      );
+    } finally {
+      blocks.dispose();
+      root.remove();
+    }
+    return requests.length - before;
+  };
+
+  const source = "syntax-return < & >\nremaining source\n";
+  expect(await visit(source)).toBe(1);
+  expect(await visit(source)).toBe(0);
+  expect(await visit(source, "js")).toBe(1);
+  expect(await visit(source + "changed\n")).toBe(1);
+  expect(await visit(source, "plain")).toBe(1);
+  expect(await visit(source, "plain")).toBe(0);
+  expect(await visit(source, "error")).toBe(1);
+  expect(await visit(source, "error")).toBe(1);
+
+  // Distinct tiny results exercise the count limit independently of retained bytes.
+  for (let index = 0; index < 33; index++) {
+    expect(await visit(`syntax-count-${index}\nremaining\n`)).toBe(1);
+  }
+  expect(await visit("syntax-count-32\nremaining\n")).toBe(0);
+  expect(await visit("syntax-count-0\nremaining\n")).toBe(1);
+
+  // Four individually admissible results exceed 2M source/markup characters together.
+  const large = (index: number) => `syntax-bytes-${index}\n${"x".repeat(260_000)}`;
+  for (let index = 0; index < 4; index++) {
+    expect(await visit(large(index))).toBe(1);
+  }
+  expect(await visit(large(3))).toBe(0);
+  expect(await visit(large(0))).toBe(1);
+  expect(terminated).toHaveBeenCalledTimes(requests.length);
+});
+
 function expectText(root: ParentNode, selector: string) {
   return expect(root.querySelector(selector)?.textContent);
 }
@@ -328,7 +660,7 @@ it("ignores an older clipboard attempt that finishes after the latest denied cop
   button.click();
   await vi.advanceTimersByTimeAsync(0);
 
-  expect(button.getAttribute("aria-label")).toBe("Copy failed");
+  expect(button.getAttribute("aria-label")).toBe("Couldn’t copy. Try again.");
 
   firstWrite.resolve();
   await vi.advanceTimersByTimeAsync(0);
@@ -373,7 +705,7 @@ it("keeps independent reset deadlines for different code-copy buttons", async ()
   await copy(second, 1_500);
 
   expect(first.getAttribute("aria-label")).toBe("Copy code");
-  expect(second.getAttribute("aria-label")).toBe("Copy failed");
+  expect(second.getAttribute("aria-label")).toBe("Couldn’t copy. Try again.");
 
   second.remove();
   await vi.advanceTimersByTimeAsync(500);
@@ -413,7 +745,7 @@ it.each([
   const button = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
   expect(button).toBeInstanceOf(HTMLButtonElement);
   await copy(button!);
-  expect(button!.getAttribute("aria-label")).toBe("Copied!");
+  expect(button!.getAttribute("aria-label")).toBe("Copied");
   expect(writeText).toHaveBeenCalledWith(source);
 });
 

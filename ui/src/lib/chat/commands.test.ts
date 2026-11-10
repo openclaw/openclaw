@@ -19,6 +19,16 @@ import {
 
 afterEach(() => replaceSlashCommands(buildFallbackSlashCommands()));
 
+it("routes /fork and its optional title to the local session operation", () => {
+  for (const text of ["/fork", "/fork Release plan"]) {
+    expect(parseSlashCommand(text)).toMatchObject({
+      command: { key: "fork", executeLocal: true, args: "[title]", icon: "copy" },
+      args: text === "/fork" ? "" : "Release plan",
+    });
+    expect(isModelIndependentChatCommand(text)).toBe(true);
+  }
+});
+
 describe("model-independent commands", () => {
   it.each([
     "/unknown",
@@ -35,8 +45,11 @@ describe("findInlineSlashCompletion", () => {
   it.each([
     ["/thi", undefined, { query: "thi", start: 0, end: 4, inline: false }],
     ["Please use /wea", undefined, { query: "wea", start: 11, end: 15, inline: true }],
-    ["Use /weather tomorrow", 8, { query: "wea", start: 4, end: 12, inline: true }],
-    ["/thinking please", 4, { query: "thi", start: 0, end: 9, inline: true }],
+    ["Use /status tomorrow", 8, { query: "sta", start: 4, end: 11, inline: true }],
+    ["/thinking please", 4, { query: "thi", start: 0, end: 9, inline: false }],
+    [" /thinking please", 5, { query: "thi", start: 1, end: 10, inline: false }],
+    ["/thiApply the prompt", 4, { query: "thi", start: 0, end: 4, inline: false }],
+    ["Use /weaX tomorrow", 8, { query: "wea", start: 4, end: 8, inline: true }],
     [
       "Please use /weather:",
       undefined,
@@ -91,6 +104,7 @@ function remoteCommand(name: string, overrides: Partial<CommandEntry> = {}): Com
     source: "plugin",
     scope: "both",
     acceptsArgs: true,
+    ...(overrides.source === "skill" ? { skillReferenceable: true } : {}),
     ...overrides,
   };
 }
@@ -167,23 +181,25 @@ describe("parseSlashCommand", () => {
   it("matches skill queries against both display titles and command tokens", () => {
     applyRemoteEntries(
       remoteCommand("release_notes", {
-        skillDisplayName: "Release Notes",
+        skillDisplayName: "Mu\u0308nchen Notes",
         source: "skill",
         skillModelVisible: true,
       }),
     );
 
-    const expected = [{ name: "release_notes", skillDisplayName: "Release Notes" }];
-    expect(getSkillCommandCompletions("notes")).toMatchObject(expected);
+    const expected = [{ name: "release_notes", skillDisplayName: "Mu\u0308nchen Notes" }];
+    expect(getSkillCommandCompletions("M\u00dcNCHEN")).toMatchObject(expected);
     expect(getSkillCommandCompletions("release_n")).toMatchObject(expected);
   });
 
   it.each([false, undefined])(
-    "keeps skills with visibility %j in slash commands but out of $ completions",
+    "offers user-invocable skills with model visibility %j in $ completions",
     (skillModelVisible) => {
       applyRemoteEntries(remoteCommand("hidden_skill", { source: "skill", skillModelVisible }));
       expectParsedSlash("/hidden_skill", { name: "hidden_skill" }, "");
-      expect(getSkillCommandCompletions("hidden")).toEqual([]);
+      expect(getSkillCommandCompletions("hidden").map((command) => command.name)).toEqual([
+        "hidden_skill",
+      ]);
     },
   );
 

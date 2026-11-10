@@ -22,6 +22,7 @@ import {
   getPreparedRuntimeAuthProfileStoreSnapshotCore as getPreparedSnapshot,
   getRuntimeAuthProfileStoreSnapshotCore as getSnapshot,
   getRuntimeAuthProfileStoreMetadataRevision as getMetadataRevision,
+  getRuntimeAuthProfileStoreCatalogRevision as getCatalogRevision,
   getRuntimeAuthProfileStoreSnapshotRevision as getSnapshotRevision,
   noteRuntimeAuthProfileStorePersistedMutation as notePersistedMutation,
   registerRuntimeAuthProfileStoreMutationListener as onStoreMutation,
@@ -164,6 +165,9 @@ describe("runtime auth profile snapshots", () => {
     const next = {
       ...store,
       runtimeInheritsMainState: true,
+      // Resolving external profiles and finding none is the startup shape, not a catalog change.
+      runtimeExternalProfileIds: [],
+      runtimeExternalProfileIdsAuthoritative: true,
       lastGood: { openai: "openai:default" },
       usageStats: {
         "openai:default": {
@@ -181,6 +185,64 @@ describe("runtime auth profile snapshots", () => {
     expect(getMetadataRevision(agentDir)).toBe(metadataRevision);
     expect(getMetadataRevision("/tmp/absent-auth-owner")).toBe(missingRevision);
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it.each(["set", "replace"] as const)(
+    "classifies %s availability separately from catalog identity",
+    (operation) => {
+      const store = apiStore("synthetic");
+      setSnapshot(store, agentDir);
+      const listener = vi.fn();
+      track(onStoreMutation(listener));
+      const publish = (next: AuthProfileStore) =>
+        operation === "set"
+          ? setSnapshot(next, agentDir)
+          : replaceSnapshots([{ agentDir, store: next }]);
+      const catalogRevision = getCatalogRevision(agentDir);
+      const metadataRevision = getMetadataRevision(agentDir);
+      const availabilityChanges: AuthProfileStore["usageStats"][] = [
+        { [acme]: { cooldownUntil: 30_000, cooldownReason: "rate_limit" as const } },
+        { [acme]: { blockedUntil: 40_000, blockedModel: "model", blockedScope: "model" as const } },
+        { [acme]: { disabledUntil: 50_000, disabledReason: "billing" as const } },
+        {},
+      ];
+      for (const usageStats of availabilityChanges) {
+        publish({ ...store, usageStats });
+        expect(listener).toHaveBeenLastCalledWith({
+          agentDir,
+          affectsInheritedStores: false,
+          profileSetChanged: false,
+          availabilityOnly: true,
+        });
+        expect(getCatalogRevision(agentDir)).toBe(catalogRevision);
+      }
+      expect(getMetadataRevision(agentDir)).toBeGreaterThan(metadataRevision);
+      for (const next of [
+        { ...store, order: { acme: [acme] } },
+        apiStore("rotated-synthetic"),
+        withProfile(store, "acme:secondary", "acme", "second-synthetic"),
+      ]) {
+        const previous = getCatalogRevision(agentDir);
+        publish(next);
+        expect(listener).toHaveBeenLastCalledWith(
+          expect.objectContaining({ availabilityOnly: false }),
+        );
+        expect(getCatalogRevision(agentDir)).toBeGreaterThan(previous);
+      }
+    },
+  );
+
+  it("keeps catalog revisions stable when availability churn exceeds the metadata revision bound", () => {
+    const dirs = Array.from({ length: 257 }, (_, index) => `${agentDir}-${index}`);
+    const store = apiStore("synthetic");
+    for (const dir of dirs) {
+      setSnapshot(store, dir);
+    }
+    const revisions = dirs.map(getCatalogRevision);
+    for (const dir of dirs.slice(0, 3)) {
+      setUsage(store, dir, {});
+    }
+    expect(dirs.map(getCatalogRevision)).toEqual(revisions);
   });
 
   it("bounds remembered revisions while refreshing a repeatedly cleared owner", () => {
@@ -231,6 +293,7 @@ describe("runtime auth profile snapshots", () => {
       expect(listener).toHaveBeenCalledExactlyOnceWith({
         affectsInheritedStores: true,
         profileSetChanged: operation === "remove",
+        availabilityOnly: false,
       });
     },
   );
@@ -324,12 +387,16 @@ describe("runtime auth profile snapshots", () => {
     expect(worker.usageStats[acme]).toEqual({ cooldownUntil: 20_000 });
 
     const usage = { cooldownUntil: 30_000, failureCounts: { timeout: 2 } };
-    setUsage(published, agentDir, { [acme]: usage });
+    const inlineId = "inline-api-key:acme";
+    setUsage(published, agentDir, { [acme]: usage, [inlineId]: usage });
     const blocked = read(worker);
     expect(blocked.usageStats?.[acme]).toEqual(usage);
+    expect(blocked.usageStats?.[inlineId]).toEqual(usage);
     expectDefined(blocked.usageStats?.[acme], "published usage").cooldownUntil = 99;
     expect(read(worker).usageStats?.[acme]?.cooldownUntil).toBe(30_000);
     expect(cleared.usageStats).toEqual({ "worker:external": { lastUsed: 7 } });
+    setUsage(published, agentDir, {});
+    expect(read(blocked).usageStats?.[inlineId]).toBeUndefined();
   });
 
   it("keeps usage with the captured physical owner and matching credential", () => {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type * as Timers from "node:timers/promises";
 import { Command } from "commander";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -29,9 +30,9 @@ import {
 } from "./store.js";
 
 const { sleepMock } = vi.hoisted(() => ({ sleepMock: vi.fn() }));
-vi.mock("../../api.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../api.js")>()),
-  sleep: sleepMock,
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof Timers>()),
+  setTimeout: sleepMock,
 }));
 
 // These names are persisted storage contracts, independent of private store declarations.

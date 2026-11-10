@@ -513,8 +513,10 @@ export function stripPlainTextToolCallBlocks(
   return projectPlainTextToolCallBlocks(text, options).text;
 }
 
-/** Admit bracket JSON candidates without activating on ordinary brace prose. */
-export function createPlainTextToolCallBraceProbe(): (delta: string) => boolean {
+/** Admit bracket JSON without activating on ordinary braces; previews also need header prefixes. */
+export function createPlainTextToolCallBraceProbe(
+  includePrefixes = false,
+): (delta: string) => boolean {
   let lineStart = true;
   let header = "";
   let awaitingPayload = "";
@@ -556,6 +558,12 @@ export function createPlainTextToolCallBraceProbe(): (delta: string) => boolean 
         continue;
       }
       lineStart = false;
+      if (
+        includePrefixes &&
+        (char === "[" || char === "<" || HARMONY_CHANNELS.some((channel) => channel[0] === char))
+      ) {
+        return true;
+      }
       if (char === "[") {
         header = char;
       }
@@ -570,8 +578,15 @@ export function projectPlainTextToolCallBlocks(
   options: {
     resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
     settleBefore?: number;
+    preview?: boolean;
+    isProtectionSettled?: (offset: number) => boolean;
   } = {},
-): { text: string; retainStart: number; retainedOutputStart: number } {
+): {
+  text: string;
+  retainStart: number;
+  retainedOutputStart: number;
+  unsettled: boolean;
+} {
   let protectedRanges: ReturnType<PlainTextToolCallProtectedRangeResolver> | undefined;
   const isProtected = (offset: number) =>
     isOffsetInProtectedRanges(
@@ -584,6 +599,12 @@ export function projectPlainTextToolCallBlocks(
   let retainStart = 0;
   let retainedOutputStart = 0;
   let pending = false;
+  const pendingResult = (end?: number) => ({
+    text: result + text.slice(cursor, end),
+    retainStart,
+    retainedOutputStart,
+    unsettled: true,
+  });
   while (index < text.length) {
     const lineStart = index === 0 || text[index - 1] === "\n" || text[index - 1] === "\r";
     if (!lineStart) {
@@ -595,11 +616,14 @@ export function projectPlainTextToolCallBlocks(
       retainedOutputStart = result.length + index - cursor;
     }
     const blockStart = skipLineIndentation(text, index);
-    if (
+    const protectedCandidate =
       (text[blockStart] === "[" ||
         text[blockStart] === "<" ||
         HARMONY_CHANNELS.some((channel) => channel[0] === text[blockStart])) &&
-      isProtected(blockStart)
+      isProtected(blockStart);
+    if (
+      protectedCandidate &&
+      (!options.preview || options.isProtectionSettled?.(blockStart) !== false)
     ) {
       index += 1;
       continue;
@@ -611,18 +635,32 @@ export function projectPlainTextToolCallBlocks(
       index = Math.max(index + 1, scan.next);
       continue;
     }
+    if (options.preview && (scan.kind === "prefix" || protectedCandidate)) {
+      return pendingResult(index);
+    }
     pending ||= scan.kind === "prefix" || !scan.settled;
     let blockEnd = scan.kind === "complete" ? scan.end : scan.completeEnd;
     if (blockEnd === undefined) {
-      return { text: result + text.slice(cursor), retainStart, retainedOutputStart };
+      // A trailing candidate may still become a hidden call; the caller must not publish it.
+      return pendingResult();
     }
     result += text.slice(cursor, index);
     while (true) {
       const adjacentStart = skipLineIndentation(text, blockEnd);
-      if (isProtected(adjacentStart)) {
+      const protectedAdjacent = isProtected(adjacentStart);
+      if (
+        protectedAdjacent &&
+        (!options.preview || options.isProtectionSettled?.(adjacentStart) !== false)
+      ) {
         break;
       }
       const adjacent = scanPlainTextToolCall(text, adjacentStart);
+      if (
+        options.preview &&
+        (adjacent.kind === "prefix" || (protectedAdjacent && adjacent.kind === "complete"))
+      ) {
+        return pendingResult(cursor);
+      }
       pending ||= adjacent.kind === "prefix" || (adjacent.kind === "complete" && !adjacent.settled);
       const adjacentEnd =
         adjacent.kind === "complete"
@@ -648,5 +686,10 @@ export function projectPlainTextToolCallBlocks(
     retainStart = text.length;
     retainedOutputStart = result.length;
   }
-  return { text: result, retainStart, retainedOutputStart };
+  return {
+    text: result,
+    retainStart,
+    retainedOutputStart,
+    unsettled: pending,
+  };
 }

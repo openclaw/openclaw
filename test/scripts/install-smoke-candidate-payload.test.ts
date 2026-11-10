@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import path from "node:path";
@@ -7,6 +6,7 @@ import {
   sealInstallSmokeCandidatePayload,
   verifyInstallSmokeCandidatePayload,
 } from "../../scripts/install-smoke-candidate-payload.mts";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeTarball } from "./prepublish-plugin-registry.fixture.js";
 
@@ -31,14 +31,15 @@ function sha256(filePath: string): string {
   return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
-function createTarball(archivePath: string, sourceDir: string, entries: string[]): void {
-  execFileSync("tar", ["-czf", archivePath, "-C", sourceDir, ...entries], {
-    // The candidate packer runs in Linux; prevent macOS tar from adding AppleDouble files.
-    env: { ...process.env, COPYFILE_DISABLE: "1" },
+function createTarball(root: string) {
+  return packToArchive({
+    pkgDir: path.join(root, "candidate-root"),
+    outDir: root,
+    outName: "candidate.tar.gz",
   });
 }
 
-function createFixture(options: FixtureOptions = {}) {
+async function createFixture(options: FixtureOptions = {}) {
   const root = tempDirs.make("install-smoke-candidate-payload-");
   const scriptsDir = path.join(root, "candidate-root/scripts");
   const packageDir = path.join(root, "package-output");
@@ -54,8 +55,7 @@ function createFixture(options: FixtureOptions = {}) {
     write(scriptsDir, "install.sh", "#!/bin/sh\necho install\n");
   }
   write(scriptsDir, "install-cli.sh", "#!/bin/sh\necho cli\n");
-  const archivePath = path.join(root, "candidate.tar.gz");
-  createTarball(archivePath, root, ["candidate-root"]);
+  const archivePath = await createTarball(root);
 
   const packagePath = path.join(packageDir, "candidate.tgz");
   writeTarball(root, packagePath, "openclaw", PACKAGE_VERSION);
@@ -67,7 +67,7 @@ function createFixture(options: FixtureOptions = {}) {
 }
 
 async function sealFixture() {
-  const fixture = createFixture();
+  const fixture = await createFixture();
   const manifest = await seal(fixture);
   const manifestPath = path.join(fixture.payloadDir, "install-smoke-candidate-payload.json");
   const expectedManifestSha256 = sha256(manifestPath);
@@ -86,7 +86,7 @@ async function sealFixture() {
   };
 }
 
-function seal(fixture: ReturnType<typeof createFixture>) {
+function seal(fixture: Awaited<ReturnType<typeof createFixture>>) {
   return sealInstallSmokeCandidatePayload({
     ...IDENTITY,
     archivePath: fixture.archivePath,
@@ -97,11 +97,11 @@ function seal(fixture: ReturnType<typeof createFixture>) {
 
 describe("install smoke candidate payload", () => {
   it("inlines archived policy without executing candidate code or reading mutable sources", async () => {
-    const fixture = createFixture();
+    const fixture = await createFixture();
     const marker = path.join(fixture.root, "executed");
     write(fixture.scriptsDir, "install.sh", `${POLICY_INCLUDE}echo install\n`);
     write(fixture.scriptsDir, "install-policy.sh", `touch '${marker}'\n`);
-    createTarball(fixture.archivePath, fixture.root, ["candidate-root"]);
+    await createTarball(fixture.root);
     write(fixture.scriptsDir, "install-policy.sh", "mutable source must not be used\n");
     await seal(fixture);
     expect(fs.existsSync(marker)).toBe(false);
@@ -137,10 +137,10 @@ describe("install smoke candidate payload", () => {
   });
 
   it("rejects a policy include backed by an archive symlink", async () => {
-    const fixture = createFixture();
+    const fixture = await createFixture();
     write(fixture.scriptsDir, "install.sh", POLICY_INCLUDE);
     fs.symlinkSync("install-target.sh", path.join(fixture.scriptsDir, "install-policy.sh"));
-    createTarball(fixture.archivePath, fixture.root, ["candidate-root"]);
+    await createTarball(fixture.root);
     await expect(seal(fixture)).rejects.toThrow("scripts/install-policy.sh must be a regular file");
   });
 
@@ -165,6 +165,6 @@ describe("install smoke candidate payload", () => {
     [{ symlinkInstaller: true }, "scripts/install.sh must be a regular file"],
     [{ symlinkPackage: true }, "candidate package tarball must be a regular file"],
   ] as const)("rejects symlinked candidate inputs %j before sealing", async (options, error) => {
-    await expect(seal(createFixture(options))).rejects.toThrow(error);
+    await expect(seal(await createFixture(options))).rejects.toThrow(error);
   });
 });

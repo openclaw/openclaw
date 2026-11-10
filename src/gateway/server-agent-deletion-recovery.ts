@@ -33,10 +33,10 @@ export async function resumeAgentDeletions(
   context: GatewayRequestContext,
   signal?: AbortSignal,
 ): Promise<void> {
-  const { entries, manualClawAgentIds } = await restorePendingDeletionFences();
-  for (const agentId of manualClawAgentIds) {
+  const { entries, manualTemplateAgentIds } = await restorePendingDeletionFences();
+  for (const agentId of manualTemplateAgentIds) {
     context.logGateway.warn(
-      `Claw ${agentId} removal remains pending; retry its Claw removal plan.`,
+      `Template ${agentId} removal remains pending; retry its Template removal plan.`,
     );
   }
   for (const journal of entries) {
@@ -44,16 +44,11 @@ export async function resumeAgentDeletions(
       return;
     }
     try {
-      const result = await deleteGatewayAgent(journal.agentId, journal.deleteFiles, context, {
+      await deleteGatewayAgent(journal.agentId, journal.deleteFiles, context, {
         recoveryOperationId: journal.operationId,
       });
-      if (result.purgeFailed || result.failed?.length) {
-        context.logGateway.warn(`Agent ${journal.agentId} deletion cleanup remains pending.`);
-      }
-    } catch (error) {
-      context.logGateway.warn(
-        `Agent ${journal.agentId} deletion recovery failed: ${String(error)}`,
-      );
+    } catch {
+      // The deletion owner records one actionable outcome after its bounded retries.
     }
   }
 }

@@ -3,6 +3,7 @@ import { Compile } from "typebox/compile";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginsListResultSchema } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { pluginCatalogId } from "../../plugins/catalog-discovery.js";
+import { createRemotePluginCatalogFixture } from "../../plugins/catalog-discovery.test-support.js";
 import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -511,14 +512,7 @@ describe("plugin management Gateway handlers", () => {
   ])(
     "keeps local results private in $intent search with attribution $searchSource",
     async ({ intent, searchSource }) => {
-      const remote = {
-        packageName: "@alice/memory-plus",
-        displayName: "Memory Plus",
-        family: "code-plugin" as const,
-        isOfficial: false,
-        categories: ["memory"],
-        runtimeId: "memory-plus",
-      };
+      const remote = createRemotePluginCatalogFixture();
       catalogMocks.browse.mockResolvedValue({ items: [remote] });
       inventory([memoryBundle]);
 

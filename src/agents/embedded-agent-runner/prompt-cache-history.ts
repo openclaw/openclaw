@@ -25,6 +25,7 @@ type RecordFingerprint =
       fields: Map<string, string>;
       primitives: Record<string, unknown>;
       immutable: false;
+      message?: { content: Message["content"]; fingerprint: PromptHistoryFingerprint };
     }
   | { digest: string; layout: string; packed: string; immutable: true };
 // Primitive revisions avoid rehashing retained text; nested values remain mutable.
@@ -130,9 +131,9 @@ export function fingerprintMessage(
   if (cached) {
     if (
       previous &&
-      (previous === cached ||
-        (previous.identityLength === cached.identityLength &&
-          previous.packed.startsWith(cached.packed.slice(0, cached.identityLength))))
+      previous !== cached &&
+      previous.identityLength === cached.identityLength &&
+      previous.packed.startsWith(cached.packed.slice(0, cached.identityLength))
     ) {
       messageFingerprints.set(message, previous);
       return previous;
@@ -141,6 +142,23 @@ export function fingerprintMessage(
   }
   const immutableMessage = isOwnedTranscriptPayload(message) || isDeeplyFrozenPlainData(message);
   const { content } = message;
+  const envelope = fingerprintRecord(message, MESSAGE_ENVELOPE_OMITTED_FIELDS);
+  // The record owner replaces this revision when any envelope field changes.
+  // Only immutable content may reuse it; mutable SDK content still needs inspection.
+  const retained = !envelope.immutable && envelope.message;
+  if (
+    !immutableMessage &&
+    retained &&
+    retained.content === content &&
+    (!previous || previous === retained.fingerprint)
+  ) {
+    return retained.fingerprint;
+  }
+  const immutableContent =
+    typeof content === "string" ||
+    immutableMessage ||
+    isOwnedTranscriptPayload(content) ||
+    isDeeplyFrozenPlainData(content);
   let stringBlock: PromptHistoryFingerprint["stringBlock"];
   let blocks: string[];
   let fingerprints: RecordFingerprint[] = [];
@@ -157,44 +175,45 @@ export function fingerprintMessage(
   } else {
     stringFingerprints.delete(message);
     // Append normalization owns the content root and freezes every descendant.
-    const immutableContent =
-      immutableMessage || isOwnedTranscriptPayload(content) || isDeeplyFrozenPlainData(content);
     fingerprints = content.map((block) => fingerprintRecord(block, undefined, immutableContent));
     blocks = fingerprints.map(({ digest }) => digest);
   }
-  const envelope = fingerprintRecord(message, MESSAGE_ENVELOPE_OMITTED_FIELDS);
   const identity = [typeof content === "string" ? "t" : "b", envelope.digest, ...blocks].join("");
+  let fingerprint: PromptHistoryFingerprint;
   if (previous?.identityLength === identity.length && previous.packed.startsWith(identity)) {
-    return previous;
+    fingerprint = previous;
+  } else {
+    const records = [envelope, ...fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS)];
+    fingerprint = {
+      role: message.role,
+      identityLength: identity.length,
+      // Flat Latin-1 strings retain full SHA-256 bytes without per-hash objects.
+      // The identity prefix precedes fixed-width, domain-tagged field hashes.
+      // Join flattens; template concatenation would retain cons-string cells per message.
+      layout: [
+        "[",
+        records
+          .map((record) =>
+            record.immutable ? record.layout : JSON.stringify(Array.from(record.fields.keys())),
+          )
+          .join(","),
+        "]",
+      ].join(""),
+      packed: [
+        identity,
+        ...records.map((record) =>
+          record.immutable ? record.packed : Array.from(record.fields.values()).join(""),
+        ),
+      ].join(""),
+      stringBlock,
+    };
   }
-  const records = [envelope, ...fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS)];
-  const fingerprint: PromptHistoryFingerprint = {
-    role: message.role,
-    identityLength: identity.length,
-    // Flat Latin-1 strings retain full SHA-256 bytes without per-hash objects.
-    // The identity prefix precedes fixed-width, domain-tagged field hashes.
-    // Join flattens; template concatenation would retain cons-string cells per message.
-    layout: [
-      "[",
-      records
-        .map((record) =>
-          record.immutable ? record.layout : JSON.stringify(Array.from(record.fields.keys())),
-        )
-        .join(","),
-      "]",
-    ].join(""),
-    packed: [
-      identity,
-      ...records.map((record) =>
-        record.immutable ? record.packed : Array.from(record.fields.values()).join(""),
-      ),
-    ].join(""),
-    stringBlock,
-  };
   if (immutableMessage) {
     messageFingerprints.set(message, fingerprint);
     // Content records may still be reused by other, mutable envelopes.
     recordFingerprints.delete(message);
+  } else if (!envelope.immutable) {
+    envelope.message = immutableContent ? { content, fingerprint } : undefined;
   }
   return fingerprint;
 }

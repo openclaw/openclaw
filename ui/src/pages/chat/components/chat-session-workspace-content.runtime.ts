@@ -1,6 +1,7 @@
 import { BROWSER_IMAGE_MIME_TYPES } from "../../../../../src/shared/browser-image-mime-types.js";
 import { formatInlineCodeSpan } from "../../../../../src/shared/markdown-code.js";
-import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
+import { isHttpArtifactDownloadUrl } from "../../../api/artifact-download-url.ts";
+import { downloadArtifact } from "../../../api/artifact-download.ts";
 import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import {
   downloadSessionFile,
@@ -8,12 +9,16 @@ import {
 } from "../../../api/session-file-download.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
+import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { readBlobAsDataUrl } from "../../../lib/blob-data-url.ts";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { formatDateTimeMs, formatUnit } from "../../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { isTextAttachment } from "../../../lib/media-file-extension.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
+import { isSessionFileReadMetadata } from "../../../lib/protocol-validators.generated/session-input.js";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { TEXT_ATTACHMENT_PREVIEW_MAX_BYTES } from "./chat-attachment-text-reader.ts";
@@ -39,7 +44,11 @@ import type {
   SessionWorkspaceHost,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
-import type { FilePreviewSource, SidebarContent } from "./chat-sidebar-content-types.ts";
+import type {
+  FilePreviewSource,
+  FileSidebarContent,
+  SidebarContent,
+} from "./chat-sidebar-content-types.ts";
 
 export { downloadSessionFile };
 
@@ -52,6 +61,7 @@ type WorkspaceFileOptions = {
   draftScope?: string;
   draftContext?: SessionWorkspaceHost["sessionWorkspaceDraftContext"];
   gatewayUrl: string;
+  relativeTo?: FileSidebarContent;
 };
 
 export async function loadSessionWorkspaceFileContent(
@@ -67,6 +77,19 @@ export async function loadSessionWorkspaceFileContent(
     options.requestPath,
     options.messageEntryId,
   );
+  const document = options.relativeTo;
+  if (
+    document &&
+    reference &&
+    (reference.result.root !== (document.root ?? undefined) ||
+      reference.result.source?.workspaceId !== document.workspaceSource?.workspaceId ||
+      reference.result.source?.root !== document.workspaceSource?.root ||
+      reference.result.source?.fileRoot !== document.workspaceSource?.fileRoot)
+  ) {
+    throw new Error(
+      "The document’s workspace changed. Reopen the document before following its links.",
+    );
+  }
   return (
     reference && {
       result: reference.result,
@@ -128,15 +151,34 @@ function createSessionWorkspaceFileContent(
     };
   }
   if (file.previewKind === "unsupported") {
+    const source: FilePreviewSource = {
+      path: filePath,
+      absolutePath: workspaceBrowserFilePath(result.root, filePath),
+      root: result.root,
+      download,
+    };
+    if (file.mimeType === "application/pdf") {
+      return {
+        kind: "attachment",
+        attachmentKind: "document",
+        title: name,
+        mimeType: file.mimeType,
+        sizeBytes: file.size,
+        sourceIdentity: JSON.stringify([
+          gatewayUrl,
+          result.sessionKey,
+          messageFile,
+          actionPath,
+          result.root,
+          result.source,
+        ]),
+        file: source,
+      };
+    }
     return {
       ...unsupportedFileSidebarContent(file, actionPath, download),
       fileLinkSessionKey: result.sessionKey,
-      file: {
-        path: filePath,
-        absolutePath: workspaceBrowserFilePath(result.root, filePath),
-        root: result.root,
-        download,
-      },
+      file: source,
     };
   }
   const text = readWorkspaceFileText(file);
@@ -240,6 +282,7 @@ function createSessionWorkspaceFileContent(
     name,
     content: text,
     download,
+    ...(result.source ? { workspaceSource: result.source } : {}),
     sessionFileSource: {
       sessionKey: result.sessionKey,
       agentId,
@@ -411,7 +454,15 @@ async function readSessionFileReference(
   const read = async (actionPath: string) => {
     try {
       const result = await state.sessions.getFile(sessionKey, actionPath, options);
-      return result ? { result, actionPath } : null;
+      // A preview can resolve an execution-path alias; actions keep its returned file and source.
+      return result
+        ? {
+            result,
+            actionPath: result.file?.workspacePath
+              ? workspaceBrowserFilePath(result.root, result.file.workspacePath)
+              : actionPath,
+          }
+        : null;
     } catch (error) {
       const details = error instanceof GatewayRequestError ? error.details : null;
       if (
@@ -422,8 +473,13 @@ async function readSessionFileReference(
         "size" in details &&
         typeof details.size === "number"
       ) {
+        const metadata = {
+          root: "root" in details ? details.root : undefined,
+          source: "source" in details ? details.source : undefined,
+        };
         const result: SessionWorkspaceGetResult = {
           sessionKey,
+          ...(isSessionFileReadMetadata(metadata) ? metadata : {}),
           file: {
             path: actionPath,
             name: pathDisplayName(actionPath),
@@ -470,10 +526,7 @@ function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must
   // stay on one logical line even when the Gateway returns hostile metadata.
   const singleLineValue = value.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
-  const hasBoundarySpaces = singleLineValue.startsWith(" ") && singleLineValue.endsWith(" ");
-  return formatInlineCodeSpan(
-    hasBoundarySpaces && !/^ +$/.test(singleLineValue) ? ` ${singleLineValue} ` : singleLineValue,
-  );
+  return formatInlineCodeSpan(singleLineValue);
 }
 
 function formatFileUpdatedAt(updatedAtMs: number | undefined): string | null {
@@ -481,7 +534,7 @@ function formatFileUpdatedAt(updatedAtMs: number | undefined): string | null {
     return null;
   }
   const updatedAt = new Date(updatedAtMs);
-  return Number.isNaN(updatedAt.getTime()) ? null : updatedAt.toISOString();
+  return Number.isNaN(updatedAt.getTime()) ? null : formatDateTimeMs(updatedAtMs);
 }
 
 function unsupportedFileSidebarContent(
@@ -489,15 +542,22 @@ function unsupportedFileSidebarContent(
   fallbackPath: string,
   download: (signal: AbortSignal) => Promise<SessionFileDownload | null>,
 ): Extract<SidebarContent, { kind: "markdown" }> {
+  registerFilePreviewEnglish();
   const filePath = file.workspacePath || file.path || fallbackPath;
   const updatedAt = formatFileUpdatedAt(file.updatedAtMs);
   const lines = [
-    "This file is not previewable inline.",
+    t("chat.detailPanel.filePreviewUnavailable"),
     "",
-    `- Path: ${formatMarkdownCodeSpan(filePath)}`,
-    file.mimeType ? `- Type: ${formatMarkdownCodeSpan(file.mimeType)}` : null,
-    typeof file.size === "number" ? `- Size: ${file.size.toLocaleString()} bytes` : null,
-    updatedAt ? `- Updated: ${updatedAt}` : null,
+    t("chat.detailPanel.filePreviewPath", { path: formatMarkdownCodeSpan(filePath) }),
+    file.mimeType
+      ? t("chat.detailPanel.filePreviewType", { type: formatMarkdownCodeSpan(file.mimeType) })
+      : null,
+    typeof file.size === "number"
+      ? t("chat.detailPanel.filePreviewSize", {
+          size: formatUnit({ value: file.size, unit: "byte", unitDisplay: "long" }),
+        })
+      : null,
+    updatedAt ? t("chat.detailPanel.filePreviewUpdated", { date: updatedAt }) : null,
   ].filter((line): line is string => line !== null);
   const content = lines.join("\n");
   return {

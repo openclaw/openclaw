@@ -9,3 +9,20 @@ describe("memory search query instruction schema", () => {
     },
   );
 });
+
+describe("memory search input format schema", () => {
+  it.each([
+    { query: "query: ", document: "passage: " },
+    { query: "Instruct: Retrieve notes\nQuery: ", document: "" },
+    { query: "", document: "" },
+  ])("preserves literal prefixes %j", (inputFormat) => {
+    expect(MemorySearchSchema.parse({ inputFormat })).toEqual({ inputFormat });
+  });
+
+  it.each([{}, { query: "query: " }, { document: "passage: " }])(
+    "requires both prefixes in %j",
+    (inputFormat) => {
+      expect(MemorySearchSchema.safeParse({ inputFormat }).success).toBe(false);
+    },
+  );
+});

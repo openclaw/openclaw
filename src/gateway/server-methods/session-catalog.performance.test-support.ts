@@ -16,6 +16,7 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { gatewayOwnerPayload } from "../../infra/gateway-owner-payload.test-support.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
@@ -206,14 +207,7 @@ export async function createComposedCatalogFixture(
     // Exercise the serving Gateway's admission path, including worker reads.
     stateOwner = acquireGatewayStateOwner({
       databasePath: resolveOpenClawStateSqlitePath(),
-      payload: {
-        pid: process.pid,
-        processNamespace: readGatewayLockProcessNamespace(),
-        createdAt: new Date().toISOString(),
-        configPath: state.configPath,
-        stateDir: state.stateDir,
-        role: "gateway",
-      },
+      payload: gatewayOwnerPayload(state, readGatewayLockProcessNamespace),
     });
     counters.observeOwnershipFile(stateOwner.path);
     // These are resident catalog rows, not an age-pruning fixture.
@@ -255,7 +249,7 @@ export async function createComposedCatalogFixture(
     const service = builder.registry.services.find(
       (entry) => entry.service.id === "codex-session-catalog",
     )?.service;
-    if (!service) {
+    if (!service || service.apiVersion === 2 || service.apiVersion === 3) {
       throw new Error("Codex did not register its catalog lifecycle");
     }
     const serviceContext = {

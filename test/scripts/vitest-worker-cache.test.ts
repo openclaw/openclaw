@@ -21,10 +21,9 @@ import { writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
-function fixture() {
-  const root = roots.make("vitest-worker-cache-");
-  const directory = path.join(root, ".artifacts/vitest-workers/run-cache-0");
-  const cached = path.join(root, ".artifacts/vitest-worker-cache/run-cache-0");
+function fixture(slot = "run-cache-0", root = roots.make("vitest-worker-cache-")) {
+  const directory = path.join(root, ".artifacts/vitest-workers", slot);
+  const cached = path.join(root, ".artifacts/vitest-worker-cache", slot);
   const read = (name: string) => fs.readFileSync(path.join(root, name), "utf8");
   const write = (name: string, bytes: string) => writeFixture(root, name, bytes);
   const sources = {
@@ -171,15 +170,41 @@ it("restores identical executable bytes into the same reserved generation path",
 });
 
 it("leaves incompatible preset generations available for their original borrower", async () => {
-  for (const preset of ["full", "runtime"] as const) {
+  for (const preset of ["full", "runtime", "tooling"] as const) {
     const f = fixture();
     await f.seed(preset);
     f.nextInvocation();
-    expect(await f.restore(preset === "full" ? "runtime" : "full")).toBeUndefined();
-    f.expectAbsent("dist");
+    for (const other of ["full", "runtime", "tooling"] as const) {
+      if (other === preset) {
+        continue;
+      }
+      expect(await f.restore(other)).toBeUndefined();
+      f.expectAbsent("dist");
+    }
 
     const restored = await f.restore(preset === "full" ? undefined : preset);
     expect(restored).toBeDefined();
+    expect(f.observe()).toEqual({ value: "first", generation: pathToFileURL(f.directory).href });
+  }
+});
+
+it("retains each preset independently at their original executable paths", async () => {
+  const full = fixture();
+  await full.seed();
+  full.nextInvocation();
+  const runtime = fixture("run-cache-runtime-0", full.root);
+  await runtime.seed("runtime");
+  runtime.nextInvocation();
+  const tooling = fixture("run-cache-tooling-0", full.root);
+  await tooling.seed("tooling");
+  tooling.nextInvocation();
+
+  for (const [f, preset] of [
+    [full, "full"],
+    [runtime, "runtime"],
+    [tooling, "tooling"],
+  ] as const) {
+    expect(await f.restore(preset)).toBeDefined();
     expect(f.observe()).toEqual({ value: "first", generation: pathToFileURL(f.directory).href });
   }
 });
@@ -327,7 +352,7 @@ it.each(["file", "directory", "symlink"] as const)(
   },
 );
 
-it.each(["timestamps and unrelated source", "runtime-written metadata"])(
+it.each(["timestamps and unrelated source", "runtime-written metadata", "CI transform cache"])(
   "restores captured compiler facts despite changes to %s",
   async (change) => {
     const f = fixture();
@@ -340,6 +365,8 @@ it.each(["timestamps and unrelated source", "runtime-written metadata"])(
     if (change === "timestamps and unrelated source") {
       fs.utimesSync(path.join(f.root, "src/value.js"), new Date(1000), new Date(1000));
       f.write("notes/unrelated.ts", 'export const unrelated = "second";\n');
+    } else if (change === "CI transform cache") {
+      f.write(".cache/openclaw-vitest-fs-cache/slots/project/0/_metadata.json", "{}\n");
     }
     const restored = await f.restore();
     expect(restored?.outputs).toEqual(manifest.outputs);

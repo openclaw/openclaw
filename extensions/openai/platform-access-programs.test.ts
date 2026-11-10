@@ -75,15 +75,15 @@ it("discovers explicit per-key programs independently of identical model availab
     ["standard", "daybreak_red"],
   ].entries()) {
     expect(results[index]?.providers.openai?.models.map(({ id }) => id)).toEqual(["gpt-6.1-sol"]);
-    expect(results[index]?.outcomes?.[0]?.modelAccessPrograms).toEqual([
-      {
+    expect(results[index]?.outcomes?.[0]?.modelAccessPrograms).toEqual(
+      ["openclaw", "codex"].map((runtimeId) => ({
         modelId: "gpt-6.1-sol",
-        runtimeId: "openclaw",
+        runtimeId,
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
         cyber,
-      },
-    ]);
+      })),
+    );
   }
   await discover("blue");
   expect(fetchMock).toHaveBeenCalledTimes(6);

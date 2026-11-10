@@ -20,6 +20,7 @@ import {
   sessionGatewayTuiTarget,
   type FinalizeArgs,
   type FinalizeArgsOverrides,
+  createGatewayPasswordRefConfig,
 } from "./setup.finalize.fixtures.test-support.js";
 import { readPin } from "./setup.finalize.runtime-pin.test-support.js";
 import {
@@ -291,18 +292,7 @@ describe("finalizeSetupWizard", () => {
       await finalizeSetupWizard(
         createFinalizeArgs("quickstart", {
           settings: { authMode: "password" },
-          nextConfig: {
-            gateway: {
-              auth: {
-                mode: "password",
-                password: {
-                  source: "env",
-                  provider: "default",
-                  id: "OPENCLAW_GATEWAY_PASSWORD",
-                },
-              },
-            },
-          },
+          nextConfig: createGatewayPasswordRefConfig(),
           prompter,
           runtime,
         }),
@@ -705,13 +695,13 @@ describe("finalizeSetupWizard", () => {
       typeof import("../commands/daemon-install-helpers.js")
     >("../commands/daemon-install-helpers.js");
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.4" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
     const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
       status: "supported",
-      version: "1.4.3",
+      version: "1.4.4",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
@@ -1205,7 +1195,7 @@ describe("finalizeSetupWizard", () => {
     "reinstalls recorded Bun through $flow with choice=$choice",
     async ({ flow, choice }) => {
       const recordedPath = "/opt/recorded/bin/bun";
-      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.3"));
+      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.4"));
       gatewayServiceIsLoaded.mockResolvedValue(true);
       gatewayServiceReadCommand.mockResolvedValue({
         programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],
@@ -1578,18 +1568,7 @@ describe("finalizeSetupWizard", () => {
     await finalize("quickstart", {
       opts: { skipHealth: false, skipUi: true },
       settings: { authMode: "password" },
-      nextConfig: {
-        gateway: {
-          auth: {
-            mode: "password",
-            password: {
-              source: "env",
-              provider: "default",
-              id: "OPENCLAW_GATEWAY_PASSWORD",
-            },
-          },
-        },
-      },
+      nextConfig: createGatewayPasswordRefConfig(),
       prompter,
     });
 

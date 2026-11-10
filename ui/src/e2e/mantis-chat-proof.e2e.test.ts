@@ -95,12 +95,13 @@ suite.define(() => {
       await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
       await page.locator(".chat-working-indicator").waitFor();
       const workingLabel = page.locator(".chat-working-indicator__status > span:first-child");
-      expect(await workingLabel.textContent()).toBe("Waiting for turn to start…");
+      expect(await workingLabel.textContent()).toBe("Working…");
+      expect(await workingLabel.getAttribute("class")).toContain("sr-only");
       expect(
         await page
           .locator(".chat-working-indicator__status > span:not(.sr-only)")
           .allTextContents(),
-      ).toEqual(["Waiting for turn to start…", "·"]);
+      ).toEqual([]);
       await expect.poll(() => gateway.getRequests("connect")).toHaveLength(1);
       // Keep each elapsed-time/heartbeat tick, without rendering every frame
       // between the one-second clock readings or suspending pending RPC replies.

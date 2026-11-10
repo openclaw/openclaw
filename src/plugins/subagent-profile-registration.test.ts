@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { projectPluginContributions } from "./registry-contributions.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createOwnershipRecord } from "./registry-ownership.test-support.js";
@@ -18,7 +19,9 @@ function fixture(declared = true) {
   const root = path.join(dir, "plugin");
   fs.mkdirSync(root);
   fs.writeFileSync(path.join(root, "reviewer.md"), instructions);
-  const builder = createTestPluginRegistry(createRuntimeBase() as PluginRuntime);
+  const builder = createTestPluginRegistry(
+    createRuntimeBase(enqueueSessionEventForHost) as PluginRuntime,
+  );
   const record = createOwnershipRecord("review", {
     rootDir: root,
     contracts: declared ? { subagentProfiles: ["reviewer"] } : undefined,
@@ -80,14 +83,12 @@ describe("plugin subagent profile registration", () => {
     "/outside.md",
     "C:\\outside.md",
     "escape.md",
-    "linked/brief.md",
+    "linked/outside.md",
   ])("refuses missing or escaping instruction file %s", (instructionsFile) => {
     const { dir, root, builder, register } = fixture();
     fs.writeFileSync(path.join(dir, "outside.md"), "outside");
-    fs.mkdirSync(path.join(dir, "outside"));
-    fs.writeFileSync(path.join(dir, "outside", "brief.md"), "outside");
     fs.symlinkSync(path.join(dir, "outside.md"), path.join(root, "escape.md"));
-    fs.symlinkSync(path.join(dir, "outside"), path.join(root, "linked"), "dir");
+    fs.symlinkSync(dir, path.join(root, "linked"), "dir");
     expect(() => register({ instructionsFile })).toThrow();
     expect(builder.registry.subagentProfiles).toEqual([]);
   });

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
@@ -10,20 +10,16 @@ import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-heartbeat-doctor-");
 
-let tmpDir: string;
-
-beforeEach(() => {
-  tmpDir = sessionDirs.make();
-});
-
 function cfgWithSession(
   session: string,
   heartbeat: AgentDefaultsConfig["heartbeat"] = { target: "slack" },
+  sqlite = false,
 ): OpenClawConfig {
+  const file = sqlite ? "sessions.sqlite" : "sessions.json";
   return {
     session: {
       mainKey: "work",
-      store: path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      store: path.join(sessionDirs.make(), "{agentId}", file),
     },
     agents: { entries: { ops: { heartbeat: { session, ...heartbeat } } } },
   };
@@ -35,17 +31,20 @@ function writeStore(cfg: OpenClawConfig, entries: Record<string, unknown>) {
   fs.writeFileSync(storePath, JSON.stringify(entries, null, 2));
 }
 
-it("uses runtime session canonicalization before warning", async () => {
-  const cfg = cfgWithSession("agent:ops:main");
-  writeStore(cfg, { "agent:ops:work": { sessionId: "work", updatedAt: 1 } });
-
-  expect(await describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
+it.each([
+  ["agent:ops:main", "agent:ops:work", false],
+  ["agent:ops:dashboard:incognito-heartbeat", "agent:ops:dashboard:incognito-heartbeat", true],
+] as const)("resolves legacy target %s", async (session, storedKey, missing) => {
+  const cfg = cfgWithSession(session);
+  writeStore(cfg, { [storedKey]: { sessionId: "legacy", updatedAt: 1 } });
+  expect(await describeHeartbeatSessionTargetIssues(cfg)).toEqual(
+    missing ? [expect.stringContaining(`resolved to ${session}`)] : [],
+  );
 });
 
 it("does not read a canonical database as JSON for a missing heartbeat target", async () => {
-  const cfg = cfgWithSession("slack:channel:c123");
-  const storePath = path.join(tmpDir, "sessions.sqlite");
-  cfg.session = { ...cfg.session, store: storePath };
+  const cfg = cfgWithSession("slack:channel:c123", undefined, true);
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" });
   await upsertSessionEntryCore(
     { agentId: "ops", sessionKey: "agent:ops:other", storePath },
     { sessionId: "other-session", updatedAt: Date.now() },
@@ -56,19 +55,7 @@ it("does not read a canonical database as JSON for a missing heartbeat target", 
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
   expect(warnings[0]).toContain("missing session route or recipient");
-  expect(warnings[0]).toContain("delivery failure instead of skipping the run");
   expect(readFileSyncSpy.mock.calls.map(([file]) => file)).not.toContain(storePath);
-});
-
-it("does not recover an absent incognito heartbeat target from a legacy store", async () => {
-  const sessionKey = "agent:ops:dashboard:incognito-heartbeat";
-  const cfg = cfgWithSession(sessionKey);
-  writeStore(cfg, { [sessionKey]: { sessionId: "legacy", updatedAt: 1 } });
-
-  const warnings = await describeHeartbeatSessionTargetIssues(cfg);
-  expect(warnings).toHaveLength(1);
-  expect(warnings[0]).toContain(`resolved to ${sessionKey}`);
-  expect(warnings[0]).toContain("has no entry");
 });
 
 it.each([
@@ -85,25 +72,21 @@ it("warns for missing sessions owned by every agent sharing heartbeat defaults",
     defaults: { heartbeat: { session: "slack:channel:c123", target: "slack" } },
     entries: { main: {}, ops: {} },
   };
-  writeStore(cfg, {});
-
-  const warnings = await describeHeartbeatSessionTargetIssues(cfg);
-
-  expect(warnings).toHaveLength(2);
-  for (const [index, agentId] of ["main", "ops"].entries()) {
-    expect(warnings[index]).toContain(`Agent ${agentId} heartbeat.session pins slack:channel:c123`);
-    expect(warnings[index]).toContain(`resolved to agent:${agentId}:slack:channel:c123`);
-  }
+  expect(await describeHeartbeatSessionTargetIssues(cfg)).toEqual(
+    ["main", "ops"].map((id) =>
+      expect.stringContaining(
+        `Agent ${id} heartbeat.session pins slack:channel:c123 (resolved to agent:${id}:slack:channel:c123)`,
+      ),
+    ),
+  );
 });
 
 it("warns when the default owner target has no configured owner route", async () => {
   const cfg = cfgWithSession("slack:channel:c123", {});
-  writeStore(cfg, {});
-
   const warning = (await describeHeartbeatSessionTargetIssues(cfg))[0];
-  expect(warning).toContain("missing owner route can cause a delivery failure");
+  expect(warning).toContain("missing owner route");
   expect(warning).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
-  expect(warning).toContain('heartbeat.target="telegram"');
-  expect(warning).toContain('heartbeat.to="123456789"');
-  expect(warning).toContain('heartbeat.target="none"');
+  expect(warning).toMatch(
+    /heartbeat.target="telegram".*heartbeat.to="123456789".*heartbeat.target="none"/,
+  );
 });

@@ -5,7 +5,6 @@ import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-c
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
-import { applyMessageQueueDefaults } from "../config/defaults.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import {
@@ -18,28 +17,24 @@ import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withDoctorProgress } from "../flows/doctor-health-startup.js";
+import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
+import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
+import { withPreparedPluginSetupRead } from "../plugins/plugin-setup-module.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { AutomaticHeartbeatRepairAdmission } from "./doctor-automatic-heartbeat-repair.js";
-import {
-  noteDoctorHookConfigWarnings,
-  noteImplicitFallbackClobberWarnings,
-  noteMcpOriginWarning,
-  noteMediaCliModelWarnings,
-  noteMissingDefaultAgentOwner,
-  noteOpencodeProviderOverrides,
-  noteSandboxOriginProxyWarning,
-} from "./doctor-config-analysis.js";
+import { noteConfigAdvisories, noteDoctorHookConfigWarnings } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import { resolveDoctorRepairMode } from "./doctor-repair-mode.js";
 import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js";
 import { createDoctorChangesPanelSink } from "./doctor/changes-panel-sink.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
 import * as notes from "./doctor/emit-notes.js";
-import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
+import { doctorConfigRevision, finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
   applyRetiredConfigStep,
@@ -73,7 +68,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   reportFindings?: notes.DoctorFindingReporter;
 }) {
   await using preparingResources = new AsyncDisposableStack();
-  const shouldRepair = params.options.repair === true || params.options.yes === true;
+  const { shouldRepair, nonInteractive } = resolveDoctorRepairMode(params.options);
   const preflight = await runDoctorConfigPreflight({
     retiredStateAdmitted: params.retiredStateAdmitted,
     stateSchemaPreparation: params.stateSchemaPreparation,
@@ -82,6 +77,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     invocationPurpose: "doctor",
     repairPrefixedConfig: shouldRepair,
     doctorOnlyStateMigrations: shouldRepair,
+    deferPluginPackageRepair: nonInteractive && !shouldRepair,
     preparePluginMetadataSnapshot: true,
     ...(params.automaticHeartbeatRepair
       ? { automaticHeartbeatRepair: params.automaticHeartbeatRepair }
@@ -101,7 +97,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const { collectRecoveryDiskUsage, formatRecoveryDiskUsage } =
       await import("./recovery-disk-usage.js");
     note(
-      formatRecoveryDiskUsage(collectRecoveryDiskUsage({ cfg: baseCfg, env: process.env })),
+      formatRecoveryDiskUsage(await collectRecoveryDiskUsage({ cfg: baseCfg, env: process.env })),
       "Recovery copies (read-only)",
     );
   }
@@ -123,10 +119,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
     }),
   );
-  const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
   const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T => {
     const soleAgentId = tryResolveSoleAgentId(config);
-    return runWithPluginMetadataSnapshot(
+    return pluginMetadataSnapshotScope.run(
       {
         config,
         workspaceDir: soleAgentId ? resolveAgentWorkspaceDir(config, soleAgentId) : undefined,
@@ -144,6 +139,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
   let modelRetirementRepairRan = false;
+  let modelRetirementBlockers = ["model-retirement"];
+  let channelWorkObserved = false;
+  const configAdvisories: string[] = [];
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
@@ -166,6 +164,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
   };
   const finalizeMigrationResult = prepareDoctorConfigMigrationResult(preflight, snapshot);
+  await runWithCurrentPluginMetadata(state.candidate, () =>
+    preparePluginDoctorContractModules({ config: state.candidate, surfaces: ["configRepair"] }),
+  );
   const plannedProviderRenames = runWithCurrentPluginMetadata(state.candidate, () =>
     planProviderRenames(
       snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
@@ -195,9 +196,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     retainLegacyDefaultAgentId(state.cfg, legacyDefaultAgentId);
     retainLegacyDefaultAgentId(state.candidate, legacyDefaultAgentId);
   }
-  const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
   const persistCanonicalAgentRoster =
-    snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster;
+    snapshot.exists && rosterMigrationNeeded && !configIncludeOwnsAgentRoster(snapshot);
   if (persistCanonicalAgentRoster) {
     applyConfigMutation(
       {
@@ -253,7 +253,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const { findDoctorLegacyConfigIssues } =
       await import("./doctor/shared/legacy-config-issues.js");
     return runWithCurrentPluginMetadata(state.candidate, () =>
-      findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed),
+      withPreparedPluginSetupRead(() =>
+        findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed),
+      ),
     );
   })();
   const seenLegacyIssues = new Set(
@@ -282,7 +284,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
   changesPanelSink.emit(legacyStep.changeLines);
 
-  const { MODEL_METADATA_CORRUPTION_AUDIT_LIMIT, repairGeneratedModelMetadataCorruption } =
+  const { repairGeneratedModelMetadataCorruption } =
     await import("./doctor/shared/model-metadata-corruption-repair.js");
   const modelMetadataRepair = runWithCurrentPluginMetadata(state.candidate, () =>
     repairGeneratedModelMetadataCorruption({
@@ -290,11 +292,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       authoredRoot: snapshot.parsed,
       configPath: snapshot.path,
       currentHash: hashConfigRaw(snapshot.raw),
-      auditRecords: readRecentConfigAuditRecords({
-        env: process.env,
-        homedir,
-        limit: MODEL_METADATA_CORRUPTION_AUDIT_LIMIT,
-      }),
+      loadAuditRecords: () =>
+        readRecentConfigAuditRecords({ env: process.env, homedir, limit: 2048 }),
     }),
   );
   applyConfigMutation(
@@ -306,25 +305,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   // Parsed config supplies invalid-key evidence only; migrations still mutate the
   // include/env-resolved candidate so doctor never writes unresolved source values.
-  const normalized = runWithCurrentPluginMetadata(state.candidate, () =>
+  const normalized = await runWithCurrentPluginMetadata(state.candidate, () =>
     normalizeCompatibilityConfigValues(state.candidate, {
       blockedModelIdentities: blockedCodexModelIdentities,
       sourceRaw: snapshot.parsed,
     }),
   );
   applyConfigMutation(normalized, `Run "${doctorFixCommand}" to apply these changes.`);
-
-  const queueDefaults = applyMessageQueueDefaults(state.candidate);
-  applyConfigMutation(
-    {
-      config: queueDefaults,
-      changes:
-        queueDefaults === state.candidate
-          ? []
-          : ["Set messages.queue.allowCollaborativeSteering to false (default)."],
-    },
-    `Run "${doctorFixCommand}" to persist the collaborative steering default.`,
-  );
 
   const { recoverCommandOwnerTargetKinds } = await import("./doctor-command-owner-recovery.js");
   applyConfigMutation(
@@ -397,10 +384,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note,
     warningNotes: collectCodexPluginActivationWarnings(pluginActivationSourceConfig),
   });
-  const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
+  const { applyPluginAutoEnableAsync } = await import("../config/plugin-auto-enable.js");
   applyConfigMutation(
-    runWithCurrentPluginMetadata(state.candidate, () =>
-      applyPluginAutoEnable({
+    await runWithCurrentPluginMetadata(state.candidate, () =>
+      applyPluginAutoEnableAsync({
         config: state.candidate,
         env: process.env,
       }),
@@ -467,6 +454,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       infoNotes: channelDoctorSequence.infoNotes,
       warningNotes: channelDoctorSequence.warningNotes,
     });
+    channelWorkObserved =
+      channelDoctorSequence.changeNotes.length > 0 || channelDoctorSequence.warningNotes.length > 0;
 
     const staleChannelCleanups = await runWithCurrentPluginMetadata(state.candidate, () =>
       channelDoctor.collectChannelDoctorStaleConfigMutations(state.candidate, {
@@ -500,7 +489,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     snapshot.authoredConfig?.agents?.defaults?.workspace ??
     (isRecord(parsedDefaults) ? parsedDefaults.workspace : undefined);
   const systemAgentWorkspaceOptions = {
-    includeOwnsRoster,
+    includeOwnsRoster: configIncludeOwnsAgentRoster(snapshot),
     authoredDefaultWorkspace:
       typeof authoredDefaultWorkspace === "string" ? authoredDefaultWorkspace : undefined,
   };
@@ -518,17 +507,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const prompter = params.prompter;
     const repairSequence = await withDoctorProgress(
-      "Config repairs",
+      formatDoctorProgressPhase("Config repairs"),
       () =>
         runDoctorRepairSequence({
           state,
           installedPluginIdRecovery: installedPluginRecovery.recovery,
           doctorFixCommand,
+          modelReplacements: params.options.modelReplacements,
           reportFindings: params.reportFindings,
           env: process.env,
           blockedCodexProviderPlan,
           pluginMetadataSnapshotState,
-          runWithPluginMetadataSnapshot,
+          runWithPluginMetadataSnapshot: pluginMetadataSnapshotScope.run,
           ...(prompter
             ? {
                 onCapabilityConsent: createPluginCapabilityConsentPrompter({
@@ -545,7 +535,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       params.options.json !== true,
     );
     state = repairSequence.state;
-    configRepairWarnings.push(...repairSequence.warningNotes);
+    configRepairWarnings.push(...repairSequence.repairWarningNotes);
+    configAdvisories.push(...repairSequence.advisoryNotes);
     if (referenceSource) {
       referenceSource.installedPluginIdRecovery = new Map([
         ...installedPluginRecovery.recovery,
@@ -556,6 +547,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     openAICodexAuthProfileIdMap = repairSequence.openAICodexAuthProfileIdMap;
     retiredModelRefConfig = repairSequence.retiredModelRefConfig;
     modelRetirementRepairRan = repairSequence.modelRetirementRepairRan;
+    modelRetirementBlockers = repairSequence.modelRetirementBlockers;
     if (repairSequence.authProfilesRepaired) {
       const { refreshGatewayAuthStateAfterAuthProfileRepair } =
         await import("./doctor/auth-profile-repair.js");
@@ -601,7 +593,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   // Retain normalized source facts before retirement removes heartbeat settings.
-  const modelBillingRouteConfig = state.candidate;
+  const preRetiredConfigState = state;
   state = await applyRetiredConfigStep({
     state,
     shouldRepair,
@@ -645,32 +637,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       referenceSource?.installedPluginIdRecovery,
     );
 
-  const configuredOpencodePluginIds = [
-    cfg.models?.providers?.opencode || cfg.models?.providers?.["opencode-zen"]
-      ? "opencode"
-      : undefined,
-    cfg.models?.providers?.["opencode-go"] ? "opencode-go" : undefined,
-  ].filter((pluginId): pluginId is string => pluginId !== undefined);
-  let activeOpencodePluginIds: string[] = [];
-  if (configuredOpencodePluginIds.length > 0) {
-    const { resolveEnabledProviderPluginIds } = await import("../plugins/providers.js");
-    activeOpencodePluginIds = runWithCurrentPluginMetadata(cfg, () =>
-      resolveEnabledProviderPluginIds({ config: cfg, onlyPluginIds: configuredOpencodePluginIds }),
-    );
-  }
-  noteOpencodeProviderOverrides(cfg, {
-    opencodePluginActive: activeOpencodePluginIds.includes("opencode"),
-    opencodeGoPluginActive: activeOpencodePluginIds.includes("opencode-go"),
-  });
-  noteImplicitFallbackClobberWarnings(cfg);
-  noteSandboxOriginProxyWarning(cfg);
-  noteMcpOriginWarning(cfg);
-  noteMediaCliModelWarnings(cfg);
-  noteMissingDefaultAgentOwner(cfg);
+  await runWithCurrentPluginMetadata(cfg, () =>
+    preparePluginDoctorContractModules({ config: cfg, surfaces: ["configRepair"] }),
+  );
+  await noteConfigAdvisories(cfg, runWithCurrentPluginMetadata);
 
   const migrationResult = await finalizeMigrationResult({
     cfg,
-    modelBillingRouteConfig,
+    modelBillingRouteConfig: preRetiredConfigState.candidate,
     shouldWriteConfig,
     pluginInventoryChanged: pluginMetadataSnapshotState.inventoryChanged,
     metadataSnapshot: pluginMetadataSnapshotState.current,
@@ -693,23 +667,47 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // Later Doctor contributions and service finalization consume these callbacks.
   const resources = preparingResources.move();
 
+  const retirementOnlyBlockers = [
+    ...modelRetirementBlockers,
+    state !== preRetiredConfigState && "config-repair",
+    !snapshot.exists && "config-missing",
+    !snapshot.valid && "config-invalid",
+    legacyStep.blocksWrite && "legacy-write-blocked",
+    deferHeartbeat && "heartbeat-deferred",
+    !preflight.preflightLegacyStateConfig && "preflight-unsettled",
+    preflight.configChanged && "preflight-config-changed",
+    preflight.stateMigrationUnsettled && "state-migration-unsettled",
+    preflight.cronStoreSelectionUnresolved && "cron-selection-unresolved",
+    Boolean(preflight.heartbeatMigrationSource) && "heartbeat-migration",
+    Boolean(preflight.modelBillingRouteMigrationSource) && "billing-migration",
+    configRepairWarnings.length > 0 && "repair-warning",
+    mutableAllowlistWarnings.length > 0 && "mutable-allowlist-warning",
+    pluginWarnings.length > 0 && "plugin-warning",
+    Boolean(migrationResult.modelBillingRouteWarnings?.length) && "billing-warning",
+    pluginMetadataSnapshotState.inventoryChanged && "plugin-inventory-changed",
+    channelWorkObserved && "channel-work",
+    providerRenames.length > 0 && "provider-renames",
+    blockedCodexModelIdentities.size > 0 && "blocked-models",
+    retiredPhoneControlCleanup.cleanupPending && "phone-cleanup",
+    migrationResult.postSessionPluginMigrationPlanBound !== true && "session-plan-unbound",
+    Boolean(migrationResult.postSessionPluginMigration?.step.refusal) && "session-plan-refused",
+  ].filter((blocker): blocker is string => Boolean(blocker));
+
   const configResult = {
     [Symbol.asyncDispose]: () => resources.disposeAsync(),
     ...finalized,
     cfg,
-    heartbeatMigrationSource: modelBillingRouteConfig,
-    ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
-      ? {
-          confirmedConfigSource: {
-            path: snapshot.path,
-            hash: snapshot.hash ?? hashConfigRaw(snapshot.raw),
-          },
-        }
-      : {}),
+    heartbeatMigrationSource: preRetiredConfigState.candidate,
+    confirmedConfigSource:
+      shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
+        ? doctorConfigRevision(snapshot)
+        : finalized.confirmedConfigSource,
     ...(referenceSource ? { referenceSource } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
-    ...(configRepairWarnings.length ? { warnings: [...new Set(configRepairWarnings)] } : {}),
+    ...(configRepairWarnings.length || configAdvisories.length
+      ? { warnings: [...new Set([...configRepairWarnings, ...configAdvisories])] }
+      : {}),
     ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),
     sourceConfigValid: snapshot.valid,
     ...(legacyStep.partiallyValid === true ? { skipPluginValidationOnWrite: true } : {}),
@@ -734,8 +732,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(providerRenames.length > 0 ? { providerRenames } : {}),
     modelRetirementRepairRan:
       modelRetirementRepairRan && !legacyStep.blocksWrite && (shouldWriteConfig || snapshot.valid),
+    retirementOnly: retirementOnlyBlockers.length === 0,
+    retirementOnlyBlockers,
     ...migrationResult,
-    runWithPluginMetadataSnapshot,
+    runWithPluginMetadataSnapshot: pluginMetadataSnapshotScope.run,
     invalidatePluginMetadataSnapshot,
   };
   return configResult;

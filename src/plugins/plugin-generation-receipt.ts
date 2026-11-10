@@ -3,6 +3,7 @@ import {
   createRootFileOpenBatchSync,
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import { hashPluginSourceFile } from "./plugin-source-file.js";
 import type { PluginCapturedSourceFact as PluginSourceContent } from "./plugin-source-verification.js";
 
@@ -48,6 +49,11 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
       throw new Error(
         "Plugin source changed while preparing its reload; retry after the edit finishes.",
       );
+    }
+    const metrics = getPluginGenerationMetrics();
+    if (metrics) {
+      metrics.receiptFileReads++;
+      metrics.receiptReadBytes += content.sizeBytes;
     }
     publishContent(file, content);
   };
@@ -95,6 +101,10 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
     finish(): PluginGenerationReceipt {
       if (finished) {
         return finished;
+      }
+      const metrics = getPluginGenerationMetrics();
+      if (metrics) {
+        metrics.receiptPasses++;
       }
       const signature = inputSignature();
       const receipt =

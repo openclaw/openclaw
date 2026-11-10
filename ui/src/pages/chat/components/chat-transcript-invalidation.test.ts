@@ -31,6 +31,7 @@ import {
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import {
   render,
   renderChatThread,
@@ -208,8 +209,9 @@ describe("chat transcript invalidation", () => {
         }
 
         toggleTranscriptSearch(paneId);
-        flush();
-        const input = expectDefined(searchContainer.querySelector("input"), "search input");
+        const input = await waitForSolid(() =>
+          expectDefined(searchContainer.querySelector("input"), "search input"),
+        );
         input.value = ownMessage.content;
         input.dispatchEvent(new Event("input", { bubbles: true }));
         await flushDeferredRowPrune();
@@ -497,6 +499,7 @@ describe("chat transcript invalidation", () => {
   });
 
   it("keeps message rows prepared and refreshes failure actions when a retained transcript returns", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
     const owner = new EventTarget();
     let visible = true;
     const props = {
@@ -649,13 +652,15 @@ describe("chat transcript invalidation", () => {
       rerender();
       transcript.start();
       await flushDeferredRowPrune();
-      expect(container.textContent).toContain("Received · waiting for worker setup");
+      await waitForSolid(() =>
+        expect(container.textContent).toContain("Received · setting up device"),
+      );
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
       expect(buildSpy).toHaveBeenCalledOnce();
 
       rerender();
       expect(buildSpy).toHaveBeenCalledOnce();
-      expect(container.textContent).toContain("Received · waiting for worker setup");
+      expect(container.textContent).toContain("Received · setting up device");
 
       props.selectedSession = {
         ...props.selectedSession,
@@ -666,7 +671,7 @@ describe("chat transcript invalidation", () => {
       };
       rerender();
       expect(buildSpy).toHaveBeenCalledTimes(2);
-      expect(container.textContent).not.toContain("Received · waiting for worker setup");
+      expect(container.textContent).not.toContain("Received · setting up device");
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
     } finally {
       transcript.dispose();
@@ -776,9 +781,7 @@ describe("chat transcript invalidation", () => {
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const transcript = createTestTranscript();
     const container = transcriptContainer();
-    const client = {
-      request: vi.fn(async () => null),
-    } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
+    const client = createGatewayBrowserClientFixture({ request: vi.fn(async () => null) });
     const sessions = createSessionCapabilityFixture();
     const { pane, state } = createTestChatPane({ client, sessions });
     const applyToken = (deviceToken: string) =>
@@ -794,25 +797,27 @@ describe("chat transcript invalidation", () => {
     applyToken("test-auth-token");
     const messages = [msg("assistant", [{ type: "image", url: source }])];
     const mediaOwner = {};
-    const view = mountSolid(
-      () => {
-        const gateway = projectOwner(
-          pane.context.gateway,
-          (owner) => owner.snapshot.hello,
-          Object.is,
-        );
-        return createComponent(ChatThread, {
-          get props() {
-            return {
-              ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
-              assistantAttachmentAuthToken: resolveControlUiAuthToken({ hello: gateway.read() }),
-              mediaOwner,
-            };
-          },
-          transcript,
-        });
-      },
-      { container },
+    const view = settleChatMount(() =>
+      mountSolid(
+        () => {
+          const gateway = projectOwner(
+            pane.context.gateway,
+            (owner) => owner.snapshot.hello,
+            Object.is,
+          );
+          return createComponent(ChatThread, {
+            get props() {
+              return {
+                ...threadProps("pane-gateway-media-auth", state.sessionKey, messages),
+                assistantAttachmentAuthToken: resolveControlUiAuthToken({ hello: gateway.read() }),
+                mediaOwner,
+              };
+            },
+            transcript,
+          });
+        },
+        { container },
+      ),
     );
     onTestFinished(view.unmount);
     transcript.start();

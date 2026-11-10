@@ -10,7 +10,7 @@ import {
 } from "./goals.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import type { SessionEntry, SessionGoal } from "./types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry, type SessionGoal } from "./types.js";
 
 const goalState = (overrides: Partial<SessionGoal> = {}): SessionGoal => ({
   schemaVersion: 1,
@@ -46,7 +46,7 @@ describe("session goals", () => {
     updatedAt: 1,
     totalTokens,
     totalTokensFresh: true,
-    totalTokensVersion: 1,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
   });
   const writeSession = (totalTokens = 0) => writeEntry(sessionEntry(totalTokens));
   const patchEntry = (patch: Partial<SessionEntry>) => writeEntry({ ...readEntry()!, ...patch });
@@ -59,7 +59,11 @@ describe("session goals", () => {
   }
 
   it("creates core-owned goal state on the session entry", async () => {
-    await patchEntry({ totalTokens: 100, totalTokensFresh: true, totalTokensVersion: 1 });
+    await patchEntry({
+      totalTokens: 100,
+      totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    });
     const goal = await createGoal({ objective: "  land the PR \n", tokenBudget: 50 });
     expect(goal).toMatchObject({
       objective: "land the PR",
@@ -97,7 +101,11 @@ describe("session goals", () => {
       totalTokensVersion: undefined,
     });
     await createGoal({ objective: "finish task", tokenBudget: 20 });
-    await patchEntry({ totalTokens: 125, totalTokensFresh: true, totalTokensVersion: 1 });
+    await patchEntry({
+      totalTokens: 125,
+      totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    });
     expect((await snapshot(20)).goal).toMatchObject({
       tokenStart: 125,
       tokenStartFresh: true,
@@ -191,7 +199,7 @@ describe("session goals", () => {
       {
         totalTokens: 140,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         goal: goalState({ tokenStartFresh: false, tokenBudget: 40 }),
       },
       20,

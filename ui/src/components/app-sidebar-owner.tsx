@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, lazy, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId } from "../app-route-paths.ts";
+import { finishBootFrame } from "../app/boot-composer.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import {
@@ -9,6 +10,7 @@ import {
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import { SidebarOnlineHeader, SidebarPagesHeader } from "./app-sidebar-panel-headers.tsx";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
@@ -19,7 +21,6 @@ import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
 import "../styles/sidebar-pinned-agents.css";
 import "../styles/sidebar-agent-roster.css";
-import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionListToolbar } from "./app-sidebar-session-filter-summary.tsx";
 import { renderSessionList as SessionList } from "./app-sidebar-session-list-render.tsx";
 import type {
@@ -32,6 +33,7 @@ import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-rend
 import {
   loadStoredSidebarCatalogGrouping,
   SIDEBAR_SESSION_PAGE_SIZE,
+  sidebarSessionPagination,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
   type SidebarToolActivity,
@@ -50,6 +52,7 @@ import {
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
+import { GatewaySidebarSkeleton } from "./solid/gateway-connection-view.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
@@ -68,6 +71,11 @@ const SidebarPages = lazy(() => import("./app-sidebar-pages.tsx"), {
 const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
   export: "AppSidebarOnline",
 });
+
+function SidebarReady() {
+  onSettled(() => finishBootFrame("sidebar"));
+  return null;
+}
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
   private readonly emptyNarrationLines = new Map<string, string>();
@@ -98,6 +106,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   peopleView?: ReturnType<typeof createSidebarPeople>;
   // A connected host retains its pending boot read when Solid recreates the view.
   readonly snapshot = createSidebarSnapshot(this);
+  scroll?: ReturnType<typeof createSidebarScroll>;
 
   override shouldPublishSessionData(): boolean {
     this.snapshot.synchronize();
@@ -119,7 +128,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sidebarSnapshot = model;
     this.navigationView = model.navigationView;
     this.sessionOrganizer.collapsedSessionSections = new Set(model.collapsedSections);
-    const rows = [...model.sessions, ...model.sections.flatMap((section) => section.rows)];
+    const rows = [...model.pinnedSessions, ...model.sections.flatMap((section) => section.rows)];
     for (const row of rows) {
       rows.push(...row.children);
     }
@@ -132,18 +141,39 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   releaseSidebarSnapshot(): void {
     const snapshot = this.sidebarSnapshot;
-    if (snapshot) {
-      this.pinnedSessions.seed(snapshot.pinnedSessions);
-      // Newer pagination choices override the saved view, independently per mode.
-      const limits = snapshot.sections.map(({ id, visibleLimit }) => [id, visibleLimit] as const);
+    if (!snapshot) {
+      return;
+    }
+    const rows = this.reconciledSidebarZone().sessionRows;
+    this.pinnedSessions.seed(
+      snapshot.pinnedSessions.flatMap(({ key }) => {
+        const row = rows.get(key);
+        return row ? [row] : [];
+      }),
+    );
+    // Newer pagination choices override the saved view, independently per mode.
+    if (snapshot.mode === "roster") {
+      const limits = snapshot.sections.map(
+        ({ id, visibleLimit }) =>
+          [
+            id,
+            Math.max(sidebarSessionPagination("category", id).initialLimit, visibleLimit),
+          ] as const,
+      );
+      this.rosterVisibleSessionLimits = new Map([...limits, ...this.rosterVisibleSessionLimits]);
+    } else if (snapshot.grouping) {
+      const grouping = snapshot.grouping;
+      const limits = snapshot.sections.map(
+        ({ id, visibleLimit }) =>
+          [sidebarSessionPagination(grouping, id).key, visibleLimit] as const,
+      );
       this.sessionData.visibleSessionLimits = new Map([
         ...limits,
         ...this.sessionData.visibleSessionLimits,
       ]);
-      this.rosterVisibleSessionLimits = new Map([...limits, ...this.rosterVisibleSessionLimits]);
     }
     this.sidebarPluginSnapshot =
-      snapshot && this.context.plugins.registryStatus !== "complete"
+      this.context.plugins.registryStatus !== "complete"
         ? { entries: snapshot.entries, plugins: snapshot.plugins }
         : null;
     this.sidebarSnapshot = null;
@@ -278,6 +308,24 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     super.connectedCallback();
   }
 
+  override updated() {
+    super.updated();
+    const sections = this.zonedVisibleSections(
+      this.selectedAgentSessionRows(this.getSessionNavigationState()),
+    ).sections;
+    const disclosure = this.sessionProjection.children;
+    const selected = sections.find((section) =>
+      section.rows.some((row) => row.key === disclosure.selectedRootKey && !row.visuallyActive),
+    );
+    if (
+      selected &&
+      disclosure.revealOnce("section:" + selected.id) &&
+      this.sessionOrganizer.collapsedSessionSections.has(selected.id)
+    ) {
+      this.sessionOrganizer.toggleSection(selected.id);
+    }
+  }
+
   toggleSessionPin(session: SidebarRecentSession): void {
     this.sessionOrganizer.setPersonalSessionPin(
       session.key,
@@ -285,20 +333,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     );
   }
 
-  toggleSessionMenu(
-    session: SidebarRecentSession,
-    trigger: HTMLElement,
-    catalogMenu?: CatalogSessionMenuRequest,
-  ): void {
-    if (catalogMenu) {
-      if (this.sidebarMenus.catalogMenu.isOpenFor(catalogMenu.key)) {
-        this.sidebarMenus.catalogMenu.close();
-        return;
-      }
-      const rect = trigger.getBoundingClientRect();
-      this.sidebarMenus.catalogMenu.open(catalogMenu, rect.right, rect.bottom + 4, trigger);
-      return;
-    }
+  toggleSessionMenu(session: SidebarRecentSession, trigger: HTMLElement): void {
     if (this.sidebarMenus.sessionMenu?.session.key === session.key) {
       this.sidebarMenus.closeSessionMenu();
       return;
@@ -316,22 +351,28 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
     const grouped = this.sidebarAgentsMode === "roster" && sectionId.startsWith("agent:");
+    const grouping = this.effectiveSessionsGrouping();
+    const { key, initialLimit } = sidebarSessionPagination(grouping, sectionId);
     const previousLimit =
       (grouped ? this.rosterVisibleSessionLimits : this.sessionData.visibleSessionLimits).get(
-        sectionId,
-      ) ?? SIDEBAR_SESSION_PAGE_SIZE;
+        key,
+      ) ?? initialLimit;
     if (limit < previousLimit) {
       this.sessionProjection.resetMembership(sectionId);
     }
     if (grouped) {
-      this.rosterVisibleSessionLimits = new Map(this.rosterVisibleSessionLimits).set(
-        sectionId,
-        limit,
-      );
+      this.rosterVisibleSessionLimits = new Map(this.rosterVisibleSessionLimits).set(key, limit);
       this.invalidate();
     } else {
-      this.sessionData.setVisibleSessionLimit(sectionId, limit);
+      this.sessionData.setVisibleSessionLimit(key, limit);
     }
+  }
+
+  resetVisibleSessionLimit(sectionId: string): void {
+    this.setVisibleSessionLimit(
+      sectionId,
+      sidebarSessionPagination(this.effectiveSessionsGrouping(), sectionId).initialLimit,
+    );
   }
 
   async loadMoreSidebarSessions(): Promise<void> {
@@ -346,6 +387,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const query = () => JSON.stringify(this.sessionData.sessionListQuery(this.expandedAgentId()));
     const initialQuery = query();
     const mode = this.sidebarAgentsMode;
+    const grouping = this.effectiveSessionsGrouping();
     const readRows = () => this.selectedAgentSessionRows(this.getSessionNavigationState());
     const previousKeys = new Set(readRows().map((row) => row.key));
     // Server pages include workers and scheduled/system sessions hidden by the
@@ -357,6 +399,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       if (
         this.context.sessions !== sessions ||
         this.sidebarAgentsMode !== mode ||
+        this.effectiveSessionsGrouping() !== grouping ||
         !sessions.isConnectionScopeCurrent(scope) ||
         query() !== initialQuery
       ) {
@@ -431,28 +474,31 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         <LazyCatalog {...props} />
       </Boundary>
     );
-    const nativeList = (
-      <SessionList
-        host={host()}
-        empty={visibleSessions().length === 0}
-        sections={sections()}
-        nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
-        nativeSessionsLoading={host().sessionData.sessionsLoading}
-        catalogRenderer={Catalog}
-        catalogs={{
-          catalogs: catalogs(),
-          basePath: host().basePath,
-          routeSessionKey: catalogRouteSessionKey(),
-          newSessionAgentId: expandedAgentId(),
-          mainKey: host().sessionMainKey(),
-          loadingMoreCatalogIds: host().sessionData.loadingMoreSessionCatalogIds,
-          projectGrouping: host().catalogProjectGrouping,
-          liveRows: host().catalogLiveRows(),
-          toSidebarSession: navigationState().toSidebarSession,
-          catalogOpenTarget: host().catalogOpenTarget,
-          terminalAvailable: host().terminalAvailable,
-        }}
-      />
+    const NativeList = () => (
+      <>
+        <SidebarReady />
+        <SessionList
+          host={host()}
+          empty={visibleSessions().length === 0}
+          sections={sections()}
+          nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
+          nativeSessionsLoading={host().sessionData.sessionsLoading}
+          catalogRenderer={Catalog}
+          catalogs={{
+            catalogs: catalogs(),
+            basePath: host().basePath,
+            routeSessionKey: catalogRouteSessionKey(),
+            newSessionAgentId: expandedAgentId(),
+            mainKey: host().sessionMainKey(),
+            loadingMoreCatalogIds: host().sessionData.loadingMoreSessionCatalogIds,
+            projectGrouping: host().catalogProjectGrouping,
+            liveRows: host().catalogLiveRows(),
+            toSidebarSession: navigationState().toSidebarSession,
+            catalogOpenTarget: host().catalogOpenTarget,
+            terminalAvailable: host().terminalAvailable,
+          }}
+        />
+      </>
     );
     return (
       <>
@@ -463,8 +509,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         >
           <LoadCatalogRenderer />
         </Show>
-        <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
+        <Show when={host().sidebarAgentsMode === "roster"} fallback={<NativeList />}>
           <SidebarViewBoundary>
+            <SidebarReady />
             <SidebarAgentRoster
               host={host()}
               active={
@@ -490,14 +537,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       const rail = renderSidebarRail(this);
       const Pages = () => (
         <SidebarViewBoundary>
+          <SidebarReady />
           <SidebarPages host={this} />
         </SidebarViewBoundary>
       );
       const toolbar = renderSessionListToolbar(this);
       const menus = this.sidebarMenus.render(this);
-      const statusVisible = () =>
-        this.gatewayStatus?.kind &&
-        (this.gatewayStatus.kind !== "connected" || this.connectionRecovery);
       return (
         <aside
           class="sidebar sidebar--rail"
@@ -514,68 +559,85 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         >
           {rail}
           <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
-            <div class="sidebar-shell__content">
-              <div
-                ref={scrollRef}
-                class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
-                onScroll={scroll.onScroll}
-              >
+            <div
+              class="sidebar-shell__content"
+              aria-busy={this.connectionPending ? "true" : undefined}
+            >
+              <Show when={!this.connectionPending} fallback={<GatewaySidebarSkeleton />}>
+                {/* Every panel header sits above the scroller so it stays pinned, keeps
+                  one geometry across views, and the scroll fade starts below it. */}
                 <Show
                   when={this.navigationView === "pages"}
                   fallback={
-                    <Show
-                      when={this.navigationView === "online"}
-                      fallback={
-                        <>
-                          {toolbar}
-                          <div
-                            ref={scroll.createContentRef()}
-                            class="sidebar-session-content"
-                            hidden={Boolean(this.contextualSidebar)}
-                          >
-                            <SidebarScrollContext value={scroll}>
-                              <Sessions />
-                            </SidebarScrollContext>
-                          </div>
-                          {this.contextualSidebar?.render(
-                            this.contextualSidebar.data,
-                            this.contextualSidebar.loaderPending,
-                            true,
-                          )}
-                        </>
-                      }
-                    >
-                      <SidebarViewBoundary>
-                        <SidebarOnline host={this} />
-                      </SidebarViewBoundary>
+                    <Show when={this.navigationView === "online"} fallback={toolbar}>
+                      <SidebarOnlineHeader host={this} />
                     </Show>
                   }
                 >
-                  <Pages />
+                  <SidebarPagesHeader host={this} />
                 </Show>
-              </div>
-              <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>
-                <PanelRefreshStatus
-                  status={this.sessionData.sessionCatalogRefreshStatus}
-                  {...{ className: "sidebar-session-error sidebar-session-catalog-error" }}
-                />
+                <div
+                  ref={scrollRef}
+                  class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
+                  onScroll={scroll.onScroll}
+                >
+                  <Show
+                    when={this.navigationView === "pages"}
+                    fallback={
+                      <Show
+                        when={this.navigationView === "online"}
+                        fallback={
+                          <>
+                            <div
+                              ref={scroll.createContentRef()}
+                              class="sidebar-session-content"
+                              hidden={Boolean(this.contextualSidebar)}
+                            >
+                              <SidebarScrollContext value={scroll}>
+                                <Sessions />
+                              </SidebarScrollContext>
+                            </div>
+                            {this.contextualSidebar?.render(
+                              this.contextualSidebar.data,
+                              this.contextualSidebar.loaderPending,
+                              true,
+                            )}
+                          </>
+                        }
+                      >
+                        <SidebarViewBoundary>
+                          <SidebarReady />
+                          <SidebarOnline host={this} />
+                        </SidebarViewBoundary>
+                      </Show>
+                    }
+                  >
+                    <Pages />
+                  </Show>
+                </div>
+                <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>
+                  <PanelRefreshStatus
+                    status={this.sessionData.sessionCatalogRefreshStatus}
+                    {...{ className: "sidebar-session-error sidebar-session-catalog-error" }}
+                  />
+                </Show>
+                <Show when={this.gatewayStatus?.kind === "reconnecting"}>
+                  <div class="sidebar-shell__connection">
+                    <GatewayStatus {...this.gatewayStatus!} row />
+                  </div>
+                </Show>
               </Show>
             </div>
-            <Show when={statusVisible() || this.devGitBranch}>
+            <Show when={this.devGitBranch}>
               <div class="sidebar-shell__footer">
-                <Show when={statusVisible()}>
-                  <GatewayStatus {...this.gatewayStatus!} row />
-                </Show>
-                <Show when={this.devGitBranch}>
-                  <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
-                    <div class="sidebar-footer-branch">
-                      <span class="sidebar-footer-branch__icon" aria-hidden="true">
-                        <Icon name="gitBranch" />
-                      </span>
-                      <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
-                    </div>
-                  </openclaw-tooltip>
-                </Show>
+                <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
+                  <div class="sidebar-footer-branch">
+                    <span class="sidebar-footer-branch__icon" aria-hidden="true">
+                      <Icon name="gitBranch" />
+                    </span>
+                    <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
+                  </div>
+                </openclaw-tooltip>
               </div>
             </Show>
             <Show

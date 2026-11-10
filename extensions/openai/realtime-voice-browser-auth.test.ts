@@ -466,38 +466,34 @@ describe("OpenAI realtime public projection", () => {
     });
   });
 
-  it.each([false, true])(
-    "advertises the subscription relay capability independently of OAuth readiness=%s",
-    async (hasOAuth) => {
-      isProviderAuthProfileConfiguredMock.mockImplementation(
-        ({ profileTypes }: { profileTypes?: readonly string[] }) =>
-          hasOAuth && profileTypes?.includes("oauth") === true,
-      );
-      const { project, relayConfigured } = projectionFixture();
-      const providerConfig = { model: "gpt-live-1-codex" };
-
-      expect(project(providerConfig)).toEqual({
+  it("separates subscription relay projection from credential and endpoint readiness", async () => {
+    const { project, relayConfigured } = projectionFixture();
+    const providerConfig = { model: "gpt-live-1-codex" };
+    expect(project(providerConfig)).toEqual({
+      config: providerConfig,
+      clientHints: { gatewayRelaySupported: true },
+    });
+    expect(await relayConfigured(providerConfig)).toBe(false);
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ profileTypes }: { profileTypes?: readonly string[] }) =>
+        profileTypes?.includes("oauth") === true,
+    );
+    expect(await relayConfigured(providerConfig)).toBe(true);
+    for (const [endpoint, supportsRelay] of [
+      [{ azureEndpoint: " https://example.openai.azure.com " }, false],
+      [{ azureDeployment: " live-deployment " }, false],
+      [{ baseUrl: " wss://voice.example.test/realtime " }, false],
+      [{ baseUrl: " " }, true],
+      [{ azureEndpoint: "", azureDeployment: " \t " }, true],
+    ] as const) {
+      const config = { ...providerConfig, ...endpoint };
+      expect(project(config, providerConfig)).toEqual({
         config: providerConfig,
-        clientHints: { gatewayRelaySupported: true },
+        clientHints: { gatewayRelaySupported: supportsRelay },
       });
-      expect(await relayConfigured(providerConfig)).toBe(hasOAuth);
-      for (const [azureConfig, supportsRelay] of [
-        [{ azureEndpoint: " https://example.openai.azure.com " }, false],
-        [{ azureDeployment: " live-deployment " }, false],
-        [{ baseUrl: " wss://voice.example.test/realtime " }, false],
-        [{ baseUrl: " " }, true],
-        [{ azureEndpoint: "", azureDeployment: " \t " }, true],
-        [{ azureEndpoint: " \t ", azureDeployment: "" }, true],
-      ] as const) {
-        const azureProviderConfig = { ...providerConfig, ...azureConfig };
-        expect(project(azureProviderConfig, providerConfig)).toEqual({
-          config: providerConfig,
-          clientHints: { gatewayRelaySupported: supportsRelay },
-        });
-        expect(await relayConfigured(azureProviderConfig)).toBe(hasOAuth && supportsRelay);
-      }
-    },
-  );
+      expect(await relayConfigured(config)).toBe(supportsRelay);
+    }
+  });
 
   it("admits opaque realtime models without publishing them", async () => {
     const { provider, api, project, relayConfigured } = projectionFixture(true);

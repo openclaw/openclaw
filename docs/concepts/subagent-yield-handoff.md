@@ -62,10 +62,28 @@ An outcome the yield already recorded stays: a collector an earlier version left
 `ok` settles as done with the reply its yielded turn ended on, the same result a
 collector that yields now gets. Only a run with no recorded outcome settles as an
 `error` that says why, and its collector completion carries
-`reason: "yielded_without_result"`. Every other paused run stays continuable however long it has been
-paused: a declared message wait, a leaf that an earlier version left paused, and an
-orchestrator waiting on descendants are not bounded by this settlement. A kill
+`reason: "yielded_without_result"`. A declared message wait retains its requester
+dependency after its pause notice is consumed. When that requester finishes or
+is released, the completion owner closes the wait with a recorded error. The
+sweeper also reconciles waits whose requester ended before the child parked.
+Waiting for a live requester or owned descendants has no elapsed-time limit.
+The yielded batch retains the original requester run ID after releasing its
+execution binding. If completion delivery permanently fails without admitting a
+successor, settlement closes that exact parked lifecycle with a recorded error.
+A newer turn, Stop, or reset rejects the stale terminal write.
+Older batches without that run ID record the same delivery-failure notice without
+changing the current lifecycle: a replacement turn may already own it. Their
+failure notice identifies the batch, rather than guessing its original writer.
+A leaf that an earlier version left paused without a recorded wait keeps its
+existing continuation behavior. A kill
 claim on a paused run is never settled over; cancellation stays with the kill path.
+
+Session rows show a continuable paused run as `subagentRunState: "paused"`
+while its recorded `status` stays unchanged, so the parent's lists can tell it
+from a finished child. `isSubagentRunPausedForContinuation` owns that test for
+both the session row and the `/subagents` waiting label. See
+[sessions.list rows](/gateway/protocol/rpc-bootstrap-and-events) for the client
+contract.
 
 Private child results wait for their spawning turn to settle before individual
 announcement admission. Normal settlement resumes each finished private child,

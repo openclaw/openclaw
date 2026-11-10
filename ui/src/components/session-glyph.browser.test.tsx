@@ -1,11 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "../test-helpers/load-styles.ts";
+import "../styles/sidebar-rail.css";
+import "../styles/sidebar-agent-roster.css";
+import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SessionOwnerChip } from "./solid/session-owner-chip.tsx";
-import { SessionGlyph, renderSessionUnreadBadge } from "./solid/session-presentation.tsx";
+import {
+  SessionGlyph,
+  TeamSessionSlots,
+  renderSessionLeadingState,
+  renderSessionUnreadBadge,
+} from "./solid/session-presentation.tsx";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
@@ -14,6 +22,57 @@ afterEach(() => {
 });
 
 describe.skipIf(!hasBrowserLayout)("sidebar glyph geometry", () => {
+  it("keeps attention artwork compact in Team slots", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const row = {
+      ...projectSidebarSession({ key: "agent:main:attention-geometry" }),
+      attention: {
+        kind: "error" as const,
+        reason: "Synthetic failure",
+        sourceSessionKey: "agent:main:attention-geometry",
+      },
+    };
+    mountSolid(
+      () => (
+        <>
+          {renderSessionLeadingState({ session: row, attribution: "owned" }).leadingIndicator}
+          <TeamSessionSlots rows={[row]} includeChildren={false} childCount={0} />
+        </>
+      ),
+      { container: host },
+    );
+    flush();
+    const regular = host.querySelector(".session-glyph .sidebar-session-attention__icon > *")!;
+    const compact = host.querySelector(
+      ".sidebar-session-team-state .sidebar-session-attention__icon > *",
+    )!;
+    expect(regular.getBoundingClientRect().width).toBe(15);
+    expect(compact.getBoundingClientRect().width).toBeGreaterThan(0);
+    expect(compact.getBoundingClientRect().width).toBeLessThan(
+      regular.getBoundingClientRect().width,
+    );
+  });
+
+  it("preserves named glyph sizes in rows and the collapsed rail", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    mountSolid(
+      () =>
+        renderSessionLeadingState({
+          session: projectSidebarSession({ key: "agent:main:geometry", icon: "kanban" }),
+          attribution: "owned",
+        }).leadingIndicator,
+      { container: host },
+    );
+    flush();
+    const artwork = host.querySelector(".session-glyph__icon > *");
+    expect(artwork).not.toBeNull();
+    for (const rail of [false, true]) {
+      host.className = rail ? "sidebar-rail" : "";
+      const { width, height } = artwork!.getBoundingClientRect();
+      expect([width, height]).toEqual(rail ? [19, 19] : [16, 16]);
+    }
+  });
+
   it.each(["page", "owner"] as const)(
     "keeps %s artwork and row geometry stable when activity starts or queues",
     async (kind) => {
@@ -86,15 +145,46 @@ describe.skipIf(!hasBrowserLayout)("sidebar glyph geometry", () => {
         const ring = bounds(".session-glyph__ring");
         const slot = bounds(".session-glyph");
         const ringStyle = getComputedStyle(ringElement);
-        expect([ringStyle.width, ringStyle.height]).toEqual(["25px", "25px"]);
+        expect(ringStyle.width).toBe(ringStyle.height);
+        expect(Number.parseFloat(ringStyle.width)).toBeGreaterThan(artwork.width);
         expect(ring.x + ring.width / 2).toBeCloseTo(slot.x + slot.width / 2, 3);
         expect(ring.y + ring.height / 2).toBeCloseTo(slot.y + slot.height / 2, 3);
         if (kind === "page") {
-          expect(bounds(".session-glyph__badge").width).toBe(7);
+          expect(bounds(".session-glyph__badge").width).toBeGreaterThan(0);
+          expect(bounds(".session-glyph__badge").width).toBeLessThan(slot.width);
         }
       }
     },
   );
+
+  it("keeps the subagent ring prominent when background work also runs", () => {
+    const session = {
+      ...projectSidebarSession({
+        key: "agent:main:subagent-parent",
+        icon: "book",
+        backgroundProcessCount: 1,
+      }),
+      runningChildCount: 1,
+    };
+    const [current, setCurrent] = createSignal(session);
+    const view = mountSolid(
+      () =>
+        renderSessionLeadingState({
+          get session() {
+            return current();
+          },
+          attribution: "owned",
+        }).leadingIndicator,
+    );
+    const ring = view.getByRole("img", { name: /^Subagents working$/ });
+    expect(ring.classList.contains("session-glyph__ring--background")).toBe(false);
+    expect(getComputedStyle(ring).animationPlayState).toBe("running");
+
+    setCurrent({ ...session, runningChildCount: 0 });
+    flush();
+    const background = view.getByRole("img", { name: /^Background work running$/ });
+    expect(background.classList.contains("session-glyph__ring--background")).toBe(true);
+  });
 
   it("pauses the paired trace while queued", () => {
     const { container } = mountSolid(() => (

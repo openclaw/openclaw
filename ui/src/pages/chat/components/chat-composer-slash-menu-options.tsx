@@ -1,7 +1,6 @@
 import { For } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
+import { sessionIconMask } from "../../../components/solid/icon.tsx";
 import { getSlashCommandDescription, type SlashCommandDef } from "../../../lib/chat/commands.ts";
-import { ComposerContent } from "./chat-composer-content.tsx";
 import { renderComposerMenuOption as ComposerMenuOption } from "./chat-composer-menu.tsx";
 import { renderSlashMatchedName } from "./chat-composer-slash-menu-dom.tsx";
 import {
@@ -11,58 +10,49 @@ import {
   type SlashMenuHost,
 } from "./chat-composer-slash-menu-state.ts";
 
-function CommandOption(props: {
-  menu: SlashMenuState;
-  host: SlashMenuHost;
-  command: SlashCommandDef;
-  index: number;
-  query: string;
-}) {
-  return (
-    <ComposerMenuOption
-      id={getSlashCommandOptionId(props.host.paneId, props.command)}
-      active={props.index === props.menu.state.slashMenuIndex}
-      select={() => props.menu.selectCommand(props.command, props.host)}
-      hover={() => props.menu.hover(props.index)}
-      icon={
-        <ComposerContent>
-          <Icon
-            name={
-              props.command.source === "skill"
-                ? "pencilSparkles"
-                : (props.command.icon ?? "terminal")
-            }
-          />
-        </ComposerContent>
-      }
-      name={
-        <>
-          /{renderSlashMatchedName(props.command.name, props.query)}
-          {props.command.args ? <span class="slash-menu-args"> {props.command.args}</span> : null}
-        </>
-      }
-      description={getSlashCommandDescription(props.command)}
-    />
-  );
-}
-
 export function SlashMenuOptions(props: {
   menu: SlashMenuState;
   host: SlashMenuHost;
   items: Array<{ command: SlashCommandDef; index: number }>;
   query: string;
 }) {
+  function CommandOption(childProps: { command: SlashCommandDef; index: number }) {
+    return (
+      <ComposerMenuOption
+        id={getSlashCommandOptionId(props.host.paneId, childProps.command)}
+        active={childProps.index === props.menu.state.slashMenuIndex}
+        select={() => props.menu.selectCommand(childProps.command, props.host)}
+        hover={() => props.menu.hover(childProps.index)}
+        icon={
+          <i
+            class="session-css-icon"
+            aria-hidden="true"
+            style={{
+              "mask-image": sessionIconMask(
+                childProps.command.source === "skill"
+                  ? "pencilSparkles"
+                  : (childProps.command.icon ?? "terminal"),
+                1.5,
+              ),
+            }}
+          />
+        }
+        name={
+          <>
+            /{renderSlashMatchedName(childProps.command.name, props.query)}
+            {childProps.command.args ? (
+              <span class="slash-menu-args"> {childProps.command.args}</span>
+            ) : null}
+          </>
+        }
+        description={getSlashCommandDescription(childProps.command).replace(/(?<!\.)\.$/u, "")}
+      />
+    );
+  }
+
   return (
     <For each={props.items} keyed={(entry) => entry.command.name}>
-      {(entry) => (
-        <CommandOption
-          menu={props.menu}
-          host={props.host}
-          command={entry().command}
-          index={entry().index}
-          query={props.query}
-        />
-      )}
+      {(entry) => <CommandOption command={entry().command} index={entry().index} />}
     </For>
   );
 }
@@ -79,9 +69,13 @@ export function SlashArgumentOptions(props: { menu: SlashMenuState; host: SlashM
           select={() => props.menu.selectArg(arg, props.host)}
           hover={() => props.menu.hover(index())}
           icon={
-            <ComposerContent>
-              <Icon name={state().slashMenuCommand?.icon ?? "terminal"} />
-            </ComposerContent>
+            <i
+              class="session-css-icon"
+              aria-hidden="true"
+              style={{
+                "mask-image": sessionIconMask(state().slashMenuCommand?.icon ?? "terminal", 1.5),
+              }}
+            />
           }
           name={arg}
           description={

@@ -6,6 +6,7 @@ import { MessageChannel, receiveMessageOnPort, type Worker } from "node:worker_t
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   classifyGatewayLockProcessNamespace,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
@@ -167,11 +168,11 @@ it("keeps the selected heartbeat generation alive through native retirement", as
       await Promise.all(ready);
       expect(fs.readFileSync(markerPath, "utf8")).toBe("selected");
       expect(heartbeat.inspect()).toBeGreaterThan(0);
-      heartbeat.stop();
+      await heartbeat.stop();
     }, release);
     expect(release).toHaveBeenCalledOnce();
   } finally {
-    heartbeat?.stop();
+    await heartbeat?.stop();
     await Promise.all(workers.map((worker) => worker.terminate()));
   }
 });
@@ -241,10 +242,83 @@ it.each(["reparented", "unchanged ppid"])(
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
     await using runtime = await startRuntime({ [rootPath]: raw });
     expect(runtime.readEvents()).toContain("parent-lost");
-    expect(kill).not.toHaveBeenCalled();
+    expect(kill.mock.calls).toEqual(kind === "unchanged ppid" ? [[process.ppid, 0]] : []);
     expect(fs.statSync(rootPath).mtimeMs).toBeGreaterThan(oldStamp.getTime());
     await vi.advanceTimersByTimeAsync(10_000);
     expect(kill).toHaveBeenLastCalledWith(process.pid, "SIGKILL");
+  },
+);
+
+it.each(["resume", "replace", "stop"] as const)(
+  "keeps the main thread responsive during expired timer renewal: %s",
+  async (ending) => {
+    const { rootPath } = lockFixture("openclaw-owner-async-renewal-");
+    const held = new Set([{ lockPath: rootPath, verifyStillHeld: () => true }]);
+    const { workers, ready, beats } = observeHeartbeatWorkers();
+    const lost = vi.fn();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const heartbeat = startGatewayStateOwnerHeartbeat(held, lost);
+    const opened = createDeferredCore();
+    const resume = createDeferredCore();
+    const open = fs.promises.open.bind(fs.promises);
+    const openSync = fs.openSync;
+    let synchronousOpens = 0;
+    try {
+      await Promise.all(ready);
+      await workers[0]!.terminate();
+      vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
+        if (args[0] === rootPath) {
+          opened.resolve();
+          await resume.promise;
+        }
+        return open(...args);
+      });
+      vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+        if (pathname === rootPath) {
+          synchronousOpens++;
+        }
+        return openSync(pathname, flags, mode);
+      });
+      const stale = BigInt(Date.now() - 65_000);
+      Atomics.store(beats[0]!, 0, stale);
+      vi.advanceTimersByTime(60_000);
+      expect(synchronousOpens).toBe(0);
+      await opened.promise;
+      let responsive = false;
+      setTimeout(() => {
+        responsive = true;
+      }, 0);
+      vi.advanceTimersByTime(0);
+      expect(responsive).toBe(true);
+      expect(Atomics.load(beats[0]!, 0)).toBe(stale);
+      if (ending === "replace") {
+        fs.renameSync(rootPath, `${rootPath}.retired`);
+        fs.copyFileSync(`${rootPath}.retired`, rootPath);
+      } else if (ending === "stop") {
+        held.clear();
+        void heartbeat.stop();
+      }
+      resume.resolve();
+      if (ending === "resume") {
+        await vi.waitFor(() => expect(Atomics.load(beats[0]!, 0)).toBeGreaterThan(stale));
+        expect(lost).not.toHaveBeenCalled();
+      } else if (ending === "replace") {
+        await vi.waitFor(() => expect(lost).toHaveBeenCalledOnce());
+        expect(lost.mock.calls[0]?.[0]).toHaveProperty(
+          "message",
+          expect.stringContaining("removed or replaced"),
+        );
+        expect(Atomics.load(beats[0]!, 0)).toBe(stale);
+      } else {
+        await vi.waitFor(() => expect(vi.getTimerCount()).toBe(0));
+        expect(lost).not.toHaveBeenCalled();
+        expect(Atomics.load(beats[0]!, 0)).toBe(stale);
+      }
+    } finally {
+      resume.resolve();
+      await heartbeat.stop();
+      await Promise.all(workers.map((worker) => worker.terminate()));
+    }
   },
 );
 
@@ -559,13 +633,11 @@ it("renews retained custody during synchronous work and never touches a successo
 it("never renews a successor after suspension between verification and the timestamp syscall", async () => {
   const pause = new Int32Array(new SharedArrayBuffer(4));
   const { workers, ready } = observeHeartbeatWorkers(pause.buffer);
-  const { gateway } = await acquireGateway("openclaw-owner-paused-");
+  const { root, gateway } = await acquireGateway("openclaw-owner-paused-");
   try {
     expect(await Promise.all(ready)).toEqual([["paused"]]);
-    const worker = workers[0];
-    if (!worker) {
-      throw new Error("Expected the paused heartbeat worker");
-    }
+    const worker = workers[0]!;
+    const owner = captureGatewayStateOwner(path.join(root, "state", "openclaw.sqlite"))!;
     const exited = once(worker, "exit");
     const held = fs.statSync(gateway.lockPath, { bigint: true });
     fs.renameSync(gateway.lockPath, `${gateway.lockPath}.retired`);
@@ -577,6 +649,8 @@ it("never renews a successor after suspension between verification and the times
     Atomics.store(pause, 0, 1);
     Atomics.notify(pause, 0);
     await exited;
+    expect(owner.signal.aborted).toBe(true);
+    expect(owner.signal.reason.message).toContain("owner lock was removed or replaced");
     expect(fs.statSync(gateway.lockPath, { bigint: true }).mtimeNs).toBe(successor.mtimeNs);
     expect(fs.readFileSync(gateway.lockPath, "utf8")).toBe("successor");
   } finally {

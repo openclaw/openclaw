@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import { fileURLToPath } from "node:url";
 import {
   receiveMessageOnPort,
   type MessagePort,
@@ -12,6 +13,7 @@ import {
   BrokerNativeResourceCloseError,
   type BrokerResourceResponse,
 } from "../process/spawn-broker/resource-protocol.js";
+import { materializeErrorStack } from "./error-graph-internal.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { trackNativeWorkerForCpu } from "./worker-cpu.js";
 import { decodeNativeWorkerFailure } from "./worker-native-error.js";
@@ -34,6 +36,16 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   private readonly diagnosticName: string;
   threadId = 0;
   started = false;
+  /** Where this worker's code lives; eval and non-file workers have no path. */
+  get sourcePath(): string | undefined {
+    if (this.evalSource) {
+      return undefined;
+    }
+    if (!(this.filename instanceof URL)) {
+      return this.filename;
+    }
+    return this.filename.protocol === "file:" ? fileURLToPath(this.filename) : undefined;
+  }
   executionStopped = false;
   private executionExitCode: number | undefined;
   private referenced = true;
@@ -247,9 +259,14 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
 
   private resourceFailed(error: unknown): void {
     this.runInContext(() => {
-      this.stopCompletion.reject(error);
+      this.rejectStopCompletion(error);
       this.emit("error", toErrorObject(error, "Native resource observation failed"));
     });
+  }
+
+  private rejectStopCompletion(error: unknown): void {
+    materializeErrorStack(error);
+    this.stopCompletion.reject(error);
   }
 
   private recoverResource(): void {
@@ -266,7 +283,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       (error: unknown) =>
         this.runInContext(() => {
           this.stopping = false;
-          this.stopCompletion.reject(error);
+          this.rejectStopCompletion(error);
         }),
     );
   }
@@ -317,7 +334,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.stopCompletion = createRetainedOperation<void>(() => this.service());
     }
     if (this.supervisorJoined && this.resourceBinding) {
-      this.stopCompletion.reject(
+      this.rejectStopCompletion(
         new Error("Native resource cleanup is still retained after supervisor loss", {
           cause: this.runtime.failure,
         }),
@@ -331,7 +348,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
         this.runtime.post({ type: "stop", id: this.id });
       } catch (error) {
         this.stopping = false;
-        this.stopCompletion.reject(error);
+        this.rejectStopCompletion(error);
       }
       this.runtime.refreshReference();
     }
@@ -385,7 +402,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.taskPort?.close();
       this.stopping = false;
       this.rejectSamples(error);
-      this.stopCompletion.reject(error);
+      this.rejectStopCompletion(error);
       this.emit("error", error);
     });
   }
@@ -401,7 +418,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
           this.finishJoined(undefined);
           return;
         }
-        this.stopCompletion.reject(
+        this.rejectStopCompletion(
           new Error("Native resource cleanup outcome is unavailable after owner loss", {
             cause: error,
           }),
@@ -503,6 +520,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       this.abandonResource();
       this.emit("error", error);
     } else if (reply.type === "stopped") {
+      this.finishExecution(reply.code);
       this.finishJoined(reply.code);
     } else if (reply.type === "execution-exit") {
       this.finishExecution(reply.code);
@@ -527,7 +545,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       } catch (decodeError) {
         error = toErrorObject(decodeError, "Native resource cleanup error decoding failed");
       }
-      this.stopCompletion.reject(error);
+      this.rejectStopCompletion(error);
       if (!requestedStop) {
         // An unsolicited exit can fail resource cleanup before the pool has
         // requested retirement. Its active task must still observe the failure.

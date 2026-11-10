@@ -218,7 +218,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           {
             provider: "openai",
             status: observation.accountType ? "ready" : "unavailable",
-            ...(observation.accountType === "chatgpt"
+            ...(observation.accountType
               ? {
                   modelAccessPrograms: result.models.flatMap((model) =>
                     model.availableAccessPrograms

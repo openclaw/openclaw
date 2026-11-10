@@ -1,4 +1,5 @@
 // Codex tests cover attempt context plugin behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +24,7 @@ import {
 import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec } from "./protocol.js";
 import type { CodexAppServerContextEngineBinding } from "./session-binding.js";
+import * as fingerprints from "./thread-fingerprints.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type WorkspaceOptions = Parameters<typeof buildCodexWorkspaceBootstrapContext>[0];
@@ -84,7 +86,7 @@ describe("Codex app-server attempt context", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("returns a run context report without deferred Codex dynamic tool schemas", () => {
+  it("reports native AGENTS.md status without reading deferred Codex tool schemas", () => {
     let deferredSchemaReads = 0;
     const tools = [
       makeTool("message", {
@@ -167,6 +169,105 @@ describe("Codex app-server attempt context", () => {
         truncated: null,
       },
     ]);
+
+    // Codex's recorded base instructions and AGENTS.md fragment count toward the prompt.
+    const nativeText = "# Parent rules\n\nnative instructions\n";
+    const fragment = `# AGENTS.md instructions for /workspace\n\n<INSTRUCTIONS>\n${nativeText}\n</INSTRUCTIONS>`;
+    const native = buildCodexSystemPromptReport({
+      ...reportParams,
+      nativeModelContext: {
+        baseInstructions: "base policy",
+        agentsMd: { directory: "/workspace", text: nativeText },
+      },
+    });
+    const ownChars = reportParams.developerInstructions.length + "base policy".length;
+    expect(native.systemPrompt).toMatchObject({
+      chars: ownChars + fragment.length,
+      projectContextChars: fragment.length,
+      nonProjectContextChars: ownChars,
+    });
+    const agentsChars = "native instructions".length;
+    expect(native.injectedWorkspaceFiles).toEqual([
+      expect.objectContaining({
+        rawChars: agentsChars,
+        injectedChars: agentsChars,
+        truncated: false,
+      }),
+    ]);
+    expect(native.injectedWorkspaceFiles[0]).not.toHaveProperty("injectionStatus");
+
+    // Base text taken from configuration rather than the loaded thread is marked estimated.
+    const estimated = buildCodexSystemPromptReport({
+      ...reportParams,
+      nativeModelContext: { baseInstructions: "base policy", baseInstructionsEstimated: true },
+    });
+    expect(estimated.systemPrompt.estimatedChars).toBe("base policy".length);
+    expect(native.systemPrompt).not.toHaveProperty("estimatedChars");
+
+    // Codex recorded no AGENTS.md: confirmed absent, not unknown.
+    const absent = buildCodexSystemPromptReport({
+      ...reportParams,
+      nativeModelContext: { agentsMd: { directory: null, text: null } },
+    });
+    expect(absent.systemPrompt.chars).toBe(reportParams.developerInstructions.length);
+    expect(absent.injectedWorkspaceFiles[0]).toMatchObject({ injectedChars: 0, truncated: false });
+
+    // Content Codex did not record (edited since, or truncated) stays unverified.
+    const stale = buildCodexSystemPromptReport({
+      ...reportParams,
+      nativeModelContext: { agentsMd: { directory: "/workspace", text: "older rules" } },
+    });
+    expect(stale.injectedWorkspaceFiles[0]).toMatchObject({
+      injectionStatus: "native_unverified",
+      injectedChars: null,
+    });
+  });
+
+  it("reuses each Codex definition hash until its schema JSON changes", () => {
+    const stabilize = vi.spyOn(fingerprints, "stabilizeJsonValue");
+    const frozen = Object.freeze({
+      type: "object",
+      properties: Object.freeze({ query: Object.freeze({ type: "string" }) }),
+    });
+    const mutable = { type: "object", properties: { query: { type: "string" } } };
+    const shallow = Object.freeze(mutable);
+    const tool = makeTool("search", { inputSchema: frozen });
+    const otherTool = makeTool("lookup", { inputSchema: shallow });
+    const params: Parameters<typeof buildCodexSystemPromptReport>[0] = {
+      attempt: { sessionId: "report" } as EmbeddedRunAttemptParams,
+      sessionKey: "agent:main:report",
+      workspaceDir: "/workspace",
+      developerInstructions: "instructions",
+      workspaceBootstrapContext: { bootstrapFiles: [], contextFiles: [], promptContextFiles: [] },
+      skillsPrompt: "",
+      tools: [tool],
+    };
+    const report = () => buildCodexSystemPromptReport(params).tools.entries[0];
+    const expectedHash = (type: string) =>
+      createHash("sha256")
+        .update(`{"properties":{"query":{"type":"${type}"}},"type":"object"}`)
+        .digest("hex");
+    expect(report()?.schemaHash).toBe(expectedHash("string"));
+    expect(report()?.schemaHash).toBe(expectedHash("string"));
+    params.tools = [otherTool];
+    expect(report()?.schemaHash).toBe(expectedHash("string"));
+    mutable.properties.query.type = "integer";
+    expect(report()?.schemaHash).toBe(expectedHash("integer"));
+    params.tools = [tool];
+    expect(report()?.schemaHash).toBe(expectedHash("string"));
+    const replacement = Object.freeze({
+      type: "object",
+      properties: Object.freeze({ query: Object.freeze({ type: "boolean" }) }),
+    });
+    tool.inputSchema = replacement;
+    expect(report()?.schemaHash).toBe(expectedHash("boolean"));
+    params.tools = [otherTool];
+    expect(report()?.schemaHash).toBe(expectedHash("integer"));
+    params.tools = [tool];
+    expect(report()?.schemaHash).toBe(expectedHash("boolean"));
+    expect(stabilize.mock.calls.filter(([schema]) => schema === frozen)).toHaveLength(1);
+    expect(stabilize.mock.calls.filter(([schema]) => schema === shallow)).toHaveLength(2);
+    expect(stabilize.mock.calls.filter(([schema]) => schema === replacement)).toHaveLength(1);
   });
 
   it("keeps MEMORY.md injected when sandbox effective workspace differs", async () => {
@@ -251,6 +352,32 @@ describe("Codex app-server attempt context", () => {
     expect(context.personaInstructions).not.toContain("Canonical agent instructions");
     expect(context.memoryToolRouted).toBe(true);
     expect(context.promptContext).toBeUndefined();
+  });
+
+  it("injects source workspace rules into restricted sandbox turns", async () => {
+    const workspace = tempDirs.make("codex-source-rules-");
+    const sandbox = tempDirs.make("codex-sandbox-rules-");
+    await fs.writeFile(path.join(workspace, "AGENTS.md"), "Source operating rules.");
+    await fs.writeFile(path.join(sandbox, "AGENTS.md"), "Sandbox decoy rules.");
+    for (const restricted of [true, false]) {
+      const context = await workspaceContext(
+        workspace,
+        { effectiveWorkspace: sandbox, sandboxed: true, tools: [] },
+        { pluginHarnessToolPolicyRestricted: restricted },
+      );
+      expect(context.threadDeveloperInstructions ?? "").not.toContain("Sandbox decoy rules.");
+      expect(context.promptContext ?? "").not.toContain("Source operating rules.");
+      expect(context.threadDeveloperInstructionFiles).toEqual(
+        restricted
+          ? [{ path: path.join(sandbox, "AGENTS.md"), content: "Source operating rules." }]
+          : [],
+      );
+      if (restricted) {
+        expect(context.threadDeveloperInstructions).toContain("Source operating rules.");
+      } else {
+        expect(context.threadDeveloperInstructions).toBeUndefined();
+      }
+    }
   });
 
   it("keeps ambient workspace instructions out of overlapping ring-zero restrictions", async () => {

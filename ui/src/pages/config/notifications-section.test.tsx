@@ -264,10 +264,16 @@ it("keeps settings available after an admitted command rejects", async () => {
   await waitForSolid(() =>
     expect(view.container.textContent).toContain("Example notification service is unavailable."),
   );
-  expect(view.container.textContent).toContain("Browser support");
+  expect(view.container.textContent).toContain(
+    "Couldn’t complete the notification request. Try again.",
+  );
+  expect(view.getByRole("button", { name: "Unsubscribe" })).toBeTruthy();
   expect(view.container.querySelectorAll(".cfg-field__error")).toHaveLength(1);
   expect(view.getByRole("button", { name: "Send test" }).hasAttribute("disabled")).toBe(false);
   expect(view.container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(false);
+  expect(view.container.querySelector('.cfg-field__error[role="alert"]')?.textContent).toContain(
+    "Example notification service is unavailable.",
+  );
 });
 
 type DevicePreferencesListener = NonNullable<NotificationProps["onWebPushSetDevicePreferences"]>;

@@ -1,13 +1,16 @@
-import type { StatementSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   OpenClawAgentDatabaseReadOnlyScope,
   withScopedOpenClawAgentDatabaseReadOnly,
 } from "../../state/openclaw-agent-db-readonly-scope.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -16,9 +19,11 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptEvent,
+  appendTranscriptMessage,
   waitForSessionTranscriptProjection,
   type SessionTranscriptReadScope,
 } from "./session-accessor.js";
+import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   insertSyntheticHistory,
@@ -61,16 +66,23 @@ function expectPage(
   );
 }
 
+type ObservedQuery = { columns: string[]; expandedSQL: string };
+
 function observeQueries(nativeDb: ReturnType<typeof requireNativeSqliteDatabase>) {
   const prototype: StatementSync = Object.getPrototypeOf(nativeDb.prepare("SELECT 1"));
-  const statements = new Set<StatementSync>();
+  const statements = new Map<StatementSync, ObservedQuery>();
   const observers = (["all", "get", "iterate"] as const).map((method) => {
     const original = prototype[method];
     return vi.spyOn(prototype, method).mockImplementation(
       new Proxy(original, {
         apply(invoke, statement: StatementSync, args) {
-          statements.add(statement);
-          return Reflect.apply(invoke, statement, args);
+          const result = Reflect.apply(invoke, statement, args);
+          // Snapshot bound metadata before the executor releases the native statement.
+          statements.set(statement, {
+            columns: statement.columns().map(({ name }) => name),
+            expandedSQL: statement.expandedSQL,
+          });
+          return result;
         },
       }),
     );
@@ -78,10 +90,10 @@ function observeQueries(nativeDb: ReturnType<typeof requireNativeSqliteDatabase>
   return {
     statements,
     restore: () => observers.forEach((observer) => observer.mockRestore()),
-    plans: (selected: Iterable<StatementSync> = statements) =>
-      [...selected].flatMap((statement) =>
+    plans: (selected: Iterable<ObservedQuery> = statements.values()) =>
+      [...selected].flatMap(({ expandedSQL }) =>
         nativeDb
-          .prepare(`EXPLAIN QUERY PLAN ${statement.expandedSQL}`)
+          .prepare(`EXPLAIN QUERY PLAN ${expandedSQL}`)
           .all()
           .map(({ detail }) => detail),
       ),
@@ -106,14 +118,12 @@ function readHistoryWithQueryPlans(
     observed.restore();
   }
   const select = (matches: (columns: string[]) => boolean) =>
-    [...observed.statements].filter((statement) =>
-      matches(statement.columns().map(({ name }) => name)),
-    );
+    [...observed.statements.values()].filter(({ columns }) => matches(columns));
   const markers = select((columns) => columns.includes("following_message_position"));
   const anchors = select(
     (columns) => columns.length === 2 && columns.includes("event_id") && columns.includes("seq"),
   );
-  const searches = (statements: StatementSync[]) =>
+  const searches = (statements: ObservedQuery[]) =>
     observed
       .plans(statements)
       .filter((detail) => typeof detail === "string" && detail.startsWith("SEARCH "));
@@ -192,6 +202,103 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
     expect(branch.drivingSearch).toMatch(search);
   }
 });
+
+it.each([false, true])(
+  "looks up background dependency payloads by exact sequence (analyzed=%s)",
+  async (analyzed) => {
+    const { scope, database } = await seedHistory("bounded-dependencies");
+    insertSyntheticHistory(database, scope.sessionId, 2_000);
+    await appendTranscriptMessage(scope, {
+      eventId: "pending-result",
+      message: {
+        ...makeAgentAssistantMessage({
+          provider: "openclaw",
+          model: "automation-result",
+          content: [{ type: "text", text: "Required background result" }],
+        }),
+        excludeFromContext: true,
+        openclawModelPlacement: "pending",
+      },
+    });
+    await persistHistory(scope, [
+      transcriptMessage("tail", "pending-result", { role: "user", content: "Continue" }),
+    ]);
+    await waitForSessionTranscriptProjection(scope);
+    if (analyzed) {
+      await waitForSessionTranscriptIndexReconcile(scope);
+      database.db.exec("ANALYZE");
+    }
+    const nativeDb = requireNativeSqliteDatabase(database.db);
+    const nativeJson = new DatabaseSync(":memory:");
+    const validJson = nativeJson.prepare("SELECT json_valid(?) AS value");
+    let dependencyProjections = 0;
+    nativeDb.function("json_valid", { deterministic: true }, (value) => {
+      if (typeof value === "string" && value.includes('"pending-result"')) {
+        dependencyProjections++;
+      }
+      return validJson.get(value)?.value ?? 0;
+    });
+    clearNodeSqliteKyselyCacheForDatabase(nativeDb);
+    const observed = observeQueries(nativeDb);
+    try {
+      let full: ReturnType<typeof readSessionTranscriptBoundedActiveContextCore> | undefined;
+      nativeDb.exec("SAVEPOINT active_fact_coverage");
+      try {
+        for (const coverage of ["full", "partial", "none"] as const) {
+          if (coverage !== "full") {
+            nativeDb
+              .prepare(
+                coverage === "partial"
+                  ? `DELETE FROM session_transcript_active_event_facts WHERE session_id = ?
+                    AND seq = (SELECT seq FROM transcript_event_identities
+                      WHERE session_id = ? AND event_id = 'pending-result')`
+                  : "DELETE FROM session_transcript_active_event_facts WHERE session_id = ?",
+              )
+              .run(
+                ...(coverage === "partial"
+                  ? [scope.sessionId, scope.sessionId]
+                  : [scope.sessionId]),
+              );
+          }
+          dependencyProjections = 0;
+          const context = runSqliteReadSnapshotSync(nativeDb, () =>
+            readSessionTranscriptBoundedActiveContextCore(scope, {
+              maxEvents: 1,
+              maxBytes: 16_384,
+              transaction: database,
+            }),
+          );
+          expect(context.events.slice(1)).toMatchObject([{ id: "pending-result" }, { id: "tail" }]);
+          full ??= context;
+          expect(context).toEqual(full);
+          // A covered dependency must never execute the native payload projection.
+          expect(dependencyProjections).toBe(coverage === "full" ? 0 : 1);
+        }
+      } finally {
+        nativeDb.exec("ROLLBACK TO active_fact_coverage; RELEASE active_fact_coverage");
+      }
+      const dependencies = [...observed.statements.values()].filter(({ columns }) =>
+        columns.includes("navigation_json"),
+      );
+      expect(dependencies.length).toBeGreaterThanOrEqual(1);
+      const eventSearches = observed
+        .plans(dependencies)
+        .filter((detail) => typeof detail === "string" && detail.startsWith("SEARCH event "));
+      // Dependency discovery must never drive a whole-session payload-index range scan.
+      expect(eventSearches.length).toBeGreaterThan(0);
+      for (const search of eventSearches) {
+        expect(search).toMatch(/\(session_id=\? AND seq=\?\)/u);
+      }
+      expect(observed.plans(dependencies)).toContainEqual(
+        expect.stringMatching(/SEARCH facts USING PRIMARY KEY \(session_id=\? AND seq=\?\)/u),
+      );
+    } finally {
+      observed.restore();
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
+      nativeJson.close();
+    }
+  },
+);
 
 it("reads only appended metadata for a warm marker-heavy page and quoted messages", async () => {
   const { scope, database } = await seedHistory("incremental-history");

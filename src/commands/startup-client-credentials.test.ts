@@ -4,7 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { inspectServiceRuntimeIntent } from "../cli/daemon-cli/status.runtime-intent.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import {
   ClientCredentialMigrationRequiredError,
@@ -16,23 +19,25 @@ import { withEngineStoreAdmission } from "../infra/database-engine/admission-sco
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import {
-  seedDeviceAuthToken,
-  readDeviceAuthTokenForTest,
-} from "../infra/device-auth-store.test-support.js";
+  storeDeviceAuthToken as seedDeviceAuthToken,
+  loadDeviceAuthToken as readDeviceAuthTokenForTest,
+} from "../infra/device-auth-store.js";
+import { generateStoredDeviceIdentity } from "../infra/device-identity-material.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
 import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
-import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import {
   acquireGatewayStateOwner,
   GatewayStateOwnerContentionError,
 } from "../infra/gateway-state-owner.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -78,14 +83,16 @@ describe("automatic client credential preparation", () => {
   async function bootstrap(postgresConnection?: string) {
     const fixture = target();
     const identity = loadOrCreateDeviceIdentity({ env: fixture.env });
-    const token = seedDeviceAuthToken({
+    const tokenClock = vi.spyOn(Date, "now").mockReturnValueOnce(123);
+    const tokenWrite = seedDeviceAuthToken({
       env: fixture.env,
       deviceId: identity.deviceId,
       role: "node",
       token: "synthetic-startup-token",
       scopes: ["node.invoke"],
-      updatedAtMs: 123,
     });
+    tokenClock.mockRestore();
+    const token = await tokenWrite;
     const shared = path.join(fixture.root, "state", "openclaw.sqlite");
     if (postgresConnection) {
       const config = {
@@ -117,10 +124,10 @@ describe("automatic client credential preparation", () => {
     };
   }
   type Fixture = Awaited<ReturnType<typeof bootstrap>>;
-  function expectCredentials(fixture: Fixture) {
+  async function expectCredentials(fixture: Fixture) {
     expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
     expect(
-      readDeviceAuthTokenForTest({
+      await readDeviceAuthTokenForTest({
         env: fixture.env,
         deviceId: fixture.identity.deviceId,
         role: "node",
@@ -169,7 +176,7 @@ describe("automatic client credential preparation", () => {
     { filename: "identity/node-device-auth.json", claim: "auth:node", kind: "auth" },
     { filename: "exec-approvals.json", claim: undefined, kind: "approvals" },
   ] as const)(
-    "preserves all files before refusing malformed required $kind",
+    "preserves malformed $kind without importing it",
     async ({ filename, claim, kind }) => {
       const fixture = await bootstrap();
       if (claim) {
@@ -185,11 +192,15 @@ describe("automatic client credential preparation", () => {
       fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
       fs.writeFileSync(sourcePath, '{"retiredCredential":"preserve for recovery"}');
       const before = snapshotFiles(fixture.root);
-      await expect(fixture.prepare({ config: {} })).rejects.toThrow(
-        kind === "approvals"
-          ? ExecApprovalsMigrationRequiredError
-          : ClientCredentialMigrationRequiredError,
-      );
+      if (kind === "approvals") {
+        await expect(fixture.prepare({ config: {} })).resolves.toBeUndefined();
+        expect(readStartupMigrationWarning()).toContain("legacy-exec-approvals-invalid");
+        expect(readStartupMigrationWarning()).not.toContain("preserve for recovery");
+      } else {
+        await expect(fixture.prepare({ config: {} })).rejects.toThrow(
+          ClientCredentialMigrationRequiredError,
+        );
+      }
       expect(snapshotFiles(fixture.root)).toEqual(before);
     },
   );
@@ -225,9 +236,9 @@ describe("automatic client credential preparation", () => {
     });
     fs.writeFileSync(sourcePath, source);
     await fixture.prepare({ config: {} });
-    expectCredentials(fixture);
+    await expectCredentials(fixture);
     expect(
-      readDeviceAuthTokenForTest({
+      await readDeviceAuthTokenForTest({
         env: fixture.env,
         deviceId: fixture.identity.deviceId,
         role: "operator",
@@ -264,6 +275,118 @@ describe("automatic client credential preparation", () => {
     expect(loadDeviceIdentityIfPresent({ env: fixture.env })).toEqual(fixture.identity);
   });
 
+  it.each([false, true])(
+    "settles runtime intent before native startup after credential cutover (pin=%s)",
+    async (pinned) => {
+      const fixture = target();
+      const shared = path.join(fixture.root, "state", "openclaw.sqlite");
+      const identity = generateStoredDeviceIdentity(123);
+      const pin = {
+        state_key: "daemon-runtime-pin:" + "a".repeat(64),
+        value_json:
+          ' { "version": 1, "pin": { "runtime": "node", "path": "/fixture/operator-node" }, "definition": "retained" }\n',
+        updated_at_ms: 456,
+      };
+      fs.mkdirSync(path.dirname(shared), { recursive: true });
+      {
+        using database = new DatabaseSync(shared);
+        database.exec(
+          fs.readFileSync(
+            new URL("../../test/fixtures/sqlite/openclaw-state-schema-v24.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+        database.exec(
+          "PRAGMA user_version = 24; INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at) VALUES ('primary', 'global', 24, 1, 1)",
+        );
+        database
+          .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
+          .run(
+            "primary",
+            identity.deviceId,
+            identity.publicKeyPem,
+            identity.privateKeyPem,
+            123,
+            123,
+          );
+        database
+          .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
+          .run(identity.deviceId, "node", "synthetic-upgrade-token", '["node.invoke"]', 123);
+        if (pinned) {
+          database
+            .prepare("INSERT INTO config_machine_state VALUES (?,?,?)")
+            .run(pin.state_key, pin.value_json, pin.updated_at_ms);
+        }
+      }
+      const status = () =>
+        inspectServiceRuntimeIntent({
+          kind: "gateway",
+          service: createMockGatewayService(),
+          command: null,
+          env: fixture.env,
+          serviceEnv: fixture.env,
+          inspectionKnown: true,
+        });
+      expect((await status()).runtimeIntent.status).toBe("migrationPending");
+      await fixture.prepare({ config: {}, prepareRuntimePins: true });
+      await closeOpenClawStateDatabaseAsync();
+      {
+        using database = new DatabaseSync(shared, { readOnly: true });
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_STATE_SCHEMA_VERSION,
+        );
+        expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+      }
+      expect(loadDeviceIdentityIfPresent({ env: fixture.env })?.deviceId).toBe(identity.deviceId);
+      expect(
+        await readDeviceAuthTokenForTest({
+          env: fixture.env,
+          deviceId: identity.deviceId,
+          role: "node",
+        }),
+      ).toMatchObject({ token: "synthetic-upgrade-token" });
+      expect((await status()).runtimeIntent.status).toBe("known");
+      expect(
+        withDaemonRuntimePinStore(fixture.env, false, (db) =>
+          db.prepare("SELECT * FROM daemon_runtime_pins").all(),
+        ),
+      ).toEqual(pinned ? [pin] : []);
+      // A second native launch must not re-import or replace explicit runtime intent.
+      await fixture.prepare({ config: {}, prepareRuntimePins: true });
+      expect((await status()).runtimeIntent.status).toBe("known");
+    },
+  );
+
+  it("refuses conflicting runtime intent even when credential preparation already completed", async () => {
+    const fixture = await bootstrap();
+    const key = "daemon-runtime-pin:" + "b".repeat(64);
+    {
+      using database = new DatabaseSync(fixture.shared);
+      database.prepare("INSERT INTO config_machine_state VALUES (?,?,?)").run(key, "source", 1);
+    }
+    withDaemonRuntimePinStore(fixture.env, true, (db) => {
+      db.prepare("INSERT INTO daemon_runtime_pins VALUES (?,?,?)").run(key, "target", 2);
+    });
+    await expect(fixture.prepare({ config: {}, prepareRuntimePins: true })).rejects.toThrow(
+      "migration conflict",
+    );
+    expect(
+      withDaemonRuntimePinStore(fixture.env, false, (db) =>
+        db.prepare("SELECT value_json FROM daemon_runtime_pins WHERE state_key = ?").get(key),
+      ),
+    ).toEqual({ value_json: "target" });
+    await closeOpenClawStateDatabaseAsync();
+    {
+      using database = new DatabaseSync(fixture.shared, { readOnly: true });
+      expect(
+        database
+          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+          .get(key),
+      ).toEqual({ value_json: "source" });
+    }
+    await expectCredentials(fixture);
+  });
+
   it("leaves a fresh profile empty", async () => {
     const fixture = target();
     await fixture.prepare();
@@ -294,7 +417,7 @@ describe("automatic client credential preparation", () => {
     vi.stubEnv("OPENCLAW_CONFIG_PATH", other.env.OPENCLAW_CONFIG_PATH);
     changeRecordedDevice(fixture.env);
     await fixture.prepare();
-    expectCredentials(fixture);
+    await expectCredentials(fixture);
     expect(fs.readdirSync(other.root)).toEqual([]);
     expect(process.env.OPENCLAW_STATE_DIR).toBe(other.root);
     const bytes = fs.readFileSync(fixture.local);
@@ -322,7 +445,7 @@ describe("automatic client credential preparation", () => {
     await fixture.prepare();
     changeRecordedDevice(fixture.env);
     await fixture.prepare();
-    expectCredentials(fixture);
+    await expectCredentials(fixture);
   });
 
   it("keeps healthy legacy credentials readable while a Gateway owns shared state", async () => {
@@ -343,7 +466,7 @@ describe("automatic client credential preparation", () => {
     try {
       await fixture.prepare();
       expect(fs.readFileSync(fixture.local)).toEqual(before);
-      expectCredentials(fixture);
+      await expectCredentials(fixture);
     } finally {
       serving.release();
     }
@@ -389,7 +512,7 @@ describe("automatic client credential preparation", () => {
             expect(error).toHaveBeenCalledWith(
               "Client credential metadata upgrade deferred; existing credentials remain available. Startup will retry automatically.",
             );
-            expectCredentials(fixture);
+            await expectCredentials(fixture);
           }
           expect(fs.readFileSync(fixture.local)).toEqual(before);
           expect(fs.readFileSync(fixture.env.OPENCLAW_CONFIG_PATH)).toEqual(originalConfig);
@@ -432,7 +555,7 @@ describe("automatic client credential preparation", () => {
       } else {
         await expect(preparation).rejects.toBe(failure);
       }
-      expectCredentials(fixture);
+      await expectCredentials(fixture);
     },
   );
 

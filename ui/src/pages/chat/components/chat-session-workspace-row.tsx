@@ -59,6 +59,63 @@ export function WorkspaceFilename(props: { name: string }) {
   );
 }
 
+/** Shared tile face: admitted image pixels or the large file icon, with an optional name. */
+export function WorkspaceTileBody(props: {
+  name: string;
+  mimeType?: string;
+  previewUrl?: string;
+  pending?: boolean;
+  caption: boolean;
+  activity?: string;
+  changed?: boolean;
+}) {
+  // A preview that fails to decode falls back to the file icon instead of a broken image.
+  const [failedUrl, setFailedUrl] = createSignal<string>();
+  const previewUrl = () =>
+    props.previewUrl && props.previewUrl !== failedUrl() ? props.previewUrl : undefined;
+  return (
+    <>
+      <Show
+        when={previewUrl()}
+        fallback={
+          <span class="workspace-desktop__tile-media">
+            <AttachmentFileIcon
+              filename={props.name}
+              mimeType={props.mimeType}
+              mode="large-placeholder"
+              loading={props.pending}
+            />
+          </span>
+        }
+      >
+        {(url) => (
+          <img
+            class="workspace-desktop__tile-media"
+            src={url()}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            referrerpolicy="no-referrer"
+            onError={() => setFailedUrl(url())}
+          />
+        )}
+      </Show>
+      <Show when={props.caption}>
+        <span class="workspace-desktop__name-line">
+          <WorkspaceFilename name={props.name} />
+          <Show when={props.activity}>
+            <span
+              class={["workspace-desktop__activity", { "is-changed": props.changed }]}
+              role="img"
+              aria-label={props.activity}
+            />
+          </Show>
+        </span>
+      </Show>
+    </>
+  );
+}
+
 export function RailRow(props: {
   file: WorkspaceCatalogFile;
   workspace: SessionWorkspaceProps;
@@ -68,6 +125,8 @@ export function RailRow(props: {
   searching?: boolean;
   position?: number;
   setSize?: number;
+  /** Session files can render as tiles; tree rows and search results stay rows. */
+  view?: "list" | "grid";
   onToggle?: (instant: boolean) => void;
 }) {
   const selected = createMemo(() =>
@@ -96,78 +155,104 @@ export function RailRow(props: {
         ? t("chat.workspaceFiles.read")
         : undefined;
   return (
-    <div
-      role="listitem"
-      class="workspace-desktop__item"
-      aria-posinset={props.position}
-      aria-setsize={props.setSize}
-    >
-      <button
-        type="button"
-        class={["workspace-desktop__row", { "is-active": selected() }]}
-        style={{
-          "padding-inline-start": `min(calc(8px + ${props.depth ?? 0} * var(--workspace-tree-step, 16px)), max(8px, calc(100% - 100px)))`,
-        }}
-        aria-label={props.file.path}
-        aria-description={activity()}
-        aria-current={selected() ? "true" : undefined}
-        aria-expanded={props.directory ? (props.expanded ? "true" : "false") : undefined}
-        onClick={(event) => {
-          if (props.directory) {
-            props.onToggle?.(event.detail === 0);
-          } else {
-            onOpen();
-          }
-        }}
-        onDblClick={() => {
-          if (!props.directory) {
-            onOpen("pinned");
-          }
-        }}
-      >
-        <Show
-          when={props.directory}
-          fallback={
-            <AttachmentFileIcon
-              filename={props.file.name}
-              mimeType={props.file.mimeType}
-              mode="preview-with-favicon"
-            />
-          }
+    <Show
+      when={props.view === "grid" && !props.directory}
+      fallback={
+        <div
+          role="listitem"
+          class="workspace-desktop__item"
+          aria-posinset={props.position}
+          aria-setsize={props.setSize}
         >
-          <span class="workspace-desktop__folder-icon">
-            <Show when={props.expanded} fallback={<Icon name="folder" />}>
-              {/* Lucide folder-open, the approved Files glyph (ISC). */}
-              <StrokeIcon aria-hidden="true">
-                <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-              </StrokeIcon>
+          <button
+            type="button"
+            class={["workspace-desktop__row", { "is-active": selected() }]}
+            style={{
+              "padding-inline-start": `min(calc(8px + ${props.depth ?? 0} * var(--workspace-tree-step, 16px)), max(8px, calc(100% - 100px)))`,
+            }}
+            aria-label={props.file.path}
+            aria-description={activity()}
+            aria-current={selected() ? "true" : undefined}
+            aria-expanded={props.directory ? (props.expanded ? "true" : "false") : undefined}
+            onClick={(event) => {
+              if (props.directory) {
+                props.onToggle?.(event.detail === 0);
+              } else {
+                onOpen();
+              }
+            }}
+            onDblClick={() => {
+              if (!props.directory) {
+                onOpen("pinned");
+              }
+            }}
+          >
+            <Show
+              when={props.directory}
+              fallback={
+                <AttachmentFileIcon
+                  filename={props.file.name}
+                  mimeType={props.file.mimeType}
+                  mode="preview-with-favicon"
+                />
+              }
+            >
+              <span class="workspace-desktop__folder-icon">
+                <Show when={props.expanded} fallback={<Icon name="folder" />}>
+                  {/* Lucide folder-open, the approved Files glyph (ISC). */}
+                  <StrokeIcon aria-hidden="true">
+                    <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
+                  </StrokeIcon>
+                </Show>
+              </span>
             </Show>
-          </span>
-        </Show>
-        <span class="workspace-desktop__identity">
-          <span class="workspace-desktop__name-line">
-            <WorkspaceFilename name={props.file.name} />
-            <Show when={!props.directory && activity()}>
-              <span
-                class={[
-                  "workspace-desktop__activity",
-                  { "is-changed": props.file.activity !== "read" },
-                ]}
-                role="img"
-                aria-label={activity()}
-              />
-            </Show>
-          </span>
-          <Show when={props.searching}>
-            <span class="workspace-desktop__location">
-              {props.file.artifactId
-                ? t("chat.workspaceFiles.desktop.sessionFiles")
-                : (props.file.workspacePath ?? props.file.path)}
+            <span class="workspace-desktop__identity">
+              <span class="workspace-desktop__name-line">
+                <WorkspaceFilename name={props.file.name} />
+                <Show when={!props.directory && activity()}>
+                  <span
+                    class={[
+                      "workspace-desktop__activity",
+                      { "is-changed": props.file.activity !== "read" },
+                    ]}
+                    role="img"
+                    aria-label={activity()}
+                  />
+                </Show>
+              </span>
+              <Show when={props.searching}>
+                <span class="workspace-desktop__location">
+                  {props.file.artifactId
+                    ? t("chat.workspaceFiles.desktop.sessionFiles")
+                    : (props.file.workspacePath ?? props.file.path)}
+                </span>
+              </Show>
             </span>
-          </Show>
-        </span>
-      </button>
-    </div>
+          </button>
+        </div>
+      }
+    >
+      <div role="listitem" class="workspace-desktop__item">
+        <button
+          type="button"
+          class={["workspace-desktop__row workspace-desktop__tile", { "is-active": selected() }]}
+          title={props.file.name}
+          aria-label={props.file.path}
+          aria-description={activity()}
+          aria-current={selected() ? "true" : undefined}
+          onClick={() => onOpen()}
+          onDblClick={() => onOpen("pinned")}
+        >
+          <WorkspaceTileBody
+            name={props.file.name}
+            mimeType={props.file.mimeType}
+            caption
+            activity={activity()}
+            changed={props.file.activity !== "read"}
+          />
+        </button>
+      </div>
+    </Show>
   );
 }
 
@@ -184,7 +269,7 @@ export function WorkspaceRows(props: {
   const mountedRows = new Set<HTMLDivElement>();
   const [focusedKey, setFocusedKey] = createSignal<string>();
   const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>();
-  const active = createMemo(() => props.active);
+  const rowsActive = createMemo(() => props.active);
   // Keep a 250 -> 125 Changed filter windowed; small and mixed lists stay eager.
   const windowed = createMemo(
     () => props.rows.length >= 100 && props.rows.every((row) => !row.directory),
@@ -192,6 +277,11 @@ export function WorkspaceRows(props: {
   const rowIndexes = createMemo(
     () => new Map<VirtualItem["key"], number>(props.rows.map((row, index) => [row.key, index])),
   );
+  const getItemKey = createMemo(() => {
+    const rows = props.rows;
+    // Geometry updates reuse positions; replacing rows invalidates the key mapping.
+    return (index: number) => rows[index]!.key;
+  });
   const activeId = createMemo(() => props.workspace.activeId);
   const selectedKey = createMemo(
     () =>
@@ -219,7 +309,7 @@ export function WorkspaceRows(props: {
     );
   });
   const publish = () => {
-    if (!active() || !windowed()) {
+    if (!rowsActive() || !windowed()) {
       return;
     }
     const items = virtualizer.getVirtualItems();
@@ -250,8 +340,9 @@ export function WorkspaceRows(props: {
     () => ({
       rows: props.rows,
       indexes: rowIndexes(),
+      getItemKey: getItemKey(),
       pinned: pinned(),
-      active: active(),
+      active: rowsActive(),
       windowed: windowed(),
     }),
     (next) => {
@@ -272,7 +363,7 @@ export function WorkspaceRows(props: {
         count: next.rows.length,
         enabled: next.windowed,
         useCachedMeasurements: false,
-        getItemKey: (index) => next.rows[index]!.key,
+        getItemKey: next.getItemKey,
         scrollMargin:
           list.getBoundingClientRect().top -
           scroller.getBoundingClientRect().top +
@@ -351,18 +442,127 @@ export function WorkspaceRows(props: {
       >
         <DirectoryBranch
           row={rowProps.row}
-          workspace={props.workspace}
-          childrenByPath={props.childrenByPath}
-          depth={props.depth}
-          viewport={props.viewport}
-          content={props.content}
-          active={props.active}
           position={windowed() ? index() + 1 : undefined}
           setSize={windowed() ? props.rows.length : undefined}
         />
       </div>
     );
   }
+  function DirectoryBranch(childProps: {
+    row: WorkspaceCatalogRow;
+    position?: number;
+    setSize?: number;
+  }) {
+    return (
+      <div class="workspace-desktop__branch">
+        <Show
+          when={childProps.row.directory}
+          fallback={
+            <RailRow
+              file={childProps.row}
+              workspace={props.workspace}
+              depth={props.depth}
+              position={childProps.position}
+              setSize={childProps.setSize}
+            />
+          }
+        >
+          {(isDirectory) => {
+            const path = () => childProps.row.workspacePath ?? childProps.row.path;
+            const expanded = createMemo(
+              () => props.workspace.navigation?.expandedPaths.includes(path()) ?? false,
+            );
+            const active = createMemo(
+              () =>
+                props.workspace.navigation?.treeVisible !== false &&
+                !props.workspace.navigation?.searchOpen,
+            );
+            const [instant, setInstant] = createSignal(true);
+            const directory = createMemo(() => props.workspace.directories?.[path()]);
+            const readResult = createMemo(
+              () => ({ pending: props.workspace.directories?.[path()]?.readResult }),
+              { equals: (previous, next) => previous.pending === next.pending },
+            );
+            const read = createMemo(async () => {
+              const current = directory();
+              const pending = readResult().pending;
+              await pending;
+              if (current?.error != null) {
+                throw new Error(current.error || t("chat.workspaceFiles.folderUnavailable"));
+              }
+              return null;
+            });
+            const browser = () =>
+              props.workspace.directories?.[path()]?.browser ??
+              (!props.workspace.list?.browser?.search &&
+              props.workspace.list?.browser?.path === path()
+                ? props.workspace.list.browser
+                : undefined);
+            return (
+              <>
+                <RailRow
+                  file={childProps.row}
+                  workspace={props.workspace}
+                  directory={isDirectory()}
+                  depth={props.depth}
+                  expanded={expanded()}
+                  onToggle={(immediate) => {
+                    setInstant(immediate);
+                    props.workspace.onToggleDirectory?.(path());
+                  }}
+                />
+                <FileDisclosure
+                  variant="folder"
+                  open={expanded()}
+                  active={active()}
+                  instant={instant()}
+                >
+                  <Errored
+                    fallback={(error) => (
+                      <div class="workspace-desktop__notice" role="alert">
+                        {formatUiError(error())}
+                      </div>
+                    )}
+                  >
+                    <Loading
+                      on={directory()}
+                      fallback={
+                        <div class="workspace-desktop__notice" role="status">
+                          {t("chat.workspaceFiles.loading")}
+                        </div>
+                      }
+                    >
+                      {latest(read)}
+                      <Show when={isPending(read)}>
+                        <div class="workspace-desktop__notice" role="status">
+                          {t("chat.workspaceFiles.loading")}
+                        </div>
+                      </Show>
+                    </Loading>
+                  </Errored>
+                  <Show when={browser()?.truncated}>
+                    <div class="workspace-desktop__notice" role="status">
+                      {t("chat.workspaceFiles.truncated")}
+                    </div>
+                  </Show>
+                  <WorkspaceRows
+                    rows={props.childrenByPath.get(path()) ?? []}
+                    workspace={props.workspace}
+                    childrenByPath={props.childrenByPath}
+                    depth={props.depth + 1}
+                    viewport={props.viewport}
+                    content={props.content}
+                    active={props.active && expanded()}
+                  />
+                </FileDisclosure>
+              </>
+            );
+          }}
+        </Show>
+      </div>
+    );
+  }
+
   return (
     <div
       role="list"
@@ -376,127 +576,6 @@ export function WorkspaceRows(props: {
       <For each={renderedRows()} keyed={(row) => row.key}>
         {(row) => <Row row={row()} />}
       </For>
-    </div>
-  );
-}
-
-function DirectoryBranch(props: {
-  row: WorkspaceCatalogRow;
-  workspace: SessionWorkspaceProps;
-  childrenByPath: ReadonlyMap<string, readonly WorkspaceCatalogRow[]>;
-  depth: number;
-  viewport: HTMLElement | undefined;
-  content: HTMLElement | undefined;
-  active: boolean;
-  position?: number;
-  setSize?: number;
-}) {
-  return (
-    <div class="workspace-desktop__branch">
-      <Show
-        when={props.row.directory}
-        fallback={
-          <RailRow
-            file={props.row}
-            workspace={props.workspace}
-            depth={props.depth}
-            position={props.position}
-            setSize={props.setSize}
-          />
-        }
-      >
-        {(isDirectory) => {
-          const path = () => props.row.workspacePath ?? props.row.path;
-          const expanded = createMemo(
-            () => props.workspace.navigation?.expandedPaths.includes(path()) ?? false,
-          );
-          const active = createMemo(
-            () =>
-              props.workspace.navigation?.treeVisible !== false &&
-              !props.workspace.navigation?.searchOpen,
-          );
-          const [instant, setInstant] = createSignal(true);
-          const directory = createMemo(() => props.workspace.directories?.[path()]);
-          const readResult = createMemo(
-            () => ({ pending: props.workspace.directories?.[path()]?.readResult }),
-            { equals: (previous, next) => previous.pending === next.pending },
-          );
-          const read = createMemo(async () => {
-            const current = directory();
-            const pending = readResult().pending;
-            await pending;
-            if (current?.error != null) {
-              throw new Error(current.error || t("chat.workspaceFiles.folderUnavailable"));
-            }
-            return null;
-          });
-          const browser = () =>
-            props.workspace.directories?.[path()]?.browser ??
-            (!props.workspace.list?.browser?.search &&
-            props.workspace.list?.browser?.path === path()
-              ? props.workspace.list.browser
-              : undefined);
-          return (
-            <>
-              <RailRow
-                file={props.row}
-                workspace={props.workspace}
-                directory={isDirectory()}
-                depth={props.depth}
-                expanded={expanded()}
-                onToggle={(immediate) => {
-                  setInstant(immediate);
-                  props.workspace.onToggleDirectory?.(path());
-                }}
-              />
-              <FileDisclosure
-                variant="folder"
-                open={expanded()}
-                active={active()}
-                instant={instant()}
-              >
-                <Errored
-                  fallback={(error) => (
-                    <div class="workspace-desktop__notice" role="alert">
-                      {formatUiError(error())}
-                    </div>
-                  )}
-                >
-                  <Loading
-                    on={directory()}
-                    fallback={
-                      <div class="workspace-desktop__notice" role="status">
-                        {t("chat.workspaceFiles.loading")}
-                      </div>
-                    }
-                  >
-                    {latest(read)}
-                    <Show when={isPending(read)}>
-                      <div class="workspace-desktop__notice" role="status">
-                        {t("chat.workspaceFiles.loading")}
-                      </div>
-                    </Show>
-                  </Loading>
-                </Errored>
-                <Show when={browser()?.truncated}>
-                  <div class="workspace-desktop__notice" role="status">
-                    {t("chat.workspaceFiles.truncated")}
-                  </div>
-                </Show>
-                <WorkspaceRows
-                  rows={props.childrenByPath.get(path()) ?? []}
-                  workspace={props.workspace}
-                  childrenByPath={props.childrenByPath}
-                  depth={props.depth + 1}
-                  viewport={props.viewport}
-                  content={props.content}
-                  active={props.active && expanded()}
-                />
-              </FileDisclosure>
-            </>
-          );
-        }}
-      </Show>
     </div>
   );
 }

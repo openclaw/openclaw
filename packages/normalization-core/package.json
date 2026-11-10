@@ -124,6 +124,11 @@
       "import": "./dist/string-normalization.mjs",
       "default": "./dist/string-normalization.mjs"
     },
+    "./stringified-error": {
+      "types": "./dist/stringified-error.d.mts",
+      "import": "./dist/stringified-error.mjs",
+      "default": "./dist/stringified-error.mjs"
+    },
     "./session-key-comparison": {
       "types": "./dist/session-key-comparison.d.mts",
       "import": "./dist/session-key-comparison.mjs",
@@ -155,6 +160,6 @@
   },
   "dependencies": {
     "libphonenumber-js": "1.13.15",
-    "typebox": "1.4.1"
+    "typebox": "1.4.3"
   }
 }

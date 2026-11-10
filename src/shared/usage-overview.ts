@@ -3,17 +3,21 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../infra/session-cost-usage-totals.js";
-import type { CostUsageTotals, UsageDailyBucket } from "../infra/session-cost-usage.types.js";
+import type { UsageDailyBucket } from "../infra/session-cost-usage.types.js";
 import { createUsageAggregateAccumulator } from "./usage-aggregates.js";
+import { createUsageCalendar, type UsageCalendar } from "./usage-calendar.js";
 import { extractQueryTerms } from "./usage-query.js";
+import {
+  sessionRowTotals,
+  USAGE_OVERVIEW_PAGE_SIZE,
+  usageOverviewPage,
+} from "./usage-table-page.js";
 import type {
   SessionUsageEntry,
   SessionsUsageOverview,
   UsageOverviewOptions,
   UsageOverviewSlice,
 } from "./usage-types.js";
-
-const PAGE_SIZE = 50;
 
 function matchesGlob(value: string, pattern: string): boolean {
   const text = value.toLowerCase();
@@ -87,7 +91,7 @@ const getSessionProviders = (session: SessionUsageEntry): string[] =>
     ...(session.usage?.modelUsage ?? []).map((entry) => entry.provider),
   ]);
 
-const getSessionModels = (session: SessionUsageEntry): string[] =>
+export const getSessionModels = (session: SessionUsageEntry): string[] =>
   normalizeQueryValues([
     session.model,
     ...(session.usage?.modelUsage ?? []).map((entry) => entry.model),
@@ -141,6 +145,8 @@ const QUERY_KEYS = new Set([
 ]);
 
 const MULTI_VALUE_QUERY_KEYS = new Set(["channel", "provider", "model", "tool"]);
+
+export const USAGE_FILTER_KEYS = ["agent", "channel", "provider", "model", "tool"] as const;
 
 const matchesEverySession: UsageQueryPredicate = () => true;
 
@@ -214,10 +220,7 @@ const prepareUsageQuery = (
     return matchesEverySession;
   }
   const [getValue, matches] = numericSpec;
-  return (session) =>
-    (!(key.endsWith("tokens") || key.endsWith("cost")) ||
-      session.usage?.usageReport?.state !== "unavailable") &&
-    matches(getValue(session), threshold);
+  return (session) => matches(getValue(session), threshold);
 };
 
 const filterSessionsByQuery = (sessions: SessionUsageEntry[], query: string) => {
@@ -248,101 +251,9 @@ const filterSessionsByQuery = (sessions: SessionUsageEntry[], query: string) => 
   return { sessions: filtered, warnings };
 };
 
-function createCalendar(bucket: UsageDailyBucket) {
-  const formatter =
-    bucket.mode === "time-zone"
-      ? new Intl.DateTimeFormat("en-US", {
-          timeZone: bucket.timeZone,
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-          hourCycle: "h23",
-        })
-      : undefined;
-  const cache = new Map<
-    number,
-    { date: string; hour: number; weekday: number; minute: number; second: number; offset: number }
-  >();
-  function at(timestamp: number) {
-    const found = cache.get(timestamp);
-    if (found) {
-      return found;
-    }
-    const date = new Date(
-      timestamp + (bucket.mode === "utc-offset" ? bucket.utcOffsetMinutes * 60_000 : 0),
-    );
-    let year = date.getUTCFullYear(),
-      month = date.getUTCMonth() + 1,
-      day = date.getUTCDate();
-    let hour = date.getUTCHours(),
-      minute = date.getUTCMinutes(),
-      second = date.getUTCSeconds();
-    if (formatter) {
-      const parts = formatter.formatToParts(timestamp);
-      const value = (type: Intl.DateTimeFormatPartTypes) =>
-        Number(parts.find((part) => part.type === type)?.value);
-      year = value("year");
-      month = value("month");
-      day = value("day");
-      hour = value("hour");
-      minute = value("minute");
-      second = value("second");
-    }
-    const calendarMs = Date.UTC(year, month - 1, day, hour, minute, second);
-    const result = {
-      date: `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
-      hour,
-      minute,
-      second,
-      weekday: new Date(Date.UTC(year, month - 1, day)).getUTCDay(),
-      offset: calendarMs - (timestamp - (((timestamp % 1000) + 1000) % 1000)),
-    };
-    cache.set(timestamp, result);
-    return result;
-  }
-  function quarter(date: string, index: number) {
-    if (!Number.isInteger(index) || index < 0 || index > 95 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return null;
-    }
-    const time = Date.parse(`${date}T00:00:00Z`);
-    if (!Number.isFinite(time) || new Date(time).toISOString().slice(0, 10) !== date) {
-      return null;
-    }
-    return at(time + index * 900_000);
-  }
-  function nextHour(timestamp: number) {
-    const current = at(timestamp);
-    const next =
-      timestamp +
-      (60 - current.minute) * 60_000 -
-      current.second * 1000 -
-      (((timestamp % 1000) + 1000) % 1000);
-    if (at(next - 1).offset === current.offset) {
-      return next;
-    }
-    let low = timestamp + 1,
-      high = next - 1;
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      if (at(middle).offset === current.offset) {
-        low = middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-    return low;
-  }
-  return { at, quarter, nextHour };
-}
-
-type Calendar = ReturnType<typeof createCalendar>;
-
 function visitHours(
   session: SessionUsageEntry,
-  calendar: Calendar,
+  calendar: UsageCalendar,
   inclusive: boolean,
   visit: (hour: number, weekday: number, share: number) => boolean | void,
 ) {
@@ -368,12 +279,52 @@ function visitHours(
   return true;
 }
 
-function touchesHours(session: SessionUsageEntry, hours: Set<number>, calendar: Calendar) {
-  if (hours.size === 0) {
-    return true;
+type SessionHours = {
+  tokens: ArrayLike<number>;
+  weekdayTokens: ArrayLike<number>;
+  /** Hour-level activity: tokens per hour are positive only where quarters had tokens. */
+  precise: boolean;
+  messages?: { total: ArrayLike<number>; errors: ArrayLike<number> };
+};
+
+// Filtering and chart folding read the same profile; detail rows map UTC quarters once per calendar.
+const hourProfiles = new WeakMap<UsageCalendar, WeakMap<object, SessionHours>>();
+// Report-local hours already follow the request calendar; their views are reused across reads.
+const localProfiles = new WeakMap<object, SessionHours>();
+
+/** Worker-folded rows carry report-calendar hours; detail rows still carry UTC quarters. */
+function sessionHours(
+  usage: NonNullable<SessionUsageEntry["usage"]>,
+  calendar: UsageCalendar,
+): SessionHours {
+  if (usage.localHours) {
+    const cached = localProfiles.get(usage.localHours);
+    if (cached) {
+      return cached;
+    }
+    const { values, precise } = usage.localHours;
+    const hours = {
+      tokens: values.subarray(0, 24),
+      weekdayTokens: values.subarray(24, 31),
+      precise,
+      messages: { total: values.subarray(31, 55), errors: values.subarray(55, 79) },
+    };
+    localProfiles.set(usage.localHours, hours);
+    return hours;
   }
-  let precise = false;
-  for (const value of session.usage?.utcQuarterHourTokenUsage ?? []) {
+  let profiles = hourProfiles.get(calendar);
+  if (!profiles) {
+    profiles = new WeakMap();
+    hourProfiles.set(calendar, profiles);
+  }
+  const cached = profiles.get(usage);
+  if (cached) {
+    return cached;
+  }
+  const tokens = Array<number>(24).fill(0);
+  const weekdayTokens = Array<number>(7).fill(0);
+  const hours: SessionHours = { tokens, weekdayTokens, precise: false };
+  for (const value of usage.utcQuarterHourTokenUsage ?? []) {
     if (value.totalTokens <= 0) {
       continue;
     }
@@ -381,13 +332,34 @@ function touchesHours(session: SessionUsageEntry, hours: Set<number>, calendar: 
     if (!mapped) {
       continue;
     }
-    precise = true;
-    if (hours.has(mapped.hour)) {
-      return true;
-    }
+    hours.precise = true;
+    tokens[mapped.hour]! += value.totalTokens;
+    weekdayTokens[mapped.weekday]! += value.totalTokens;
   }
-  if (precise) {
-    return false;
+  if (usage.utcQuarterHourMessageCounts?.length) {
+    const total = Array<number>(24).fill(0);
+    const errors = Array<number>(24).fill(0);
+    for (const value of usage.utcQuarterHourMessageCounts) {
+      const mapped = calendar.quarter(value.date, value.quarterIndex);
+      if (!mapped) {
+        continue;
+      }
+      total[mapped.hour]! += value.total;
+      errors[mapped.hour]! += value.errors;
+    }
+    hours.messages = { total, errors };
+  }
+  profiles.set(usage, hours);
+  return hours;
+}
+
+function touchesHours(session: SessionUsageEntry, hours: Set<number>, calendar: UsageCalendar) {
+  if (hours.size === 0) {
+    return true;
+  }
+  const profile = session.usage ? sessionHours(session.usage, calendar) : undefined;
+  if (profile?.precise) {
+    return [...hours].some((hour) => (profile.tokens[hour] ?? 0) > 0);
   }
   let touches = false;
   visitHours(session, calendar, true, (hour) => {
@@ -397,87 +369,48 @@ function touchesHours(session: SessionUsageEntry, hours: Set<number>, calendar: 
   return touches;
 }
 
-function sessionRowTotals(session: SessionUsageEntry, days: ReadonlySet<string>): CostUsageTotals {
-  const usage = session.usage;
-  if (!days.size || !usage?.dailyBreakdown?.length) {
-    return usage ?? createEmptyCostUsageTotals();
-  }
-  const totals = createEmptyCostUsageTotals();
-  for (const day of usage.dailyBreakdown) {
-    if (days.has(day.date)) {
-      addCostUsageTotals(totals, { ...day, totalTokens: day.tokens, totalCost: day.cost });
-    }
-  }
-  return totals;
-}
-
-function compareUsageOverviewSessions(options: UsageOverviewOptions) {
-  if (options.recentKeys) {
-    const recentKeys = options.recentKeys;
-    return (a: SessionUsageEntry, b: SessionUsageEntry) =>
-      recentKeys.indexOf(a.key) - recentKeys.indexOf(b.key);
-  }
-  const days = new Set(options.selectedDays);
-  const rowTotals = new Map<SessionUsageEntry, ReturnType<typeof sessionRowTotals>>();
-  const totals = (entry: SessionUsageEntry) => {
-    let result = rowTotals.get(entry);
-    if (!result) {
-      result = sessionRowTotals(entry, days);
-      rowTotals.set(entry, result);
-    }
-    return result;
-  };
-  const value = (entry: SessionUsageEntry) => {
-    switch (options.sort) {
-      case "tokens":
-        return totals(entry).totalTokens;
-      case "cost":
-        return totals(entry).totalCost;
-      case "messages":
-        return entry.usage?.messageCounts?.total ?? 0;
-      case "errors":
-        return entry.usage?.messageCounts?.errors ?? 0;
-      default:
-        return entry.updatedAt ?? 0;
-    }
-  };
-  const direction = options.sortDirection === "asc" ? -1 : 1;
-  return (a: SessionUsageEntry, b: SessionUsageEntry) =>
-    direction *
-    (value(b) - value(a) ||
-      (b.updatedAt ?? 0) - (a.updatedAt ?? 0) ||
-      (a.label || a.key).localeCompare(b.label || b.key));
-}
-
-function compactSession(session: SessionUsageEntry, days: ReadonlySet<string>): SessionUsageEntry {
+export function compactUsageOverviewSession(
+  session: SessionUsageEntry,
+  days: ReadonlySet<string>,
+): SessionUsageEntry {
   if (!session.usage) {
     return session;
   }
+  const source = session.usage;
   const row = sessionRowTotals(session, days);
+  // Build the retained table record directly; deleting history fields makes it a dictionary.
   const usage = {
-    ...session.usage,
-    ...row,
-    usageReport: row.usageReport,
+    input: row.input,
+    output: row.output,
+    cacheRead: row.cacheRead,
+    cacheWrite: row.cacheWrite,
+    totalTokens: row.totalTokens,
+    totalCost: row.totalCost,
+    inputCost: row.inputCost,
+    outputCost: row.outputCost,
+    cacheReadCost: row.cacheReadCost,
+    cacheWriteCost: row.cacheWriteCost,
+    missingCostEntries: row.missingCostEntries,
+    missingCostByModel: row.missingCostByModel ?? source.missingCostByModel,
+    computedAt: source.computedAt,
+    staleSince: source.staleSince,
+    refreshing: source.refreshing,
+    sessionId: source.sessionId,
+    firstActivity: source.firstActivity,
+    lastActivity: source.lastActivity,
+    durationMs: source.durationMs,
+    messageCounts: source.messageCounts,
+    toolUsage: source.toolUsage,
+    modelUsage: source.modelUsage,
+    latency: source.latency,
   };
-  for (const field of [
-    "dailyBreakdown",
-    "dailyMessageCounts",
-    "dailyModelUsage",
-    "dailyLatency",
-    "utcQuarterHourTokenUsage",
-    "utcQuarterHourMessageCounts",
-    "activityDates",
-    "sessionFile",
-  ] as const) {
-    delete usage[field];
-  }
   return { ...session, usage };
 }
 
 function selectUsageOverviewSessions(
   sessions: SessionUsageEntry[],
   options: UsageOverviewOptions,
-  calendar: Calendar,
+  calendar: UsageCalendar,
 ) {
   const days = new Set(options.selectedDays);
   const hours = new Set(options.selectedHours);
@@ -499,12 +432,6 @@ function selectUsageOverviewSessions(
   return { days, queried, matched, selected, scoped, roster };
 }
 
-function usageOverviewPage(roster: SessionUsageEntry[], options: UsageOverviewOptions) {
-  return roster
-    .toSorted(compareUsageOverviewSessions(options))
-    .slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? PAGE_SIZE));
-}
-
 /** Selects rows for context hydration without calculating the full report twice. */
 export function selectUsageOverviewPage(params: {
   rows: SessionUsageEntry[];
@@ -514,7 +441,7 @@ export function selectUsageOverviewPage(params: {
   const { roster } = selectUsageOverviewSessions(
     params.rows,
     params.options,
-    createCalendar(params.dayBucket),
+    createUsageCalendar(params.dayBucket),
   );
   return usageOverviewPage(roster, params.options);
 }
@@ -526,20 +453,28 @@ export function buildUsageOverview(params: {
   compact?: boolean;
 }): UsageOverviewSlice {
   const { options, rows: sessions } = params;
-  const calendar = createCalendar(params.dayBucket);
+  const calendar = createUsageCalendar(params.dayBucket);
+  // Each option counts the sessions that carry it, once per session.
   const filters = {
-    agent: new Set<string>(),
-    channel: new Set<string>(),
-    provider: new Set<string>(),
-    model: new Set<string>(),
-    tool: new Set<string>(),
+    agent: new Map<string, number>(),
+    channel: new Map<string, number>(),
+    provider: new Map<string, number>(),
+    model: new Map<string, number>(),
+    tool: new Map<string, number>(),
   };
   for (const session of sessions) {
+    const values = {
+      agent: new Set<string>(),
+      channel: new Set<string>(),
+      provider: new Set<string>(),
+      model: new Set<string>(),
+      tool: new Set<string>(),
+    };
     if (session.agentId) {
-      filters.agent.add(session.agentId);
+      values.agent.add(session.agentId);
     }
     if (session.channel) {
-      filters.channel.add(session.channel);
+      values.channel.add(session.channel);
     }
     for (const provider of [
       session.modelProvider,
@@ -547,22 +482,27 @@ export function buildUsageOverview(params: {
       session.origin?.provider,
     ]) {
       if (provider) {
-        filters.provider.add(provider);
+        values.provider.add(provider);
       }
     }
     if (session.model) {
-      filters.model.add(session.model);
+      values.model.add(session.model);
     }
     for (const model of session.usage?.modelUsage ?? []) {
       if (model.provider) {
-        filters.provider.add(model.provider);
+        values.provider.add(model.provider);
       }
       if (model.model) {
-        filters.model.add(model.model);
+        values.model.add(model.model);
       }
     }
     for (const tool of session.usage?.toolUsage?.tools ?? []) {
-      filters.tool.add(tool.name);
+      values.tool.add(tool.name);
+    }
+    for (const key of USAGE_FILTER_KEYS) {
+      for (const value of values[key]) {
+        filters[key].set(value, (filters[key].get(value) ?? 0) + 1);
+      }
     }
   }
   const { days, queried, matched, selected, scoped, roster } = selectUsageOverviewSessions(
@@ -589,7 +529,7 @@ export function buildUsageOverview(params: {
     selected.size ? scoped.map((session) => [session.key, session]) : [],
   );
   const toRow = (session: SessionUsageEntry) =>
-    params.compact === false ? session : compactSession(session, days);
+    params.compact === false ? session : compactUsageOverviewSession(session, days);
   const accumulator = createUsageAggregateAccumulator();
   const overview: SessionsUsageOverview = {
     total: roster.length,
@@ -604,7 +544,7 @@ export function buildUsageOverview(params: {
     tableSessionCount: matched.length,
     tableTotals: { tokens: 0, cost: 0, errors: 0 },
     offset: options.offset ?? 0,
-    limit: options.limit ?? PAGE_SIZE,
+    limit: options.limit ?? USAGE_OVERVIEW_PAGE_SIZE,
     queryWarnings: queried.warnings,
     hourTokens: Array.from({ length: 24 }, () => 0),
     weekdayTokens: Array.from({ length: 7 }, () => 0),
@@ -614,25 +554,29 @@ export function buildUsageOverview(params: {
     hourlyMessages: Array.from({ length: 24 }, () => 0),
     hourlyErrors: Array.from({ length: 24 }, () => 0),
     filterOptions: {
-      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
-      agent: [...filters.agent].sort(),
-      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
-      channel: [...filters.channel].sort(),
-      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
-      provider: [...filters.provider].sort(),
-      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
-      model: [...filters.model].sort(),
-      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
-      tool: [...filters.tool].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The keys spread is a private array.
+      agent: [...filters.agent.keys()].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The keys spread is a private array.
+      channel: [...filters.channel.keys()].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The keys spread is a private array.
+      provider: [...filters.provider.keys()].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The keys spread is a private array.
+      model: [...filters.model.keys()].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The keys spread is a private array.
+      tool: [...filters.tool.keys()].sort(),
+    },
+    filterOptionCounts: {
+      agent: Object.fromEntries(filters.agent),
+      channel: Object.fromEntries(filters.channel),
+      provider: Object.fromEntries(filters.provider),
+      model: Object.fromEntries(filters.model),
+      tool: Object.fromEntries(filters.tool),
     },
   };
   for (const session of matched) {
     const row = sessionRowTotals(session, days);
     overview.tableTotals.tokens += row.totalTokens;
     overview.tableTotals.cost += row.totalCost;
-    if (row.usageReport?.state === "unavailable") {
-      overview.tableTotals.usageReport = row.usageReport;
-    }
     overview.tableTotals.errors += session.usage?.messageCounts?.errors ?? 0;
   }
   for (const session of scoped) {
@@ -645,22 +589,17 @@ export function buildUsageOverview(params: {
       overview.durationMs += usage.durationMs!;
       overview.durationCount++;
     }
+    const hours = sessionHours(usage, calendar);
     if (usage.totalTokens > 0) {
-      let precise = false;
-      for (const value of usage.utcQuarterHourTokenUsage ?? []) {
-        if (value.totalTokens <= 0) {
-          continue;
+      if (hours.precise) {
+        overview.hasTimelineData = true;
+        for (let hour = 0; hour < 24; hour += 1) {
+          overview.hourTokens[hour]! += hours.tokens[hour]!;
         }
-        const mapped = calendar.quarter(value.date, value.quarterIndex);
-        if (!mapped) {
-          continue;
+        for (let weekday = 0; weekday < 7; weekday += 1) {
+          overview.weekdayTokens[weekday]! += hours.weekdayTokens[weekday]!;
         }
-        precise = true;
-        overview.hourTokens[mapped.hour]! += value.totalTokens;
-        overview.weekdayTokens[mapped.weekday]! += value.totalTokens;
-      }
-      overview.hasTimelineData = overview.hasTimelineData || precise;
-      if (!precise) {
+      } else {
         overview.hasTimelineData =
           visitHours(session, calendar, false, (hour, weekday, share) => {
             overview.hourTokens[hour]! += usage.totalTokens * share;
@@ -669,14 +608,10 @@ export function buildUsageOverview(params: {
       }
     }
     if (usage.messageCounts?.total) {
-      if (usage.utcQuarterHourMessageCounts?.length) {
-        for (const value of usage.utcQuarterHourMessageCounts) {
-          const mapped = calendar.quarter(value.date, value.quarterIndex);
-          if (!mapped) {
-            continue;
-          }
-          overview.hourlyMessages[mapped.hour]! += value.total;
-          overview.hourlyErrors[mapped.hour]! += value.errors;
+      if (hours.messages) {
+        for (let hour = 0; hour < 24; hour += 1) {
+          overview.hourlyMessages[hour]! += hours.messages.total[hour]!;
+          overview.hourlyErrors[hour]! += hours.messages.errors[hour]!;
         }
       } else {
         visitHours(session, calendar, false, (hour, _weekday, share) => {
@@ -697,7 +632,6 @@ export function buildUsageOverview(params: {
       }
     }
   }
-  overview.usageReport = accumulator.totals.usageReport;
   const aggregates = accumulator.finish();
   overview.selectedSessionCount = aggregates.sessionCount ?? 0;
   if (days.size) {

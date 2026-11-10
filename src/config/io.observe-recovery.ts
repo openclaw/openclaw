@@ -2,7 +2,7 @@ import type fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import JSON5 from "json5";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
 import {
   enqueueConfigAuditRecord,
   captureConfigAuditAppender,
@@ -33,17 +33,22 @@ import {
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
-import type { NormalizedConfigIoDeps } from "./io.read.types.js";
+import type { ConfigSnapshotReadMeasure, NormalizedConfigIoDeps } from "./io.read.types.js";
 import type {
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
   PrepareConfigRecoveryCandidate,
 } from "./io.types.js";
-import { chmodConfigBestEffort, chmodConfigBestEffortSync } from "./io.write-safety.js";
+import {
+  captureConfigRootWriteTarget,
+  chmodConfigBestEffort,
+  chmodConfigBestEffortSync,
+  resolveConfigWriteDirectory,
+} from "./io.write-safety.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
-import { resolveIsConfigReadOnly, resolveStateDir } from "./paths.js";
+import { resolveIsConfigReadOnly } from "./paths.js";
 import {
   collectPollutedSecretPlaceholders,
   isPluginLocalInvalidConfigSnapshot,
@@ -66,6 +71,7 @@ type ConfigReadRecoveryParams = {
   ) => Promise<ConfigRecoveryCandidatePreparation>;
   assertCurrent?: () => void;
   allowBackupRecovery?: () => Promise<boolean>;
+  measure?: ConfigSnapshotReadMeasure;
 };
 
 type ConfigReadRecoveryResult = Pick<ConfigRecoveryCandidate, "raw" | "parsed">;
@@ -76,18 +82,22 @@ function createRecoveryCommitEffect(params: {
   raw: string;
   beforeCommit?: () => void;
 }): ConfigRecoveryEffect<void> {
+  const { path: publicationPath, pathProof } = captureConfigRootWriteTarget(
+    params.configPath,
+    params.deps.fs,
+  );
   const options = {
-    filePath: params.configPath,
+    filePath: publicationPath,
     content: params.raw,
     dirMode:
-      readExistingStateRootMode(
-        path.dirname(params.configPath),
-        resolveStateDir(params.deps.env, params.deps.homedir),
-        params.deps.fs,
+      stateRootDirectoryMode(
+        path.dirname(publicationPath),
+        resolveConfigWriteDirectory(params.configPath, publicationPath, params.deps).path,
       ) ?? 0o700,
     mode: 0o600,
     tempPrefix: path.basename(params.configPath),
     fileSystem: params.deps.fs,
+    assertBeforeMutation: pathProof.assertCurrent,
   };
   return {
     sync: () => {
@@ -271,7 +281,10 @@ function* planSuspiciousConfigRead(
   });
   const healthSnapshot = (yield {
     sync: () => ({ state: readConfigHealthStateFromStore(deps), basis: null }),
-    async: (health) => health.read(),
+    async: (health) =>
+      params.measure
+        ? params.measure("config.recovery.health-read", () => health.read())
+        : health.read(),
   }) as ConfigHealthSnapshot; // SAFETY: Both effect runners return the typed health-owner snapshot.
   const entry = readConfigHealthEntry(healthSnapshot.state, configPath);
   let backupRaw: string | null = null;

@@ -16,6 +16,7 @@ import {
 } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles/store-runtime.js";
 import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
+import { resolveCapturedOpenClawToolsFsPolicy } from "./openclaw-tools.fs-policy.js";
 import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
 import { prepareProgressCardToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
@@ -46,6 +47,7 @@ export async function prepareOpenClawTools(
     captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
     { allowKeychainPrompt: false },
   );
+  captured.fsPolicy = resolveCapturedOpenClawToolsFsPolicy(captured, sessionAgentId);
   const delegated = isEmbeddedMode()
     ? []
     : await createOpenClawDelegateToolsForRunAsync({ ...captured, sessionAgentId }, shared);

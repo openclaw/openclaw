@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { startChatSendDiagnostics } from "../../../gateway/server-methods/chat-send-diagnostics.js";
 import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
+import * as mediaLocalRoots from "../../../media/local-roots.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
@@ -17,12 +18,9 @@ import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-const { resolveSandboxContext: resolveRealSandboxContext } = await vi.importActual<
-  typeof import("../../sandbox/context.js")
->("../../sandbox/context.js");
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
 const resolveSandboxContext = vi.hoisted(() =>
-  vi.fn<typeof resolveRealSandboxContext>(async () => null),
+  vi.fn<typeof import("../../sandbox/context.js").resolveSandboxContext>(async () => null),
 );
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
@@ -65,7 +63,7 @@ const attemptDefaults = {
 describe("prepareEmbeddedAttemptSetup", () => {
   beforeEach(() => {
     resolveProviderRuntimePluginHandle.mockReset();
-    resolveSandboxContext.mockClear();
+    resolveSandboxContext.mockReset().mockResolvedValue(null);
   });
 
   it.each([false, true])(
@@ -121,7 +119,6 @@ describe("prepareEmbeddedAttemptSetup", () => {
   it.each([undefined, "agent:main:policy"])(
     "prepares a detached global workspace with policy %s",
     async (sandboxSessionKey) => {
-      resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
       const workspaceDir = tempDirs.make("openclaw-global-attempt-");
       const foreground = {
         agentId: "marketing",
@@ -150,7 +147,6 @@ describe("prepareEmbeddedAttemptSetup", () => {
   );
 
   it("does not apply an execution owner to an independent unscoped sandbox policy", async () => {
-    resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
     const workspaceDir = tempDirs.make("openclaw-policy-attempt-");
     await expect(
       resolveAttemptWorkspaceSandbox({
@@ -211,11 +207,21 @@ describe("prepareEmbeddedAttemptSetup", () => {
       if (!agent.transformContext) {
         throw new Error("expected installed history transform");
       }
+      using roots = vi.spyOn(mediaLocalRoots, "getAgentScopedMediaLocalRoots");
+      for (const content of [
+        [{ type: "text", text: "describe" }],
+        [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+      ]) {
+        const messages = [castAgentMessage({ role: "user", content })];
+        expect(await agent.transformContext(messages)).toEqual(messages);
+      }
+      expect(roots).not.toHaveBeenCalled();
       const replay = await agent.transformContext([message]);
       expect((replay[0] as { content?: unknown }).content).toEqual([
         { type: "text", text: "describe" },
         { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
       ]);
+      expect(roots).toHaveBeenCalledOnce();
     } finally {
       guards.remove();
     }

@@ -91,7 +91,7 @@ async function runManagedRepair(
     const interactive = outcome.startsWith("interactive-");
     const declined = outcome === "interactive-declined";
     const clean = declined || outcome.startsWith("clean-") || outcome.startsWith("update-");
-    const archiveVerification = outcome === "archive-verification";
+    const archiveVerification = is("archive-verification", "update-parent-stopped");
     const current = clean || archiveVerification;
     const inspectionOnly = outcome === "clean-force-inspect";
     const force = outcome.startsWith("clean-force-");
@@ -249,7 +249,8 @@ async function runManagedRepair(
       }),
       readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
       isLoaded: async () => running,
-      isEnabled: async () => running,
+      // Stopping the process leaves the native autostart policy unchanged.
+      isEnabled: async () => true,
       stop,
       start,
       restart,
@@ -292,7 +293,14 @@ async function runManagedRepair(
             doctorOnlyStateMigrations: true,
           }),
         });
-        expect(approvals.warnings.length > 0).toBe(approvalsBlocked);
+        expect(approvals.warnings.length > 0, JSON.stringify(approvals)).toBe(approvalsBlocked);
+        if (approvalsBlocked) {
+          expect(approvals.warnings.join("\n")).toContain(
+            outcome === "approvals-malformed"
+              ? "Invalid legacy exec approvals"
+              : "Conflicting legacy exec approvals remain",
+          );
+        }
         await collectSecurityWarnings(ctx.cfg, state.env);
       }
       if (is("ready", "interactive-ready", "store-close-failed")) {
@@ -438,9 +446,6 @@ async function runManagedRepair(
         expectProcessOwnerReleased();
       } else if (outcome === "workspace-cleanup-failed") {
         await expect(run).rejects.toThrow(/workspace.*requires migration/);
-      } else if (approvalsBlocked) {
-        await expect(run).rejects.toThrow(ExecApprovalsMigrationRequiredError);
-        expectProcessOwnerReleased();
       } else if (outcome === "restart-unhealthy") {
         await expect(run).rejects.toThrow("managed Gateway did not become ready");
       } else {
@@ -448,6 +453,9 @@ async function runManagedRepair(
       }
       if (modernUpdate) {
         expect(events.filter((event) => event !== "repair")).toEqual([]);
+        if (archiveTransform) {
+          expect(archiveTransform).not.toHaveBeenCalled();
+        }
         expectUnchanged();
         return;
       }
@@ -481,9 +489,14 @@ async function runManagedRepair(
         );
       }
       if (approvalsCase) {
+        expectProcessOwnerReleased();
         if (approvalsBlocked) {
           expect(fs.readFileSync(approvalsPath, "utf8")).toBe(approvalsBefore);
-          expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
+          if (outcome === "approvals-malformed") {
+            expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
+          } else {
+            expect(loadExecApprovalsReadOnly().defaults?.security).toBe("deny");
+          }
         } else {
           expect(fs.existsSync(approvalsPath)).toBe(false);
           expect(loadExecApprovalsReadOnly().defaults?.security).toBe("full");
@@ -494,7 +507,7 @@ async function runManagedRepair(
           );
         }
       }
-      if (clean || is("ready", "interactive-ready", "archive-verification", "approvals-migrated")) {
+      if (clean || approvalsCase || is("ready", "interactive-ready", "archive-verification")) {
         expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
       } else {
         expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");

@@ -12,9 +12,9 @@ import {
 } from "../../../../src/auto-reply/reply/directive-handling.parse.js";
 import type { IconName } from "../../components/icon-data.ts";
 import { t } from "../../i18n/index.ts";
-import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
+import { registerChatCommandsEnglish } from "../../i18n/locales/en-chat-commands.ts";
 
-registerCommandPaletteEnglish();
+registerChatCommandsEnglish();
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -41,6 +41,7 @@ export type SlashCommandDef = {
   source?: "native" | "plugin" | "skill";
   skillDisplayName?: string;
   skillModelVisible?: boolean;
+  skillReferenceable?: boolean;
   clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
 
@@ -63,6 +64,7 @@ type CommandLike = {
   source?: "native" | "plugin" | "skill";
   skillDisplayName?: string;
   skillModelVisible?: boolean;
+  skillReferenceable?: boolean;
   clientPresentation?: NonNullable<CommandEntry["clientPresentation"]>;
 };
 
@@ -83,6 +85,7 @@ const COMMAND_PRESENTATION: Partial<Record<string, Pick<SlashCommandDef, "icon" 
   skill: { icon: "zap", category: "tools" },
   commands: { icon: "book", category: "tools" },
   new: { icon: "plus", category: "session" },
+  fork: { icon: "copy", category: "session" },
   reset: { icon: "refresh", category: "session" },
   compact: { icon: "loader", category: "session" },
   stop: { icon: "stop", category: "session" },
@@ -109,6 +112,7 @@ const LOCAL_COMMANDS = new Set([
   "btw",
   "help",
   "new",
+  "fork",
   "reset",
   "stop",
   "compact",
@@ -127,7 +131,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
   {
     key: "clear",
     name: "clear",
-    description: "Clear chat history",
+    description: "Clear conversation",
     descriptionKey: "chat.commands.clearDescription",
     icon: "trash",
     category: "session",
@@ -152,13 +156,21 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
 const COMMAND_OVERRIDES: Partial<
   Record<string, Pick<SlashCommandDef, "description" | "descriptionKey" | "args">>
 > = {
+  agents: {
+    description: registerChatCommandsEnglish.catalog.chat.commands.agentsDescription,
+    descriptionKey: "chat.commands.agentsDescription",
+  },
+  usage: {
+    description: registerChatCommandsEnglish.catalog.chat.commands.usageDescription,
+    descriptionKey: "chat.commands.usageDescription",
+  },
   steer: {
-    description: registerCommandPaletteEnglish.catalog.chat.commands.steerDescription,
+    description: registerChatCommandsEnglish.catalog.chat.commands.steerDescription,
     descriptionKey: "chat.commands.steerDescription",
     args: "<message>",
   },
   "export-session": {
-    description: registerCommandPaletteEnglish.catalog.chat.commands.exportDescription,
+    description: registerChatCommandsEnglish.catalog.chat.commands.exportDescription,
     descriptionKey: "chat.commands.exportDescription",
     args: undefined,
   },
@@ -223,8 +235,8 @@ function toSlashCommand(command: CommandLike, source: "local" | "remote"): Slash
     tier: source === "local" ? mapTier(command) : "standard",
     ...(resolvedSource ? { source: resolvedSource } : {}),
     ...(command.skillDisplayName ? { skillDisplayName: command.skillDisplayName } : {}),
-    ...(command.skillModelVisible !== undefined
-      ? { skillModelVisible: command.skillModelVisible }
+    ...(command.skillReferenceable !== undefined
+      ? { skillReferenceable: command.skillReferenceable }
       : {}),
     ...(command.clientPresentation ? { clientPresentation: command.clientPresentation } : {}),
   };
@@ -295,7 +307,7 @@ export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCom
         category: entry.category,
         source: entry.source,
         skillDisplayName: entry.skillDisplayName?.trim() || undefined,
-        skillModelVisible: entry.skillModelVisible,
+        skillReferenceable: entry.skillReferenceable,
         clientPresentation: entry.source === "plugin" ? entry.clientPresentation : undefined,
       };
     })
@@ -360,7 +372,7 @@ export function getSlashCommandCompletions(
   let commands = options?.inlineOnly
     ? SLASH_COMMANDS.filter(
         (command) =>
-          (command.source === "skill" && command.skillModelVisible === true) ||
+          isReferenceableSkill(command) ||
           (executesInlineImmediately(command) && options.allowImmediateInlineCommands !== false),
       )
     : SLASH_COMMANDS;
@@ -388,7 +400,11 @@ export type InlineSlashCompletion = {
   argumentStart?: number;
 };
 
-/** Finds the slash token being edited at the caret, including inside normal prose. */
+/**
+ * Finds the slash token being edited at the caret, including inside normal prose.
+ * A leading token is the draft's own command even when prose follows it; only
+ * tokens after other text (or an explicit `:` skill reference) are inline.
+ */
 export function findInlineSlashCompletion(
   text: string,
   caret = text.length,
@@ -409,14 +425,19 @@ export function findInlineSlashCompletion(
     end += 1;
   }
   const query = match[1] ?? "";
+  // Text typed in front of existing prose (`/loo|Apply`) stays: the token only
+  // extends past the caret while the whole word can still name a command.
+  if (end > boundedCaret) {
+    const word = normalizeLowercaseStringOrEmpty(text.slice(start + 1, end).replace(/:$/u, ""));
+    if (!SLASH_COMMANDS.some((command) => getSlashCommandRelevance(command, word) <= 1)) {
+      end = boundedCaret;
+    }
+  }
   return {
     query,
     start,
     end,
-    inline:
-      text.slice(0, start).trim().length > 0 ||
-      text.slice(end).trim().length > 0 ||
-      match[2] === ":",
+    inline: text.slice(0, start).trim().length > 0 || match[2] === ":",
     ...(match[2] === ":" ? { skillOnly: true } : {}),
   };
 }
@@ -425,22 +446,30 @@ export function getSkillDisplayName(command: SlashCommandDef): string {
   return command.skillDisplayName?.trim() || command.name;
 }
 
+function isReferenceableSkill(command: SlashCommandDef): boolean {
+  return command.source === "skill" && command.skillReferenceable === true;
+}
+
 export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
-  const lower = normalizeLowercaseStringOrEmpty(filter);
+  const lower = normalizeLowercaseStringOrEmpty(filter).normalize("NFC");
   const normalized = lower.replace(/[\s_]+/gu, "-");
-  return SLASH_COMMANDS.filter(
-    (command) => command.source === "skill" && command.skillModelVisible === true,
-  )
+  return SLASH_COMMANDS.filter(isReferenceableSkill)
     .filter((command) => {
-      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command));
+      const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command)).normalize(
+        "NFC",
+      );
       const displayLookup = displayName.replace(/[\s_]+/gu, "-");
-      const commandLookup = normalizeLowercaseStringOrEmpty(command.name).replace(/[\s_]+/gu, "-");
+      const commandLookup = normalizeLowercaseStringOrEmpty(command.name)
+        .normalize("NFC")
+        .replace(/[\s_]+/gu, "-");
       return (
         !lower ||
         displayName.includes(lower) ||
         displayLookup.includes(normalized) ||
         commandLookup.startsWith(normalized) ||
-        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower)
+        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command))
+          .normalize("NFC")
+          .includes(lower)
       );
     })
     .toSorted((left, right) => getSkillDisplayName(left).localeCompare(getSkillDisplayName(right)));

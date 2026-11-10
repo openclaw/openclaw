@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { makeStallingStream } from "../../../src/infra/http-body.test-support.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { startBrowserBootstrapRecovery } from "./browser-bootstrap.runtime.ts";
 import {
@@ -190,15 +191,9 @@ describe("same-origin browser bootstrap recovery", () => {
     const cancel = vi.fn();
     fetchMock.mockImplementation(
       async () =>
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode(" ".repeat(8193)));
-            },
-            cancel,
-          }),
-          { headers: { "Content-Type": "application/json" } },
-        ),
+        new Response(makeStallingStream([new TextEncoder().encode(" ".repeat(8193))], cancel), {
+          headers: { "Content-Type": "application/json" },
+        }),
     );
     startRecovery();
     rejectConnect();

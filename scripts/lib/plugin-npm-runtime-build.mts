@@ -20,6 +20,7 @@ import { createPluginInventoryModuleRefsPlugin } from "./plugin-inventory-module
 import { preparePackageRuntimeAssets } from "./plugin-npm-runtime-assets.mts";
 import { collectPluginThemeAssetPaths } from "./plugin-theme-assets.mts";
 import { isRecord } from "./record-shared.mjs";
+import { standaloneRuntimeProcessBuildEntries } from "./runtime-process-core-build-entries.mts";
 import {
   createStandaloneSourceModuleUrlPlugin,
   updateStandaloneSourceModuleUrlChunks,
@@ -191,6 +192,7 @@ type PluginNpmRuntimeBuildParams = {
   packageDir: string;
   logLevel?: "silent" | "error" | "warn" | "info";
   profile?: "qa-gateway-fixture";
+  controlUiAssetsPrepared?: boolean;
 };
 
 function readJsonFile(filePath: string) {
@@ -661,7 +663,7 @@ export type PluginNpmRuntimeBuildPlan = NonNullable<
   ReturnType<typeof resolvePluginNpmRuntimeBuildPlan>
 >;
 
-/** Create the canonical options without building or changing package artifacts. */
+/** Share exact build contexts with native source-module URL resolution. */
 export function createPluginNpmRuntimeBuildOptions(
   plan: PluginNpmRuntimeBuildPlan,
   {
@@ -677,49 +679,60 @@ export function createPluginNpmRuntimeBuildOptions(
     ...Object.keys(bundledSdkImports),
     ...Object.keys(bundledSdkExports),
   ]);
-  return {
-    clean: false,
-    config: false,
-    dts: false,
-    alias: bundledSdkImports,
-    deps: {
-      alwaysBundle: (id) => bundledSdkSpecifiers.has(id),
-      neverBundle: createNeverBundleDependencyMatcher(plan.packageJson, bundledSdkSpecifiers),
-    },
-    entry: plan.entry,
-    plugins: [
-      createStandaloneSourceModuleUrlPlugin({ rootDir: plan.repoRoot }),
-      {
-        name: "openclaw:runtime-build-inputs",
-        moduleParsed({ id }) {
-          if (path.isAbsolute(id) && !id.split(path.sep).includes("node_modules")) {
-            inputFiles.add(path.relative(plan.repoRoot, id).split(path.sep).join("/"));
-          }
+  const privateWorkers = Object.entries(plan.entry).filter(([name]) =>
+    Object.hasOwn(standaloneRuntimeProcessBuildEntries, `extensions/${plan.pluginDir}/${name}`),
+  );
+  const sharedEntries = { ...plan.entry };
+  for (const [name] of privateWorkers) {
+    delete sharedEntries[name];
+  }
+  // Worker isolates must not inherit unrelated SDK imports from shared plugin chunks.
+  return [sharedEntries, ...privateWorkers.map(([name, source]) => ({ [name]: source }))].map(
+    (entry) =>
+      ({
+        clean: false,
+        config: false,
+        dts: false,
+        alias: bundledSdkImports,
+        deps: {
+          alwaysBundle: (id) => bundledSdkSpecifiers.has(id),
+          neverBundle: createNeverBundleDependencyMatcher(plan.packageJson, bundledSdkSpecifiers),
         },
-      },
-      createBundledSdkExportsPlugin(plan.repoRoot, bundledSdkExports, bundleTelegramLifecycle),
-      createPluginInventoryModuleRefsPlugin(plan.packageDir),
-      createStateSchemaInlinePlugin(plan.repoRoot),
-    ],
-    outputOptions: {
-      // Published plugins still support hosts predating these private source facades.
-      paths: {
-        "openclaw/plugin-sdk/media-ffmpeg": "openclaw/plugin-sdk/media-runtime",
-        "openclaw/plugin-sdk/realtime-voice-playback": "openclaw/plugin-sdk/realtime-voice",
-      },
-      chunkFileNames: `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
-      entryFileNames: (chunk) =>
-        Object.hasOwn(plan.entry, chunk.name)
-          ? `[name]${pluginRuntimeExtension(plan.runtimeFormat)}`
-          : `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
-    },
-    env,
-    fixedExtension: plan.runtimeFormat === "cjs",
-    format: plan.runtimeFormat,
-    logLevel,
-    outDir: plan.outDir,
-    platform: "node",
-  } satisfies InlineConfig;
+        entry,
+        plugins: [
+          createStandaloneSourceModuleUrlPlugin({ rootDir: plan.repoRoot }),
+          {
+            name: "openclaw:runtime-build-inputs",
+            moduleParsed({ id }) {
+              if (path.isAbsolute(id) && !id.split(path.sep).includes("node_modules")) {
+                inputFiles.add(path.relative(plan.repoRoot, id).split(path.sep).join("/"));
+              }
+            },
+          },
+          createBundledSdkExportsPlugin(plan.repoRoot, bundledSdkExports, bundleTelegramLifecycle),
+          createPluginInventoryModuleRefsPlugin(plan.packageDir),
+          createStateSchemaInlinePlugin(plan.repoRoot),
+        ],
+        outputOptions: {
+          // Published plugins still support hosts predating these private source facades.
+          paths: {
+            "openclaw/plugin-sdk/media-ffmpeg": "openclaw/plugin-sdk/media-runtime",
+            "openclaw/plugin-sdk/realtime-voice-playback": "openclaw/plugin-sdk/realtime-voice",
+          },
+          chunkFileNames: `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
+          entryFileNames: (chunk) =>
+            Object.hasOwn(entry, chunk.name)
+              ? `[name]${pluginRuntimeExtension(plan.runtimeFormat)}`
+              : `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
+        },
+        env,
+        fixedExtension: plan.runtimeFormat === "cjs",
+        format: plan.runtimeFormat,
+        logLevel,
+        outDir: plan.outDir,
+        platform: "node",
+      }) satisfies InlineConfig,
+  );
 }
 
 /**
@@ -733,14 +746,24 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   }
 
   const inputFiles = new Set<string>();
-  const options = createPluginNpmRuntimeBuildOptions(plan, {
-    inputFiles,
-    logLevel: params.logLevel,
-  });
   const { build } = await import("tsdown");
   assertRealOutputRoot(plan.outDir);
-  fs.rmSync(plan.outDir, { recursive: true, force: true });
-  await build(options);
+  if (params.controlUiAssetsPrepared && fs.existsSync(plan.outDir)) {
+    // The composed root build already published these source-owned browser assets.
+    for (const entry of fs.readdirSync(plan.outDir)) {
+      if (entry !== "control-ui" && entry !== "openclaw.plugin.json") {
+        fs.rmSync(path.join(plan.outDir, entry), { recursive: true, force: true });
+      }
+    }
+  } else {
+    fs.rmSync(plan.outDir, { recursive: true, force: true });
+  }
+  for (const options of createPluginNpmRuntimeBuildOptions(plan, {
+    inputFiles,
+    logLevel: params.logLevel,
+  })) {
+    await build(options);
+  }
   const missingHostExports = listMissingPluginNpmRuntimeHostExports(plan);
   if (missingHostExports.length > 0) {
     throw new Error(
@@ -751,7 +774,9 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   return {
     ...plan,
     inputFiles: [...inputFiles].toSorted(),
-    ...(await preparePackageRuntimeAssets(plan)),
+    ...(await preparePackageRuntimeAssets(plan, {
+      controlUiAssetsPrepared: params.controlUiAssetsPrepared,
+    })),
   };
 }
 

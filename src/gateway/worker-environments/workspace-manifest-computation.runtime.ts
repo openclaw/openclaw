@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
-import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
+import { deserialize } from "node:v8";
+import { zstdDecompressSync } from "node:zlib";
+import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
+import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
 import {
   pruneWorkspaceHashMemo,
   withWorkerWorkspaceHashMemo,
@@ -11,6 +15,7 @@ import {
 import {
   manifestNodes,
   parseChangedWorkspaceResult,
+  prepareWorkspaceReconciliation,
   sameEntry,
   type WorkspaceNode,
 } from "./workspace-manifest-comparison.js";
@@ -24,9 +29,15 @@ import type {
 } from "./workspace-manifest-computation.js";
 import { applyWorkspaceSourceOverlay } from "./workspace-manifest-overlay.js";
 import {
+  gitFileMode,
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
+
+// One prepared tree per existing worker; another owner or root refills it.
+let preparedLocalManifest:
+  | { owner: string; records: Map<string, LocalWorkspaceManifestRecord> }
+  | undefined;
 
 function decodeUtf8(bytes: Uint8Array): string {
   return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8");
@@ -76,6 +87,71 @@ export async function executeWorkspaceManifestComputation(
   assertBeforeMutation?: () => void,
 ): Promise<WorkspaceManifestComputationResult> {
   switch (command.type) {
+    case "workspace.manifest.template": {
+      const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
+      const input = decodeManifestValue(command);
+      const previous = input.previous;
+      const entries = new Map(
+        previous
+          ? parseWorkerWorkspaceManifest(previous.rawManifest, previous.manifestRef).entries.map(
+              (entry) => [entry.path, entry] as const,
+            )
+          : [],
+      );
+      const changed = new Set(previous?.changedPaths);
+      // Keep discovery: installers can create empty directories, and staged-input
+      // markers can change eligibility. Only unchanged immutable file bytes are reused.
+      const { rawManifest, manifestRef } = await readActualWorkspaceManifestImpl(
+        { ...input, buildCacheInputs: new Set(input.buildCacheInputs) },
+        previous
+          ? (relative, _identity, stats) => {
+              const entry = entries.get(relative);
+              return !changed.has(relative) &&
+                // Installer-owned bytes can be retained by a staged-input marker.
+                !/(?:^|\/)node_modules\//u.test(relative) &&
+                entry?.type === "file" &&
+                entry.size === Number(stats.size) &&
+                entry.mode === gitFileMode(Number(stats.mode & 0o777n))
+                ? entry
+                : undefined;
+            }
+          : undefined,
+      );
+      return { rawManifest, manifestRef };
+    }
+    case "workspace.manifest.local": {
+      const { executeLocalWorkspaceManifestRead } =
+        await import("./local-workspace-manifest-scan.js");
+      const owner = command.input.owner;
+      let records =
+        preparedLocalManifest?.owner === owner ? preparedLocalManifest.records : undefined;
+      preparedLocalManifest = undefined;
+      const bytes = await requestGitWorkerEffect({
+        type: "workspace.manifest.read",
+        input: { knownTreeRoot: records?.get("")?.treeRef },
+      });
+      // SAFETY: The state reader captures both arguments from the admitted request.
+      const [snapshot, action] = deserialize(zstdDecompressSync(bytes)) as Parameters<
+        typeof executeLocalWorkspaceManifestRead
+      >;
+      if (snapshot.records) {
+        records = decodeLocalWorkspaceTree(snapshot.records, !snapshot.row.tree_root_digest);
+      }
+      const result = await executeLocalWorkspaceManifestRead(snapshot, action, records);
+      if (
+        records?.has("") &&
+        snapshot.row.tree_root_digest &&
+        (action.kind === "scan" ||
+          action.kind === "probe" ||
+          action.kind === "materialize" ||
+          action.kind === "archive")
+      ) {
+        // A scan consumes this map. Its actual root may still await acceptance;
+        // the next authoritative header must match it before any reuse.
+        preparedLocalManifest = { owner, records };
+      }
+      return result;
+    }
     case "workspace.manifest.base-refresh": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = command.input;
@@ -158,13 +234,45 @@ export async function executeWorkspaceManifestComputation(
         return result.results;
       });
     }
+    case "workspace.manifest.result":
     case "workspace.manifest.staged": {
-      const { loadStagedWorkerWorkspace } = await import("./workspace-result-inventory.runtime.js");
-      return await loadStagedWorkerWorkspace(
+      const { loadStagedWorkerWorkspace, materializeStagedWorkerWorkspace } =
+        await import("./workspace-result-inventory.runtime.js");
+      const { nodes, ...snapshot } = await loadStagedWorkerWorkspace(
         command.input.root,
         command.input.ref,
         command.input.buildCacheInputs,
+        command.input.reconciliation,
       );
+      const reconciliation = command.input.reconciliation;
+      if (
+        command.input.verifyContents ||
+        (command.input.stagingRoot &&
+          (!reconciliation ||
+            (!reconciliation.alreadyAccepted &&
+              reconciliation.baseManifestRef === snapshot.baseManifestRef)))
+      ) {
+        await materializeStagedWorkerWorkspace(
+          command.input.root,
+          command.input.stagingRoot,
+          snapshot,
+        );
+      }
+      if (command.type === "workspace.manifest.result") {
+        return {
+          gitHistory: snapshot.gitHistory,
+          baseManifestRef: snapshot.baseManifestRef,
+          currentManifestRef: snapshot.currentManifestRef,
+          base: { baseCommit: snapshot.base.baseCommit },
+          current: { baseCommit: snapshot.current.baseCommit },
+          changed: snapshot.changed,
+          changedEntryCount: snapshot.changedEntries.length,
+        };
+      }
+      return {
+        ...snapshot,
+        reconciliation: prepareWorkspaceReconciliation(snapshot.base, snapshot.current, nodes),
+      };
     }
     case "workspace.manifest.stage-input": {
       const { buildWorkspaceStageInput } =
@@ -174,11 +282,6 @@ export async function executeWorkspaceManifestComputation(
     case "workspace.manifest.tree-input": {
       const { buildWorkspaceTreeInput } = await import("./workspace-result-preparation.runtime.js");
       return await buildWorkspaceTreeInput(decodeManifestValue(command), assertBeforeMutation);
-    }
-    case "workspace.manifest.entries": {
-      const { readStagedWorkerWorkspaceEntries } =
-        await import("./workspace-result-inventory.runtime.js");
-      return ownedWorkerBytes(await readStagedWorkerWorkspaceEntries(command.input));
     }
     case "workspace.manifest.capture":
     case "workspace.manifest.snapshot":
@@ -190,6 +293,10 @@ export async function executeWorkspaceManifestComputation(
         readActualWorkspaceManifestImpl({
           ...input,
           includePaths: input.includePaths && new Set(input.includePaths),
+          gitIgnore: input.gitIgnore && {
+            paths: new Set(input.gitIgnore.paths),
+            retainedPaths: new Set(input.gitIgnore.retainedPaths),
+          },
           buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),
           preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
         }),
@@ -213,6 +320,18 @@ export async function executeWorkspaceManifestComputation(
       return await withHashes(input.hashes, () =>
         readWorkspaceFileSnapshotWithLimit(input.path, input.maxBytes, input.root),
       );
+    }
+    case "workspace.reconcile.diff": {
+      const { readWorkspacePatch } = await import("./workspace-reconcile-recovery.js");
+      return await readWorkspacePatch(
+        command.input.root,
+        command.input.baseTree,
+        command.input.currentTree,
+      );
+    }
+    case "workspace.reconcile.patch": {
+      const { createWorkspacePatch } = await import("./workspace-reconcile-recovery.js");
+      return await createWorkspacePatch(decodeManifestValue(command));
     }
     case "workspace.reconcile.preflight": {
       const { preflightWorkspaceApplyImpl } = await import("./workspace-reconcile-preflight.js");
@@ -257,9 +376,17 @@ export async function executeWorkspaceManifestComputation(
     case "workspace.manifest.pair": {
       const baseRaw = decodeUtf8(command.input.baseRaw);
       const currentRaw = decodeUtf8(command.input.currentRaw);
-      const base = parseWorkerWorkspaceManifest(baseRaw, command.input.baseRef);
-      const current = parseWorkerWorkspaceManifest(currentRaw, command.input.currentRef);
-      const compared = parseChangedWorkspaceResult(base, current);
+      const base = parseWorkerWorkspaceManifest(
+        baseRaw,
+        command.input.baseRef,
+        command.input.buildCacheInputs,
+      );
+      const current = parseWorkerWorkspaceManifest(
+        currentRaw,
+        command.input.currentRef,
+        command.input.buildCacheInputs,
+      );
+      const compared = parseChangedWorkspaceResult(base, current, false);
       return { base, current, ...compared, paths: compared.entries.map((entry) => entry.path) };
     }
   }

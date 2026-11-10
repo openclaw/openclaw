@@ -1,9 +1,11 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { isDeepStrictEqual } from "node:util";
+import { promisify } from "node:util";
 import { stringifyNonErrorCause, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import {
@@ -20,7 +22,13 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
+import { readGatewayLockProcessCmdline } from "../../../../src/infra/gateway-lock-process.js";
 import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../../../../src/infra/node-commands.js";
+import {
+  inspectNodeWorkerProcessIdentity,
+  requireNodeWorkerProcessIdentity,
+  type NodeWorkerProcessIdentity,
+} from "../../../../src/node-host/node-worker-process-identity.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   BASELINE_PROMPT,
@@ -275,6 +283,42 @@ function waitForChatError(events: readonly GatewayEvent[], runId: string) {
   });
 }
 
+async function killWorkerPayload(owner: NodeWorkerProcessIdentity): Promise<number> {
+  let worker = owner;
+  if (process.platform === "linux" || process.platform === "darwin") {
+    // The receipt identifies the cleanup anchor; crash its payload, preserving cleanup custody.
+    const { stdout } = await promisify(execFile)("ps", ["-ax", "-o", "ppid=", "-o", "pid="], {
+      encoding: "utf8",
+      timeout: 1_000,
+    });
+    const payloads = stdout.split("\n").flatMap((line) => {
+      const [parentPid, pid] = line.trim().split(/\s+/u).map(Number);
+      if (parentPid !== owner.pid || !pid) {
+        return [];
+      }
+      const identity = requireNodeWorkerProcessIdentity(pid);
+      const argv = readGatewayLockProcessCmdline(pid, process.platform, 1_000);
+      return argv?.includes("--internal-worker-ipc") && argv.includes("--internal-worker-session")
+        ? [identity]
+        : [];
+    });
+    assert.equal(payloads.length, 1, "cleanup anchor must own exactly one worker payload");
+    worker = payloads[0]!;
+  }
+  assert.equal(
+    inspectNodeWorkerProcessIdentity(owner),
+    "live",
+    "worker owner changed before crash",
+  );
+  assert.equal(
+    inspectNodeWorkerProcessIdentity(worker),
+    "live",
+    "worker payload changed before crash",
+  );
+  process.kill(worker.pid, "SIGKILL");
+  return worker.pid;
+}
+
 async function runProof(options: ProducerOptions) {
   const state = createQaBusState();
   // openclaw-temp-dir: allow standalone QA producer owns and removes this fixture root.
@@ -296,6 +340,7 @@ async function runProof(options: ProducerOptions) {
     const transport = createQaChannelTransport(state);
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${provider.baseUrl}/v1`,
       providerMode: "mock-openai",
@@ -396,11 +441,12 @@ async function runProof(options: ProducerOptions) {
         ? receipt.worker
         : undefined;
     });
-    process.kill(activeWorker.pid, "SIGKILL");
+    const workerPid = await killWorkerPayload(activeWorker);
     const killed = {
       killedProcessCount: 1,
       nodeDeviceId: node.identity.deviceId,
-      workerPid: activeWorker.pid,
+      workerPid,
+      cleanupOwnerPid: activeWorker.pid,
     };
     const waitResult = await operator.request<GatewayRunResult>(
       "agent.wait",
@@ -420,15 +466,37 @@ async function runProof(options: ProducerOptions) {
       const marker = COMMITTED_MARKERS.find((candidate) => text.includes(candidate));
       return marker ? [{ role: messageRole(message), marker }] : [];
     });
-    if (
-      !isDeepStrictEqual(historyAfterFailure, committedBeforeKill) ||
-      committedSequence.length !== COMMITTED_MARKERS.length ||
-      committedSequence.some((entry, index) => entry.marker !== COMMITTED_MARKERS[index]) ||
-      historyAfterFailure.some((message) => messageText(message).includes(VOLATILE_TEXT)) ||
-      Object.values(countsAfterFailure).some((count) => count !== 1)
-    ) {
-      throw new Error(`unexpected durable cutoff: ${JSON.stringify(committedSequence)}`);
-    }
+    assert.deepEqual(
+      historyAfterFailure.slice(0, committedBeforeKill.length),
+      committedBeforeKill,
+      "worker loss must retain the exact committed prefix",
+    );
+    assert.deepEqual(
+      committedSequence.map((entry) => entry.marker),
+      COMMITTED_MARKERS,
+      "worker loss must retain checkpoint ordering",
+    );
+    assert.ok(Object.values(countsAfterFailure).every((count) => count === 1));
+    const interruptedTail = historyAfterFailure.slice(committedBeforeKill.length);
+    assert.equal(interruptedTail.length, 2, "worker loss must append one partial and one notice");
+    const interruptedReply = requireRecord(interruptedTail[0], "interrupted reply");
+    assert.equal(interruptedReply.role, "assistant");
+    assert.equal(messageText(interruptedReply), VOLATILE_TEXT);
+    assert.deepEqual(interruptedReply.openclawAbort, {
+      aborted: true,
+      origin: "placement-abandon",
+      runId,
+    });
+    const failureNotice = requireRecord(interruptedTail[1], "worker failure notice");
+    assert.equal(failureNotice.role, "custom");
+    assert.equal(failureNotice.customType, "run-failed-before-reply");
+    assert.equal(failureNotice.display, true);
+    const runError = requireRecord(failureNotice.openclawRunError, "worker failure provenance");
+    assert.equal(runError.runId, runId);
+    const failureSummary = messageText(failureNotice);
+    assert.ok(failureSummary.trim());
+    assert.equal(runError.summary, failureSummary);
+    assert.equal(waitResult.status, "error");
 
     // Keep the node connected until its supervisor delivers the worker's terminal receipt.
     await node.disconnect();
@@ -468,12 +536,13 @@ async function runProof(options: ProducerOptions) {
     const recoveryCounts = markerCounts(historyAfterRecovery);
     const recoveryContext = provider.contextRequest;
     if (
-      !COMMITTED_MARKERS.every((marker) => recoveryContext.includes(marker)) ||
+      !COMMITTED_MARKERS.every((marker) => recoveryContext.split(marker).length - 1 === 1) ||
       recoveryContext.includes(VOLATILE_TEXT) ||
+      recoveryContext.includes(JSON.stringify(failureSummary).slice(1, -1)) ||
       Object.values(recoveryCounts).some((count) => count !== 1)
     ) {
       throw new Error(
-        "redispatched inference did not preserve exactly one copy of each checkpoint",
+        "redispatched inference lost or duplicated checkpoint context or replayed a display-only record",
       );
     }
 
@@ -507,17 +576,18 @@ async function runProof(options: ProducerOptions) {
       killedWorker: killed,
       durableTranscript: {
         cutoff: COMMITTED_MARKERS.length,
-        exactPreKillSnapshotRetained: true,
+        exactPreKillPrefixRetained: true,
         historyMessageCount: historyAfterFailure.length,
         exactMarkers: COMMITTED_MARKERS,
         sequence: committedSequence,
         markerCounts: countsAfterFailure,
-        volatileMessagePersisted: false,
+        interruptedPartialPersisted: true,
+        failureNoticeCount: 1,
       },
       livePreview: {
         text: VOLATILE_TEXT,
         deliveredBeforeDeath: true,
-        absentFromDurableTranscript: true,
+        retainedAsInterruptedReply: true,
         visibleFailureAfterDeath: true,
       },
       turnFailure: {
@@ -532,6 +602,7 @@ async function runProof(options: ProducerOptions) {
         placementState: requireRecord(redispatched.placement, "redispatched placement").state,
         contextContainedCutoff: true,
         contextExcludedVolatilePreview: true,
+        contextExcludedFailureNotice: true,
         reply: CONTEXT_REPLY,
         turnStatus: recoveryResult.status,
         markerCounts: recoveryCounts,
@@ -592,7 +663,10 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
       id: SCENARIO_ID,
       title: "Cloud worker mid-turn machine loss",
       sourcePath: `qa/scenarios/runtime/${SCENARIO_ID}.yaml`,
-      docsRefs: ["docs/gateway/cloud-workers.md", "docs/concepts/qa-e2e-automation.md"],
+      docsRefs: [
+        "docs/gateway/cloud-workers/session-lifecycle.md",
+        "docs/concepts/qa-e2e-automation.md",
+      ],
       codeRefs: [
         "src/worker/embedded-agent-transcript.runtime.ts",
         "src/gateway/worker-environments/transcript-commit.ts",
@@ -609,7 +683,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
     return await writer.write({
       artifacts: [{ filePath: VERDICT_FILE, kind: "verdict" }],
       details:
-        "paired-node worker loss preserved the exact committed transcript prefix, surfaced an error, and redispatched with continuous context",
+        "paired-node worker loss preserved the exact committed prefix and interrupted reply, surfaced a durable error, and redispatched with continuous context",
       durationMs: Math.max(1, Date.now() - startedAt),
       status: "pass",
     });

@@ -14,7 +14,7 @@ const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
 const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
 
-class CliExecutionAuthProfileError extends Error {
+export class CliExecutionAuthProfileError extends Error {
   override name = "CliExecutionAuthProfileError";
 }
 
@@ -45,7 +45,10 @@ export function selectCliExecutionAuthProfile(params: {
   sessionBinding?: CliSessionBinding;
   readinessMode?: "execution" | "read-only";
   metadataSnapshot?: PluginMetadataSnapshot;
-}): { profileId: string; provider: string } | undefined {
+}):
+  | { kind: "stored"; profileId: string; provider: string }
+  | { kind: "native"; profileId: string }
+  | undefined {
   const { store } = params;
   const selectedAuthProfileId = params.selected?.authProfileId?.trim();
   const hasExplicitSelection =
@@ -66,7 +69,9 @@ export function selectCliExecutionAuthProfile(params: {
       : undefined;
   const nativeProfileId = retainedProfileId ?? selectedAuthProfileId;
   if (nativeProfileId && nativeAuthProfileIds?.includes(nativeProfileId)) {
-    return undefined;
+    // Preserve an explicit native choice separately from missing credentials so callers
+    // can authorize an account transition without forwarding a stored credential.
+    return { kind: "native", profileId: nativeProfileId };
   }
   const canonicalProvider = resolveCliRuntimeCanonicalProvider({
     runtime: params.cliExecutionProvider,
@@ -89,7 +94,7 @@ export function selectCliExecutionAuthProfile(params: {
       );
     }
     if (acceptsCredential(credential, true)) {
-      return { profileId: retainedProfileId, provider: credential.provider };
+      return { kind: "stored", profileId: retainedProfileId, provider: credential.provider };
     }
     throw new CliExecutionAuthProfileError(
       `CLI backend "${params.cliExecutionProvider}" cannot use auth profile "${retainedProfileId}" owned by "${credential.provider}".`,
@@ -121,7 +126,7 @@ export function selectCliExecutionAuthProfile(params: {
         acceptsCredential(credential, false) &&
         !nativeAuthProfileIds?.includes(profileId)
       ) {
-        return { profileId, provider: credential.provider };
+        return { kind: "stored", profileId, provider: credential.provider };
       }
     }
     if (order.hasExplicitOrder) {
@@ -131,12 +136,12 @@ export function selectCliExecutionAuthProfile(params: {
   return undefined;
 }
 
-export async function resolveCliExecutionAuthProfileId(
+export async function resolveCliExecutionAuthSelection(
   params: Omit<Parameters<typeof selectCliExecutionAuthProfile>[0], "store" | "readinessMode"> & {
     agentDir: string;
     loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
   },
-): Promise<string | undefined> {
+) {
   const loadStore =
     params.loadAuthProfileStoreForRuntimeAsync ??
     (await import("./auth-profiles/store-runtime.js")).loadAuthProfileStoreForRuntimeAsync;
@@ -150,5 +155,12 @@ export async function resolveCliExecutionAuthProfileId(
         ? selected
         : (params.sessionBinding?.authProfileId?.trim() ?? selected),
   });
-  return selectCliExecutionAuthProfile({ ...params, store })?.profileId;
+  return selectCliExecutionAuthProfile({ ...params, store });
+}
+
+export async function resolveCliExecutionAuthProfileId(
+  params: Parameters<typeof resolveCliExecutionAuthSelection>[0],
+): Promise<string | undefined> {
+  const selection = await resolveCliExecutionAuthSelection(params);
+  return selection?.kind === "stored" ? selection.profileId : undefined;
 }

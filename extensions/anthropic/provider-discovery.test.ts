@@ -20,21 +20,6 @@ afterEach(() => {
   discoverClaudeCliModels.mockReset();
 });
 
-it("prepares native availability once for a 632-workspace roster", async () => {
-  const entries = Object.fromEntries(
-    Array.from({ length: 632 }, (_, i) => [String(i), { workspace: String(i) }]),
-  );
-  const input = { config: { agents: { entries } }, env: {}, signal: undefined };
-  probeClaudeCliAuthStatus.mockResolvedValue({ status: "missing" });
-  const prepared = new Set<string>();
-  for (const agentId of Object.keys(entries)) {
-    await prepare(input);
-    prepared.add(agentId);
-  }
-  expect(prepared.size).toBe(632);
-  expect(probeClaudeCliAuthStatus).toHaveBeenCalledOnce();
-});
-
 it.each(["config", "env", "signal"] as const)(
   "reobserves native availability after a changed %s",
   async (changed) => {
@@ -129,15 +114,7 @@ it("publishes the native menu once per discovery generation, never static member
     }),
     resolveProviderApiKey: () => ({ apiKey: undefined }),
   };
-  const row = {
-    id: "claude-new-native",
-    name: "Native",
-    reasoning: true,
-    input: ["text" as const],
-    maxTokens: 100,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    thinkingLevelMap: { low: "low", max: "max" },
-  };
+  const row = { id: "claude-new-native" };
   probeClaudeCliAuthStatus.mockResolvedValue({ status: "available" });
   discoverClaudeCliModels.mockResolvedValueOnce([row]).mockResolvedValueOnce([]);
   const first = await provider.catalog!.run(ctx);

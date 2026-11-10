@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ControlUiViewContext } from "../../../src/plugin-sdk/control-ui.js";
 import { PRESENTATION_CHANGED_EVENT } from "../lib/presentation.ts";
 import { createInitializationContext } from "../pages/chat/chat-application-context.test-support.ts";
 import { threadFixture } from "../pages/chat/components/chat-transcript-fixture.test-support.tsx";
@@ -10,21 +9,41 @@ import {
 } from "../pages/chat/components/chat-transcript.test-support.ts";
 import { render } from "../pages/chat/test-helpers/chat-transcript-native.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { createViewRuntime, replacement } from "./control-ui-view.test-support.ts";
+import { createViewRuntime, recordReplacement } from "./control-ui-view.test-support.ts";
 
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it("retires inline views when retained rows hide and remounts equal props on return", async () => {
-  const contexts: ControlUiViewContext<unknown>[] = [];
-  const dispose = vi.fn();
-  const runtime = createViewRuntime(
-    replacement("workspace", (container, context) => {
-      contexts.push(context);
-      container.textContent = "Incident detail";
-      return { dispose };
-    }),
+it.each([true, false])("uses the latest queued visibility from presented=%s", async (presented) => {
+  const Observer = globalThis.IntersectionObserver;
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class extends Observer {
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        super(
+          (entries, observer) =>
+            callback(
+              entries.flatMap((entry) => [
+                {
+                  target: entry.target,
+                  boundingClientRect: entry.boundingClientRect,
+                  intersectionRect: entry.intersectionRect,
+                  rootBounds: entry.rootBounds,
+                  time: entry.time - 1,
+                  isIntersecting: false,
+                  intersectionRatio: 0,
+                },
+                entry,
+              ]),
+              observer,
+            ),
+          options,
+        );
+      }
+    },
   );
+  const { view, contexts, dispose } = recordReplacement("workspace", "Incident detail");
+  const runtime = createViewRuntime(view);
   const registration = runtime.context.plugins.selectedReplacement("workspace")!;
   Object.assign(runtime.context.plugins, {
     selectedReplacement: () => undefined,
@@ -33,8 +52,9 @@ it("retires inline views when retained rows hide and remounts equal props on ret
     registrations: (kind: string) =>
       kind === "inlineViews" ? [{ ...registration, key: "review/fixture@1" }] : [],
   });
-  const applicationContext = createInitializationContext();
-  Object.assign(applicationContext, { plugins: runtime.context.plugins });
+  const applicationContext = Object.assign(createInitializationContext(), {
+    plugins: runtime.context.plugins,
+  });
   const presentation = new EventTarget();
   let visible = true;
   const props = threadProps(
@@ -43,10 +63,7 @@ it("retires inline views when retained rows hide and remounts equal props on ret
     [
       {
         role: "toolResult",
-        toolName: "show_incident",
-        toolCallId: "incident-call",
         timestamp: 1_000,
-        content: [{ type: "text", text: "Incident summary" }],
         details: {
           pluginView: {
             type: "plugin_view",
@@ -63,7 +80,7 @@ it("retires inline views when retained rows hide and remounts equal props on ret
     ],
     {
       applicationContext,
-      presented: true,
+      presented,
       transcriptVisible: { owner: presentation, isPresented: () => visible },
     },
   );
@@ -71,14 +88,20 @@ it("retires inline views when retained rows hide and remounts equal props on ret
   try {
     rerender();
     transcript.start();
+    const initialRow = container.querySelector(".chat-virtual-row");
+    if (!presented) {
+      flush();
+      expect(contexts).toHaveLength(0);
+      props.presented = true;
+      rerender();
+    }
     await waitForSolid(() => expect(contexts).toHaveLength(1));
     const row = container.querySelector(".chat-virtual-row");
+    expect(row).toBe(initialRow);
     const placeholder = container.querySelector(".chat-plugin-inline-view");
     expect(row).not.toBeNull();
     expect(placeholder?.textContent).toContain("Incident detail");
     const original = contexts[0]!;
-    await expect(original.host.request("fixture.active")).resolves.toEqual({ ok: true });
-    runtime.request.mockClear();
 
     // Keep row props and the last near-viewport receipt unchanged. The canonical
     // transcript presentation owner must retire work before another IO receipt.

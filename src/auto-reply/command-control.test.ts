@@ -6,7 +6,6 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization, resolveCommandAuthorizationAsync } from "./command-auth.js";
 import {
-  hasCommandSyntax,
   hasControlCommand,
   hasInlineCommandTokens,
   shouldComputeCommandAuthorized,
@@ -16,6 +15,7 @@ import { markInboundContextLabel } from "./reply/inbound-context-marker.js";
 import { resolveAuthorizedSessionResetCommand } from "./reply/session-reset-command.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
+import { nativeGroupContext } from "./test-helpers/command-context-fixtures.js";
 
 installDiscordRegistryHooks();
 
@@ -370,14 +370,7 @@ describe("resolveCommandAuthorization", () => {
       } as OpenClawConfig;
 
       const auth = authorize(
-        {
-          Provider: "telegram",
-          Surface: "telegram",
-          ChatType: "group",
-          From: "telegram:999",
-          SenderId: "999",
-          CommandSource: "native",
-        } as MsgContext,
+        nativeGroupContext("telegram", "telegram:999", "999") as MsgContext,
         cfg,
       );
 
@@ -397,14 +390,7 @@ describe("resolveCommandAuthorization", () => {
       } as OpenClawConfig;
 
       const auth = authorize(
-        {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: "group",
-          From: "discord:helper",
-          SenderId: "helper",
-          CommandSource: "native",
-        } as MsgContext,
+        nativeGroupContext("discord", "discord:helper", "helper") as MsgContext,
         cfg,
       );
 
@@ -676,7 +662,6 @@ describe("control command parsing", () => {
     "![nested [diagram]][figure]",
     "@bot ![diagram](https://example.com/diagram.png)",
   ])("keeps Markdown images out of command classification: %s", (body) => {
-    expect(hasCommandSyntax(body)).toBe(false);
     expect(shouldComputeCommandAuthorized(body)).toBe(false);
     expect(hasControlCommand(body)).toBe(false);
   });

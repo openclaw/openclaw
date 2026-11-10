@@ -1,13 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
-import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
-import { getExistingSessionControllerMailbox } from "../../sessions/session-controller.mailbox.js";
 import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
-import type { AgentInputRecoveryAdmission } from "../../state/agent-input-recovery.types.js";
 import { createChatRunState } from "../server-chat-state.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createControlFixture } from "./client-control-fixture.test-support.js";
 
 const { config, coreParams, mocks } = await vi.hoisted(
@@ -74,38 +71,16 @@ function gate(backend = true) {
   return { started, release: () => released.resolve(), run };
 }
 
-function recoveryGate() {
-  const target = captureSessionTarget({ ...channelTurn, storeScope: sessionTarget.storePath });
-  const recovery = createDeferred();
-  const waiting = createDeferred();
-  let pending = true;
-  const fixture = createOwner(undefined, {
-    isPending: () => pending,
-    waitForAgentInputRecovery: (_agentId, options) => {
-      if (!pending) {
-        return undefined;
-      }
-      waiting.resolve();
-      return racePromiseWithAbortSignal(recovery.promise, options?.signal);
-    },
-  });
-  return {
-    ...fixture,
-    waiting,
-    mailbox: () => getExistingSessionControllerMailbox(sessionTarget.canonicalKey, target),
-    recover: () => {
-      pending = false;
-      recovery.resolve();
-    },
-  };
-}
-
 function createOwner(
   flushTranscript: () => Promise<void> = async () => undefined,
-  inputRecovery?: AgentInputRecoveryAdmission,
+  boundGateway = false,
 ) {
+  const context: GatewayRequestContext = controlContext();
+  if (boundGateway) {
+    context.resolveGatewayContext = () => context;
+  }
   const runner = createConsultRunner({
-    context: { logGateway: { warn: vi.fn() } } as never,
+    context,
     sessionTarget,
     ownerConnId: "conn-talk",
     getVoiceSessionId: () => "voice-talk",
@@ -117,7 +92,7 @@ function createOwner(
     runToolAgentConsult: runner.runArgs,
     runAgentConsult: runner.runOwnedArgs,
     flushTranscript,
-    context: Object.assign(controlContext(), { inputRecovery }),
+    context,
   });
   owner.control.bindBridge(bridge);
   owner.activate();
@@ -183,6 +158,19 @@ beforeEach(() => {
 
 afterEach(resetSessionControllerStateForTest);
 
+it("runs a Gateway-bound voice consult outside the request scope", async () => {
+  const { enqueue, owner, expectResults } = createOwner(undefined, true);
+  const task = enqueue("consult", "configure the Dial");
+  try {
+    await vi.waitFor(() => expect(order).toEqual(["configure the Dial"]));
+    task.release();
+    await expectResults("configure the Dial");
+  } finally {
+    task.release();
+    await owner.close();
+  }
+});
+
 it.each([
   ["consult", "consult", ["first", "second"]],
   ["channel", "consult", ["second"]],
@@ -210,67 +198,6 @@ it.each([
     await owner.close();
   },
 );
-
-it.each(["recovered", "closed"] as const)(
-  "reserves Talk consults after saved input recovery, preserving arrival order: %s",
-  async (outcome) => {
-    const fixture = recoveryGate();
-    const first = gate();
-    const second = gate();
-    fixture.consult("first", "first");
-    fixture.consult("second", "second");
-    await fixture.waiting.promise;
-    expect(fixture.mailbox()).toBeUndefined();
-    let savedRun: Promise<unknown> | undefined;
-    const saved = gate(false);
-    try {
-      if (outcome === "closed") {
-        await fixture.owner.close();
-        expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
-        expect(fixture.mailbox()).toBeUndefined();
-        return;
-      }
-      savedRun = withSessionTurn(channelTurn, () => saved.run({ prompt: "saved" }));
-      await saved.started.promise;
-      fixture.recover();
-      await vi.waitFor(() => expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledTimes(2));
-      expect(order).toEqual(["saved"]);
-      saved.release();
-      await first.started.promise;
-      expect(order).toEqual(["saved", "first"]);
-      first.release();
-      await second.started.promise;
-      expect(order).toEqual(["saved", "first", "second"]);
-      second.release();
-      await fixture.expectResults("first", "second");
-    } finally {
-      fixture.recover();
-      saved.release();
-      first.release();
-      second.release();
-      await Promise.allSettled([savedRun, fixture.owner.close()]);
-    }
-  },
-);
-
-it("closes a native Talk consultation waiting for saved-input recovery before admission", async () => {
-  const fixture = recoveryGate();
-  const consultation = fixture.owner.runAgentConsult({ prompt: "native consult" });
-  void consultation.catch(() => {});
-  try {
-    await fixture.waiting.promise;
-    expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
-    await fixture.owner.close();
-    await expect(consultation).rejects.toMatchObject({
-      name: "AbortError",
-      cause: fixture.owner.signal.reason,
-    });
-    expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
-  } finally {
-    fixture.recover();
-    await Promise.allSettled([consultation, fixture.owner.close()]);
-  }
-});
 
 it("cancels a running consult through Stop and keeps the session's waiting turn", async () => {
   const hook = vi.fn();

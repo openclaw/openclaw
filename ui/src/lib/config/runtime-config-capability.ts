@@ -7,7 +7,7 @@ import { formatUiError } from "../format-error.ts";
 import { canCallGatewayMethod } from "../gateway-methods.ts";
 import { createAppliedConfigRefreshOwner } from "./applied-refresh.ts";
 import type { ConfigMethod } from "./config-gateway-operations.ts";
-import { loadConfigSnapshot } from "./config-gateway-read.ts";
+import { canEnsureConfigRead, loadConfigSnapshot } from "./config-gateway-read.ts";
 import {
   agentConfigEntry,
   clearConfigRequestVersions,
@@ -24,11 +24,12 @@ import type { RuntimeConfigEditor } from "./runtime-config-editor.ts";
 type OptionalRuntimeConfigCapabilityKey = "canSet" | "canApply" | "canPatch" | "canOpenFile";
 export type RuntimeConfigCapability = Omit<
   RuntimeConfigEditor,
-  OptionalRuntimeConfigCapabilityKey | "snapshotOwner"
+  OptionalRuntimeConfigCapabilityKey | "snapshotOwner" | "ensureSchemaLoaded"
 > &
   Partial<Pick<RuntimeConfigEditor, OptionalRuntimeConfigCapabilityKey>> & {
     ensureDisplayLoaded: () => Promise<void>;
     refreshDisplay: (options?: { background?: boolean }) => Promise<void>;
+    ensureSchemaLoaded: () => Promise<void>;
   };
 
 /** Bootstrap display facts stay eager; editing is activated by the first config operation. */
@@ -108,7 +109,7 @@ export function createRuntimeConfigCapability(
     if (editor) {
       return editor.ensureLoaded();
     }
-    if (!state.configSnapshot) {
+    if (!state.configSnapshot && (displayRead || canEnsureConfigRead(state))) {
       await (displayRead ?? runDisplayRead());
     }
     displayRefresh.reconcile();
@@ -129,6 +130,9 @@ export function createRuntimeConfigCapability(
   let pluginGeneration = gateway.snapshot.pluginCapabilities?.generation;
   // The same state holds display snapshots before the editor takes custody.
   const stopGateway = gateway.subscribe((snapshot) => {
+    if (state.client !== snapshot.client || (state.connected && snapshot.phase !== "connected")) {
+      pendingSchema = null;
+    }
     if (updateEditorConnection) {
       updateEditorConnection(snapshot);
       return;
@@ -150,7 +154,6 @@ export function createRuntimeConfigCapability(
       state.configSnapshot = null;
       displayRead = null;
       displayRefresh.cancel();
-      pendingSchema = null;
       state.configLoading = false;
       state.configSchemaLoading = false;
     }
@@ -282,10 +285,19 @@ export function createRuntimeConfigCapability(
     }
     const result = invoke((loaded) => {
       // Hand the module-loading flag to the read before its coalesced publication.
-      if (!currentConfigRead(state)) {
+      const inheritedRead = currentConfigRead(state);
+      if (!inheritedRead) {
         state.configLoading = false;
+        return task(loaded);
       }
-      return task(loaded);
+      // Read receipts remain current after settlement. Retire only this module-loading
+      // flag once its task joins the receipt, unless a successor read replaced it.
+      return task(loaded).finally(() => {
+        if (state.configLoading && currentConfigRead(state) === inheritedRead) {
+          state.configLoading = false;
+          publish();
+        }
+      });
     }, undefined);
     if (
       !background &&
@@ -308,35 +320,25 @@ export function createRuntimeConfigCapability(
   };
   const loadSchema = (refresh: boolean): Promise<Result<void, string>> => {
     if (editor) {
-      const loaded = editor;
-      if (refresh) {
-        return loaded.refreshSchema();
-      }
-      const loading = loaded.ensureSchemaLoaded();
-      // A reconnect can replace schemaRead before this caller's read settles.
-      const receipt = loaded.schemaRead;
-      return loading.then(() => receipt ?? { ok: true, value: undefined });
+      pendingSchema = null;
+      return refresh ? editor.refreshSchema() : editor.ensureSchemaLoaded();
     }
     if (pendingSchema) {
       return pendingSchema;
     }
-    pendingSchema = invoke<Result<void, string>>(
-      async (loaded) => {
-        if (refresh) {
-          return loaded.refreshSchema();
-        }
-        const loading = loaded.ensureSchemaLoaded();
-        const receipt = loaded.schemaRead;
-        await loading;
-        return receipt ?? { ok: true as const, value: undefined };
-      },
-      { ok: true as const, value: undefined },
+    const requested: Promise<Result<void, string>> = activate().then(
+      (loaded) =>
+        loaded?.schemaRead ??
+        (loaded && pendingSchema === requested
+          ? loadSchema(refresh)
+          : { ok: true, value: undefined }),
     );
+    pendingSchema = requested;
     if (state.client && state.connected && canRead && !disposed) {
       state.configSchemaLoading = true;
       publish();
     }
-    return pendingSchema;
+    return requested;
   };
   return {
     get state() {
@@ -359,7 +361,10 @@ export function createRuntimeConfigCapability(
     },
     ensureDisplayLoaded,
     refreshDisplay,
-    ensureLoaded: () => read((loaded) => loaded.ensureLoaded()),
+    ensureLoaded: () =>
+      !editor && !state.configSnapshot && !displayRead && !canEnsureConfigRead(state)
+        ? activate().then(() => undefined)
+        : read((loaded) => loaded.ensureLoaded()),
     ensureSchemaLoaded: () => loadSchema(false).then(() => undefined),
     refresh: (options) => read((loaded) => loaded.refresh(options), options?.background),
     refreshSchema: () => loadSchema(true),

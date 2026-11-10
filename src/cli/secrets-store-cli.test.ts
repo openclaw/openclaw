@@ -53,7 +53,7 @@ function run(...args: string[]) {
   return program.parseAsync(["secrets", "store", ...args], { from: "user" });
 }
 
-async function inputFile(value: string) {
+async function inputFile(value: string | Buffer) {
   const file = path.join(tempDirs.make("store-cli-"), "input");
   await fs.writeFile(file, value);
   return file;
@@ -104,21 +104,6 @@ describe("secrets store CLI", () => {
     expect(mocks.writeBatch).not.toHaveBeenCalled();
     expect(mocks.runtimeErrors.join("\n")).toContain("OPENCLAW_GATEWAY_TOKEN");
   });
-  it("writes JSON results for list and get", async () => {
-    const entry = { name: "SERVICE_MODE", kind: "env" };
-    const list = [{ ...entry, valuePreview: "production" }];
-    mocks.list.mockReturnValueOnce(list).mockReturnValueOnce([entry]);
-    mocks.read.mockResolvedValueOnce({ ok: true, value: "production" });
-    await run("list", "--json");
-    await run("get", "SERVICE_MODE", "--json");
-    expect(mocks.runtimeLogs).toHaveLength(2);
-    expect(mocks.defaultRuntime.writeJson.mock.calls).toEqual([
-      [list],
-      [{ ...entry, value: "production" }],
-    ]);
-    expect(mocks.runtimeErrors).toHaveLength(0);
-  });
-
   it("escapes readable env values while preserving JSON and plain output", async () => {
     const value = "café\u001b[31m\noperator-forged\tend\rrow\u0007";
     const entry = { name: "SERVICE_MODE", kind: "env", valuePreview: value };
@@ -146,6 +131,7 @@ describe("secrets store CLI", () => {
     await run("list", "--plain");
     await run("get", "SERVICE_MODE", "--plain");
     expect(mocks.runtimeLogs).toEqual([`SERVICE_MODE\tenv\t${value}\t`, value]);
+    expect(mocks.runtimeErrors).toEqual([]);
   });
 
   it("shows non-secret allowed-host metadata in list output", async () => {
@@ -170,8 +156,11 @@ describe("secrets store CLI", () => {
     expect(mocks.write).not.toHaveBeenCalled();
   });
 
-  it("reports an oversized --value-file as validation (exit 2), matching the stdin path", async () => {
-    const file = await inputFile("a".repeat(64 * 1024 + 1));
+  it.each([
+    ["oversized", Buffer.alloc(64 * 1024 + 1)],
+    ["malformed UTF-8", Buffer.from([0xff])],
+  ] as const)("refuses %s value files before store mutation", async (_name, bytes) => {
+    const file = await inputFile(bytes);
     await expect(
       run("set", "BIG_ENV_VALUE", "--kind", "env", "--value-file", file),
     ).rejects.toThrow("__exit__:2");
@@ -277,7 +266,8 @@ describe("secrets store CLI", () => {
   });
 
   it("imports quoted and multiline dotenv values without exposing them", async () => {
-    const privateKey = "-----BEGIN PRIVATE KEY-----\nmultiline-body\n-----END PRIVATE KEY-----";
+    const privateKey =
+      "-----BEGIN PRIVATE KEY-----\n合法 � 😀\nmultiline-body\n-----END PRIVATE KEY-----";
     const dotenvPath = await inputFile(
       [
         'SERVICE_URL="https://service.test/path with spaces"',

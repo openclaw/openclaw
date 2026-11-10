@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { streamSimpleOpenAICompletions } from "../providers/openai-completions.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import {
@@ -33,21 +37,11 @@ const server = createServer((request, response) => {
 });
 
 beforeAll(async () => {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Missing loopback provider address");
-  }
-  baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  baseUrl = `${await listenLoopback(server)}/v1`;
 });
 
 afterAll(async () => {
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+  await closeHttpServer(server);
 });
 
 it.each([

@@ -42,6 +42,7 @@ import { MaintenanceStatus } from "./maintenance-contract.js";
 import { text } from "./model.js";
 import {
   AnnotateInput,
+  ExtractSectionInput,
   SavePage,
   ClaimInput,
   RelationshipInput,
@@ -49,12 +50,14 @@ import {
   WithdrawInput,
   MergeInput,
   UnmergeInput,
+  SupersedeInput,
   RecallInput,
   Receipt,
   HistoryEntry,
   GitStatus,
   requestId,
 } from "./mutation-contract.js";
+import { HUB_PAGE_BUDGET_CHARS, PAGE_BUDGET_CHARS } from "./page-budget.js";
 import { QueryFreshness } from "./query-freshness.js";
 import { RecentInput, RecentOutput } from "./recent.js";
 import { RelinkInput, RelinkOutput } from "./relink-contract.js";
@@ -69,6 +72,7 @@ import { withSearchDetail } from "./search-detail.js";
 import { SessionActivityInput, SessionActivityOutput } from "./session-activity.js";
 import {
   AgentProxyInput,
+  GrantChangeInput,
   StoreState,
   StoresChangeInput,
   StoresChangeOutput,
@@ -79,6 +83,8 @@ import { TextWindowInput, TextWindowContent, RecoveryContent } from "./text-wind
 const empty = Type.Object({}, { additionalProperties: false });
 const issue = Type.Object({ path: text(500), code: text(80), message: text(1000) });
 const record = CardSummary;
+const chars = (n: number) => n.toLocaleString("en-US");
+const BUDGET_NOTE = ` Page bodies have a size budget: ${chars(HUB_PAGE_BUDGET_CHARS)} characters for hub pages (the most-linked pages), ${chars(PAGE_BUDGET_CHARS)} otherwise. Growth past it returns a receipt with state=rejected and budget (sizes, hub degree, largest sections, connected candidates) and saves nothing; same-size and shrinking edits always succeed. Extract sections with knowledge_extract_section; claims are never limited.`;
 const issues = Type.Array(issue, { maxItems: 1000 });
 const MergeCandidate = Type.Object(
   {
@@ -98,7 +104,7 @@ export const contract = defineFeatureContract({
     timeline: {
       kind: "query",
       description:
-        "Chronological structured records, optionally scoped to an entity page ID and date range. Defaults to occurrence time; choose recorded_at/updated_at for when Knowledge changed or due_at for commitments. No dates inferred from prose or ingestion. Explicit source-event claims fold matching meeting pages. Unknown dates excluded. Follow nextOffset with the same filters and returned snapshot; restart on change.",
+        "Chronological structured records, optionally scoped to an entity page ID and date range. Defaults to occurrence time; choose recorded_at/updated_at for when Knowledge changed or due_at for commitments. No dates inferred from prose or ingestion. Explicit source-event claims fold matching meeting pages. group=source with entity returns its Timeline: one row per dated source with their relationship note and claim count. Unknown dates excluded. Follow nextOffset with the same filters and returned snapshot; restart on change.",
       input: TimelineInput,
       output: ChronicleOutput,
       tool: { name: "knowledge_timeline", label: "Read knowledge timeline" },
@@ -154,7 +160,8 @@ export const contract = defineFeatureContract({
     publish_batch: {
       kind: "action",
       description:
-        "Publish 1–25 items; max 1 MiB. Unique item keys: 1–40 characters, start with lowercase a-z, then only a-z, 0-9, _ or - (e.g. morgan_hale, not MorganHale). Refs must match keys exactly. Batch-level UUID, vault ID, ontology hash. Refs: @key; body links: [[@key|label]]. Upload evidence first; no inline source. Page edit: existing id + revision + hash. Arrays/fields replace; omitted preserves. Validate all, then journal. Retry: same UUID + payload, or knowledge_resume. Source unchanged: old receipt; new payload ignored. Source changed: reconcile, set expectedPreviousRequestId. Receipt state/Git applies to all items. No dedup, correction or rollback.",
+        "Publish 1–25 items; max 1 MiB. Unique item keys: 1–40 characters, start with lowercase a-z, then only a-z, 0-9, _ or - (e.g. morgan_hale, not MorganHale). Refs must match keys exactly. Batch-level UUID, vault ID, ontology hash. Refs: @key; body links: [[@key|label]]. Upload evidence first; no inline source. Page edit: existing id + revision + hash. Arrays/fields replace; omitted preserves. Validate all, then journal. Retry: same UUID + payload, or knowledge_resume. Source unchanged: old receipt; new payload ignored. Source changed: reconcile, set expectedPreviousRequestId. Receipt state/Git applies to all items. No dedup, correction or rollback." +
+        BUDGET_NOTE,
       input: BatchInput,
       output: Receipt,
       tool: { name: "knowledge_publish_batch", label: "Publish knowledge batch" },
@@ -217,15 +224,25 @@ export const contract = defineFeatureContract({
     edit_body: {
       kind: "action",
       description:
-        "Edit one exact active-page body range without resending the record. Read knowledge_record view=content first; start inclusive/end exclusive are UTF-16 offsets in the full body (not raw Markdown/frontmatter). start=end inserts, empty replacement deletes. Maximum replacement 48,000 characters; complete request remains bounded. Mandatory observed vault/revision/hash/ontology fences reject stale edits. Preserves unrelated metadata/evidence; publishes a normal revision/history/receipt. The complete UTF-8 record including frontmatter must fit 5,000,000 bytes. Reuse identical requestId/payload after uncertainty; no implicit rebasing or fuzzy matching.",
+        "Edit one exact active-page body range without resending the record. Read knowledge_record view=content first; start inclusive/end exclusive are UTF-16 offsets in the full body (not raw Markdown/frontmatter). start=end inserts, empty replacement deletes. Maximum replacement 48,000 characters; complete request remains bounded. Mandatory observed vault/revision/hash/ontology fences reject stale edits. Preserves unrelated metadata/evidence; publishes a normal revision/history/receipt. The complete UTF-8 record including frontmatter must fit 5,000,000 bytes. Reuse identical requestId/payload after uncertainty; no implicit rebasing or fuzzy matching." +
+        BUDGET_NOTE,
       input: EditBodyInput,
       output: Receipt,
       tool: { name: "knowledge_edit_body", label: "Edit knowledge body" },
     },
+    extract_section: {
+      kind: "action",
+      description:
+        "Move one heading section of an active page to a new page or an existing connected page (linked either way or by a typed relationship) in one fenced publication. Use it to shrink a page over its body budget instead of truncating. The section moves verbatim, links still resolve, and source evidence it quotes or names is carried. The source keeps the heading plus your one-line summary and a link to the destination. Claims the section links to that name the source as a subject get the destination as primary subject and keep their existing subjects; remove the source with knowledge_annotate entities when it no longer applies. Supply sectionStart (heading offset) from a budget rejection or fresh read and fresh source/destination fences. Nothing changes unless every record validates. Reuse identical requestId/payload after uncertainty.",
+      input: ExtractSectionInput,
+      output: Receipt,
+      tool: { name: "knowledge_extract_section", label: "Extract knowledge section" },
+    },
     save_page: {
       kind: "action",
       description:
-        "Create or edit a page in the authorized scope. requestId must be a generated lowercase UUID, never a source ID or slug; it may be omitted only during a host pre-compaction memory flush, when Knowledge derives it from the flush ID and normalized title. Creates omit id/expectedRevision/expectedHash; edits require all three from knowledge_record. Reuse requestId and identical payload for retries; inspect knowledge_mutation after an uncertain result. Calls share a serialized service lane, not a multi-record transaction. Aliases, tags, dependencies and fields replace their collections when supplied (empty clears); omission preserves on edit. Optional expectedOntologyFingerprint fences the observed schema. Append file evidence returned by knowledge_attach using attachments (no count cap). Legacy source text remains supported; saved pages are immediately available with no approval step. A published receipt is a completed save; accepted publication conflicts retain recovery material and block publication. Requests rejected before acceptance are not saved.",
+        "Create or edit a page in the authorized scope. requestId must be a generated lowercase UUID, never a source ID or slug; it may be omitted only during a host pre-compaction memory flush, when Knowledge derives it from the flush ID and normalized title. Creates omit id/expectedRevision/expectedHash; edits require all three from knowledge_record. Reuse requestId and identical payload for retries; inspect knowledge_mutation after an uncertain result. Calls share a serialized service lane, not a multi-record transaction. Aliases, tags, dependencies and fields replace their collections when supplied (empty clears); omission preserves on edit. Optional expectedOntologyFingerprint fences the observed schema. Append file evidence returned by knowledge_attach using attachments (no count cap). Legacy source text remains supported; saved pages are immediately available with no approval step. A published receipt is a completed save; accepted publication conflicts retain recovery material and block publication. Requests rejected before acceptance are not saved." +
+        BUDGET_NOTE,
       input: SavePage,
       output: Receipt,
       tool: { name: "knowledge_save_page", label: "Save knowledge page" },
@@ -278,10 +295,18 @@ export const contract = defineFeatureContract({
       output: Receipt,
       tool: { name: "knowledge_withdraw", label: "Withdraw knowledge" },
     },
+    supersede: {
+      kind: "action",
+      description:
+        "Agent-only: mark 1–25 earlier active claims superseded by one existing current claim, such as status snapshots replaced by their outcome or a claim a later one explicitly corrects, without writing a new copy (knowledge_correct publishes a new replacement). Each earlier claim keeps its text, evidence and history and gets superseded_by plus the reason; the superseding claim is not rewritten. Every claim must share a linked page with the superseding one; link them first. No self-supersession; already superseded or withdrawn claims are rejected. Default reads exclude superseded claims; historical reads and knowledge_history keep them. undo=true restores claims this tool superseded by the same claim. Supply current revision/hash fences and a reason. Reuse identical request/payload for retries.",
+      input: SupersedeInput,
+      output: Receipt,
+      tool: { name: "knowledge_supersede", label: "Supersede claims" },
+    },
     merge: {
       kind: "action",
       description:
-        "Agent-only identity merge of two pages of the same type confirmed to be one entity (the user said so, or a source states it). The absorbed page becomes merged and its ID resolves to the survivor everywhere: claims, relationships, links, Timeline and lookups that name it count toward the survivor, and nothing is rewritten. The survivor gains the absorbed title and aliases, tags, missing fields and evidence; its own field values win (conflicts are reported). Supply both pages' current revision/hash from knowledge_record, a reason, optional retained identity evidence, and optionally a new title or a combined body (bodies are never merged automatically). Never merge on name similarity alone; see knowledge_diagnostics mergeCandidates. Undo with knowledge_unmerge. Reuse identical request/payload for retries.",
+        "Agent-only identity merge of two pages of the same type confirmed to be one entity (the user said so, or a source states it). The absorbed page becomes merged and its ID resolves to the survivor everywhere: claims, relationships, links, Timeline and lookups that name it count toward the survivor, and nothing is rewritten. The survivor gains the absorbed title and aliases, tags, missing fields and evidence; its own field values win (conflicts are reported). Supply both pages' current revision/hash from knowledge_record, a reason, optional retained identity evidence, and optionally a new title or a combined body (bodies are never merged automatically). Never merge on name similarity alone; see knowledge_diagnostics mergeCandidates. Undo with knowledge_unmerge. Reuse identical request/payload for retries. A combined body is subject to the page budget.",
       input: MergeInput,
       output: Receipt,
       tool: { name: "knowledge_merge", label: "Merge duplicate pages" },
@@ -297,7 +322,7 @@ export const contract = defineFeatureContract({
     recall: {
       kind: "action",
       description:
-        "Owner-private agent tool for explicit automatic-recall approval. Set a short summary plus optional trigger phrases, importance and host project keys on one exact active record; the service supplies approval identity/time. Source and agent-inference claims cannot be approved. Clear removes recall metadata. Revision/hash preconditions and exact request replay use the normal publication receipt and local Git checkpoint path. Corrections do not inherit approval.",
+        "Agent tool for explicit automatic-recall approval, in owner-private conversations or conversations an owner granted saves to private knowledge. Set a short summary plus optional trigger phrases, importance and host project keys on one exact active record; the service supplies approval identity/time. Source and agent-inference claims cannot be approved. Clear removes recall metadata. Revision/hash preconditions and exact request replay use the normal publication receipt and local Git checkpoint path. Corrections do not inherit approval.",
       input: RecallInput,
       output: Receipt,
       tool: { name: "knowledge_recall", label: "Curate automatic recall" },
@@ -440,7 +465,7 @@ export const contract = defineFeatureContract({
     grep: {
       kind: "query",
       description:
-        "Find records by words in titles, aliases and bodies. Use for discovery when the exact identity is unknown. Rank authorized valid knowledge by title/alias/body keywords with SQLite FTS5. Default: all word tokens, active records. Saved pages need no approval. mode=any ORs literal words; mode=phrase matches their order. No raw FTS/regex operators. lifecycle=superseded/all includes history, never withdrawn records. Filters apply before ranking. Agents get compact hits (id, title, type, path, revision, short snippet, matched fields; default limit 10); detail=full adds revision/hash citations, body line locators, score, attribution and evidence. index.state=unavailable and total=null mean failed retrieval, not no matches. Compare index.snapshot across pages; restart on changes. Not exhaustive inventory: use knowledge_records. No embeddings.",
+        "Find records by words in titles, aliases and bodies. Use for discovery when the exact identity is unknown. Rank authorized valid knowledge by title/alias/body keywords with SQLite FTS5. Default: all word tokens, active records. Saved pages need no approval. mode=any ORs literal words; mode=phrase matches their order. No raw FTS/regex operators. lifecycle=superseded/all includes history, never withdrawn records. An active search also matches superseded wording and lists the current replacement after direct matches, with matches=[superseded] and via naming the earlier revision that matched. Filters apply before ranking. Agents get compact hits (id, title, type, path, revision, short snippet, matched fields; default limit 10); detail=full adds revision/hash citations, body line locators, score, attribution and evidence. index.state=unavailable and total=null mean failed retrieval, not no matches. Compare index.snapshot across pages; restart on changes. Not exhaustive inventory: use knowledge_records. No embeddings.",
       input: withSearchDetail(SearchInput),
       output: ToolSearchOutput,
       tool: { name: "knowledge_grep", label: "Search knowledge" },
@@ -459,7 +484,7 @@ export const contract = defineFeatureContract({
         "List current eligible authorized records exhaustively using pagination, with optional kind, ontology type/alias, or ID/title/alias filtering. lifecycle=all is an explicit historical inventory including inactive/invalid records; originals remain available by exact record/history inspection. includeCards adds bounded claim text and card metadata from the same scan, without evidence excerpts. includeEndpoints adds deduplicated current eligible relationship endpoint summaries for this page from the same authorized scan. Responses are bounded by bytes and nested values and may return fewer rows than requested; follow nextOffset, not offset+limit. Oversized individual cards fall back to clickable summaries; use knowledge_record for full content.",
       input: Type.Object(
         {
-          offset: Type.Optional(Type.Integer({ minimum: 0, maximum: 500 })),
+          offset: Type.Optional(Type.Integer({ minimum: 0 })),
           limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
           kind: Type.Optional(
             Type.Union([Type.Literal("page"), Type.Literal("claim"), Type.Literal("relationship")]),
@@ -531,7 +556,7 @@ export const contract = defineFeatureContract({
       kind: "query",
       description:
         "Operator settings: agents, effective store assignments and store inventory. Never creates storage.",
-      input: empty,
+      input: Type.Object({ includeRecordCounts: Type.Optional(Type.Boolean()) }),
       output: StoresSnapshot,
     },
     stores_change: {
@@ -539,6 +564,13 @@ export const contract = defineFeatureContract({
       description:
         "Operator settings: change one agent's store assignment (share its store, use a shared store, or use its own). Requires operator admin access and the current settings revision.",
       input: StoresChangeInput,
+      output: StoresChangeOutput,
+    },
+    stores_grant: {
+      kind: "action",
+      description:
+        "Operator settings: grant, change or revoke one conversation's read, write or read-write access to its agent's private knowledge. Requires operator admin access and the current grants revision.",
+      input: GrantChangeInput,
       output: StoresChangeOutput,
     },
     stores_change_status: {

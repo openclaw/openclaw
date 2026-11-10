@@ -102,6 +102,7 @@ it("keeps collaborative native spawn under the incumbent and refuses an ended pa
             hostCapabilities: host.capabilities,
             namespace: "crew",
           });
+          relay.bindForegroundTurn("parent-thread", "parent-turn");
           const invoke = (toolName: string, callId: string) =>
             invokeNativeHookRelay({
               provider: "codex",

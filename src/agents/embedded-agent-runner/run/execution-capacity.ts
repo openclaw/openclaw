@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
+import { AsyncContext } from "../../../shared/async-context.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 
 type CapacityWait = {
@@ -10,10 +11,10 @@ type CapacityWait = {
 
 type CapacityOwner = {
   active: boolean;
-  outside: <T>(operation: () => Promise<T>) => Promise<T>;
+  outside?: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
-const capacityOwner = new AsyncLocalStorage<CapacityOwner>();
+const capacityOwner = new AsyncContext<CapacityOwner>(Symbol("executionCapacityOwner"));
 
 /** Keep one task and its owners alive across separately admitted capacity tickets. */
 export async function withReleasableExecutionCapacity<T>(
@@ -74,11 +75,18 @@ export async function withReleasableExecutionCapacity<T>(
     throw error;
   } finally {
     owner.active = false;
+    // Scheduled request contexts can outlive the task captured by this callback.
+    owner.outside = undefined;
   }
 }
 
 /** Suspend only the designated wait; continuation and cleanup reacquire capacity. */
 export function outsideExecutionCapacity<T>(operation: () => Promise<T>): Promise<T> {
   const owner = capacityOwner.getStore();
-  return owner ? owner.outside(operation) : operation();
+  if (!owner) {
+    return operation();
+  }
+  return owner.outside
+    ? owner.outside(operation)
+    : Promise.reject(new Error("Execution capacity is not held"));
 }

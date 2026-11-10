@@ -8,8 +8,15 @@ const RETURN_PATH_QUERY_VALIDATORS = new Map<string, (value: string) => boolean>
   ["openclaw_mount_recovery", (value) => /^[0-9]+$/u.test(value)],
   ["__openclawSessionFacePreference", (value) => value === "1"],
   ["__openclawComposerFocus", (value) => value === "1"],
-  ["__openclawSessionKey", (value) => Boolean(value.trim())],
+  [
+    "__openclawSessionKey",
+    (value) => Boolean(value.trim()) && !containsAsciiControlCharacter(value),
+  ],
 ]);
+
+export function isControlUiSessionReturnPathQueryKey(key: string): boolean {
+  return RETURN_PATH_QUERY_VALIDATORS.has(key);
+}
 
 export function controlUiSessionEntryPath(basePath: string): string {
   return `${basePath}/__openclaw__/session-entry`;

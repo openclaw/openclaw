@@ -39,17 +39,20 @@ export async function removeFileIfExists(filePath: string): Promise<FileRemovalR
   );
 }
 
-async function readSessionFileStat(filePath: string): Promise<SessionsDirFileStat | null> {
-  const stat = await fs.promises.stat(filePath).catch(() => null);
-  return stat?.isFile()
-    ? {
-        path: filePath,
-        canonicalPath: canonicalizePathForComparison(filePath),
-        name: path.basename(filePath),
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      }
-    : null;
+function readSessionFileStat(filePath: string): Promise<SessionsDirFileStat | null> {
+  return fs.promises.stat(filePath).then(
+    (stat) =>
+      stat.isFile()
+        ? {
+            path: filePath,
+            canonicalPath: canonicalizePathForComparison(filePath),
+            name: path.basename(filePath),
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+          }
+        : null,
+    () => null,
+  );
 }
 
 export async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {

@@ -24,6 +24,8 @@ export function readChatSessionActionAccess(
     fork: readSessionMethodAccess(snapshot, {
       method: "sessions.fork",
       requiredScope: "operator.write",
+      sessionScope: true,
+      session: options.session,
     }),
     reset: adminAction("sessions.reset"),
     branchSwitch: adminAction("sessions.branches.switch"),

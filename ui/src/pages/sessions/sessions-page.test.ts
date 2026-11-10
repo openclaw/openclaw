@@ -2,14 +2,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
 import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability, SessionListOptions } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type {
   SessionDeleteOutcome,
@@ -34,7 +34,6 @@ import {
   selectMenuValue,
   settleSessionMenu,
 } from "../../test-helpers/session-menu.ts";
-import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { page as sessionsRoute, type SessionsRouteData } from "./route.ts";
 import {
@@ -123,6 +122,131 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("sessions page lifecycle", () => {
+  it("keeps held row work idle on unchanged status while sort, identity, rows and locale stay live", async () => {
+    let name = "Before";
+    const connection = createGateway(
+      createTestGatewayClient(async () => ({ agentId: "main", name, avatar: "" })),
+    );
+    const agentIdentity = createAgentIdentityCapability(connection.gateway);
+    const managed = createManagedSessions();
+    const context = { ...createContext(connection.gateway, managed.sessions), agentIdentity };
+    const rows = [
+      sessionRow("webchat:a", { updatedAt: 1 }),
+      sessionRow("webchat:b", { updatedAt: 2 }),
+    ];
+    const page = await createRenderedPage(context, sessionsResult(rows, 1));
+    await agentIdentity.ensure(["main"]);
+    await page.updateComplete;
+    const held = [...page.querySelectorAll(".session-data-row")];
+    const heldRows = page.result?.sessions;
+    const sort = vi.spyOn(Array.prototype, "toSorted");
+    const identity = vi.spyOn(agentIdentity, "get");
+    const translate = vi.spyOn(i18n, "t");
+    for (let i = 0; i < 5; i++) {
+      connection.emit({});
+      await page.updateComplete;
+    }
+    expect.soft(sort.mock.contexts.filter((input) => input === heldRows)).toHaveLength(0);
+    expect.soft(identity).not.toHaveBeenCalled();
+    expect
+      .soft(
+        translate.mock.calls.filter(([key]) =>
+          [
+            "sessionsView.selectSession",
+            "sessionsView.showSessionDetails",
+            "chat.sidebar.openSessionMenu",
+          ].includes(key),
+        ),
+      )
+      .toHaveLength(0);
+    expect([...page.querySelectorAll(".session-data-row")]).toEqual(held);
+    const keys = () =>
+      [...page.querySelectorAll(".session-link")].map((link) => link.getAttribute("href"));
+    const first = keys();
+    page.querySelector<HTMLButtonElement>('th[data-sort-dir="desc"] button')!.click();
+    await page.updateComplete;
+    expect(keys()).toEqual(first.toReversed());
+    page.querySelector<HTMLButtonElement>("th.data-table-key-col button")!.click();
+    await page.updateComplete;
+    expect(keys()).toEqual(first);
+    page.onSortChange("updated", "desc");
+    publishRows(managed, [{ ...rows[0]!, updatedAt: 3, displayName: "Changed row" }, rows[1]!]);
+    await page.updateComplete;
+    expect(keys()).toEqual(first.toReversed());
+    expect(page.textContent).toContain("Changed row");
+    expect(page.querySelectorAll(".session-data-row")[0]).toBe(held[1]);
+    name = "After";
+    agentIdentity.invalidate(["main"]);
+    await agentIdentity.ensure(["main"]);
+    await page.updateComplete;
+    expect(page.querySelector(".session-link")?.textContent).toContain("After");
+    const checkbox = page.querySelector<HTMLInputElement>(".session-data-row input")!;
+    const menu = page.querySelector(".session-row-menu-trigger")!.closest("openclaw-tooltip")!;
+    const english = [checkbox.getAttribute("aria-label"), menu.content];
+    try {
+      await i18n.setLocale("de");
+      await i18n.prepareLocale();
+      await page.updateComplete;
+      expect(checkbox.getAttribute("aria-label")).not.toBe(english[0]);
+      expect(menu.content).not.toBe(english[1]);
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
+  it.each(["pending", "completed"] as const)(
+    "adopts the entering route's %s list without another request",
+    async (completion) => {
+      const response = createDeferred<SessionsListResult>();
+      const linked = completion === "completed";
+      const key = linked ? "agent:research:linked" : "agent:main:current";
+      const row = sessionRow("current", { key });
+      const result = sessionsResult([{ ...row, rowMode: "compact" }], 1);
+      const { request, sessions, context } = liveSessions<SessionListOptions>({
+        "sessions.subscribe": () => ({ subscribed: true }),
+        "sessions.list": (params) =>
+          params?.source === "sessions-page" ? response.promise : sessionsResult([], 1),
+        "sessions.describe": () => ({ session: row }),
+      });
+      const refresh = vi.spyOn(sessions, "refreshList");
+      const pageRequests = () =>
+        request.mock.calls.filter(
+          ([method, params]) => method === "sessions.list" && params?.source === "sessions-page",
+        );
+      let mountedPage: Awaited<ReturnType<typeof createPage>> | undefined;
+      try {
+        // SAFETY: The Sessions route loader returns these options, without a redirect or not-found.
+        const routeData = (await sessionsRoute.loader!(
+          context,
+          createRouteLoaderOptions({
+            pathname: "/sessions",
+            search: linked ? `?session=${encodeURIComponent(key)}` : "",
+            hash: "",
+          }),
+        )) as SessionsRouteData;
+        expect(pageRequests()).toHaveLength(1);
+        expect(pageRequests()[0]?.[1]).toMatchObject({
+          agentId: linked ? "research" : "main",
+          includeUnknown: linked,
+          ...(linked ? { search: key } : {}),
+        });
+        if (completion === "completed") {
+          response.resolve(result);
+          await refresh.mock.results[0]!.value;
+        }
+        mountedPage = await createPage(context, routeData);
+        expect(pageRequests()).toHaveLength(1);
+        response.resolve(result);
+        await waitForFast(() => expect(mountedPage?.result?.sessions[0]?.key).toBe(key));
+        expect(pageRequests()).toHaveLength(1);
+      } finally {
+        response.resolve(result);
+        mountedPage?.remove();
+        sessions.dispose();
+      }
+    },
+  );
+
   it("retries a retained agent identity on roster publication after reconnect backoff", async () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -518,6 +642,23 @@ describe("sessions page lifecycle", () => {
     expect(sessions.deleteMany).toHaveBeenCalledWith([capturedTarget(target)]);
   });
 
+  it("warns about automations added to a selected conversation after selection", async () => {
+    vi.mocked(showConfirmDialog).mockResolvedValue(false);
+    const target = sessionRow("gained-automation");
+    const { page, sessions } = await mountMutation();
+    page.result = sessionsResult([target], 1);
+    // Selecting captures a row copy through the page's real selection owner.
+    selectRows(page, target);
+    // A refreshed row for the same incarnation keeps the captured selection copy.
+    page.result = sessionsResult([{ ...target, hasAutomation: true }], 2);
+    await page.deleteSelected();
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
+    expect(showConfirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ confirmLabel: "Delete anyway" }),
+    );
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
+  });
+
   it("publishes unrelated roster updates while an optimistic deletion is pending", async () => {
     const target = sessionRow("before");
     const arrived = sessionRow("arrived", { updatedAt: 2 });
@@ -574,44 +715,6 @@ describe("sessions page lifecycle", () => {
     expect(page.error).toBe(retryError);
   });
 
-  it.each(["active", "provisioning"] as const)(
-    "stops a %s cloud worker while adopting roster updates",
-    async (state) => {
-      const stopped = createDeferred<{ ok: true }>();
-      const request = vi.fn(() => stopped.promise);
-      const managed = createManagedSessions();
-      const context = createContext(
-        createGateway({ request } as unknown as GatewayBrowserClient).gateway,
-        managed.sessions,
-      );
-      const placement = createActiveSessionPlacement({ environmentId: "environment-1" });
-      const target = sessionRow("cloud", {
-        label: "Cloud task",
-        hasActiveRun: state === "provisioning",
-        placement: state === "active" ? placement : { ...placement, state },
-      });
-      const page = await createRenderedPage(context, sessionsResult([target], 1));
-      expect((await openRowMenu(page, target)).textContent).toContain("Stop cloud worker…");
-      const [query] = managed.subscribeList.mock.calls[0]!;
-      managed.refreshList.mockClear();
-      vi.mocked(showConfirmDialog).mockResolvedValue(true);
-      const stopping = page.stopCloudWorker(target);
-      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-      publishRows(managed, [{ ...target, label: "Updated while stopping" }]);
-      expect(page.result?.sessions[0]?.label).toBe("Updated while stopping");
-      stopped.resolve({ ok: true });
-      await stopping;
-      expect(showConfirmDialog).toHaveBeenCalledOnce();
-      expect(request).toHaveBeenCalledWith(
-        "sessions.reclaim",
-        { key: target.key, agentId: "main" },
-        { timeoutMs: null },
-      );
-      expect(managed.refreshList).toHaveBeenCalledWith({ ...query, force: true });
-      expect(page.result?.sessions[0]?.label).toBe("Updated while stopping");
-    },
-  );
-
   it("drops stale mutation state, errors, menus, and navigation after disconnect", async () => {
     const deleted = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
     const patched = createDeferred<Awaited<ReturnType<SessionCapability["patch"]>>>();
@@ -656,24 +759,29 @@ describe("sessions page lifecycle", () => {
     expect(context.navigate).not.toHaveBeenCalled();
   });
 
-  it("forks an active session from its last completed message", async () => {
-    const { page, sessions } = await mountMutation({
-      createResult: vi.fn<SessionCapability["createResult"]>(async () => ({
-        key: "active-fork",
-        entry: { sessionId: "active-fork-id" },
-        initialRun: { status: "idle" },
-      })),
-    });
-    await page.forkSession("main", true);
-    expect(sessions.createResult).toHaveBeenCalledWith(
-      {
-        parentSessionKey: "main",
-        fork: true,
-        forkFrom: "last-completed",
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-  });
+  it.each(["operator.write", "operator.sessions.write"])(
+    "forks an active owned session with %s",
+    async (scope) => {
+      const { page, sessions, connection } = await mountMutation({
+        createResult: vi.fn<SessionCapability["createResult"]>(async () => ({
+          key: "active-fork",
+          entry: { sessionId: "active-fork-id" },
+          initialRun: { status: "idle" },
+        })),
+      });
+      connection.emit({ hello: gatewayHelloForMethods(["sessions.create"], [scope]) });
+      page.result = sessionsResult([sessionRow("main", { key: "main", sharingRole: "owner" })], 1);
+      await page.forkSession("main", true);
+      expect(sessions.createResult).toHaveBeenCalledWith(
+        {
+          parentSessionKey: "main",
+          fork: true,
+          forkFrom: "last-completed",
+        },
+        { signal: expect.any(AbortSignal) },
+      );
+    },
+  );
 });
 
 describe("sessions page new group", () => {
@@ -740,9 +848,7 @@ describe("sessions page new group", () => {
     pending.resolve("completed");
     await created;
     expect(sessions.patch).not.toHaveBeenCalled();
-    expect(messages).toEqual([
-      "Gateway connection replaced before the group was saved. Try again.",
-    ]);
+    expect(messages).toEqual(["The connection changed before the group was saved. Try again."]);
     page.result = sessionsResult([row], 1);
     await page.requestNewCategory(key);
     expect(messages[1]).toBeNull();
@@ -913,7 +1019,9 @@ describe("sessions page plugin actions", () => {
     menu.querySelector<HTMLElement>(actionSelector)!.click();
     await settleSessionMenu(menu);
     expect(run.mock.calls.length).toBe(1);
-    await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+    await waitForFast(() =>
+      expect(page.textContent).toContain(i18n.t("pluginUi.actionUnavailableSession")),
+    );
 
     publish([{ ...current, archived: true }]);
     await page.updateComplete;
@@ -932,7 +1040,9 @@ describe("sessions page plugin actions", () => {
       menu.querySelector<HTMLElement>(actionSelector)!.click();
       await settleSessionMenu(menu);
       expect(run.mock.calls.length).toBe(0);
-      await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+      await waitForFast(() =>
+        expect(page.textContent).toContain(i18n.t("pluginUi.actionSessionUnavailable")),
+      );
     }
 
     expect(page.querySelector(actionSelector)).toBeNull();

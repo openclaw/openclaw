@@ -10,8 +10,11 @@ import {
   hasAgentScopeColumn,
   legacyMemorySchemaError,
   memoryAgentPredicate,
+  MEMORY_QUERY_COLUMNS,
   MEMORY_TABLE_NAME,
   quoteLanceSqlString,
+  type MemoryQueryColumn,
+  type MemoryQueryFilter,
 } from "./lancedb-schema.js";
 
 // LanceDB's CJS serializer needs Arrow datatypes from the same module instance.
@@ -41,15 +44,15 @@ export type MemorySearchResult = {
   score: number;
 };
 
-export const MEMORY_QUERY_COLUMNS = ["id", "text", "importance", "category", "createdAt"] as const;
-export type MemoryQueryColumn = (typeof MEMORY_QUERY_COLUMNS)[number];
-export type MemoryQueryFilter = {
-  column: MemoryQueryColumn;
-  operator: "=" | "!=" | "<>" | "<" | "<=" | ">" | ">=" | "LIKE";
-  value: string | number;
+type MemoryReadGuard = {
+  /**
+   * Runs once the table is prepared, synchronously before the read is dispatched. A caller
+   * whose authority can lapse during that preparation throws here to stop the read.
+   */
+  beforeRead?: () => void;
 };
 
-type MemoryQueryOptions = {
+type MemoryQueryOptions = MemoryReadGuard & {
   columns: MemoryQueryColumn[];
   filter?: MemoryQueryFilter;
   limit?: number;
@@ -188,17 +191,18 @@ export class MemoryDB {
     vector: number[],
     limit = 5,
     minScore = 0.5,
-    executionOptions?: Pick<LanceDB.QueryExecutionOptions, "timeoutMs">,
+    options?: Pick<LanceDB.QueryExecutionOptions, "timeoutMs"> & MemoryReadGuard,
   ): Promise<MemorySearchResult[]> {
     // LanceDB applies metadata predicates before vector ranking. Foreign rows
     // must never enter this agent's candidate set or top-K.
-    const results = await this.useTable((table) =>
-      table
+    const results = await this.useTable((table) => {
+      options?.beforeRead?.();
+      return table
         .vectorSearch(vector)
         .where(memoryAgentPredicate(agentId))
         .limit(limit)
-        .toArray(executionOptions),
-    );
+        .toArray(options?.timeoutMs === undefined ? undefined : { timeoutMs: options.timeoutMs });
+    });
 
     const mapped = results.map((row) => {
       const distance = row["_distance"] ?? 0;
@@ -244,6 +248,7 @@ export class MemoryDB {
 
   async query(agentId: string, options: MemoryQueryOptions): Promise<Record<string, unknown>[]> {
     return await this.useTable(async (table) => {
+      options.beforeRead?.();
       let query = table
         .query()
         // LanceDB 0.30 replaces rather than combines repeated where() calls.

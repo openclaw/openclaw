@@ -6,13 +6,18 @@ import {
   resolveAgentRunFailureText,
 } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
 import { assertCurrentSessionTranscriptHeader } from "../../../config/sessions/session-entry-codec.js";
+import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import { recordModelFallbackStop } from "../../model-fallback-stop.js";
+import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
+import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { createEmptyPreparedModelRuntimeFixture } from "../model.fixture.test-support.js";
+import { createEmptyAgentDiscoveryStores } from "../model.js";
 import { prepareEmbeddedAccessProgramGuard } from "./access-program.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
@@ -94,6 +99,70 @@ function makeParams(overrides: FixtureOptions = {}): Params {
 }
 
 describe("handleEmbeddedPromptFailure", () => {
+  it("admits current configured-key programs and rejects stale or foreign discovery at execution", async () => {
+    let current = true;
+    const modelRoute = {
+      provider: "openai",
+      modelId: "fixture",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      authRequirement: "api-key",
+      requestTransportOverrides: "none",
+    } as const;
+    const runtime = {
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: "/fixture/agent",
+        config: {},
+        metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+        createStores: createEmptyAgentDiscoveryStores,
+      }),
+      isCurrent: () => current,
+    };
+    runtime.modelCatalog.providerOutcomes = [
+      {
+        provider: "openai",
+        status: "ready",
+        modelAccessPrograms: [
+          {
+            modelId: "fixture",
+            runtimeId: "openclaw",
+            api: modelRoute.api,
+            baseUrl: modelRoute.baseUrl,
+            cyber: ["daybreak_blue"],
+          },
+        ],
+      },
+    ];
+    const attempt = {
+      provider: "openai",
+      modelId: "fixture",
+      cyberAccessProgram: "daybreak_blue" as const,
+      admittedRunContext: {
+        operationalRunInstance: createOperationalRunInstanceRef("prompt-failure-test"),
+      },
+      authProfileStore: { version: 1 as const, profiles: {} },
+      preparedModelRuntime: runtime,
+      runtimePlan: buildAgentRuntimePlan({
+        provider: "openai",
+        modelId: "fixture",
+        metadataSnapshot: runtime.metadataSnapshot,
+        preparedAuthPlan: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+          selectedAuthMode: "api-key",
+          modelRoute,
+        },
+      }),
+    };
+    const guard = await prepareEmbeddedAccessProgramGuard(attempt);
+    expect(guard).toBeTypeOf("function");
+    expect(() => guard?.()).not.toThrow();
+    runtime.modelCatalog.providerOutcomes[0]!.profileId = "openai:other";
+    expect(() => guard?.()).toThrow("not advertised");
+    delete runtime.modelCatalog.providerOutcomes[0]!.profileId;
+    current = false;
+    expect(() => guard?.()).toThrow("not advertised");
+  });
   it("keeps a stale session Access choice out of shared credential health", async () => {
     // The same guard runs again before a request, after initial preparation.
     const attempt = {
@@ -280,11 +349,15 @@ describe("handleEmbeddedPromptFailure", () => {
       const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
       expect(fields).toEqual({
         stopReason: "timeout",
-        ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
+        ...(phase === "prompt"
+          ? { timeoutPhase: "provider", providerStarted: true }
+          : phase === "tool_execution"
+            ? { timeoutPhase: "tool_execution" }
+            : {}),
       });
       expect(
         buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
-      ).toBe(phase === "prompt" ? "hard_timeout" : "timed_out");
+      ).toBe(phase === "compaction" ? "timed_out" : "hard_timeout");
     },
   );
 
@@ -304,7 +377,11 @@ describe("handleEmbeddedPromptFailure", () => {
     params.normalizedAttempt.attempt.promptTimeoutOutcome = { providerStarted: true };
     const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
     const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
-    expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
+    expect(fields).toEqual({
+      stopReason: "timeout",
+      timeoutPhase: "tool_execution",
+      providerStarted: true,
+    });
     expect(
       buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
     ).toBe("hard_timeout");
@@ -323,7 +400,11 @@ describe("handleEmbeddedPromptFailure", () => {
 
       expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
         stopReason: "timeout",
-        ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
+        ...(phase === "prompt"
+          ? { timeoutPhase: "provider", providerStarted: true }
+          : phase === "tool_execution"
+            ? { timeoutPhase: "tool_execution" }
+            : {}),
       });
       expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
       expect(error).toHaveProperty("cause", params.terminal.promptError);

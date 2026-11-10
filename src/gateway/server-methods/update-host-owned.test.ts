@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createMacosAppInstallOwner } from "../../commands/test-runtime-config-helpers.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import {
   adoptUpdateCampaignMock,
   invokeUpdateRun,
@@ -16,62 +17,59 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-async function installRoot() {
+async function invokeInstalledUpdate(prepare: (root: string) => Promise<void>) {
   const packageRoot = await import("../../infra/openclaw-root.js");
   const ocmUpdate = await import("../../infra/ocm-update-client.js");
   const root = tempDirs.make("openclaw-host-owned-update-");
   vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
-  return {
-    root,
-    resolveManager: vi.spyOn(ocmUpdate, "resolveOcmUpdateManager"),
-    createRun: vi.spyOn(
-      await import("../../infra/update-run-write.async.js"),
-      "createUpdateRunAsync",
-    ),
-  };
+  const resolveManager = vi.spyOn(ocmUpdate, "resolveOcmUpdateManager");
+  const createRun = vi.spyOn(
+    await import("../../infra/update-run-write.async.js"),
+    "createUpdateRunAsync",
+  );
+  await prepare(root);
+  const respond = vi.fn();
+  await invokeUpdateRun({}, respond);
+  expectNoUpdateEffects(resolveManager, createRun);
+  return respond;
 }
 
 function expectNoUpdateEffects(...effects: MockInstance[]) {
-  for (const effect of [
+  expectNoCalls(
     ...effects,
     adoptUpdateCampaignMock,
     startManagedServiceUpdateHandoffMock,
     scheduleGatewayRestartMock,
-  ]) {
-    expect(effect).not.toHaveBeenCalled();
-  }
+  );
   expect(sentinelState.capturedPayload).toBeUndefined();
 }
 
 it("refuses an app-owned Gateway update before delegation, history, or restart effects", async () => {
-  const { root, resolveManager, createRun } = await installRoot();
   const installOwner = createMacosAppInstallOwner();
-  await fs.writeFile(path.join(root, "openclaw-install-owner.json"), JSON.stringify(installOwner));
-  const respond = vi.fn();
-
-  await invokeUpdateRun({}, respond);
-
+  const respond = await invokeInstalledUpdate(async (root) => {
+    await fs.writeFile(
+      path.join(root, "openclaw-install-owner.json"),
+      JSON.stringify(installOwner),
+    );
+  });
   expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
     code: "UNAVAILABLE",
     message: "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
     details: { reason: "host-owned-install", installOwner },
     retryable: false,
   });
-  expectNoUpdateEffects(resolveManager, createRun, resolveUpdateInstallSurfaceMock);
+  expect(resolveUpdateInstallSurfaceMock).not.toHaveBeenCalled();
 });
 
 it("refuses immutable activation before manager delegation, history, campaign, or handoff", async () => {
   const immutableInstall = await import("../../infra/update-immutable-install.js");
-  const { root, resolveManager, createRun } = await installRoot();
-  vi.spyOn(immutableInstall, "inspectImmutableInstall").mockResolvedValue({
-    root,
-    currentPath: path.join(root, "releases", "a".repeat(40)),
-    currentSha: "a".repeat(40),
+  const respond = await invokeInstalledUpdate(async (root) => {
+    vi.spyOn(immutableInstall, "inspectImmutableInstall").mockResolvedValue({
+      root,
+      currentPath: path.join(root, "releases", "a".repeat(40)),
+      currentSha: "a".repeat(40),
+    });
   });
-  const respond = vi.fn();
-
-  await invokeUpdateRun({}, respond);
-
   expect(respond).toHaveBeenCalledWith(
     false,
     undefined,
@@ -83,7 +81,6 @@ it("refuses immutable activation before manager delegation, history, campaign, o
       ),
     }),
   );
-  expectNoUpdateEffects(resolveManager, createRun);
 });
 
 it("refuses an immutable surface discovered after initial admission before campaign adoption", async () => {
