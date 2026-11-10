@@ -202,6 +202,8 @@ The general runtime string limit is 65,536 UTF-16 code units (JavaScript string
 length). Longer strings are replaced with an explicit truncation marker.
 Field-specific bounds and the separate event byte limit still apply, including
 UTF-8 and JSON escaping overhead.
+Export masks secrets and local paths without shortening text to the generic
+support-message preview length. Text discarded during capture is not recovered.
 
 Runtime capture preserves structured results within its field limits, including
 explicit truncation markers. If a tool result exceeds the event size limit,
