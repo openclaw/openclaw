@@ -150,6 +150,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         }
         expect(prompt).toContain("not a free-form substitute for the missing setup tool");
         expect(prompt).toContain("setup or repair on another host");
+        expect(prompt).toContain("remote task on local agent-ID migration");
       }
     },
   );

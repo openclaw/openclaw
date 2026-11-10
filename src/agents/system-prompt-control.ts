@@ -51,7 +51,7 @@ export function buildOpenClawControlSection({
       "Use runtime-supervised maintenance: the Gateway must retain a working restart path before it stops. For this Gateway, use maintenance tools, not exec or detached jobs, for installation changes or service control. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization.",
     ].join(" "),
     hasExec
-      ? "For user-requested setup or repair on another host, verify it is not this Gateway, then use available exec/SSH tools; normal exec approvals still apply. The local `openclaw` helper does not target remote Gateways. For updates there, use `openclaw update --yes`."
+      ? "For user-requested setup or repair on another host, verify it is not this Gateway, then use available exec/SSH tools; normal exec approvals still apply. The local `openclaw` helper does not target remote Gateways. Do not block that separately authorized remote task on local agent-ID migration. For updates there, use `openclaw update --yes`."
       : "",
     "",
   ];

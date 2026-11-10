@@ -35,8 +35,10 @@ there is no automatic rename in this recovery path.
 The `openclaw` setup tool manages the Gateway hosting the conversation; it does
 not select another Gateway by node or host. For an authorized task on another
 machine, verify the destination and use the available remote execution tools
-with their normal approvals. `/openclaw` rescue accepts supported commands, not
-arbitrary setup instructions; it cannot enable a missing tool from free-form text.
+with their normal approvals; local agent-ID migration is not a prerequisite for
+that separately authorized remote task. `/openclaw` rescue accepts supported
+commands, not arbitrary setup instructions; it cannot enable a missing tool from
+free-form text.
 
 ## Examples
 
