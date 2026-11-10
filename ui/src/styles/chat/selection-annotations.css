@@ -77,7 +77,7 @@ openclaw-chat-comment-pins {
   max-height: min(320px, calc(var(--auto-size-available-height, 100dvh) - 26px));
   overflow: auto;
   overscroll-behavior: contain;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 400;
   line-height: 1.5;
 }
@@ -111,7 +111,7 @@ openclaw-chat-comment-pins {
   border-radius: var(--radius-full);
   background: var(--accent-subtle);
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
 }
 
@@ -212,9 +212,9 @@ openclaw-chat-comment-pins {
   border-radius: 0;
   background: none;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
-  line-height: 16px;
+  line-height: var(--control-ui-text-lg);
 }
 
 .chat-comment-preview--editable .chat-comment-preview__item:is(:hover, :focus-within) {
@@ -227,9 +227,9 @@ openclaw-chat-comment-pins {
 }
 
 .chat-comment-preview--editable .chat-comment-preview__body > .muted {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   font-weight: 500;
-  line-height: 16px;
+  line-height: var(--control-ui-text-lg);
 }
 
 .chat-comment-preview--editable .chat-comment-preview__body > .muted:first-child {
@@ -237,8 +237,8 @@ openclaw-chat-comment-pins {
 }
 
 .chat-comment-preview--editable .chat-comment-preview__text {
-  font-size: 13px;
-  line-height: 19.5px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: calc(19.5px * var(--control-ui-text-scale));
 }
 
 .chat-comment-preview--editable .chat-comment-preview__text--selection {

@@ -1,0 +1,2 @@
+84
+# Regression coverage: compact source-update rows on desktop/mobile, main/Side chat code typography, Settings preference application/reset, rebuilt plugin scaling, and cap-relative warning fixture inputs. Extends existing scenarios and retains navigation/recovery and budget enforcement assertions. Includes only this change’s net test lines, not inherited main debt.

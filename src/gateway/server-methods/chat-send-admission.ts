@@ -235,8 +235,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     ...(progressRefresh ? { controlUiVisible: false, projectSessionActive: false } : {}),
     lifecycleGeneration,
   });
+  // A message to people never interrupts or steers the active run.
   const runInterruptCapture =
-    admittedRunAbort.entry?.input.policy.mode === "interrupt"
+    admittedRunAbort.entry?.input.policy.mode === "interrupt" && !request.humanAddressed
       ? captureSessionControllerInterruptBefore(admittedRunAbort.entry.input)
       : undefined;
   const placementService = context.workerSessionPlacementService;
@@ -357,8 +358,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         admittedSessionId = latestSessionId ?? backingSessionId ?? clientRunId;
         if (!replyTargetsCaptured) {
           // Retain original opaque targets, including absence, across placement waits.
+          // A message to people never steers the active run.
           messageInjectionTarget =
-            p.queueMode === "steer"
+            p.queueMode === "steer" && !request.humanAddressed
               ? captureCurrentReplyMessageInjectionTarget(
                   admittedRunAbort.entry?.input.mailbox.owner.id ?? activeRunScopeKey,
                 )

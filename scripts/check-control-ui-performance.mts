@@ -58,9 +58,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Coordinator-accepted warm cached-page reveal latch (#195865): measured
-  // 1,297,532 B (+495 B over its CI base) plus 64 B headroom.
-  chatBootJsGzipBytes: 1_297_596,
+  // Entering-row forecasts (#196173): measured 1,300,731 B, plus 64 B headroom.
+  // Cold construction split: add CI-measured 336 B, coordinator-accepted (local +508 B).
+  chatBootJsGzipBytes: 1_301_131,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
   newBootJsGzipBytes: 803_364,
   startupCssRequests: 1,
@@ -77,11 +77,13 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
-  // Josh Lehman approved the OpenClaw ID account menu styles (#192352, 2026-11-06):
-  // measured 325,045 B gzip / 1,675,690 B raw; retain 64 B headroom.
-  totalCssGzipBytes: 325_109,
-  totalCssRawBytes: 1_675_754,
+  // Vincent Koc accepted the interface-wide text-scale cost in #196468
+  // (2026-11-10): +2,284 B gzip / +30,654 B raw versus a7ba22b9.
+  // Add only that accepted delta to the prior fixed ceilings (326,575 /
+  // 1,682,231). Preserve their existing allowance for concurrent main changes,
+  // rather than subtracting it by binding the caps to one stale build total.
+  totalCssGzipBytes: 328_859,
+  totalCssRawBytes: 1_712_885,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

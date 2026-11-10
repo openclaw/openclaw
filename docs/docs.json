@@ -2897,6 +2897,7 @@
                       "cli/channels",
                       "cli/directory",
                       "cli/pairing",
+                      "cli/pair",
                       "cli/qr",
                       "cli/users",
                       "cli/voicecall"

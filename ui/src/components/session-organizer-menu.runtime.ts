@@ -75,6 +75,8 @@ export async function runSessionAction(
   action: SidebarSessionAction,
 ): Promise<unknown> {
   switch (action.kind) {
+    case "rename":
+      return organizer.renameSession(session);
     case "toggle-pin":
       return organizer.setPersonalSessionPin(
         session.key,
@@ -114,28 +116,23 @@ export async function runSessionAction(
         ? organizer.patchSession(session, { archived: false }, { sessionScope: true })
         : organizer.archiveSessionWithUndo(session);
     default:
-      return organizer.runOperation(
-        (operations, scope) => {
-          switch (action.kind) {
-            case "rename":
-              return operations.renameSession(organizer.deps, session, scope);
-            case "assign-owner":
-              return operations.assignSessionOwner(organizer.deps, session, action.owner, scope);
-            case "fork":
-              return operations.createChildSession(organizer.deps, session, scope, { fork: true });
-            case "snooze":
-              return operations.snoozeSessionWithUndo(organizer.deps, session, action, scope);
-            case "stop-cloud-worker":
-              return operations.stopCloudWorker(organizer.deps, session, scope);
-            case "delete":
-              // Only the sidebar offers the delete-confirm opt-out.
-              return operations.deleteSession(organizer.deps, session, scope, { offerSkip: true });
-            default:
-              return action satisfies never;
-          }
-        },
-        action.kind === "rename" || action.kind === "delete",
-      );
+      return organizer.runOperation((operations, scope) => {
+        switch (action.kind) {
+          case "assign-owner":
+            return operations.assignSessionOwner(organizer.deps, session, action.owner, scope);
+          case "fork":
+            return operations.createChildSession(organizer.deps, session, scope, { fork: true });
+          case "snooze":
+            return operations.snoozeSessionWithUndo(organizer.deps, session, action, scope);
+          case "stop-cloud-worker":
+            return operations.stopCloudWorker(organizer.deps, session, scope);
+          case "delete":
+            // Only the sidebar offers the delete-confirm opt-out.
+            return operations.deleteSession(organizer.deps, session, scope, { offerSkip: true });
+          default:
+            return action satisfies never;
+        }
+      }, action.kind === "delete");
   }
 }
 

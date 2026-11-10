@@ -158,3 +158,10 @@ it.each<[string, Options, boolean]>([
   expect(callGateway.mock.calls[0]?.[1].delegation).not.toHaveProperty("fullPermission");
   expect(callerScope.getGatewayToolCallerIdentity()).toBeUndefined();
 });
+
+it("keeps setup self-delegation unavailable even when the configured user agent collides", () => {
+  const config = { agents: { entries: { openclaw: { tools: { alsoAllow: ["openclaw"] } } } } };
+  expect(createTools({ sessionAgentId: "openclaw", config })).toEqual([]);
+  expect(createTools({ sessionAgentId: "openclaw" })).toEqual([]);
+  expect(callGateway).not.toHaveBeenCalled();
+});

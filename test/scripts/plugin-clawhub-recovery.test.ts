@@ -240,18 +240,90 @@ describe("sealed ClawHub recovery manifest", () => {
     );
   });
 
-  it("refuses an unavailable package before recovering any staged attempt", async () => {
-    const fetchImpl = vi.fn<typeof fetch>();
-    await expect(
-      executeClawHubRecoveryManifest({
-        manifest: createClawHubRecoveryManifest(transactions, []),
-        reason: "Parent failed after sealed staging",
-        token: "fixture-token",
-        fetchImpl,
-      }),
-    ).rejects.toThrow("was not staged and has no recoverable attempt");
-    expect(fetchImpl).not.toHaveBeenCalled();
+  it("observes a published missing receipt without submitting recovery", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ name: pending.name, version, state: "published" }));
+    const messages: string[] = [];
+    const result = await executeClawHubRecoveryManifest({
+      manifest: createClawHubRecoveryManifest(transactions, []),
+      reason: "Parent failed after sealed staging",
+      token: "fixture-token",
+      fetchImpl,
+      report: (message: string) => messages.push(message),
+    });
+    expect(result).toEqual({ schemaVersion: 1, complete: true, recovered: [] });
+    expect(fetchImpl.mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
+    expect(messages.at(-1)).toContain("Run postpublish verification for sealed-byte evidence");
   });
+
+  it.each(["pending", "failed", "absent", "legacy-not-found"])(
+    "recovers an independent sibling while preserving missing-receipt uncertainty (%s)",
+    async (state) => {
+      const sibling = { ...pending, name: "@openclaw/sibling", attemptId: "sibling-original" };
+      const manifest = createClawHubRecoveryManifest(
+        {
+          ...transactions,
+          packages: [
+            ...transactions.packages,
+            { ...transactions.packages[0], name: sibling.name, artifactName: "clawhub-sibling" },
+          ],
+        },
+        [sibling],
+      );
+      const mutations: string[] = [];
+      const messages: string[] = [];
+      const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+        const url = input instanceof Request ? input.url : input.toString();
+        if (init?.method === "POST") {
+          mutations.push(url);
+          return Response.json({
+            ...sibling,
+            recoveredFromAttemptId: sibling.attemptId,
+            attemptId: "sibling-recovered",
+            publicationStatus: "published",
+          });
+        }
+        if (url.includes(encodeURIComponent(sibling.name))) {
+          return Response.json({
+            name: sibling.name,
+            version,
+            attemptId: sibling.attemptId,
+            state: "failed",
+            recoverable: true,
+          });
+        }
+        return state === "legacy-not-found"
+          ? new Response("Not found", { status: 404 })
+          : Response.json({
+              name: pending.name,
+              version,
+              state,
+              ...(state === "failed"
+                ? { recoverable: true, attemptId: "unbound-attempt" }
+                : state === "pending"
+                  ? { stage: "finalization", attemptId: "unbound-attempt" }
+                  : {}),
+            });
+      });
+      await expect(
+        executeClawHubRecoveryManifest({
+          manifest,
+          reason: "Parent failed after sealed staging",
+          token: "fixture-token",
+          fetchImpl,
+          report: (message: string) => messages.push(message),
+        }),
+      ).rejects.toThrow(`Independent recoveries completed: ${sibling.name}@${version}`);
+      expect(mutations).toEqual([
+        "https://clawhub.ai/api/v1/publish/attempts/sibling-original/recover",
+      ]);
+      expect(messages.join("\n")).toContain("Cannot bind the original attempt");
+      expect(messages.join("\n")).toContain(
+        `registry state ${state === "legacy-not-found" ? "unpublished" : state}`,
+      );
+    },
+  );
 
   it.each(["pending", "published"])(
     "verifies a recorded %s receipt against public state",

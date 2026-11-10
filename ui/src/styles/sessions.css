@@ -9,7 +9,7 @@
 
 .sessions-hub-header .page-title {
   margin: 0;
-  font-size: 26px;
+  font-size: calc(26px * var(--control-ui-text-scale));
 }
 
 /* Applied filters tint the trigger; it is a status, not a pressed toggle. */
@@ -129,7 +129,7 @@
 
 .sessions-transcript-search__empty {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .sessions-transcript-search__summary,
@@ -175,14 +175,14 @@
 .sessions-transcript-search__result-header > strong {
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .sessions-transcript-search__snippet {
   overflow-wrap: anywhere;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -394,7 +394,7 @@
 
 .oc-sheet .sessions-filter-popover__panel .session-filter-check__label {
   overflow: hidden;
-  font-size: 16px;
+  font-size: var(--control-ui-text-lg);
   font-weight: var(--control-ui-font-weight-normal);
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -765,7 +765,7 @@ select.session-group-select {
 .session-details-panel__title {
   max-width: min(720px, 72vw);
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -838,7 +838,7 @@ select.session-group-select {
 
 @media (max-width: 768px) {
   .sessions-hub-header .page-title {
-    font-size: 22px;
+    font-size: calc(22px * var(--control-ui-text-scale));
   }
 
   .sessions-transcript-search__input {

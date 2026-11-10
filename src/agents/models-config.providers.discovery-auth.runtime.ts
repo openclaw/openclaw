@@ -8,7 +8,6 @@ import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
-import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type {
   ProviderApiKeyResolver,
@@ -70,6 +69,7 @@ export async function prepareProviderDiscoveryAuth(
       profiles.set(profileId, () => envValue);
       continue;
     }
+    const { resolveApiKeyForProfile } = await import("./auth-profiles/oauth.js");
     try {
       // Only the canonical owner may redeem this exact profile's published ref.
       const resolved = await resolveApiKeyForProfile({
@@ -150,6 +150,10 @@ export async function prepareProviderCatalogOAuthAuth(
       credential.oauthRef ||
       hasUsableOAuthCredential(credential)
     ) {
+      break;
+    }
+    const { resolveApiKeyForProfile } = await import("./auth-profiles/oauth.js");
+    if (!isActive()) {
       break;
     }
     let message = "No OAuth credential was returned";

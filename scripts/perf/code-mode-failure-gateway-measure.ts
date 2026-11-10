@@ -6,6 +6,8 @@
  * --full seeds 5,000 sessions, 12 GiB of synthetic text plus indexes, and 62,000 files.
  * --reuse reopens only this harness's marked fixture. --allocation samples separately.
  * The mock caps baseline work at eight failing cells; candidate should stop after three.
+ * --reply-initialization --hold-ms 3000 instead queues a command-bearing message
+ * before reply preparation, records missing queue publication, and reconnects while held.
  */
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -24,6 +26,7 @@ import { stopChild } from "../lib/gateway-bench-child.ts";
 import {
   controlGatewayProfile,
   measureGatewayCpuUsage,
+  readGatewayCpuProfile,
   readGatewayHeapProfile,
   readGatewayResources,
 } from "../lib/gateway-bench-profile.ts";
@@ -42,6 +45,8 @@ const { values } = parseArgs({
     full: { type: "boolean" },
     reuse: { type: "boolean" },
     allocation: { type: "boolean" },
+    "cpu-profile": { type: "boolean" },
+    "reply-initialization": { type: "boolean" },
     "hold-ms": { type: "string", default: "0" },
     "expect-failures": { type: "string", default: "8" },
   },
@@ -56,6 +61,8 @@ const samples = Number(values.samples);
 const delayMs = Number(values["delay-ms"]);
 const holdMs = Number(values["hold-ms"]);
 const expectedFailures = Number(values["expect-failures"]);
+const replyInitialization = values["reply-initialization"] === true;
+assert(!replyInitialization || holdMs >= 3000, "Reply initialization needs --hold-ms >= 3000");
 assert(expectedFailures === 3 || expectedFailures === 8);
 assert(Number.isInteger(port) && port >= 40000 && port < 65535);
 assert(Number.isInteger(samples) && samples > 0 && samples <= 20);
@@ -152,7 +159,7 @@ const provider = createServer((req, res) => {
         firstRequest?.();
         firstRequest = undefined;
       }
-      const tool = key !== "utility" && !followup && count <= 8;
+      const tool = !replyInitialization && key !== "utility" && !followup && count <= 8;
       await delay(delayMs + (count === 1 && key !== "utility" ? holdMs : 0), undefined, {
         signal: lifetime.signal,
       });
@@ -194,6 +201,33 @@ await new Promise<void>((resolve, reject) => {
   provider.listen(providerPort, "127.0.0.1", resolve);
 });
 const events: Array<{ at: number; event: string; payload: unknown }> = [];
+async function connect() {
+  client = createGatewayWsClient({
+    url: `ws://127.0.0.1:${port}`,
+    onEvent: (event) =>
+      events.push({ at: performance.now(), event: event.event, payload: event.payload }),
+  });
+  await client.waitOpen();
+  await rpc("connect", {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: { id: "gateway-client", version: "1.0.0", platform: process.platform, mode: "backend" },
+    role: "operator",
+    scopes: ["operator.read", "operator.write", "operator.admin"],
+    caps: [],
+  });
+  await rpc("sessions.subscribe", {});
+}
+function hasQueuedInput(history: unknown, runId: string): boolean {
+  return (
+    isRecord(history) &&
+    isRecord(history.pendingInputs) &&
+    Array.isArray(history.pendingInputs.items) &&
+    history.pendingInputs.items.some(
+      (input: unknown) => isRecord(input) && input.runId === runId && input.queued === true,
+    )
+  );
+}
 async function rpc(method: string, params: unknown) {
   const response = await client!.request(method, params, 120000, { retryStartup: true });
   assert(response.ok, `${method}: ${JSON.stringify(response.error)}`);
@@ -265,23 +299,13 @@ try {
       () => false,
     );
   }, "Gateway readiness");
-  client = createGatewayWsClient({
-    url: `ws://127.0.0.1:${port}`,
-    onEvent: (event) =>
-      events.push({ at: performance.now(), event: event.event, payload: event.payload }),
-  });
-  await client.waitOpen();
-  await rpc("connect", {
-    minProtocol: PROTOCOL_VERSION,
-    maxProtocol: PROTOCOL_VERSION,
-    client: { id: "gateway-client", version: "1.0.0", platform: process.platform, mode: "backend" },
-    role: "operator",
-    scopes: ["operator.read", "operator.write", "operator.admin"],
-    caps: [],
-  });
-  await rpc("sessions.subscribe", {});
+  await connect();
   console.log(`GATEWAY_READY http://127.0.0.1:${port}`);
   const profilePath = output + ".heapprofile";
+  const cpuProfilePath = output + ".cpuprofile";
+  if (values["cpu-profile"]) {
+    await controlGatewayProfile(gateway, "cpu", "start", cpuProfilePath, { includeWorkers: true });
+  }
   if (values.allocation) {
     await controlGatewayProfile(gateway, "heap", "start", profilePath, {
       includeCollectedObjects: true,
@@ -308,33 +332,41 @@ try {
     const sentAt = performance.now();
     await rpc("chat.send", {
       sessionKey,
-      message: `FOLLOWUP_FIXTURE_${key}`,
+      message: `${replyInitialization ? "/verbose on " : ""}FOLLOWUP_FIXTURE_${key}`,
       idempotencyKey: followupId,
       queueMode: "followup",
     });
     let queued: unknown;
-    await waitUntil(
-      async () => {
-        const history = await rpc("chat.history", { sessionKey, limit: 50 });
-        if (
-          isRecord(history) &&
-          isRecord(history.pendingInputs) &&
-          Array.isArray(history.pendingInputs.items) &&
-          history.pendingInputs.items.some(
-            (input: unknown) =>
-              isRecord(input) && input.runId === followupId && input.queued === true,
-          )
-        ) {
-          queued = history;
-          return true;
+    let queueVisibleMs: number | null = null;
+    let reconnected: unknown;
+    if (replyInitialization) {
+      const observationDeadline = sentAt + 1000;
+      do {
+        queued = await rpc("chat.history", { sessionKey, limit: 50, inputRunIds: [followupId] });
+        if (queueVisibleMs === null && hasQueuedInput(queued, followupId)) {
+          queueVisibleMs = performance.now() - sentAt;
         }
-        return false;
-      },
-      "followup queue receipt",
-      10000,
-    );
-    const visibleAt = performance.now();
-    console.log(`QUEUED ${sessionKey} ${JSON.stringify({ queueVisibleMs: visibleAt - sentAt })}`);
+        await delay(25);
+      } while (performance.now() < observationDeadline);
+      client!.close();
+      await connect();
+      reconnected = await rpc("chat.history", { sessionKey, limit: 50, inputRunIds: [followupId] });
+    } else {
+      await waitUntil(
+        async () => {
+          const history = await rpc("chat.history", { sessionKey, limit: 50 });
+          if (hasQueuedInput(history, followupId)) {
+            queued = history;
+            return true;
+          }
+          return false;
+        },
+        "followup queue receipt",
+        10000,
+      );
+      queueVisibleMs = performance.now() - sentAt;
+    }
+    console.log(`QUEUED ${sessionKey} ${JSON.stringify({ queueVisibleMs })}`);
     const first = await terminal(runId);
     const terminalAt = performance.now();
     const second = await terminal(followupId);
@@ -359,14 +391,18 @@ try {
         result.status === "failed" &&
         String(result.error).includes("synthetic repeated failure"),
     );
-    assert.equal(failures.length, expectedFailures, "Actual Code Mode executions before terminal");
+    assert.equal(
+      failures.length,
+      replyInitialization ? 0 : expectedFailures,
+      "Actual Code Mode executions before terminal",
+    );
     assert(
       isRecord(first) &&
         isRecord(first.terminalReply) &&
         first.terminalReply.disposition === "visible",
       "Failure must have a visible recorded outcome",
     );
-    if (expectedFailures === 3) {
+    if (!replyInitialization && expectedFailures === 3) {
       assert.match(String(first.terminalReply.text), /failed 3 times/);
     }
     assert(
@@ -383,7 +419,10 @@ try {
       modelRequests: requests.get(key),
       failureCount: failures.length,
       toolResults,
-      queueVisibleMs: visibleAt - sentAt,
+      queueVisibleMs,
+      ...(replyInitialization
+        ? { reconnected, queuedAfterReconnect: hasQueuedInput(reconnected, followupId) }
+        : {}),
       terminalMs: terminalAt - start,
       followupMs: performance.now() - sentAt,
       first,
@@ -394,6 +433,11 @@ try {
     });
   }
   const after = await readGatewayResources(gateway);
+  let cpuProfile;
+  if (values["cpu-profile"]) {
+    await controlGatewayProfile(gateway, "cpu", "stop", cpuProfilePath);
+    cpuProfile = readGatewayCpuProfile(cpuProfilePath);
+  }
   let allocation;
   if (values.allocation) {
     await controlGatewayProfile(gateway, "heap", "stop", profilePath);
@@ -407,10 +451,11 @@ try {
         entry,
         entrySha256: createHash("sha256").update(readFileSync(entry)).digest("hex"),
         platform: process.platform,
-        workload: { samples, delayMs, code, maxProviderCalls: 8 },
+        workload: { samples, delayMs, holdMs, replyInitialization, code, maxProviderCalls: 8 },
         loadBefore,
         loadAfter: loadavg(),
         cpu: measureGatewayCpuUsage(before, after),
+        cpuProfile,
         memoryBefore: before.memory,
         memoryAfter: after.memory,
         allocation,

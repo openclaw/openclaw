@@ -86,6 +86,9 @@ type Fixture = {
   registry?: (Record<string, unknown> | null)[];
   ledger?: { status: string; conclusion?: string }[];
   dispatchFails?: boolean;
+  dispatchFailAt?: number;
+  dispatchResponse?: Record<string, unknown> | string;
+  verificationSha?: string;
   sleepSeconds?: number;
   harness?: string;
 };
@@ -157,6 +160,12 @@ elif args[:2] == ['run', 'list']:
 elif args[:2] == ['run', 'view']:
     run_id = args[args.index('--repo') + 2]
     fields = value('--json')
+    if fields == 'headSha,url' and state.get('dispatched'):
+        state.setdefault('beforeVerification', []).append({name: (root / name).read_text() for name in ['output', 'env', 'summary']})
+        save()
+        if 'verificationSha' in config:
+            emit(dict(headSha=config['verificationSha'], url='https://github.com/${repo}/actions/runs/' + run_id))
+            sys.exit(0)
     timeline = config.get('runs', {}).get(run_id)
     if timeline is not None:
         if fields == 'status,url,updatedAt':
@@ -190,10 +199,14 @@ elif endpoint.endswith('/pending_deployments'):
     if post and config.get('rejectFails'): fail('HTTP 403')
     emit({} if post else [dict(environment=dict(id=7))])
 elif endpoint.endswith('/dispatches'):
-    if config.get('dispatchFails'): fail('HTTP 502')
+    state['dispatchCount'] = state.get('dispatchCount', 0) + 1
+    save()
+    if config.get('dispatchFails') or config.get('dispatchFailAt') == state['dispatchCount']: fail('HTTP 502')
     state['dispatched'] = True
     save()
-    emit(dict(workflow_run_id=92, html_url='${url(92)}'))
+    response = config.get('dispatchResponse', dict(workflow_run_id=91 + state['dispatchCount'], html_url='https://github.com/${repo}/actions/runs/' + str(91 + state['dispatchCount'])))
+    if isinstance(response, str): print(response)
+    else: emit(response)
 elif '/commits/' in endpoint: print('${sha}')
 elif '/actions/runs/' in endpoint:
     run_id = endpoint.split('/')[-1]
@@ -248,9 +261,10 @@ else: fail('Unexpected call: ' + json.dumps(args))
         .split("\n")
         .filter(Boolean)
         .map((line) => JSON.parse(line) as Call);
-      const state: { events?: string[] } = JSON.parse(
-        readFileSync(join(root, "state.json"), "utf8"),
-      );
+      const state: {
+        events?: string[];
+        beforeVerification?: { output: string; env: string; summary: string }[];
+      } = JSON.parse(readFileSync(join(root, "state.json"), "utf8"));
       return {
         ...result,
         calls,
@@ -258,6 +272,7 @@ else: fail('Unexpected call: ' + json.dumps(args))
         outputs: readFileSync(join(root, "output"), "utf8"),
         savedEnv: readFileSync(join(root, "env"), "utf8"),
         events: state.events ?? [],
+        beforeVerification: state.beforeVerification ?? [],
       };
     },
   };
@@ -286,6 +301,116 @@ cleanup_clawhub_children() { echo cleanup >> "$GITHUB_OUTPUT"; }`,
     },
   };
 }
+
+describe("accepted publish child identity", () => {
+  const roles = [
+    ["plugin-npm-release.yml", "plugin_npm_run_id", "CHILD_PLUGIN_NPM_RUN_ID"],
+    [clawhub, "plugin_clawhub_run_id", "RELEASE_CLAWHUB_RUN_ID"],
+    [bootstrap, "plugin_clawhub_bootstrap_run_id", "RELEASE_CLAWHUB_BOOTSTRAP_RUN_ID"],
+    [coreNpm, "openclaw_npm_run_id", "CHILD_OPENCLAW_NPM_RUN_ID"],
+  ];
+
+  it.each(roles)(
+    "records %s before verification and tolerates missing browser metadata",
+    (name, outputKey, envKey) => {
+      const result = fixture({ dispatchResponse: { workflow_run_id: 92 } }).run(
+        `${source}run_id="$(dispatch_workflow_at_ref main "$PARENT_WORKFLOW_SHA" ${name})"; echo "$run_id"`,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("92");
+      expect(result.beforeVerification).toEqual([
+        {
+          output: `${outputKey}=92\n`,
+          env: `${envKey}=92\n`,
+          summary: expect.stringContaining(`accepted run \`92\` from \`main\` (${url(92)})`),
+        },
+      ]);
+      expect(result.stderr).toContain(`Dispatched ${name} from main at ${sha}: ${url(92)}`);
+      expect(result.calls.filter(isDispatch)).toHaveLength(1);
+    },
+  );
+
+  it.each(roles)(
+    "retains %s without granting approval when SHA verification fails",
+    (name, outputKey, envKey) => {
+      const result = fixture({ verificationSha: target }).run(
+        `${source}run_id="$(dispatch_workflow_at_ref main "$PARENT_WORKFLOW_SHA" ${name})"\ndispatch_workflow_at_ref main "$PARENT_WORKFLOW_SHA" ${coreNpm}`,
+      );
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.outputs).toBe(`${outputKey}=92\n`);
+      expect(result.savedEnv).toBe(`${envKey}=92\n`);
+      expect(result.beforeVerification[0]?.output).toBe(result.outputs);
+      expect(result.beforeVerification[0]?.env).toBe(result.savedEnv);
+      expect(result.beforeVerification[0]?.summary).toContain(url(92));
+      expect(result.stderr).toContain(`expected ${sha}`);
+      expect(result.calls.filter(isDispatch)).toHaveLength(1);
+      expect(result.calls.some((call) => call.args.includes("state=approved"))).toBe(false);
+      expect(cancellations(result)).toEqual(["92"]);
+    },
+  );
+
+  it("keeps a known child through exhausted SHA propagation reads", () => {
+    const result = fixture({ verificationSha: "" }).run(dispatch(coreNpm));
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.outputs).toBe("openclaw_npm_run_id=92\n");
+    expect(result.savedEnv).toBe("CHILD_OPENCLAW_NPM_RUN_ID=92\n");
+    expect(result.beforeVerification).toHaveLength(12);
+    expect(result.beforeVerification.every(({ output }) => output === result.outputs)).toBe(true);
+    expect(result.calls.filter(isDispatch)).toHaveLength(1);
+  });
+
+  it.each<Fixture>([
+    { dispatchFails: true },
+    { dispatchResponse: "not JSON" },
+    { dispatchResponse: { html_url: url(92) } },
+  ])("holds unknown acceptance for manual reconciliation: %j", (config) => {
+    const result = fixture(config).run(dispatch(coreNpm));
+    expect(result.status, result.stderr).toBe(1);
+    for (const text of [
+      "acceptance unknown",
+      "parent=100/2",
+      "parent_workflow=openclaw-release-publish.yml",
+      "parent_ref=refs/tags/release-publish/aaaaaaaaaaaa-100",
+      `workflow=${coreNpm}, ref=main`,
+      "Hold publication and manually reconcile",
+      "do not blindly redispatch",
+    ]) {
+      expect(result.stderr).toContain(text);
+      expect(result.summary).toContain(text);
+    }
+    expect(result.outputs).toBe("");
+    expect(result.savedEnv).toBe("");
+    expect(result.beforeVerification).toEqual([]);
+    expect(result.calls.filter(isDispatch)).toHaveLength(1);
+    expect(cancellations(result)).toEqual([]);
+  });
+
+  it("preserves earlier batch children when a later POST has unknown acceptance", () => {
+    const result = fixture({
+      dispatchFailAt: 3,
+      harness: `
+${noops("verify_release_tag_target", "render_github_release_notes", "guard_existing_public_release")}
+resolve_openclaw_npm_publish_state() { openclaw_npm_already_published=false; }
+resolve_clawhub_release_plan() {
+  clawhub_plan_path="$RUNNER_TEMP/plan.json"
+  printf '%s' '{"normal":{"shouldDispatch":true,"ref":"main","workflow":"plugin-clawhub-release.yml"},"bootstrap":{"shouldDispatch":true,"ref":"main","workflow":"plugin-clawhub-new.yml"}}' > "$clawhub_plan_path"
+}
+verify_bootstrap_workflow_sha() { echo "$PARENT_WORKFLOW_SHA"; }
+append_clawhub_dispatch_args() { clawhub_dispatch_args=(); }
+`,
+    }).run(step("Dispatch publish workflows").run!, {
+      PUBLISH_OPENCLAW_NPM: "true",
+      WAIT_FOR_CLAWHUB: "false",
+    });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.outputs).toBe("plugin_npm_run_id=92\nplugin_clawhub_run_id=93\n");
+    expect(result.savedEnv).toBe("CHILD_PLUGIN_NPM_RUN_ID=92\nRELEASE_CLAWHUB_RUN_ID=93\n");
+    expect(result.summary).toContain(url(92));
+    expect(result.summary).toContain(url(93));
+    expect(result.summary).toContain(`acceptance unknown (POST failed): parent=100/2`);
+    expect(result.calls.filter(isDispatch)).toHaveLength(3);
+  });
+});
 
 describe("optional Gateway publication notification", () => {
   const notificationName = "Notify Windows of published Gateway packages";
@@ -580,6 +705,15 @@ it("cleans up recorded ClawHub children after a later dispatch fails", () => {
   // Cancellation alone leaves a gated bootstrap child waiting; reject its gate first.
   const rejection = cleanup.calls.findIndex((call) => call.args.includes("state=rejected"));
   expect([rejection >= 0, rejection < cleanup.calls.findIndex(isCancel)]).toEqual([true, true]);
+});
+
+it("cleans up the current parent's unfinished sealed recovery child", () => {
+  const recovery = "plugin-clawhub-recovery.yml";
+  const result = fixture({
+    children: [child({ id: 94, ...childWorkflow(recovery) })],
+  }).run(`${source}cleanup_clawhub_children`, { CHILD_CLAWHUB_RECOVERY_RUN_ID: "94" });
+  expect(result.status, result.stderr).toBe(0);
+  expect(cancellations(result)).toEqual(["94"]);
 });
 
 it.each<{ config: Fixture; env: NodeJS.ProcessEnv; messages: string[] }>([
