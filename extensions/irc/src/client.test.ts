@@ -184,6 +184,7 @@ describe("irc client fallback nick", () => {
   it.each([
     ["!!!", /^openclaw_\d*$/],
     ["a".repeat(50), /^a+_\d*$/],
+    ["a".repeat(29), /^a+_\d*$/],
   ] as const)("normalizes and bounds fallback for %s", async (initial, expected) => {
     const nick = await connectAfterNickCollision(initial);
     expect(nick.length).toBeLessThanOrEqual(30);
