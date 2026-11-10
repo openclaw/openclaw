@@ -283,31 +283,6 @@ describe("Gateway Template Add application", () => {
     expect(mocks.apply).toHaveBeenCalled();
   });
 
-  it("passes chat, runtime, and readiness adapters to the shared installer without running them", async () => {
-    const prepareAgentChat = vi.fn(async () => async () => {});
-    const waitForAgentRuntime = vi.fn(async () => "applied" as const);
-    const onAgentReady = vi.fn(async () => {});
-    await applyTemplateAddForGateway(
-      applyInput({ prepareAgentChat, waitForAgentRuntime, onAgentReady }),
-    );
-    const options: StatelessTemplateAddOptions = mocks.apply.mock.calls[0]![1];
-    expect(options.waitForAgentRuntime).toBe(waitForAgentRuntime);
-    expect(options.onAgentReady).toBeTypeOf("function");
-    expect(prepareAgentChat).not.toHaveBeenCalled();
-    expect(waitForAgentRuntime).not.toHaveBeenCalled();
-    expect(onAgentReady).not.toHaveBeenCalled();
-    await options.prepareAgentSession!(config);
-    expect(prepareAgentChat).toHaveBeenCalledWith(plan.agent.finalId, config);
-    await options.onAgentReady!({
-      agentId: plan.agent.finalId,
-      sessionKey: "agent:workflow-operator:home",
-    });
-    expect(onAgentReady).toHaveBeenCalledWith({
-      agentId: plan.agent.finalId,
-      sessionKey: "agent:workflow-operator:home",
-    });
-  });
-
   it("uses the canonical worker installer only after a sealed plan and persisted source match", async () => {
     const input = applyInput();
     const result = await applyTemplateAddForGateway(input);

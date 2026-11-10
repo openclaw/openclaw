@@ -2,4 +2,4 @@
 # secondary-session blocking, real requester revocation and persisted-session compatibility.
 # Includes the existing real Gateway fixture with a local synthetic greeting provider.
 # The separate 85-line template-bootstrap-first-turn allocation is not counted twice.
-2559
+2534
