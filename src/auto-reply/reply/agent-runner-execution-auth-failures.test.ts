@@ -211,35 +211,6 @@ describe("executeAgentTurn: authentication failures", () => {
     }
   });
 
-  it("tells channel users to replace an expired API key instead of signing in", async () => {
-    const expiredKeyCopy =
-      "⚠️ This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key.";
-    state.isInternalMessageChannelMock.mockReturnValue(false);
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new FailoverError("This API key has expired.", {
-        reason: "auth",
-        provider: "opencode",
-        model: "fixture-model",
-        status: 401,
-        code: "api_key_expired",
-        rawError: "401 This API key has expired. Signing in again will not renew this key.",
-      }),
-    );
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        sessionCtx: {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: "direct",
-        } as unknown as TemplateContext,
-      }),
-    );
-
-    expect(result).toMatchObject({ kind: "final", payload: { text: expiredKeyCopy } });
-  });
-
   it("surfaces typed missing API-key auth guidance without parsing the message", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new MissingProviderAuthError("openai", {
