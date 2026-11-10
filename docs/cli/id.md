@@ -85,6 +85,14 @@ last ten minutes), `openclaw id status` says the new keys wait for a link code; 
 
 `--yes` skips the confirmation and needs `--kit-stdin` and `--code`.
 
+If the Gateway accepted the move but the CLI cannot read publication status, the command
+prints that the move **committed** and exits normally with warning code **2**, rather than
+throwing an error. With `--json`, it reports `moved: true`, the committed `bindingSeq`,
+`published: null` (unknown), `publicationError`, and `nextStep: "openclaw id status"`.
+Run `openclaw id status` to check the result; do not automatically repeat `rebind`.
+Repeating the whole command after a committed move prepares another rotation, not a replay
+of the previous commit. A refused commit still reports an error, not `moved: true`.
+
 If `openclaw id status` says Discovery lists newer keys for this claw that this computer
 doesn't have, either this computer was restored from an older backup, or someone with your
 recovery kit moved the claw. Either way, run `openclaw id rebind`: it signs above the binding
