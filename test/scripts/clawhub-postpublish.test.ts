@@ -15,6 +15,8 @@ import {
   verifyClawHubPostpublish,
 } from "../../scripts/clawhub-postpublish.mjs";
 import {
+  checkOriginalPackedClawHubAbsent,
+  createOriginalPackedClawHubDescriptor,
   createPreparedClawHubManifest,
   downloadPreparedClawHubRelease,
   resolvePreparedClawHubMatrix,
@@ -724,6 +726,108 @@ function authenticatedParentRecoveryFixture(mode: "full" | "selected" | "omitted
   return { ...f, qualification, recoveryWrites, evidenceClient };
 }
 
+function originalPackedFixture(mode: "full" | "selected" | "omitted sibling" = "selected") {
+  const f = authenticatedParentRecoveryFixture(mode);
+  const seal = {
+    schemaVersion: 1,
+    kind: "openclaw-clawhub-recovery-manifest",
+    identity: f.transactions.identity,
+    packages: f.transactions.packages.map((entry) => ({
+      ...entry,
+      publicationStatus: "unavailable",
+    })),
+  };
+  replaceJsonArtifact(f.original, f.recoveryArtifact, "recovery-manifest.json", seal);
+  const inventory = f.metadata.get(jobsPath(20, 1)) as { jobs: ReturnType<typeof job>[] };
+  const publisher = {
+    ...job("publish_plugins_clawhub"),
+    head_sha: f.child.head_sha,
+    conclusion: "skipped",
+  };
+  f.setJobs(20, 1, [...inventory.jobs, publisher]);
+  // Original parent authorization never existed. No prepared-success artifact is invented.
+  f.setArtifacts(10, [f.dispatchArtifact]);
+  const env = {
+    ...f.options.env,
+    GITHUB_WORKFLOW_REF: `${repository}/${parentWorkflow}@${f.options.env.GITHUB_REF}`,
+    GITHUB_RUN_ID: "30",
+    GITHUB_RUN_ATTEMPT: "1",
+  };
+  const source = (name: string) => {
+    const content = JSON.stringify({ name });
+    return {
+      type: "file",
+      encoding: "base64",
+      size: Buffer.byteLength(content),
+      content: Buffer.from(content).toString("base64"),
+    };
+  };
+  const candidate = f.transactions.identity.candidateSha;
+  f.metadata.set(`git/trees/${candidate}`, {
+    tree: [{ path: "extensions", type: "tree", sha: "extension-tree" }],
+  });
+  f.metadata.set("git/trees/extension-tree", {
+    tree: [
+      { path: "actual-directory", type: "tree", sha: "example-tree" },
+      { path: "sibling", type: "tree", sha: "sibling-tree" },
+      { path: "test-support", type: "tree", sha: "support-tree" },
+    ],
+  });
+  for (const name of ["example", "sibling"]) {
+    f.metadata.set(`git/trees/${name}-tree`, {
+      tree: [
+        { path: "package.json", type: "blob", mode: "100644", sha: `${name}-blob` },
+        { path: "src", type: "tree", sha: `${name}-source-tree` },
+      ],
+    });
+  }
+  f.metadata.set("git/trees/support-tree", {
+    tree: [{ path: "fixtures", type: "tree", sha: "huge-unrelated-tree" }],
+  });
+  f.metadata.set(
+    `contents/extensions/sibling/package.json?ref=${candidate}`,
+    source("@openclaw/sibling"),
+  );
+  f.metadata.set(
+    `contents/extensions/actual-directory/package.json?ref=${candidate}`,
+    source(f.entry.name),
+  );
+  let state: "absent" | "pending" = "absent";
+  const options = {
+    ...f.options,
+    env,
+    evidenceClient: f.evidenceClient,
+    request: f.request,
+    runGhJson: (path: string) =>
+      JSON.parse(f.options.runGh(["api", `repos/${repository}/${path}`])),
+    fetchImpl: async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (
+        requestUrl(input).startsWith("https://clawhub.ai/") &&
+        requestUrl(input).endsWith("/publication")
+      ) {
+        expect(init?.method ?? "GET").toBe("GET");
+        const name = decodeURIComponent(new URL(requestUrl(input)).pathname.split("/")[4]!);
+        return Response.json({
+          name,
+          version: f.entry.version,
+          state,
+          ...(state === "pending" ? { stage: "staging" } : {}),
+        });
+      }
+      return f.original.options.fetchImpl(input, init);
+    },
+  };
+  return {
+    ...f,
+    options,
+    seal,
+    publisher,
+    setPending: () => {
+      state = "pending";
+    },
+  };
+}
+
 function retryFixture({
   parentOnMain = false,
   producerAttempt = 1,
@@ -1163,6 +1267,242 @@ describe("ClawHub prepared publication", () => {
   });
 });
 
+describe("original sealed ClawHub source", () => {
+  it("resolves package directories without expanding a huge unrelated source subtree", async () => {
+    const f = originalPackedFixture();
+    const hugeTree = {
+      tree: Array.from({ length: 12_891 }, (_, index) => ({
+        path: `test-support/fixtures/unrelated/source-file-${index}.ts`,
+        type: "blob",
+        mode: "100644",
+        sha: "d".repeat(40),
+      })),
+    };
+    expect(Buffer.byteLength(JSON.stringify(hugeTree))).toBeGreaterThan(1024 * 1024);
+    f.metadata.set("git/trees/extension-tree?recursive=1", hugeTree);
+    f.metadata.set("git/trees/huge-unrelated-tree", hugeTree);
+    const reads: string[] = [];
+    const descriptor = await createOriginalPackedClawHubDescriptor(f.options);
+    const matrix = await resolvePreparedClawHubMatrix({
+      ...f.options,
+      descriptor,
+      runGhJson: (path: string) => {
+        reads.push(path);
+        const value = f.options.runGhJson(path);
+        if (Buffer.byteLength(JSON.stringify(value)) > 1024 * 1024) {
+          throw new Error("GitHub transport response exceeds 1 MiB");
+        }
+        return value;
+      },
+    });
+    expect(matrix).toMatchObject([{ packageDir: "extensions/actual-directory" }]);
+    expect(reads).toEqual([
+      `git/trees/${f.transactions.identity.candidateSha}`,
+      "git/trees/extension-tree",
+      "git/trees/example-tree",
+      `contents/extensions/actual-directory/package.json?ref=${f.transactions.identity.candidateSha}`,
+      "git/trees/sibling-tree",
+      `contents/extensions/sibling/package.json?ref=${f.transactions.identity.candidateSha}`,
+      "git/trees/support-tree",
+    ]);
+  });
+
+  it.each(["release_publish_run_id", "release_publish_run_attempt"] as const)(
+    "rejects a descriptor whose %s differs from the actual child dispatch before authentication",
+    async (field) => {
+      const f = originalPackedFixture();
+      const descriptor = await createOriginalPackedClawHubDescriptor(f.options);
+      const githubReads = f.githubReads.length;
+      await expect(
+        resolvePreparedClawHubMatrix({
+          ...f.options,
+          descriptor,
+          event: { inputs: { ...f.request.inputs, [field]: "99" } },
+          env: {
+            ...f.options.env,
+            GITHUB_WORKFLOW_REF: `${repository}/${childWorkflow}@${f.options.env.GITHUB_REF}`,
+            GITHUB_RUN_ID: "50",
+          },
+        }),
+      ).rejects.toThrow("does not bind the actual child dispatch parent");
+      expect(f.githubReads).toHaveLength(githubReads);
+      expect(f.recoveryWrites).toEqual([]);
+    },
+  );
+
+  it("hands selected original bytes to a fresh transaction without original parent authorization", async () => {
+    const f = originalPackedFixture();
+    const descriptor = await createOriginalPackedClawHubDescriptor(f.options);
+    expect(descriptor).toEqual({ kind: "openclaw-clawhub-original-packed", request: f.request });
+    const eventPath = join(f.directory, "child-event.json");
+    writeFileSync(eventPath, JSON.stringify({ inputs: f.request.inputs }));
+    const childOptions = {
+      ...f.options,
+      event: undefined,
+      env: {
+        ...f.options.env,
+        GITHUB_WORKFLOW_REF: `${repository}/${childWorkflow}@${f.options.env.GITHUB_REF}`,
+        GITHUB_EVENT_PATH: eventPath,
+        GITHUB_RUN_ID: "50",
+      },
+    };
+    const matrix = await resolvePreparedClawHubMatrix({
+      ...childOptions,
+      descriptor,
+      candidateSha: f.transactions.identity.candidateSha,
+      selectionMode: "selected",
+      plugins: f.entry.name,
+    });
+    expect(matrix).toMatchObject([
+      {
+        packageName: f.entry.name,
+        packageDir: "extensions/actual-directory",
+        alreadyPublished: false,
+        publication: { state: "absent" },
+        prepared: {
+          tarballSha256: f.entry.artifactSha256,
+          inventoryDigest: f.entry.inventoryDigest,
+        },
+      },
+    ]);
+    const outputDir = join(f.directory, "fresh-package");
+    await restorePreparedClawHubPackage({
+      ...childOptions,
+      descriptor,
+      entry: matrix[0]!.prepared,
+      token: "fixture-token",
+      outputDir,
+      artifactName: "fresh-parent-package",
+    });
+    expect(readFileSync(join(outputDir, "example.tgz"))).toEqual(f.tarball);
+    expect(f.recoveryWrites).toEqual([]);
+    expect(f.qualification.admission.calls).toContain(`repos/${repository}/actions/artifacts/70`);
+    f.setPending();
+    await expect(checkOriginalPackedClawHubAbsent({ ...childOptions, descriptor })).rejects.toThrow(
+      "not absent",
+    );
+    const blockedOutput = join(f.directory, "blocked-package");
+    await expect(
+      restorePreparedClawHubPackage({
+        ...childOptions,
+        descriptor,
+        entry: matrix[0]!.prepared,
+        token: "fixture-token",
+        outputDir: blockedOutput,
+      }),
+    ).rejects.toThrow("not absent");
+    expect(existsSync(blockedOutput)).toBe(false);
+  });
+
+  it.each([
+    "executed publisher",
+    "missing publisher",
+    "incomplete pack",
+    "outside admission",
+    "tampered seal",
+    "changed request",
+  ] as const)("refuses original source for %s", async (change) => {
+    const f = originalPackedFixture(
+      change === "outside admission" ? "omitted sibling" : "selected",
+    );
+    const inventory = f.metadata.get(jobsPath(20, 1)) as { jobs: ReturnType<typeof job>[] };
+    if (change === "executed publisher") {
+      f.publisher.conclusion = "failure";
+      expect(await createOriginalPackedClawHubDescriptor(f.options)).toBeNull();
+    } else {
+      if (change === "missing publisher") {
+        f.setJobs(
+          20,
+          1,
+          inventory.jobs.filter((entry) => entry !== f.publisher),
+        );
+      } else if (change === "incomplete pack") {
+        f.setJobs(
+          20,
+          1,
+          inventory.jobs.filter((entry) => !entry.name.includes("Pack ClawHub package")),
+        );
+      } else if (change === "tampered seal") {
+        f.archives.set(f.recoveryArtifact.id, Buffer.from("tampered seal"));
+      } else if (change === "changed request") {
+        f.request.inputs.reason = "Not the uploaded request";
+      }
+      await expect(createOriginalPackedClawHubDescriptor(f.options)).rejects.toThrow(
+        change === "missing publisher"
+          ? /unproven/u
+          : change === "incomplete pack"
+            ? /pack job inventory/u
+            : change === "outside admission"
+              ? /outside the original admitted/u
+              : change === "changed request"
+                ? /authenticated parent request/u
+                : /size|digest/u,
+      );
+    }
+    expect(f.recoveryWrites).toEqual([]);
+  });
+
+  it.each(["legacy missing state", "unknown", "published", "HTTP 404"])(
+    "does not treat %s as authoritative absence",
+    async (state) => {
+      const f = originalPackedFixture();
+      const fetchImpl: typeof fetch = async (input, init) => {
+        if (
+          requestUrl(input).startsWith("https://clawhub.ai/") &&
+          requestUrl(input).endsWith("/publication")
+        ) {
+          return state === "HTTP 404"
+            ? new Response(null, { status: 404 })
+            : Response.json({
+                name: f.entry.name,
+                version: f.entry.version,
+                ...(state === "legacy missing state" ? {} : { state }),
+              });
+        }
+        return f.options.fetchImpl(input, init);
+      };
+      await expect(
+        createOriginalPackedClawHubDescriptor({ ...f.options, fetchImpl }),
+      ).rejects.toThrow(/publication|HTTP 404/u);
+      expect(f.recoveryWrites).toEqual([]);
+    },
+  );
+
+  it("rejects changed tarball bytes even when their enclosing archive digest is current", async () => {
+    const f = originalPackedFixture();
+    const descriptor = await createOriginalPackedClawHubDescriptor(f.options);
+    const matrix = await resolvePreparedClawHubMatrix({ ...f.options, descriptor });
+    const sibling = fixture(false, f.child.head_sha, "sibling", 1, {
+      version: f.entry.version,
+      candidateSha: f.transactions.identity.candidateSha,
+      toolingSha: f.child.head_sha,
+      toolingRef: f.child.head_branch,
+    });
+    const archive = zip("example.tgz", sibling.tarball);
+    f.archives.set(f.packageArtifact.id, archive);
+    Object.assign(f.packageArtifact, {
+      size_in_bytes: archive.length,
+      digest: `sha256:${digest(archive)}`,
+    });
+    const entry = {
+      ...matrix[0]!.prepared,
+      artifactSizeBytes: archive.length,
+      artifactDigest: f.packageArtifact.digest,
+    };
+    const outputDir = join(f.directory, "changed-package");
+    await expect(
+      restorePreparedClawHubPackage({
+        ...f.options,
+        descriptor,
+        entry,
+        token: "fixture-token",
+        outputDir,
+      }),
+    ).rejects.toThrow("identity mismatch");
+    expect(existsSync(outputDir)).toBe(false);
+  });
+});
+
 describe("ClawHub parent-requested recovery", () => {
   it.each(["full", "selected"] as const)(
     "authenticates original FRV admission before %s parent recovery",
@@ -1540,6 +1880,18 @@ describe("ClawHub detached postpublish verification", () => {
       f.metadata.set("actions/runs/10/attempts/1", parent);
       f.child.conclusion = childConclusion;
       sealParent(f, parentJobConclusion);
+      if (status === "in_progress") {
+        f.setJobs(10, 1, [
+          {
+            ...job("Publish plugins, then OpenClaw", 10, 1, [
+              "Upload exact release child dispatch record",
+              "Upload original-byte ClawHub parent authorization",
+            ]),
+            status: "in_progress",
+            conclusion: null,
+          },
+        ]);
+      }
 
       const recoveryManifest = {
         schemaVersion: 1,
@@ -1582,6 +1934,38 @@ describe("ClawHub detached postpublish verification", () => {
           parentStatePolicy,
         }),
       ).rejects.toThrow(/sealed ClawHub original attempt roster/u);
+    },
+  );
+
+  it.each(["dispatch upload", "authorization upload", "wrong attempt"])(
+    "rejects an active parent with %s failure before public readback",
+    async (change) => {
+      const f = fixture();
+      const parent = { ...f.parent, status: "in_progress", conclusion: null };
+      f.metadata.set("actions/runs/10/attempts/1", parent);
+      sealParent(f);
+      const producer = {
+        ...job("Publish plugins, then OpenClaw", 10, 1, [
+          "Upload exact release child dispatch record",
+          "Upload original-byte ClawHub parent authorization",
+        ]),
+        status: "in_progress",
+        conclusion: null,
+      };
+      if (change === "wrong attempt") {
+        producer.run_attempt = 2;
+      } else {
+        producer.steps![change === "dispatch upload" ? 0 : 1]!.conclusion = "failure";
+      }
+      f.setJobs(10, 1, [producer]);
+      await expect(
+        verifyClawHubPostpublish({
+          ...f.options,
+          parent,
+          parentStatePolicy: "sealed-producer",
+        }),
+      ).rejects.toThrow(/producer (job|step)/u);
+      expect(f.registryReads).toEqual([]);
     },
   );
 

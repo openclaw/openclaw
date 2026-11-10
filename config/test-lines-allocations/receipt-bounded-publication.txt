@@ -1,4 +1,5 @@
 # Bounded original-roster authentication, sparse npm consumption, exact-byte pruning,
 # current-authority recovery, full-roster core ordering, and credential-scoped
-# capacity observation regressions, including hosted CI fixture corrections.
-864
+# capacity observation regressions, including hosted CI fixture corrections and
+# original sealed-byte initial-publication handoff / current-parent ordering.
+1350

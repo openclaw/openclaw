@@ -83,6 +83,23 @@ claim completion of excluded packages. Before core publication, a full-scope
 parent waits for recovery of the complete original roster. Manual recovery without
 parent inputs retains the existing full-roster behavior.
 
+When authenticated job evidence proves that the original publisher never ran,
+the parent can instead restore the original sealed package bytes through the
+existing prepared-artifact consumer. Successful original pack jobs authenticate
+the source even if the enclosing child failed before publication. Original
+source identity remains separate from the new publishing child and its current
+parent authorization; this path does not invent a successful preparation run,
+previous publication attempt, or historical authorization. The complete original
+admission and seals are authenticated before selecting packages. A fresh
+authoritative registry check must report each selected package absent before
+initial publication; pending, failed, unknown, or ambiguous state stops the path
+for original-attempt reconciliation. No package is repacked. The parent keeps
+this child active through authorization and exact public readback, even when
+optional ClawHub waiting or core publication is disabled. Core publication cannot
+start before this original-byte batch is verified. Ordinary releases retain their
+existing authorization placement after core startup; both paths use the same
+transaction authorization owner.
+
 The existing parent prefetch and child preview/load report the first and last
 allowlisted response quota headers using their own workflow token, without an
 extra request. The `fetch-metadata-only` counts separate fixed from per-package

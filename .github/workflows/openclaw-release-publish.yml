@@ -1330,7 +1330,7 @@ jobs:
       clawhub_run_id: ${{ steps.children.outputs.plugin_clawhub_run_id }}
       clawhub_bootstrap_run_id: ${{ steps.children.outputs.plugin_clawhub_bootstrap_run_id }}
       clawhub_recovery_run_id: ${{ steps.children.outputs.clawhub_recovery_run_id }}
-      clawhub_receipt: ${{ steps.clawhub_receipt.outcome }}
+      clawhub_receipt: ${{ inputs.original_clawhub_run_id != '' && steps.original_clawhub_receipt.outcome || steps.clawhub_receipt.outcome }}
     if: ${{ !inputs.publish_docker_only }}
     env:
       # Artifact bytes may belong to an FRV child; the input run still authorizes npm dispatch.
@@ -1622,7 +1622,21 @@ jobs:
           if [[ -n "${PLUGINS// }" ]]; then
             plan_args+=(--plugins "${PLUGINS}")
           fi
-          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" || "${DEFER_CLAWHUB:-false}" == "true" || -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" ]]; then
+          original_prepared=""
+          if [[ -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" ]]; then
+            if [[ -n "${PREPARED_PLUGINS}" ]]; then
+              echo "Original ClawHub source and prepared plugins are mutually exclusive." >&2
+              exit 1
+            fi
+            node .release-harness/scripts/clawhub-prepared-artifact.mjs original \
+              --request "$RUNNER_TEMP/clawhub-recovery-request/dispatch.json" \
+              --output "$RUNNER_TEMP/clawhub-original-source.json"
+            if jq -e 'type == "object"' "$RUNNER_TEMP/clawhub-original-source.json" >/dev/null; then
+              original_prepared="$(jq -c . "$RUNNER_TEMP/clawhub-original-source.json")"
+              plan_args+=(--prepared-artifact "$original_prepared")
+            fi
+          fi
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" || "${DEFER_CLAWHUB:-false}" == "true" || ( -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" && -z "${original_prepared}" ) ]]; then
             plan_args+=(--skip-clawhub)
           fi
           if [[ -n "${PREPARED_PLUGINS}" ]]; then
@@ -1819,7 +1833,7 @@ jobs:
             echo "- Release SHA: \`${TARGET_SHA}\`"
             echo "- Release approval: this workflow job"
             if [[ -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" ]]; then
-              echo "- ClawHub: recover original sealed attempts; wait for exact readback before core"
+              echo "- ClawHub: reuse original sealed bytes for initial publication or exact-attempt recovery; wait for exact readback before core"
             elif [[ "${DEFER_CLAWHUB:-false}" == "true" ]]; then
               echo "- ClawHub: deferred to independent recovery; full release remains incomplete"
             elif [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
@@ -1909,7 +1923,7 @@ jobs:
           fi
 
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
-          if [[ -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" ]]; then
+          if [[ -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" && "$(jq -r '.normal.inputs.prepared_artifact // ""' "${clawhub_plan_path}")" == "" ]]; then
             recovery_args=()
             while IFS= read -r entry; do
               recovery_args+=(-f "$(jq -r '[.key, .value] | join("=")' <<< "$entry")")
@@ -1996,6 +2010,36 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Authorize original-byte ClawHub package transactions
+        id: original_clawhub_authorization
+        if: inputs.original_clawhub_run_id != '' && steps.children.outputs.plugin_clawhub_run_id != ''
+        env:
+          CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.children.outputs.plugin_npm_run_id }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
+          wait_for_run plugin-npm-release.yml "$CHILD_PLUGIN_NPM_RUN_ID" "$PARENT_WORKFLOW_SHA" "" false true
+          verify_release_tag_target
+          node .release-harness/scripts/clawhub-prepared-artifact.mjs check-absent \
+            --descriptor "$RUNNER_TEMP/clawhub-original-source.json"
+          node .release-harness/scripts/clawhub-parent-authorization.mjs authorize \
+            --child-run '${{ steps.children.outputs.plugin_clawhub_run_id }}' \
+            --plan "$RUNNER_TEMP/openclaw-release-clawhub-plan.json" \
+            --output "$RUNNER_TEMP/clawhub-parent-authorization/authorization.json"
+
+      - name: Upload original-byte ClawHub parent authorization
+        id: original_clawhub_receipt
+        if: inputs.original_clawhub_run_id != '' && steps.children.outputs.plugin_clawhub_run_id != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.original_clawhub_authorization.outputs.artifact_name }}
+          path: ${{ runner.temp }}/clawhub-parent-authorization/authorization.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Start core npm publication
         id: core_start
         env:
@@ -2040,6 +2084,15 @@ jobs:
             # The recovery owner verifies exact original bytes before succeeding.
             # Full scope has no selected list, so core waits for the complete roster.
             wait_for_run plugin-clawhub-recovery.yml "$CLAWHUB_RECOVERY_RUN_ID" "$PARENT_WORKFLOW_SHA" "" true true
+          elif [[ -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" && -n "${CHILD_PLUGIN_CLAWHUB_RUN_ID}" ]]; then
+            # The original-byte consumer needs its current parent through approval.
+            # Join and verify this bounded roster even when core and optional waits are off.
+            wait_for_run plugin-clawhub-release.yml "$CHILD_PLUGIN_CLAWHUB_RUN_ID" "$PARENT_WORKFLOW_SHA" "" true true
+            PARENT_RUN_ID="$GITHUB_RUN_ID" PARENT_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+              PARENT_REF="$GITHUB_REF_NAME" PARENT_SHA="$GITHUB_WORKFLOW_SHA" \
+              PARENT_STATUS=in_progress PARENT_STATE_POLICY=sealed-producer \
+              VERIFIER_SHA="$GITHUB_WORKFLOW_SHA" \
+              node .release-harness/scripts/clawhub-postpublish.mjs
           fi
 
           if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
@@ -2119,7 +2172,7 @@ jobs:
 
       - name: Authorize exact ClawHub package transactions
         id: clawhub_authorization
-        if: steps.children.outputs.plugin_clawhub_run_id != ''
+        if: inputs.original_clawhub_run_id == '' && steps.children.outputs.plugin_clawhub_run_id != ''
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
@@ -2132,7 +2185,7 @@ jobs:
 
       - name: Upload immutable ClawHub parent authorization
         id: clawhub_receipt
-        if: steps.children.outputs.plugin_clawhub_run_id != ''
+        if: inputs.original_clawhub_run_id == '' && steps.children.outputs.plugin_clawhub_run_id != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.clawhub_authorization.outputs.artifact_name }}
@@ -2181,8 +2234,8 @@ jobs:
           CHILD_OPENCLAW_NPM_RUN_ATTEMPT: ${{ steps.children.outputs.openclaw_npm_resume_run_attempt }}
           CHILD_OPENCLAW_NPM_RUN_ID: ${{ steps.core_start.outputs.openclaw_npm_run_id || steps.children.outputs.openclaw_npm_resume_run_id }}
           CORE_START_OUTCOME: ${{ steps.core_start.outcome }}
-          CLAWHUB_AUTHORIZATION_OUTCOME: ${{ steps.clawhub_authorization.outcome }}
-          CLAWHUB_RECEIPT_OUTCOME: ${{ steps.clawhub_receipt.outcome }}
+          CLAWHUB_AUTHORIZATION_OUTCOME: ${{ inputs.original_clawhub_run_id != '' && steps.original_clawhub_authorization.outcome || steps.clawhub_authorization.outcome }}
+          CLAWHUB_RECEIPT_OUTCOME: ${{ inputs.original_clawhub_run_id != '' && steps.original_clawhub_receipt.outcome || steps.clawhub_receipt.outcome }}
         run: |
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"

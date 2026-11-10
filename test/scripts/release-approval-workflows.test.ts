@@ -125,10 +125,66 @@ it("binds sealed ClawHub recovery to the current parent before core publication"
     "clawhub-recovery-request/dispatch.json",
     "dispatch_workflow plugin-clawhub-recovery.yml",
   ]);
+  const plan = requireStep(publish, "Resolve ClawHub release plan");
+  containsAll(plan.run, [
+    "clawhub-prepared-artifact.mjs original",
+    '--request "$RUNNER_TEMP/clawhub-recovery-request/dispatch.json"',
+    'plan_args+=(--prepared-artifact "$original_prepared")',
+    '&& -z "${original_prepared}"',
+  ]);
+  expect(plan.run?.indexOf("clawhub-prepared-artifact.mjs original")).toBeLessThan(
+    plan.run?.indexOf("openclaw-release-clawhub-plan.ts") ?? -1,
+  );
+  expect(dispatch.run).toContain('.normal.inputs.prepared_artifact // ""');
+  const authorization = requireStep(
+    publish,
+    "Authorize original-byte ClawHub package transactions",
+  );
+  containsAll(authorization.run, [
+    "set -euo pipefail",
+    "wait_for_run plugin-npm-release.yml",
+    "verify_release_tag_target",
+  ]);
+  expect(authorization.run?.indexOf("check-absent")).toBeLessThan(
+    authorization.run?.indexOf("clawhub-parent-authorization.mjs authorize") ?? -1,
+  );
+  expect(authorization.if).toContain("inputs.original_clawhub_run_id != ''");
+  expect(requireStep(publish, "Authorize exact ClawHub package transactions").if).toContain(
+    "inputs.original_clawhub_run_id == ''",
+  );
+  const publishSteps = publish.steps.map((step) => step.name);
+  expect(publishSteps.indexOf("Authorize exact ClawHub package transactions")).toBeGreaterThan(
+    publishSteps.indexOf("Start core npm publication"),
+  );
+  expect(publishSteps.indexOf("Upload original-byte ClawHub parent authorization")).toBeLessThan(
+    publishSteps.indexOf("Start core npm publication"),
+  );
   const coreScript = expectDefined(
     requireStep(publish, "Start core npm publication").run,
     "core publication script",
   );
+  expect(coreScript).toContain(
+    'elif [[ -n "${ORIGINAL_CLAWHUB_RUN_ID:-}" && -n "${CHILD_PLUGIN_CLAWHUB_RUN_ID}" ]]',
+  );
+  const originalReadback = coreScript.indexOf(
+    "node .release-harness/scripts/clawhub-postpublish.mjs",
+  );
+  expect(originalReadback).toBeGreaterThan(
+    coreScript.indexOf("wait_for_run plugin-clawhub-release.yml"),
+  );
+  expect(originalReadback).toBeLessThan(
+    coreScript.indexOf('if [[ "${PUBLISH_OPENCLAW_NPM}" != "true" ]]'),
+  );
+  expect(coreScript.slice(0, originalReadback)).not.toContain("WAIT_FOR_CLAWHUB");
+  const approve = requireJob(clawhub, "approve_plugins_clawhub_release");
+  const approveNames = approve.steps.map((step) => step.name);
+  expect(approveNames.indexOf("Recheck original packed publication absence")).toBeGreaterThan(
+    approveNames.indexOf("Wait for the release parent's ClawHub authorization"),
+  );
+  containsAll(requireStep(approve, "Recheck original packed publication absence").run, [
+    "openclaw-clawhub-original-packed",
+    "clawhub-prepared-artifact.mjs check-absent",
+  ]);
   const recoveryWait = coreScript.indexOf("wait_for_run plugin-clawhub-recovery.yml");
   expect(recoveryWait).toBeGreaterThan(coreScript.indexOf("wait_for_run plugin-npm-release.yml"));
   expect(recoveryWait).toBeLessThan(coreScript.indexOf('if [[ "${PUBLISH_OPENCLAW_NPM}"'));
