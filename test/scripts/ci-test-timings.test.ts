@@ -336,6 +336,34 @@ describe("native singleton invocation timings", () => {
       ),
     ).timings.compactGroupSeconds.blacksmith;
 
+  it.each(["node", "bun-all"])("refits exact split plugin envelopes for %s", (runtime) => {
+    const timingKey = splitTimingGeneration({
+      configs: [config],
+      parentShardName: `changed-${shard}`,
+      stripes: [files],
+    }).timingKeys[0]!;
+    const text = invocationLog()
+      .replace(
+        encodeNodeTestGroups([descriptor]),
+        encodeNodeTestGroups([{ ...descriptor, timing_key: timingKey }]),
+      )
+      .replace(`[shard:${shard}] begin`, `[shard:${timingKey}] begin`)
+      .replace(`[shard:${shard}] end`, `[shard:${timingKey}] end`);
+    const withRuntime = (log: string) =>
+      runtime === "node"
+        ? log
+        : `2026-09-26T00:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: bun-all\n${log.replaceAll("[shard:", "[shard:bun:")}`;
+    const key = `${runtime === "node" ? "" : "bun-all:"}${extensionTimingKey(config, files)!}`;
+    expect(refit(withRuntime(text))[key]).toBe(34);
+    const mismatched = text.replace(
+      encodeNodeTestGroups([{ ...descriptor, timing_key: timingKey }]),
+      encodeNodeTestGroups([
+        { ...descriptor, includePatterns: files.slice(1), timing_key: timingKey },
+      ]),
+    );
+    expect(refit(withRuntime(mismatched))).toEqual({});
+  });
+
   it.each([
     { kind: "parallel", interleaved: false, receipts: [2] },
     { kind: "parallel", interleaved: true, receipts: [2] },

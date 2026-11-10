@@ -206,6 +206,7 @@ it("refuses tunnel-bound HTTP tokens outside the tunnel and token fallback for r
     setDeviceTokenBindingOwner({
       lookup: () => peerKey,
       record: async () => {},
+      forget: async () => {},
       reportMismatch: () => {},
     });
     setOpenClawIdTunnelPrincipalResolver(async () => undefined);

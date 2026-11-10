@@ -555,7 +555,7 @@ async function readClawHubTemplateContents(
                   kind: "mcpServer" as const,
                 })),
               ],
-              automations: manifest.cronJobs.map((job) => ({
+              automations: manifest.automations.map((job) => ({
                 name: job.name || job.id,
                 schedule: job.schedule.cron,
                 timezone: job.schedule.timezone,
@@ -581,7 +581,7 @@ type PersistClawHubSource = () => Promise<ResolvedClawHubSource>;
 
 export async function withResolvedClawHubSource<T>(
   params: ClawHubFetchOptions & {
-    coordinate: ClawHubCoordinate;
+    coordinate: { packageName: string; version?: string };
     mode: "preview" | "apply";
     acknowledgeClawHubRisk?: boolean;
     stateDir?: string;
@@ -592,13 +592,34 @@ export async function withResolvedClawHubSource<T>(
     ) => Promise<T>;
   },
 ): Promise<{ value: T } & ClawHubTemplateTrust> {
-  const { packageName, version } = params.coordinate;
+  const { packageName } = params.coordinate;
   requireTemplateName(packageName);
+  if (params.coordinate.version !== undefined) {
+    requireExactVersion(params.coordinate.version);
+  }
+  // Exact releases can fetch independent metadata together; latest needs the catalog version first.
+  const [detail, exactArtifact] = await Promise.all([
+    fetchClawHubPackageDetail({ ...params, name: packageName }),
+    params.coordinate.version === undefined
+      ? Promise.resolve(undefined)
+      : fetchClawHubPackageArtifact({
+          ...params,
+          name: packageName,
+          version: params.coordinate.version,
+        }),
+  ]);
+  const pkg = requirePublicTemplatePackage(detail, packageName);
+  const version = params.coordinate.version ?? pkg.latestVersion;
+  if (!version) {
+    throw new ClawHubSourceError(
+      "clawhub_version_unavailable",
+      "ClawHub has no published version.",
+    );
+  }
   requireExactVersion(version);
-  const detail = await fetchClawHubPackageDetail({ ...params, name: packageName });
-  requirePublicTemplatePackage(detail, packageName);
-  const artifact = await fetchClawHubPackageArtifact({ ...params, name: packageName, version });
-  const resolvedArtifact = readExactTemplateArtifact(artifact, params.coordinate);
+  const artifact =
+    exactArtifact ?? (await fetchClawHubPackageArtifact({ ...params, name: packageName, version }));
+  const resolvedArtifact = readExactTemplateArtifact(artifact, { packageName, version });
   const expectedSha256 = resolvedArtifact.sha256;
   const trust = await checkClawHubPackageTrust({
     subject: { kind: "template", packageName },

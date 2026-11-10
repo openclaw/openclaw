@@ -229,7 +229,7 @@ function textSvg(text, box, width, height, index) {
   );
   const lineHeight = fontSize * 1.08;
   const totalHeight = lineHeight * lines.length;
-  const rotate = box.rotate ? ` rotate(${box.rotate} ${centerX} ${centerY})` : "";
+  const rotate = box.rotate ? ` rotate(${box.rotate} ${centerX} 0)` : "";
   lines = lines.map(escapeXml);
   const tspans = lines
     .map((line, lineIndex) => {

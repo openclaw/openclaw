@@ -64,7 +64,7 @@ openclaw-keyboard-shortcuts-dialog section + section {
 openclaw-keyboard-shortcuts-dialog h3 {
   margin: 18px 0 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -76,7 +76,7 @@ openclaw-keyboard-shortcuts-dialog .shortcut-row {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 openclaw-keyboard-shortcuts-dialog .combos {
@@ -100,6 +100,6 @@ openclaw-keyboard-shortcuts-dialog kbd {
   background: var(--bg-muted);
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-align: center;
 }

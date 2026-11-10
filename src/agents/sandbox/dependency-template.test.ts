@@ -272,6 +272,21 @@ it.each(["stdout", "stderr"] as const)(
   },
 );
 
+it.each(["ENOSPC", "No space left on device", "No space left\n      on device (os error 28)"])(
+  "fails preparation on %s instead of publishing a partial install or source-only success",
+  async (failure) => {
+    mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
+      code: args[0] === "exec" ? 1 : 0,
+      stdout: args[0] === "image" ? image : containerId,
+      stderr: args[0] === "exec" ? `${failure}\n${"progress\n".repeat(400)}` : "",
+    }));
+    await expect(prepare()).rejects.toThrow(
+      /Sandbox dependency installation ran out of space.*PNPM_CONFIG_STORE_DIR/u,
+    );
+    expect(mocks.retire).toHaveBeenCalledOnce();
+  },
+);
+
 it("uses offline installation without skipping source lifecycle scripts", async () => {
   const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };
   await prepare(offlineCfg);

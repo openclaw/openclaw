@@ -77,6 +77,8 @@ final class AdaptiveLayoutUITests: XCTestCase {
             geometry.lifetime = .keepAlways
             add(geometry)
             XCTAssertTrue(control.isHittable)
+            XCTAssertGreaterThanOrEqual(control.frame.width, 44)
+            XCTAssertGreaterThanOrEqual(control.frame.height, 44)
             XCTAssertTrue(app.windows.firstMatch.frame.contains(control.frame))
         }
         self.capture("chat-toolbar-current-window", in: app)

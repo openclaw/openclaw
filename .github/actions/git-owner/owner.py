@@ -21,6 +21,14 @@ git = shutil.which("git")
 checkout_environment = {}
 
 
+def lifetime_fds(environment):
+    # Native children and their hooks/helpers share the enclosing PR lifetime.
+    if os.name == "nt":
+        return ()
+    return ((7,) if environment.get("OPENCLAW_PR_LIFETIME_FILE") else ()) + tuple(
+        item["fd"] for item in json.loads(environment.get("OPENCLAW_PR_LIFETIME_ANCESTORS", "[]")))
+
+
 def cancel(signum, _frame):
     global cancelled
     cancelled = signum
@@ -179,6 +187,7 @@ def group_states(pgid, deadline):
             ["ps", "-o", "pgid=,stat=", "-g", str(pgid)], stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             env={**os.environ, "COMMAND_MODE": "unix2003"},
+            pass_fds=lifetime_fds(os.environ),
             timeout=max(0.001, deadline - time.monotonic()),
         )
     except subprocess.TimeoutExpired as error:
@@ -350,6 +359,7 @@ def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=N
             command = [sys.executable, "-I", "-S", "-c", bootstrap, str(job), *command]
         else:
             options["start_new_session"] = True
+            options["pass_fds"] = lifetime_fds(environment if environment is not None else os.environ)
         # Signal handlers only latch cancellation, so Popen cannot lose ownership
         # between process creation and saving its handle/group for cleanup.
         child = subprocess.Popen(command, **options)
@@ -563,7 +573,7 @@ def checkout():
         os.makedirs(workspace, exist_ok=True)
         # Every earlier Git group has been drained before deleting its workspace.
         subprocess.run(["find", workspace, "-mindepth", "1", "-maxdepth", "1",
-                        "-exec", "rm", "-rf", "{}", "+"], check=True)
+                        "-exec", "rm", "-rf", "{}", "+"], check=True, pass_fds=lifetime_fds(os.environ))
     run_git(workspace, "init", workspace)
     if kind in ("linux-node", "android"):
         run_git(workspace, "config", "--global", "--add", "safe.directory", workspace)

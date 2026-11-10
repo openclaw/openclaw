@@ -135,15 +135,34 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_VITEST_WORKER_CACHE: "1"
-        run: node scripts/prepare-vitest-worker-cache.mts
+        run: |
+          node scripts/prepare-vitest-worker-cache.mts
+          # Each narrow graph has its own archive; full jobs never download it.
+          node --input-type=module -e "import { prepareVitestWorkerCache } from './scripts/prepare-vitest-worker-cache.mts'; for (const preset of ['runtime', 'tooling']) await prepareVitestWorkerCache(preset);"
 
       - name: Save compiled Vitest workers
         if: ${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.vitest-worker-cache-key != '' }}
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .artifacts/vitest-worker-cache
+          path: .artifacts/vitest-worker-cache/run-cache-0
           key: ${{ steps.setup-node-env.outputs.vitest-worker-cache-key }}
+
+      - name: Save runtime compiled Vitest workers
+        if: ${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.vitest-worker-cache-prefix != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/vitest-worker-cache/run-cache-runtime-0
+          key: ${{ steps.setup-node-env.outputs.vitest-worker-cache-prefix }}-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Save tooling compiled Vitest workers
+        if: ${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.vitest-worker-cache-prefix != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/vitest-worker-cache/run-cache-tooling-0
+          key: ${{ steps.setup-node-env.outputs.vitest-worker-cache-prefix }}-tooling-${{ github.run_id }}-${{ github.run_attempt }}
 
       # Hosted Linux SDK publication belongs to CI lint stripe 1. Other owners seal
       # before the full build changes resolution topology outside this payload.

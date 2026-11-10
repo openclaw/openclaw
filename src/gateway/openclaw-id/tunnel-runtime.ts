@@ -49,6 +49,8 @@ export async function startTunnelRuntime(params: {
   gatewayServer: () => HttpServer | undefined;
   /** Admitted peer keys at start; nothing is admitted until the first push. */
   membership: { seq: number; admitted: string[] };
+  /** K_srv the stored binding names, read at every child (re)start; undefined while unlinked. */
+  boundEndpointKey: () => string | undefined;
   log: RuntimeLogger;
   onStatus?: (status: TunnelSupervisorStatus) => void;
   /** Serves the OpenClaw ID tunnel API for admitted devices. */
@@ -65,13 +67,17 @@ export async function startTunnelRuntime(params: {
   const supervisor = createTunnelSupervisor({
     // The worker argv ends with the entry path itself; fork receives it separately.
     launch: { entry, execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1) },
-    startMessage: () => ({
-      type: "start",
-      relayUrl: params.settings.relayUrl,
-      keyPath,
-      ingress: { socketPath: listener.socketPath, proxyToken: listener.proxyToken },
-      forwardedProto: params.settings.forwardedProto,
-    }),
+    startMessage: () => {
+      const expectedEndpointKey = params.boundEndpointKey();
+      return {
+        type: "start",
+        relayUrl: params.settings.relayUrl,
+        keyPath,
+        ...(expectedEndpointKey ? { expectedEndpointKey } : {}),
+        ingress: { socketPath: listener.socketPath, proxyToken: listener.proxyToken },
+        forwardedProto: params.settings.forwardedProto,
+      };
+    },
     log: params.log,
     onStatus: params.onStatus,
     onReady: (ready) => {

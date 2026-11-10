@@ -143,6 +143,26 @@ workflow binding, and hosted lease. The default source-review file is
 `.local/correction-review.json`; an explicit file lets the reviewer supply new
 source-review bytes without overwriting an older correction review.
 
+To credit additional verified contributors without rewriting the signed source,
+add `--coauthors <file>` to this explicit `--for-proof` invocation. The regular
+UTF-8 JSON file contains an array of `Name <email>` identities, for example:
+
+```json
+["Ada Example <ada@example.invalid>", "Renée Example <renee@example.invalid>"]
+```
+
+The file is snapshotted relative to the caller’s working directory before
+checkout or evidence retirement; use an absolute path across native handoffs.
+Names and addresses must be single-line values without control or Unicode line
+separators. Existing source trailers remain unchanged and first; additions are
+deduplicated by case-insensitive email, retaining the first requested spelling.
+The requested metadata is part of the signed baseline binding and candidate
+identity. Interrupted and completed retries must select the same metadata;
+changing the file cannot change the admitted transition. This is attribution,
+not approval: the new candidate still requires fresh exact-source review.
+Omitting the option preserves source-only credit. Other baseline commands do
+not accept it.
+
 For a previously published correction whose fresh incoming review has advanced
 but whose preparation context still names the earlier incoming head, also select
 `--incoming-head <hosted-SHA> --incoming-review <fresh-review-OID>

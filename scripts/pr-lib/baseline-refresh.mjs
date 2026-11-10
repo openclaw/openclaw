@@ -363,6 +363,7 @@ function bindingAt(anchor, suppliedBytes) {
     ...(Object.hasOwn(record, "sourceAdmission") ? ["sourceAdmission"] : []),
     ...(Object.hasOwn(record, "incomingSource") ? ["incomingSource"] : []),
     ...(record.version === 2 ? ["purpose", "proofSource"] : []),
+    ...(Object.hasOwn(record, "coauthors") ? ["coauthors"] : []),
   ]);
   if (
     ![1, 2].includes(record.version) ||
@@ -387,11 +388,28 @@ function bindingAt(anchor, suppliedBytes) {
   ) {
     throw new Error("Invalid baseline refresh binding.");
   }
+  if (Object.hasOwn(record, "coauthors")) {
+    const coauthors = additionalCoauthors(record.coauthors);
+    if (
+      record.version !== 2 ||
+      !coauthors.length ||
+      JSON.stringify(coauthors) !== JSON.stringify(record.coauthors)
+    ) {
+      throw new Error("Invalid baseline co-author metadata.");
+    }
+  }
   if (text("show", "-s", "--format=%P", anchor) !== `${record.sourceHead} ${record.baselineHead}`) {
     throw new Error("Refreshed candidate lost its ordered source and baseline parents.");
   }
   git(["verify-commit", anchor]);
   git(["verify-commit", record.sourceHead]);
+  if (
+    Object.hasOwn(record, "coauthors") &&
+    JSON.stringify(sourceCoauthors(anchor)) !==
+      JSON.stringify(baselineCoauthors(record.sourceHead, record.coauthors))
+  ) {
+    throw new Error("Baseline candidate co-author credit differs from its signed binding.");
+  }
   git(["merge-base", "--is-ancestor", record.incomingHead, record.sourceHead]);
   git(["merge-base", "--is-ancestor", record.baselineHead, record.capturedMain]);
   const replay = materialize(record.sourceHead, record.baselineHead, record.resolutions);
@@ -662,7 +680,16 @@ function validateProofSource(record) {
   return context;
 }
 
-function completedProof(pr, source, baseline, sourceTree, sourceReviewOid, continuationJson, main) {
+function completedProof(
+  pr,
+  source,
+  baseline,
+  sourceTree,
+  sourceReviewOid,
+  continuationJson,
+  main,
+  coauthorsJson,
+) {
   const anchor = text("rev-parse", "HEAD");
   const binding = { ...bindingAt(anchor), anchor };
   const { record } = binding;
@@ -675,6 +702,7 @@ function completedProof(pr, source, baseline, sourceTree, sourceReviewOid, conti
     record.baselineHead !== baseline ||
     record.proofSource.sourceTree !== sourceTree ||
     record.proofSource.sourceReviewOid !== sourceReviewOid ||
+    JSON.stringify(record.coauthors ?? []) !== coauthorsJson ||
     (request === null
       ? selected !== null
       : !selected ||
@@ -1235,6 +1263,75 @@ export function baselineRefreshCandidate({
   };
 }
 
+function additionalCoauthors(value) {
+  if (!Array.isArray(value)) {
+    throw new Error("Expected a JSON array of co-authors in Name <email> format.");
+  }
+  const seen = new Set();
+  return value.filter((identity) => {
+    const match =
+      typeof identity === "string" &&
+      /^([^\p{Cc}\p{Zl}\p{Zp}<>]+) <([^<>\s@\p{Cc}\p{Zl}\p{Zp}]+@[^<>\s@\p{Cc}\p{Zl}\p{Zp}]+)>$/u.exec(
+        identity,
+      );
+    if (!match || match[1] !== match[1].trim()) {
+      throw new Error(
+        "Invalid co-author: expected one Name <email> without control or line separators.",
+      );
+    }
+    const email = match[2].toLowerCase();
+    if (seen.has(email)) {
+      return false;
+    }
+    seen.add(email);
+    return true;
+  });
+}
+
+function sourceCoauthors(source) {
+  // Git owns trailer parsing/unfolding; this read-only format cannot execute
+  // configured trailer commands. Copy only source credit, never binding markers.
+  const coauthors = decoder
+    .decode(
+      git([
+        "-c",
+        "trailer.separators=:",
+        "-c",
+        "trailer.co-authored-by.key=Co-authored-by",
+        "show",
+        "-s",
+        "--no-show-signature",
+        "--no-notes",
+        "--no-color",
+        "--no-decorate",
+        "--encoding=UTF-8",
+        "--format=%(trailers:key=Co-authored-by,only,unfold)",
+        source,
+      ]),
+    )
+    .split("\n")
+    .filter(Boolean);
+  if (coauthors.some((line) => !/^Co-authored-by: [^\p{Cc}\p{Zl}\p{Zp}]+$/u.test(line))) {
+    throw new Error(
+      "Cannot preserve source co-author credit containing control or line separators.",
+    );
+  }
+  return coauthors;
+}
+
+function baselineCoauthors(source, requested) {
+  const coauthors = sourceCoauthors(source);
+  const emails = new Set(coauthors.map((line) => /<([^<>]+)>$/u.exec(line)?.[1].toLowerCase()));
+  for (const identity of requested) {
+    const email = /<([^<>]+)>$/u.exec(identity)[1].toLowerCase();
+    if (!emails.has(email)) {
+      coauthors.push("Co-authored-by: " + identity);
+      emails.add(email);
+    }
+  }
+  return coauthors;
+}
+
 function create(
   pr,
   source,
@@ -1246,7 +1343,9 @@ function create(
   successor,
   signer,
   proofSource,
+  requestedCoauthors = [],
 ) {
+  const coauthors = additionalCoauthors(requestedCoauthors);
   if (
     ![source, baseline, main].every((value) => oidPattern.test(value)) ||
     (!successor && present(bindingPath))
@@ -1311,6 +1410,7 @@ function create(
   const record = {
     version: proofSource ? 2 : 1,
     ...(proofSource ? { purpose: "proof", proofSource } : {}),
+    ...(coauthors.length ? { coauthors } : {}),
     pr,
     sourceHead: source,
     baselineHead: baseline,
@@ -1327,38 +1427,11 @@ function create(
   };
   const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
   const oid = hash(bytes);
-  // Git owns trailer parsing/unfolding; this read-only format cannot execute
-  // configured trailer commands. Copy only source credit, never binding markers.
-  const coauthors = decoder
-    .decode(
-      git([
-        "-c",
-        "trailer.separators=:",
-        "-c",
-        "trailer.co-authored-by.key=Co-authored-by",
-        "show",
-        "-s",
-        "--no-show-signature",
-        "--no-notes",
-        "--no-color",
-        "--no-decorate",
-        "--encoding=UTF-8",
-        "--format=%(trailers:key=Co-authored-by,only,unfold)",
-        source,
-      ]),
-    )
-    .split("\n")
-    .filter(Boolean);
-  if (coauthors.some((line) => !/^Co-authored-by: [^\p{Cc}\p{Zl}\p{Zp}]+$/u.test(line))) {
-    throw new Error(
-      "Cannot preserve source co-author credit containing control or line separators.",
-    );
-  }
   const message = [
     "fix: refresh the reviewed correction baseline",
     "",
     `Baseline-Refresh: ${oid}`,
-    ...coauthors,
+    ...baselineCoauthors(source, coauthors),
     "",
   ].join("\n");
   const anchor = decoder
@@ -1570,18 +1643,29 @@ function checkSigning(pr, root, lockRef, lockOid) {
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     const [command, ...args] = process.argv.slice(2);
-    if (command === "continuation-baseline" && args.length === 8) {
+    if (command === "coauthors" && args.length === 1) {
+      process.stdout.write(
+        JSON.stringify(additionalCoauthors(JSON.parse(decoder.decode(readRegular(args[0]))))),
+      );
+    } else if (command === "continuation-baseline" && args.length === 8) {
       process.stdout.write(continuationBaseline(Number(args[0]), ...args.slice(1)));
     } else if (command === "publication-lineage" && args.length === 5) {
       publicationLineage(Number(args[0]), ...args.slice(1));
     } else if (command === "incoming-source-snapshot" && args.length === 3) {
       incomingSourceSnapshot(Number(args[0]), ...args.slice(1));
-    } else if (command === "completed-proof" && args.length === 7) {
+    } else if (command === "completed-proof" && args.length === 8) {
       completedProof(Number(args[0]), ...args.slice(1));
     } else if (command === "proof-source" && args.length === 10) {
       prepareProofSource(Number(args[0]), ...args.slice(1));
-    } else if (command === "create-proof" && args.length === 8) {
-      create(Number(args[0]), ...args.slice(1, 7), undefined, undefined, JSON.parse(args[7]));
+    } else if (command === "create-proof" && args.length === 9) {
+      create(
+        Number(args[0]),
+        ...args.slice(1, 7),
+        undefined,
+        undefined,
+        JSON.parse(args[7]),
+        JSON.parse(args[8]),
+      );
     } else if (command === "create" && args.length === 7) {
       create(Number(args[0]), ...args.slice(1));
     } else if (command === "create-successor" && args.length === 11) {

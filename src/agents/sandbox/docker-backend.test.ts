@@ -706,22 +706,39 @@ it.each([
   }
 });
 
-it.each(["describeRuntime", "removeRuntime"] as const)(
+it.each([false, true])("stops an idle Podman runtime (paused=%s)", async (paused) => {
+  mocks.containerState.mockResolvedValue({
+    exists: true,
+    running: !paused,
+    id: containerId,
+    paused,
+  });
+  await podmanSandboxBackendManager.stopRuntime(runtimeEntry("podman"), () => {});
+  expect(mocks.execContainer.mock.calls.map(([, args]) => args)).toEqual([
+    ...(paused ? [["unpause", containerId]] : []),
+    ["stop", "--time", "0", containerId],
+  ]);
+});
+
+it.each(["describeRuntime", "removeRuntime", "stopRuntime"] as const)(
   "rejects a stale Podman registry target before %s",
   async (operation) => {
     const targetError = new Error("active Podman connection changed");
     mocks.validateSandboxContainerEngineTarget.mockRejectedValueOnce(targetError);
+    const entry = {
+      ...runtimeEntry("podman"),
+      backendTarget: {
+        key: `machine:${"a".repeat(32)}`,
+        globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
+      },
+    };
     await expect(
-      podmanSandboxBackendManager[operation]({
-        entry: {
-          ...runtimeEntry("podman"),
-          backendTarget: {
-            key: `machine:${"a".repeat(32)}`,
-            globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
-          },
-        },
-        config: createConfig(),
-      }),
+      operation === "stopRuntime"
+        ? podmanSandboxBackendManager.stopRuntime(entry, () => {})
+        : podmanSandboxBackendManager[operation]({
+            entry,
+            config: createConfig(),
+          }),
     ).rejects.toBe(targetError);
     expect(mocks.containerState).not.toHaveBeenCalled();
     expect(mocks.execContainer).not.toHaveBeenCalled();
