@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { PresenceEntry } from "../../api/types.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -286,6 +287,8 @@ function InventoryEntry(props: {
     deviceDesktopEnvironment(props.devices, `node:${props.entry.id}`),
   );
   const rowConnected = () => props.entry.node?.connected ?? props.entry.connected;
+  // OpenClaw ID membership owns these browsers; the Access page removes them.
+  const managedByOpenClawId = () => props.entry.device?.managedBy === "openclaw-id";
   const warnings = createMemo(() => entryWarnings(props.entry, props.devices.gatewayVersion));
   const tokens = createMemo(() => props.entry.device?.tokens ?? []);
   const tokenRoles = createMemo(() => new Set(tokens().map((token) => token.role)));
@@ -337,9 +340,23 @@ function InventoryEntry(props: {
                 })
             : undefined
         }
-        onRemove={() => props.devices.onInventoryRemove(toRemovalRequest(props.entry))}
+        onRemove={
+          managedByOpenClawId()
+            ? undefined
+            : () => props.devices.onInventoryRemove(toRemovalRequest(props.entry))
+        }
       />
       <dl class="device-entry__facts">
+        <Show when={managedByOpenClawId()}>
+          <DeviceFact label={t("devices.inventory.openclawIdLabel")}>
+            {t("devices.inventory.openclawIdManaged")}{" "}
+            <a
+              href={`${pathForRoute("plugin", props.devices.basePath)}?${new URLSearchParams({ plugin: "openclaw-id-access", id: "access" })}`}
+            >
+              {t("devices.inventory.openclawIdOpen")}
+            </a>
+          </DeviceFact>
+        </Show>
         <For
           each={warnings().filter((warning) => warning.detail)}
           keyed={(warning) => warning.kind}
@@ -376,6 +393,7 @@ function InventoryEntry(props: {
                     device={{ id: props.entry.id, name: props.entry.name }}
                     tokenSummary={token()}
                     devices={props.devices}
+                    revocable={!managedByOpenClawId()}
                   />
                 )}
               </For>
@@ -570,6 +588,7 @@ function TokenRow(props: {
   device: { id: string; name: string };
   tokenSummary: DeviceTokenSummary;
   devices: DevicesProps;
+  revocable: boolean;
 }) {
   const disabled = () =>
     props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
@@ -618,7 +637,7 @@ function TokenRow(props: {
         >
           {t("devices.inventory.rotate")}
         </button>
-        {props.tokenSummary.revokedAtMs ? undefined : (
+        {props.tokenSummary.revokedAtMs || !props.revocable ? undefined : (
           <button
             class="btn btn--sm danger"
             disabled={disabled()}

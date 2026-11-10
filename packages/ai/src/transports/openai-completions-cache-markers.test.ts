@@ -30,7 +30,9 @@ const marker = { type: "ephemeral" };
 const marked = (text: string) => [{ type: "text", text, cache_control: marker }];
 const systemMessage = (suffix: string, cache = true) => ({
   role: "system",
-  content: cache ? [...marked("STABLE"), { type: "text", text: suffix }] : `STABLE\n${suffix}`,
+  content: cache
+    ? [...marked("STABLE"), { type: "text", text: `\n${suffix}` }]
+    : `STABLE\n${suffix}`,
 });
 
 function markers(payload: unknown) {
@@ -167,6 +169,11 @@ describe("Completions cache markers", () => {
       systemMessage("Today: 2026-09-07"),
       { role: "user", content: marked("Question") },
     ]);
+    expect(
+      (first.messages[0] as { content: Array<{ text: string }> }).content
+        .map((block) => block.text)
+        .join(""),
+    ).toBe("STABLE\nToday: 2026-09-06");
     expect(first.tools).toEqual(second.tools);
     expect(first.tools).toMatchObject([
       { function: { name: "alpha" } },
