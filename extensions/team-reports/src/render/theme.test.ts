@@ -12,17 +12,15 @@ const context = {
   absoluteUrl: publicUrl,
   displayTimezone: "UTC",
 };
-const links = `<a id="history" href="/team/reports/day/prev/?person=a#theme=dark">History</a><a id="absolute" href="https://g.test/team/reports/people/">People</a><a id="external" href="https://e.test/team/reports/">External</a><a id="outside" href="/team/reports-other/">Outside</a>`;
-const html = shell(context, "Theme fixture", links, "home");
+const content = `<a id="history" href="/team/reports/day/prev/?person=a#theme=dark">History</a><a id="absolute" href="https://g.test/team/reports/people/">People</a><a id="external" href="https://e.test/team/reports/">External</a><a id="outside" href="/team/reports-other/">Outside</a><input data-maintainer-filter><div data-maintainer-search="Café">Café</div><div data-maintainer-search="Cafe\u0301">Cafe\u0301</div><div data-maintainer-search="Alice">Alice</div>`;
+const html = shell(context, "Theme and filter fixture", content, "home");
 
 async function openPage({ url = "", stored = "", blocked = false, light = false } = {}) {
   const { window } = new JSDOM(html, {
     url: new URL(url, "https://g.test/team/reports/").href,
     runScripts: "dangerously",
     beforeParse(frame) {
-      Object.defineProperty(frame, "matchMedia", {
-        value: () => ({ matches: light, addEventListener() {} }),
-      });
+      Object.assign(frame, { matchMedia: () => ({ matches: light, addEventListener() {} }) });
       if (blocked) {
         Object.defineProperty(frame, "localStorage", {
           get() {
@@ -56,8 +54,8 @@ it.each([
   expect((await openPage(options)).headTheme).toBe(options.expected);
 });
 
-it("carries a sandboxed theme across internal navigation without changing external destinations", async () => {
-  const { window, link, toggle } = await openPage({ blocked: true });
+it.each([true, false])("persists themes (storage blocked: %s)", async (blocked) => {
+  const { window, link, toggle } = await openPage({ blocked, stored: "dark" });
   toggle();
   expect(window.document.documentElement.dataset.theme).toBe("light");
   expect(window.location.hash).toBe("#theme=light");
@@ -67,7 +65,12 @@ it("carries a sandboxed theme across internal navigation without changing extern
   expect(link('a[aria-label="Open in a new window"]')).toBe(`${publicUrl}#theme=light`);
   expect(link("#external")).toBe("https://e.test/team/reports/");
   expect(link("#outside")).toBe("/team/reports-other/");
-  const next = await openPage({ url: link("#history") ?? "", blocked: true });
+  if (!blocked) {
+    const stored = window.localStorage.getItem("theme") ?? undefined;
+    expect(stored).toBe("light");
+    expect((await openPage({ stored })).headTheme).toBe("light");
+  }
+  const next = await openPage({ url: link("#history") ?? "", blocked });
   expect(next.headTheme).toBe("light");
   expect(next.link('a[aria-current="page"]')).toBe("/team/reports/#theme=light");
   next.toggle();
@@ -75,10 +78,8 @@ it("carries a sandboxed theme across internal navigation without changing extern
   expect(next.link("#history")).toBe("/team/reports/day/prev/?person=a#theme=dark");
 });
 
-it("persists a separate-window theme when browser storage is available", async () => {
-  const { window, toggle } = await openPage({ stored: "dark" });
-  toggle();
-  expect(window.localStorage.getItem("theme")).toBe("light");
-  const next = await openPage({ stored: window.localStorage.getItem("theme") ?? undefined });
-  expect(next.headTheme).toBe("light");
+it.each(["Café", "Cafe\u0301"])("filters canonical member queries: %s", async (person) => {
+  const { window } = await openPage({ url: `?person=${encodeURIComponent(person)}` });
+  const rows = window.document.querySelectorAll<HTMLElement>("[data-maintainer-search]");
+  expect(Array.from(rows, (row) => row.hidden)).toEqual([false, false, true]);
 });
