@@ -1,7 +1,7 @@
 ---
 summary: "Publish coding sessions for shared viewing and live Team continuation"
 read_when:
-  - Sharing a Claude Code or Codex session with trusted Gateway operators
+  - Sharing a Claude Code, Codex, or Grok Bot session with trusted Gateway operators
   - Continuing a beamed conversation with a Team agent
   - Configuring an authenticated session-ingest endpoint without connecting a node
   - Auditing what Beam stores and exposes
@@ -59,7 +59,7 @@ cloudflared access curl https://gateway.example.com/api/v1/beam/sessions \
   --data-binary @sanitized-beam.json
 ```
 
-The `beam` skill in [openclaw/agent-skills](https://github.com/openclaw/agent-skills) handles local transcript discovery, redaction, Cloudflare Access login, and upload for Claude Code and Codex.
+The `beam` skill in [openclaw/agent-skills](https://github.com/openclaw/agent-skills) handles local transcript discovery, redaction, Cloudflare Access login, and upload for Claude Code, Codex, and exported Grok Bot conversations.
 
 ## Request
 
@@ -88,6 +88,8 @@ Content-Type: application/json
 Send `items` in conversation order, oldest first. Beam preserves that order in storage and displays questions before their replies. Its session-catalog API returns newest-first pages, matching the other coding-session catalogs.
 
 The schema is closed. Beam rejects unknown fields, invalid item types, empty text, more than 200 items, item text over 6,000 characters, non-JSON requests, and bodies over 56 KiB.
+
+`source` names the originating assistant. The Beam skill sends `claude`, `codex`, or `grokbot`. Beam stores that identifier in lowercase and returns it on the catalog session. The `/beam/<slug>` viewer and Team continuation follow the same path for every source. A mirrored catalog sends its catalog id instead, so the field stays a short identifier rather than a closed list of product names. Missing values, spaces, slashes, and identifiers longer than 32 characters are rejected. Grok Bot is not a local session catalog, so `mirror.catalogs` does not include `grokbot`.
 
 A successful upload returns the stable Beam id and a relative Control UI URL:
 

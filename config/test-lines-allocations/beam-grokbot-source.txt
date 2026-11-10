@@ -1,0 +1,2 @@
+# Beam receiver contract for a Grok Bot snapshot, viewer path, continuation, and invalid sources.
+88
