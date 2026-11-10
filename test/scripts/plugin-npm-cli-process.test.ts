@@ -132,11 +132,15 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
     // Bound all immutable work, including routes not listed in the fixture inventory.
     expect(categoriesByProcess[name]!.immutable, name + " reacquired immutable evidence").toBe(0);
     const calls = requests(name);
+    expect(calls, name + " total GitHub requests").toHaveLength(
+      name.startsWith("consume") ? 135 : 132,
+    );
     // One owner refreshes original qualification; retain the later effect-boundary checks.
     for (const [route, count] of [
       ["actions/runs/910", 4],
       ["actions/artifacts/70", 6],
-      ["collaborators/release-operator/permission", 18],
+      ["collaborators/release-operator/permission", 9],
+      ["actions/artifacts/6400", 2],
     ] as const) {
       expect(
         calls.filter((row) => row.route === route),

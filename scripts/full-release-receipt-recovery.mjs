@@ -36,7 +36,7 @@ import {
 } from "./plugin-npm-prepared-release.mjs";
 import {
   revalidateQualificationAdmissionAuthority,
-  verifyReleaseQualificationOperator,
+  verifyReleaseQualificationOperators,
 } from "./release-qualification-admission.mjs";
 import { validateQualificationJobs } from "./release-qualification-coverage.mjs";
 import {
@@ -240,8 +240,12 @@ export function verifyReceiptRecoveryAuthority(repository, producer, completed =
     workflowEvent: "workflow_dispatch",
     runStatePolicy: completed ? "success" : "active",
   });
-  verifyReleaseQualificationOperator(repository, run.actor, runReleaseToolingGh);
-  verifyReleaseQualificationOperator(repository, run.triggering_actor, runReleaseToolingGh);
+  verifyReleaseQualificationOperators(
+    repository,
+    run.actor,
+    run.triggering_actor,
+    runReleaseToolingGh,
+  );
   return run;
 }
 
