@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.runtime.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { ensureGitCommit } from "./lib/merge-head-diff-base.mjs";
 
 const HEADER = [
   "candidate",
@@ -32,8 +33,7 @@ function git(args, options = {}) {
 }
 
 function resolveCommit(value, label, cwd) {
-  const result = git(["rev-parse", "--verify", `${value}^{commit}`], { cwd });
-  const oid = result.stdout.trim();
+  const oid = ensureGitCommit(value, cwd);
   if (!/^[0-9a-f]{40}$/u.test(oid)) {
     throw new Error(`Unable to resolve ${label} as one commit: ${value}`);
   }

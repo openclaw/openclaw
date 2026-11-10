@@ -143,6 +143,51 @@ export function formatMs(ms?: number | null): string {
   return createMsFormatter()(ms);
 }
 
+/** {@link formatMs} for tight rows: today reads as the time alone, this year omits the year. */
+export function formatCompactMs(ms?: number | null): string {
+  return createCompactMsFormatter()(ms);
+}
+
+const DEFAULT_MS_FORMAT: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+};
+const YEAR_FIELDS = new Set(["era", "year"]);
+const DATE_FIELDS = new Set([...YEAR_FIELDS, "month", "day", "weekday", "dateStyle"]);
+
+/** Same-day timestamps keep only the caller's time fields, and same-year ones drop the year;
+ * anything else keeps every field. Options must include time fields and the viewer's zone.
+ */
+export function createCompactMsFormatter(
+  options: Intl.DateTimeFormatOptions = DEFAULT_MS_FORMAT,
+  fallback?: string,
+): (ms?: number | null) => string {
+  const without = (fields: Set<string>) =>
+    Object.fromEntries(Object.entries(options).filter(([field]) => !fields.has(field)));
+  const formatters = {
+    full: createMsFormatter(options, fallback),
+    // Style presets choose their own year, so only explicit fields can drop it.
+    year: options.dateStyle ? undefined : createMsFormatter(without(YEAR_FIELDS), fallback),
+    day: createMsFormatter(without(DATE_FIELDS), fallback),
+  };
+  return (ms) => {
+    const timestampMs = asDateTimestampMs(ms);
+    if (timestampMs === undefined) {
+      return formatters.full(ms);
+    }
+    const date = new Date(timestampMs);
+    const now = new Date();
+    if (date.toDateString() === now.toDateString()) {
+      return formatters.day(timestampMs);
+    }
+    const sameYear = date.getFullYear() === now.getFullYear() ? formatters.year : undefined;
+    return (sameYear ?? formatters.full)(timestampMs);
+  };
+}
+
 /** Reuse within one render so the next render picks up locale and system timezone changes.
  * Explicit options replace the default minute-precision fields.
  */
@@ -161,16 +206,7 @@ export function createMsFormatter(
       locale = i18n.getLocale();
       formatter = undefined;
     }
-    formatter ??= new Intl.DateTimeFormat(
-      locale,
-      options ?? {
-        year: "numeric",
-        month: "numeric",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      },
-    );
+    formatter ??= new Intl.DateTimeFormat(locale, options ?? DEFAULT_MS_FORMAT);
     return formatter.format(new Date(timestampMs));
   };
 }
@@ -267,12 +303,17 @@ export function formatDateTimeRangeMs(first: number, last: number): string {
 // Keep token presentation consistent across UI session and usage surfaces.
 export function formatCompactTokenCount(
   tokens: number | null | undefined,
-  options: { thousandsSuffix?: string; trimTrailingZero?: boolean } = {},
+  options: {
+    thousandsPrecision?: 0 | 1;
+    thousandsSuffix?: string;
+    trimTrailingZero?: boolean;
+  } = {},
 ): string {
   if (tokens == null || !Number.isFinite(tokens)) {
     return "0";
   }
   return formatTokenUnits(tokens, {
+    thousandsPrecision: options.thousandsPrecision,
     thousandsSuffix: options.thousandsSuffix,
     millionsSuffix: "M",
     trimTrailingZero: options.trimTrailingZero ?? true,
@@ -280,9 +321,9 @@ export function formatCompactTokenCount(
   });
 }
 
-export function formatContextTokenCapacity(tokens: number): string {
+export function formatContextTokenCapacity(tokens: number, thousandsPrecision: 0 | 1 = 1): string {
   if (tokens < 1_000_000) {
-    return formatCompactTokenCount(tokens);
+    return formatCompactTokenCount(tokens, { thousandsPrecision });
   }
   return `${Math.floor(tokens / 100_000) / 10}M`;
 }

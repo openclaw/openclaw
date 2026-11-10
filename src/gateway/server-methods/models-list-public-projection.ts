@@ -14,6 +14,21 @@ import { supportsOpenAIResponsesFastMode } from "../../llm/providers/openai-fast
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 
+// Private account provenance follows each projected row, not a shared provider/model key.
+// Weak ownership keeps its catalog lifetime without exposing account selection on the wire.
+const pinnedAccountChoices = new WeakSet<ModelChoice>();
+
+export function retainModelChoiceAccountPin(choice: ModelChoice, pinned: boolean): ModelChoice {
+  if (pinned) {
+    pinnedAccountChoices.add(choice);
+  }
+  return choice;
+}
+
+export function hasModelChoiceAccountPin(choice: ModelChoice): boolean {
+  return pinnedAccountChoices.has(choice);
+}
+
 /** Account observations are never model metadata donors or native-login readiness. */
 function resolveModelCatalogServiceTiers(params: {
   snapshot: ModelCatalogSnapshot;

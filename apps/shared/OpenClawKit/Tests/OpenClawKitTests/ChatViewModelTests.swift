@@ -2,7 +2,11 @@ import Foundation
 import Observation
 import OpenClawKit
 import OpenClawProtocol
+import SwiftUI
 import Testing
+#if os(macOS)
+import AppKit
+#endif
 @testable import OpenClawChatUI
 
 private func chatTextMessage(
@@ -8428,7 +8432,7 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
-    @Test func `write scope permits model but keeps effort settings admin only`() async throws {
+    @Test func `effort settings stay unchanged without effort access`() async throws {
         let writeCatalog = OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
             modelMutationAvailable: true,
@@ -8450,6 +8454,26 @@ struct ChatViewModelTests {
             vm.selectVerboseLevel("full")
         }
         try await Task.sleep(for: .milliseconds(20))
+        #expect(await transport.sessionSettingsPatches().isEmpty)
+    }
+
+    @Test func `write scope permits effort but keeps tool details admin only`() async throws {
+        let writeCatalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            modelMutationAvailable: true,
+            effortMutationAvailable: true)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(key: "main", updatedAt: 1, sessionId: "sess-main"),
+            ])],
+            composerCapabilityCatalog: writeCatalog)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await vm.loadComposerCapabilities()
+
+        #expect(await MainActor.run { !vm.composerVerboseMutationAvailable })
+        await MainActor.run { vm.selectVerboseLevel("full") }
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
@@ -8935,6 +8959,40 @@ struct ChatViewModelTests {
             vm.toggleComposerWebSearch()
         }
         #expect(await transport.sessionSettingsPatches().isEmpty)
+    }
+
+    @Test func `health poll recovery reloads composer capabilities loaded before connect`() async throws {
+        let calls = AsyncCounter()
+        let writerCatalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            modelMutationAvailable: true,
+            effortMutationAvailable: true,
+            permissionMutationAvailable: true)
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(key: "main", updatedAt: 1, sessionId: "sess-main"),
+            ])],
+            composerCapabilityCatalogHook: { _, _ in
+                // The composer's first load runs before the operator route exists.
+                await calls.increment() == 1 ? OpenClawChatComposerCapabilityCatalog() : writerCatalog
+            },
+            healthResponses: [false, true])
+        let bootstrap = try #require(await MainActor.run {
+            vm.load()
+            return vm.bootstrapTask
+        })
+        await bootstrap.value
+        await vm.loadComposerCapabilities()
+        #expect(await MainActor.run { !vm.healthOK && !vm.composerModelMutationAvailable })
+
+        // The chat's own health poll, not a gateway health event, observes the connection.
+        await vm.pollHealthIfNeeded(force: true)
+        await calls.wait { $0 >= 2 }
+        await waitForObservedState {
+            vm.composerModelMutationAvailable && vm.composerEffortMutationAvailable
+        }
+        #expect(await calls.current() == 2)
     }
 
     @Test func `composer capabilities fail closed and discard a stale catalog`() async throws {
@@ -10578,7 +10636,6 @@ struct ChatViewModelTests {
         await finalRefresh?.value
         #expect(await mainHistoryCount.current() == 3)
 
-
         await send.value
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-send-refresh" &&
@@ -10637,7 +10694,6 @@ struct ChatViewModelTests {
             vm.sessionId == "sess-main-terminal-empty-refresh" &&
                 vm.pendingRunCount == 0
         })
-
 
         await send.value
         #expect(await MainActor.run {
@@ -10704,7 +10760,6 @@ struct ChatViewModelTests {
                 }
         })
 
-
         await send.value
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-terminal-user-only-refresh" &&
@@ -10760,7 +10815,6 @@ struct ChatViewModelTests {
         await sendRefreshGate.release()
         await vm.bootstrapTask?.value
         #expect(vm.sessionId == "sess-main-manual-user-only-refresh" && vm.pendingRunCount == 0)
-
 
         await send?.value
         #expect(vm.sessionId == "sess-main-manual-user-only-refresh")
@@ -10825,7 +10879,6 @@ struct ChatViewModelTests {
         #expect(vm.messages.contains { message in
             message.content.contains { $0.text == "older answer" }
         })
-
 
         await send?.value
         #expect(vm.sessionId == "sess-main-manual-older-complete-refresh")
@@ -10922,7 +10975,6 @@ struct ChatViewModelTests {
         #expect(await MainActor.run {
             vm.sessionId == "sess-main-manual-stale-complete-refresh"
         })
-
 
         await send.value
         #expect(await MainActor.run {
@@ -15350,3 +15402,35 @@ struct ChatHistoryMutationTests {
         #expect(model.messages.isEmpty)
     }
 }
+
+#if os(macOS)
+struct ChatObscuredStreamPacingTests {
+    @Test @MainActor func `covered chat paces live text slower until it is revealed`() {
+        _ = NSApplication.shared
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        func content(obscured: Bool) -> some View {
+            OpenClawChatView(viewModel: vm, showsComposer: false)
+                .environment(\.openClawChatIsObscured, obscured)
+        }
+        let host = NSHostingView(rootView: content(obscured: true))
+        window.contentView = host
+        defer {
+            vm.detachTransport()
+            window.contentView = nil
+            window.close()
+        }
+        host.layoutSubtreeIfNeeded()
+        #expect(vm.streamPacing.interval == 0.5)
+
+        host.rootView = content(obscured: false)
+        host.layoutSubtreeIfNeeded()
+        #expect(vm.streamPacing.interval == 0.15)
+    }
+}
+#endif

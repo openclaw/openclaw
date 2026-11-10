@@ -152,17 +152,17 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     >;
   };
 
-export function evaluateWorkflowExpression(expression: unknown, context: WorkflowContext) {
+export function evaluateWorkflowExpression(
+  expression: unknown,
+  context: WorkflowContext,
+  sandbox = {},
+) {
   if (typeof expression !== "string") {
     throw new TypeError("workflow expression must be a string");
   }
-  const match = expression.match(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/u);
-  if (!match) {
-    throw new Error(`invalid workflow expression: ${expression}`);
-  }
-  const source = match[1];
+  const source = expression.match(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/u)?.[1];
   if (source === undefined) {
-    throw new Error(`workflow expression has no body: ${expression}`);
+    throw new Error(`invalid workflow expression: ${expression}`);
   }
   // Actions permits dashes in property names; preserve quoted literals while
   // translating those accesses for the JavaScript fixture evaluator.
@@ -174,7 +174,7 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
         property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
     );
   const effectiveRunnerBackend = (context.runnerBackend ?? context.runnerProfile) || "blacksmith";
-  return runInNewContext(evaluableSource, {
+  const globals = {
     always: () => true,
     success: () => !context.failed && !context.cancelled,
     failure: () => context.failed ?? false,
@@ -313,7 +313,8 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
       OPENCLAW_CI_ON_PUSH: context.ciOnPush ?? "",
       OPENCLAW_RELEASE_PRIORITY_RUN: context.releasePriorityRun ?? "",
     },
-  });
+  };
+  return runInNewContext(evaluableSource, Object.assign(sandbox, globals));
 }
 
 export function evaluateWorkflowRunner(

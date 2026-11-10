@@ -67,9 +67,6 @@ export class StorageLifecycle extends StorageEdits {
         data = await vault.scan();
       const previous = assertLifecycleTarget(data.records, input, false);
       const record = lifecycleRecord(previous, "withdrawn", input, actor);
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
       return { record, previous, artifacts: {}, data, snapshot, lifecycle: input };
     });
     return this.accept(input.requestId, intent, prepared, access, actor);
@@ -102,9 +99,6 @@ export class StorageLifecycle extends StorageEdits {
         eligible(data, withdrawnIds(db, this.retrievalBinding(access)), false),
       );
       const plan = planSupersede(data, current, input, actor);
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
       const [first, ...rest] = plan.changes;
       return {
         previous: first!.before,
@@ -317,9 +311,6 @@ export class StorageLifecycle extends StorageEdits {
                 .join("; "),
           );
         }
-      }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
       }
       return {
         previous: planned.survivor,

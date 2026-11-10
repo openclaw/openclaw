@@ -8,11 +8,12 @@ export function isChatGoalDraftMode(value: unknown): value is ChatGoalDraftMode 
   }
   const allowed =
     value.action === "start"
-      ? ["action", "sessionId"]
+      ? ["action", "sessionId", "fromCommand"]
       : ["action", "sessionId", "goalId", "previousDraft"];
   return (
     Object.keys(value).every((key) => allowed.includes(key)) &&
-    (value.action === "start" ||
+    ((value.action === "start" &&
+      (value.fromCommand === undefined || value.fromCommand === true)) ||
       (value.action === "edit" &&
         typeof value.goalId === "string" &&
         value.goalId.length > 0 &&

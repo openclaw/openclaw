@@ -141,6 +141,9 @@ struct RootTabs: View {
             .overlay(alignment: .topLeading) {
                 self.uiTestReadinessMarker
             }
+            .task(id: self.appModel.agentAvatarRequest) {
+                await self.appModel.refreshAgentAvatars(self.appModel.agentAvatarRequest)
+            }
             .task(id: self.chatOwnerTaskIdentity) {
                 await self.appModel.restoreChatSessionRoutingIdentityIfNeeded()
                 guard !Task.isCancelled else { return }
@@ -198,7 +201,8 @@ struct RootTabs: View {
                 onShow: self.showSidebar,
                 onHide: self.hideSidebar,
                 sidebar: self.sidebarColumn(drawerSafeAreaInsets: isDrawerLayout ? proxy.safeAreaInsets : nil),
-                detail: self.sidebarDetailNavigationShell,
+                detail: self.sidebarDetailNavigationShell
+                    .environment(\.openClawChatIsObscured, isDrawerLayout && self.isSidebarVisible),
                 contentSafeAreaInsets: proxy.safeAreaInsets)
                 .onChange(of: layoutMode, initial: true) { _, mode in
                     self.updateSidebarLayout(mode)
@@ -943,7 +947,9 @@ extension RootTabs {
     private func applyInitialChatSessionIfNeeded() {
         guard !self.didApplyInitialChatSession else { return }
         self.didApplyInitialChatSession = true
-        self.appModel.focusChatSession(Self.initialChatSessionKey)
+        // Without the launch argument, keep the restored last chat instead of forcing Home.
+        guard let initialChatSessionKey = Self.initialChatSessionKey else { return }
+        self.appModel.focusChatSession(initialChatSessionKey)
     }
 
     private func maybeShowQuickSetup() {

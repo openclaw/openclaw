@@ -18,6 +18,11 @@ pages and assets while bots and existing Gateway connections keep running.
 Re-enable it to resume serving; missing assets are prepared in the background.
 Changing the serving base path or asset root still requires a Gateway restart.
 
+During a Gateway restart, lazy views and background UI imports wait for the
+server to return and retry in the open tab. Restarting the same build does not
+require a page reload. If an update changes the UI build, the existing reload
+recovery keeps unsaved work protected until it is safe to replace the page.
+
 For unmatched HTTP paths, the app-shell fallback respects the request's `Accept` header. An explicit HTML rejection such as `text/html;q=0, */*` overrides the broader wildcard, so the request reaches the startup `503` or final `404` response. Headerless and wildcard-only requests retain the browser navigation fallback.
 
 It speaks **directly to the Gateway WebSocket** on the same port.
@@ -33,11 +38,23 @@ without known dimensions keep a 3:2 frame while displayed, with the full image
 fitted inside it. Previously learned dimensions size the next preview without
 moving the surrounding messages when the image decodes.
 
+Opening a transcript image or video shows a shared viewer for supported media in
+the loaded thread, including inline Markdown images, your own attachments, and
+earlier response turns.
+When more than one item is available, use the visible previous/next buttons,
+Left/Right arrow keys, or touch swipes to browse; the counter shows your position.
+Older messages that have not been loaded are not fetched just to fill the viewer.
+
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer
 visibility, or remote session-link titles. Side Chat is hidden, and session links
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
+
+**Settings → Devices** displays the current device inventory while refreshing
+configuration separately. Binding controls keep their own loading and error
+state until configuration is available; a slow configuration read does not
+hold the inventory page open.
 
 Connections without general read access also skip CLI session catalogs, plugin
 tool artwork, detailed usage reads, and the separate command catalog. Slash-command
@@ -65,6 +82,18 @@ deployment settings for this Gateway. To direct them to your own workflow, set
 text replaces the instructions after the read-only heading. End the notice with
 a space and an absolute HTTP or HTTPS URL to add a **Learn more** link. For
 example, `Edit the deployment manifest and redeploy. https://example.org/gateway`.
+
+## Feedback and bug reports
+
+Open **Help** from the sidebar account menu to **Report a bug** or **Suggest a feature**.
+Connection and chat error notices also offer **Report a bug**. These links open the
+matching public GitHub issue form; they do not submit an issue.
+
+Only the issue template and a fixed **Control UI** title are prefilled. OpenClaw does
+not attach error text, diagnostics, logs, conversations, configuration, identifiers,
+credentials, or private URLs, and the links suppress the browser referrer. Review
+anything you add before submitting publicly. Use [official support](https://community.openclaw.ai/)
+for setup help and [private security reporting](https://github.com/openclaw/openclaw/security/policy) for security concerns.
 
 ## Edit a failed message
 
@@ -109,14 +138,24 @@ while you scroll.
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
 name, so repositories from different organizations are easier to distinguish.
-Selecting a repository also shows its identity in the workspace control.
+The **Local projects** section filters the Gateway’s saved project catalog immediately;
+it does not scan the filesystem. GitHub search results appear separately, without
+repeating repositories already shown as local matches. If no local project matches,
+the picker says so explicitly. Selecting a repository also shows its identity in
+the workspace control.
 Session-only connections receive the same read-safe repository identity for
 projects they can already discover, without repository URLs, credentials, or host
 checkout paths. This label does not grant access to private repository content.
 
+Without `operator.write` (for example the `guest` and `contributor` roles), the
+picker lists only agent workspaces and saved projects backed by public GitHub
+repositories, and it hides GitHub search and repository URL entry. A saved
+selection the Gateway no longer lists falls back to the agent workspace. See [Operator scopes](/gateway/operator-scopes) for the exact
+rules.
+
 ## Create a nested session
 
-Right-click a session in the sidebar and choose **New Nested Session** to open an
+Right-click a session in the sidebar and choose **New child session** to open an
 empty, persistent child beneath it. The parent expands to show the new session,
 and the Control UI opens the child conversation.
 
@@ -124,6 +163,11 @@ This does not copy the parent conversation or start an agent run. Use
 **Advanced → Fork session** when you want a child with copied history. The
 Gateway checks your write access to the parent before creating either kind of
 child.
+
+Imported conversations can remain grouped under their original session source,
+such as Beam. After conversion, they use the normal session controls, including
+rename, pin, and archive. Their child-session disclosure opens the normal nested
+conversation tree; the source group does not require another import.
 
 ## Automatic session names
 
@@ -151,7 +195,10 @@ access to an unavailable conversation.
 
 A saved chat can restore its archived or read-only composer and parent breadcrumb
 while reconnecting. These saved display facts never authorize actions; live session
-state replaces them when the connection returns.
+state replaces them when the connection returns. If a temporary transcript or
+live-message subscription failure exhausted its retries, returning to that chat
+starts a fresh read attempt. Access denials are not retried automatically, and
+returning to a chat does not resend messages.
 
 If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
 
@@ -188,13 +235,23 @@ If the New Session page fails during its initial render, the UI attempts one aut
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The handoff waits for the session list and expanded child-session reads to finish or report an error; elapsed reconnect time alone does not replace saved rows. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
-The saved sidebar also retains unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
+On a warm chat reload, browsers that retain the previous page during navigation can reveal the cached sidebar and conversation together. If that cached page is slow to prepare, the usual loading layout appears instead. Missing cached content, sign-in, and route errors release the loading view immediately.
+
+After the connection and saved conversation are ready, chat fetches updates while the rest of the page loads. A slow or unavailable cache keeps the normal loading path.
+
+The saved sidebar also retains the session rows for its initial viewport, along with unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Reload starts at the top of the sidebar. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
+
+The Online sidebar loads people's open and running session counts when you open it. Switching to Sessions or Pages stops those count refreshes; opening Online again loads current counts. Restoring a Sessions sidebar does not wait for Online counts.
 
 Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
+
+The desktop **Subagents** tab places nested subagents beneath the subagent that started them. Each row keeps its own activity and controls. Floating **Details** and the mobile list remain compact, direct-child views.
 
 When a conversation has a saved Details snapshot, desktop task progress keeps its saved runtime presentation while reconnecting. Live reads refresh those values in place after the progress and child reads settle; the saved presentation does not authorize actions.
 
 Saved desktop Details also restores session attribution, participant counts, and the branch/worktree row before live session facts arrive. Automations keeps its position while those facts refresh.
+
+The saved Details snapshot also retains the running-process preview while reconnecting, so Processes does not appear later and push Automations down. Saved process rows cannot stop processes. Live process reads refresh the preview, remove finished processes, and hide it if access is denied.
 
 A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. The **Show earlier** label stays steady while reconnecting or loading. The control exposes its busy and unavailable state to assistive technology and ignores activation until ready.
 
@@ -224,7 +281,7 @@ Transcript history loads in parallel with the browser cache. An unchanged histor
 
 When saved row sizes match the current content, appearance, and pane width, the initial viewport and its nearby rows mount together. Rows without matching saved sizes are measured incrementally.
 
-Consecutive informational system and model-fallback events appear as a collapsed **system events** row in chat. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
+Informational model-fallback events appear as a collapsed **system event** row in chat, even when only one occurs. Consecutive informational system and model-fallback events share a collapsed **system events** row. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
 
 During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
 
@@ -256,7 +313,11 @@ over the worker's bulk download, which resumes after page requests settle.
 
 If the selected session changes while its message subscription is being admitted, chat retries that read with fresh access checks for up to one minute. Saved replies load after the subscription succeeds, without resending your message. Switching chats or losing access stops recovery; a persistent failure leaves **Retry** available.
 
+Opening a nested session from a **Waiting on** link, a direct URL, or browser history expands its owning sidebar group and session ancestors so you can see where the session belongs. Other branches keep their disclosure state, and ordinary refreshes do not undo a branch you collapse while staying in the same session.
+
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
+
+Snoozing also hides pinned sessions from the Active sidebar until they wake. Their pins and relative order are preserved, and snoozed sessions remain discoverable with the **Snoozed** or **All** filter.
 
 The chat header’s **Details** panel groups session information into collapsible sections separated by subtle dividers. **Environment** shows the workspace name, branch, worktree, execution device, and model. Absolute workspace paths stay out of the panel text and tooltips; use **Copy path** when you need the full path, copy the branch, or open **Show session files** to browse the workspace. The composer's context ring shows a compact usage breakdown, latest-run tokens, and provider plan limits. **View context** opens the complete report, Refresh, and compaction action in one side panel. Approximate usage keeps its `~` marker. **Changes** keeps pull requests, change totals, checks, and available publication actions together. Background tasks, automations, participants, and task progress retain their existing session-scoped actions. On wide conversations, Details docks beside the transcript; narrower conversations use a dismissible popover below the header. On desktop, use the **Details** toggle to open or close the panel; mobile keeps a close button inside the panel.
 
@@ -361,6 +422,20 @@ non-success outcomes remain visible even when collapsed, such as
 
 Still-streaming assistant text stays at the bottom of its run, below saved output, and
 takes its transcript position once saved.
+
+While steering waits for a running tool, the message appears as an ordinary user
+bubble. Waiting steers are delivered together, so one small **Send now** link
+appears under the newest steer that can interrupt. Session writers can click it
+to interrupt supported running tools and deliver the waiting steers sooner,
+keeping the same agent run alive. The model receives a tool result explaining
+the user interruption. The link sits in the slot the message's footer actions use
+once it is delivered, so spacing stays the same. When nothing can interrupt, for
+viewers without steer access, tools that cannot be interrupted safely, and
+runtimes without tool interruption, the newest waiting message shows a muted
+**Steering…** label instead; hovering it explains what the steer is waiting for.
+A refused **Send now** returns the row to **Steering…** without a separate error.
+Tools that cannot be interrupted safely include Code Mode aggregate tools and
+native or remote backends, which do not support tool-only interruption.
 
 Accepted steering messages keep their saved transcript positions. Earlier saved
 output stays above the message; later answers and live output appear below it,
@@ -537,6 +612,17 @@ Opening a file collapses the file tree to make room for its preview. Use **Toggl
 file tree** to browse another file, or **Show in Files** to reveal the current file
 in its folder with the **All** filter.
 
+The **Session files** group lists files the agent produced outside the project
+tree together with the images and attachments in the loaded transcript. Use the
+control beside its heading to switch between **List** and **Grid** and to sort by
+**Default**, **Date**, **Name**, or **Type**. Default keeps the Gateway's file
+order followed by attachments in transcript order. Date puts the most recently
+modified files and most recently sent attachments first; entries without a
+recorded time, such as artifacts, follow in default order. The grid shows image
+previews once they load and large file icons for other files; untitled images
+show their picture without a caption. The choice is remembered in this browser
+for every session's Files panel. The project tree keeps its folder structure.
+
 The **Review** file menu offers **Edit file** when the file reader confirms editing
 is available. Readable files keep **Open file** and their supported Markdown and
 source views when editing is unavailable; downloads remain available from the preview.
@@ -651,6 +737,10 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 
 Use the agent selector to open an agent's chat or its settings gear to configure
 that agent. Per-agent settings remain at `/settings/agents/<id>`.
+
+The agent's **Automations** panel shows an empty state only after its jobs read
+succeeds. Failed reads show an error with **Refresh** available; previously loaded
+jobs remain visible while a refresh is pending or fails.
 
 Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
 This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**

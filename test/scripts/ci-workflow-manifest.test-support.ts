@@ -77,6 +77,7 @@ type CiManifestFixtureOptions = {
   publishedDriverUpdateCapability?: boolean;
   changedPaths?: string[] | null;
   checkFamilyScope?: boolean;
+  checkPlanSource?: string;
   ciLintPlan?: Awaited<ReturnType<typeof createChangedCiLintPlan>>;
   ciTypeGraphNames?: string[];
   ciTypeBoundaryFailure?: boolean;
@@ -314,6 +315,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     if (options.changedCoreTestSupport) {
       copyFixtures([
         "scripts/changed-lanes.mts",
+        "scripts/lib/windows-test-targets.mts",
         "scripts/lib/changed-path-facts.mjs",
         "scripts/lib/release-changelog.mjs",
         "scripts/lib/arg-utils.mts",
@@ -328,7 +330,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       ]);
     }
     if (options.checkFamilyScope) {
-      copyFixture("scripts/ci-check-plan.mts");
+      writeFixture(
+        "scripts/ci-check-plan.mts",
+        options.checkPlanSource ?? readFileSync("scripts/ci-check-plan.mts"),
+      );
       writeScript(
         "ci-check-family-scope.mts",
         reexport("resolveCiCheckFamilyScope", "scripts/lib/ci-check-family-scope.mts"),
@@ -501,6 +506,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     }
     if (options.bundledPlanner) {
       writeScript(
+        "vitest-runtime-selection.mts",
+        reexport("resolveCiVitestWorkerPreset", "scripts/lib/vitest-runtime-selection.mts"),
+      );
+      writeScript(
         "ci-docker-seed-plan.mts",
         options.dockerSeedPlannerSource ??
           reexport(
@@ -578,7 +587,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       "release-context.mjs",
       "release-version.mjs",
       "ci-ios-smoke-plan.mjs",
+      "ci-blacksmith-capacity.mjs",
       "ci-node-test-capacity.mts",
+      "ci-skills-python-plan.mjs",
+      "changed-path-facts.mjs",
     ]) {
       copyFixture(`.ci-harness/scripts/lib/${name}`, `scripts/lib/${name}`);
     }

@@ -598,12 +598,18 @@ prevent model calls or the existing `/v1/usage` snapshot.
 
 An upstream Anthropic `400` reporting `credit balance is too low` is a
 ClawRouter upstream-service failure, not a rejected ClawRouter key. OpenClaw
-keeps that key available to other requests and permits configured model
-fallbacks. Ask the ClawRouter operator to repair the upstream account, or retry
+keeps that key available to other requests and immediately tries the next configured
+fallback model without retrying the depleted route. Ask the ClawRouter operator to repair the upstream account, or retry
 with another available model. An explicit chat model pin still prevents silent
 model switching; a cron job's own model and fallback list remain independent of
 that pin. Router-key authentication failures and router budget denials retain
 their normal credential cooldown behavior.
+
+`invalid_request_error` alone does not identify the cause: Anthropic also uses it
+for exhausted upstream credits. Check the bounded, credential-redacted
+`providerError` in the HTTP `400` `[model-fetch]` log. Request-format failures
+surface the provider's message instead of switching models; the credit-balance
+exception above applies only to that specific upstream message.
 
 | Symptom                                  | Check                                                                                                                                              |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -619,7 +625,7 @@ their normal credential cooldown behavior.
 - Catalog discovery is scoped to the configured ClawRouter key. Conversational inventory responses are cached by endpoint and resolved credential; changing either does not reuse the previous response. Prepared inventory and dynamic model lookup retain their own agent, workspace, and auth scopes. Decisions check the selected key’s catalog on every call.
 - The ClawRouter key is attached only at request dispatch; it is not stored in model metadata.
 - Automatic attribution and request-correlation values are trimmed and control-character rejected before dispatch. Attribution values are bounded to 256 characters; request ids are bounded to 128.
-- Model transport diagnostics contain metadata only and never include the ClawRouter key or model content.
+- Model transport diagnostics contain metadata and bounded, credential-redacted HTTP `400` error details, never the ClawRouter key or model request content.
 - Native Anthropic and Gemini model ids are rewritten to their upstream ids only at dispatch.
 - Unsupported or ungranted catalog rows are not advertised for chat. Static decision support never grants a key permission to execute.
 

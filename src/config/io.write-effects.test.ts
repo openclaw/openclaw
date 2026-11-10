@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hashConfigIncludeRaw } from "./includes.js";
 import {
   content,
   createWriteEffectsFixture,
@@ -19,6 +20,22 @@ function identity(file: string) {
   const stat = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
   return { raw: stat ? fs.readFileSync(file, "utf8") : null, ino: stat?.ino };
 }
+
+it.each(["root", "include"])("refuses invalid %s UTF-8 before staging", async (owner) => {
+  const f = fixture();
+  const target = owner === "root" ? f.target : path.join(f.dir, "include.json");
+  fs.writeFileSync(target, Buffer.from([0xff]));
+  const options = { ...f.options, validateUtf8: true };
+  if (owner === "root") {
+    options.snapshot.raw = "�";
+  } else {
+    options.includeGraph = {
+      hashes: { [target]: hashConfigIncludeRaw("�") },
+      targets: { [target]: target },
+    };
+  }
+  await expect(prepare(f, fs, options)).rejects.toMatchObject({ code: "ERR_INVALID_UTF8" });
+});
 
 it.runIf(process.platform !== "win32").each([
   { name: "foreign state root", foreign: true, stateRoot: true, fileFailure: false },
@@ -108,12 +125,13 @@ it("finishes Windows fallback partial writes through the same descriptor", async
       },
     }),
   };
-  const { prepared: stage, guarded } = await prepare(f, io);
+  const { prepared: stage, guarded } = await prepare(f, io, { ...f.options, validateUtf8: true });
   await using prepared = stage;
   expect(prepared.publish().method).toBe("copy-fallback");
   guarded.assertPublishedIdentity();
   expect(calls).toBeGreaterThan(1);
-  expect(fs.readFileSync(f.target, "utf8")).toBe(content);
+  expect(fs.readFileSync(f.target)).toEqual(Buffer.from(content));
+  expect(fs.readFileSync(`${f.target}.bak`)).toEqual(Buffer.from(original));
 });
 
 it("does not swallow a transient assertion failure during awaited backup preparation", async () => {

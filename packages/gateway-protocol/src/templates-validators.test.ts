@@ -41,12 +41,22 @@ const rejectPlan = planResult.rejects;
 
 describe("Templates Gateway contract", () => {
   it("allows the public catalog and exact publisher Add coordinates", () => {
-    search.accepts({}, { query: "workflow", limit: 30 });
+    search.accepts({}, { query: "workflow", limit: 30 }, { overview: true, limit: 8 });
     search.rejects({ sourceRoot: "/private/template" });
-    searchResult.accepts({ entries: [catalogEntry] });
-    detail.accepts(coordinate);
+    searchResult.accepts(
+      { entries: [catalogEntry] },
+      {
+        entries: [],
+        overview: {
+          featured: [catalogEntry],
+          sections: [{ category: "research", entries: [catalogEntry] }],
+        },
+      },
+    );
+    detail.accepts(coordinate, { packageName: coordinate.packageName });
     const preview = { kind: "instruction", name: "AGENTS.md" };
     previewParams.accepts({ ...coordinate, ...preview });
+    previewParams.rejects({ packageName: coordinate.packageName, ...preview });
     previewResult.accepts({ preview: { ...preview, content: "# Instructions" } });
     detailResult.accepts({
       detail: {
@@ -66,6 +76,7 @@ describe("Templates Gateway contract", () => {
       },
     });
     addPlan.accepts({ source: coordinate });
+    addPlan.rejects({ source: { packageName: coordinate.packageName } });
 
     const apply = (acknowledgeRiskWarning: boolean) => ({
       source: coordinate,

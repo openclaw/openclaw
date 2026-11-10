@@ -14,6 +14,10 @@ const { spawn } = vi.hoisted(() => ({
 }));
 // mock-isolation: The systemd CLI is an unavailable external boundary on macOS.
 vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => ({ spawn }) }));
+vi.mock("../process/child-memory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/child-memory.js")>()),
+  getHostExecMemoryBudget: () => ({ memoryBytes: 15 * 1024 ** 3, swapBytes: 5 * 1024 ** 3 }),
+}));
 vi.mock("../infra/executable-path.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/executable-path.js")>()),
   resolveExecutablePath: (name: string, options: { env: NodeJS.ProcessEnv }) => {
@@ -70,7 +74,6 @@ it("launches an independent user service with private environment, cgroup limits
       cwd: "/workspace",
       logPath: "/state/process.log",
       timeoutMs: 120_000,
-      memoryLimitBytes: 1048576,
       assertCurrent,
     }),
   ).resolves.toEqual({ unitName });
@@ -91,11 +94,14 @@ it("launches an independent user service with private environment, cgroup limits
       "--property=ExitType=cgroup",
       "--property=RemainAfterExit=yes",
       "--property=KillMode=control-group",
+      "--property=LimitCORE=0",
       "--property=StandardInput=null",
       "--property=StandardOutput=append:/state/process.log",
       "--property=UnsetEnvironment=MANAGER_ONLY_TOKEN",
       "--property=RuntimeMaxSec=120s",
-      "--property=MemoryMax=1048576",
+      "--property=MemoryMax=16106127360",
+      "--property=MemorySwapMax=5368709120",
+      "--property=OOMPolicy=kill",
       "--setenv=GH_TOKEN",
       'printf "%s" "$$GH_TOKEN"',
     ]),
@@ -106,6 +112,14 @@ it("launches an independent user service with private environment, cgroup limits
 
 it.each([
   ["ActiveState=active\nSubState=running\nMainPID=42", { state: "running", pid: 42 }],
+  [
+    "ActiveState=active\nSubState=running\nMainPID=0\nControlGroup=/user.slice/app.slice/job.service",
+    {
+      state: "running",
+      pid: undefined,
+      cgroupDirectory: "/sys/fs/cgroup/user.slice/app.slice/job.service",
+    },
+  ],
   [
     "ActiveState=active\nSubState=exited\nExecMainCode=1\nExecMainStatus=7\nResult=exit-code",
     { state: "exited", exitCode: 7, exitSignal: null, reason: "exit", result: "exit-code" },

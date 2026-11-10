@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { throwAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -21,6 +22,7 @@ import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events
 import { resolveVisibleRepliesPolicy } from "./dispatch-from-config.harness-defaults.js";
 import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.prepare-delivery.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
+import { InboundDedupePendingError } from "./inbound-dedupe-error.js";
 import { claimInboundDedupe } from "./inbound-dedupe.js";
 import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./message-received-hooks.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -373,13 +375,41 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     reclaimPendingInput && recorder?.withPendingInputCurrent
       ? await recorder.withPendingInputCurrent(claimInput)
       : claimInput();
+  const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  // Recovery can arrive before the retired source finishes cleanup.
+  if (inboundDedupeClaim.status === "inflight" && lifecycle?.admission === "exclusive") {
+    throw new InboundDedupePendingError();
+  }
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     return skipDuplicate();
   }
-  const commitInboundDedupeIfClaimed = () => inboundDedupeClaim.commit?.();
+  const commitInboundDedupeIfClaimed = () => {
+    const admission = state.replyOperationRunState.admission;
+    // Queued admission is pending; its source still owns the input receipt.
+    if (
+      lifecycle?.admission === "exclusive" &&
+      admission?.status === "accepted" &&
+      admission.mode === "followup" &&
+      !state.turnAdoptionState?.adopted &&
+      !state.inboundDedupeReplayUnsafe
+    ) {
+      return;
+    }
+    inboundDedupeClaim.commit?.();
+  };
   const releaseInboundDedupeIfClaimed = () => inboundDedupeClaim.release?.();
-  const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
   if (lifecycle && inboundDedupeClaim.status === "claimed") {
+    const onAdopted = lifecycle.onAdopted;
+    lifecycle.onAdopted = async () => {
+      await onAdopted();
+      inboundDedupeClaim.commit();
+    };
+    const onSettled = lifecycle.onSettled;
+    lifecycle.onSettled = () => {
+      // Abandonment released its exact owner; only consumption can still commit.
+      inboundDedupeClaim.commit();
+      return onSettled?.();
+    };
     const onAbandoned = lifecycle.onAbandoned;
     lifecycle.onAbandoned = () => {
       // Release before ingress retries, including abandonment before commit.
@@ -440,6 +470,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     recordProcessed("skipped", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
     state.completeDispatchReplyOperation();
+    throwAgentRunRestartAbortReason(operation?.abortSignal.reason);
     return attachSourceReplyDeliveryMode({
       ...baseDispatchResult(queuedFinal),
       ...(state.turnLedger.hasObservedDelivery() ? { observedReplyDelivery: true } : {}),

@@ -39,11 +39,12 @@ export function createGoogleGenerateContentStreams<
   return {
     stream,
     streamSimple: (model, context, options) => {
-      // Nucleus sampling is a Google call option, not part of the shared base projection.
-      const topP = asRecord(options).topP;
+      // Sampling controls are Google call options, not part of the shared base projection.
+      const { topP, seed } = asRecord(options);
       return stream(model, context, {
         ...buildBaseOptions(model, options, resolveSimpleApiKey?.(model, options)),
         ...(typeof topP === "number" ? { topP } : {}),
+        ...(typeof seed === "number" ? { seed } : {}),
         thinking: buildGoogleSimpleThinking(model, options),
       });
     },

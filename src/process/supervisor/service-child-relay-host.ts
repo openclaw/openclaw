@@ -23,6 +23,7 @@ import {
   type ServiceChildAnchorMessage,
 } from "./service-child-protocol.js";
 import {
+  assertServiceChildSpawn,
   createServiceChildStart,
   prepareServiceChildRelay,
   type ServiceChildRelayAdapter,
@@ -30,6 +31,7 @@ import {
 } from "./service-child-relay-preparation.js";
 import {
   createServiceChildRelayRetirement,
+  joinStartupFailureCleanup,
   stopServiceChildOwner,
 } from "./service-child-relay-retirement.js";
 import type { AwaitedStdoutConsumer, ProcessAdapterStartup } from "./types.js";
@@ -47,11 +49,7 @@ export async function createServiceChildRelayAdapter(
   using preparation = prepareServiceChildRelay(params);
   const { useWindowsJobAnchor, useLinuxSubreaper, controlFd, lineageFd } = preparation;
 
-  if (params.abortSignal?.aborted) {
-    throw new Error("service child construction aborted");
-  }
-  params.assertCurrent?.();
-  params.beforeSpawn?.();
+  assertServiceChildSpawn(params);
   const { child, cleanup, transportReady } = spawnServiceChildRelay({
     ...preparation.spawn,
     onSpawnCleanup: params.onSpawnCleanup,
@@ -76,10 +74,6 @@ export async function createServiceChildRelayAdapter(
     cleanup.completion.reject(error);
     throw error;
   }
-  const stopOnOutputFailure =
-    params.stdoutConsumption === "awaited"
-      ? () => requestedSignal !== "SIGKILL" && kill("SIGKILL")
-      : undefined;
   const events = createProcessAdapterEvents();
   const outputFailure = (stream: "stdout" | "stderr", error: Error) => {
     resultError ??= error;
@@ -89,7 +83,9 @@ export async function createServiceChildRelayAdapter(
   const stdoutRelay = createOutputRelay(
     child.stdout ?? undefined,
     false,
-    stopOnOutputFailure,
+    params.stdoutConsumption === "awaited"
+      ? () => requestedSignal !== "SIGKILL" && kill("SIGKILL")
+      : undefined,
     (error) => outputFailure("stdout", error),
   );
   const stderrRelay = createOutputRelay(
@@ -252,6 +248,11 @@ export async function createServiceChildRelayAdapter(
     expire: expireCleanup,
     force: () => kill("SIGKILL"),
   });
+  const recordControlError = (error: unknown) => {
+    // A broken write cannot replace the receipt and native extinction join.
+    controlError ??= toErrorObject(error, "service child control delivery failed");
+    cleanupDeadline.begin();
+  };
 
   const sendControlMessage = createServiceChildControlSender({
     child,
@@ -403,8 +404,23 @@ export async function createServiceChildRelayAdapter(
       return;
     }
     inboundSequence = message.sequence;
-    if (message.type === "prepared" && state === "starting" && params.initiateSpawn) {
-      void sendControlMessage({ type: "launch" }, params.initiateSpawn).catch((error: unknown) => {
+    if (
+      message.type === "prepared" &&
+      state === "starting" &&
+      (params.initiateSpawn || params.prepareTargetSpawn)
+    ) {
+      void (async () => {
+        try {
+          await params.prepareTargetSpawn?.();
+          assertServiceChildSpawn(params);
+        } catch (error) {
+          throw new ServiceChildLaunchNotInitiatedError(error);
+        }
+        if (state !== "starting") {
+          return;
+        }
+        await sendControlMessage({ type: "launch" }, params.initiateSpawn);
+      })().catch((error: unknown) => {
         if (!(error instanceof ServiceChildLaunchNotInitiatedError) || state !== "starting") {
           return loseIdentity(String(error));
         }
@@ -471,9 +487,7 @@ export async function createServiceChildRelayAdapter(
         void sendControlMessage({
           type: "closing-ack",
           closingSequence: message.sequence,
-        }).catch((error: unknown) => {
-          controlError ??= toErrorObject(error, "closing acknowledgement failed");
-        });
+        }).catch(recordControlError);
       }
     } else if (message.type === "startup-error") {
       // A failed command never sends ready. Keep its live anchor's identity for
@@ -534,9 +548,7 @@ export async function createServiceChildRelayAdapter(
         finishControl();
       }
     });
-    control.on("error", (error) => {
-      controlError ??= error;
-    });
+    control.on("error", recordControlError);
   }
 
   child.on("message", (raw: unknown) => {
@@ -585,9 +597,7 @@ export async function createServiceChildRelayAdapter(
     retirement.observeExit(code, signal);
     relayExit.resolve();
     params.abortSignal?.removeEventListener("abort", onConstructionAbort);
-    if (useWindowsJobAnchor) {
-      finishWindowsAuthority();
-    }
+    finishWindowsAuthority();
   });
 
   const start = createServiceChildStart(params, preparation, generation, Boolean(control));
@@ -597,8 +607,7 @@ export async function createServiceChildRelayAdapter(
       ? () => {
           void sendControlMessage({ type: "stdin-end" }).then(
             () => child.stdin?.end(),
-            (error: unknown) =>
-              loseIdentity(toErrorObject(error, "stdin EOF delivery failed").message),
+            recordControlError,
           );
         }
       : undefined,
@@ -608,11 +617,7 @@ export async function createServiceChildRelayAdapter(
   const ready = (async () => {
     using delivery = preparation.transferSecretInput();
     try {
-      params.assertCurrent?.();
-      if (params.abortSignal?.aborted) {
-        onConstructionAbort();
-      }
-      params.beforeSpawn?.();
+      assertServiceChildSpawn(params, onConstructionAbort);
       await Promise.race([sendServiceChildMessage(child, start), constructionAbort.promise]);
       params.assertCurrent?.();
       const [startupResult, secretDeliveryResult] = await Promise.allSettled([
@@ -621,9 +626,11 @@ export async function createServiceChildRelayAdapter(
       ]);
       // Preserve admission failure over the secret pipe it closes as a consequence.
       if (startupResult.status === "rejected") {
-        await startupErrorAckDelivery;
-        await cleanup.promise;
-        throw startupResult.reason;
+        throw await joinStartupFailureCleanup(
+          startupResult.reason,
+          startupErrorAckDelivery,
+          cleanup.promise,
+        );
       }
       if (secretDeliveryResult.status === "rejected") {
         throw secretDeliveryResult.reason;

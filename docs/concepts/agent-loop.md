@@ -316,6 +316,8 @@ nonempty text, reasoning, or tool argument deltas count as progress, including h
 reasoning. To tolerate long hidden-reasoning phases, Responses uses a 15-minute
 model-progress deadline, or the effective idle budget when larger. Real progress
 resets this deadline; ordinary network silence retains the existing idle budget.
+Tool activity and periodic tool heartbeats can keep the connection active, but
+they do not reset the model-progress deadline while a model stream remains open.
 Computation that emits only bookkeeping can still time out at this long ceiling.
 The session watchdog follows the request guard's current deadline with a recovery
 margin derived from its warning interval. Request stalls therefore surface as
@@ -373,6 +375,10 @@ Harness cleanup flushes trajectory events accepted before foreground work ended,
 including during restart cancellation. It cannot accept new events after that
 lifetime ends, or flush through a closed host, revoked admission, replaced run,
 or replaced recorder.
+
+Completed and aborted built-in attempts release their session transcript listeners
+even if transcript-owner cleanup fails. The cleanup error remains visible, while
+the global listener registry no longer retains the completed session's history.
 
 When a runtime reports a definitive timeout, the Gateway records its terminal
 status and error for the session sidebar immediately, without waiting for

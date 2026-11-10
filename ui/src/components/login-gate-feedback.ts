@@ -1,5 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  ConnectErrorDetailCodes,
+  type readPairingConnectErrorDetails,
+} from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import {
   redactLoginFailureError,
   resolveAuthHintKind,
@@ -79,11 +83,48 @@ export type LoginFailureFeedback = {
 };
 
 export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[0] & {
+  lastErrorPairing?: ReturnType<typeof readPairingConnectErrorDetails>;
   gatewayUrl?: string;
   secret?: string;
   reconnectPending?: boolean;
   reconnectAt?: number;
 };
+
+type PairingCopy = { titleKey: string; summaryKey: string; params?: Record<string, string> };
+
+/**
+ * Titles follow what approval would grant, not the Gateway's reason code alone: a
+ * revoked token for an approved role is reported as "role-upgrade" but adds nothing.
+ */
+function resolvePairingCopy(
+  kind: string,
+  pairing: LoginFailureFeedbackParams["lastErrorPairing"],
+): PairingCopy {
+  if (kind === "pairing-required") {
+    return { titleKey: "title", summaryKey: "summary" };
+  }
+  if (kind === "metadata-upgrade-pending") {
+    return { titleKey: "metadataTitle", summaryKey: "upgradeSummary" };
+  }
+  const role = pairing?.requestedRole;
+  const approvedRoles = pairing?.approvedRoles ?? [];
+  if (!role || !pairing?.requestedScopes) {
+    return {
+      titleKey: kind === "role-upgrade-pending" ? "roleTitle" : "scopeTitle",
+      summaryKey: "upgradeSummary",
+    };
+  }
+  if (!approvedRoles.includes(role)) {
+    return { titleKey: "roleTitle", summaryKey: "roleSummary", params: { role } };
+  }
+  const allowedScopes = pairing.approvedScopes ?? [];
+  const added = pairing.requestedScopes.filter(
+    (scope) => !roleScopesAllow({ role, requestedScopes: [scope], allowedScopes }),
+  );
+  return added.length > 0
+    ? { titleKey: "scopeTitle", summaryKey: "scopeSummary", params: { scopes: added.join(", ") } }
+    : { titleKey: "restoreTitle", summaryKey: "restoreSummary", params: { role } };
+}
 
 function buildFeedback(
   error: string,
@@ -218,19 +259,13 @@ export function resolveLoginFailureFeedback(
 
   const pairing = resolvePairingHint(rawError, lastErrorCode);
   if (pairing) {
+    const copy = resolvePairingCopy(pairing.kind, params.lastErrorPairing);
     return buildFeedback(rawError, "login.failure.pairing", {
       kind: "pairing-required",
       tone: "pending",
       docsHref: "https://docs.openclaw.ai/web/control-ui#device-pairing-first-connection",
-      titleKey:
-        pairing.kind === "scope-upgrade-pending"
-          ? "scopeTitle"
-          : pairing.kind === "role-upgrade-pending"
-            ? "roleTitle"
-            : pairing.kind === "metadata-upgrade-pending"
-              ? "metadataTitle"
-              : "title",
-      summaryKey: pairing.kind === "pairing-required" ? "summary" : "upgradeSummary",
+      titleKey: copy.titleKey,
+      summaryKey: copy.summaryKey,
       // `approve --latest` only previews the newest pending request and prints the
       // exact approve command; without a request id the steps say to run that too.
       primaryCommand: pairing.requestId
@@ -241,7 +276,7 @@ export function resolveLoginFailureFeedback(
         { key: "stepDashboard", commands: ["openclaw dashboard"] },
         ...(params.reconnectPending ? [] : ["stepReconnect"]),
       ],
-      stepParams: { host },
+      stepParams: { host, ...copy.params },
     });
   }
 
