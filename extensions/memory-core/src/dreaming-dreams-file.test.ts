@@ -20,6 +20,7 @@ import {
 import { writeDailyDreamingPhaseBlock, writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { runDreamNarrative } from "./dreaming-narrative.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
+import { withMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { SESSION_CORPUS_RELATIVE_DIR } from "./session-ingestion.js";
 import {
   applyShortTermPromotions,
@@ -224,23 +225,155 @@ it.each([false, true])("keeps file and workspace permissions (new=%s)", async (f
   }
 });
 
-// Root ignores directory permissions, so a read-only parent cannot force the
-// in-place fallback there; those cases would silently prove atomic replacement.
-const readOnlyParentRejectsWrites = process.getuid?.() !== 0;
+describe("dreams file publication on an unwritable parent", () => {
+  // replaceFileAtomic creates its temp file beside DREAMS.md. Rejecting those
+  // opens with EROFS reproduces a read-only workspace directory even as root,
+  // where chmod alone cannot block writes.
+  function rejectTempFileCreation(code: string) {
+    const realOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const [file] = args;
+      if (
+        typeof file === "string" &&
+        path.basename(file).startsWith(`${path.basename(dreamsPath)}.dreams.`)
+      ) {
+        throw Object.assign(new Error("read-only file system"), { code });
+      }
+      return realOpen(...args);
+    });
+  }
 
-it.runIf(process.platform !== "win32" && readOnlyParentRejectsWrites)(
-  "writes an existing DREAMS.md in place when the parent rejects a sibling temp file",
-  async () => {
+  it("falls back to an in-place write, truncating shorter content", async () => {
+    const prior = `# Dream Diary\n\n${"Prior entry. ".repeat(40)}\n`;
+    await fs.writeFile(dreamsPath, prior, { encoding: "utf8", mode: 0o600 });
+    await fs.chmod(dreamsPath, 0o600);
+    const shorter = "# Dream Diary\n\nShort.\n";
+    rejectTempFileCreation("EROFS");
+
+    await writeDreamsFileAtomic(dreamsPath, shorter);
+
+    expect(await readDiary()).toBe(shorter);
+    expect((await fs.stat(dreamsPath)).mode & 0o777).toBe(0o600);
+    await expect(fs.readdir(workspaceDir)).resolves.toEqual(["DREAMS.md"]);
+  });
+
+  it("publishes a diary entry through the fallback", async () => {
+    await fs.writeFile(dreamsPath, "# Existing\n");
+    rejectTempFileCreation("EROFS");
+
+    await writeBackfill();
+
+    expect(await readDiary()).toContain("The archive remembered a durable fact.");
+    await expect(fs.readdir(workspaceDir)).resolves.toEqual(["DREAMS.md"]);
+  });
+
+  it("keeps non-permission failures fatal and leaves the file untouched", async () => {
+    const prior = "# Existing\n";
+    await fs.writeFile(dreamsPath, prior);
+    rejectTempFileCreation("ENOSPC");
+
+    await expect(writeDreamsFileAtomic(dreamsPath, "# Replacement\n")).rejects.toMatchObject({
+      code: "ENOSPC",
+    });
+    expect(await readDiary()).toBe(prior);
+    await expect(fs.readdir(workspaceDir)).resolves.toEqual(["DREAMS.md"]);
+  });
+
+  it("keeps the original error when there is no existing file to write in place", async () => {
+    rejectTempFileCreation("EROFS");
+
+    await expect(writeDreamsFileAtomic(dreamsPath, "# Fresh\n")).rejects.toMatchObject({
+      code: "EROFS",
+    });
+    await expect(fs.readdir(workspaceDir)).resolves.toEqual([]);
+  });
+
+  function revocableOwner() {
+    let current = true;
+    return {
+      setCurrent(value: boolean) {
+        current = value;
+      },
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("fixture owner revoked");
+        }
+      },
+    };
+  }
+
+  it("rejects a diary update revoked while the fallback prepares its write", async () => {
     await fs.writeFile(dreamsPath, "# Dream Diary\n\nAn existing entry.\n", "utf8");
-    await fs.chmod(workspaceDir, 0o555);
-    try {
+    const owner = revocableOwner();
+    const realOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const [file] = args;
+      if (
+        typeof file === "string" &&
+        path.basename(file).startsWith(`${path.basename(dreamsPath)}.dreams.`)
+      ) {
+        throw Object.assign(new Error("read-only file system"), { code: "EROFS" });
+      }
+      const handle = await realOpen(...args);
+      if (args[1] === "r+") {
+        // Revocation lands while the fallback awaits the open, after the
+        // pre-fallback authority check and immediately before the write.
+        owner.setCurrent(false);
+      }
+      return handle;
+    });
+
+    const failure = await withMemoryMutationAuthority(owner.assertCurrent, async () => {
       await writeDreamsFileAtomic(dreamsPath, "# Dream Diary\n\nA new entry.\n");
-      expect(await readDiary()).toBe("# Dream Diary\n\nA new entry.\n");
-    } finally {
-      await fs.chmod(workspaceDir, 0o755);
-    }
-  },
-);
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe("fixture owner revoked");
+    expect(await readDiary()).toBe("# Dream Diary\n\nAn existing entry.\n");
+  });
+
+  it("restores the original diary byte-for-byte when the in-place write fails partway", async () => {
+    const prior = `# Dream Diary\n\n${"Prior entry. ".repeat(40)}\n`;
+    const replacement = `# Dream Diary\n\n${"Replacement entry. ".repeat(100)}\n`;
+    await fs.writeFile(dreamsPath, prior, "utf8");
+    const realOpen = fs.open.bind(fs);
+    let shortRestoreWrite = true;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const [file] = args;
+      if (
+        typeof file === "string" &&
+        path.basename(file).startsWith(`${path.basename(dreamsPath)}.dreams.`)
+      ) {
+        throw Object.assign(new Error("read-only file system"), { code: "EROFS" });
+      }
+      const handle = await realOpen(...args);
+      if (args[1] !== "r+") {
+        return handle;
+      }
+      const realWrite = handle.write.bind(handle);
+      const failingWriteFile = async (content: string) => {
+        const partial = Buffer.from(content, "utf-8").subarray(0, 1024);
+        await realWrite(partial, 0, partial.length, 0);
+        throw Object.assign(new Error("EFBIG: file too large, write"), { code: "EFBIG" });
+      };
+      const write = async (buffer: Buffer, offset: number, length: number, position: number) => {
+        const cappedLength = shortRestoreWrite && length > 1 ? Math.floor(length / 2) : length;
+        shortRestoreWrite = false;
+        return await realWrite(buffer, offset, cappedLength, position);
+      };
+      Object.defineProperties(handle, {
+        writeFile: { value: failingWriteFile },
+        write: { value: write },
+      });
+      return handle;
+    });
+
+    await expect(writeDreamsFileAtomic(dreamsPath, replacement)).rejects.toMatchObject({
+      code: "EFBIG",
+    });
+    expect(await readDiary()).toBe(prior);
+  });
+});
 
 it("serializes concurrent writes and deduplication", async () => {
   const entry = "*April 11, 2026, 8:00 AM*\n\nThe server room smelled like rain.";
