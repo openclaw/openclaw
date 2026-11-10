@@ -9,6 +9,7 @@ import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSessionFoldersEnglish } from "../../i18n/locales/en-session-folders.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -23,6 +24,7 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import { isPinnableUiSessionRow } from "../../lib/sessions/session-key.ts";
 import type { SessionsProps } from "./view-types.ts";
+import { createSessionsRoster, SessionsFeedback } from "./view.tsx";
 import "./folder-view.css";
 
 registerSessionFoldersEnglish();
@@ -136,8 +138,10 @@ export function SessionFolderView(props: {
     navigation
       .read()
       .sidebarEntries.includes(serializeSidebarEntry({ type: "session", key: row.key }));
+  const gateway = projectGateway(context.gateway);
+  const roster = createSessionsRoster(() => props.view.roster);
   const newThreadAccess = () =>
-    readSessionMethodAccess(context.gateway.snapshot, {
+    readSessionMethodAccess(gateway.read().snapshot, {
       method: "sessions.create",
       params: {},
       sessionScope: true,
@@ -154,6 +158,7 @@ export function SessionFolderView(props: {
   const running = createMemo(() => members().filter(isSessionRunStateActive).length);
   return (
     <div class="session-folders">
+      <SessionsFeedback view={props.view} readRoster={roster} />
       <Show
         when={props.folder}
         fallback={

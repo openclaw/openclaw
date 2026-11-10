@@ -31,7 +31,7 @@ export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRout
   {
     loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
       const options = routeOptions(location);
-      return `${options.expandedSessionKey ?? ""}\u0000${options.folder ?? "list"}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
+      return `${options.expandedSessionKey ?? ""}\u0000${JSON.stringify(options.folder)}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
     },
     loader: (context: ApplicationContext, { location, cause }): SessionsRouteData => {
       const options = routeOptions(location);

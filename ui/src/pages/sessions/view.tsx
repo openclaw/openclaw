@@ -68,50 +68,10 @@ export function SessionsView(props: SessionsProps) {
   const rows = createMemo(() => props.result?.sessions ?? []);
   const archivedCount = createMemo(() => rows().filter((row) => row.archived === true).length);
   const transcriptSearch = createMemo(() => props.transcriptSearch);
-  const receipt = createMemo(() => ({ promise: props.roster }), {
-    equals: (previous, next) => previous.promise === next.promise,
-  });
-  // Readiness may lag during revalidation; owner rows and controls must keep publishing.
-  const roster = createDeferred<RosterOutcome>(() => {
-    const promise = receipt().promise;
-    return promise
-      ? promise.then<RosterOutcome, RosterOutcome>(
-          () => ({ ok: true }),
-          (error: unknown) => ({ ok: false, error }),
-        )
-      : { ok: true };
-  });
-  const commandError = createMemo(() => {
-    if (props.error) {
-      // oxlint-disable-next-line typescript/only-throw-error -- Relay the owner's original error; the boundary formats it for display.
-      throw props.error;
-    }
-    return null;
-  });
+  const roster = createSessionsRoster(() => props.roster);
   return (
     <SettingsPage wide>
-      <Show when={!props.commandPending}>
-        <Errored
-          fallback={(error) => (
-            <div class="sessions-error" role="alert">
-              {formatUiError(error())}
-            </div>
-          )}
-        >
-          {commandError()}
-        </Errored>
-      </Show>
-      <Errored
-        fallback={(error) => (
-          <div class="sessions-error" role="alert">
-            {formatUiError(error())}
-          </div>
-        )}
-      >
-        <Loading fallback={null}>
-          <SessionsRosterStatus readRoster={roster} />
-        </Loading>
-      </Errored>
+      <SessionsFeedback view={props} readRoster={roster} />
       <SettingsSection
         title={t("sessionsView.title")}
         description={
@@ -176,6 +136,62 @@ export function SessionsView(props: SessionsProps) {
         <SessionsTable {...props} readRoster={roster} phoneLayout={phoneLayout()} />
       </SettingsSection>
     </SettingsPage>
+  );
+}
+
+export function createSessionsRoster(read: () => SessionsProps["roster"]) {
+  const receipt = createMemo(() => ({ promise: read() }), {
+    equals: (previous, next) => previous.promise === next.promise,
+  });
+  // Readiness may lag during revalidation; owner rows and controls must keep publishing.
+  const roster = createDeferred<RosterOutcome>(() => {
+    const promise = receipt().promise;
+    return promise
+      ? promise.then<RosterOutcome, RosterOutcome>(
+          () => ({ ok: true }),
+          (error: unknown) => ({ ok: false, error }),
+        )
+      : { ok: true };
+  });
+  return roster;
+}
+
+export function SessionsFeedback(props: { view: SessionsProps; readRoster: () => RosterOutcome }) {
+  const commandError = createMemo(() => {
+    if (props.view.error) {
+      // oxlint-disable-next-line typescript/only-throw-error -- Relay the owner's original error; the boundary formats it for display.
+      throw props.view.error;
+    }
+    return null;
+  });
+  return (
+    <>
+      <Show when={!props.view.commandPending}>
+        <Errored
+          fallback={(error) => (
+            <div class="sessions-error" role="alert">
+              {formatUiError(error())}
+            </div>
+          )}
+        >
+          {commandError()}
+        </Errored>
+      </Show>
+      <Errored
+        fallback={(error) => (
+          <div class="sessions-error" role="alert">
+            {formatUiError(error())}
+            <button class="btn btn--sm" onClick={() => props.view.onRefresh()}>
+              {t("common.retry")}
+            </button>
+          </div>
+        )}
+      >
+        <Loading fallback={null}>
+          <SessionsRosterStatus readRoster={props.readRoster} />
+        </Loading>
+      </Errored>
+    </>
   );
 }
 
