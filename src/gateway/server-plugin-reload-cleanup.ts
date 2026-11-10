@@ -366,7 +366,7 @@ export function createPluginReloadCleanup({
     const holds = instances.map((instance) => ({
       pluginId: instance.pluginId,
       count: instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),
-      turnHandover: pluginHandsOverTurns([previousRegistry], instance.pluginId),
+      turnHandover: pluginHandsOverTurns(instance.owner?.record),
     }));
     const count = observedInstances.reduce(
       (total, instance) =>

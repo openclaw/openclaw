@@ -9,15 +9,15 @@ import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 const log = createSubsystemLogger("agents/plugin-turn-handover");
 
 // Every plugin these registries hold that a reload has reserved.
-function reservedPluginIds(
+function reservedPluginInstances(
   registries: readonly PluginRegistry[],
   instances?: () => Iterable<PluginInstanceHandle>,
-): Set<string> {
-  const reserved = new Set<string>();
+): Set<PluginInstanceHandle> {
+  const reserved = new Set<PluginInstanceHandle>();
   for (const instance of instances?.() ??
     registries.flatMap((registry) => [...collectRegistryInvocationInstances(registry)])) {
     if (instance.replacementPending) {
-      reserved.add(instance.pluginId);
+      reserved.add(instance);
     }
   }
   return reserved;
@@ -48,25 +48,26 @@ export function captureTurnHandoverRequest(
   let scheduled = false;
   // Every plugin the reload reserved is still reserved, and every one can hand over.
   const handoverReady = () => {
-    const reserved = [...reservedPluginIds(held, instances)];
+    const reserved = [...reservedPluginInstances(held, instances)];
     return (
-      reserved.length > 0 && reserved.every((pluginId) => pluginHandsOverTurns(held, pluginId))
+      reserved.length > 0 &&
+      reserved.every((instance) => pluginHandsOverTurns(instance.owner?.record))
     );
   };
   const decide = () => {
     scheduled = false;
     const pendingYields = yields.splice(0);
-    const reserved = [...reservedPluginIds(held, instances)];
-    const pinning = reserved.filter((pluginId) => !pluginHandsOverTurns(held, pluginId));
+    const reserved = [...reservedPluginInstances(held, instances)];
+    const pinning = reserved.filter((instance) => !pluginHandsOverTurns(instance.owner?.record));
     if (!reserved.length || pinning.length) {
       if (pinning.length) {
         log.info(
-          `reload of ${pinning.join(", ")} keeps running turns on their admitted generations`,
+          `reload of ${pinning.map(({ pluginId }) => pluginId).join(", ")} keeps running turns on their admitted generations`,
         );
       }
       return;
     }
-    const plugins = reserved.join(", ");
+    const plugins = reserved.map(({ pluginId }) => pluginId).join(", ");
     if (!refresh.isOwned()) {
       log.info(`plugin ${plugins} reload requested; whole-run hold yields to the reload`);
       pendingYields.forEach((yieldHold) => yieldHold());

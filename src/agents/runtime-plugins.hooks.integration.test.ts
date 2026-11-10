@@ -124,6 +124,7 @@ it("retains resolved capabilities through nested runtime scopes without pinning 
       id: tool.id,
       configSchema: { type: "object", additionalProperties: false },
       contracts: { tools: ["lease_probe"] },
+      reload: { turnHandover: true },
     }),
   );
   const hook = writePlugin({
@@ -150,11 +151,16 @@ it("retains resolved capabilities through nested runtime scopes without pinning 
     config,
     workspaceDir,
     run: async (registry) => {
+      const selectedRegistry = {
+        ...registry,
+        plugins: registry.plugins.filter(({ id }) => id !== tool.id),
+        tools: [],
+      };
       const snapshot = createModelRuntimeChoiceOwnerFixture(config, () => true, {
-        pluginRegistry: registry,
+        pluginRegistry: selectedRegistry,
       });
       const generation = {
-        pluginRegistry: registry,
+        pluginRegistry: selectedRegistry,
         pluginMetadataSnapshot: snapshot.metadataSnapshot,
         remoteCatalog: null,
         inlineProviderModels: [],
@@ -195,6 +201,12 @@ it("retains resolved capabilities through nested runtime scopes without pinning 
           }),
         );
         expect(toolOwner!.retainedWorkCount).toBe(1);
+        const releaseReplacement = toolOwner!.reserveReplacement();
+        try {
+          await expect.poll(() => toolOwner!.retainedWorkCount).toBe(0);
+        } finally {
+          releaseReplacement();
+        }
       } finally {
         for (const lease of leases) {
           await lease[Symbol.asyncDispose]();
