@@ -461,7 +461,7 @@ it.each([false, true])(
             env: { TOKEN: "${TEMPLATE_ROUTINE_TEST_TOKEN}" },
           },
         },
-        cronJobs: [
+        automations: [
           {
             id: "daily",
             schedule: { cron: "0 9 * * *", timezone: "UTC" },
