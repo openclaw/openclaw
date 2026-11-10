@@ -662,7 +662,8 @@ export function createOpenClawIdService(params: {
     gatewayKey,
     enabled: () => !closed && isOpenClawIdEnabled(params.getConfig()),
     holdCode: rebindPublication.hold,
-    restartRemoteAccess: () => (queue = queue.then(restartForRebind, restartForRebind)),
+    restartRemoteAccess: () =>
+      (queue = queue.then(restartForRebind, restartForRebind)).then(() => status),
   });
 
   localPrincipals.publish();

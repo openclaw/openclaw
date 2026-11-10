@@ -26,6 +26,7 @@ import { gatewayKeyPath, loadStagedGatewaySigner, stageGatewayKey } from "./gate
 import type { RebindPreparation } from "./rebind-operations.js";
 import { reconcileRegistration } from "./registration-recovery.js";
 import type { createServiceGatewayKey } from "./service-gateway-key.js";
+import type { OpenClawIdStatus } from "./service.js";
 import { ed25519PublicKeyHex, loadKeyFile, stagedKeyPath } from "./tunnel-child/keyfile.js";
 import { discardStagedEndpointKey, stageEndpointKey } from "./tunnel-runtime.js";
 
@@ -49,6 +50,12 @@ async function stageKeys(stateDir: string) {
 export type RebindAction = "prepare" | "commit" | "cancel";
 export type RebindInput = { binding?: unknown; code?: string };
 
+/** A persisted move stays successful even if activating or publishing its keys fails. */
+export type RebindCommitResult = { ok: true; moved: true; bindingSeq: number } & (
+  | { followUpError?: never }
+  | { published: null; followUpError: string; nextStep: "openclaw id status" }
+);
+
 /** Discovery's published descriptor for the claw (untrusted), or why it could not be read. */
 export type PublishedLookup = { descriptor: unknown } | { error: string; detail: string };
 
@@ -58,7 +65,7 @@ type Deps = {
   getAuthority: () => Promise<OpenClawIdAuthority>;
   gatewayKey: ReturnType<typeof createServiceGatewayKey>;
   /** Restarts remote access, so the tunnel child and K_gw follow the stored binding. */
-  restartRemoteAccess: () => Promise<void>;
+  restartRemoteAccess: () => Promise<OpenClawIdStatus>;
   /** Keeps the owner account's code in memory for publishing the committed re-bind. */
   holdCode: (code: string | undefined) => void;
   log: { info: (message: string) => void };
@@ -149,7 +156,7 @@ export function createServiceRebind(deps: Deps) {
     binding: unknown,
     code: string | undefined,
     isCurrent: () => boolean,
-  ): Promise<{ ok: true; bindingSeq: number } | AuthorityRefusal> => {
+  ): Promise<RebindCommitResult | AuthorityRefusal> => {
     const owner = await linkedOwner(channel);
     if ("ok" in owner) {
       return owner;
@@ -169,12 +176,24 @@ export function createServiceRebind(deps: Deps) {
     if (!result.ok) {
       return result;
     }
-    deps.log.info(`openclaw-id: moved to new keys (binding ${result.bindingSeq})`);
-    deps.holdCode(code);
-    // Durable before the restart: if publishing does not finish now, it runs at the next start.
-    await owner.recordDiscovery({ publish_pending: true });
-    await deps.restartRemoteAccess();
-    return { ok: true, bindingSeq: result.bindingSeq };
+    const committed = { ok: true, moved: true, bindingSeq: result.bindingSeq } as const;
+    try {
+      deps.log.info(`openclaw-id: moved to new keys (binding ${result.bindingSeq})`);
+      deps.holdCode(code);
+      // The stored binding's lead over the published sequence already makes publication pending.
+      const status = await deps.restartRemoteAccess();
+      if (status.state === "failed" || status.state === "keys_refused") {
+        throw new Error(status.reason);
+      }
+      return committed;
+    } catch (error) {
+      return {
+        ...committed,
+        published: null,
+        followUpError: error instanceof Error ? error.message : String(error),
+        nextStep: "openclaw id status",
+      };
+    }
   };
 
   // Deletes the staged keys of a re-bind that was not committed. A staged key the stored
@@ -206,7 +225,7 @@ export function createServiceRebind(deps: Deps) {
       isCurrent: () => boolean,
     ) {
       const step = (): Promise<
-        RebindPreparation | AuthorityRefusal | { ok: true; bindingSeq?: number }
+        RebindPreparation | AuthorityRefusal | RebindCommitResult | { ok: true }
       > =>
         !isCurrent()
           ? Promise.resolve(cancelled())

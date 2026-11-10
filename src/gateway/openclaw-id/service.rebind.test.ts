@@ -8,7 +8,10 @@ import {
   type IrohEndpointKey,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { stageGatewayKey } from "./gateway-key.js";
-import { TEST_K_SRV, linkedClaw, serviceFor } from "./openclaw-id.test-support.js";
+import { TEST_K_SRV, linkedClaw, memoryStore, serviceFor } from "./openclaw-id.test-support.js";
+import { publicationPending } from "./publication-retry.js";
+import { createServiceGatewayKey } from "./service-gateway-key.js";
+import { createServiceRebind } from "./service-rebind.js";
 import * as tunnelRuntime from "./tunnel-runtime.js";
 
 // A re-bind starts only once the claw's registration at Discovery is settled.
@@ -140,4 +143,113 @@ describe("re-bind lifetime", () => {
     expect(claw.authority.current()?.binding?.body.binding_seq).toBe(1);
     expect(claw.authority.current()?.discovery.publish_pending).not.toBe(true);
   });
+});
+
+describe("re-bind committed settlement", () => {
+  it.each(["bookkeeping", "restart", "commit"] as const)(
+    "preserves the actual move outcome when %s fails",
+    async (failure) => {
+      const store = memoryStore();
+      const claw = await linkedClaw(store);
+      await claw.authority.recordDiscovery({ owner_account_id: "owner", published_binding_seq: 1 });
+      const before = await store.read();
+      const nextEndpoint = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
+      vi.spyOn(tunnelRuntime, "stageEndpointKey").mockResolvedValue(nextEndpoint);
+      const binding = await signStatement(
+        "ServerBinding",
+        {
+          ...claw.authority.current()!.binding!.body,
+          k_gw: stageGatewayKey(claw.stateDir),
+          k_srv: nextEndpoint,
+          binding_seq: 2,
+        },
+        claw.root,
+      );
+      const write = store.write;
+      let writes = 0;
+      vi.spyOn(store, "write").mockImplementation(async (record) => {
+        if (failure === "commit" || (failure === "bookkeeping" && writes > 0)) {
+          throw new Error("storage full");
+        }
+        await write(record);
+        writes++;
+      });
+      const restartRemoteAccess = vi.fn(async () => {
+        if (failure === "restart") {
+          throw new Error("restart failed");
+        }
+        return { state: "off" as const };
+      });
+      const deps = { getStateDir: () => claw.stateDir, getAuthority: async () => claw.authority };
+      const owner = createServiceRebind({
+        ...deps,
+        getConfig: () => config,
+        gatewayKey: createServiceGatewayKey(deps),
+        restartRemoteAccess,
+        holdCode: vi.fn(),
+        log: { info: vi.fn() },
+      });
+      const result = owner.run("commit", "local_operator", { binding }, () => true);
+      if (failure === "commit") {
+        await expect(result).rejects.toThrow("storage full");
+        expect((await store.read())?.binding?.body.binding_seq).toBe(1);
+        expect(restartRemoteAccess).not.toHaveBeenCalled();
+        return;
+      }
+      await expect(result).resolves.toMatchObject({
+        ok: true,
+        moved: true,
+        bindingSeq: 2,
+        ...(failure === "restart"
+          ? {
+              published: null,
+              followUpError: "restart failed",
+              nextStep: "openclaw id status",
+            }
+          : {}),
+      });
+      expect(writes).toBe(1);
+      expect(publicationPending(await store.read())).toBe(true);
+      expect((await store.read())?.binding).toEqual(binding);
+      expect((await store.read())?.authority).toEqual(before?.authority);
+      expect(restartRemoteAccess).toHaveBeenCalledOnce();
+    },
+  );
+});
+
+it("reports a committed move when the real service records a tunnel startup failure", async () => {
+  const claw = await linkedClaw();
+  await claw.authority.recordDiscovery({ owner_account_id: "owner", published_binding_seq: 1 });
+  const nextEndpoint = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
+  vi.spyOn(tunnelRuntime, "stageEndpointKey").mockResolvedValue(nextEndpoint);
+  const start = vi
+    .spyOn(tunnelRuntime, "startTunnelRuntime")
+    .mockRejectedValue(new Error("tunnel startup failed"));
+  const binding = await signStatement(
+    "ServerBinding",
+    {
+      ...claw.authority.current()!.binding!.body,
+      k_gw: stageGatewayKey(claw.stateDir),
+      k_srv: nextEndpoint,
+      binding_seq: 2,
+    },
+    claw.root,
+  );
+  const { service } = serviceFor(claw.authority, config);
+  try {
+    await expect(service.rebind("commit", "local_operator", { binding })).resolves.toMatchObject({
+      ok: true,
+      moved: true,
+      bindingSeq: 2,
+      published: null,
+      followUpError: "tunnel startup failed",
+      nextStep: "openclaw id status",
+    });
+    expect(start).toHaveBeenCalledOnce();
+    expect(service.status()).toEqual({ state: "failed", reason: "tunnel startup failed" });
+    expect((await claw.store.read())?.binding).toEqual(binding);
+    expect(publicationPending(await claw.store.read())).toBe(true);
+  } finally {
+    await service.stop();
+  }
 });

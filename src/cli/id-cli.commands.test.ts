@@ -28,6 +28,7 @@ let preparation: RebindPreparation;
 let bindingSeq: number;
 let readFailure: Error | undefined;
 let commitFailure: Error | undefined;
+let followUpError: string | undefined;
 let commits: SignedStatement<"ServerBinding">[];
 let output: string;
 let originalExitCode: typeof process.exitCode;
@@ -58,6 +59,7 @@ beforeEach(() => {
   bindingSeq = 1;
   readFailure = undefined;
   commitFailure = undefined;
+  followUpError = undefined;
   commits = [];
   output = "";
   originalExitCode = process.exitCode;
@@ -67,53 +69,61 @@ beforeEach(() => {
     return true;
   });
   // Fixed RPC I/O with the production scope gate, not a permissive method mock.
-  vi.mocked(callGatewayFromCli).mockImplementation(async (method, _opts, params, extra) => {
-    const authorization = authorizeOperatorScopesForMethod(method, extra?.scopes ?? [], params);
-    if (!authorization.allowed) {
-      throw new Error(`missing scope: ${authorization.missingScope}`);
-    }
-    if (method === "openclawId.status") {
-      return { status: { state: "on" }, link: { linked: true } };
-    }
-    if (method === "openclawId.people") {
-      if (readFailure) {
-        throw readFailure;
+  vi.mocked(callGatewayFromCli)
+    .mockClear()
+    .mockImplementation(async (method, _opts, params, extra) => {
+      const authorization = authorizeOperatorScopesForMethod(method, extra?.scopes ?? [], params);
+      if (!authorization.allowed) {
+        throw new Error(`missing scope: ${authorization.missingScope}`);
       }
-      return {
-        link: {
-          binding: {
-            bindingSeq,
-            publishedBindingSeq: bindingSeq,
-            kSrv: preparation.k_srv,
-            kGw: preparation.k_gw,
+      if (method === "openclawId.status") {
+        return { status: { state: "on" }, link: { linked: true } };
+      }
+      if (method === "openclawId.people") {
+        if (readFailure) {
+          throw readFailure;
+        }
+        return {
+          link: {
+            binding: {
+              bindingSeq,
+              publishedBindingSeq: bindingSeq,
+              kSrv: preparation.k_srv,
+              kGw: preparation.k_gw,
+            },
           },
-        },
-      };
-    }
-    const input = params as { action: string; binding: SignedStatement<"ServerBinding"> };
-    if (input.action === "rebind_prepare") {
-      return {
-        ...preparation,
-        binding_seq: bindingSeq + 1,
-        k_srv: formatIrohEndpointKey(new Uint8Array(32).fill(bindingSeq + 10)),
-        k_gw: formatEd25519PublicKey(new Uint8Array(32).fill(bindingSeq + 20)),
-        current: {
-          k_srv: commits.at(-1)?.body.k_srv ?? preparation.current.k_srv,
-          k_gw: commits.at(-1)?.body.k_gw ?? preparation.current.k_gw,
-          binding_seq: bindingSeq,
-        },
-      };
-    }
-    if (input.action === "rebind_commit") {
-      if (commitFailure) {
-        throw commitFailure;
+        };
       }
-      commits.push(input.binding);
-      bindingSeq = input.binding.body.binding_seq;
-      return { ok: true, bindingSeq };
-    }
-    throw new Error(`Unexpected RPC: ${method}`);
-  });
+      const input = params as { action: string; binding: SignedStatement<"ServerBinding"> };
+      if (input.action === "rebind_prepare") {
+        return {
+          ...preparation,
+          binding_seq: bindingSeq + 1,
+          k_srv: formatIrohEndpointKey(new Uint8Array(32).fill(bindingSeq + 10)),
+          k_gw: formatEd25519PublicKey(new Uint8Array(32).fill(bindingSeq + 20)),
+          current: {
+            k_srv: commits.at(-1)?.body.k_srv ?? preparation.current.k_srv,
+            k_gw: commits.at(-1)?.body.k_gw ?? preparation.current.k_gw,
+            binding_seq: bindingSeq,
+          },
+        };
+      }
+      if (input.action === "rebind_commit") {
+        if (commitFailure) {
+          throw commitFailure;
+        }
+        commits.push(input.binding);
+        bindingSeq = input.binding.body.binding_seq;
+        return {
+          ok: true,
+          bindingSeq,
+          ...(followUpError
+            ? { moved: true, published: null, followUpError, nextStep: "openclaw id status" }
+            : {}),
+        };
+      }
+      throw new Error(`Unexpected RPC: ${method}`);
+    });
 });
 
 afterEach(() => {
@@ -169,6 +179,33 @@ describe("registered id commands", () => {
         expect(output).toContain("Publication check failed: connection closed");
         expect(output).toContain("openclaw id status");
         expect(output).toContain("Do not repeat");
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "reports committed follow-up failure without polling or retrying (json=%s)",
+    async (json) => {
+      followUpError = "restart failed";
+      await expect(run("rebind", json)).resolves.toBeUndefined();
+      expect(commits).toHaveLength(1);
+      expect(process.exitCode).toBe(2);
+      expect(
+        vi.mocked(callGatewayFromCli).mock.calls.some(([method]) => method === "openclawId.people"),
+      ).toBe(false);
+      if (json) {
+        expect(JSON.parse(output)).toEqual({
+          moved: true,
+          bindingSeq: 2,
+          published: null,
+          followUpError: "restart failed",
+          nextStep: "openclaw id status",
+        });
+      } else {
+        expect(output).toContain("committed");
+        expect(output).toContain("Follow-up failed: restart failed");
+        expect(output).toContain("openclaw id status");
+        expect(output).toContain("Do not repeat rebind");
       }
     },
   );

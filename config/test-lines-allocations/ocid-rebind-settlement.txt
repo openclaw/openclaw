@@ -1,0 +1,2 @@
+149
+# Regression-first committed binding outcome across failed follow-up storage/activation, precommit storage refusal, and registered CLI JSON/text warning without polling or retry.

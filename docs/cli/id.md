@@ -51,8 +51,8 @@ openclaw id rebind --cancel
 
 Moves this claw to a new endpoint key and Gateway key with its recovery kit (`OCK1-…`).
 Use it when a key file was lost or may have leaked, after a move to a new computer without
-the key files, or to rotate keys. In the Control UI on this computer the same action is
-**Move to new keys**.
+the key files, or to rotate keys. A forthcoming Control UI action, **Move to new keys**,
+will offer the same recovery on this computer.
 
 1. You give a link code from your OpenClaw ID account (the **Add a claw** page at
    `https://claws.<loaderDomain>/link`), at the prompt or with `--code`. Discovery moves a claw
@@ -85,6 +85,11 @@ last ten minutes), `openclaw id status` says the new keys wait for a link code; 
 
 `--yes` skips the confirmation and needs `--kit-stdin` and `--code`.
 
+If the Gateway stored the new binding but restarting remote access fails, the command
+reports `moved: true`, `published: null`, `followUpError`, and `nextStep: "openclaw id status"`,
+with warning exit code **2**. Check status and follow its recovery advice; do not repeat
+`rebind`, because the keys have already moved.
+
 If the Gateway accepted the move but the CLI cannot read publication status, the command
 prints that the move **committed** and exits normally with warning code **2**, rather than
 throwing an error. With `--json`, it reports `moved: true`, the committed `bindingSeq`,
@@ -112,5 +117,6 @@ openclaw id publish --code <link-code>
 ```
 
 Publishes the claw's descriptor and membership to Discovery now. The Gateway also retries on
-its own. A link code from `https://claws.<loaderDomain>/link` is needed only when the claw is
-not registered at Discovery yet.
+its own. A link code from `https://claws.<loaderDomain>/link` is needed when the claw is not
+registered at Discovery yet, or its replacement binding has not been published. If a restart
+loses the held code or the code expires, use a fresh code from the same owner account.

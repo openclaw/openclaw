@@ -10,6 +10,7 @@ import type {
   IrohEndpointKey,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import type { RebindCommitResult } from "../gateway/openclaw-id/service-rebind.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import {
   describeRebind,
@@ -206,6 +207,31 @@ async function waitForPublication(opts: IdCliOpts, bindingSeq: number) {
   return false;
 }
 
+function writeCommittedWarning(
+  opts: IdCliOpts,
+  bindingSeq: number,
+  error: unknown,
+  stage: "follow-up" | "publication",
+) {
+  const reason = sanitizeTerminalText(error instanceof Error ? error.message : String(error));
+  write(
+    opts,
+    {
+      moved: true,
+      bindingSeq,
+      published: null,
+      [stage === "follow-up" ? "followUpError" : "publicationError"]: reason,
+      nextStep: "openclaw id status",
+    },
+    [
+      "Moved to new keys (committed).",
+      `${stage === "follow-up" ? "Follow-up failed" : "Publication check failed"}: ${reason}`,
+      "Run openclaw id status to check remote access and publication. Do not repeat rebind: it rotates keys again.",
+    ].join("\n"),
+  );
+  process.exitCode = 2;
+}
+
 async function runRebind(opts: RebindOpts) {
   if (opts.cancel) {
     await authority(opts, { action: "rebind_cancel" });
@@ -235,29 +261,17 @@ async function runRebind(opts: RebindOpts) {
     }
   }
   const raw = await authority(opts, { action: "rebind_commit", binding: signed.binding, code });
-  // SAFETY: rebind_commit answers { ok, bindingSeq }.
-  const committed = raw as { bindingSeq: number };
+  // SAFETY: rebind_commit answers the service's committed-result contract.
+  const committed = raw as RebindCommitResult;
+  if (committed.followUpError !== undefined) {
+    writeCommittedWarning(opts, committed.bindingSeq, committed.followUpError, "follow-up");
+    return;
+  }
   let published: boolean;
   try {
     published = await waitForPublication(opts, committed.bindingSeq);
   } catch (error) {
-    const reason = sanitizeTerminalText(error instanceof Error ? error.message : String(error));
-    write(
-      opts,
-      {
-        moved: true,
-        bindingSeq: committed.bindingSeq,
-        published: null,
-        publicationError: reason,
-        nextStep: "openclaw id status",
-      },
-      [
-        "Moved to new keys (committed).",
-        `Publication check failed: ${reason}`,
-        "Run openclaw id status to check publication. Do not repeat rebind: it rotates keys again.",
-      ].join("\n"),
-    );
-    process.exitCode = 2;
+    writeCommittedWarning(opts, committed.bindingSeq, error, "publication");
     return;
   }
   write(
