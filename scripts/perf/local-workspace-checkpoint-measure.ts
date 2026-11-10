@@ -731,6 +731,14 @@ ${anchor}
         "globalThis.__checkpointMeasure();\nconst env = params.env ?? process.env;",
       );
       code = code.replace(anchor, anchor + "\nglobalThis.__checkpointMeasure(action.kind);");
+      if (nativeTurns) {
+        const manifestOwner = "manifest: readManifest,";
+        assert(code.includes(manifestOwner));
+        code = code.replace(
+          manifestOwner,
+          'manifest: (previous, action) => globalThis.__checkpointPhase("localWorkspace.manifest:" + action.kind, () => readManifest(previous, action)),',
+        );
+      }
       const snapshotAnchor = code.includes("return result.snapshot;")
         ? "return result.snapshot;"
         : "const value = await computeWorkspaceManifest(";
