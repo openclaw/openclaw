@@ -118,11 +118,12 @@ inside the app's sandbox. Tests supply an isolated URL. This file uses
 separate client-credential format: node enrollment has its own app lifecycle and
 contains no client/operator credentials.
 
-The named migration `apple-node-enrollments-v2` creates two STRICT tables and
-sets `PRAGMA user_version = 2` atomically. It accepts an empty version-zero database
-or the recognized version-one schema. Migration preserves existing trust facts
-and moves each saved enrollment to its own restart row. An unrecognized database,
-a different version, or an incompatible schema is refused unchanged.
+The named initialization `apple-node-enrollments-v1` creates two STRICT tables
+and sets `PRAGMA user_version = 1` atomically, only in an empty version-zero
+database. The schema is unshipped and edited in place; there is no upgrade path
+from earlier development schemas. Pre-release local stores must be recreated and
+the node re-enrolled. An unrecognized database, a different version, or an
+incompatible schema is refused unchanged.
 The shared `openclaw_id_node_targets` table has these columns:
 
 - `hostname TEXT NOT NULL PRIMARY KEY`
