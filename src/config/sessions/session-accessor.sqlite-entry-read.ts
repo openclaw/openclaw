@@ -23,6 +23,7 @@ import {
   prepareSqliteSessionParticipantProjection,
   projectSqliteSessionParticipants,
 } from "./session-accessor.sqlite-participant-projection.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
@@ -47,6 +48,55 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
 export type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
+
+// Retirement workers share this exact reader with Doctor without importing its
+// cold restoration and cross-store copy graph.
+/** Probe the exact staged target; Doctor may replace a malformed partial row. */
+export function readExactSessionEntryRowForCanonicalRepair(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionKey: string,
+  options: { allowMalformedRowRepair?: boolean } = {},
+) {
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_nodes")
+      .selectAll()
+      .select(sessionEntrySnapshotColumns)
+      .where("session_key", "=", sessionKey),
+  );
+  if (!row) {
+    return undefined;
+  }
+  if (row.entry_json === "{}") {
+    const retainedWindow = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_windows")
+        .select("session_id")
+        .where("session_id", "=", row.current_session_id)
+        .where("session_key", "=", row.session_key),
+    );
+    if (retainedWindow) {
+      return undefined;
+    }
+  }
+  const parsedEntry = parseSessionEntryRow(row);
+  if (!parsedEntry && !options.allowMalformedRowRepair) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `invalid persisted session row requires repair for ${sessionKey}`,
+    );
+  }
+  const entry: SessionEntry = parsedEntry ?? {
+    sessionId: row.current_session_id,
+    updatedAt: row.updated_at,
+  };
+  if (!parsedEntry) {
+    attachSessionEntrySnapshots(entry, row);
+  }
+  return { entry, row };
+}
 
 export function parseReadableSessionEntryData(
   database: Pick<OpenClawAgentDatabase, "db">,

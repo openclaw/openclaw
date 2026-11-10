@@ -61,6 +61,39 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
   return (entry as Record<string, unknown>)[name] === source;
 }
 
+it("keeps retirement reads outside the Doctor restoration graph", async () => {
+  const selected = configs.find((config) =>
+    hasWorkerEntry(
+      config,
+      "config/sessions/session-transcript.worker",
+      "src/config/sessions/session-transcript.worker.ts",
+    ),
+  );
+  if (!selected) {
+    throw new Error("Missing private transcript worker build config");
+  }
+  const root = createTempDir("openclaw-retirement-read-build-");
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    entry: { "retirement-read": "src/config/sessions/session-retirement-read.worker.ts" },
+    outDir: root,
+    dts: false,
+    logLevel: "silent",
+  });
+  try {
+    const chunks = bundles.flatMap((bundle) => bundle.chunks);
+    // The rejected package emitted over 5,000 files through this read-only handler.
+    // Retain room for its query/engine dependencies without copying Doctor's restorers.
+    expect(chunks.length).toBeLessThan(1_500);
+    console.info(`Retirement read build: ${chunks.length} emitted files`);
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
+
 it("keeps the standalone launcher bootstrap within its measured metadata-only boundary", async () => {
   const selected = configs.find((config) =>
     hasWorkerEntry(config, "node-host-launcher-bootstrap", "src/node-host/launcher-bootstrap.ts"),
