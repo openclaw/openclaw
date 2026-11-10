@@ -3,10 +3,11 @@ import path from "node:path";
 import { prepareFilesystemRestrictedLaunch } from "@openclaw/proc-safe/filesystem-launch";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 /** Node-owned grants; a worker descriptor cannot add filesystem permissions. */
-export function prepareNodeWorkerFilesystem(params: {
+export async function prepareNodeWorkerFilesystem(params: {
   workspaceDir: string;
   bundleRoot: string;
   entry: string;
@@ -74,7 +75,7 @@ export function prepareNodeWorkerFilesystem(params: {
     }
   }
   const temporaryRoot = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "worker-"));
-  const cleanup = () => fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  const cleanup = () => removeTemporaryArtifacts(temporaryRoot, "Node worker scratch");
   try {
     const launch = prepareFilesystemRestrictedLaunch({
       executable: process.execPath,
@@ -96,7 +97,7 @@ export function prepareNodeWorkerFilesystem(params: {
     });
     return { ...launch, cleanup };
   } catch (error) {
-    cleanup();
+    await cleanup();
     throw error;
   }
 }

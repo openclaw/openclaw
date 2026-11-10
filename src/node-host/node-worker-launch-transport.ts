@@ -197,7 +197,7 @@ export async function prepareNodeWorkerLaunchTransport(
         supervisor: options.supervisor,
       });
       const filesystem = options.filesystemIsolation
-        ? prepareNodeWorkerFilesystem({
+        ? await prepareNodeWorkerFilesystem({
             workspaceDir: options.descriptor.assignment.workspaceDir,
             bundleRoot: options.bundleRoot,
             entry,
@@ -221,8 +221,8 @@ export async function prepareNodeWorkerLaunchTransport(
           // Attach before readiness: failed startup must release scratch too,
           // but only the existing owner may certify descendant extinction.
           // Filesystem mode is Linux-only; this native owner resolves on extinction.
-          const cleaned = adapter.waitForExtinction().then(() => {
-            filesystem.cleanup();
+          const cleaned = adapter.waitForExtinction().then(async () => {
+            await filesystem.cleanup();
           });
           void cleaned.catch(() => undefined);
           adapter.waitForExtinction = () => cleaned;
@@ -234,7 +234,7 @@ export async function prepareNodeWorkerLaunchTransport(
           throw error;
         }
         if (!ownedAdapter) {
-          filesystem.cleanup();
+          await filesystem.cleanup();
         } else {
           ownedAdapter.kill("SIGKILL");
           await ownedAdapter.waitForExtinction?.().catch(() => undefined);
