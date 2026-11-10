@@ -14,6 +14,8 @@ export type SessionCapabilities = {
   unavailable: Array<{ reason: string; tools: string[] }>;
   notices?: string[];
   error?: string;
+  /** Scopes already held when the inventory check itself was refused. */
+  grantedScopes?: string[];
 };
 
 function summarizeSessionCapabilities(
@@ -50,6 +52,7 @@ export async function resolveSessionCapabilities(params: {
   callGateway: AgentToolGatewayRequestCaller;
   agentId: string;
   sessionKey: string;
+  grantedScopes?: readonly string[];
 }): Promise<SessionCapabilities> {
   try {
     const inventory = await params.callGateway<EffectiveToolInventoryResult>({
@@ -59,18 +62,26 @@ export async function resolveSessionCapabilities(params: {
     return summarizeSessionCapabilities(inventory);
   } catch (error) {
     // Status stays useful without the inventory; the model sees that the check failed.
+    const grantedScopes = [...(params.grantedScopes ?? [])]
+      .map((scope) => scope.trim())
+      .filter((scope) => scope.length > 0)
+      .toSorted();
     return {
       checked: "unavailable",
       available: [],
       unavailable: [],
       error: error instanceof Error ? error.message : String(error),
+      ...(grantedScopes.length > 0 ? { grantedScopes } : {}),
     };
   }
 }
 
 export function formatSessionCapabilities(capabilities: SessionCapabilities): string {
   if (capabilities.checked === "unavailable") {
-    return `Capabilities: could not be checked (${capabilities.error ?? "unknown error"}). This is not evidence that OpenClaw lacks a capability.`;
+    const held = capabilities.grantedScopes?.length
+      ? ` This session holds ${capabilities.grantedScopes.join(", ")}.`
+      : "";
+    return `Capabilities: could not be checked (${capabilities.error ?? "unknown error"}).${held} This is not evidence that OpenClaw lacks a capability.`;
   }
   return [
     "Capabilities (this session only; other sessions, agents, or config can differ):",

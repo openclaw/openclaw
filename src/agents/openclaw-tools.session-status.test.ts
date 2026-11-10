@@ -9,12 +9,14 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import {
   createMockConfig,
   expectSpawnedSessionLookupCalls,
   fixedStoreConfig,
 } from "./openclaw-tools.session-status.test-support.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -186,9 +188,6 @@ vi.mock("../plugins/provider-thinking.js", () => ({
   resolveEffectiveThinkingProfile: () => undefined,
   resolveProviderXHighThinking: () => undefined,
 }));
-// Keep provider-runtime/plugin activation out of this focused tool test. The
-// session_status surface only needs model selection semantics here, not real
-// bundled provider registration.
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: () => [],
 }));
@@ -599,14 +598,29 @@ describe("session_status tool", () => {
     );
 
     const tool = getSessionStatusTool();
-    const result = await tool.execute("call-capabilities-error", { capabilities: true });
+    const result = await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "main",
+        operatorAuthority: createAdmittedRunOperatorAuthority({
+          profileId: "status-scope-proof",
+          scopes: ["operator.sessions.write"],
+          assertCurrent() {},
+        }),
+      },
+      () => tool.execute("call-capabilities-error", { capabilities: true }),
+    );
     const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
     expect(result.details).toMatchObject({
       ok: true,
-      capabilities: { checked: "unavailable", error: "missing scope: operator.read" },
+      capabilities: {
+        checked: "unavailable",
+        error: "missing scope: operator.read",
+        grantedScopes: ["operator.sessions.write"],
+      },
     });
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(text).toContain("not evidence that OpenClaw lacks a capability");
+    expect(text).toContain("This session holds operator.sessions.write.");
   });
 
   it("resolves whitespace-decorated current to the webchat requester (#89773, #89800)", async () => {
