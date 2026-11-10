@@ -14,6 +14,10 @@ const catalog = {
       cron: "Cron {expr}",
       withCwd: "{value} (cwd: {cwd})",
       withTimeZone: "{value} ({timeZone})",
+      nextRunToday: "Next run today at {time}",
+      nextRunTomorrow: "Next run tomorrow at {time}",
+      nextRunOn: "Next run on {day} at {time}",
+      noNextRun: "Not scheduled to run again",
     },
   },
 } satisfies TranslationMap;

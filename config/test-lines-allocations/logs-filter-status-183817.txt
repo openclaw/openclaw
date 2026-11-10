@@ -1,0 +1,3 @@
+# Browser regression for persistent Logs empty-result status, keyboard focus,
+# loading, and quiet polling without repeated live-region mutations.
+110

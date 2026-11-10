@@ -4,7 +4,6 @@ import {
   getPreparedModelRuntimeMocks,
   usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
-import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,6 +38,7 @@ import {
 } from "../plugins/runtime/generation-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope, isAsyncWorkScopeActiveHere } from "../shared/async-work-scope.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
 import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
@@ -376,7 +376,7 @@ describe("auth publication generation recovery", () => {
       // JSC's conservative scanning may pin one build even after this timer hop.
       await new Promise<void>((resolve) => {
         setTimeout(() => {
-          queryObjects(WeakRef);
+          forceFullGc();
           resolve();
         }, 0);
       });

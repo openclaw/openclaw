@@ -60,10 +60,10 @@ the idle limit is not a substitute for caller cleanup.
 
 | Testbox               | Allowed runner        | Default runtime | Maximum requested runtime |
 | --------------------- | --------------------- | --------------- | ------------------------- |
-| General runtime proof | 16-vCPU Ubuntu x64    | 60 minutes      | 240 minutes               |
-| High-memory exception | 32-vCPU Ubuntu x64    | 240 minutes     | 240 minutes               |
+| General runtime proof | 4-vCPU Ubuntu x64     | 60 minutes      | 240 minutes               |
+| High-memory exception | 8-vCPU Ubuntu x64     | 240 minutes     | 240 minutes               |
 | ARM proof             | 16-vCPU Ubuntu ARM    | 120 minutes     | 120 minutes               |
-| Build artifacts       | 16-vCPU Ubuntu x64    | 35 minutes      | 35 minutes                |
+| Build artifacts       | 4-vCPU Ubuntu x64     | 35 minutes      | 35 minutes                |
 | Windows               | 8- or 16-vCPU Windows | 75 minutes      | 75 minutes                |
 
 The ARM workflow's pull-request setup check uses `ubuntu-24.04-arm`. Manual
@@ -183,6 +183,11 @@ The shared screenshot wrapper scans and mounts installed runtimes, ensures CI ha
 The macOS critical-security CodeQL job temporarily stays on `macos-26-intel` with Xcode 26.6 because [Swift build tracing is unsupported on macOS 27 and Xcode 27](https://github.com/github/codeql/issues/22742). This preserves Swift security coverage until upstream restores traced-build support. It continues to build the native app for ARM64. The native app keeps its macOS 26.2 deployment target, shared Swift packages keep macOS 15, and the Tauri companion keeps macOS 13.0 through its package configuration and explicit build environment.
 
 The earlier hosted-routing validation used `macos-26`: repeated first attempts left the Blacksmith macOS jobs unassigned while other CI completed. In [run 33616182173](https://github.com/openclaw/openclaw/actions/runs/33616182173), the hosted retry assigned all three waiting Mac jobs within eight seconds; the Debug/simulator job passed in 15m31s. That historical result predates Xcode 27. Complete native evidence remains required for full manual qualification.
+
+Linux Node setup probes Git's `--no-lazy-fetch` support before running checks.
+Capable installations are unchanged. Ubuntu images missing it install current Git
+from the Git project's recommended PPA; other images must provision Git 2.45 or
+newer. Package operations are noninteractive and bounded.
 
 The Node test planner marks only shards that run the real native grep fixture.
 Those Linux jobs install the `ripgrep` package when the selected runner image
@@ -379,7 +384,8 @@ Backend routing still applies. Hybrid retries and fork retries retain their
 hosted routes. Ordinary manual CI dispatches remain hosted in hybrid mode;
 Full Release Validation's existing frozen-target lint exception remains separate.
 Npm preflight build and test jobs use the larger Blacksmith request by default
-and retain their explicit `use_github_hosted_runners` option. The final npm
+and retain their explicit `use_github_hosted_runners` option, which Full Release
+Validation exposes as `npm_preflight_use_github_hosted_runners`. The final npm
 qualification job uses `ubuntu-24.04`, honoring `OPENCLAW_RELEASE_RUNNER_GROUP`.
 It validates and seals the existing artifacts without rerunning builds or tests.
 

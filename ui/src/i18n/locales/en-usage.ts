@@ -52,6 +52,14 @@ const enUsage = {
       daysCount: "{count} days",
       hoursCount: "{count} hours",
       sessionsCount: "{count} sessions",
+      search: {
+        creator: "Search identities",
+        channel: "Search channels",
+        provider: "Search providers",
+        model: "Search models",
+        tool: "Search tools",
+      },
+      noMatches: "No matches for “{query}”",
     },
     query: {
       placeholder:
@@ -82,6 +90,7 @@ const enUsage = {
       all: "All identities",
       select: "Filter by session creator",
       selected: "Selected identity",
+      you: "You",
       identity: "Identity",
       unattributed: "Not recorded",
       unattributedHint:

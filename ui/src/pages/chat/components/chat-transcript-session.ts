@@ -32,6 +32,7 @@ export type TranscriptCallbacks = {
   getComposerFloat?: () => HTMLElement | null;
   getComposerActivityLayout?: () => ComposerActivityLayout | null;
   onViewportResize?: () => void;
+  /** Explicit keys report direction; undefined reconciles geometry or neutral contact. */
   onReaderScroll?: (towardEnd?: boolean) => void;
   onNativeScroll?: (event: Event) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
@@ -110,6 +111,15 @@ export function createTranscriptPresentation(
   measureRow = measureTranscriptRow,
 ) {
   const redraw = {};
+  let pendingChange: (() => void) | undefined;
+  const flushChange = () => {
+    const commit = pendingChange;
+    if (commit) {
+      pendingChange = undefined;
+      cancelLayout(redraw);
+      commit();
+    }
+  };
   let resizeOffsetSynced = false;
   const readConnectedRows = (): (() => boolean) | null => {
     const apply = readConnectedTranscriptRows(scrollElement(), virtualizer, rowElements());
@@ -123,14 +133,16 @@ export function createTranscriptPresentation(
 
   const presentation = {
     commitChange(commit: () => void, defer: boolean) {
+      pendingChange = commit;
       if (defer) {
-        scheduleLayout(redraw, () => commit);
+        scheduleLayout(redraw, () => flushChange);
       } else {
-        cancelLayout(redraw);
-        commit();
+        flushChange();
       }
     },
+    flushChange,
     cancelChange() {
+      pendingChange = undefined;
       cancelLayout(redraw);
     },
     measureElement(element: HTMLElement, entry: ResizeObserverEntry | undefined) {

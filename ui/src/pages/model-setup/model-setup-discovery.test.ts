@@ -173,7 +173,7 @@ describe("Model Setup explicit discovery", () => {
         expect(pendingReceipt()).toBe(receipt);
       } else {
         await waitForFast(() =>
-          expect(page.querySelector(".model-setup-wizard .callout.warning")?.textContent).toContain(
+          expect(page.querySelector(".model-setup-wizard .callout.warn")?.textContent).toContain(
             "Couldn’t confirm cancellation",
           ),
         );

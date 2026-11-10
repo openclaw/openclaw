@@ -81,6 +81,14 @@ const runtimeContextProjections = [false, true].map((escape) =>
       if (message.role === "custom" && isOpenClawSystemUpdateMessage(message)) {
         const details = systemUpdateDetailsSchema.safeParse(message.details);
         if (details.success) {
+          // Keep runtime semantics when this route cannot project operator messages.
+          if (!inHistorySystemUpdates && details.data.kind === "runtime-context") {
+            return {
+              ...message,
+              customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+              details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+            };
+          }
           const projected: UserMessage = {
             role: "user",
             content: message.content,

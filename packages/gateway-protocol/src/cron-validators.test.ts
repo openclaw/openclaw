@@ -96,6 +96,9 @@ describe("cron protocol validators", () => {
       job,
       { ...job, deliveryPreview },
       { created: true, job, deliveryPreview },
+      { ...job, warning: "Operator grant cannot be retained" },
+      { created: true, job, warning: "Operator grant cannot be retained" },
+      { created: false, job, warning: "Operator grant cannot be retained" },
     ]) {
       expect(Value.Check(CronAddResultSchema, result)).toBe(true);
     }
@@ -203,6 +206,11 @@ describe("cron protocol validators", () => {
       true,
     ],
     [{ delivery: { threadId: 42 } }, true],
+    [{ failureAlert: { threadId: 42 } }, true],
+    [{ failureAlert: { threadId: null } }, true],
+    [{ delivery: { failureDestination: { threadId: "42" } } }, true],
+    [{ delivery: { failureDestination: { threadId: null } } }, true],
+    [{ failureAlert: { threadId: {} } }, false],
     [{ delivery: { completionDestination } }, true],
     [{ delivery: { completionDestination: null } }, true],
     [{ delivery: { completionDestination: {} } }, false],

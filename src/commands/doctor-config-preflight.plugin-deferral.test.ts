@@ -15,6 +15,7 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { readPluginStateMigrationReadiness } from "../plugins/plugin-state-migration-readiness.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -269,17 +270,27 @@ async function installStatelessFixture(
 }
 
 describe("configured plugin migration deferral", () => {
-  it.each(["absent", "default", "after-session-repair", "detector-failed"])(
-    "inspects an inactive owner's retained settings without activating it (%s)",
-    (source) =>
+  it.each(
+    ["absent", "default", "after-session-repair", "detector-failed"].flatMap((source) =>
+      ["plugin", "channel"].map((disabled) => ({ source, disabled })),
+    ),
+  )(
+    "inspects an inactive owner's migration without activating it ($disabled disabled; $source)",
+    ({ source, disabled }) =>
       withFixture(async (f) => {
         const actions = [{ id: "data" }, { id: "repair", phase: "after-session-repair" }];
-        const configPaths = [["plugins", "entries", f.pluginId, "config"]];
+        const executed = path.join(f.root, "executed");
+        const configPaths =
+          disabled === "plugin" ? [["plugins", "entries", f.pluginId, "config"]] : [];
         await installFixture(
           f.root,
           "@example/inactive-fixture",
           {
             id: f.pluginId,
+            channels: [f.pluginId],
+            channelConfigs: {
+              [f.pluginId]: { schema: objectSchema({ enabled: { type: "boolean" } }) },
+            },
             configSchema: objectSchema({ enabled: { type: "boolean" } }),
             configContracts: {
               compatibilityMigrationPaths: [`plugins.entries.${f.pluginId}.config`],
@@ -287,7 +298,8 @@ describe("configured plugin migration deferral", () => {
             doctorContract: { stateMigrations: actions },
           },
           false,
-          'throw Error("Disabled plugin runtime must not be evaluated");',
+          `require('node:fs').writeFileSync(${JSON.stringify(executed)}, 'runtime');
+throw Error("Disabled plugin runtime must not be evaluated");`,
         );
         await fs.writeFile(
           path.join(f.root, "doctor-contract-api.cjs"),
@@ -295,20 +307,29 @@ describe("configured plugin migration deferral", () => {
 module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
   ...action, label: action.id,
   detectLegacyState({ config }) {
-    if (config.plugins.entries.fixture.config.enabled !== false) throw Error('Retained settings missing');
+    if (${JSON.stringify(disabled)} === 'plugin' && config.plugins.entries.fixture.config.enabled !== false) throw Error('Retained settings missing');
     if (${JSON.stringify(source)} === 'detector-failed') throw Error('Cannot inspect source');
     const source = action.phase ? ${JSON.stringify(f.migrated)} : ${JSON.stringify(f.source)};
     return fs.existsSync(source) ? { preview: ['Retained source data'] } : null;
   },
-  migrateLegacyState() { throw Error('Disabled owner must not migrate source data'); }
+  migrateLegacyState() {
+    fs.writeFileSync(${JSON.stringify(executed)}, 'repair');
+    throw Error('Disabled owner must not migrate source data');
+  }
 }));`,
         );
         const config = {
           ...f.config(undefined, [f.root]),
+          ...(disabled === "channel" ? { channels: { [f.pluginId]: { enabled: false } } } : {}),
           plugins: {
             allow: [f.pluginId],
             load: { paths: [f.root] },
-            entries: { [f.pluginId]: { enabled: false, config: { enabled: false } } },
+            entries: {
+              [f.pluginId]: {
+                enabled: disabled === "channel",
+                ...(disabled === "plugin" ? { config: { enabled: false } } : {}),
+              },
+            },
           },
         };
         await f.write(config);
@@ -327,10 +348,26 @@ module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
             },
           ],
         });
-        await doctor();
-        expect((await f.read()).plugins).toEqual(config.plugins);
+        const result = await doctor();
+        const saved = await f.read();
+        expect(saved.plugins).toEqual(config.plugins);
+        expect(saved.channels).toEqual(config.channels);
         if (source === "absent") {
+          expect(result.deferredPluginMigrations).toBeUndefined();
+          expect(result.stateMigrationUnsettled).toBe(false);
+          expect(result.configChanged).toBe(disabled === "plugin");
+          expect(result.snapshot.config.plugins?.entries?.[f.pluginId]?.config).toEqual(
+            disabled === "plugin" ? { enabled: false } : undefined,
+          );
+          await inspectDatabase(f.databasePath, (database) => {
+            expect(
+              database
+                .prepare("SELECT status FROM migration_runs WHERE id = ?")
+                .get(`deferred-plugin-migration:${f.pluginId}`)?.status,
+            ).toBe("completed");
+          });
           expect(readDeferredPluginMigrations({ includeDeferred: true })).toEqual([]);
+          expect(readPluginStateMigrationReadiness({})).toEqual([]);
         } else {
           f.pending({ requiresStateMigration: true });
           if (source !== "detector-failed") {
@@ -352,6 +389,7 @@ module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
           loaded.retireGatewayRuntimeBindings();
           await disposePluginRegistryInstances(loaded.pluginRegistry);
         }
+        await expectMissing(executed);
       }),
   );
 
@@ -784,7 +822,7 @@ module.exports.stateMigrations = ${JSON.stringify(actions)}.map(action => ({
         await fs.unlink(path.join(f.root, "doctor-contract-api.cjs"));
         await f.stateless();
         const original = await f.raw();
-        await doctor(prepared);
+        expect((await doctor(prepared)).configChanged).toBe(false);
         expect(readDeferredPluginMigrations()).toEqual([]);
         expect(note).toHaveBeenCalledWith(
           '- Plugin "fixture" version "1.0.0": no plugin migration contract. No migration ran; existing data and settings have been kept.',

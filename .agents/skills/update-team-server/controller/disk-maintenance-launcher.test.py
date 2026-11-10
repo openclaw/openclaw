@@ -61,7 +61,9 @@ try {
             pw_dir="/home/openclaw",
         )
         self.body = self.root / "openclaw-health-check"
-        self.body.write_text("exit 0\n")
+        self.body.write_text("raise SystemExit(0)\n")
+        (self.root / "verified").mkdir(mode=0o700)
+        (self.root / "verified" / self.release.name).write_text(self.release.name + "\n")
         stack = self.enterContext(contextlib.ExitStack())
         for name, value in (("ROOT", self.root), ("LOCK", self.lock), ("LIBRARY", self.library)):
             stack.enter_context(patch.object(self.launcher, name, value))
@@ -155,13 +157,29 @@ try {
                     proof.assert_not_called()
                     body.assert_not_called()
 
+    def test_missing_or_mismatched_receipt_does_not_launch_body(self):
+        receipt = self.root / "verified" / self.release.name
+        for contents in ("wrong\n", None):
+            with self.subTest(contents=contents):
+                if contents is None:
+                    receipt.unlink()
+                else:
+                    receipt.write_text(contents)
+                with patch.object(self.launcher.subprocess, "Popen") as child:
+                    with self.assertRaises((RuntimeError, FileNotFoundError)):
+                        self.launcher.run_and_join(
+                            self.runtime, self.release / "openclaw.mjs", self.body,
+                            stop_signal=self.launcher.StopSignal())
+                    child.assert_not_called()
+
     def test_runtime_body_and_reporter_do_not_inherit_lock(self):
         self.body.write_text('''
-test ! -e /proc/self/fd/9 || exit 91
-for fd in /proc/self/fd/*; do
-  test "$(readlink "$fd")" != "''' + str(self.lock) + '''" || exit 92
-done
-''')
+import os
+from pathlib import Path
+assert not Path('/proc/self/fd/9').exists()
+assert all(os.readlink(fd) != 'LOCK_PATH' for fd in Path('/proc/self/fd').iterdir() if fd.exists())
+assert int(os.environ['OPENCLAW_MAINTENANCE_VERIFIED_AT_MS']) > 0
+'''.replace('LOCK_PATH', str(self.lock)))
         # Non-root cannot call setgroups; uid/gid still use the real runtime path.
         with patch.object(self.launcher.os, "getgrouplist", return_value=None):
             self.assertEqual(self.main(), 0)
@@ -170,8 +188,11 @@ done
                 os.set_inheritable(lock.fileno(), True)
                 os.dup2(lock.fileno(), 9, inheritable=True)
                 try:
+                    self.runtime.pw_dir = str(self.root)
+                    reporter = self.root / "openclaw-disk-maintenance"
+                    reporter.write_text("test ! -e /proc/self/fd/9\n")
                     self.assertEqual(self.launcher.run_and_join(
-                        self.runtime, self.release / "openclaw.mjs", self.body,
+                        self.runtime, None, reporter,
                         stop_signal=self.launcher.StopSignal(),
                         report=("deferred", "deployment-lock", "0")), 0)
                 finally:

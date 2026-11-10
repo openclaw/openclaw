@@ -76,13 +76,14 @@ enum CostUsageRequest {
             : String(format: ":%02d", absoluteMinutes % 60)
         let utcOffset = "UTC\(offsetMinutes < 0 ? "-" : "+")\(absoluteMinutes / 60)\(minuteSuffix)"
         let params: [String: Any] = [
+            "agentScope": "all",
             "days": 31,
             "mode": "specific",
             "timeZone": timeZone.identifier,
             "utcOffset": utcOffset,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: params, options: [.sortedKeys]) else {
-            return #"{"days":31,"mode":"gateway"}"#
+            return #"{"agentScope":"all","days":31,"mode":"gateway"}"#
         }
         return String(bytes: data, encoding: .utf8)!
     }

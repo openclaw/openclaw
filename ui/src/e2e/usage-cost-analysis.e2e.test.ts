@@ -422,7 +422,7 @@ suite.define(() => {
         has: page.locator(".usage-filter-trigger", { hasText: "Provider" }),
       });
       await providerFilter.locator(".usage-filter-trigger").click();
-      await providerFilter.locator('[data-value="command:select-all"]').click();
+      await providerFilter.getByRole("button", { name: "Select all", exact: true }).click();
       await expectText(providerFilter.locator(".settings-count")).toBe("2");
       await expect
         .poll(async () => (await sessionLabels.allTextContents()).toSorted())
@@ -437,7 +437,10 @@ suite.define(() => {
           .poll(async () => (await sessionLabels.allTextContents()).toSorted())
           .toEqual(["Research Review", "Team Planning"]);
         await providerFilter.locator(".usage-filter-trigger").click();
-        const openai = providerFilter.locator('[data-value="option:openai"]');
+        const openai = providerFilter.getByRole("menuitemcheckbox", {
+          name: "openai",
+          exact: true,
+        });
         await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
         await openai.click();
         await expectTexts(sessionLabels, ["Research Review"]);

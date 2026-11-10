@@ -140,10 +140,10 @@ export async function prepareLegacyArchiveRetention(params: {
 }) {
   const { owner, receipt, originalInput } = params;
   const repo = owner.worktree.repoRoot;
-  const { readStagedWorkerWorkspaceResult } = await import("./workspace-result-staging.js");
+  const { loadStagedWorkspaceManifest } = await import("./workspace-manifest-worker.js");
   const { serializeWorkerWorkspaceManifest } = await import("./workspace-manifest.js");
   const { expireLocalWorkspaceProjection } = await import("./local-workspace-projection.js");
-  const archived = await readStagedWorkerWorkspaceResult(repo, receipt, [originalInput]);
+  const archived = await loadStagedWorkspaceManifest(repo, receipt, undefined, [originalInput]);
   const replaceBaseline = async (rawManifest: string) => {
     await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
       await store.update(store.get()!, {}, undefined, {

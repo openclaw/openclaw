@@ -1,8 +1,10 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GatewayErrorDetailCodes,
   type GitHubPublicationSelectionRejectedErrorDetails,
 } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { WORKSPACE_RESULT_LIMIT_ERROR_CODE } from "./worker-environments/workspace-inventory-limits.js";
 
 type PublicationFailure = Pick<
   Extract<SessionGitHubPublicationResult, { status: "failed" }>,
@@ -157,6 +159,9 @@ export function resolveGitHubPublicationFailure(error: unknown): PublicationFail
     return { code: error.failure.code, nextAction: `${reason} ${error.failure.nextAction}` };
   }
   const message = error instanceof Error ? error.message : "";
+  if (message && asOptionalRecord(error)?.code === WORKSPACE_RESULT_LIMIT_ERROR_CODE) {
+    return { code: "workspace_changed", nextAction: message };
+  }
   if (message.includes("publication workspace base")) {
     return {
       code: "unavailable",
