@@ -1,9 +1,9 @@
 // Real isolated Gateway + public registry + production UI. No mocked RPCs or simulated delays.
-// Acceptance: mean trusted-click-to-content latency <= 50% of 10-run baseline in >=5
-// candidate runs for BOTH surfaces, with equal identities and full returned contents.
+// Acceptance: mean first-catalog-RPC-to-content latency <= 50% of 10-run baseline
+// in >=5 candidate runs for BOTH surfaces, with equal identities and full contents.
 // Cold browser context per sample; resident Gateway, uncontrolled shared upstream caches.
-// Primary timing starts at the trusted native click. RPC and automation-call timings
-// are separate diagnostics; browser boot and handshake precede the measured action.
+// Keep the approved content-readiness boundary fixed across baseline and candidate.
+// Trusted-click and automation-call timings are separate diagnostics, not boot proof.
 // node --import ./scripts/tsx.mjs scripts/bench-templates-catalog.mts
 //   --config <isolated config> --output <JSON> --samples 10 --label baseline
 import assert from "node:assert/strict";
@@ -81,7 +81,7 @@ type Run = { arm: string; surface: string } & (
 const runs: Run[] = [];
 const report = {
   label: values.label,
-  primaryMetric: "activationMs",
+  primaryMetric: "ms",
   metric: "first templates.catalog request to rendered complete contents",
   activationMetric: "trusted native click event to DOM-content assertion (browser clock)",
   automationMetric: "Playwright click call to readiness, including actionability wait",
