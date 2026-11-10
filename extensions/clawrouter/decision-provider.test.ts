@@ -248,6 +248,32 @@ it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
   },
 );
 
+it("classifies a rate-limited catalog when the connection dies mid-body and closes its transport", async () => {
+  const closed = Promise.withResolvers<void>();
+  await fixture(
+    async (origin, seen) => {
+      expect(await evaluate(origin)).toEqual({
+        status: "unavailable",
+        reason: "rate-limited",
+        retryAfterMs: 2000,
+      });
+      await closed.promise;
+      expect(seen.map(({ path }) => path)).toEqual(["/v1/catalog"]);
+    },
+    (path, response) => {
+      if (path === "/v1/catalog") {
+        response.statusCode = 429;
+        response.setHeader("retry-after", "2");
+        response.on("close", () => closed.resolve());
+        response.write("synthetic-router-key private evidence");
+        response.destroy();
+      } else {
+        response.end(JSON.stringify(catalog()));
+      }
+    },
+  );
+});
+
 it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
   "rejects malformed and credential-reflecting JSON at %s",
   async (failedPath) => {
