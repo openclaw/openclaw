@@ -125,6 +125,12 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       !directAnnounceResult?.meta?.error &&
       !directAnnounceResult?.meta?.aborted;
     const automaticEvidence = getAutomaticDeliveryEvidence(directAnnounceResult ?? {});
+    // A yielded or still-continuing response is not settled: another attempt may still
+    // produce its visible reply, so only a finished response is a permanent outcome.
+    const settledCompletedReply =
+      requesterCompletedSuccessfully &&
+      directAnnounceResult?.meta?.yielded !== true &&
+      directAnnounceResult?.meta?.continuationPending !== true;
     const missingVisibleReplyResult = (): SubagentAnnounceDeliveryResult => {
       const stateConflict =
         !automaticEvidence.mayHaveSent &&
@@ -141,7 +147,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         // until the dedupe window expires. A state conflict is transient and stays retryable.
         ...(stateConflict
           ? { disposition: "retryable" as const }
-          : requesterCompletedSuccessfully
+          : settledCompletedReply
             ? { disposition: "permanent_failure" as const }
             : {}),
       };
