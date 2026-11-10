@@ -1,5 +1,5 @@
 /**
- * Remediation for apply_patch workspace containment.
+ * Remediation for file-tool workspace containment.
  *
  * Which control imposed the boundary decides which remedy is true, so the runtime owner
  * names its own source rather than the tool guessing from configuration it cannot see.
@@ -7,8 +7,54 @@
 import { isHostRootEscapeError, markHostRootEscape } from "./sandbox-paths.js";
 import { withToolOperatorHint } from "./tool-operator-hint.js";
 
-/** Which layer contained apply_patch, and therefore which operator explanation applies. */
+/** The prepared policy transports this source for both patch and other file tools. */
 export type ApplyPatchContainmentSource = "config" | "session" | "required-root";
+
+function workspaceBindingHint(source: ApplyPatchContainmentSource | undefined): string {
+  switch (source) {
+    case "config":
+      return (
+        "Keep file paths within the bound root. For an authorized task in another repository, " +
+        "when session and sender policy permit, use a worker bound to that repository; when " +
+        "starting one with sessions_spawn, set cwd to that repository. Changing exec workdir " +
+        "does not rebind file tools."
+      );
+    case "session":
+      return (
+        "Keep file paths within this session's recorded root. A hidden native sessions_spawn child with only " +
+        "a different cwd inherits this root and will also be blocked. Do not use that as recovery. " +
+        "For an authorized task outside it, the operator must use a " +
+        "session whose recorded root includes the target repository."
+      );
+    case "required-root":
+      return (
+        "Keep file paths within this run's required root. Changing cwd, session permission mode, " +
+        "or workspaceOnly configuration does not lift this boundary."
+      );
+    default:
+      return "Keep file paths within the bound root. Changing exec workdir does not rebind file tools.";
+  }
+}
+
+export function isSandboxRootEscapeError(error: unknown): error is Error {
+  return error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message);
+}
+
+export function withWorkspaceRecoveryHint(
+  error: unknown,
+  hostWorkspace: boolean,
+  source?: ApplyPatchContainmentSource,
+): unknown {
+  if (!isSandboxRootEscapeError(error)) {
+    return error;
+  }
+  const message = error.message.includes(".openclaw/tmp/")
+    ? error.message
+    : `${error.message}. Use a relative path under \`.openclaw/tmp/\` inside the workspace for scratch/temp/meta files that file tools need to read or write later.`;
+  const bindingHint =
+    hostWorkspace && isHostRootEscapeError(error) ? ` ${workspaceBindingHint(source)}` : "";
+  return new Error(`${message}${bindingHint}`, { cause: error });
+}
 
 const HINTS: Record<ApplyPatchContainmentSource, string> = {
   "required-root":
@@ -38,10 +84,7 @@ export function withApplyPatchContainmentHint(
   }
   const failure = hostWorkspace
     ? markHostRootEscape(
-        new Error(
-          `${error.message}. Keep patch paths within the bound root. For an authorized task in another repository, ask the parent to respawn the worker with sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.`,
-          { cause: error },
-        ),
+        new Error(`${error.message}. ${workspaceBindingHint(source)}`, { cause: error }),
       )
     : error;
   return source ? withToolOperatorHint(failure, HINTS[source]) : failure;
