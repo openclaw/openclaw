@@ -34,4 +34,18 @@ sees a missing or synthetic tool outcome. Only user-triggered runs are reviewed.
 in flight; the run ending or a new user message cancels it. Gateway info logs
 record review token usage and whether a correction was steered.
 
+Cron- and heartbeat-rooted spawn chains and Workboard workers are not reviewed.
+Direct chats and their subagents remain eligible. Advisor follows up to eight
+session entries through `spawnedBy`; dashboard-only `parentSessionKey` links are
+not spawn provenance. Isolated heartbeat metadata is also recognized. Missing entries and
+lookup failures leave the run eligible. Scheduled work in a named session cannot
+always be recognized from its key.
+
+Current-turn provenance from `before_prompt_build` skips `sessions_send` reviews,
+even after the input leaves the recent history window. When that provenance is
+unavailable, Advisor checks the newest user message at review time. This includes
+a human request relayed by another agent. The sending run remains
+eligible. Admission requires session metadata reads, and each due review reads
+up to 300 recent messages to inspect provenance.
+
 Docs: https://docs.openclaw.ai/concepts/experimental-features#advisor
