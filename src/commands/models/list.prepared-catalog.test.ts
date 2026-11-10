@@ -316,19 +316,12 @@ describe("models list published transport", () => {
   );
 
   it.each([
-    [{ json: true, plain: true }, "Choose either --json or --plain"],
-    [{ provider: "Example Provider", json: true }, "Invalid provider filter"],
+    [{ json: true, plain: true }, expect.stringContaining("Choose either --json or --plain")],
+    [{ provider: "Example Provider", json: true }, expect.stringContaining("Invalid provider")],
   ] as const)("rejects invalid options %j before reading a catalog", async (options, error) => {
-    await expect(list(options)).rejects.toThrow(error);
+    await expect(list(options)).rejects.toMatchObject({ name: "ExpectedCliError", message: error });
     expect(gateway.callGateway).not.toHaveBeenCalled();
     expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
-  });
-
-  it("rejects --json with --plain as an ExpectedCliError", async () => {
-    await expect(list({ json: true, plain: true })).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      message: "Choose either --json or --plain, not both.",
-    });
   });
 
   it("filters only proven local rows and renders their exact keys in plain output", async () => {

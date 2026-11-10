@@ -1,4 +1,0 @@
-# Net test-line growth from PR "fix(models): surface the --json/--plain conflict as an ExpectedCliError"
-# (discriminating regression asserting models list/status reject --json with --plain
-# as an ExpectedCliError instead of the generic "The CLI command failed." line).
-7
