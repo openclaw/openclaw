@@ -1,6 +1,7 @@
 import { extractErrorCode, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
-import { formatStateLeaseLoss, type StateLeaseLoss } from "../shared/state-lease-loss.js";
+import { formatStateLeaseLoss } from "../shared/state-lease-loss-format.js";
+import type { StateLeaseLoss } from "../shared/state-lease-loss.js";
 
 /** Renewal diagnostics omit error prose, stacks, and database paths. */
 export function formatLeaseRenewalError(error: unknown): string {
