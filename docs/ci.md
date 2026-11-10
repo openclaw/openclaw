@@ -194,7 +194,8 @@ custom selections retain the full registry.
 Packed Node groups also share the runtime-only registry when every group has
 one known configuration and only explicitly qualified files. This includes
 the Gateway client callsite guard, Codex abort settlement, and native search
-authority proofs. Parent and child resolve the same include-file selection;
+authority proofs, plus the synthetic CI timing-refitter tooling suite. Parent
+and child resolve the same include-file selection;
 broad or mixed selections, extra Vitest arguments, and groups requiring a build
 retain the full registry. Test inventory, process isolation, and artifact
 verification are unchanged.
@@ -299,6 +300,8 @@ The same release job caches Xcode's `SourcePackages` downloads separately from o
 
 Release qualification disables Spotlight indexing on the disposable runner's Data volume before checkout. After Simulator boot, it requires ten seconds of at least 30% idle host CPU within five minutes before issuing the pairing credential. This keeps first-launch background work out of the Gateway and XCTest deadlines. Local qualification uses the same CPU readiness check and leaves host indexing settings to the operator.
 
+iOS qualification proof records assertion basenames and line numbers from the snapshot suite and its Chat and Helpers files, without assertion text or checkout paths. Pairing handles the expected Local Network permission prompt directly before opening manual setup, and also supports authorization retained by subsequent tests. Raw XCTest output and result bundles remain private and are cleaned up by the harness.
+
 Android screenshot-input PRs and ordinary full manual CI run the existing phone
 and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
 capture to succeed; unit-test-only and documentation changes omit it. See
@@ -378,6 +381,8 @@ Full GitHub and hybrid type checks run the five core stripes independently, reta
 Additional checks and narrow-PR guards and dependency scans start directly after preflight. Ordinary PRs selecting Madge or Kysely divide guards into `check-guards` and `check-guards-architecture`, with the same runner routing and no compiler-plan wait. The manifest retains every check once, and both selected rows must pass. Other events retain their existing rows. Guards retain the exact comparison base and shared check commands; compiler and lint rows wait for their selected graphs. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 
 Changed compiler planning queries each config's complete file membership with `--listFilesOnly`, using tsrs by default and tsgo on unsupported hosts or when `OPENCLAW_TYPECHECKER=tsgo`. Type-only consumers and dependency declarations remain included; the selected compiler's bundled library directory is excluded because it describes compiler identity, not repository membership. Config expansion and shard/buildinfo validation still use tsgo's `--showConfig`. Queries run serially without opening native API snapshots. Upstream first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect.
+
+When shared SDK declarations are enabled, explicitly selected core-only lint rows skip SDK restoration. Selected extension consumers restore this run's SDK; unselected legacy rows retain their existing cache restoration.
 
 The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative

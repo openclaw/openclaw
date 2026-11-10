@@ -788,13 +788,15 @@ private struct AttachmentRow: View {
                     resolverReady: self.resolverReady,
                     load: { try await self.loadMedia($0, .image, nil) })
             case .audio:
+                // A busy Gateway inspector can omit playback metadata. Let its
+                // playback route inspect on demand rather than assume native support.
                 ChatMediaAudioAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     durationSeconds: self.att.durationSeconds,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
-                    load: { try await self.loadMedia($0, .audio, self.att.playback) })
+                    load: { try await self.loadMedia($0, .audio, self.att.playback ?? .transcode) })
             case .video:
                 ChatMediaVideoAttachment(
                     artifactId: artifactId,
@@ -803,7 +805,7 @@ private struct AttachmentRow: View {
                     height: self.att.height,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
-                    load: { try await self.loadMedia($0, .video, self.att.playback) })
+                    load: { try await self.loadMedia($0, .video, self.att.playback ?? .transcode) })
             }
         } else {
             self.fallbackRow

@@ -179,6 +179,35 @@ describe("assessFreshness", () => {
     expect([replay.ok, replay.code]).toEqual([false, "stale_binding"]);
   });
 
+  it("retains binding retirement and membership order independently across refused evidence", async () => {
+    const w = await world();
+    const old = await w.binding(4, w.oldSrv);
+    const first = await gate(w, old, { snapshot: await w.snapshot(9, 5) });
+    const inconsistent = await gate(
+      w,
+      old,
+      { snapshot: await w.snapshot(10, 4) },
+      { stored: first.state },
+    );
+    expect(inconsistent).toMatchObject({ ok: false, code: "stale_binding" });
+    expect(inconsistent.state?.snapshot).toEqual({ seq: 10, issued_at: now - 60, binding_seq: 5 });
+    const replay = await gate(
+      w,
+      old,
+      { snapshot: await w.snapshot(10, 4) },
+      { stored: inconsistent.state },
+    );
+    expect(replay).toMatchObject({ ok: false, code: "stale_binding" });
+    const current = await w.binding(5, w.newSrv);
+    const membershipReplay = await gate(
+      w,
+      current,
+      { snapshot: await w.snapshot(9, 5) },
+      { stored: inconsistent.state },
+    );
+    expect(membershipReplay).toMatchObject({ ok: false, code: "freshness_unavailable" });
+  });
+
   it("never stores a snapshot from the future", async () => {
     const w = await world();
     const b = await w.binding(4, w.oldSrv);

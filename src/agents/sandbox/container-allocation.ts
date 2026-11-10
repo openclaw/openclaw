@@ -89,7 +89,15 @@ export function buildSandboxCreateArgs(params: {
     args.push("--read-only");
   }
   for (const entry of params.cfg.tmpfs) {
-    args.push("--tmpfs", entry);
+    const [target, options = ""] = entry.split(":", 2);
+    // Engine defaults scale with host RAM; cold dependency stores must not inherit that budget.
+    const size = target === "/tmp/openclaw-deps" ? "4g" : target === "/tmp" ? "1g" : "256m";
+    args.push(
+      "--tmpfs",
+      /(?:^|,)size=/u.test(options)
+        ? entry
+        : `${target}:${options ? `${options},` : ""}size=${size}`,
+    );
   }
   if (params.cfg.network) {
     args.push("--network", params.cfg.network);

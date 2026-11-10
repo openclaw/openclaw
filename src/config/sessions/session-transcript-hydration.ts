@@ -4,6 +4,7 @@ import {
   readSqliteDatabaseScopedWriteTokenForPath,
   sqliteSessionIdWriteScope,
 } from "../../infra/sqlite-database-admission.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   assertAgentDatabaseTerminalOpenAllowed,
   revalidateAgentDatabaseTerminalOpenAsync,
@@ -53,7 +54,7 @@ import {
   type SessionTranscriptCurrentTurnEntryRequest,
 } from "./session-transcript-worker.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
-import { cloneTranscriptView } from "./transcript-snapshot.js";
+import { freezeTranscriptSnapshot } from "./transcript-snapshot.js";
 import {
   captureSessionTranscriptTargetBinding,
   type CapturedSessionTranscriptTargetBinding,
@@ -66,10 +67,18 @@ import {
 type PendingHydration = {
   promise: Promise<PreparedSessionTranscriptHydration>;
   signal?: AbortSignal;
-  readers: number;
 };
 // Only in-flight reads share transport work; completed snapshots belong to the actor replica.
 const pendingHydrations = new WeakMap<SessionHistoryWorkerLane, Map<string, PendingHydration>>();
+
+function ownHydration(prepared: PreparedSessionTranscriptHydration) {
+  freezeTranscriptSnapshot(prepared.snapshot);
+  if (prepared.kind === "bounded") {
+    freezeTrustedJsonSnapshot(prepared.residentRows);
+    freezeTrustedJsonSnapshot(prepared.transcript);
+  }
+  return Object.freeze(prepared);
+}
 
 type SessionTranscriptHydrationReader = {
   target: CapturedSessionTranscriptTargetBinding;
@@ -121,42 +130,44 @@ export function prepareSessionTranscriptHydration(
               primaryConversation: await resolveCurrentSessionPrimaryConversation(memory.target),
             };
           }
-          return prepared;
+          return ownHydration(prepared);
         }
         memory.assertCurrent();
-        return limits
-          ? {
-              kind: "bounded",
-              snapshot: {
-                activeLeafEntryId: null,
-                version: version(),
-                events: [],
-                opaqueParents: new Map(),
-                parents: new Map(),
-                firstKeptRanges: new Map(),
-                persistedSuffixStartSeq: 0,
-                boundaryCount: 0,
-                serializedBytes: 0,
-                totalEvents: 0,
-                transcriptMutationAt: null,
-                truncated: false,
-                completeActivePath: true,
+        return ownHydration(
+          limits
+            ? {
+                kind: "bounded",
+                snapshot: {
+                  activeLeafEntryId: null,
+                  version: version(),
+                  events: [],
+                  opaqueParents: new Map(),
+                  parents: new Map(),
+                  firstKeptRanges: new Map(),
+                  persistedSuffixStartSeq: 0,
+                  boundaryCount: 0,
+                  serializedBytes: 0,
+                  totalEvents: 0,
+                  transcriptMutationAt: null,
+                  truncated: false,
+                  completeActivePath: true,
+                },
+                ...(options?.compaction
+                  ? {
+                      compaction: {
+                        sessionTarget: memory.target,
+                        entry: undefined,
+                        runtimeEntry: undefined,
+                        primaryConversation: undefined,
+                      },
+                    }
+                  : {}),
+              }
+            : {
+                kind: "full",
+                snapshot: { events: [], eventJson: [], eventSeqs: [], version: version() },
               },
-              ...(options?.compaction
-                ? {
-                    compaction: {
-                      sessionTarget: memory.target,
-                      entry: undefined,
-                      runtimeEntry: undefined,
-                      primaryConversation: undefined,
-                    },
-                  }
-                : {}),
-            }
-          : {
-              kind: "full",
-              snapshot: { events: [], eventJson: [], eventSeqs: [], version: version() },
-            };
+        );
       },
       readCurrentTurnEntry: async (request) => {
         if (!memory.missing) {
@@ -172,6 +183,9 @@ export function prepareSessionTranscriptHydration(
         memory.assertCurrent();
         return {
           kind: "transcript-maintenance",
+          ...(request.operation === "code-mode-store" && request.leafEntryId === null
+            ? { store: { writes: new Map(), incremental: false } }
+            : {}),
           ...(request.operation === "custom-branch" && request.leafEntryId === null
             ? { events: [] }
             : {}),
@@ -289,9 +303,7 @@ export function prepareSessionTranscriptHydration(
       if (!transcript) {
         return undefined;
       }
-      prepared.transcript = structuredClone(transcript);
-    } else {
-      delete prepared.transcript;
+      return ownHydration({ ...prepared, transcript });
     }
     return prepared;
   };
@@ -329,10 +341,11 @@ export function prepareSessionTranscriptHydration(
     }
     // Full exports stream into caller-owned channels; compaction also carries live entry facts.
     if (!contextLimits || "compaction" in contextLimits || input.compaction) {
-      return owner.readTranscript(input, signal);
+      return owner.readTranscript(input, signal).then(ownHydration);
     }
     const load = () =>
       owner.readTranscript(input, signal).then((prepared) => {
+        ownHydration(prepared);
         retainRead(prepared, resolved);
         return prepared;
       });
@@ -352,12 +365,11 @@ export function prepareSessionTranscriptHydration(
     let shared = pending.get(key);
     if (!shared) {
       const promise = load();
-      shared = { promise, signal, readers: 0 };
+      shared = { promise, signal };
       pending.set(key, shared);
       const forget = () => pending.delete(key);
       void promise.then(forget, forget);
     }
-    shared.readers++;
     try {
       const prepared = await racePromiseWithAbortSignal(
         shared.promise,
@@ -365,16 +377,13 @@ export function prepareSessionTranscriptHydration(
         (aborted) => aborted.reason,
       );
       signal?.throwIfAborted();
-      // Earlier receivers detach before the last receiver takes the original envelope.
-      return shared.readers > 1 ? cloneTranscriptView(prepared) : prepared;
+      return prepared;
     } catch (error) {
       signal?.throwIfAborted();
       if (shared.signal?.aborted && shared.signal !== signal) {
         return readPrepared(owner, input, readerLane);
       }
       throw error;
-    } finally {
-      shared.readers--;
     }
   };
   const read: SessionTranscriptHydrationReader["read"] = async (options) => {

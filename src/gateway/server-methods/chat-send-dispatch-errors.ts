@@ -1,3 +1,7 @@
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
@@ -29,6 +33,7 @@ import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs, type ChatAbortMarker } from "../server-chat-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { WORKSPACE_RESULT_LIMIT_ERROR_CODE } from "../worker-environments/workspace-inventory-limits.js";
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatTerminal } from "./chat-broadcast.js";
@@ -135,6 +140,14 @@ type PendingDispatchLifecycleError = {
 };
 
 function resolveDesktopChatSendErrorNotice(error: unknown): string | undefined {
+  // Provisioning preserves the typed cause; never expose its paths or raw diagnostics.
+  if (
+    collectNestedErrorCandidates(error).some(
+      (candidate) => extractErrorCode(candidate) === WORKSPACE_RESULT_LIMIT_ERROR_CODE,
+    )
+  ) {
+    return "This workspace exceeds OpenClaw's file or size limits.";
+  }
   const storageFailure = classifyGatewayStorageFailure(error);
   const notice =
     storageFailure === "SQLITE_BUSY" || storageFailure === "SQLITE_LOCKED"

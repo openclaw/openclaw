@@ -11,6 +11,7 @@ import {
 import { prewarmChatSnapshot } from "../pages/chat/chat-snapshot-prewarm.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
+import { finishBootFrame } from "./boot-composer.ts";
 import type { BootRecord } from "./boot-record.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { readCredentialBootRecord } from "./gateway-store.credentials.ts";
@@ -35,7 +36,7 @@ function prewarmBootChat(
   const target = sessionRefFromPath(location.pathname, basePath, record.agents.mainKey);
   const path = location.pathname.slice(basePath.length).replace(/\/$/u, "");
   if (!target && path !== "" && path !== "/chat") {
-    return;
+    return finishBootFrame();
   }
   // Dashboard names are ambiguous until the roster resolves them. Warm one
   // same-agent last-viewed candidate; only the route's exact key can consume it.
@@ -52,23 +53,22 @@ function prewarmBootChat(
       : target?.kind === "literal"
         ? target.sessionKey
         : lastSessionKey;
-  if (target?.kind === "short" && parseAgentSessionKey(sessionKey)?.agentId !== target.agentId) {
-    return;
+  const parsedSession = parseAgentSessionKey(sessionKey);
+  if (!parsedSession || (target?.kind === "short" && parsedSession.agentId !== target.agentId)) {
+    return finishBootFrame();
   }
-  if (parseAgentSessionKey(sessionKey)) {
-    void prewarmChatSnapshot(
-      resolveChatSnapshotKey(
-        {
-          agentsList: record.agents,
-          hello: null,
-          assistantAgentId: null,
-          settings: { gatewayUrl: record.scope },
-          client: { offlineRecoveryScope: record.recoveryScope },
-        },
-        { sessionKey },
-      ),
-    );
-  }
+  void prewarmChatSnapshot(
+    resolveChatSnapshotKey(
+      {
+        agentsList: record.agents,
+        hello: null,
+        assistantAgentId: null,
+        settings: { gatewayUrl: record.scope },
+        client: { offlineRecoveryScope: record.recoveryScope },
+      },
+      { sessionKey },
+    ),
+  );
 }
 
 /** Resolve the document's connection once, before either transport or rendering starts. */
