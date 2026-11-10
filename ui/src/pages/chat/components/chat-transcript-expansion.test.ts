@@ -50,14 +50,18 @@ describe("transcript expansion", () => {
     });
     render(renderChatThread(full, fullTranscript), fullPane);
     await settleToolBridges(fullPane);
-    expectDefined(disclosures(fullPane)[0], "shared tool disclosure").click();
+    (
+      await waitForSolid(() => expectDefined(disclosures(fullPane)[0], "shared tool disclosure"))
+    ).click();
     await waitForSolid(() =>
       expect(disclosures(fullPane)[0]?.getAttribute("aria-expanded")).toBe("true"),
     );
 
     render(renderChatThread(partial, partialTranscript), partialPane);
     await settleToolBridges(partialPane);
-    expect(disclosures(partialPane)[0]?.getAttribute("aria-expanded")).toBe("true");
+    await waitForSolid(() =>
+      expect(disclosures(partialPane)[0]?.getAttribute("aria-expanded")).toBe("true"),
+    );
     expectDefined(disclosures(partialPane)[0], "shared tool disclosure in sibling pane").click();
     await waitForSolid(() =>
       expect(disclosures(fullPane)[0]?.getAttribute("aria-expanded")).toBe("false"),
