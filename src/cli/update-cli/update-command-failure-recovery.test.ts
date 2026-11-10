@@ -393,10 +393,12 @@ describe("post-update failure recovery observation", () => {
             reason: "package-swap",
             durationMs: 0,
             before: { version: "2026.9.5" },
+            // Release writers name the risk; only legacy rows rely on the read-time mapping.
             ...(dataAtRisk && {
               recovery: {
                 serviceRestartSafe: false,
                 reason: "state-migration-started",
+                dataAtRisk: "state-migrated-no-rollback",
               },
             }),
             steps: [
@@ -423,6 +425,7 @@ describe("post-update failure recovery observation", () => {
           expect(recorded.verification.recovery).toMatchObject({
             reason: "state-migration-started",
             serviceRestartSafe: false,
+            dataAtRisk: "state-migrated-no-rollback",
           });
         }
       } else {
