@@ -121,6 +121,8 @@ TypeSafe AI preserves the single-path header mark from [typesafe.ai](https://typ
 
 Bifrost, Levanto, oMLX, and SubQ preserve their first-party marks: the [getbifrost.ai](https://getbifrost.ai/) header symbol without its wordmark; the leading L of the [levanto.ai](https://levanto.ai/) header wordmark, which its favicon also uses; the [oMLX penguin](https://github.com/jundot/omlx/blob/3df94603c047ec77f5381d11d1d6daff75794870/apps/omlx-web/omlx_web/static/logo-light.svg) (Apache-2.0) with its original transform and without its dark-mode style; and the [subq.ai favicon](https://subq.ai/favicon.svg), whose five squares are combined into one path. Fills are normalized to `currentColor`; geometry and view boxes are unchanged.
 
+Llama preserves the [Llama app mark](https://github.com/ggml-org/llama-pages/blob/e38564a3bf084e04853bc59a61fa08fd2c3ffad4/src/lib/assets/brand/icon-light.svg) with its original `0 0 600 600` view box. Fills are normalized to `currentColor`; geometry is unchanged.
+
 ## OpenClaw action glyphs
 
 Browser, Canvas, Diffs, and the memory family preserve the approved shapes from [`icon-data-tools.ts`](../ui/src/components/icon-data-tools.ts). The optional overrides preserve Intent, memory store/forget, file fetch/write, and directory list/fetch geometry. Lobster preserves both progress-claw paths, with a solid fill and the jaw’s resting `rotate(-10 8.6 11)` transform from [`working-indicator.css`](../ui/src/styles/chat/working-indicator.css). Linux Node reuses the existing platform silhouette from [`brand-icons.ts`](../ui/src/pages/apps/brand-icons.ts).

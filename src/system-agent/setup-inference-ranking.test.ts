@@ -22,6 +22,7 @@ describe("first-run inference ranking", () => {
       candidate("provider-auto:ollama", { modelRef: "ollama/loaded" }),
       candidate("provider-auto:llama-cpp", { modelRef: "llama-cpp/loaded" }),
       candidate("provider-auto:lmstudio", { modelRef: "lmstudio/loaded" }),
+      candidate("provider-auto:llama", { modelRef: "llama/loaded" }),
       candidate("provider-auto:unknown", { credentials: true }),
       candidate("codex-cli"),
       candidate("codex-cli", { credentials: false }),
@@ -46,6 +47,7 @@ describe("first-run inference ranking", () => {
       "anthropic-api-key",
       "provider-auto:ollama",
       "provider-auto:lmstudio",
+      "provider-auto:llama",
       "provider-auto:llama-cpp",
     ];
 

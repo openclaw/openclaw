@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/llama-provider",
+  "version": "2026.11.2",
+  "private": true,
+  "description": "OpenClaw Llama app provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

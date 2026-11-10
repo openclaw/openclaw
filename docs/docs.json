@@ -2349,6 +2349,7 @@
                     "group": "Local runtimes",
                     "pages": [
                       "providers/ds4",
+                      "providers/llama",
                       "providers/llmman",
                       "providers/lmstudio",
                       "providers/ollama",

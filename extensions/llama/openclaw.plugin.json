@@ -1,0 +1,30 @@
+{
+  "id": "llama",
+  "categories": ["models"],
+  "activation": { "onStartup": false },
+  "enabledByDefault": true,
+  "providers": ["llama"],
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "modelCatalog": { "discovery": { "llama": "refreshable" } },
+  "providerRequest": {
+    "providers": { "llama": { "openAICompletions": { "supportsStreamingUsage": true } } }
+  },
+  "modelPricing": { "providers": { "llama": { "external": false } } },
+  "syntheticAuthRefs": ["llama"],
+  "providerAuthChoices": [
+    {
+      "provider": "llama",
+      "method": "local",
+      "choiceId": "llama",
+      "choiceLabel": "Llama",
+      "choiceHint": "Connect to the running Llama app",
+      "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Connect Llama",
+      "website": "https://llama.app",
+      "groupId": "llama",
+      "groupLabel": "Llama",
+      "groupHint": "Local models from llama.cpp's desktop app"
+    }
+  ],
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

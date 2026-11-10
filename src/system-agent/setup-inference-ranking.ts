@@ -28,8 +28,10 @@ function candidateRank(candidate: SetupInferenceCandidate): number | undefined {
         return 6;
       case "lmstudio":
         return 7;
-      case "llama-cpp":
+      case "llama":
         return 8;
+      case "llama-cpp":
+        return 9;
       default:
         return undefined;
     }

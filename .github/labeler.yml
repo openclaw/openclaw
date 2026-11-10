@@ -497,6 +497,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llama-cpp/**"
+"extensions: llama":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/llama/**"
+          - "docs/providers/llama.md"
 "extensions: advisor":
   - changed-files:
       - any-glob-to-any-file:
