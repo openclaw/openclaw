@@ -314,7 +314,7 @@ export const contract = defineFeatureContract({
     edit_body: {
       kind: "action",
       description:
-        "Edit one exact active-page body range without resending the record. Read knowledge_record view=content first; start inclusive/end exclusive are UTF-16 offsets in the full body (not raw Markdown/frontmatter). start=end inserts, empty replacement deletes. Maximum replacement 48,000 characters; complete request remains bounded. Mandatory observed vault/revision/hash/ontology fences reject stale edits. Preserves unrelated metadata/evidence; publishes a normal revision/history/receipt. The complete UTF-8 record including frontmatter must fit 5,000,000 bytes. Reuse identical requestId/payload after uncertainty; no implicit rebasing or fuzzy matching." +
+        "Edit one exact active-page body range without resending the record. Read the body with knowledge_record first; start inclusive/end exclusive are UTF-16 offsets in the full body (not raw Markdown/frontmatter). start=end inserts, empty replacement deletes. Maximum replacement 48,000 characters; complete request remains bounded. Mandatory observed vault/revision/hash/ontology fences reject stale edits. Preserves unrelated metadata/evidence; publishes a normal revision/history/receipt. The complete UTF-8 record including frontmatter must fit 5,000,000 bytes. Reuse identical requestId/payload after uncertainty; no implicit rebasing or fuzzy matching." +
         BUDGET_NOTE,
       input: EditBodyInput,
       output: receipt,
@@ -557,7 +557,7 @@ export const contract = defineFeatureContract({
     record: {
       kind: "query",
       description:
-        "Read one saved record by stable ID: id, revision, full hash; pages add title, type, aliases, tags, dependencies, non-empty domain fields and body; claims add kind, date, due date, owner, linked pages, source, attribution and text; partial identity, supersession and merge redirects appear when present. maxChars (default 12,000) bounds the whole response; follow nextOffset with offset and compare hashes. includeEvidence=true adds citation locators and short excerpts (follow nextEvidenceOffset with evidenceOffset); read full passages with knowledge_evidence_read. Use knowledge_verify for structural and link checks and knowledge_connections for neighbors. Missing/duplicate IDs return null. Never edit from a truncated body.",
+        "Read one saved record by stable ID: id, revision, full hash; pages add title, type, aliases, tags, dependencies, non-empty domain fields and body; claims add kind, date, due date, owner, linked pages, source, attribution and text; partial identity, supersession and merge redirects appear when present. maxChars (default 12,000) bounds the whole response by shortening the text, never identity or metadata; follow nextOffset with offset and compare hashes. includeEvidence=true adds citation locators and short excerpts (follow nextEvidenceOffset with evidenceOffset); read full passages with knowledge_evidence_read. Use knowledge_verify for structural and link checks and knowledge_connections for neighbors. Missing/duplicate IDs return null. Never edit from a truncated body.",
       input: AgentRecordInput,
       output: LeanRecordOutput,
       tool: { name: "knowledge_record", label: "Inspect knowledge" },

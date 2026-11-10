@@ -118,7 +118,9 @@ export function leanRecord(
       .map((id) => ({ id })),
   ].slice(0, 100);
   const fields = m.fields && Object.keys(m.fields).length ? m.fields : undefined;
-  const date = claim ? (m.occurred_at ?? r.occurredAt ?? r.recordedAt) : undefined;
+  // Only an occurrence date: when Knowledge recorded a claim is not when it happened.
+  const date = claim ? (m.occurred_at ?? r.occurredAt) : undefined;
+  const confidence = m.attribution_confidence;
   const lean: LeanRecordOutput = {
     record: {
       id: r.id,
@@ -140,12 +142,19 @@ export function leanRecord(
       ...(about.length ? { about } : {}),
       ...(r.source ? { source: ref(r.source) } : {}),
       ...(r.attribution ? { attribution: r.attribution } : {}),
+      ...(confidence && confidence.level !== "high"
+        ? { attributionConfidence: { level: confidence.level, basis: confidence.basis } }
+        : {}),
       ...(r.assertionOrigin && r.assertionOrigin !== "source"
         ? { assertionOrigin: r.assertionOrigin }
         : {}),
       ...(m.subject_hint ? { subjectHint: m.subject_hint } : {}),
       ...(m.superseded_by ? { supersededBy: m.superseded_by } : {}),
-      ...(r.body === undefined ? {} : claim ? { text: stripComments(r.body) } : { body: r.body }),
+      ...(r.body === undefined
+        ? {}
+        : claim
+          ? { text: claimText(output, r.body) }
+          : { body: r.body }),
     },
     ...(output.content.nextOffset === null
       ? {}
@@ -201,7 +210,9 @@ export function leanRecord(
 
 // maxChars bounds the complete serialized response, including the continuation
 // fields a cut adds. The text window (page body or claim text) is what shrinks;
-// requested evidence keeps its own limits.
+// requested evidence keeps its own limits. Identity and metadata are never cut, so
+// a record whose metadata alone exceeds maxChars returns it whole with a short
+// text window and a continuation.
 // A cut claim shows its text as stored, so offsets continue over the stored text.
 function boundLeanRecord(
   lean: LeanRecordOutput,
@@ -245,7 +256,7 @@ function boundLeanRecord(
     return lean;
   }
   // Nothing was cut: keep only the continuation the read already had.
-  record[key] = key === "text" ? stripComments(value) : value;
+  record[key] = key === "text" ? claimText(output, value) : value;
   if (before.nextOffset === undefined) {
     delete lean.nextOffset;
     delete lean.totalChars;
@@ -255,6 +266,11 @@ function boundLeanRecord(
   }
   return lean;
 }
+
+// Comments are stripped only from complete claim text; a window shows the text as
+// stored, so offsets continue over it exactly.
+const claimText = (output: RecordOutput, text: string) =>
+  output.content.offset === 0 && output.content.nextOffset === null ? stripComments(text) : text;
 
 // knowledge_grep / knowledge_lookup
 function snippet(hit: FullHit) {

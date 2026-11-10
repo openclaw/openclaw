@@ -495,3 +495,41 @@ it("authored IDs of merged pages count once, as the page they resolve to", () =>
   const lean = leanRecord(output, {});
   expect(lean.record?.about).toStrictEqual([{ id: "survivor-page", title: "Survivor" }]);
 });
+
+it("record reads keep domain fields whole when they fill the response budget", async () => {
+  const s = await seeded();
+  const role = "r".repeat(16_000);
+  const body = "# Sam Field\n\n" + "Background. ".repeat(1_500);
+  const saved = await s.tool("knowledge_save_page", {
+    requestId: randomUUID(),
+    title: "Sam Field",
+    type: "person",
+    body,
+    fields: { role },
+  });
+  const read = await s.tool("knowledge_record", { id: saved.id });
+  expect(read.record.fields).toStrictEqual({ role });
+  expect(read.nextOffset).toBeGreaterThan(0);
+});
+
+it("record reads keep attribution doubt and never date a claim by when it was recorded", () => {
+  const output: any = {
+    view: "content",
+    record: {
+      id: "claim-0002",
+      kind: "claim",
+      type: "fact",
+      title: "A fact",
+      revision: 1,
+      hash: "b".repeat(64),
+      recordedAt: "2026-09-22T12:00:00Z",
+      attribution: "Someone on the call",
+      body: "A fact.",
+      metadata: { attribution_confidence: { level: "low", basis: "Two similar voices" } },
+    },
+    content: { offset: 0, totalChars: 7, nextOffset: null },
+  };
+  const record = leanRecord(output, {}).record!;
+  expect(record.attributionConfidence).toStrictEqual({ level: "low", basis: "Two similar voices" });
+  expect(record).not.toHaveProperty("date");
+});

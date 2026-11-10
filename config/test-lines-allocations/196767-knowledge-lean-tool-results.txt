@@ -1,6 +1,7 @@
 # PR #196767: Knowledge agent tool results. Contract tests for the new lean agent
 # response shapes of every read tool and write receipt, rejection of removed agent
 # options, whole-response maxChars bounding with exact continuation, and 16+
-# character hash-prefix write fences (accepted, too short, wrong, stale revision).
+# character hash-prefix write fences (accepted, too short, wrong, stale revision),
+# and record reads keeping domain fields, attribution doubt and occurrence dates.
 # Exact net growth for PR #196767.
-590
+628

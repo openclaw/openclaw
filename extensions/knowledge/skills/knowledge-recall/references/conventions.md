@@ -171,9 +171,8 @@ existing tools, not a separate ingestion engine.
   neighbors. Follow `nextOffset`; restart if `snapshot` changes between pages.
   Connections default to one row per connection: ID, revision, 16-character
   hash, title/type, and for claims their text, day, linked page titles and
-  source, without evidence. Keep view/filters unchanged across pages. Request
-  `view: "full"` only for metadata/evidence previews; read the record for
-  complete provenance.
+  source, without evidence. Keep filters unchanged across pages. Read
+  provenance with `knowledge_record({id, includeEvidence: true})`.
   A source → entity link gives the entity a derived backlink. An entity's
   Timeline comes from its relationship with the source, not from links. Do not
   write generated References/Referenced by lists into page bodies. Check typed claims/relationships separately; navigation is not evidence.

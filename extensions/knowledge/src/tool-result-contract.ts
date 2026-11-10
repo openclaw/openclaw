@@ -71,6 +71,15 @@ export const LeanRecordFields = Type.Object(
     about: Type.Optional(Type.Array(Ref, { maxItems: 100 })),
     source: Type.Optional(Ref),
     attribution: Type.Optional(text(1000)),
+    attributionConfidence: Type.Optional(
+      Type.Object(
+        {
+          level: Type.Union([Type.Literal("low"), Type.Literal("medium")]),
+          basis: text(1000),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     assertionOrigin: Type.Optional(text(30)),
     subjectHint: Type.Optional(text(200)),
     supersededBy: Type.Optional(text(96)),

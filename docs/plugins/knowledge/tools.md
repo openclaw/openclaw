@@ -73,15 +73,15 @@ See [Records and ontology](/plugins/knowledge/records-and-ontology).
 
 `knowledge_record({id})` returns the ID, revision, full hash, and lifecycle when
 not active. Pages add title, type, aliases, tags, dependencies, non-empty domain
-fields, and the body; claims add kind, date, due date, owner, linked pages,
+fields, and the body; claims add kind, occurrence date, due date, owner, linked pages,
 source, attribution, the saver's subject hint, and text. Validation issues,
 partial identity, supersession, and merge redirects appear when present.
 
-| Input                   | Effect                                                                                    |
-| ----------------------- | ----------------------------------------------------------------------------------------- |
-| `offset`, `maxChars`    | `maxChars` (default 12,000) bounds the whole response; follow `nextOffset` with `offset`. |
-| `includeEvidence: true` | Citation locators and short excerpts (4,000 characters total).                            |
-| `evidenceOffset`        | Continue citations from `nextEvidenceOffset`, 20 per response.                            |
+| Input                   | Effect                                                                                                                                                |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `offset`, `maxChars`    | `maxChars` (default 12,000) bounds the whole response by shortening the text; identity and metadata are never cut. Follow `nextOffset` with `offset`. |
+| `includeEvidence: true` | Citation locators and short excerpts (4,000 characters total).                                                                                        |
+| `evidenceOffset`        | Continue citations from `nextEvidenceOffset`, 20 per response.                                                                                        |
 
 Compare hashes across chunks and restart if the record changes. Never replace a
 page from an incomplete body. Evidence previews left out to fit are named in

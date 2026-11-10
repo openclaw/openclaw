@@ -38,7 +38,8 @@ edit.
   `offset`; compare hashes across pages). Never edit from a truncated read.
 - The record read includes domain fields, aliases, tags and dependencies; send
   the complete set you want when changing one. Preserve unrelated prose and
-  metadata.
+  metadata. If the read's `omitted` lists `metadata.fields`, the fields were
+  too large to return: omit `fields` so they are preserved.
 
 ## Page budgets
 
