@@ -153,10 +153,12 @@ The recovery owner authenticates the original admission and dispatches, each
 current successful child attempt and its complete composite receipt, the sealed
 candidate and its package bytes, and all recorded npm, SDK, plugin, and Docker
 producer receipts and payload digests. Missing payloads, incomplete job history,
-changed attempts, or lost authority fail closed. It never dispatches test or
-preparation workflows and has only Actions/content read permissions. Runtime
-setup installs only trusted P dependencies with lifecycle scripts disabled; it
-does not build or execute candidate code.
+changed attempts, or lost authority fail closed. Each recovery child verification
+has a ten-minute budget to read its complete rerun history; ordinary child reuse
+keeps its two-minute default, and per-request timeouts and retry limits are unchanged.
+It never dispatches test or preparation workflows and has only Actions/content
+read permissions. Runtime setup installs only trusted P dependencies with lifecycle
+scripts disabled; it does not build or execute candidate code.
 
 The existing publication-admission owner then reads committed candidate metadata
 using current trusted P and collects new, honestly timestamped registry

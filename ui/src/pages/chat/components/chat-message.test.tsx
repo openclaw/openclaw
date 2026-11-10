@@ -94,20 +94,28 @@ describe("grouped chat rendering", () => {
     { tools: [], canSteer: true, reason: "on the next model turn" },
     { tools: ["upload"], canSteer: true, reason: "when the current step finishes" },
     { tools: [], canSteer: false, reason: "when the current step finishes", available: true },
+    { tools: [], canSteer: true, reason: "on the next model turn", queued: true },
   ])(
     "labels the newest waiting steer in its footer slot (%j)",
-    ({ tools, canSteer, reason, available }) => {
+    ({ tools, canSteer, reason, available, queued }) => {
       const status = available ? "available" : "blocked";
       renderSteer(
-        { ...steerInput({ status, tools }), newest: true, sendNow: available || undefined },
+        {
+          ...steerInput({ status, tools }),
+          queued: queued || undefined,
+          newest: true,
+          sendNow: available || undefined,
+        },
         canSteer,
       );
       const label = requireElement(
         ".chat-group-footer .chat-steer-now [role=status]",
         HTMLSpanElement,
       );
-      expect(label.textContent).toBe("Steering…");
-      expect(label.getAttribute("aria-label")).toBe(`Steering — sends ${reason}.`);
+      expect(label.textContent).toBe(queued ? "Queued" : "Steering…");
+      expect(label.getAttribute("aria-label")).toBe(
+        queued ? "Queued" : `Steering — sends ${reason}.`,
+      );
       expect(label.title).toBe(label.getAttribute("aria-label"));
       expectAbsent(".chat-steer-now button");
       // Identity, time and actions follow delivery.

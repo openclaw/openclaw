@@ -47,6 +47,30 @@ export function registerNodeCli(program: Command) {
     { hidden: true },
   );
 
+  addNodeCommandOptions(
+    node.command("join").description("Enroll this node with an OpenClaw ID invitation"),
+  )
+    .argument("<link>", "openclaw-node:// invitation link")
+    .option("--service", "Install and run the node host as an OS service")
+    .option("--discovery-url <url>", "Discovery API origin (separate from the invitation link)")
+    .option("--display-name <name>", "Override node display name")
+    .action(async (link: string, opts, command: Command) => {
+      try {
+        // Enrollment owns approval, saved-target persistence, and foreground/service startup.
+        const { runNodeJoin } = await import("../../node-host/openclaw-id-join.js");
+        await runNodeJoin(link, {
+          service: opts.service,
+          discoveryUrl: opts.discoveryUrl,
+          displayName: opts.displayName,
+          commands: opts.commands ?? inheritOptionFromParent<string[]>(command, "commands"),
+          allCommands: opts.allCommands ?? inheritOptionFromParent<boolean>(command, "allCommands"),
+        });
+      } catch (error) {
+        defaultRuntime.error(error instanceof Error ? error.message : String(error));
+        defaultRuntime.exit(1);
+      }
+    });
+
   addNodeGatewayOptions(
     addNodeCommandOptions(
       node.command("run").description("Run the headless node host (foreground)"),

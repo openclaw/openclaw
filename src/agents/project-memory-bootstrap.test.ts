@@ -1,6 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
-import type { MemoryProviderHandle, MemorySearchHit } from "../plugins/memory-provider-types.js";
+import type {
+  MemoryProviderHandle,
+  MemorySearchHit,
+} from "../plugins/memory-provider-runtime-types.js";
 import {
   filterProjectScopedCuratedContextFiles,
   prepareProjectMemoryBootstrap,
