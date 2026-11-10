@@ -61,6 +61,7 @@ struct ComputerControlSettingsTests {
                     includeDeviceIdentity: false,
                     allowStoredDeviceAuth: false),
                 sessionBox: WebSocketSessionBox(session: sockets),
+                workerTransportURL: nil,
                 fallbackMainSessionKey: "main")
         }
         do {
