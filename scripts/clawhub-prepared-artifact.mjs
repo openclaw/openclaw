@@ -27,7 +27,10 @@ import {
 } from "./lib/actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { resolveOpenClawClawHubPackageFamily } from "./lib/clawhub-package-family.mjs";
-import { classifyClawHubPublication } from "./lib/clawhub-publication-state.mjs";
+import {
+  classifyClawHubPublication,
+  isPreparedClawHubTrustedPublisher,
+} from "./lib/clawhub-publication-state.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { runReleaseToolingGh, verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 
@@ -312,15 +315,6 @@ export async function downloadPreparedClawHubRelease(options) {
   }
   return manifest;
 }
-export function isPreparedClawHubTrustedPublisher(publisher) {
-  return (
-    publisher?.provider === "github-actions" &&
-    publisher?.repository === REPOSITORY &&
-    publisher?.workflowFilename === "plugin-clawhub-release.yml" &&
-    publisher?.environment == null
-  );
-}
-
 async function preparedPackagePublication(entry, fetchImpl, requireAbsent = false) {
   const packageUrl = `https://clawhub.ai/api/v1/packages/${encodeURIComponent(entry.packageName)}`;
   const publisherRepair =
