@@ -45,7 +45,35 @@ export async function runLocalWorkspaceProjection<T>(
       owner.workerAuthority,
     );
   }
-  const operations = projectionOperations(owner, store, previous);
+  const reconcile =
+    !options.provision &&
+    (options.reason === undefined ||
+      options.reason === "reconcile" ||
+      options.reason === "preparation");
+  let captured = false;
+  const operations = projectionOperations(
+    owner,
+    store,
+    previous,
+    reconcile
+      ? {
+          pause: () => pause(),
+          resume: async () => {
+            await quiescence?.resume();
+            paused = false;
+          },
+          capture: async (consume) => {
+            await pause();
+            quiescence?.markPhase("capture");
+            const selected = capture;
+            capture = undefined;
+            captured ||= Boolean(selected);
+            await (selected ? selected(consume) : consume());
+          },
+          markPhase: (phase) => quiescence?.markPhase(phase),
+        }
+      : undefined,
+  );
   if (previous) {
     operations.current();
   }
@@ -57,7 +85,11 @@ export async function runLocalWorkspaceProjection<T>(
     commitGuard: () => void operations.current(),
   };
   let quiescence: Awaited<ReturnType<typeof quiesceLocalWorkspace>> | undefined;
+  let paused = false;
   const pause = async () => {
+    if (paused) {
+      return;
+    }
     quiescence =
       previous && !options.provision
         ? await timeWorktreePreparationPhase("runtimeQuiesce", () =>
@@ -74,13 +106,18 @@ export async function runLocalWorkspaceProjection<T>(
             }),
           )
         : undefined;
+    paused = Boolean(quiescence);
   };
-  const capture =
-    previous && options.reason === "checkpoint" && options.snapshotCapture
+  const useCapture = reconcile || (options.reason === "checkpoint" && options.snapshotCapture);
+  let capture =
+    previous?.baseline_ref && useCapture
       ? await prepareLocalWorkspaceCheckpointCapture(
           previous.projection_path,
           filesystemOptions,
-          () => timeWorktreePreparationPhase("runtimeResume", quiescence!.resume),
+          async () => {
+            await timeWorktreePreparationPhase("runtimeResume", quiescence!.resume);
+            paused = false;
+          },
           pause,
         )
       : undefined;
@@ -95,6 +132,7 @@ export async function runLocalWorkspaceProjection<T>(
         },
         retire: () => quiescence!.retire(),
         resume: () => quiescence!.resume(),
+        markPhase: (phase) => quiescence!.markPhase(phase),
       },
       capture,
     );
@@ -123,7 +161,7 @@ export async function runLocalWorkspaceProjection<T>(
         await timeWorktreePreparationPhase("runtimeResume", quiescence.resume);
       }
     }
-    if (previous && options.reason === "checkpoint") {
+    if (previous && (options.reason === "checkpoint" || captured)) {
       if (accepted) {
         await retireLocalWorkspaceCheckpointCapture(previous.projection_path, filesystemOptions);
       } else {

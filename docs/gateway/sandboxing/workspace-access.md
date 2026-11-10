@@ -356,10 +356,23 @@ the canonical file, and import the saved change into the private checkout under 
 same custody before resuming its runtimes. Capture,
 publication, and lifecycle operations retain their reconciliation lease and pause
 requirements.
+Ordinary reconciliation also uses the btrfs capture for guest exports. Once an
+immutable result owns the source bytes, staged-file materialization, Git patch
+preparation, and temporary-file cleanup run with the guest resumed. Imports pause
+again before confirming the target and applying changes; edits made during
+preparation cause a visible conflict and remain saved. Pending base refreshes
+retain their pause until both workspaces accept the transfer.
+
 Each successful container pause records a `sandbox/quiescence` info log with a
 bounded reason (`checkpoint`, `preparation`, `publication`, `retirement`, `restore`,
 or `reconcile`) and that reason's process-lifetime counter. Already-paused runtimes
 and stopped containers do not increment it; counters restart with the Gateway.
+Release records `Local workspace unpause` with the same `reason`, elapsed
+`durationMs`, `dominantPhase`, and `dominantPhaseMs`. Timing includes engine pause
+and resume calls. `durationScope=observed` means recovery found an already-paused
+runtime and cannot measure the earlier owner's interval; `durationScope=owner`
+covers this owner's pause. `outcome` distinguishes a resumed, already-running, or
+removed runtime. Failed resumes retain custody and do not log a successful release.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
