@@ -1,6 +1,7 @@
 .board-session-surface {
   position: relative;
   display: flex;
+  flex-direction: column;
   flex: 1 1 0;
   width: 100%;
   min-width: 0;
@@ -55,12 +56,12 @@
   text-overflow: ellipsis;
 }
 
-/* The picker floats over the existing canvas; it never reserves a rail or padding. */
+/* Host controls own their space; plugin and iframe content can use every canvas pixel. */
 .chat-dashboard-menu {
-  position: absolute;
-  z-index: 2;
-  top: 10px;
-  right: 12px;
+  position: relative;
+  align-self: flex-end;
+  flex: 0 0 auto;
+  margin: 6px 12px;
 }
 
 .chat-dashboard-menu__trigger {
