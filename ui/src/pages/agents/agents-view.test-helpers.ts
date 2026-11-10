@@ -1,8 +1,10 @@
 import type { CronJob } from "../../api/types.ts";
 import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
+import { resolveAgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { AgentFiles } from "./panels-files.tsx";
 import type { Agents } from "./view.tsx";
 
@@ -61,6 +63,23 @@ export function createAgentViewTestProps(
       channelsLastSuccess: null,
     }),
     access: {
+      settings: resolveAgentSettingsAccess(
+        {
+          hello: gatewayHelloForMethods([
+            "agents.list",
+            "config.get",
+            "agents.files.list",
+            "agents.files.get",
+            "tools.catalog",
+            "skills.status",
+            "channels.status",
+            "cron.list",
+            "cron.status",
+            "doctor.memory.status",
+          ]),
+        },
+        true,
+      ),
       canDeleteAgent: true,
       canCreateAgent: true,
       canPatchConfig: true,
