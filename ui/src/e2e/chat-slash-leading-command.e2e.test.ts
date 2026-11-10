@@ -19,6 +19,7 @@ const skill = (name: string, description: string) => ({
   skillModelVisible: true,
 });
 const commands = [
+  skill("weather", "Check the weather."),
   skill(
     "event_loop_starvation_timeout_di",
     "Full-suite-only request timeouts or queued worker stalls.",
@@ -87,6 +88,18 @@ suite.define(() => {
       await expect.poll(() => picker.count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await screenshot(page, "leading-command-completed.png", composer);
+
+      // Completing inside a colon-terminated skill consumes the entire token.
+      await composer.fill("Please use /wether:");
+      await composer.press("Control+End");
+      for (let index = 0; index < 5; index += 1) {
+        await composer.press("ArrowLeft");
+      }
+      await composer.pressSequentially("a");
+      await expect.poll(names).toEqual(["/weather"]);
+      await composer.press("Enter");
+      await expect.poll(() => composer.inputValue()).toBe("Please use $weather ");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
 

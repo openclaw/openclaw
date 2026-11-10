@@ -1,2 +1,2 @@
-# Exact net test-line growth from PR #196123 (slash menu offers commands for a leading slash token ahead of pasted prose): unit coverage for the caret-bounded token and dispatch gate, plus one real-gateway e2e regression.
-187
+# Exact net test-line growth for PR #196123: caret-bounded leading commands and dispatch admission, Goal objective preservation, and built Control UI browser coverage including colon-terminated skill completion. Gateway transport is mocked.
+200

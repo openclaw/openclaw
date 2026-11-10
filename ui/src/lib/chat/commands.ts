@@ -428,7 +428,7 @@ export function findInlineSlashCompletion(
   // Text typed in front of existing prose (`/loo|Apply`) stays: the token only
   // extends past the caret while the whole word can still name a command.
   if (end > boundedCaret) {
-    const word = normalizeLowercaseStringOrEmpty(text.slice(start + 1, end));
+    const word = normalizeLowercaseStringOrEmpty(text.slice(start + 1, end).replace(/:$/u, ""));
     if (!SLASH_COMMANDS.some((command) => getSlashCommandRelevance(command, word) <= 1)) {
       end = boundedCaret;
     }
