@@ -309,7 +309,6 @@
 ["extensions/discord/src/voice/ingress.test.ts","../runtime.js","1a45c2ae9ab7c53ebb5459d4744ed334ee951096461e52d0c2dba4d901de1c4e",1]
 ["extensions/discord/src/voice/realtime-playback.integration.test-support.ts","./audio-worker-thread.js","6822217db8a810d2d4b8a3c1b6887cac3d0007393e407e22a525f6197829ae9a",1]
 ["extensions/discord/src/voice/voice-test-mocks.test-support.ts","./audio-worker-thread.js","5380264ffb256051bcb2e4d3b8b9bc29a16dac8bb2571c535c8ee766f55006b8",1]
-["extensions/elevenlabs/speech-provider.test.ts","./config-api.js","ae8d1475fcd827898542d7e2b699b5d91d9c7cabf55bcdd674a3d621266d33bd",1]
 ["extensions/facetime/index.test.ts","./runtime-api.js","c4758e1b7ae6e483d5eeab64a21e3d1ae4e45653e017113156786340f8009326",1]
 ["extensions/facetime/index.test.ts","./src/plugin-paths.js","05269d631198087d8d1206efe17ea3ce8fb0ca82cdb5352c98902540167cc1ee",1]
 ["extensions/facetime/index.test.ts","./src/setup.js","498a08bd0472ec8a174c113d70932fe22450b0ca2040f7738be2ca6a80df7429",1]
