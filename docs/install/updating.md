@@ -1209,28 +1209,22 @@ Paths carried over solely from the old definition still pass the existing safety
 filters. If the definition cannot be preserved, reconciliation requires manual repair.
 Deployment-owned definitions retain their existing installation owner.
 
-When an operator-owned service override prevents rebinding, the update targets
-only the service installation. The invoking shell CLI remains unchanged; shared
-config and plugins may advance beyond the version that CLI supports. The updater
-warns about this in progress output and text/JSON dry-run notes. Use the CLI from
-the service installation for diagnostics, or align the invoking installation with
-the Gateway version before using it against the shared state.
+If a service override keeps the Gateway on a different installation, only that
+installation is updated. Your shell CLI stays unchanged and may no longer support
+the shared config or plugins. Use the Gateway's CLI, or update your shell CLI to
+the same version.
 
-Doctor reports launcher-override repair guidance even when a split installation
-prevents maintenance admission. Reinstalling the managed base cannot change an
-operator-owned launcher override; inspect and update that override first.
+Reinstalling cannot replace a custom launcher override. Doctor reports this even
+when it cannot begin repairs. To change a systemd `ExecStart` override:
 
-An `ExecStart` drop-in cannot be repaired by rewriting the base systemd unit.
-Inspect the service with `openclaw gateway status --deep` and
-`systemctl --user cat openclaw-gateway.service` (omit `--user` for a system service;
-use the reported unit name for a profile). Update or remove only the launcher
-override you intend to change, preserving unrelated settings, then run
-`systemctl --user daemon-reload` with the same scope. Reinstall from the intended,
-version-aligned CLI if needed, and verify the effective launcher and Gateway
-health. Status and Doctor now explain this manual step instead of recommending
-an ineffective automatic repair. The warning requires the installed updater or
-CLI to contain this fix; installing a candidate cannot change an older updater's
-initial root selection. No state migration or service-routing change is introduced.
+1. Run `openclaw gateway status --deep` to find the service.
+2. Inspect it with `systemctl --user cat openclaw-gateway.service`.
+3. Update or remove the launcher override, keeping unrelated settings.
+4. Run `systemctl --user daemon-reload`. If needed, reinstall from the CLI you
+   want the Gateway to use, then check its launcher and health with `openclaw gateway status --deep`.
+
+For system services, omit `--user`; for profiles, use the reported unit name.
+These warnings require an updated CLI; an older updater still uses its old routing.
 
 An owned managed **Bun** Gateway at a different package root uses the existing
 service-root update route: only the Gateway installation advances, and the

@@ -257,7 +257,7 @@ export function assertDoctorMaintenanceInspection(
     `Gateway service ownership or shutdown could not be verified. Run ${formatCliCommand("openclaw gateway status --deep", env)} and stop it through its service owner before retrying.`;
   const guidance =
     kind === "foreign"
-      ? `Run ${formatCliCommand("openclaw gateway status --deep", env)} to locate the Gateway's installation. If an operator-owned launcher override pins the service, update or remove that override before reinstalling from the intended CLI; rewriting the managed service alone cannot change it. On systemd, inspect the unit and its drop-ins with systemctl cat (use --user for a user service). The service was left unchanged.`
+      ? `Run ${formatCliCommand("openclaw gateway status --deep", env)} to find the Gateway installation. If an operator-owned launcher override points there, update or remove that override; reinstalling alone will not fix it. Inspect systemd overrides with systemctl cat (--user for user services). The service was left unchanged.`
       : `Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`;
   throw new DoctorMaintenanceRefusalError(
     `Doctor could not enter maintenance. Error: ${detail} ${guidance}`,

@@ -94,7 +94,7 @@ export function resolveDaemonServiceInstallGuidance(
     return block;
   }
   if (hasGatewayServiceLauncherOverride(service?.command)) {
-    return "The effective launcher is operator-owned; rewriting the managed service cannot change it. Inspect the service definition with `openclaw gateway status --deep`, then update or remove the launcher override before reinstalling from the intended CLI. On systemd, inspect the unit and its drop-ins with systemctl cat (use --user for a user service), then reload the manager after editing.";
+    return "An operator-owned launcher override prevents automatic repair. Run `openclaw gateway status --deep`, then update or remove the override. On systemd, inspect it with systemctl cat (--user for user services) and reload the manager after editing. Reinstalling alone will not fix it.";
   }
   return service?.stopped
     ? `Stopped service definitions are preserved; run \`${formatDaemonServiceInstallCommand(env, service.port)}\` from the active CLI. Installation may start the service.`
@@ -108,7 +108,7 @@ export function formatGatewayServiceInstallationDrift(
 ): string {
   const { serviceRoot, serviceVersion, activeRoot, activeVersion } = drift;
   const recovery = hasGatewayServiceLauncherOverride(service?.command)
-    ? `Use the CLI from ${serviceRoot} for diagnostics; the invoking installation is unchanged by service-root updates and may be incompatible with shared plugins.`
+    ? `Use the CLI from ${serviceRoot} to check or repair this Gateway.`
     : `Run \`${formatCliCommand("openclaw update", env)}\` or use the CLI from ${serviceRoot}.`;
   const facts = `CLI ${activeVersion ?? "version unknown"} at ${activeRoot} differs from the Gateway service's ${serviceVersion ?? "version unknown"} at ${serviceRoot}. ${recovery}`;
   const guidance = resolveDaemonServiceInstallGuidance(undefined, env, service);
@@ -120,7 +120,7 @@ export function formatGatewayServiceRootRedirect(redirect: {
   root: string;
   previousRoot: string;
 }): string {
-  return `Only the managed Gateway installation at ${redirect.root} will be updated. The invoking CLI at ${redirect.previousRoot} will remain unchanged and may become incompatible with shared config and plugins. Use the CLI from ${redirect.root}, or align the invoking installation with the Gateway version. If an operator-owned launcher override pins the service, update or remove that override before reinstalling; reinstalling the base service alone cannot change it.`;
+  return `Only the Gateway installation at ${redirect.root} will be updated. Your CLI at ${redirect.previousRoot} will remain unchanged and may become incompatible with shared config and plugins. Use the CLI from ${redirect.root} after updating.`;
 }
 
 export type GatewayCrashHistory = {

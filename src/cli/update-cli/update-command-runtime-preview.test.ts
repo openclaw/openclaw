@@ -326,7 +326,7 @@ it.each([false, true])(
     const output = json ? JSON.stringify(lastJson()) : log.mock.calls.flat().join("\n");
     expect(output).toContain("will remain unchanged");
     expect(output).toContain("incompatible with shared config and plugins");
-    expect(output).toContain("update or remove that override");
+    expect(output).toContain(`Use the CLI from ${fixture.root}`);
     expect(output).toContain("/other-node/lib/node_modules/openclaw");
     expectUnstaged();
   },
