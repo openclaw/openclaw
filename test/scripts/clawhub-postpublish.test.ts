@@ -1423,7 +1423,9 @@ describe("original sealed ClawHub source", () => {
           inventory.jobs.filter((entry) => !entry.name.includes("Pack ClawHub package")),
         );
       } else if (change === "tampered seal") {
-        f.archives.set(f.recoveryArtifact.id, Buffer.from("tampered seal"));
+        const tampered = Buffer.from(f.archives.get(f.recoveryArtifact.id)!);
+        tampered.writeUInt8(tampered.readUInt8(tampered.length - 1) ^ 1, tampered.length - 1);
+        f.archives.set(f.recoveryArtifact.id, tampered);
       } else if (change === "changed request") {
         f.request.inputs.reason = "Not the uploaded request";
       }

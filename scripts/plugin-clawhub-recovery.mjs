@@ -623,7 +623,15 @@ async function main() {
   }
 }
 
-if (process.argv[1] && isDirectRunUrl(realpathSync(process.argv[1]), import.meta.url)) {
+let invokedAsMain = false;
+if (process.argv[1]) {
+  try {
+    invokedAsMain = isDirectRunUrl(realpathSync(process.argv[1]), import.meta.url);
+  } catch {
+    // Inline and stdin importers need not have a filesystem entrypoint.
+  }
+}
+if (invokedAsMain) {
   try {
     await main();
   } catch (error) {
