@@ -22,6 +22,66 @@ function fixture(node: string) {
 }
 
 describePosix("PR dependency lifetime inheritance", () => {
+  it("carries primary and ancestor lifetimes through the Python Git owner to Git helpers", () => {
+    const f = fixture(requireNodeTool("node"));
+    const inner = join(f.root, "inner-lifetime");
+    const reader = join(f.root, "reader.cjs");
+    const policy = join(f.root, "policy.py");
+    writeFileSync(inner, "", { mode: 0o600 });
+    writeFileSync(
+      reader,
+      `const assert = require("node:assert/strict");
+assert.equal(process.env.OPENCLAW_PR_LIFETIME_FILE, ${JSON.stringify(inner)});
+assert(JSON.parse(process.env.OPENCLAW_PR_LIFETIME_ANCESTORS).some(item => item.path === ${JSON.stringify(f.lifetime)}));
+console.log("Git helper retained both lifetimes");
+`,
+    );
+    writeFileSync(
+      policy,
+      `from ci_git_owner import run_git
+import shlex
+run_git(${JSON.stringify(f.root)}, "-c", "alias.lifetime=!" + shlex.join([${JSON.stringify(f.node)}, ${JSON.stringify(reader)}]), "lifetime")
+`,
+    );
+    const fd = openSync(f.lifetime, "r+");
+    try {
+      const result = spawnSync(
+        f.node,
+        [
+          "-e",
+          `const { openSync, closeSync } = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const fd = openSync(${JSON.stringify(inner)}, "r+");
+try {
+  const result = spawnSync("python3", ["-I", "-S", ${JSON.stringify(resolve(".github/actions/git-owner/owner.py"))}, "--policy", ${JSON.stringify(policy)}], {
+    env: { ...process.env, OPENCLAW_PR_LIFETIME_FILE: ${JSON.stringify(inner)} },
+    stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "ignore", "ignore", fd], encoding: "utf8",
+  });
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+  process.exitCode = result.status ?? 1;
+} finally { closeSync(fd); }
+`,
+        ],
+        {
+          env: {
+            ...process.env,
+            HOME: f.root,
+            OPENCLAW_PR_LIFETIME_FILE: f.lifetime,
+            NODE_OPTIONS: `--require ${JSON.stringify(preload)}`,
+          },
+          stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "ignore", "ignore", fd],
+          encoding: "utf8",
+          timeout: 15_000,
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Git helper retained both lifetimes");
+    } finally {
+      closeSync(fd);
+    }
+  });
+
   it.each(runtimes)(
     "preserves the lifetime through $runtime launches, custom environments and fork IPC",
     ({ executable }) => {

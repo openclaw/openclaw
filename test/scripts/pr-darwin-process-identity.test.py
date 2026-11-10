@@ -30,8 +30,16 @@ NODE = shutil.which('node')
 GIT = shutil.which('git')
 
 
+def lifetime_fds(env):
+    # Python closes extra descriptors by default; retain the enclosing wrapper's
+    # lifetimes without inheriting FD9's separate anchor-creation authority.
+    return ((7,) if env.get('OPENCLAW_PR_LIFETIME_FILE') else ()) + tuple(
+        item['fd'] for item in json.loads(env.get('OPENCLAW_PR_LIFETIME_ANCESTORS', '[]')))
+
+
 def run(args, **kwargs):
-    return subprocess.run(args, text=True, capture_output=True, timeout=20, **kwargs)
+    return subprocess.run(args, text=True, capture_output=True, timeout=20,
+                          pass_fds=lifetime_fds(kwargs.get('env', os.environ)), **kwargs)
 
 
 class DecodeTests(unittest.TestCase):
@@ -153,7 +161,8 @@ class LockTests(unittest.TestCase):
         self.ref = 'refs/openclaw/pr-operation-locks/42'
 
     def git(self, *args, **kwargs):
-        return subprocess.check_output([GIT, '-C', str(self.repo), *args], text=True, env=self.env, **kwargs).strip()
+        return subprocess.check_output([GIT, '-C', str(self.repo), *args], text=True, env=self.env,
+                                       pass_fds=lifetime_fds(self.env), **kwargs).strip()
 
     def exists(self):
         return run([GIT, '-C', str(self.repo), 'rev-parse', '--verify', self.ref], env=self.env).returncode == 0
@@ -172,7 +181,8 @@ class LockTests(unittest.TestCase):
             profile.write_text('(version 1)(allow default)(deny network*)(deny file-write*)'
                                '(allow file-write* (literal "/dev/null") (subpath '+json.dumps(str(self.root.resolve()))+'))')
             command = ['/usr/bin/sandbox-exec', '-f', str(profile), *command]
-        p = subprocess.Popen(command, env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        p = subprocess.Popen(command, env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             start_new_session=True, pass_fds=lifetime_fds(self.env))
         self.addCleanup(self.stop, p)
         return p
 
@@ -203,7 +213,7 @@ class LockTests(unittest.TestCase):
                    str(anchor.resolve()/'scripts'/'pr-lib'/'process-group-runner.mjs'),
                    str(self.repo.resolve()), str(script.resolve())]
         p = subprocess.Popen(command, env=self.env, text=True, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, start_new_session=True)
+                             stderr=subprocess.PIPE, start_new_session=True, pass_fds=lifetime_fds(self.env))
         self.addCleanup(self.stop, p)
         return p, anchor, outside
 
@@ -370,7 +380,7 @@ class LockTests(unittest.TestCase):
     def test_wrong_birth_or_reused_group_never_auto_recovers(self):
         # A fixture v3 lock with the real live PGID but a different incarnation
         # must remain sticky. Identity itself always comes from the kernel.
-        live=subprocess.Popen(['sleep','20'], start_new_session=True, env=self.env)
+        live=subprocess.Popen(['sleep','20'], start_new_session=True, env=self.env, pass_fds=lifetime_fds(self.env))
         self.addCleanup(self.stop,live)
         state,birth,pgid=identity.query_identity(live.pid) if sys.platform=='darwin' else ('S','fixture',live.pid)
         for stored_birth in ('different incarnation',birth):
@@ -399,7 +409,7 @@ class LockTests(unittest.TestCase):
   process.once('exit', () => require('node:fs').writeSync(2, 'group-probes=' + probes + '\\n'));
 }
 ''')
-        self.env['NODE_OPTIONS'] = '--require '+str(preload)
+        self.env['NODE_OPTIONS'] = (self.env.get('NODE_OPTIONS', '')+' --require '+str(preload)).strip()
         p = self.supervise('acquire_pr_operation_lock 42\nprintf "%s\\n" "$PR_OPERATION_LOCK_OWNER_OID"')
         out, err = p.communicate(timeout=15)
         self.assertEqual(p.returncode, 1, out+err)

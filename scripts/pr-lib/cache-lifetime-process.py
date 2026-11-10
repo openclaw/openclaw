@@ -92,8 +92,10 @@ def linux_scan(targets):
 
 def darwin_scan(targets):
     env = {**os.environ, "LC_ALL": "C", "TZ": "UTC0"}
+    lifetime_fds = ((7,) if env.get("OPENCLAW_PR_LIFETIME_FILE") else ()) + tuple(
+        item["fd"] for item in json.loads(env.get("OPENCLAW_PR_LIFETIME_ANCESTORS", "[]")))
     census = subprocess.run(["ps", "-axo", "pid=,uid=,lstart="], capture_output=True,
-                            text=True, check=True, timeout=15, env=env)
+                            text=True, check=True, timeout=15, env=env, pass_fds=lifetime_fds)
     processes = {}
     for line in census.stdout.splitlines():
         pid, uid, started = line.split(None, 2)
@@ -103,7 +105,7 @@ def darwin_scan(targets):
     if os.getpid() not in processes:
         raise ValueError("incomplete-process-census")
     files = subprocess.run(["lsof", "-nP", "-Fpn"], capture_output=True,
-                           text=True, check=True, timeout=15)
+                           text=True, check=True, timeout=15, pass_fds=lifetime_fds)
     if not files.stdout:
         raise ValueError("incomplete-file-census")
     references = set()
