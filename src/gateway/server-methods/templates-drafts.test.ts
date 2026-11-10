@@ -228,7 +228,7 @@ packages:
   - { kind: skill, source: clawhub, ref: "@maker/sources", version: 1.2.3 }
   - { kind: plugin, source: clawhub, ref: "@maker/github", version: 2.0.0 }
 mcpServers: { research: { command: research-mcp } }
-cronJobs:
+automations:
   - id: weekly-recap
     schedule: { cron: "0 9 * * 1", timezone: UTC }
     session: isolated
