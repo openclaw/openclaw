@@ -266,20 +266,13 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           <span
             class="sidebar-recent-session__title-row"
             onDblClick={(event: MouseEvent) => {
-              if (!shouldHandleNavigationClick(event)) {
-                return;
-              }
-              const target = actionSession();
-              const access = host().readSessionMutationAccess({
-                method: "sessions.patch",
-                params: { key: target.key, label: null },
-                sessionScope: true,
-                session: target,
-                allowDeferred: true,
-              });
-              if (access.allowed) {
+              if (
+                !host().sidebarSnapshot &&
+                !session().snapshot &&
+                shouldHandleNavigationClick(event)
+              ) {
                 event.preventDefault();
-                void host().sessionOrganizer.renameSession(target);
+                void host().sessionOrganizer.renameSession(actionSession());
               }
             }}
           >
