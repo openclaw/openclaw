@@ -7,6 +7,7 @@ import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-cal
 import { reserveReplyAdmissionTicket } from "../../auto-reply/reply/reply-admission-ticket.js";
 import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
 import type { SessionGoalOperationResult } from "../../config/sessions/goals-operations.js";
+import { readPendingInputSource } from "../../config/sessions/session-pending-input-source.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -314,16 +315,17 @@ export async function handleChatSendWithStorage(
       inputAdmissionAttempted = true;
       const input = await admission.acquireInputActor();
       if (input) {
-        const authority = {
-          assertCurrent: assertCustodyLifetimeCurrent,
-          authorize: assertCustodyLifetimeCurrent,
-        };
-        const state = input.actor.snapshot(authority) ?? (await input.actor.read(authority));
-        // Older Gateways can leave custody behind before committing the recovery
-        // claim. Recover that input; fresh idle sends commit transcript custody directly.
-        stageInput = state.pendingInputs.some(
-          (pending) => pending.idempotency_key === userTurn.baseInput.idempotencyKey,
+        const source = await readPendingInputSource(
+          { agentId: session.agentId, sessionKey, sessionId: admittedSessionId, storePath },
+          userTurn.baseInput.idempotencyKey!,
+          true,
         );
+        assertCustodyLifetimeCurrent();
+        source?.assertCurrent();
+        // Consumed receipts stay durable, not resident. Route both consumed and
+        // pending sources through staging's full replay comparison; only fresh
+        // idle sends commit transcript custody directly.
+        stageInput = Boolean(source?.snapshot.current && source.snapshot.pending);
       }
     }
     if (stageInput) {
