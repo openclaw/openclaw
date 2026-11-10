@@ -809,7 +809,7 @@ describe("independent release child reuse", () => {
       gh,
       `#!${testNodeExecPath}
 const fs = require("node:fs");
-fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\n");
+fs.appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2).join(" ") + "\\n");
 process.stdout.write(${JSON.stringify(JSON.stringify({ message, privateData: "secret-response" }))});
 process.stderr.write("gh: Forbidden (HTTP 403)");
 process.exit(1);
