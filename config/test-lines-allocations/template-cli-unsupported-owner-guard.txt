@@ -1,0 +1,2 @@
+# Native CLI rejects an older Gateway creator guard with update/restart guidance.
+21

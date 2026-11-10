@@ -33,10 +33,12 @@ afterEach(() => vi.restoreAllMocks());
 
 it.each(
   [false, true].flatMap((profiled) =>
-    ["lost-reply", "later-failure", "before-dispatch", "before-commit"].map((scenario) => ({
-      profiled,
-      scenario,
-    })),
+    ["lost-reply", "later-failure", "before-dispatch", "before-commit", "older-gateway"].map(
+      (scenario) => ({
+        profiled,
+        scenario,
+      }),
+    ),
   ),
 )("CLI retains native creator receipt ($profiled, $scenario)", async ({ profiled, scenario }) => {
   await withFixture(async (fixture) => {
@@ -51,6 +53,7 @@ it.each(
     }
     const laterFailure = scenario === "later-failure";
     const transferred = scenario === "before-dispatch" || scenario === "before-commit";
+    const unsupportedAbsence = scenario === "older-gateway" && !profiled;
     const transfer = () => {
       client.authenticatedUserProfile = people.other.authenticatedUserProfile;
     };
@@ -95,6 +98,7 @@ it.each(
         return await add(...args);
       });
     }
+    transport.request.mockClear();
     transport.request.mockImplementation(
       async (
         method: string,
@@ -113,6 +117,15 @@ it.each(
           async (childMethod, childParams) => await transport.request(childMethod, {}, childParams),
           new AbortController().signal,
         );
+        if (unsupportedAbsence && method === "cron.add") {
+          expect(prepared?.expectedProfileId).toBeNull();
+          const failure = new GatewayClientRequestError({
+            code: "INVALID_REQUEST",
+            message: "invalid request frame: at /expectedProfileId: must be string",
+          });
+          retainGatewayResponsePayload(failure, undefined);
+          throw failure;
+        }
         if (prepared && scenario === "before-dispatch") {
           transfer();
         }
@@ -158,13 +171,21 @@ it.each(
       await runTemplatesAddCommand(source, { workspace: path.join(root, "workspace"), json: true });
       expect(output).toHaveLength(1);
       expect(output[0]).toMatchObject({
-        status: laterFailure || transferred ? "partial" : "complete",
+        status: laterFailure || transferred || unsupportedAbsence ? "partial" : "complete",
       });
       expect(
         await fixture.getCron().list({ includeDisabled: true }),
         JSON.stringify(output),
-      ).toHaveLength(laterFailure || transferred ? 0 : 1);
-      if (!laterFailure && !transferred) {
+      ).toHaveLength(laterFailure || transferred || unsupportedAbsence ? 0 : 1);
+      if (unsupportedAbsence) {
+        expect(JSON.stringify(output)).toContain(
+          "Update OpenClaw on the Gateway host to match this CLI, restart the Gateway",
+        );
+        expect(
+          transport.request.mock.calls.filter(([method]) => method === "cron.add"),
+        ).toHaveLength(1);
+      }
+      if (!laterFailure && !transferred && !unsupportedAbsence) {
         expect(fixture.getConfig().agents?.entries?.[agentId]).toBeDefined();
         const [stored] = await fixture.getCron().list({ includeDisabled: true });
         expect(stored?.ownerProfileId).toBe(

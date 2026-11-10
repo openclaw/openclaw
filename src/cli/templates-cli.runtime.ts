@@ -9,6 +9,7 @@ import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isGatewayProtocolResponseError } from "../gateway/client.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
@@ -458,11 +459,32 @@ async function runTemplatesAddFromSource(
           consentPlanIntegrity: plan.planIntegrity,
           runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
           cronGateway: {
-            add: async (input, options) =>
-              await callGatewayFromCli("cron.add", {}, input, {
-                prepareAuthenticatedRequest: async (request, signal) =>
-                  await captureTemplateCronOwner(request, signal, options),
-              }),
+            add: async (input, options) => {
+              let expectedProfileId: string | null | undefined;
+              try {
+                return await callGatewayFromCli("cron.add", {}, input, {
+                  prepareAuthenticatedRequest: async (request, signal) => {
+                    const prepared = await captureTemplateCronOwner(request, signal, options);
+                    expectedProfileId = prepared.expectedProfileId;
+                    return prepared;
+                  },
+                });
+              } catch (error) {
+                // An older Gateway rejects the null header before cron.add can run.
+                if (
+                  expectedProfileId === null &&
+                  isGatewayProtocolResponseError(error) &&
+                  error.gatewayCode === "INVALID_REQUEST" &&
+                  error.message === "invalid request frame: at /expectedProfileId: must be string"
+                ) {
+                  throw new Error(
+                    "Gateway does not support this automation creator check. Update OpenClaw on the Gateway host to match this CLI, restart the Gateway, then retry Template Add.",
+                    { cause: error },
+                  );
+                }
+                throw error;
+              }
+            },
             list: async (agentId) =>
               await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
             get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
