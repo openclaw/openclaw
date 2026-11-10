@@ -1,5 +1,7 @@
 package ai.openclaw.app.gateway
 
+import kotlinx.serialization.json.JsonObject
+
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -10,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonObject
 import kotlin.coroutines.coroutineContext
 
 internal data class OpenClawIdEnrollmentUiState(
@@ -136,11 +139,24 @@ internal class OpenClawIdNodeController(
         seed.fill(0)
       }
     signer.use {
-      // Discovery's 403 is unsigned, so it stays a retryable failure; only a verified snapshot
-      // that no longer lists this node is removal.
-      val response = discovery.call(target.discoveryOrigin, target.descriptorPath, signer)
+      return refreshTarget({ discovery.call(target.discoveryOrigin, target.descriptorPath, signer) }) { response ->
+        store.assess(stableId, response, System.currentTimeMillis() / 1_000).second
+      }
+    }
+  }
+
+  internal companion object {
+    /**
+     * A refresh's outcome. Discovery failures, including its unsigned 403, pass through unchanged
+     * and stay retryable; only a verified snapshot that no longer lists this node is removal.
+     */
+    suspend fun refreshTarget(
+      fetch: suspend () -> JsonObject,
+      assess: (JsonObject) -> OpenClawIdTrustAssessment,
+    ): OpenClawIdTrustTarget {
+      val response = fetch()
       coroutineContext.ensureActive()
-      val (_, assessment) = store.assess(stableId, response, System.currentTimeMillis() / 1_000)
+      val assessment = assess(response)
       return assessment.target ?: if (assessment.failure == "node_not_admitted") throw OpenClawIdRemovedException() else error("node_evidence_refused")
     }
   }
