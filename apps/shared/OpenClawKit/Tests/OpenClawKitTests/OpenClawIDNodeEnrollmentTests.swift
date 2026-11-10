@@ -365,7 +365,7 @@ struct OpenClawIDNodeEnrollmentTests {
             await #expect(throws: (any Error).self) { try await attempt() }
             #expect(await store.saved == nil)
             let remembered = ["higher-binding", "stale", "excluded"].contains(scenario)
-            #expect(await store.observed?.snapshotSequence == (remembered ? 3 : nil))
+            #expect(await store.observed?.snapshotSequence == (remembered ? 3 : 0))
             if remembered {
                 // This fresh-looking older snapshot was accepted before refused observations were retained.
                 await #expect(throws: OpenClawIDNodeEnrollmentError.rollback) { try await attempt() }
@@ -453,6 +453,69 @@ struct OpenClawIDNodeEnrollmentTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func sameHostEnrollmentKeepsSelectedRestartIdentity(legacy: Bool) async throws {
+        let (fixture, json) = try fixture()
+        let link = try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link)
+        let origin = URL(string: "https://discovery.example")!
+        let firstID = UUID()
+        let secondID = UUID()
+        let secondIdentity = try OpenClawIDNodeIdentity(seed: Data(repeating: 89, count: 32))
+        var response = try #require(json["response"]).fields(["descriptor", "snapshot"])
+        var envelope = try response["snapshot"]!.fields(["v", "type", "body", "signer", "alg", "sig"])
+        guard case var .object(body) = envelope["body"]! else { throw OpenClawIDNodeEnrollmentError.malformed }
+        body["node_peer_keys"] = .array([.string(fixture.node_key.iroh), .string(secondIdentity.peerKey)])
+        envelope["body"] = .object(body)
+        let gateway = try Curve25519.Signing.PrivateKey(rawRepresentation:
+            OpenClawIDNodeIdentity.unhex(try #require(json["gateway_seed_hex"]).text()))
+        envelope["sig"] = .string(OpenClawIDNodeIdentity.base64URL(try gateway.signature(
+            for: Data("openclaw/MembershipSnapshot/v1\0".utf8) + OpenClawIDCanonicalJSON.object(body).encoded)))
+        response["snapshot"] = .object(envelope)
+        let evidence = OpenClawIDCanonicalJSON.object(response).encoded
+        let first = try OpenClawIDNodeTrust.assess(response: evidence, link: link, discoveryOrigin: origin,
+            peerKey: fixture.node_key.iroh, previous: nil, now: fixture.now).verdict.get()
+        let second = try OpenClawIDNodeTrust.assess(response: evidence, link: link, discoveryOrigin: origin,
+            peerKey: secondIdentity.peerKey, previous: first.state, now: fixture.now).verdict.get()
+        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("trust.sqlite")
+        if legacy {
+            let legacyURL = try #require(Bundle.module.url(forResource: "OpenClawIDNodeStateV1", withExtension: "sql", subdirectory: "Fixtures"))
+            let old = try OpenClawNativeStateSQLite(databaseURL: database)
+            try old.execute(String(contentsOf: legacyURL, encoding: .utf8))
+            let row = try old.prepare("INSERT INTO openclaw_id_node_targets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            for (index, value) in [link.hostname, link.clawID, link.rootFingerprint].enumerated() {
+                try row.bindText(value, at: Int32(index + 1))
+            }
+            for (index, value) in [first.state.bindingSequence, first.state.snapshotSequence,
+                                  first.state.snapshotIssuedAt, first.state.snapshotBindingSequence].enumerated() {
+                try row.bindInt64(value, at: Int32(index + 4))
+            }
+            for (index, value) in [firstID.uuidString, origin.absoluteString, first.relayURL.absoluteString,
+                                  first.serverKey, first.peerKey, String(decoding: evidence, as: UTF8.self)].enumerated() {
+                try row.bindText(value, at: Int32(index + 8))
+            }
+            _ = try row.step()
+        } else {
+            let selected = OpenClawIDNodeNativeTrustStore(databaseURL: database, enrollmentID: firstID, assertCurrent: {})
+            try await selected.commit(first)
+            await selected.close()
+        }
+        // A second admitted attempt finishes before the app's Check step selects its identity.
+        let pending = OpenClawIDNodeNativeTrustStore(databaseURL: database, enrollmentID: secondID, assertCurrent: {})
+        try await pending.commit(second)
+        await pending.close()
+        let reopened = OpenClawIDNodeNativeTrustStore(databaseURL: database, enrollmentID: firstID, assertCurrent: {})
+        let saved = try #require(await reopened.savedEnrollment(hostname: link.hostname))
+        #expect(saved.enrollmentID == firstID)
+        #expect(saved.peerKey == fixture.node_key.iroh)
+        await reopened.close()
+        let alternate = OpenClawIDNodeNativeTrustStore(databaseURL: database, enrollmentID: secondID, assertCurrent: {})
+        #expect(try await alternate.savedEnrollment(hostname: link.hostname)?.peerKey == secondIdentity.peerKey)
+        await alternate.close()
+    }
+
     @Test func nativeStoreMigratesAndRetainsIndependentHighWaterAcrossReopen() async throws {
         let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString)
@@ -512,14 +575,20 @@ struct OpenClawIDNodeEnrollmentTests {
         #expect(await replayHTTP.requests.map(\.httpMethod) == ["GET"])
         await final.close()
         let database = try OpenClawIDNodeStateSchema.open(databaseURL: url)
-        #expect(try database.scalarInt64("PRAGMA user_version") == 1)
+        #expect(try database.scalarInt64("PRAGMA user_version") == OpenClawIDNodeStateSchema.version)
         #expect(try database.scalarInt64("PRAGMA synchronous") == 2)
         let columns = try database.prepare("PRAGMA table_info(openclaw_id_node_targets)")
         var names: [String] = []
         while try columns.step() == .row { names.append(try columns.requiredText(at: 1, field: "column")) }
         #expect(names == ["hostname", "claw_id", "root_fingerprint", "binding_sequence", "snapshot_sequence",
-            "snapshot_issued_at", "snapshot_binding_sequence", "enrollment_id", "discovery_origin", "relay_url",
-            "server_key", "peer_key", "evidence_json"])
+            "snapshot_issued_at", "snapshot_binding_sequence"])
+        let enrollmentColumns = try database.prepare("PRAGMA table_info(openclaw_id_node_enrollments)")
+        var enrollmentNames: [String] = []
+        while try enrollmentColumns.step() == .row {
+            enrollmentNames.append(try enrollmentColumns.requiredText(at: 1, field: "column"))
+        }
+        #expect(enrollmentNames == ["hostname", "enrollment_id", "discovery_origin", "relay_url",
+                                   "server_key", "peer_key", "evidence_json"])
     }
 
     @Test(arguments: [false, true]) func nativeStorageFailureNeverReturnsDialTarget(failCommit: Bool) async throws {
@@ -534,8 +603,8 @@ struct OpenClawIDNodeEnrollmentTests {
         #expect(try await store.load(hostname: link.hostname) == nil)
         // Inject an actual SQLite write failure, separately at observation and target commit.
         let database = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false)
-        let effect = failCommit ? "UPDATE OF enrollment_id" : "INSERT"
-        try database.execute("CREATE TRIGGER fail_write BEFORE \(effect) ON openclaw_id_node_targets BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END")
+        let table = failCommit ? "openclaw_id_node_enrollments" : "openclaw_id_node_targets"
+        try database.execute("CREATE TRIGGER fail_write BEFORE INSERT ON \(table) BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END")
         let http = ScriptedHTTP(responses: [.init(status: 202, body: Data()),
             .init(status: 200, body: try #require(json["response"]).encoded)])
         let client = OpenClawIDNodeEnrollmentClient(http: http, trustStore: store, now: { fixture.now })

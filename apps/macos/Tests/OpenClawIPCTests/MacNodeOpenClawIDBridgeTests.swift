@@ -118,8 +118,68 @@ struct MacNodeOpenClawIDBridgeTests {
         }
         let head = try MacNodeOpenClawIDBridgeHTTP.responseHead(
             status: 200, headers: [["Content-Length", "500"], ["Connection", "X-Hop"], ["X-Hop", "removed"]], method: "GET")
-        #expect(String(decoding: head, as: UTF8.self) ==
-            "HTTP/1.1 200 Tunnel Response\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n")
+        #expect(String(decoding: head.bytes, as: UTF8.self) ==
+            "HTTP/1.1 200 Tunnel Response\r\nConnection: close\r\nContent-Length: 500\r\n\r\n")
+    }
+
+    @Test func responseLengthIsUnambiguousAndNoBodyMetadataIsPreserved() throws {
+        for headers in [
+            [["Content-Length", "2"], ["content-length", "2"]],
+            [["Content-Length", "-1"]], [["Content-Length", ""]],
+            [["Content-Length", "999999999999999999999999"]],
+        ] {
+            #expect(throws: (any Error).self) {
+                try MacNodeOpenClawIDBridgeHTTP.responseHead(status: 200, headers: headers, method: "GET")
+            }
+        }
+        for (status, method) in [(200, "HEAD"), (304, "GET")] {
+            let response = try MacNodeOpenClawIDBridgeHTTP.responseHead(
+                status: status, headers: [["Content-Length", "500"]], method: method)
+            #expect(response.noBody)
+            #expect(response.length == 500)
+            #expect(!String(decoding: response.bytes, as: UTF8.self).contains("Transfer-Encoding"))
+        }
+        let empty = try MacNodeOpenClawIDBridgeHTTP.responseHead(
+            status: 204, headers: [["Content-Length", "500"]], method: "GET")
+        #expect(empty.noBody)
+        #expect(empty.length == nil)
+    }
+
+    @Test(arguments: [200, 206])
+    func workerBundleDownloadPreservesLengthAndRange(status: Int) async throws {
+        let body = Data("bundle payload".utf8)
+        var headers = [["Content-Length", String(body.count)], ["Accept-Ranges", "bytes"]]
+        if status == 206 { headers.append(["Content-Range", "bytes 10-23/24"]) }
+        let head = try JSONSerialization.data(withJSONObject: ["status": status, "headers": headers])
+        let stream = BridgeTestStream(response: try OpenClawIDNodeTunnelCodec.frame(head) + OpenClawIDNodeTunnelCodec.frame(body))
+        let tunnel = self.tunnel(stream)
+        let bridge = try await MacNodeOpenClawIDBridge.start(
+            tunnel: tunnel, logicalOrigin: URL(string: "wss://claw.invalid")!, onUnexpectedStop: {})
+        do {
+            let handle = try self.connect(bridge.socketPath)
+            defer { try? handle.close() }
+            let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
+            let reader = MacNodeOpenClawIDBridgeReader(io: io)
+            let range = status == 206 ? "Range: bytes=10-\r\n" : ""
+            try await io.write(Data("GET /__openclaw__/worker-bundle/v1/bundles/test HTTP/1.1\r\nHost: localhost\r\n\(range)\r\n".utf8))
+            let response = String(decoding: try await reader.through(Data([13, 10, 13, 10]), limit: 1024), as: UTF8.self)
+            #expect(response.contains("Content-Length: \(body.count)\r\n"))
+            #expect(!response.lowercased().contains("transfer-encoding:"))
+            #expect(response.contains("Accept-Ranges: bytes\r\n"))
+            if status == 206 { #expect(response.contains("Content-Range: bytes 10-23/24\r\n")) }
+            #expect(try await reader.exactly(body.count) == body)
+            let written = await stream.snapshot().0
+            let size = written.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
+            let forwarded = try #require(JSONSerialization.jsonObject(with: Data(written.dropFirst(4).prefix(size))) as? [String: Any])
+            let requestHeaders = try #require(forwarded["headers"] as? [[String]])
+            if status == 206 { #expect(requestHeaders.contains(["range", "bytes=10-"])) }
+        } catch {
+            await bridge.shutdown()
+            await tunnel.shutdown()
+            throw error
+        }
+        await bridge.shutdown()
+        await tunnel.shutdown()
     }
 
     @Test func privatePermissionsAndInvalidWorkerUpgradeCleanUp() async throws {
