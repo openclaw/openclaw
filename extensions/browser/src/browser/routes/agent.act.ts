@@ -2,7 +2,7 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BROWSER_ACT_KIND_FACTS, isActKind } from "../act-kinds.js";
-import { resolveExistingSessionActTimeouts } from "../act-policy.js";
+import { isCloseOnlyAction, resolveExistingSessionActTimeouts } from "../act-policy.js";
 import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
   clickChromeMcpElement,
@@ -22,6 +22,7 @@ import { BROWSER_ACT_ERROR_CODES, type BrowserActErrorCode } from "../errors.js"
 import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { clearClosedTabSelection } from "../server-context.selection.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import {
@@ -116,6 +117,7 @@ export function registerBrowserAgentActRoutes(
       return;
     }
     const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
+    const closeOnly = isCloseOnlyAction(action);
     const existingSessionTimeouts = resolveExistingSessionActTimeouts(action);
     const requestDeadline = isExistingSession
       ? createExistingSessionDeadline(
@@ -131,8 +133,9 @@ export function registerBrowserAgentActRoutes(
         ctx,
         profileCtx,
         targetId,
-        // Batch stays guarded because nested actions can read or return page data.
-        enforceCurrentUrlAllowed: action.kind !== "resize" && action.kind !== "close",
+        allowCrashed: closeOnly,
+        // Batches that can read or return page data still require the URL guard.
+        enforceCurrentUrlAllowed: action.kind !== "resize" && !closeOnly,
         run: async ({ cdpUrl, tab, signal, resolveTabUrl, assertCurrent }) => {
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
           const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
@@ -411,6 +414,8 @@ export function registerBrowserAgentActRoutes(
               cdpUrl,
               action,
               targetId: tab.targetId,
+              targetUrl:
+                closeOnly && action.kind === "batch" ? await resolveTabUrl(tab.url) : undefined,
               evaluateEnabled,
               ...navigationPolicy,
               signal,
@@ -427,7 +432,8 @@ export function registerBrowserAgentActRoutes(
               });
             }
             const downloads = result.downloads;
-            if (action.kind === "close" || result.aborted?.reason === "closed") {
+            if (action.kind === "close" || result.closed || result.aborted?.reason === "closed") {
+              clearClosedTabSelection(ctx.state().profiles.get(profileName), tab.targetId);
               clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
             }
             if (action.kind === "batch") {

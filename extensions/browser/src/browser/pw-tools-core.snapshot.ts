@@ -19,7 +19,10 @@ import {
 } from "./navigation-guard.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import type { RoleRefMap } from "./pw-role-snapshot.js";
-import { closeResolvedPageViaPlaywright } from "./pw-session-actions.js";
+import {
+  closePageByTargetIdViaPlaywright,
+  closeResolvedPageViaPlaywright,
+} from "./pw-session-actions.js";
 import { connectBrowser, pageTargetInfo } from "./pw-session-connection.js";
 import type { RoleRefs } from "./pw-session-contracts.js";
 import { isConnectionScopedPage } from "./pw-session-page-target.js";
@@ -46,6 +49,7 @@ import {
 } from "./pw-snapshot-page.js";
 import {
   assertInteractionCurrent,
+  type GuardedInteractionOptions,
   type InteractionTargetOptions,
 } from "./pw-tools-core.interactions.navigation.js";
 import { runPageEmulationTransition, setViewportSizeOnPage } from "./pw-tools-core.state.js";
@@ -422,12 +426,14 @@ export async function resizeViewportViaPlaywright(
   });
 }
 
-export async function closePageViaPlaywright(opts: InteractionTargetOptions): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  await closeResolvedPageViaPlaywright(page, {
-    cdpUrl: opts.cdpUrl,
-    assertCurrent: opts.assertCurrent ? () => assertInteractionCurrent(opts) : undefined,
-  });
+export async function closePageViaPlaywright(opts: GuardedInteractionOptions): Promise<void> {
+  const assertCurrent = opts.assertCurrent ? () => assertInteractionCurrent(opts) : undefined;
+  if (opts.targetId) {
+    await closePageByTargetIdViaPlaywright({ ...opts, targetId: opts.targetId, assertCurrent });
+  } else {
+    const page = await getPageForTargetId(opts);
+    await closeResolvedPageViaPlaywright(page, { ...opts, assertCurrent });
+  }
 }
 
 export async function pdfViaPlaywright(opts: {

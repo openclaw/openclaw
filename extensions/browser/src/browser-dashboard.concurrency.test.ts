@@ -222,16 +222,14 @@ describe("Browser dashboard operation ordering", () => {
     expect(detach).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { change: "dashboard retention", targetRetained: true },
-    { change: "runtime ownership", targetRetained: false },
-  ] as const)(
-    "rejects crashed-target closure before CDP I/O when $change changes during session preparation",
-    async ({ targetRetained }) => {
+  it.each(["dashboard retention", "runtime ownership", "caller authority"] as const)(
+    "rejects crashed-target closure before CDP I/O when %s changes during session preparation",
+    async (change) => {
       const sessionPrepared = createDeferred<void>();
       const releaseSession = createDeferred<void>();
       const send = vi.fn(async () => ({ success: true }));
       const detach = vi.fn(async () => {});
+      let callerCurrent = true;
       browser.page.mockRejectedValueOnce(new BrowserTabCrashedError());
       browser.connect.mockResolvedValueOnce({
         browser: {
@@ -243,12 +241,17 @@ describe("Browser dashboard operation ordering", () => {
         },
       });
 
-      const closing = closePageByTargetIdViaPlaywright({
+      const closing = closePageViaPlaywright({
         cdpUrl: "http://127.0.0.1:9222",
         targetId: "target-1",
+        assertCurrent: () => {
+          if (!callerCurrent) {
+            throw new Error("caller authority changed");
+          }
+        },
       });
       await sessionPrepared.promise;
-      if (targetRetained) {
+      if (change === "dashboard retention") {
         await trackTab("target-1", {
           name: "service",
           sessionKey,
@@ -256,13 +259,19 @@ describe("Browser dashboard operation ordering", () => {
           url: "http://service.example/",
           state: "active",
         });
-      } else {
+      } else if (change === "runtime ownership") {
         await fixture.installRuntime();
+      } else {
+        callerCurrent = false;
       }
       releaseSession.resolve();
 
       await expect(closing).rejects.toThrow(
-        targetRetained ? /belongs to dashboard service/ : /store owner changed/,
+        change === "dashboard retention"
+          ? /belongs to dashboard service/
+          : change === "runtime ownership"
+            ? /store owner changed/
+            : /caller authority changed/,
       );
       expect(send).not.toHaveBeenCalled();
       expect(detach).toHaveBeenCalledOnce();

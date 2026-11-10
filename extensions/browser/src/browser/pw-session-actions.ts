@@ -670,6 +670,7 @@ export async function closePageByTargetIdViaPlaywright(opts: {
   targetId: string;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
+  assertCurrent?: () => void | Promise<void>;
 }): Promise<void> {
   let page: Page;
   try {
@@ -700,7 +701,9 @@ export async function closePageByTargetIdViaPlaywright(opts: {
             });
         },
         {
-          assertCurrent: () => assertBrowserStateRuntimeCurrent(runtime),
+          assertCurrent: () =>
+            opts.assertCurrent?.()?.then(() => assertBrowserStateRuntimeCurrent(runtime)) ??
+            assertBrowserStateRuntimeCurrent(runtime),
         },
       );
     } finally {

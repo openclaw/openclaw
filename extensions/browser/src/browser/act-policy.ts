@@ -36,6 +36,16 @@ const EXISTING_SESSION_NAVIGATION_GRACE_MS =
   EXISTING_SESSION_NAVIGATION_RECHECK_DELAYS_MS.reduce<number>((total, delay) => total + delay, 0) +
   (EXISTING_SESSION_NAVIGATION_RECHECK_DELAYS_MS.at(-1) ?? 0);
 
+/** Closing a target does not require a usable renderer, including inside nested batches. */
+export function isCloseOnlyAction(action: BrowserActRequest): boolean {
+  return (
+    action.kind === "close" ||
+    (action.kind === "batch" &&
+      action.actions.length > 0 &&
+      action.actions.every(isCloseOnlyAction))
+  );
+}
+
 /** Keep navigation timeouts consistent across transports and browser backends. */
 export function resolveBrowserNavigationTimeoutMs(timeoutMs?: number): number {
   return Math.min(120_000, resolveTimerTimeoutMs(timeoutMs, 20_000, 1_000));

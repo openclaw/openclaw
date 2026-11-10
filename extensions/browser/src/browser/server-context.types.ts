@@ -59,6 +59,8 @@ export type BrowserOperationOptions = {
 export type EnsureTabAvailableOptions = BrowserOperationOptions & {
   /** Allow a target-id-only tab when the caller can continue through Playwright. */
   allowPlaywrightFallback?: boolean;
+  /** Select crashed targets for closing without requiring a usable renderer. */
+  allowCrashed?: boolean;
 };
 
 export type ProfileContext = {

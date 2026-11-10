@@ -175,14 +175,21 @@ describe("executeActViaPlaywright batches", () => {
   it("supports resize and close inside a batch", async () => {
     const result = await batch([{ kind: "resize", width: 800, height: 600 }, { kind: "close" }]);
 
-    expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }, { ok: true }] });
+    expect(result).toEqual({
+      targetId: "tab-1",
+      closed: true,
+      results: [{ ok: true }, { ok: true }],
+    });
     expect(resizeViewportViaPlaywright).toHaveBeenCalledWith({
       ...target,
       width: 800,
       height: 600,
       signal: expect.any(AbortSignal),
     });
-    expect(closePageViaPlaywright).toHaveBeenCalledWith(target);
+    expect(closePageViaPlaywright).toHaveBeenCalledWith({
+      ...target,
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it.each([

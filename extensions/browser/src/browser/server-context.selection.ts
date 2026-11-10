@@ -35,6 +35,16 @@ type SelectionDeps = {
 
 type SelectionOps = Pick<ProfileContext, "ensureTabAvailable" | "focusTab" | "closeTab">;
 
+export function clearClosedTabSelection(
+  runtime: ProfileRuntimeState | undefined,
+  targetId: string,
+): void {
+  if (runtime?.lastTargetId === targetId) {
+    // Retire only the closed sticky identity; an unrelated selection must survive.
+    runtime.lastTargetId = null;
+  }
+}
+
 function mergeOpenedTabSnapshot(
   tabs: BrowserTab[],
   openedTab: BrowserTab | undefined,
@@ -180,7 +190,7 @@ export function createProfileSelectionOps({
     if (!chosen) {
       throw new BrowserTabNotFoundError({ input: targetId ?? stickyTargetId });
     }
-    if (chosen.crashed) {
+    if (chosen.crashed && !options?.allowCrashed) {
       throw new BrowserTabCrashedError();
     }
     runtime.lastTargetId = chosen.targetId;
@@ -303,11 +313,7 @@ export function createProfileSelectionOps({
       return close();
     });
 
-    if (runtime.lastTargetId === resolvedTargetId) {
-      // Retire only the closed sticky identity; otherwise an unprovable session
-      // handle can block every later targetless action.
-      runtime.lastTargetId = null;
-    }
+    clearClosedTabSelection(runtime, resolvedTargetId);
     return resolvedTargetId;
   };
 

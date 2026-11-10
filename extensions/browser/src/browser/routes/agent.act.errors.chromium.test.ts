@@ -35,6 +35,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
     let fixture: Server;
     let targetId: string;
     let refs: Record<string, { name?: string }>;
+    let state: BrowserServerState;
 
     beforeAll(async () => {
       fixture = createServer((_req, res) => {
@@ -58,7 +59,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
       page = context.pages()[0] ?? (await context.newPage());
       await page.goto(`http://127.0.0.1:${fixturePort}`);
       targetId = await readTargetId(page);
-      const state: BrowserServerState = {
+      state = {
         port: 0,
         profiles: new Map(),
         resolved: resolveBrowserConfig({
@@ -180,6 +181,56 @@ describe.runIf(process.env.OPENCLAW_BROWSER_ACTION_ERRORS_E2E === "1")(
         await page.getByRole("textbox", { name: "Working input", exact: true }).inputValue(),
       ).toBe("browser remains usable");
     });
+
+    it.each(["implicit", "explicit", "batch"] as const)(
+      "closes a crashed renderer through %s act requests",
+      async (mode) => {
+        const crashed = await context.newPage();
+        const policy = state.resolved.ssrfPolicy;
+        try {
+          await crashed.goto(page.url().replace("127.0.0.1", "localhost"));
+          const crashedId = await readTargetId(crashed);
+          await browserSnapshot(baseUrl, { targetId: crashedId, format: "ai" });
+          const session = await context.newCDPSession(crashed);
+          const didCrash = crashed.waitForEvent("crash");
+          await Promise.race([didCrash, session.send("Page.crash").then(() => didCrash)]);
+          await expect(
+            browserAct(baseUrl, { kind: "press", key: "Enter", targetId: crashedId }),
+          ).rejects.toMatchObject({ code: "ACT_OPERATION_FAILED" });
+          if (mode === "batch") {
+            await closePlaywrightBrowserConnection({ cdpUrl });
+            state.resolved.ssrfPolicy = { ...policy, blockedHostnames: ["localhost"] };
+          }
+
+          const result = await browserAct(
+            baseUrl,
+            mode === "batch"
+              ? {
+                  kind: "batch",
+                  targetId: crashedId,
+                  actions: [{ kind: "batch", actions: [{ kind: "close" }] }, { kind: "close" }],
+                }
+              : { kind: "close", ...(mode === "explicit" ? { targetId: crashedId } : {}) },
+          );
+          expect(result).toMatchObject({ ok: true, targetId: crashedId });
+          if (mode === "batch") {
+            expect(result).toMatchObject({
+              results: [{ ok: true }],
+              aborted: { reason: "closed", afterAction: 1, skipped: 1, url: "" },
+            });
+          }
+          const { tabs } = await browserTabs(baseUrl);
+          expect(tabs).not.toContainEqual(expect.objectContaining({ targetId: crashedId }));
+          expect(tabs).toContainEqual(expect.objectContaining({ targetId }));
+          state.resolved.ssrfPolicy = policy;
+          expect(await browserSnapshot(baseUrl, { format: "ai" })).toMatchObject({ targetId });
+        } finally {
+          state.resolved.ssrfPolicy = policy;
+          await crashed.close().catch(() => {});
+        }
+      },
+      20_000,
+    );
 
     it.each([false, true])(
       "reports renderer crashes with new-tab recovery (cold connection: %s)",
