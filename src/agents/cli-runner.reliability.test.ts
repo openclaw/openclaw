@@ -66,7 +66,11 @@ import {
   wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
-import { createPreparedCliContext } from "./cli-runner/prepared-context.test-support.js";
+import {
+  buildPreparedContext,
+  createPreparedCliContext,
+  type PreparedContextOverrides,
+} from "./cli-runner/prepared-context.test-support.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
 import { persistCliSessionBindingResult } from "./cli-session-store.js";
@@ -112,66 +116,6 @@ function createSessionFixture(params?: {
     manager.appendMessage({ ...entry, timestamp: index + 1 });
   }
   return { dir, sessionFile: sessionTarget.sessionKey, sessionTarget, storePath };
-}
-
-type PreparedContextOverrides = Partial<{
-  sessionKey: string;
-  cliSessionId: string;
-  runId: string;
-  lane: string;
-  openClawHistoryPrompt: string;
-  provider: string;
-  model: string;
-  executionMode: PreparedCliRunContext["params"]["executionMode"];
-  allowEmptyAssistantReplyAsSilent: boolean;
-}>;
-
-function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCliRunContext {
-  const provider = params?.provider ?? "codex-cli";
-  const model = params?.model ?? "gpt-5.4";
-  const backend = {
-    command: "codex",
-    args: ["exec", "--json"],
-    output: "text" as const,
-    input: "arg" as const,
-    modelArg: "--model",
-    sessionMode: "existing" as const,
-    serialize: true,
-  };
-  const runId = params?.runId ?? "run-2";
-  return createPreparedCliContext(
-    {
-      provider,
-      model,
-      runId,
-      sessionId: "s1",
-      sessionKey: params?.sessionKey,
-      thinkLevel: "low",
-      lane: params?.lane,
-      executionMode: params?.executionMode,
-      allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
-    },
-    {
-      id: provider,
-      config: backend,
-      bundleMcp: false,
-      pluginId: provider === "claude-cli" ? "anthropic" : "openai",
-    },
-    {
-      reusableCliSession: params?.cliSessionId
-        ? { mode: "reuse", sessionId: params.cliSessionId }
-        : { mode: "none" },
-      contextWindowInfo: {
-        tokens: 150_000,
-        referenceTokens: 200_000,
-        source: "modelsConfig",
-      },
-      systemPrompt: "You are a helpful assistant.",
-      ...(params?.openClawHistoryPrompt
-        ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
-        : {}),
-    },
-  );
 }
 
 function withParams(

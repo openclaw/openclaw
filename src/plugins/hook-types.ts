@@ -8,7 +8,6 @@ import type {
 } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ImageContent } from "../llm/types.js";
 import type { InstallPolicyRequestKind as PluginInstallRequestKind } from "../security/install-policy.js";
 import type {
   PluginHookAgentContext,
@@ -20,6 +19,7 @@ import type {
   PluginHookBeforeAgentFinalizeResult,
 } from "./hook-agent-finalize.types.js";
 import type {
+  PluginHookBeforeAgentRunEvent,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -73,6 +73,7 @@ export type {
 } from "./hook-agent-finalize.types.js";
 
 export type {
+  PluginHookBeforeAgentRunEvent,
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
@@ -739,26 +740,6 @@ type PluginHookBeforeInstallResult = {
   findings?: PluginInstallFinding[];
   block?: boolean;
   blockReason?: string;
-};
-
-/** Event payload for the before_agent_run gate hook. */
-export type PluginHookBeforeAgentRunEvent = {
-  /** The user's message that triggered this run. */
-  prompt: string;
-  /** Prepared current-turn images, including prompt-local references. Absent on older hosts. */
-  images?: ImageContent[];
-  /** Loaded session history before the current prompt is submitted. */
-  messages: unknown[];
-  /** Active system prompt prepared for this run. */
-  systemPrompt?: string;
-  /** Account identity when available. */
-  accountId?: string;
-  /** Channel the message came from. */
-  channelId?: string;
-  /** Sender identity when available. */
-  senderId?: string;
-  /** Trusted sender identity bit when available. */
-  senderIsOwner?: boolean;
 };
 
 /** Result type for before_agent_run. Returns pass/block or void (= pass). */

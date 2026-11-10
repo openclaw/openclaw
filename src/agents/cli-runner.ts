@@ -391,16 +391,22 @@ async function runPreparedCliAgentOwned(
             },
           };
     diagnosticLifecycle?.setPhase("send");
-    const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse, {
-      promptImages,
-      ...(diagnosticLifecycle
+    const output = await executePreparedCliRun(
+      attemptContext,
+      cliSessionIdToUse,
+      diagnosticLifecycle || promptImages
         ? {
-            onPhase: diagnosticLifecycle.setPhase,
-            onPromptPrepared: (prompt: string) =>
-              diagnosticLifecycle.publishCapturedContent({ userPrompt: prompt }),
+            promptImages,
+            ...(diagnosticLifecycle
+              ? {
+                  onPhase: diagnosticLifecycle.setPhase,
+                  onPromptPrepared: (prompt: string) =>
+                    diagnosticLifecycle.publishCapturedContent({ userPrompt: prompt }),
+                }
+              : {}),
           }
-        : {}),
-    });
+        : undefined,
+    );
     try {
       params.assertCurrent?.();
     } catch (error) {
