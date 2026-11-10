@@ -1,4 +1,5 @@
 import type { Profiler } from "node:inspector";
+import type { DiagnosticsCpuProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { observeRuntimeProfileCapability } from "../infra/runtime-capabilities.js";
 import {
@@ -22,6 +23,7 @@ export function sanitizeDiagnosticCpuProfile(
   profile: Profiler.Profile,
   packageRoot: string | null,
   { durationMs, startBlockedMs }: { durationMs: number; startBlockedMs: number },
+  batch?: Required<DiagnosticsCpuProfileParams>,
 ) {
   assertProfile(profile.samples !== undefined && profile.timeDeltas !== undefined);
   if (profile.nodes.length > MAX_NODES || profile.samples.length > MAX_SAMPLES) {
@@ -42,12 +44,24 @@ export function sanitizeDiagnosticCpuProfile(
     };
   });
   const result = {
-    requestedDurationMs: DURATION_MS,
+    requestedDurationMs: batch ? batch.windows * batch.windowMs : DURATION_MS,
     actualDurationMs: durationMs,
     startBlockedMs,
     samplingIntervalMicros: INTERVAL_MICROS,
     sampleLossCount: null,
     redactedNodeCount,
+    ...(batch
+      ? {
+          // Preserve the native timeline; the last window includes capture overrun.
+          windowBoundariesMicros: [
+            ...Array.from(
+              { length: batch.windows },
+              (_, index) => profile.startTime + index * batch.windowMs * 1_000,
+            ),
+            profile.endTime,
+          ],
+        }
+      : {}),
     profile: {
       nodes,
       startTime: profile.startTime,
@@ -58,6 +72,9 @@ export function sanitizeDiagnosticCpuProfile(
   };
   if (boundedJsonUtf8Bytes(result, DIAGNOSTIC_PROFILE_MAX_BYTES).complete) {
     return result;
+  }
+  if (batch) {
+    throw new ProfileFailure("profile-too-large");
   }
 
   // Boot/deoptimization can produce deep stacks even at a coarse sampling interval.
@@ -134,17 +151,24 @@ export function sanitizeDiagnosticCpuProfile(
 }
 
 /** Captures CPU samples through Node's shared native profiler or Bun's inspector. */
-export function captureDiagnosticCpuProfile(options: {
-  signal: AbortSignal;
-  hasAuthority: () => boolean;
-}) {
+export function captureDiagnosticCpuProfile(
+  options: DiagnosticsCpuProfileParams & {
+    signal: AbortSignal;
+    hasAuthority: () => boolean;
+  },
+) {
+  const batch =
+    options.windows !== undefined || options.windowMs !== undefined
+      ? { windows: options.windows ?? 1, windowMs: options.windowMs ?? DURATION_MS }
+      : undefined;
   return observeRuntimeProfileCapability(
     "cpuProfiling",
     captureDiagnosticProfile({
       ...options,
-      durationMs: DURATION_MS,
+      durationMs: batch ? batch.windows * batch.windowMs : DURATION_MS,
       create: (inspector) =>
-        process.versions.bun
+        // Node 24's native API ignores the sampling interval, overflowing long batches.
+        process.versions.bun || (batch && Number(process.versions.node.split(".")[0]) < 26)
           ? createInspectorProfileCapture(inspector, {
               setup: async (session) => {
                 await session.post("Profiler.enable");
@@ -155,7 +179,8 @@ export function captureDiagnosticCpuProfile(options: {
               disable: (session) => session.post("Profiler.disable"),
             })
           : createNativeCpuProfileCapture(INTERVAL_MICROS),
-      sanitize: sanitizeDiagnosticCpuProfile,
+      sanitize: (profile, packageRoot, measurement) =>
+        sanitizeDiagnosticCpuProfile(profile, packageRoot, measurement, batch),
     }),
   );
 }

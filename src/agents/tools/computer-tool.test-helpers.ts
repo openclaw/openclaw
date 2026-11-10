@@ -32,8 +32,8 @@ vi.mock("./computer-tool-gateway.js", () => ({
   bindGatewayComputerCleanup: async () => undefined,
 }));
 
-export const { createComputerTool, invalidateComputerFrameIfMissing } =
-  await import("./computer-tool.js");
+export { invalidateComputerFrameIfMissing } from "./computer-tool-shared.js";
+export const { createComputerTool } = await import("./computer-tool.js");
 export const { loadPairedComputerUseAvailabilityForSurface } =
   await import("../computer-use-node-capabilities.js");
 const { DEFAULT_IMAGE_MAX_DIMENSION_PX } = await import("../image-sanitization.js");

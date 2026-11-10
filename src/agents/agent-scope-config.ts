@@ -103,6 +103,7 @@ export type ResolvedAgentConfig = {
   humanDelay?: AgentEntry["humanDelay"];
   typingMode?: AgentEntry["typingMode"];
   tts?: AgentEntry["tts"];
+  compaction?: AgentEntry["compaction"];
   contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
@@ -481,6 +482,7 @@ export function resolveAgentConfig(
     humanDelay: entry.humanDelay,
     typingMode: entry.typingMode ?? agentDefaults?.typingMode,
     tts: entry.tts,
+    ...(entry.compaction ? { compaction: entry.compaction } : {}),
     contextLimits: entry.contextLimits
       ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
       : agentDefaults?.contextLimits,

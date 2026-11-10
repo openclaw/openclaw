@@ -58,9 +58,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Causal lookup: measured 1,298,464 B (+386 B on #196181), plus 64 B headroom.
-  // Its qualification-base turn gains of 12.6–20.2% are coordinator-accepted.
-  chatBootJsGzipBytes: 1_298_528,
+  // Receipt narrowing: 1,298,156 → 1,298,697 B (+541 B), coordinator-accepted.
+  // Use the measured head with no added headroom.
+  chatBootJsGzipBytes: 1_298_697,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
   // Picker-hidden agents (#194575): CI Node 24 measures 803,504 B (+288 B) plus 64 B;
   // Node 26 reports +331 B more for the same tree, CI measurement is authoritative.
@@ -79,11 +79,10 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Retired selectors and supported-browser fallback removal: measured head plus 64 B.
-  // Josh Lehman approved the OpenClaw ID account menu styles (#192352, 2026-11-06):
-  // measured 325,045 B gzip / 1,675,690 B raw; retain 64 B headroom.
-  totalCssGzipBytes: 325_109,
-  totalCssRawBytes: 1_675_754,
+  // Coordinator-accepted shipped feature cost after paydown #196291 and #196320.
+  // Measured on main a58dbe09: exact totals, with no added headroom.
+  totalCssGzipBytes: 326_575,
+  totalCssRawBytes: 1_682_231,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

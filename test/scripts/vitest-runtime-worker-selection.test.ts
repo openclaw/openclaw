@@ -3,7 +3,9 @@ import { expect, it } from "vitest";
 import {
   TUI_PTY_BUILT_CLI_CANARY_PATTERN,
   shouldUseRuntimeOnlyVitestWorkers,
+  shouldUseToolingOnlyVitestWorkers,
 } from "../../scripts/lib/vitest-runtime-selection.mts";
+import { boundaryTestFiles } from "../vitest/vitest.unit-paths.mjs";
 
 const e2e = "test/vitest/vitest.e2e.config.ts";
 const tui = "test/vitest/vitest.tui-pty.config.ts";
@@ -113,6 +115,18 @@ it.each([
   },
 ])("keeps the compiler scope for $name", ({ config, files, env, pattern, runtime }) => {
   expect(shouldUseRuntimeOnlyVitestWorkers(config, ["run", ...files], env, pattern)).toBe(runtime);
+});
+
+it("retains full workers when the boundary inventory gains an unqualified owner", () => {
+  const previousLength = boundaryTestFiles.length;
+  boundaryTestFiles.push("test/new-boundary-owner.test.ts");
+  try {
+    expect(
+      shouldUseToolingOnlyVitestWorkers("test/vitest/vitest.boundary.config.ts", ["run"], {}),
+    ).toBe(false);
+  } finally {
+    boundaryTestFiles.length = previousLength;
+  }
 });
 
 it("keeps the built PTY CI canary aligned with runtime-only preparation", () => {
