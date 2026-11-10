@@ -260,7 +260,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   const [renderReady, setRenderReady] = createSignal(initialRestoring || !splitRows);
   onSettled(() => {
     if (!renderReady()) {
-      void yieldChatTask().then(() => setRenderReady(true));
+      void yieldChatTask(true).then(() => setRenderReady(true));
     }
   });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);

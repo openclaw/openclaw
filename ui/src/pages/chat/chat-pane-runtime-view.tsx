@@ -371,7 +371,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     onSettled(() => {
       if (!constructed()) {
         frame();
-        pendingLayout = yieldChatTask();
+        pendingLayout = yieldChatTask(true);
         void pendingLayout.then(() => {
           pendingLayout = undefined;
           if (!disposed) {
