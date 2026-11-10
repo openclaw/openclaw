@@ -255,7 +255,9 @@ export async function buildAssistantReplyContentFromInputs(
         }
       },
       onPrepareError: (error) => {
-        params.onManagedMediaPrepareError?.(error.message);
+        // Managed errors already carry an actionable message; preserved prepare causes
+        // surface through the canonical formatter so the log keeps the underlying reason.
+        params.onManagedMediaPrepareError?.(error.cause ? formatForLog(error) : error.message);
       },
     });
     if (payload.audioAsVoice === true) {

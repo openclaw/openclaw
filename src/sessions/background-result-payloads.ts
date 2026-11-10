@@ -1,6 +1,7 @@
 // Turns delivered reply payloads into one background result row in a conversation.
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { isAudioFileName, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
@@ -46,6 +47,8 @@ export type BackgroundPayloadsCommitParams = {
   /** The payloads that were shown; the stored row is their transcript projection. */
   payloads: readonly ReplyPayload[];
   idempotencyKey: string;
+  /** The channel accepted these payloads, so embedding failures are not delivery failures. */
+  deliveryConfirmed?: boolean;
   provenance?: BackgroundSessionResultProvenance;
   config: OpenClawConfig;
   signal?: AbortSignal;
@@ -82,6 +85,7 @@ export async function commitBackgroundPayloadsToSession(
           sessionKey: params.sessionKey,
           config: params.config,
           payloads,
+          deliveryConfirmed: params.deliveryConfirmed === true,
           signal: params.signal,
           assertCurrent: params.assertCurrent,
         });
@@ -140,6 +144,7 @@ async function buildResultDisplayContent(params: {
   sessionKey: string;
   config: OpenClawConfig;
   payloads: readonly ReplyPayload[];
+  deliveryConfirmed?: boolean;
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<Record<string, unknown>[]> {
@@ -206,8 +211,28 @@ async function buildResultDisplayContent(params: {
       includeSensitiveMedia: false,
       logGateway: { warn: (message) => logWarn(message) },
     });
-    return [...(assistantContent ?? []), ...documentReferences.values()];
+    // The channel already delivered this payload, so an embedding failure is not a delivery
+    // failure. Keep a named media reference in history and let the prepare warning carry the reason.
+    const displayContent = params.deliveryConfirmed
+      ? retainDeliveredMediaReferences(assistantContent ?? [])
+      : (assistantContent ?? []);
+    return [...displayContent, ...documentReferences.values()];
   } finally {
     scope.release();
   }
+}
+
+// Delivery confirmed the media, so a later transcript-embedding failure must not record a
+// delivery failure in the destination conversation; retain the delivered name instead.
+function retainDeliveredMediaReferences(
+  blocks: readonly Record<string, unknown>[],
+): Record<string, unknown>[] {
+  return blocks.map((block) => {
+    if (block.type !== "attachment_error" || !isRecord(block.attachment)) {
+      return block;
+    }
+    const reference = { ...block.attachment };
+    delete reference.code;
+    return { type: "attachment", attachment: reference };
+  });
 }

@@ -145,6 +145,7 @@ export async function commitConfirmedVisibleMessage(
       },
       payloads: [params.payload],
       idempotencyKey: `outbound-delivery:${params.deliveryId}:${params.payloadIndex}`,
+      deliveryConfirmed: true,
       provenance: params.provenance,
       config: params.config,
       signal: params.signal,
