@@ -131,6 +131,8 @@ export function describeSignRefusal(refusal: RebindSignRefusal, hostname: string
       return `Couldn't read the binding Discovery publishes (${sanitizeTerminalText(refusal.detail)}). Try again, or pass --binding-seq ${refusal.atLeast} or higher.`;
     case "binding_seq_too_low":
       return `--binding-seq must be at least ${refusal.atLeast}.`;
+    default:
+      return refusal satisfies never;
   }
 }
 

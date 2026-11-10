@@ -6,7 +6,7 @@ export function createRebindPublication() {
   let code: string | undefined;
   let noticeSeq = 0;
   return {
-    hold(next: string | undefined): void {
+    hold: (next: string | undefined): void => {
       code = next;
     },
     /**
