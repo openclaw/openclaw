@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   downloadExactActionsArtifactArchive,
   verifyExactActionsArtifactDigest,
 } from "../../scripts/lib/actions-artifact-archive.mjs";
+import { createReleaseEvidenceReplay } from "../../scripts/lib/release-evidence-replay.mjs";
 
 function fixture(size = 4, transferredSize = size) {
   const chunk = Buffer.alloc(64 * 1024, 7);
@@ -52,7 +53,73 @@ function fixture(size = 4, transferredSize = size) {
   return { expected, metadata, fetchImpl, token: "synthetic-test-token", retryAttempts: 1 };
 }
 
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
 describe("exact artifact streaming digest verification", () => {
+  it.each([
+    { archiveTimeoutMs: undefined, delayMs: 70_000, succeeds: false, elapsedMs: 60_000 },
+    { archiveTimeoutMs: 240_000, delayMs: 70_000, succeeds: true, elapsedMs: 70_000 },
+    { archiveTimeoutMs: 240_000, delayMs: 250_000, succeeds: false, elapsedMs: 240_000 },
+  ])("bounds delayed archive bodies: $archiveTimeoutMs / $delayMs", async (scenario) => {
+    vi.useFakeTimers();
+    const timeouts: number[] = [];
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      timeouts.push(ms);
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+      return controller.signal;
+    });
+    const params = fixture();
+    const started = Date.now();
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (!url.endsWith("/zip")) {
+        return Response.json(params.metadata);
+      }
+      const signal = init?.signal;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            const timer = setTimeout(() => {
+              controller.enqueue(Buffer.alloc(4, 7));
+              controller.close();
+            }, scenario.delayMs);
+            signal?.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                controller.error(signal.reason);
+              },
+              { once: true },
+            );
+          },
+        }),
+      );
+    };
+    const verification = verifyExactActionsArtifactDigest({
+      ...params,
+      fetchImpl,
+      archiveTimeoutMs: scenario.archiveTimeoutMs,
+    });
+    const checked = scenario.succeeds
+      ? expect(verification).resolves.toMatchObject({ digest: params.expected.artifactDigest })
+      : expect(verification).rejects.toThrow(/Timed out|deadline exceeded/);
+    await vi.advanceTimersByTimeAsync(scenario.elapsedMs);
+    await checked;
+    expect(Date.now() - started).toBe(scenario.elapsedMs);
+    expect(timeouts).toEqual([60_000, scenario.archiveTimeoutMs ?? 60_000]);
+  });
+
+  it("rejects archive request budgets beyond the existing four-minute ceiling", async () => {
+    await expect(
+      verifyExactActionsArtifactDigest({ ...fixture(), archiveTimeoutMs: 240_001 }),
+    ).rejects.toThrow("no larger than 240000");
+  });
+
   it("hashes the observed 402006833-byte image size without raising buffered ZIP limits", async () => {
     // Reuse one 64 KiB synthetic block: no test or production whole-image allocation.
     const params = fixture(402006833);
@@ -81,6 +148,45 @@ describe("exact artifact streaming digest verification", () => {
     params.expected.artifactDigest = `sha256:${"b".repeat(64)}`;
     params.metadata.digest = params.expected.artifactDigest;
     await expect(verifyExactActionsArtifactDigest(params)).rejects.toThrow("does not match");
+  });
+
+  it("replays archive bytes but retains live metadata and selected-digest checks", async () => {
+    const params = fixture();
+    const binding = { publication: "archive-boundary-fixture" };
+    const preview = createReleaseEvidenceReplay(binding);
+    await downloadExactActionsArtifactArchive({ ...params, immutableReads: preview });
+    const payload = JSON.parse(preview.serialize());
+    params.fetchImpl.mockClear();
+    const replay = () => createReleaseEvidenceReplay(binding, payload);
+    const result = await downloadExactActionsArtifactArchive({
+      ...params,
+      immutableReads: replay(),
+    });
+    expect(result.archiveBytes).toEqual(Buffer.alloc(4, 7));
+    expect(
+      params.fetchImpl.mock.calls.map(([url]) =>
+        url instanceof Request ? url.url : url.toString(),
+      ),
+    ).toEqual(["https://api.github.com/repos/openclaw/openclaw/actions/artifacts/777"]);
+
+    params.metadata.expired = true;
+    await expect(
+      downloadExactActionsArtifactArchive({ ...params, immutableReads: replay() }),
+    ).rejects.toThrow("immutable publication tuple");
+    params.metadata.expired = false;
+
+    // A self-consistent carrier digest is not the selected publication digest.
+    const changed = Buffer.alloc(4, 8);
+    payload.entries[0][1].data = changed.toString("base64");
+    payload.entries[0][1].sha256 = createHash("sha256").update(changed).digest("hex");
+    await expect(
+      downloadExactActionsArtifactArchive({ ...params, immutableReads: replay() }),
+    ).rejects.toThrow(/does not match/iu);
+    expect(
+      params.fetchImpl.mock.calls.every(
+        ([url]) => !(url instanceof Request ? url.url : url.toString()).endsWith("/zip"),
+      ),
+    ).toBe(true);
   });
 
   it("rejects changed remote identity before reading the binary body", async () => {

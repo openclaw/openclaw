@@ -92,6 +92,7 @@ export type GoogleInteractionsRequestBody = {
     temperature?: number;
     top_p?: number;
     top_k?: number;
+    seed?: number;
     max_output_tokens?: number;
     stop_sequences?: string[];
     thinking_level?: string;
@@ -262,6 +263,9 @@ export function buildGoogleInteractionsParams<T extends GoogleApiType>(
   }
   if (options.topP !== undefined) {
     generationConfig.top_p = options.topP;
+  }
+  if (options.seed !== undefined) {
+    generationConfig.seed = options.seed;
   }
   if (options.maxTokens !== undefined) {
     generationConfig.max_output_tokens = options.maxTokens;

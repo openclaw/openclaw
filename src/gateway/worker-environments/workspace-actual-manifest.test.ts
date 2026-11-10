@@ -27,6 +27,34 @@ afterEach(() => {
 
 type InventoryOptions = Parameters<typeof readActualWorkspaceManifestImpl>[0];
 
+it.each([false, true])(
+  "rejects omitted snapshot subvolumes before returning an inventory (selected: %s)",
+  async (selected) => {
+    const { root } = await inventoryFixture();
+    const nested = path.join(root, "nested");
+    await fs.mkdir(nested);
+    const lstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stats = await lstat(...args);
+      if (args[0] === nested) {
+        Reflect.set(stats, "ino", 2n);
+      }
+      return stats;
+    });
+    const entries = vi.fn();
+    await expect(
+      scanActualWorkspaceManifest({
+        root,
+        baseCommit: null,
+        btrfsSnapshot: true,
+        includePaths: selected ? new Set(["nested"]) : undefined,
+        onEntry: entries,
+      }),
+    ).rejects.toMatchObject({ code: "WORKSPACE_SNAPSHOT_INCOMPLETE" });
+    expect(entries).not.toHaveBeenCalled();
+  },
+);
+
 async function inventoryFixture(count = 0) {
   const root = await fs.realpath(tempDirs.make("workspace-inventory-"));
   const files = Array.from({ length: count }, (_, index) => `file-${index}.txt`);

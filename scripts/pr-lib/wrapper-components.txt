@@ -1498,6 +1498,7 @@ src/logging/config.ts
 src/logging/console.ts
 src/logging/diagnostic-cpu-profile.ts
 src/logging/diagnostic-heap-profile.ts
+src/logging/diagnostic-profile-file.ts
 src/logging/diagnostic-profile.ts
 src/logging/diagnostic-support-key-check.ts
 src/logging/diagnostic-support-causes.ts
@@ -1865,6 +1866,7 @@ src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
 src/process/linux-exec-cgroup-device.ts
 src/process/linux-exec-cgroup.ts
+src/process/linux-oom-score-spawn.ts
 src/process/linux-oom-score.ts
 src/process/output-drain.ts
 src/process/process-deadline.ts
@@ -2692,6 +2694,7 @@ src/config/sessions/session-actor-memory-publication.ts
 src/config/sessions/session-actor-memory-reactions.ts
 src/config/sessions/session-actor-memory-registry.ts
 src/config/sessions/session-actor-memory-reports.ts
+src/config/sessions/session-actor-memory-replay-groups.ts
 src/config/sessions/session-actor-memory-search.ts
 src/config/sessions/session-actor-memory-side-effects-contract.ts
 src/config/sessions/session-actor-memory-side-effects.ts
@@ -2739,6 +2742,7 @@ src/config/sessions/session-transcript-execution-read.ts
 src/config/sessions/session-transcript-lock-settlement.ts
 src/config/sessions/session-transcript-raw-cursor.ts
 src/config/sessions/session-transcript-report-policy.ts
+src/config/sessions/session-transcript-replay.types.ts
 src/config/sessions/session-transcript-rewrite-effects.ts
 src/config/sessions/session-transcript-search-policy.ts
 src/config/sessions/session-transcript-turn-state.ts
@@ -2920,6 +2924,7 @@ src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
 src/shared/pending-promises.ts
 src/shared/state-lease-loss.ts
+src/shared/state-lease-loss-format.ts
 src/shared/weak-owner-map.ts
 src/status/utility-model-warnings.ts
 src/infra/sqlite-integrity.worker.ts

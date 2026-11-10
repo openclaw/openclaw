@@ -433,9 +433,8 @@ export function resolveCompletionProfilePath(shell: CompletionShell): string {
     );
   }
   return appendCompletionProfilePath(
-    home,
+    env.XDG_CONFIG_HOME || appendCompletionProfilePath(home, pathApi, ".config"),
     pathApi,
-    ".config",
     "powershell",
     "Microsoft.PowerShell_profile.ps1",
   );

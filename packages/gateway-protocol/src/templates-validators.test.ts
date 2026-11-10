@@ -71,9 +71,10 @@ describe("Templates Gateway contract", () => {
         },
       },
     );
-    detail.accepts(coordinate);
+    detail.accepts(coordinate, { packageName: coordinate.packageName });
     const preview = { kind: "instruction", name: "AGENTS.md" };
     previewParams.accepts({ ...coordinate, ...preview });
+    previewParams.rejects({ packageName: coordinate.packageName, ...preview });
     previewResult.accepts({ preview: { ...preview, content: "# Instructions" } });
     detailResult.accepts({
       detail: {
@@ -93,6 +94,7 @@ describe("Templates Gateway contract", () => {
       },
     });
     addPlan.accepts({ source: coordinate });
+    addPlan.rejects({ source: { packageName: coordinate.packageName } });
 
     const apply = (acknowledgeRiskWarning: boolean) => ({
       source: coordinate,

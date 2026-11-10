@@ -590,7 +590,7 @@ export async function buildTemplateAddPlan(params: {
   });
 
   // Strict v1 validation permits only deterministic main or isolated targets.
-  for (const job of params.manifest.cronJobs) {
+  for (const job of params.manifest.automations) {
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -610,7 +610,7 @@ export async function buildTemplateAddPlan(params: {
       templateAddCapabilityChange({
         kind: "cronJob",
         id: job.id,
-        path: `cronJobs.${job.id}`,
+        path: `automations.${job.id}`,
         action: "schedule",
         reason: "The Template declares recurring scheduled work.",
         effect: { ...job, agentId: finalId },

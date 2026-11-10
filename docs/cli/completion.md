@@ -40,6 +40,8 @@ The install writes a small `# OpenClaw Completion` block into your shell profile
 | powershell | `~/.config/powershell/Microsoft.PowerShell_profile.ps1` (on Windows: `Documents/PowerShell/Microsoft.PowerShell_profile.ps1`, or `Documents/WindowsPowerShell/...` for Windows PowerShell) |
 | zsh        | `$ZDOTDIR/.zshrc` when `ZDOTDIR` is defined; otherwise `~/.zshrc` (an empty `ZDOTDIR` resolves to `/.zshrc`)                                                                               |
 
+On macOS and Linux, PowerShell uses `$XDG_CONFIG_HOME/powershell/Microsoft.PowerShell_profile.ps1` when `XDG_CONFIG_HOME` is nonempty, falling back to the path above otherwise.
+
 Profile changes are staged beside the destination and atomically replace it only after a complete durable write. A failed install leaves an existing profile unchanged.
 Profiles must be regular files; symlinks to regular files are supported. Pipes and
 other special files are rejected before reading, so completion does not wait for a writer.

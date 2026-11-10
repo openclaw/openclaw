@@ -46,7 +46,7 @@
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  font-size: 0.76rem;
+  font-size: calc(0.76rem * var(--control-ui-text-scale));
 }
 
 .workboard-session-tile__meta {
@@ -84,7 +84,7 @@ a.workboard-session-pr:hover {
 .workboard-sessions__empty,
 .workboard-sessions-editor__help {
   color: var(--muted);
-  font-size: 0.74rem;
+  font-size: calc(0.74rem * var(--control-ui-text-scale));
 }
 
 .workboard-sessions__empty {
@@ -133,7 +133,7 @@ a.workboard-session-pr:hover {
 .workboard-sessions-editor label {
   display: grid;
   gap: 6px;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--control-ui-text-scale));
 }
 
 .workboard-sessions-editor .settings-input {

@@ -4,6 +4,7 @@ import {
   loadPatternListFromEnv,
   matchesVitestCliSelection,
 } from "../../test/vitest/vitest.pattern-file.ts";
+import { boundaryTestFiles } from "../../test/vitest/vitest.unit-paths.mjs";
 import {
   includesRuntimeConfig,
   resolveVitestRuntimeConfigScopes,
@@ -28,6 +29,7 @@ const runtimeOnlyBuiltCliFiles = new Set([
 const runtimeOnlyUnitFiles = new Set([
   "src/agents/agent-tools.delegated-authority.test.ts",
   "src/agents/session-placement-computer.test.ts",
+  "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
   "src/auto-reply/reply/commands-system-prompt.test.ts",
@@ -37,16 +39,24 @@ const runtimeOnlyUnitFiles = new Set([
   "src/auto-reply/reply/dispatch-from-config.test.ts",
   "src/auto-reply/reply/followup-runner.test.ts",
   "src/auto-reply/reply/groups.test.ts",
+  "src/commands/doctor-config-preflight.container-upgrade.test.ts",
+  "src/commands/doctor-maintenance.schema-preflight.test.ts",
+  "src/commands/doctor-maintenance.stopped-systemd.test.ts",
+  "src/commands/doctor-plugin-package-consent.test.ts",
   "src/config/io.load-async.test.ts",
+  "src/flows/doctor-health.update-schema.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
   "src/gateway/server-methods/session-catalog-privacy.test.ts",
   "src/gateway/server.beam-owned-view.test.ts",
   "src/gateway/talk/client-permission-parity.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
+  "src/plugins/doctor-repair-setup.test.ts",
   "src/plugins/loader.runtime-registry.test.ts",
   "src/plugins/plugin-generation-source-inspection.worker.test.ts",
   "src/plugins/plugin-generation-worker.test.ts",
+  "src/state/dreaming-startup-admission.test.ts",
   "test/canonical-descendant.integration.test.ts",
+  "test/codex-account-usage.integration.test.ts",
   "test/codex-settled-turn-finalization.integration.test.ts",
   "test/codex-web-search-native.integration.test.ts",
   "test/codex-web-search-policy.integration.test.ts",
@@ -56,6 +66,7 @@ const runtimeOnlyUnitFiles = new Set([
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-native-search.gateway.test.ts",
   "test/plugins/deep-research-routing.gateway.test.ts",
+  "test/runtime-agent.codex-initialization.integration.test.ts",
   "test/scripts/ci-test-timings-tooling.test.ts",
   "test/scripts/eager-import-closure.test.ts",
   "test/scripts/lint-suppressions.test.ts",
@@ -63,14 +74,33 @@ const runtimeOnlyUnitFiles = new Set([
   "test/scripts/pr-wrapper-source-closure.test.ts",
   "test/scripts/type-suppression-inventory.test.ts",
   "test/skill-usage.codex.integration.test.ts",
+  "test/slack-outbound-permanent-rejection-loopback.test.ts",
   "test/vitest-projects-config.test.ts",
 ]);
 
-// These tooling proofs use compiled harness entries, not production workers.
+// These selections need only source tooling and compiled harness entries.
 const toolingOnlyUnitFiles = new Set([
+  "src/infra/boundary-path.test.ts",
+  "src/infra/git-root.test.ts",
+  "src/infra/home-dir.test.ts",
+  "src/infra/openclaw-exec-env.test.ts",
+  "src/infra/openclaw-root.test.ts",
+  "src/infra/package-json.test.ts",
+  "src/infra/path-env.test.ts",
+  "src/infra/stable-node-path.test.ts",
+  "test/control-ui-import-boundary.test.ts",
+  "test/extension-test-boundary.test.ts",
+  "test/plugin-extension-import-boundary.test.ts",
   "test/scripts/vitest-prebuilt-ai.test.ts",
   "test/scripts/ci-changed-build-selection.test.ts",
   "test/scripts/ci-changed-node-test-plan.integration.test.ts",
+  "test/scripts/ci-workflow-cost.test.ts",
+  "test/scripts/ci-ui-e2e-selection.test.ts",
+  "test/scripts/eager-import-closure.test.ts",
+  "test/scripts/pr-wrapper-source-closure.test.ts",
+  "test/scripts/update-restart-module-outcome.test.ts",
+  "test/scripts/vitest-isolated.test.ts",
+  "test/scripts/vitest-runtime-worker-selection.test.ts",
   "test/scripts/vitest-worker-artifacts.batch.test.ts",
   "test/scripts/run-vitest-progress.test.ts",
   "test/scripts/run-vitest.test.ts",
@@ -114,13 +144,16 @@ export function resolveCiVitestWorkerPreset(
       plan.target !== undefined
         ? files([plan.target])
         : plan.configs?.length === 1 &&
-          Boolean(plan.includePatterns?.length) &&
+          (Boolean(plan.includePatterns?.length) ||
+            (plan.includePatterns == null &&
+              plan.configs[0] === "test/vitest/vitest.boundary.config.ts")) &&
           !plan.requiresDist &&
           plan.pretestBuildMode === undefined &&
           selection(
             plan.configs[0]!,
             [],
-            plan.env ?? {},
+            // Group include metadata replaces the parent's include file at launch.
+            { ...plan.env, OPENCLAW_VITEST_INCLUDE_FILE: undefined },
             undefined,
             plan.includePatterns ?? undefined,
           ),
@@ -139,12 +172,13 @@ function selectedFiles(
   args: string[],
   env: NodeJS.ProcessEnv,
   includePatterns?: readonly string[],
+  unfilteredFiles: readonly string[] = [],
 ) {
-  return (
-    includePatterns ??
-    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
-    collectVitestFileFilters(args)
-  ).map((file) => file.replaceAll("\\", "/").replace(/^\.\//u, ""));
+  const included = includePatterns ?? loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const files = included ?? collectVitestFileFilters(args);
+  return (included === null && files.length === 0 ? unfilteredFiles : files).map((file) =>
+    file.replaceAll("\\", "/").replace(/^\.\//u, ""),
+  );
 }
 
 export function shouldUseToolingOnlyVitestWorkers(
@@ -154,9 +188,13 @@ export function shouldUseToolingOnlyVitestWorkers(
   _testNamePattern?: string | RegExp,
   includePatterns?: readonly string[],
 ): boolean {
+  // New boundary owners stay full until their worker requirements are qualified.
+  const boundary = config === "test/vitest/vitest.boundary.config.ts";
   return (
-    config === "test/vitest/vitest.tooling.config.ts" &&
-    areToolingOnlyVitestUnitFiles(selectedFiles(args, env, includePatterns))
+    (boundary || config === "test/vitest/vitest.tooling.config.ts") &&
+    areToolingOnlyVitestUnitFiles(
+      selectedFiles(args, env, includePatterns, boundary ? boundaryTestFiles : []),
+    )
   );
 }
 
@@ -184,10 +222,12 @@ export function shouldUseRuntimeOnlyVitestWorkers(
       config === "test/vitest/vitest.agents-spawn-production-boundary.config.ts" ||
       config === "test/vitest/vitest.auto-reply.config.ts" ||
       config === "test/vitest/vitest.auto-reply-reply.config.ts" ||
+      config === "test/vitest/vitest.commands.config.ts" ||
       config === "test/vitest/vitest.infra.config.ts" ||
       config === "test/vitest/vitest.runtime-config.config.ts" ||
       config === "test/vitest/vitest.plugins.config.ts" ||
       config === "test/vitest/vitest.tooling.config.ts" ||
+      config === "test/vitest/vitest.tooling-isolated.config.ts" ||
       config === "test/vitest/vitest.unit-fast.config.ts" ||
       config === "test/vitest/vitest.unit-fast-isolated.config.ts" ||
       config === "test/vitest/vitest.gateway-client.config.ts" ||

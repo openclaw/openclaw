@@ -42,6 +42,28 @@ Read only the references needed for the selected phase:
 - Release notes: `$openclaw-changelog-update`, including its separate approved post-release docs-mirror route. Initial release generation keeps its existing format; docs publication does not run automatically during release. Requested announcements: `$release-openclaw-announcement` for Discord, `$release-tweets` for X. Announcements never gate publication and require explicit posting authorization.
 - Published artifact verification: `$verify-release`. GHSA operations: `$openclaw-ghsa-maintainer` only with explicit security-workflow authorization.
 
+## Backports and new fixes
+
+For every release track, apply approved changes already on `main` directly to
+the canonical release branch, one commit at a time in dependency order with
+`git cherry-pick -x`. Keep each backport separate, including the initial set;
+never open individual backport PRs or a combined staging/mega PR for that work.
+Record source and destination SHAs, adaptations, and proof in the release ledger.
+
+For a new fix not yet on `main`, prefer an individual PR to `main`, then direct
+backport after it merges. When urgency requires a release-first fix, commit it
+directly to the release branch and track an individual forward-port PR to
+`main` after publication, with an owner in the handoff. Do not lose the fix at
+closeout. This applies to product, CI, and release-tooling repairs; independently
+trusted publishing tooling P must still come from `main`.
+
+CI can be repaired after backports are on the release branch; it is not a
+reason to open a backport PR or stage the initial set behind one. Backport an
+existing main fix directly; otherwise use the new-fix route above. Run focused
+proof and repair branch CI before freezing and qualifying the final candidate.
+Required release validation, intake approval, security disclosure, and exact-SHA
+evidence remain unchanged; direct backports do not authorize publication.
+
 ## Hotfix ledger management
 
 Prefer the [shared hotfix ledger](references/hotfix-ledger-management.md) for
@@ -180,8 +202,10 @@ invalidated proof. A manager's opportunity notification is not that approval.
 
 Release process improvements made during a release land on both branches.
 Workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
-merge to `main` first, then get cherry-picked (`-x`) onto `release/YYYY.M.PATCH`
-for the next candidate or patch. A qualification repair needed for this release
+normally merge to `main` first, then get cherry-picked (`-x`) directly onto the
+canonical release branch for the next candidate or patch, without a backport PR.
+Urgent release-first repairs follow [the new-fix route](#backports-and-new-fixes).
+A qualification repair needed for this release
 must land before freezing a new C/Q; never silently swap the harness for an
 already qualified candidate. Where `main`-only CI infrastructure is missing on the branch,
 keep the branch's expression form and port only the logic. Product code on the

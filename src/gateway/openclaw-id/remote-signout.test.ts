@@ -78,7 +78,8 @@ it("remote sign-out rejects the issued token on replay while keeping this device
     expect(await response.json()).toEqual({ signedOut: true });
     expect(await verify()).toMatchObject({ ok: false });
     expect(closeConnections).toHaveBeenCalledWith(["browser-rpc"]);
-    expect(claw.authority.tokenBinding(identity.deviceId, identity.role)).toBeUndefined();
+    // The browser stays an OpenClaw ID browser (managed on the Access page) after sign-out.
+    expect(claw.authority.tokenBinding(identity.deviceId, identity.role)).toBe(claw.w1);
     expect(await verifyDeviceToken({ ...other, token: otherToken, baseDir })).toMatchObject({
       ok: true,
     });

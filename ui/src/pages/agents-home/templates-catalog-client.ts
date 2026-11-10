@@ -68,7 +68,7 @@ export async function readTemplatesOverview(
 
 export async function readTemplateDetail(
   client: GatewayBrowserClient,
-  source: TemplateCatalogSource,
+  source: { packageName: string; version?: string },
 ): Promise<TemplateCatalogDetail> {
   const result = await client.request<{ detail: TemplateCatalogDetail }>(
     "templates.catalog.detail",
@@ -78,7 +78,7 @@ export async function readTemplateDetail(
   if (
     !isPublicEntry(detail) ||
     detail.packageName !== source.packageName ||
-    detail.version !== source.version ||
+    (source.version !== undefined && detail.version !== source.version) ||
     !detail.contents ||
     !Array.isArray(detail.contents.instructions) ||
     !Array.isArray(detail.contents.skills) ||

@@ -263,7 +263,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           assertCurrent();
           if (outcome !== "applied") {
             throw new Error(
-              `Template agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); inspect config.get before retrying.`,
+              `Template agent configuration was saved but its application to the active Gateway was not confirmed (${typeof outcome === "object" ? outcome.status : outcome}); inspect config.get before retrying.`,
             );
           }
         },

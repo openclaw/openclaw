@@ -14,6 +14,10 @@ const RETURN_PATH_QUERY_VALIDATORS = new Map<string, (value: string) => boolean>
   ],
 ]);
 
+export function isControlUiSessionReturnPathQueryKey(key: string): boolean {
+  return RETURN_PATH_QUERY_VALIDATORS.has(key);
+}
+
 export function controlUiSessionEntryPath(basePath: string): string {
   return `${basePath}/__openclaw__/session-entry`;
 }
