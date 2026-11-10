@@ -1,0 +1,4 @@
+# Regression tests proving the Approvals and Labs settings pages register the route
+# subtitle catalog so the page header shows the real sentence instead of the raw i18n key.
+# Exact net test-line growth for BUG-356 (approvals +7, labs +8).
+15

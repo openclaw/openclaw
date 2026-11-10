@@ -125,6 +125,11 @@ function createPage({
 
 beforeEach(() => i18n.setLocale("en"));
 
+it("renders the approvals page subtitle instead of the raw i18n key", () => {
+  const p = createPage();
+  expect(p.text(".page-subtitle")).toContain("Recent exec, plugin, and system-agent approvals.");
+});
+
 it("refreshes retained timestamps with locale and accepted history, not grants or loading", async () => {
   const NativeDateTimeFormat = Intl.DateTimeFormat;
   let timeZone = "UTC";

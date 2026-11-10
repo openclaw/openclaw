@@ -154,6 +154,14 @@ afterEach(() => {
 });
 
 describe("LabsPage", () => {
+  it("renders the labs page subtitle instead of the raw i18n key", async () => {
+    const { page } = await mountPage({});
+    const subtitle = page.querySelector(".page-subtitle");
+    expect(subtitle?.textContent).toContain(
+      "Labs contains experimental capabilities that may change, break, or disappear between releases.",
+    );
+  });
+
   it("defaults predictions off with Utility and saves each model without enabling the lab", async () => {
     const { page, runtimeConfig } = await mountPage({});
     const toggle = labToggle(page, "Composer predictions");
