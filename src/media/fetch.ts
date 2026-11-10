@@ -19,7 +19,8 @@ import {
   withTrustedExplicitProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
-import { retryAsync, type RetryOptions } from "../infra/retry.js";
+import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
+import { resolveRetryConfig, retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
@@ -50,15 +51,17 @@ export type MediaFetchRetryOptions = RetryOptions;
 export class MediaFetchError extends Error {
   readonly code: MediaFetchErrorCode;
   readonly status?: number;
+  readonly retryAfterMs?: number;
 
   constructor(
     code: MediaFetchErrorCode,
     message: string,
-    options?: { cause?: unknown; status?: number },
+    options?: { cause?: unknown; status?: number; retryAfterMs?: number },
   ) {
     super(message, options);
     this.code = code;
     this.status = options?.status;
+    this.retryAfterMs = options?.retryAfterMs;
     this.name = "MediaFetchError";
   }
 }
@@ -375,10 +378,14 @@ async function assertMediaResponseOk(params: {
       detail += `; body: ${snippet}`;
     }
   }
+  const retryAfterSeconds = parseRetryAfterHeaderSeconds(res.headers.get("retry-after"));
   throw new MediaFetchError(
     "http_error",
     `Failed to fetch media from ${sourceUrl}${redirected}: ${redactSensitiveText(detail)}`,
-    { status: res.status },
+    {
+      status: res.status,
+      retryAfterMs: retryAfterSeconds === undefined ? undefined : retryAfterSeconds * 1000,
+    },
   );
 }
 
@@ -569,7 +576,10 @@ function shouldRetryMediaFetch(err: unknown): boolean {
       return false;
     }
     if (err.code === "http_error") {
-      return typeof err.status === "number" && (err.status === 408 || err.status >= 500);
+      return (
+        typeof err.status === "number" &&
+        (err.status === 408 || err.status === 429 || err.status >= 500)
+      );
     }
     if (err.code === "fetch_failed") {
       if (isAbortError(err) || isAbortError(err.cause)) {
@@ -644,11 +654,32 @@ async function withGuardedMediaResponse<T>(
   if (!retry) {
     return await run();
   }
+  const { minDelayMs, maxDelayMs } = resolveRetryConfig(undefined, retry);
+  const retryAfterMaxDelayMs =
+    retry.retryAfterMaxDelayMs === undefined
+      ? maxDelayMs || Number.POSITIVE_INFINITY
+      : resolveRetryConfig(
+          { attempts: 1, minDelayMs, maxDelayMs, jitter: 0 },
+          { maxDelayMs: retry.retryAfterMaxDelayMs },
+        ).maxDelayMs;
   return await retryAsync(run, {
     label: "media:fetch",
     ...retry,
-    shouldRetry: (err, attempt) =>
-      retry.shouldRetry ? retry.shouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+    retryAfterMs:
+      retry.retryAfterMs ??
+      ((err) => (err instanceof MediaFetchError ? err.retryAfterMs : undefined)),
+    shouldRetry: (err, attempt) => {
+      // A bounded recovery must not send before the origin permits another request.
+      // Explicit caller pacing retains its existing override contract.
+      if (
+        !retry.retryAfterMs &&
+        err instanceof MediaFetchError &&
+        (err.retryAfterMs ?? 0) > retryAfterMaxDelayMs
+      ) {
+        return false;
+      }
+      return retry.shouldRetry ? retry.shouldRetry(err, attempt) : shouldRetryMediaFetch(err);
+    },
     sleep:
       retry.sleep ??
       ((delay) =>

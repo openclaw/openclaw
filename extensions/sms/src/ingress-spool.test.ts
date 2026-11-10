@@ -143,7 +143,7 @@ describe("createSmsIngressSpool", () => {
         ) {
           authenticatedMediaRequests += 1;
         }
-        if (mediaRequests === 1) {
+        if (mediaRequests <= 2) {
           res.statusCode = 429;
           res.end("Twilio rate limited");
           return;
@@ -280,7 +280,7 @@ describe("createSmsIngressSpool", () => {
     expect(firstResponse.status).toBe(200);
     expect(firstResponse.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
     await spool.waitForIdle();
-    expect(mediaRequests).toBe(1);
+    expect(mediaRequests).toBe(2);
     expect(await queue.listPending()).toEqual([
       expect.objectContaining({ id: messageSid, lastError: expect.stringContaining("HTTP 429") }),
     ]);
@@ -299,8 +299,8 @@ describe("createSmsIngressSpool", () => {
       { id: messageSid, body: "keep this attachment", attachments: 1 },
       { id: secondSid, body: "the later message", attachments: 0 },
     ]);
-    expect(mediaRequests).toBe(2);
-    expect(authenticatedMediaRequests).toBe(2);
+    expect(mediaRequests).toBe(3);
+    expect(authenticatedMediaRequests).toBe(3);
     expect(await spool.enqueue(mediaCallback)).toMatchObject({
       kind: "completed",
       duplicate: true,

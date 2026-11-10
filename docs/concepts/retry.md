@@ -69,6 +69,15 @@ When a fallback chain fails, bounded provider reset guidance is extracted from t
 
 Chinese exhausted-quota messages follow the same policy, including MiniMax Token Plan's `已达到 Token Plan 用量上限`, z.ai's `已达到每周/每月使用上限`, and `额度已用尽` / `配额已用尽`. Temporary `请求过于频繁` throttles keep the same-model retry budget.
 
+### Remote media downloads
+
+Media-understanding attachment downloads retry temporary HTTP failures, including
+rate limits (`429`), within their existing three-attempt budget. A valid
+`Retry-After` sets the minimum wait. If that wait exceeds the download
+retry-delay budget, the download fails rather than retrying the origin early.
+Missing or malformed timing uses the existing backoff. Cancellation still stops
+the download and its retry wait.
+
 ### Managed Git operations
 
 The shared Git runner retries transient `fetch` and `ls-remote` failures once,
