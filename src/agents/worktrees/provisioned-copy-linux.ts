@@ -118,6 +118,9 @@ export async function copyProvisionedPathsLinux(
         stage,
         constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
       );
+      check();
+      options.assertCurrent?.();
+      check();
       // Inherited descriptors pin every input. Native cp retains nanosecond timestamps
       // and reflinks; one bounded batch can span many small selected directories.
       await new Promise<void>((resolve, reject) => {

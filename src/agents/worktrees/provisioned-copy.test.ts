@@ -169,7 +169,7 @@ it.skipIf(process.platform !== "linux")(
     const result = await copyProvisionedPaths(source, destination, [...names, "skipped/link"], {
       assertCurrent: authority,
     });
-    expect(authority.mock.calls.length).toBeLessThanOrEqual(4);
+    expect(authority.mock.calls.length).toBeLessThanOrEqual(5);
     expect(swapped).toBe(true);
     expect(result).toEqual(names.toSorted());
     expect(await fs.readdir(outside)).toEqual(["file"]);
@@ -317,3 +317,36 @@ it("rejects an included file replaced by a symlink during portable copy inspecti
   expect(await fs.readdir(destination)).toEqual([]);
   expect(await fs.readFile(outside, "utf8")).toBe("outside bytes\n");
 });
+
+it.skipIf(process.platform !== "linux").for(["abort", "authority"])(
+  "refuses a child when %s is revoked during staging preparation",
+  async (kind) => {
+    const { source, destination } = fixture();
+    await fs.writeFile(path.join(source, "file"), "admitted");
+    const failure = new Error("staging authority retired");
+    const controller = new AbortController();
+    let current = true;
+    const mkdtemp = fs.mkdtemp.bind(fs);
+    vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
+      const stage = await mkdtemp(...args);
+      current = false;
+      if (kind === "abort") {
+        controller.abort(failure);
+      }
+      return stage;
+    });
+    const copies = vi.spyOn(childProcess, "spawn");
+    await expect(
+      copyProvisionedPaths(source, destination, ["file"], {
+        signal: controller.signal,
+        assertCurrent() {
+          if (!current) {
+            throw failure;
+          }
+        },
+      }),
+    ).rejects.toBe(failure);
+    expect(copies).not.toHaveBeenCalled();
+    expect(await fs.readdir(destination)).toEqual([]);
+  },
+);
