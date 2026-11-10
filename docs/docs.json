@@ -2679,7 +2679,8 @@
                     "pages": [
                       "gateway/cli-backends",
                       "gateway/local-models",
-                      "gateway/local-model-services"
+                      "gateway/local-model-services",
+                      "gateway/offline"
                     ]
                   },
                   {
