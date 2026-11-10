@@ -523,6 +523,12 @@ stop changing for a private copy. Inspection without that admission still uses
 an artifact-preserving copy and refuses an inconsistent source. This is
 candidate-side behavior; the installed updater runs first with its shipped checks.
 
+Captured Doctor session inspection reads a drained SQLite database in place when
+the update owns schema-maintenance custody. This avoids a whole-database scratch
+copy on a full disk. The immutable read adds no sidecars and is rejected if the
+source changes; undrained or uncustodied inspections still use a private copy.
+This is candidate-side behavior, not a change to an older installed updater.
+
 During update finalization, disposable plugin source copies and private SQLite
 inspection snapshots use the candidate helper's absolute `TMPDIR` (including
 when an older installed updater starts that helper). Normal Gateway cache

@@ -31,13 +31,17 @@ import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/k
 import { isPostgresSqlConnection } from "../../../infra/sql-connection.js";
 import { runWithSqliteCleanup } from "../../../infra/sqlite-lifecycle-errors.js";
 import { SqliteSnapshotCleanupError } from "../../../infra/sqlite-readonly-location-cleanup.js";
-import { prepareSqliteReadOnlyLocationSync } from "../../../infra/sqlite-snapshot-source.js";
+import {
+  prepareSqliteReadOnlyLocationSync,
+  readCustodiedDrainedSqliteSource,
+} from "../../../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabaseFileIdentity,
 } from "../../../infra/sqlite-worker-identity.js";
 import { hasUpdateDoctorMigrationCapture } from "../../../infra/update-doctor-migration-attribution.js";
+import { withArtifactPreservingStateReads } from "../../../state/artifact-preserving-state-reads.js";
 import { agentEngineInput } from "../../../state/openclaw-agent-db-engine.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly-open.js";
@@ -144,6 +148,15 @@ export function scanDoctorSessionEntryRecords(
       return scan(databaseOptions, expectedIdentity);
     }
     assertSourceCurrent();
+    if (readCustodiedDrainedSqliteSource(scope.storePath)) {
+      // The artifact-preserving owner reads a drained, custodied source in place.
+      const inPlace = withArtifactPreservingStateReads(
+        () => scan(databaseOptions, expectedIdentity),
+        { agentDatabases: true },
+      );
+      assertSourceCurrent();
+      return inPlace;
+    }
     // The child pins the original source identity; the reader keeps its private identity.
     const snapshot = prepareSqliteReadOnlyLocationSync(scope.storePath, expectedIdentity);
     return runWithSqliteCleanup(

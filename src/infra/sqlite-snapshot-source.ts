@@ -12,7 +12,11 @@ import {
   artifactPreservingReads,
   isArtifactPreservingStateRead,
 } from "../state/artifact-preserving-state-reads.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  maintenanceOwnerHasSourceCustody,
+} from "../state/openclaw-state-maintenance-context.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
@@ -51,6 +55,34 @@ import {
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 import { isUpdateRehearsalPrivateDatabase } from "./update-rehearsal-paths.js";
 
+/** A drained family under schema custody can be inspected without a whole-file copy. */
+export function readCustodiedDrainedSqliteSource(pathname: string): BigIntStats | undefined {
+  if (!maintenanceOwnerHasSourceCustody(getOpenClawDatabaseMaintenanceScope(), pathname)) {
+    return undefined;
+  }
+  if (
+    fs.existsSync(`${pathname}-journal`) ||
+    (fs.statSync(`${pathname}-wal`, { throwIfNoEntry: false })?.size ?? 0) > 0
+  ) {
+    return undefined;
+  }
+  return fs.statSync(pathname, { bigint: true });
+}
+
+// Immutable reads cannot detect a writer, so a changed source invalidates what was read.
+function assertCustodiedSourceUnchanged(pathname: string, before: BigIntStats): void {
+  const after = fs.statSync(pathname, { bigint: true, throwIfNoEntry: false });
+  if (
+    !after ||
+    after.ino !== before.ino ||
+    after.size !== before.size ||
+    after.mtimeNs !== before.mtimeNs ||
+    readCustodiedDrainedSqliteSource(pathname) === undefined
+  ) {
+    throw new Error(`SQLite source changed during in-place inspection: ${pathname}`);
+  }
+}
+
 /** The inspection scope owns private readers until native close and snapshot disposal settle. */
 export function openSqliteReadOnlyDatabase(
   pathname: string,
@@ -62,9 +94,11 @@ export function openSqliteReadOnlyDatabase(
   }
   // The published updater already prepared this image. Keep inspection read-only
   // and scoped, but do not copy the same database again for each canary check.
-  const snapshot = isUpdateRehearsalPrivateDatabase(pathname, process.env)
-    ? undefined
-    : prepareSqliteReadOnlyLocationSync(pathname);
+  const drained = readCustodiedDrainedSqliteSource(pathname);
+  const snapshot =
+    drained || isUpdateRehearsalPrivateDatabase(pathname, process.env)
+      ? undefined
+      : prepareSqliteReadOnlyLocationSync(pathname);
   const release = snapshot
     ? retainSnapshotTempDirectory(snapshot.cleanupRoot ?? path.dirname(snapshot.location))
     : undefined;
@@ -78,11 +112,16 @@ export function openSqliteReadOnlyDatabase(
     scope.readers.delete(close);
   };
   scope.readers.add(close);
-  const db = openNodeSqliteDatabase(snapshot?.location ?? pathname, { ...options, readOnly: true });
+  const location =
+    snapshot?.location ?? (drained ? resolveImmutableSqliteFileUri(pathname) : pathname);
+  const db = openNodeSqliteDatabase(location, { ...options, readOnly: true });
   const dispose = db.close.bind(db);
   native.close = () => {
     if (db.isOpen) {
       dispose();
+      if (drained) {
+        assertCustodiedSourceUnchanged(pathname, drained);
+      }
     }
   };
   db.close = close;
