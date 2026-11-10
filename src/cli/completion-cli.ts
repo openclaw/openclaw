@@ -383,11 +383,11 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
             $wordPrefix
         }
     }
-    $choicePrefix = $wordToComplete
     # PowerShell retains quotes in wordToComplete, even for an unfinished literal.
     if ($wordToComplete -ne '' -and $commandElements[-1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-        $choicePrefix = $commandElements[-1].Value
+        $wordToComplete = $commandElements[-1].Value
     }
+    $choicePrefix = $wordToComplete
     $choiceCompletionPrefix = ''
     if ($wordToComplete -match '^(--[^=]+)=(.*)$') {
         $choiceFlag = $Matches[1]

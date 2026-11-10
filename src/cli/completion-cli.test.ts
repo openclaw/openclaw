@@ -419,6 +419,10 @@ ${cases
   });
 
   itWithPowerShell.each([
+    ["openclaw completion '--shell=f'", ["--shell=fish"]],
+    ['openclaw completion "--shell=f"', ["--shell=fish"]],
+    ["openclaw completion '-sf'", ["-sfish"]],
+    ["openclaw completion '--shell=f", ["--shell=fish"]],
     ["openclaw 'completion' --shell f", ["fish"]],
     ["openclaw 'gateway' 'status' --j", ["--json"]],
     ["openclaw gateway --token 'status' --f", ["--force"]],
