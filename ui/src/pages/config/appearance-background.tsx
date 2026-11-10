@@ -1,5 +1,5 @@
 import { action, createMemo, createOptimistic, Errored, Loading, onSettled, Show } from "solid-js";
-import { SessionBackground } from "../../components/session-background.tsx";
+import { SessionBackground } from "../../components/session-background-host.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -87,9 +87,10 @@ export function AppearanceBackground() {
                       return (
                         <Errored
                           fallback={(error) => (
-                            <p role="alert" class="settings-status settings-status--danger">
-                              {formatUiError(error())}
-                            </p>
+                            <div role="alert" class="settings-status settings-status--danger">
+                              <div>{t("configView.appearance.background.saveFailed")}</div>
+                              <div>{formatUiError(error())}</div>
+                            </div>
                           )}
                         >
                           <Loading

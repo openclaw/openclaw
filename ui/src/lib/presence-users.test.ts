@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   hasSessionPresenceViewers,
   presenceUserLabel,
+  profilePresenceViewer,
   presenceViewerActivity,
   projectOnlinePresenceViewers,
   projectPresencePayload,
@@ -10,10 +11,13 @@ import {
 
 it.each([
   [{ id: "gateway-owner" }, "Shared owner", true],
-  [{ id: "gateway-owner", name: "Saved owner name" }, "Shared owner", true],
+  [{ id: "gateway-owner", name: "Saved owner name" }, "Saved owner name · Shared owner", true],
+  [{ id: "gateway-owner", name: "  " }, "Shared owner", true],
+  [{ id: "gateway-owner", email: "shared@example.test" }, "Shared owner", true],
   [{ id: "person", name: "Example person", email: "person@example.test" }, "Example person", false],
-  [{ id: "person", email: "person@example.test" }, "person@example.test", false],
-  [{ id: "person" }, "person", false],
+  [{ id: "person", email: "person@example.test" }, "Person", false],
+  [{ id: "person@example.test", email: "person@example.test" }, "Person", false],
+  [{ id: "person" }, "Person", false],
 ] as const)(
   "labels presence without presenting the shared identity as a person: %j",
   (user, name, isSharedOwner) => {
@@ -41,19 +45,16 @@ it("isolates namespaces while merging renamed tabs and excluding disconnected fa
     { instanceId: "closed", user: raw, reason: "disconnect", watchedSessions: ["closed-session"] },
   ];
   const forward = projectPresencePayload({ presence });
-  expect(forward.users).toHaveLength(2);
-  expect(
-    forward.users.map(({ id: userId, identity, name, watchedSessions, entries }) => [
-      userId,
-      identity,
-      name,
-      watchedSessions,
-      entries?.length,
-    ]),
-  ).toEqual([
-    [id, profile.identity, profile.name, ["profile-extra", "profile-session"], 2],
-    [id, undefined, raw.name, ["raw-extra", "raw-session"], 2],
+  const entries = [expect.any(Object), expect.any(Object)];
+  expect(forward.users).toEqual([
+    expect.objectContaining({
+      ...profile,
+      watchedSessions: ["profile-extra", "profile-session"],
+      entries,
+    }),
+    expect.objectContaining({ ...raw, watchedSessions: ["raw-extra", "raw-session"], entries }),
   ]);
+  expect(forward.users[1]?.identity).toBeUndefined();
   expect(projectPresencePayload({ presence: presence.toReversed() })).toEqual(forward);
 });
 
@@ -136,4 +137,29 @@ it("ages person interaction independently of connection beacons and native input
   expect(activity(at(119_999))).toBe("active");
   expect(activity(at(600_000), at(5_000), { ts: now })).toBe("active");
   expect(activity(at(600_000), { ...at(0), reason: "disconnect" })).toBe("idle");
+});
+
+it.each([
+  { id: "person", login: "octocat", name: "octocat" },
+  { id: "person", login: null, name: "Person person" },
+  { id: "gateway-owner", login: null, name: undefined },
+])("uses one person identity for offline People ($id, $login)", ({ id, login, name }) => {
+  const person = profilePresenceViewer({
+    id,
+    displayName: null,
+    avatarMime: null,
+    hasAvatar: false,
+    githubIdentity: login
+      ? {
+          login,
+          profileUrl: "https://github.com/octocat",
+          avatarUrl: "https://avatars.githubusercontent.com/u/42?v=4",
+        }
+      : null,
+    emails: [],
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  expect(person).toMatchObject({ name, avatarUrl: "/api/users/" + id + "/avatar?v=1" });
 });

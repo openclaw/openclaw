@@ -12,7 +12,6 @@ export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotM
     pageScopeId: null,
     pinnedSessions: [],
     entries: [],
-    sessions: [],
     sections: [],
     cards: [],
     collapsedAgentIds: [],
@@ -26,6 +25,8 @@ export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotM
     offlineUsers: [],
     ownerId: null,
     involvingMe: false,
+    windowKeys: [],
+    rowFloor: 32,
     footer: null,
     brand: { name: "Synthetic workspace", avatar: null, icon: "mark", environment: null },
   };

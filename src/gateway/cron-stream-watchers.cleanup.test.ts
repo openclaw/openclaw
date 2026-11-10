@@ -7,6 +7,7 @@ import {
   job,
   settle,
 } from "./cron-stream-watchers.test-helpers.js";
+import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 
 function cleanup(
   watchers: ReturnType<typeof createCronStreamWatcherFixture>["watchers"],
@@ -17,6 +18,17 @@ function cleanup(
     await watchers.stopAll("shutdown");
   });
 }
+
+function expectHealthy(watchers: ReturnType<typeof createCronStreamWatcherFixture>["watchers"]) {
+  expect(watchers.inspect("stream-job")).toMatchObject({
+    state: "running",
+    consecutiveFailures: 0,
+    restartTimerPending: false,
+  });
+}
+
+const commands = (fake: ReturnType<typeof fakeSupervisor>) =>
+  fake.inputs.map((input) => (input.mode === "child" ? input.argv : undefined));
 
 function deferredSourceFixture() {
   const entered = createDeferred();
@@ -105,14 +117,8 @@ it.each(["identical", "updated"])(
     const replacement = watchers.start(job({ schedule: { kind: "stream", command, batchMs: 50 } }));
     release();
     await Promise.all([starting, replacement]);
-    expect(fake.inputs.map((input) => (input.mode === "child" ? input.argv : undefined))).toEqual([
-      command,
-    ]);
-    expect(watchers.inspect("stream-job")).toMatchObject({
-      state: "running",
-      consecutiveFailures: 0,
-      restartTimerPending: false,
-    });
+    expect(commands(fake)).toEqual([command]);
+    expectHealthy(watchers);
     expect(recordFailure).not.toHaveBeenCalled();
   },
 );
@@ -123,7 +129,6 @@ it("keeps a running source current across repeated starts and reconciliation", a
   const streamJob = job();
   await watchers.start(streamJob);
   const assertCurrent = fake.inputs[0]?.assertCurrent;
-  expect(assertCurrent).toBeTypeOf("function");
   await watchers.start(streamJob);
   await watchers.reconcile([streamJob], true);
   expect(assertCurrent).not.toThrow();
@@ -141,28 +146,75 @@ it("does not revive a running source after a superseded replacement", async () =
   const original = job();
   await watchers.start(original);
   const assertOriginalCurrent = fake.inputs[0]?.assertCurrent;
-  expect(assertOriginalCurrent).toBeTypeOf("function");
   const replacement = watchers.start(
     job({ schedule: { kind: "stream", command: ["replacement"], batchMs: 50 } }),
   );
   const reverted = watchers.start(original);
-  // Both watcher calls admit their requests before the serialized owner operations run.
   await Promise.resolve();
   expect(assertOriginalCurrent).toThrow("Stream source admission is no longer current");
   await Promise.all([replacement, reverted]);
 
-  expect(fake.inputs.map((input) => (input.mode === "child" ? input.argv : undefined))).toEqual([
-    ["stream-source"],
-    ["stream-source"],
-  ]);
+  expect(commands(fake)).toEqual([["stream-source"], ["stream-source"]]);
   expect(fake.runs[0]?.cancel).toHaveBeenCalled();
   expect(assertOriginalCurrent).toThrow("Stream source admission is no longer current");
-  expect(fake.inputs[1]?.assertCurrent).toBeTypeOf("function");
   expect(fake.inputs[1]?.assertCurrent).not.toThrow();
-  expect(watchers.inspect(original.id)).toMatchObject({
-    state: "running",
-    consecutiveFailures: 0,
-    restartTimerPending: false,
-  });
+  expectHealthy(watchers);
   expect(recordFailure).not.toHaveBeenCalled();
+});
+
+it("refuses OCID recovery without the original private process source", async () => {
+  const fake = fakeSupervisor();
+  const fixture = createCronStreamWatcherFixture({ getProcessSupervisor: () => fake.supervisor });
+  cleanup(fixture.watchers);
+  const principal = {
+    kind: "owner",
+    peerKey: `iroh:${"dc".repeat(32)}`,
+    authority: {
+      clawId: "host-stream-claw",
+      rootPub: "host-stream-root",
+      listedSeq: 2,
+      ownerDevice: "host-owner",
+    },
+  } satisfies OpenClawIdTunnelPrincipal;
+  const stored = job({
+    operatorSource: {
+      executionRevision: "source-revision",
+      source: {
+        version: 1,
+        agentId: "main",
+        sessionKey: "agent:main:creator",
+        sessionId: "creator",
+        sourceRunId: "creator-run",
+        snapshot: {
+          profileId: "gateway-owner",
+          scopes: ["operator.admin"],
+          assignedRole: null,
+          githubLogin: null,
+          grant: null,
+          aliasBindingIds: [],
+          authPolicy: {
+            generation: "",
+            grantGeneration: "fixture",
+            role: "operator",
+            authMethod: "trusted-proxy",
+          },
+          controlUiAdmin: true,
+          localOperator: false,
+          sourceIngress: "control-ui",
+          openclawIdPrincipal: principal,
+        },
+      },
+    },
+  });
+  const savedJob = JSON.stringify(stored);
+  await fixture.watchers.start(JSON.parse(savedJob));
+  await fixture.watchers.stopAll("shutdown");
+  expect(fake.spawn).not.toHaveBeenCalled();
+  expect(fixture.recordFailure).toHaveBeenCalledWith(
+    "stream-job",
+    expect.stringContaining("operator authority"),
+    expect.objectContaining({ streamRestartExhausted: true }),
+    expect.any(String),
+    expect.any(String),
+  );
 });

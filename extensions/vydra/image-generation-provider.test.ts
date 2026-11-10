@@ -1,3 +1,4 @@
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { bufferedOversizedJsonResponse as oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,8 +9,8 @@ describe("vydra image-generation provider", () => {
   const { imageProvider: provider } = vydra.registerVydraProviders();
   const request = { provider: "vydra", model: "grok-imagine", prompt: "draw a cat", cfg: {} };
   const imageUrl = "https://cdn.vydra.ai/generated/test.png";
-  const completed = () => vydra.jsonResponse({ jobId: "job-123", status: "completed", imageUrl });
-  const queuedJob = () => vydra.jsonResponse({ jobId: "job-123", status: "queued" });
+  const completed = () => jsonResponse({ jobId: "job-123", status: "completed", imageUrl });
+  const queuedJob = () => jsonResponse({ jobId: "job-123", status: "queued" });
   const png = (body = "png-data") => vydra.binaryResponse(body, "image/png");
   const headersAt = (mock: ReturnType<typeof vi.fn>, index: number) => {
     const call = mock.mock.calls[index];
@@ -62,7 +63,7 @@ describe("vydra image-generation provider", () => {
     const resultUrl = "https://198.18.0.11/generated/test.png";
     const fetchMock = vydra.stubFetch(
       queuedJob(),
-      vydra.jsonResponse({ jobId: "job-123", status: "completed", resultUrls: [resultUrl] }),
+      jsonResponse({ jobId: "job-123", status: "completed", resultUrls: [resultUrl] }),
       png(),
     );
     await provider.generateImage({

@@ -1,4 +1,5 @@
 import type { TranscriptsStatusResult } from "@openclaw/gateway-protocol";
+import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
@@ -7,6 +8,8 @@ import { TRANSCRIPT_SOURCE_LOCATOR_FIELDS } from "../../../../src/plugins/manife
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
   SettingsNavRow,
@@ -16,6 +19,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { registerTranscriptsEnglish } from "../../i18n/locales/en-transcripts.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -165,7 +169,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
       return;
     }
     const updatedSources = [...sources()];
-    if (index !== "new" && updatedSources[index] !== editedSource) {
+    if (index !== "new" && !jsonSchemaValuesEqual(updatedSources[index], editedSource)) {
       setEditError(t("meetingCapture.sourceChanged"));
       return;
     }
@@ -221,7 +225,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
     // A pending health refresh retains the last status from the current connection.
     // Only the original request owner can seed an editor's validation rules.
     const currentResult = result();
-    return currentResult?.isCurrent() ? currentResult.status : null;
+    return client() && currentResult?.isCurrent() ? currentResult.status : null;
   }
   const captureStatus = createMemo(() => (client() && !pending() ? knownCaptureStatus() : null));
   function SourceEditor(editorProps: { index: number | "new" }) {
@@ -267,28 +271,22 @@ export function MeetingCaptureSettings(props: SettingsProps) {
             <SettingsRow
               title={t("meetingCapture.fields.providerId")}
               control={
-                <select
-                  class="settings-select"
+                <SettingsSelect
                   name="providerId"
                   aria-label={t("meetingCapture.fields.providerId")}
                   required
                   disabled={disabled()}
                   value={editedProviderId()}
                   onChange={(event) => selectProvider(event.currentTarget.value)}
-                >
-                  <option value="">{t("meetingCapture.chooseProvider")}</option>
-                  <For each={options()} keyed={(option) => option.id}>
-                    {(option) => (
-                      <option value={option().id} selected={option().id === editedProviderId()}>
-                        {option().label}
-                      </option>
-                    )}
-                  </For>
-                </select>
+                  options={[
+                    { value: "", label: t("meetingCapture.chooseProvider") },
+                    ...options().map((option) => ({ value: option.id, label: option.label })),
+                  ]}
+                />
               }
             />
             {editedProviderId() && !supportsAutoStartSetup(selectedProvider()) ? (
-              <SettingsEmpty message={t("meetingCapture.autoStartUnavailable")} />
+              <SettingsUnavailable message={t("meetingCapture.autoStartUnavailable")} />
             ) : undefined}
             <For each={fields()}>
               {(key) => (
@@ -409,57 +407,67 @@ export function MeetingCaptureSettings(props: SettingsProps) {
       </>
     );
   }
-  const sourceRows = () =>
-    sources().map((raw, index) => {
-      const source = asNullableRecord(raw);
-      const provider = status()?.providers.find((item) => item.providerId === source?.providerId);
-      return (
-        <SettingsRow
-          title={
-            typeof source?.title === "string"
-              ? source.title
-              : (normalizeOptionalString(source?.providerId) ?? t("transcripts.unknown"))
-          }
-          description={[
-            provider?.name,
-            ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => source?.[key]),
-          ]
-            .filter((value) => typeof value === "string" && value)
-            .join(" · ")}
-          control={
-            <>
-              <button
-                class="btn"
-                disabled={disabled()}
-                aria-label={t("meetingCapture.editSourceNumber", { number: String(index + 1) })}
-                onClick={() => editSource(index)}
-              >
-                <Icon name="edit" />
-                {t("meetingCapture.edit")}
-              </button>
-              <button
-                class="btn"
-                disabled={disabled()}
-                aria-label={t("meetingCapture.removeSourceNumber", { number: String(index + 1) })}
-                onClick={() => {
-                  if (disabled()) {
-                    return;
-                  }
-                  context.runtimeConfig.patchForm(
-                    ["transcripts", "autoStart"],
-                    sources().filter((_, position) => position !== index),
-                  );
-                  editSource(null);
-                }}
-              >
-                <Icon name="trash" />
-                {t("common.remove")}
-              </button>
-            </>
-          }
-        />
-      );
-    });
+  function SourceRows() {
+    return (
+      <For each={sources()} keyed={false}>
+        {(raw, index) => {
+          const source = () => asNullableRecord(raw());
+          const provider = () =>
+            status()?.providers.find((item) => item.providerId === source()?.providerId);
+          const title = () => {
+            const current = source();
+            return typeof current?.title === "string"
+              ? current.title
+              : (normalizeOptionalString(current?.providerId) ?? t("transcripts.unknown"));
+          };
+          return (
+            <SettingsRow
+              title={title()}
+              description={[
+                provider()?.name,
+                ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => source()?.[key]),
+              ]
+                .filter((value) => typeof value === "string" && value)
+                .join(" · ")}
+              control={
+                <>
+                  <button
+                    class="btn"
+                    disabled={disabled()}
+                    aria-label={t("meetingCapture.editSourceNumber", { number: String(index + 1) })}
+                    onClick={() => editSource(index)}
+                  >
+                    <Icon name="edit" />
+                    {t("meetingCapture.edit")}
+                  </button>
+                  <button
+                    class="btn"
+                    disabled={disabled()}
+                    aria-label={t("meetingCapture.removeSourceNumber", {
+                      number: String(index + 1),
+                    })}
+                    onClick={() => {
+                      if (disabled()) {
+                        return;
+                      }
+                      context.runtimeConfig.patchForm(
+                        ["transcripts", "autoStart"],
+                        sources().filter((_, position) => position !== index),
+                      );
+                      editSource(null);
+                    }}
+                  >
+                    <Icon name="trash" />
+                    {t("common.remove")}
+                  </button>
+                </>
+              }
+            />
+          );
+        }}
+      </For>
+    );
+  }
   return (
     <openclaw-meeting-capture-settings>
       <SettingsPage>
@@ -485,17 +493,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                 description={t("meetingCapture.libraryHint")}
                 onClick={() => context.navigate("meetings")}
               />
-              <Errored fallback={(_error) => <CaptureSummary status={null} />}>
-                <Loading on={requestKey()} fallback={<CaptureSummary status={null} />}>
-                  <Show
-                    when={client() && readStatus()}
-                    keyed
-                    fallback={<CaptureSummary status={null} />}
-                  >
-                    {(current) => <CaptureSummary status={current.status} />}
-                  </Show>
-                </Loading>
-              </Errored>
+              <CaptureSummary status={knownCaptureStatus()} />
               <SettingsRow
                 title={t("meetingCapture.health")}
                 control={
@@ -534,7 +532,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                 </Loading>
               </Errored>
               {!hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null) ? (
-                <SettingsEmpty message={t("configView.adminRequired")} />
+                <SettingsUnavailable message={t("configView.adminRequired")} />
               ) : undefined}
               {rawDraftPending() ? (
                 <SettingsEmpty message={t("meetingCapture.rawDraftPending")} />
@@ -556,7 +554,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
             }
           >
             {sources().length ? (
-              sourceRows()
+              <SourceRows />
             ) : (
               <SettingsEmpty message={t("meetingCapture.noSources")} />
             )}
@@ -564,51 +562,52 @@ export function MeetingCaptureSettings(props: SettingsProps) {
           <Show when={editing() !== null ? { index: editing() } : undefined} keyed>
             {(selection) => <SourceEditor index={selection.index!} />}
           </Show>
-          <Show when={status()} keyed>
-            {(currentStatus) => (
-              <>
-                {!currentStatus.providers.some(supportsAutoStartSetup) ? (
-                  <SettingsEmpty message={t("meetingCapture.noAutoStartProviders")} />
-                ) : undefined}
-                {currentStatus.configuredSources.length ? (
-                  <SettingsSection
-                    title={t("meetingCapture.sourceHealth")}
-                    description={t("meetingCapture.armedHint")}
-                  >
-                    <For each={currentStatus.configuredSources}>
-                      {(item) => (
-                        <SettingsRow
-                          title={item.title ?? item.source.providerId}
-                          description={[
-                            ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => item.source[key]),
-                            item.startDiagnostic
-                              ? t(`meetingCapture.startDiagnostics.${item.startDiagnostic}`)
-                              : undefined,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                          control={
-                            <SettingsStatus
-                              kind={"muted"}
-                              label={t(`meetingCapture.states.${item.state}`)}
-                            />
-                          }
-                        />
-                      )}
-                    </For>
-                  </SettingsSection>
-                ) : undefined}
-                {Object.values(currentStatus.omitted).some((count) => count > 0) ? (
-                  <p class="settings-page__intro">
-                    {t("meetingCapture.omitted", {
-                      count: String(
-                        Object.values(currentStatus.omitted).reduce((sum, count) => sum + count, 0),
+          <Show when={Boolean(knownCaptureStatus())}>
+            <>
+              {!knownCaptureStatus()?.providers.some(supportsAutoStartSetup) ? (
+                <SettingsEmpty message={t("meetingCapture.noAutoStartProviders")} />
+              ) : undefined}
+              {knownCaptureStatus()?.configuredSources.length ? (
+                <SettingsSection
+                  title={t("meetingCapture.sourceHealth")}
+                  description={t("meetingCapture.armedHint")}
+                >
+                  <For each={knownCaptureStatus()?.configuredSources ?? []} keyed={false}>
+                    {(item) => (
+                      <SettingsRow
+                        title={item().title ?? item().source.providerId}
+                        description={[
+                          ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => item().source[key]),
+                          item().startDiagnostic
+                            ? t(`meetingCapture.startDiagnostics.${item().startDiagnostic}`)
+                            : undefined,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                        control={
+                          <SettingsStatus
+                            kind={"muted"}
+                            label={t(`meetingCapture.states.${item().state}`)}
+                          />
+                        }
+                      />
+                    )}
+                  </For>
+                </SettingsSection>
+              ) : undefined}
+              {Object.values(knownCaptureStatus()?.omitted ?? {}).some((count) => count > 0) ? (
+                <p class="settings-page__intro">
+                  {t("meetingCapture.omitted", {
+                    count: String(
+                      Object.values(knownCaptureStatus()?.omitted ?? {}).reduce(
+                        (sum, count) => sum + count,
+                        0,
                       ),
-                    })}
-                  </p>
-                ) : undefined}
-              </>
-            )}
+                    ),
+                  })}
+                </p>
+              ) : undefined}
+            </>
           </Show>
           <p class="settings-page__intro">{t("meetingCapture.safetyHint")}</p>
           <p class="settings-page__intro">{t("meetingCapture.durationHint")}</p>
@@ -616,12 +615,15 @@ export function MeetingCaptureSettings(props: SettingsProps) {
         </div>
       </SettingsPage>
       <ShellLayoutBoundary traits={{ settingsPage: true }}>
-        <details class="settings-page" open={props.advancedExpanded}>
-          <summary class="settings-section__heading">
-            {t("meetingCapture.advancedSettings")}
-          </summary>
-          {props.buildEditor?.()}
-        </details>
+        <div class="settings-page">
+          <SettingsDisclosure
+            sections
+            title={t("meetingCapture.advancedSettings")}
+            open={props.advancedExpanded}
+          >
+            {props.buildEditor?.()}
+          </SettingsDisclosure>
+        </div>
       </ShellLayoutBoundary>
     </openclaw-meeting-capture-settings>
   );

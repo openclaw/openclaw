@@ -9,11 +9,12 @@ import {
   cleanupUsagePageTest,
   contextWeight,
   loadUsagePage,
+  showRecentSessions,
   queryUsagePage,
   settleUsagePage,
   usageCalls,
 } from "./usage-page.test-support.ts";
-import { texts } from "./view-render.test-support.ts";
+import { openUsageFilter, texts } from "./view-render.test-support.ts";
 import { buildAggregatesFromSessions } from "./view.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
@@ -98,6 +99,7 @@ it.each<
     });
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const { page } = await loadUsagePage(request);
+    await showRecentSessions(page);
     // Match the fixture range so each export interaction renders only its populated day.
     page.read().callbacks.filters.onDatesChange({
       startDate: snapshot.result.startDate,
@@ -116,25 +118,26 @@ it.each<
     }
     if (menuProvider) {
       expect(texts(page.element, ".session-bar-title")).toEqual(["Team Planning"]);
-      const trigger = page.querySelector<HTMLButtonElement>(
-        '[id="usage-filter-provider:trigger"]',
-      )!;
-      trigger.click();
-      await vi.waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
-      page
-        .querySelector<HTMLButtonElement>(
-          '[id="usage-filter-provider:content"] [data-value="option:openai"]',
-        )!
+      const { surface } = openUsageFilter(page, "Provider");
+      await vi.waitFor(() =>
+        expect(
+          surface.querySelector('[role="menuitemcheckbox"][aria-label="openai"]'),
+        ).not.toBeNull(),
+      );
+      surface
+        .querySelector<HTMLButtonElement>('[role="menuitemcheckbox"][aria-label="openai"]')!
         .click();
       await vi.waitFor(() =>
         expect(usageCalls(request).at(-1)?.[1]).toMatchObject({
-          query: page.querySelector<HTMLInputElement>(".usage-query-input")!.value.trim(),
+          query: page
+            .querySelector<HTMLInputElement>(".usage-filter-menu__query input")!
+            .value.trim(),
         }),
       );
       await settleUsagePage(page);
-      trigger.click();
+      page.querySelector<HTMLButtonElement>(".usage-filter-menu__trigger")!.click();
       expect
-        .soft(page.querySelector<HTMLInputElement>(".usage-query-input")!.value)
+        .soft(page.querySelector<HTMLInputElement>(".usage-filter-menu__query input")!.value)
         .toBe(`${query} provider:openai `);
       expect.soft(texts(page.element, ".usage-metric-badge strong")).toEqual(["100", "$1.00", "1"]);
     }

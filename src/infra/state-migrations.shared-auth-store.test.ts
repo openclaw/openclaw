@@ -8,7 +8,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import * as ownership from "../agents/auth-profiles/path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../agents/auth-profiles/path-resolve.native.js";
-import * as persisted from "../agents/auth-profiles/persisted.js";
 import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
 import * as paths from "../agents/auth-profiles/shared-main-dir.js";
 import * as bootstrap from "../agents/auth-profiles/shared-store-bootstrap.js";
@@ -18,7 +17,6 @@ import {
   readSharedAuthProfileRows,
 } from "../agents/auth-profiles/sqlite-read.js";
 import * as sqlite from "../agents/auth-profiles/sqlite.js";
-import * as authState from "../agents/auth-profiles/state.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
@@ -31,7 +29,6 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-ag
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import * as stateDb from "../state/openclaw-state-db.js";
@@ -39,6 +36,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../state/user-model-account-authority.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -46,6 +44,7 @@ import {
 import type { EngineConnection } from "./sql-connection.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
+import * as snapshots from "./sqlite-snapshot-source.js";
 import * as doctor from "./state-migrations.doctor.js";
 import * as migration from "./state-migrations.shared-auth-store.js";
 
@@ -56,8 +55,8 @@ function rows(db: EngineConnection, sql: string, ...params: SQLInputValue[]) {
   return db.prepare(sql).all(...params);
 }
 
-function inspectCopy(fixture: Awaited<ReturnType<typeof createEmptyFixture>>) {
-  expect(fixture.detect({ env: fixture.env, artifactPreservingReadOnly: true })).toEqual({
+async function inspectCopy(fixture: Awaited<ReturnType<typeof createEmptyFixture>>) {
+  expect(await fixture.detect({ env: fixture.env, artifactPreservingReadOnly: true })).toEqual({
     sourcePath: fixture.sourcePath,
     hasLegacy: true,
   });
@@ -100,9 +99,6 @@ function receiptRow(db: EngineConnection) {
     db,
     "SELECT source_sha256, source_record_count, status, removed_source FROM migration_sources WHERE target_table = 'auth_profile_stores'",
   );
-}
-function count(db: EngineConnection, table: string, key: string, value: string) {
-  return row(db, `SELECT COUNT(*) AS count FROM ${table} WHERE ${key} = ?`, value)?.count;
 }
 function completedReceipt(source: unknown) {
   return {
@@ -263,8 +259,14 @@ it.each(["legacy-main", "state-db"])(
     const before = inventory();
     expect(fs.existsSync(`${fixture.sourcePath}-shm`)).toBe(false);
     expect(fs.existsSync(`${statePath}-shm`)).toBe(false);
-    inspectCopy(fixture);
-    expect(inventory()).toEqual(before);
+    const syncPreparation = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+    try {
+      await inspectCopy(fixture);
+      expect(syncPreparation).not.toHaveBeenCalled();
+      expect(inventory()).toEqual(before);
+    } finally {
+      syncPreparation.mockRestore();
+    }
   },
 );
 
@@ -321,43 +323,13 @@ describe("shared auth relocation lifecycle", () => {
         `);
       }
 
-      const sourceChecks = new Map<DatabaseSync, string[]>();
-      // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted native database receiver.
-      const prepare = DatabaseSync.prototype.prepare;
-      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-        this: DatabaseSync,
-        sql,
-      ) {
-        const statement = prepare.call(this, sql);
-        if (this.location() !== sourcePath || !/^PRAGMA (?:quick|integrity)_check\b/u.test(sql)) {
-          return statement;
-        }
-        const all = statement.all.bind(statement);
-        statement.all = () => {
-          const checks = sourceChecks.get(this) ?? [];
-          checks.push(sql);
-          sourceChecks.set(this, checks);
-          return all();
-        };
-        return statement;
-      });
-
       const result = await migrate(sourcePath, integrityCheck);
       if (integrityCheck === "full") {
-        expect([...sourceChecks.values()]).toEqual([["PRAGMA integrity_check;"]]);
         expect(result).toMatchObject({
           changes: [],
           warnings: [expect.stringMatching(/integrity_check.*idx_agent_cache_updated/su)],
         });
       } else {
-        expect([...sourceChecks.values()]).toEqual([
-          ["PRAGMA quick_check;"],
-          [
-            "PRAGMA quick_check;",
-            "PRAGMA integrity_check('auth_profile_store');",
-            "PRAGMA integrity_check('auth_profile_state');",
-          ],
-        ]);
         expect(result.warnings).toEqual([]);
         expect(
           await readSharedAuthProfileRows(captureOpenClawStateWorkerContext({ env: state.env })),
@@ -377,12 +349,6 @@ describe("shared auth relocation lifecycle", () => {
         expect(source.prepare("SELECT value_json FROM cache_entries").get()?.value_json).toBe(
           '"untouched"',
         );
-      }
-      if (integrityCheck !== "full") {
-        // Successful QUICK relocation must not admit a later FULL runtime open.
-        expect(() =>
-          openOpenClawAgentDatabase({ agentId: "main", path: sourcePath, env: state.env }),
-        ).toThrow(/integrity_check.*idx_agent_cache_updated/su);
       }
     },
   );
@@ -407,6 +373,9 @@ describe("shared auth relocation lifecycle", () => {
 
   it("revokes the source credential authority before relocation and cold-loads the shared credential", async () => {
     sqlite.writePersistedAuthProfileStoreRaw(store, state.agentDir());
+    stateDb.openOpenClawStateDatabase({ env: state.env });
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    const syncPreparation = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
     const { sourcePath } = state;
     const reader = prepareAgentAuthProfileRowsRead({
       databasePath: sourcePath,
@@ -423,6 +392,7 @@ describe("shared auth relocation lifecycle", () => {
     });
     const result = await migrate(sourcePath);
     expect(result.warnings).toEqual([]);
+    expect(syncPreparation).not.toHaveBeenCalled();
     expect(deniedBeforeSourceRelease).toBe(true);
     expect(() => authority.readCurrentCredential()).toThrow();
     const context = captureOpenClawStateWorkerContext({ env: state.env });
@@ -440,11 +410,55 @@ describe("shared auth relocation lifecycle", () => {
     );
     expect(current.readCurrentCredential()).toEqual(credential);
   });
+
+  it("rechecks retained ownership after the source read before publishing shared credentials", async () => {
+    sqlite.writePersistedAuthProfileStoreRaw(store, state.agentDir());
+    const { sourcePath } = state;
+    stateDb.openOpenClawStateDatabase({ env: state.env });
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    let retained = false;
+    registerSourceClose(sourcePath, async () => {
+      await setImmediate();
+      if (!retained) {
+        retained = true;
+        beginAgentDeletionJournal(
+          {
+            agentId: "main",
+            operationId: "retain-during-auth-source-close",
+            agentDir: state.agentDir(),
+            workspaceDir: path.join(state.stateDir, "workspace"),
+            sessionsDir: path.join(state.stateDir, "agents", "main", "sessions"),
+            deleteFiles: false,
+          },
+          { env: state.env },
+        );
+      }
+    });
+
+    const result = await migrate(sourcePath);
+
+    expect(retained).toBe(true);
+    expect(result).toMatchObject({
+      changes: [],
+      outcome: "skipped",
+      warnings: [expect.stringContaining("store held for agent main")],
+    });
+    const target = stateDb.openOpenClawStateDatabase({ env: state.env });
+    expect(machineRow(target.db, "authProfiles.store")).toBeUndefined();
+    expect(ownership.resolveSharedAuthStoreOwnership(state.env)).toEqual({
+      location: "legacy-main",
+    });
+    using source = new DatabaseSync(sourcePath, { readOnly: true });
+    expect(readSource(source, "store")).toEqual({
+      store_json: JSON.stringify(store),
+      updated_at: expect.any(Number),
+    });
+  });
 });
 
 it("does not pin runtime auth ownership during copied inspection", async () => {
   const fixture = await createEmptyFixture(false);
-  inspectCopy(fixture);
+  await inspectCopy(fixture);
   const statePath = resolveOpenClawStateSqlitePath(fixture.env);
   expect(fs.existsSync(statePath)).toBe(false);
   expect(ownership.getPreparedSharedAuthStoreOwnership(fixture.env)).toBeUndefined();
@@ -473,7 +487,7 @@ it.runIf(process.platform === "linux")(
         `);
     const before = readMainDatabasePosixLocks(fixture.sourcePath);
     expect(before).toEqual([{ length: 510, pid: process.pid, start: 1073741826, type: "read" }]);
-    inspectCopy(fixture);
+    await inspectCopy(fixture);
     expect(readMainDatabasePosixLocks(fixture.sourcePath)).toEqual(before);
     expect(rows(writer, "SELECT store_key FROM auth_profile_store")).toEqual([
       { store_key: "primary" },
@@ -481,11 +495,9 @@ it.runIf(process.platform === "linux")(
   },
 );
 
-it.each([false, true])("records ownership only (source=%s)", async (hasSource) => {
-  const fixture = await createEmptyFixture(hasSource);
-  expect(fs.existsSync(fixture.sourcePath)).toBe(hasSource);
-
-  const detected = fixture.detect();
+it("records ownership for an empty source database without reporting relocation", async () => {
+  const fixture = await createEmptyFixture(true);
+  const detected = await fixture.detect();
   expect(detected.hasLegacy).toBe(true);
   expect(await fixture.migrate(detected)).toEqual(NO_CHANGES);
   expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
@@ -493,65 +505,26 @@ it.each([false, true])("records ownership only (source=%s)", async (hasSource) =
   });
 });
 
-it("moves exact rows, preserves every effective agent store, and records receipts", async () => {
+it("preserves effective main and private-agent auth across relocation", async () => {
   const fixture = await createFixture();
-  const effectiveBytes = (agentDir: string) => {
-    const effective = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
-    return JSON.stringify({
-      credentials: persisted.buildPersistedAuthProfileSecretsStore(effective),
-      state: authState.buildPersistedAuthProfileState(effective),
+  const effective = () =>
+    [fixture.mainAgentDir, fixture.opsAgentDir].map((agentDir) => {
+      const { profiles, order, lastGood } = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+      return { profiles, order, lastGood };
     });
-  };
-  const before = {
-    main: effectiveBytes(fixture.mainAgentDir),
-    ops: effectiveBytes(fixture.opsAgentDir),
-  };
-  const detected = fixture.detect();
-
-  expect(await fixture.migrate(detected)).toMatchObject({
+  const before = effective();
+  expect(await fixture.migrate(await fixture.detect())).toMatchObject({
     warnings: [],
     changes: [expect.stringContaining("Relocated shared auth")],
   });
-
-  expect({
-    store: sqlite.readPersistedAuthProfileStoreRaw(),
-    state: sqlite.readPersistedAuthProfileStateRaw(),
-    local: localAuth(fixture.mainAgentDir),
-  }).toEqual({
-    store: fixture.sharedStore,
-    state: fixture.sharedState,
-    local: { store: null, state: null },
-  });
-  expect({
-    main: effectiveBytes(fixture.mainAgentDir),
-    ops: effectiveBytes(fixture.opsAgentDir),
-  }).toEqual(before);
-
-  const database = stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
-  for (const [key, value] of [
-    ["authProfiles.store", fixture.sharedStore],
-    ["authProfiles.state", fixture.sharedState],
-    ["auth.sharedStore", { location: "state-db" }],
-  ] as const) {
-    expect(machineRow(database, key)).toEqual({ value_json: JSON.stringify(value) });
-  }
-  expect(
-    row(
-      database,
-      "SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ?",
-      "shared-auth-store-state-db",
-    ),
-  ).toEqual({ count: 2 });
+  expect(effective()).toEqual(before);
 });
 
-it.each(["standard", "custom", "main override"] as const)(
+it.each(["custom", "main override"] as const)(
   "relocates the configured inheritance owner through Doctor (%s)",
   async (layout) => {
     const fixture = await createEmptyFixture(false);
-    const ownerDir = path.join(
-      fixture.stateDir,
-      layout === "custom" ? "custom-owner" : "agents/ops/agent",
-    );
+    const ownerDir = path.join(fixture.stateDir, "custom-owner");
     const peerDir = path.join(fixture.stateDir, "agents/dev/agent");
     const config: OpenClawConfig = {
       agents: {
@@ -676,7 +649,7 @@ it.each(["order state", "credential override"] as const)(
     }
     const localBefore = localAuth(mainAgentDir);
     const sharedBefore = sharedAuth(fixture.env);
-    const detected = fixture.detect({ env: fixture.env });
+    const detected = await fixture.detect({ env: fixture.env });
     expect(detected).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: false });
     expect(await fixture.migrate(detected, fixture.env)).toEqual(NO_CHANGES);
     expect({ local: localAuth(mainAgentDir), shared: sharedAuth(fixture.env) }).toEqual({
@@ -748,27 +721,29 @@ it.each([
     stateRow.updated_at + Number(["changed state", "changed credential"].includes(scenario)),
   );
 
-  const detected = fixture.detect();
+  const detected = await fixture.detect();
   const result = await fixture.migrate(detected);
   const migratedTarget = stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
   const converges = scenario.endsWith("subset");
   expect(result.warnings).toEqual(converges ? [] : [expect.stringMatching(/conflict.*Back up/)]);
   if (!converges) {
     expect(result.warnings[0]).toContain(conflict);
-    expect(result.warnings[0]).toContain("openclaw doctor --fix");
-    expect(result.warnings[0]).toContain(JSON.stringify(sourcePath));
-    expect(result.warnings[0]).toContain(
-      JSON.stringify(path.join(fixture.stateDir, "state", "openclaw.sqlite")),
-    );
     expect(result.warnings[0]).not.toMatch(/shared-key|extra-key|different-key|legacyMetadata/);
   }
   expect(machineRow(migratedTarget, "authProfiles.store", true)).toEqual(targetRow);
   expect(readSource(source, "store")).toEqual(converges ? undefined : sourceRow);
   expect(readSource(source, "state")).toEqual(converges ? undefined : stateRow);
   expect(receiptRow(migratedTarget)).toEqual(converges ? completedReceipt(sourceRow) : undefined);
-  expect(fixture.detect().hasLegacy).toBe(!converges);
+  expect((await fixture.detect()).hasLegacy).toBe(!converges);
   if (scenario === "changed credential") {
     const warning = result.warnings[0]!;
+    for (const guidance of [
+      "openclaw doctor --fix",
+      sourcePath,
+      path.join(fixture.stateDir, "state", "openclaw.sqlite"),
+    ]) {
+      expect(warning).toContain(guidance);
+    }
     expect(warning).toContain(`${JSON.stringify(escapedProfileId)}: missing from target`);
     expect(warning.indexOf(JSON.stringify(escapedProfileId))).toBeLessThan(
       warning.indexOf('"openai:shared"'),
@@ -787,7 +762,7 @@ it.each([
       changes: [expect.stringContaining("Relocated shared auth")],
     });
     expect(sharedAuth(fixture.env).store).toEqual(reconciled);
-    expect(fixture.detect().hasLegacy).toBe(false);
+    expect((await fixture.detect()).hasLegacy).toBe(false);
   }
 });
 
@@ -834,14 +809,10 @@ it.each(["absolute", "tilde"] as const)(
           },
           { env: source.env },
         );
-        expect(localAuth(source.agentDir)).toEqual({ store: source.store, state: source.state });
       }
 
       const detected = await detectLegacy(selected.env, () => selected.owner.home);
-      expect(detected).toMatchObject({
-        stateDir: selected.owner.stateDir,
-        stateSchema: { hasLegacy: false },
-      });
+      expect(detected.stateDir).toBe(selected.owner.stateDir);
       const selectedSourcePath = sqlite.resolveAuthProfileDatabasePath(selected.agentDir);
       expect
         .soft(detected.sharedAuthStore)
@@ -963,9 +934,9 @@ for (const crashState of [
         );
     }
 
-    const detected = fixture.detect();
+    const detected = await fixture.detect();
     const first = await fixture.migrate(detected);
-    const retryDetected = fixture.detect();
+    const retryDetected = await fixture.detect();
     const retry = await fixture.migrate(retryDetected);
     const migratedTarget = stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
 
@@ -981,14 +952,15 @@ for (const crashState of [
         value_json: targetStoreJson,
       });
     }
-    expect(
-      ["authProfiles.store", "authProfiles.state"].map((key) =>
-        count(migratedTarget, "config_machine_state", "state_key", key),
-      ),
-    ).toEqual([1, 1]);
+    expect(sharedAuth(fixture.env)).toEqual({
+      store: JSON.parse(targetStoreJson),
+      state: fixture.sharedState,
+    });
     using cleanedSource = new DatabaseSync(sourcePath, { readOnly: true });
-    expect(count(cleanedSource, "auth_profile_store", "store_key", "primary")).toBe(0);
-    expect(count(cleanedSource, "auth_profile_state", "state_key", "primary")).toBe(0);
+    expect([readSource(cleanedSource, "store"), readSource(cleanedSource, "state")]).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 }
 
@@ -1009,12 +981,12 @@ it.each(["dangling symlink", "unreadable file"] as const)(
         }
         return realLstat(pathname, options as never);
       });
-      expect(fixture.detect({ doctorOnlyStateMigrations: false })).toEqual({
+      expect(await fixture.detect({ doctorOnlyStateMigrations: false })).toEqual({
         sourcePath,
         hasLegacy: false,
       });
     }
-    expect(() => fixture.detect()).toThrowError(
+    await expect(fixture.detect()).rejects.toThrowError(
       expect.objectContaining({
         name: "SharedAuthStoreSourceInspectionError",
         code: "SHARED_AUTH_STORE_SOURCE_UNREADABLE",

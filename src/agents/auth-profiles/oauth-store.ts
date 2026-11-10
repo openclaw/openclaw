@@ -5,7 +5,7 @@ import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { continueAuthProfileAuthorization } from "./authorization-lifetime.js";
 import { authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
-import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
+import { resolveOAuthMirrorDecision } from "./oauth-identity.js";
 import { buildOAuthApiKey } from "./oauth-provider-operations.js";
 import { appendOAuthRefreshCleanupErrors } from "./oauth-refresh-failure.js";
 import { isExactOAuthCredential } from "./oauth-refresh-fence.js";
@@ -137,12 +137,12 @@ export async function resolveAuthoritativeSharedOAuthCredentialUnderLock(params:
     sharedStoreWrite: true,
     updater: (store) => {
       const existing = store.profiles[params.profileId];
-      const decision = shouldMirrorRefreshedOAuthCredential({
+      const decision = resolveOAuthMirrorDecision({
         existing,
         refreshed: params.candidate,
       });
-      if (!decision.shouldMirror) {
-        if (decision.reason === "identity-mismatch-or-regression") {
+      if (decision !== "mirror") {
+        if (decision === "identity-mismatch-or-regression") {
           authProfilesLog.warn(
             "refused to mirror OAuth credential: identity mismatch or regression",
             {
@@ -150,7 +150,7 @@ export async function resolveAuthoritativeSharedOAuthCredentialUnderLock(params:
             },
           );
         }
-        if (decision.reason === "incoming-not-fresher" && existing?.type === "oauth") {
+        if (decision === "incoming-not-fresher" && existing?.type === "oauth") {
           acceptAuthoritative(existing);
         }
         return false;
@@ -205,6 +205,7 @@ export async function persistOAuthRefreshClaim(params: {
   profileId: string;
   expected: OAuthCredential;
   fence: OAuthCredential;
+  assertAdmission?: () => void;
   assertCurrent: () => void;
 }): Promise<boolean> {
   let claimed = false;
@@ -214,6 +215,9 @@ export async function persistOAuthRefreshClaim(params: {
     profileId: params.profileId,
     assertCurrent: params.assertCurrent,
     updater: (store) => {
+      // Admit before this claim publishes its own pending-credential denial.
+      // Accepted claim persistence and refresh settlement retain their native owner.
+      params.assertAdmission?.();
       if (!isExactOAuthCredential(store.profiles[params.profileId], params.expected)) {
         return false;
       }

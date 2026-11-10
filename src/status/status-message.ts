@@ -9,6 +9,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  findDecisionReason,
+  summarizeDecisionReason,
+} from "../../packages/media-understanding-common/src/format.js";
+import type { MediaUnderstandingDecision } from "../../packages/media-understanding-common/src/types.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
@@ -16,6 +21,7 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -57,11 +63,6 @@ import type {
   MessagePresentationBlock,
   MessagePresentationTableCell,
 } from "../interactive/payload.js";
-import {
-  findDecisionReason,
-  summarizeDecisionReason,
-} from "../media-understanding/runner.entries.js";
-import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
@@ -146,27 +147,6 @@ function normalizeAuthMode(value?: string) {
     return "unknown";
   }
   return undefined;
-}
-
-function resolveConfiguredTextVerbosity(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  provider?: string | null;
-  model?: string | null;
-}): "low" | "medium" | "high" | undefined {
-  const provider = params.provider?.trim();
-  const model = params.model?.trim();
-  if (!provider || !model || provider !== "openai") {
-    return undefined;
-  }
-  return resolveOpenAITextVerbosity(
-    resolveExtraParams({
-      cfg: params.config,
-      provider,
-      modelId: model,
-      agentId: params.agentId,
-    }),
-  );
 }
 
 function resolveExecutionLabel(
@@ -387,62 +367,6 @@ const formatVoiceModeLine = (
   return parts.join(" · ");
 };
 
-function resolveChannelModelNote(params: {
-  config?: OpenClawConfig;
-  entry?: SessionEntry;
-  selectedProvider: string;
-  selectedModel: string;
-  parentSessionKey?: string;
-}): string | undefined {
-  if (!params.config || !params.entry) {
-    return undefined;
-  }
-  if (
-    normalizeOptionalString(params.entry.modelOverride) ||
-    normalizeOptionalString(params.entry.providerOverride)
-  ) {
-    return undefined;
-  }
-  const channelOverride = resolveChannelModelOverride({
-    cfg: params.config,
-    channel: sessionDeliveryChannel(params.entry),
-    groupId: params.entry.groupId,
-    groupChatType: params.entry.chatType ?? sessionDeliveryOrigin(params.entry)?.chatType,
-    groupChannel: params.entry.groupChannel,
-    groupSubject: params.entry.subject,
-    parentSessionKey: params.parentSessionKey,
-    directUserIds: [
-      sessionDeliveryOrigin(params.entry)?.nativeDirectUserId,
-      sessionDeliveryOrigin(params.entry)?.from,
-      sessionDeliveryOrigin(params.entry)?.to,
-    ],
-  });
-  if (!channelOverride) {
-    return undefined;
-  }
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.config,
-    defaultProvider: DEFAULT_PROVIDER,
-    allowPluginNormalization: false,
-  });
-  const resolvedOverride = resolveModelRefFromString({
-    raw: channelOverride.model,
-    defaultProvider: DEFAULT_PROVIDER,
-    aliasIndex,
-    allowPluginNormalization: false,
-  });
-  if (!resolvedOverride) {
-    return undefined;
-  }
-  if (
-    resolvedOverride.ref.provider !== params.selectedProvider ||
-    resolvedOverride.ref.model !== params.selectedModel
-  ) {
-    return undefined;
-  }
-  return "channel override";
-}
-
 export type StatusMessageParts = ReturnType<typeof buildStatusMessageParts>;
 
 export function buildStatusMessageParts(args: StatusArgs) {
@@ -582,18 +506,38 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const activeModelProvider = runtimeAliasModelEquivalent
     ? selectedLookupProvider
     : contextLookupProvider;
-  const selectedContextTokens = resolveContextTokensForModel({
+  const selectedCatalogEntry = findModelInCatalog(
+    args.thinkingCatalog ?? [],
+    selectedLookupProvider,
+    selectedLookupModel,
+  );
+  const selectedWindow = resolveModelContextWindowProfile({
+    catalogEntry: selectedCatalogEntry ?? { contextWindow: args.selectedContextWindow },
+    selected: entry?.contextWindow,
+  });
+  const resolvedSelectedContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     provider: selectedLookupProvider,
     model: selectedLookupModel,
-    modelContextWindow: args.selectedContextWindow,
+    modelContextWindow: selectedWindow.contextTokens,
     modelContextTokens: args.selectedContextTokens,
     allowAsyncLoad: false,
     allowCacheLookup: false,
   });
+  const selectedContextTokens =
+    selectedWindow.contextWindow && selectedWindow.contextTokens !== undefined
+      ? Math.min(
+          resolvedSelectedContextTokens ?? selectedWindow.contextTokens,
+          selectedWindow.contextTokens,
+        )
+      : resolvedSelectedContextTokens;
   const activeCatalogEntry = contextLookupProvider
     ? findModelInCatalog(args.thinkingCatalog ?? [], contextLookupProvider, contextLookupModel)
     : undefined;
+  const activeWindow = resolveModelContextWindowProfile({
+    catalogEntry: activeCatalogEntry,
+    selected: entry?.contextWindow,
+  });
   const activeModelMatchesPreparedIdentity =
     normalizeLowercaseStringOrEmpty(contextLookupProvider) ===
       normalizeLowercaseStringOrEmpty(modelRefs.active.provider) &&
@@ -605,12 +549,12 @@ export function buildStatusMessageParts(args: StatusArgs) {
       normalizeLowercaseStringOrEmpty(modelRefs.active.provider)
       ? (args.runtimeContextProvider ?? contextLookupProvider)
       : contextLookupProvider;
-  const activeContextTokens = resolveContextTokensForModel({
+  const resolvedActiveContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     ...(activeContextProvider ? { provider: activeContextProvider } : {}),
     modelProvider: contextLookupProvider,
     model: contextLookupModel,
-    modelContextWindow: activeCatalogEntry?.contextWindow,
+    modelContextWindow: activeWindow.contextTokens,
     modelContextTokens:
       activeCatalogEntry?.contextTokens ??
       (activeCatalogEntry || activeModelMatchesPreparedIdentity
@@ -619,13 +563,53 @@ export function buildStatusMessageParts(args: StatusArgs) {
     allowAsyncLoad: false,
     allowCacheLookup: false,
   });
-  const channelModelNote = resolveChannelModelNote({
-    config: args.config,
-    entry,
-    selectedProvider: selectedLookupProvider,
-    selectedModel: selectedLookupModel,
-    parentSessionKey: args.parentSessionKey,
-  });
+  const activeContextTokens =
+    activeWindow.contextWindow && activeWindow.contextTokens !== undefined
+      ? Math.min(
+          resolvedActiveContextTokens ?? activeWindow.contextTokens,
+          activeWindow.contextTokens,
+        )
+      : resolvedActiveContextTokens;
+  const channelOverride =
+    args.config &&
+    entry &&
+    !normalizeOptionalString(entry.modelOverride) &&
+    !normalizeOptionalString(entry.providerOverride)
+      ? resolveChannelModelOverride({
+          cfg: args.config,
+          channel: sessionDeliveryChannel(entry),
+          groupId: entry.groupId,
+          groupChatType: entry.chatType ?? sessionDeliveryOrigin(entry)?.chatType,
+          groupChannel: entry.groupChannel,
+          groupSubject: entry.subject,
+          parentSessionKey: args.parentSessionKey,
+          directUserIds: [
+            sessionDeliveryOrigin(entry)?.nativeDirectUserId,
+            sessionDeliveryOrigin(entry)?.from,
+            sessionDeliveryOrigin(entry)?.to,
+          ],
+        })
+      : undefined;
+  const channelModelAliasIndex = channelOverride
+    ? buildModelAliasIndex({
+        cfg: args.config,
+        defaultProvider: DEFAULT_PROVIDER,
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const resolvedChannelOverride = channelOverride
+    ? resolveModelRefFromString({
+        raw: channelOverride.model,
+        defaultProvider: DEFAULT_PROVIDER,
+        aliasIndex: channelModelAliasIndex,
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const channelModelNote =
+    resolvedChannelOverride?.ref.provider === selectedLookupProvider &&
+    resolvedChannelOverride.ref.model === selectedLookupModel
+      ? "channel override"
+      : undefined;
   const projectedActiveContextTokens = resolveProjectedSessionContextTokens({
     entry,
     provider: contextLookupProvider,
@@ -736,12 +720,19 @@ export function buildStatusMessageParts(args: StatusArgs) {
         ? "elevated"
         : `elevated:${elevatedLevel}`
       : null;
-  const textVerbosity = resolveConfiguredTextVerbosity({
-    config: args.config,
-    agentId: args.agentId,
-    provider: activeProvider,
-    model: activeModel,
-  });
+  const textVerbosityProvider = activeProvider?.trim();
+  const textVerbosityModel = activeModel?.trim();
+  const textVerbosity =
+    textVerbosityProvider === "openai" && textVerbosityModel
+      ? resolveOpenAITextVerbosity(
+          resolveExtraParams({
+            cfg: args.config,
+            provider: textVerbosityProvider,
+            modelId: textVerbosityModel,
+            agentId: args.agentId,
+          }),
+        )
+      : undefined;
   const fastModeValue = formatFastModeStatusValue({
     mode: fastMode,
     fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,

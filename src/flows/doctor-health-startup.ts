@@ -1,14 +1,18 @@
-import fs from "node:fs";
+import fs, { writeSync } from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
-import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
+import { exitCliAfterOutput, watchCliExitAfterOutput } from "../cli/one-shot-exit.js";
+import { getPendingCliDisposers } from "../cli/runtime-cleanup.js";
+import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
-import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
+import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
+import { formatDoctorProgressPhase, type DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
-import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
+import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
 import { createNonExitingRuntime, defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
@@ -18,6 +22,22 @@ export const showDoctorIntro = (message: string) =>
   clackIntro(stylePromptTitle(message) ?? message);
 export const showDoctorOutro = (message: string) =>
   clackOutro(stylePromptTitle(message) ?? message);
+
+export function showDoctorComplete(params: { watchExit: boolean }): void {
+  showDoctorOutro("Doctor complete.");
+  if (params.watchExit) {
+    // Cleanup after this line can outlive arming the settled-exit watchdog; name what it holds.
+    watchCliExitAfterOutput(() => {
+      writeSync(
+        2,
+        `Doctor finished but the process is still alive: ${JSON.stringify({
+          activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
+          unsettledDisposers: getPendingCliDisposers(),
+        })}\n`,
+      );
+    });
+  }
+}
 
 /** Keep slow checks visible without writing human progress into machine output. */
 export async function withDoctorProgress<T>(
@@ -42,6 +62,15 @@ export async function withDoctorProgress<T>(
   }
 }
 
+export function createDoctorProgressMeasure(options: DoctorOptions): DoctorProgressMeasure {
+  return (name, run) =>
+    withDoctorProgress(
+      formatDoctorProgressPhase(name),
+      () => measureGatewayBootstrapStep(name, run),
+      options.json !== true,
+    );
+}
+
 export function exitDoctorHealthFlow(runtime: RuntimeEnv, code: number): void {
   if (runtime === defaultRuntime) {
     exitCliAfterOutput(runtime, code);
@@ -55,6 +84,26 @@ function stateDirectoryExistsAtDoctorStart(): boolean {
   } catch {
     return false;
   }
+}
+
+// These reads precede maintenance custody; timing out must never abandon a repair.
+function readDoctorStartup<T>(
+  phase: string,
+  read: (signal?: AbortSignal) => Promise<T>,
+): Promise<T> {
+  return withCommandProcessScope(async () => {
+    const signal = resolveCommandProcessSignal();
+    return raceWithTimeout(
+      () => read(signal),
+      60_000,
+      () => {
+        throw new Error(
+          `Doctor startup timed out after 60000ms (${phase}). Retry with OPENCLAW_DEBUG=1 openclaw doctor --lint; if it still stalls, capture a Node diagnostic report before retrying repairs.`,
+        );
+      },
+      { signal },
+    );
+  }, getAsyncWorkSignal());
 }
 
 export async function prepareDoctorHealthFlow(
@@ -71,11 +120,14 @@ export async function prepareDoctorHealthFlow(
   // Preserve the entry fact so doctor can report that automatic initialization.
   const stateDirExistedAtStart = stateDirectoryExistsAtDoctorStart();
   showIntro("OpenClaw doctor");
-  const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
-  const root = await resolveOpenClawPackageRoot({
-    moduleUrl: import.meta.url,
-    argv1: process.argv[1],
-    cwd: process.cwd(),
+  const root = await readDoctorStartup("package root", async (signal) => {
+    const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+    return resolveOpenClawPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+      signal,
+    });
   });
   if (
     resolveIsNixMode() &&
@@ -90,14 +142,15 @@ export async function prepareDoctorHealthFlow(
   if (!resolveDoctorRepairMode(options).updateInProgress) {
     // Source-only config reads avoid database admission and plugin validation: show
     // configured startup dependencies before offline maintenance and repair prompts.
-    const [{ readSourceConfigBestEffort }, { inspectDoctorTailscalePrerequisite }] =
-      await Promise.all([
-        import("../config/io.runtime.js"),
-        import("../commands/doctor-tailscale.js"),
-      ]);
-    const prerequisite = await inspectDoctorTailscalePrerequisite(
-      await readSourceConfigBestEffort(),
-    );
+    const config = await readDoctorStartup("source config", async () => {
+      const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
+      return readSourceConfigBestEffort();
+    });
+    const prerequisite = await readDoctorStartup("Tailscale prerequisite", async () => {
+      const { inspectDoctorTailscalePrerequisite } =
+        await import("../commands/doctor-tailscale.js");
+      return inspectDoctorTailscalePrerequisite(config);
+    });
     if (prerequisite) {
       const { note } = await import("../../packages/terminal-core/src/note.js");
       note(prerequisite, "Gateway startup prerequisite");
@@ -129,13 +182,21 @@ export async function prepareDoctorInteractiveMaintenance(params: {
     confirm: (p) => prompter.confirm(p),
     outro: params.outro,
   });
-  if (offeredUpdate.handled) {
+  if (offeredUpdate) {
     return "handled";
   }
   if (!params.databasePreflight) {
     // Refuse incompatible agent schemas before consent can pause the service.
     // Maintenance still rediscovers current facts after excluding publishers.
     await prepareDoctorDatabasePreflight();
+  }
+  if (process.platform === "darwin" && isDefaultInstallIdentity()) {
+    const [{ readSourceConfigBestEffort }, { noteMacGatewayPlatformWarnings }] = await Promise.all([
+      import("../config/io.runtime.js"),
+      import("../commands/doctor-platform-notes.js"),
+    ]);
+    // Schema admission has passed; repair before maintenance captures its service fingerprint.
+    await noteMacGatewayPlatformWarnings(await readSourceConfigBestEffort(), prompter);
   }
   const accepted = await prompter.confirmRuntimeRepair({
     message:
@@ -158,11 +219,16 @@ export async function prepareDoctorInteractiveMaintenance(params: {
   };
 }
 
-export function showDoctorConfigWriteRefusal(
+export function showDoctorRepairRefusal(
   ctx: DoctorHealthFlowContext,
 ): UpdatePostInstallDoctorResult | undefined {
   if (!ctx.configWriteRefusal) {
-    return undefined;
+    if (ctx.postInstallDoctorResult?.status !== "error") {
+      return undefined;
+    }
+    showDoctorHealthSummary(ctx);
+    showDoctorOutro("Doctor blocked; required repairs remain incomplete.");
+    return ctx.postInstallDoctorResult;
   }
   showDoctorHealthSummary(ctx);
   showDoctorOutro(
@@ -238,7 +304,7 @@ export async function repairDoctorStateDatabase(
     repairOpenClawStateDatabaseIndexesForDoctor,
     repairOpenClawStateDatabaseReadabilityForDoctor,
   ]) {
-    const result = repair({ env: process.env, integrityCheck });
+    const result = await repair({ env: process.env, integrityCheck });
     repairedState ||= result.changes.length > 0;
     if (result.warnings.length > 0) {
       throw new Error(result.warnings.join("\n"));
@@ -257,8 +323,21 @@ export async function prepareDoctorRuntimeChecks(
   prompter: DoctorPrompter,
   options: DoctorOptions,
 ) {
-  const measure = <T>(label: string, run: () => T | Promise<T>) =>
-    withDoctorProgress(label, run, options.json !== true);
+  const measure: DoctorProgressMeasure = (label, run) =>
+    withDoctorProgress(formatDoctorProgressPhase(label), run, options.json !== true);
+  const { getOpenClawDatabaseMaintenanceScope } =
+    await import("../state/openclaw-state-maintenance-context.js");
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (maintenance?.ownsSchemaMaintenance) {
+    const { hasUpdateDoctorMigrationCapture } =
+      await import("../infra/update-doctor-migration-attribution.js");
+    const { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
+    if (hasUpdateDoctorMigrationCapture() && fs.existsSync(resolveOpenClawStateSqlitePath())) {
+      const { openOpenClawStateDatabaseForDoctor } = await import("../state/openclaw-state-db.js");
+      await openOpenClawStateDatabaseForDoctor();
+      maintenance.assertAdmission();
+    }
+  }
   const { repairDoctorAgentDeletionJournal } =
     await import("../commands/doctor-agent-deletion-journal.js");
   const deletionJournal = await measure("Agent deletion journal", () =>

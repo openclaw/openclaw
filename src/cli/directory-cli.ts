@@ -1,4 +1,3 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -26,6 +25,7 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
 import { getScopedChannelsCommandSecretTargets } from "./command-secret-targets.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 
 const DIRECTORY_LIST_LABELS = {
   listPeers: ["Peers", "No peers found", "directory peers"],
@@ -170,13 +170,7 @@ export function registerDirectoryCli(program: Command) {
     action: keyof typeof DIRECTORY_LIST_LABELS,
   ) => {
     const [title, emptyMessage, unsupported] = DIRECTORY_LIST_LABELS[action];
-    const limit =
-      opts.limit === undefined || opts.limit === null
-        ? null
-        : parseStrictPositiveInteger(opts.limit);
-    if (limit === undefined) {
-      throw new Error("--limit must be a positive integer.");
-    }
+    const limit = parseOptionalPositiveInteger(opts.limit ?? undefined, "--limit", ".") ?? null;
     const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
     if (action === "listGroupMembers" && !groupId) {
       throw new Error("Missing --group-id");

@@ -30,6 +30,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
+import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers/thinking.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
@@ -39,6 +40,7 @@ import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
+import { createStandaloneCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { DefaultResourceLoader } from "../sessions/resource-loader.js";
@@ -46,7 +48,6 @@ import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
-import { containsRealConversationMessages } from "./compaction-diagnostics.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
   buildBeforeCompactionHookMetrics,
@@ -131,10 +132,16 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
+    // Exclude obsolete history without clipping the current context or previous summary.
     const preparedSessionManager =
       memoryTranscript?.sessionManager ??
       preparedSession?.sessionManager ??
-      (await SessionManager.openAsync(sessionTarget, undefined, undefined, params.abortSignal));
+      (await SessionManager.openAsync(
+        sessionTarget,
+        undefined,
+        { compaction: true },
+        params.abortSignal,
+      ));
     assertActive();
     const responsesApi =
       effectiveModel.api === "openai-responses" ||
@@ -165,6 +172,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       setSessionModelUsageSink(sessionManager, recordUsage);
     }
     const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+      agentId: sessionAgentId,
       sessionId: params.sessionId,
       cwd: effectiveCwd,
       agentDir,
@@ -235,7 +243,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       setCompactionSafeguardCancellation(sessionManager, undefined);
       // Rebuild on retry so provider wrappers and payload shaping use the fallback effort.
       attemptedThinking.add(thinkLevel);
-      const systemPromptText = buildSystemPromptText();
+      const systemPromptText = await buildSystemPromptText();
       let session: AgentSession | undefined;
       let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
       let resetCompactionTimeout: (() => void) | undefined;
@@ -293,6 +301,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         diagnosticOwner = createDiagnosticEmbeddedRunOwner({
           watchdogAttempt: operation
             ? operation.watchdog.attachAttempt({
+                nested: true,
                 assertCurrent: () => {
                   params.abortSignal?.throwIfAborted();
                   assertSessionControllerOperation(operation);
@@ -429,7 +438,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         const { messageCountOriginal, tokenCountBefore: limitedTranscriptTokensBefore } =
           beforeHookMetrics;
 
-        if (!containsRealConversationMessages(session.messages)) {
+        if (
+          !session.messages.some((message, index, allMessages) =>
+            isRealConversationMessage(message, allMessages, index),
+          )
+        ) {
           log.info(
             `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
           );
@@ -487,6 +500,18 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               },
             });
         const activeSession = session;
+        // The resolved session budget can be smaller than the summarizer's model
+        // window. Carry it into manual fitting when allowing larger replay artifacts.
+        const manualRequestBudget =
+          trigger === "manual"
+            ? createStandaloneCompactionRequestBudget({
+                maxSummaryChars: settingsManager.getCompactionSettings().maxSummaryChars,
+                contextWindow: contextTokenBudget,
+                reserveTokens: settingsManager.getCompactionReserveTokens(),
+                systemPrompt: session.agent.state.systemPrompt,
+                tools: session.agent.state.tools,
+              })
+            : undefined;
         let clientResult: Awaited<ReturnType<typeof activeSession.compact>> | undefined;
         // A timeout after generation is persistence; recovery would discard a real summary.
         let summaryReady = false;
@@ -501,7 +526,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 const requestState =
                   accountingRecorder?.pendingRequestState ??
                   (trigger === "overflow" ? ("unresolved" as const) : undefined);
-                if (trigger === "manual") {
+                if (trigger === "manual" && !manualRequestBudget) {
                   return {
                     status: "completed" as const,
                     result: await activeSession.compact(params.customInstructions),
@@ -510,9 +535,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 return activeSession[agentSessionAutomaticCompaction](
                   params.customInstructions,
                   requestState,
-                  summaryOutputPolicy,
+                  trigger === "manual" ? "none" : summaryOutputPolicy,
                   {
-                    requestBudget: accountingRecorder?.requestBudget,
+                    requestBudget: manualRequestBudget ?? accountingRecorder?.requestBudget,
+                    requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
                     onSummaryReady: () => {
                       summaryReady = true;

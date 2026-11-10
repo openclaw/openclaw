@@ -1,6 +1,7 @@
 // Browser tests cover browser cli plugin behavior.
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserExtensionCommands } from "./browser-cli-extension.js";
 import { registerBrowserInspectCommands } from "./browser-cli-inspect.js";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
@@ -18,6 +19,59 @@ vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => {
 });
 vi.mock("openclaw/plugin-sdk/media-runtime", () => {
   throw new Error("Browser CLI registration must not load media runtime");
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("Browser CLI root output", () => {
+  it("throws a JSON-mode missing-subcommand failure before writing human help", async () => {
+    const writeOut = vi.fn();
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
+      throw new Error("unexpected runtime exit");
+    });
+    const program = new Command().name("openclaw").configureOutput({ writeOut });
+    registerBrowserCli(program, ["node", "openclaw", "browser", "--json"]);
+
+    await expect(program.parseAsync(["browser", "--json"], { from: "user" })).rejects.toThrow(
+      'Missing subcommand. Try: "openclaw browser status"',
+    );
+    expect(writeOut).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("keeps human help and exit 1 when no subcommand is supplied", async () => {
+    const writeOut = vi.fn();
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
+      throw new Error("runtime exit");
+    });
+    const program = new Command().name("openclaw").configureOutput({ writeOut });
+    registerBrowserCli(program, ["node", "openclaw", "browser"]);
+
+    await expect(program.parseAsync(["browser"], { from: "user" })).rejects.toThrow("runtime exit");
+    expect(writeOut).toHaveBeenCalledWith(expect.stringContaining("Usage: openclaw browser"));
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("Missing subcommand."));
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps explicit help successful even with --json", async () => {
+    const writeOut = vi.fn();
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit");
+    const program = new Command().name("openclaw").exitOverride().configureOutput({ writeOut });
+    registerBrowserCli(program, ["node", "openclaw", "browser", "--json", "--help"]);
+
+    await expect(
+      program.parseAsync(["browser", "--json", "--help"], { from: "user" }),
+    ).rejects.toMatchObject({ code: "commander.helpDisplayed", exitCode: 0 });
+    expect(writeOut).toHaveBeenCalledWith(expect.stringContaining("Usage: openclaw browser"));
+    expect(error).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
 });
 
 describe("Browser CLI import boundary", () => {

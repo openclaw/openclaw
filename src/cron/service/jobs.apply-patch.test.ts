@@ -32,22 +32,20 @@ const clearedFailureDestination = {
 const failureDefaults = { channel: "slack", to: "C123", accountId: "bot-b" };
 
 describe("applyJobPatch schedule retention", () => {
-  it("defaults cron to cleanup when converting it to at", () => {
-    const job = makeJob({ schedule: { kind: "cron", expr: "0 * * * *" } });
-    applyJobPatch(job, { schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" } });
-    expect(job).toMatchObject({ schedule: { kind: "at" }, deleteAfterRun: true });
-  });
-
-  it("preserves an explicit keep policy when converting a recurring job to at", () => {
-    const job = makeJob({ deleteAfterRun: true });
-
-    applyJobPatch(job, {
-      schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" },
-      deleteAfterRun: false,
-    });
-
-    expect(job.deleteAfterRun).toBe(false);
-  });
+  it.each([undefined, false] as const)(
+    "converts recurring to at with cleanup policy %s",
+    (policy) => {
+      const job =
+        policy === undefined
+          ? makeJob({ schedule: { kind: "cron", expr: "0 * * * *" } })
+          : makeJob({ deleteAfterRun: true });
+      applyJobPatch(job, {
+        schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" },
+        ...(policy === undefined ? {} : { deleteAfterRun: policy }),
+      });
+      expect(job).toMatchObject({ schedule: { kind: "at" }, deleteAfterRun: policy ?? true });
+    },
+  );
 
   it.each([
     { kind: "at", at: "2026-07-19T09:00:00.000Z" },
@@ -75,12 +73,8 @@ describe("schedule activation ownership", () => {
   it("ignores caller-supplied activation state during creation", () => {
     const now = Date.parse("2026-07-30T00:00:00.000Z");
     const input = {
-      name: "owned activation",
-      enabled: true,
+      ...makeMainJob(),
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
       state: {
         scheduleActivatedAtMs: now - 60_000,
         runningScheduleChangeId: "caller-supplied-edit",
@@ -89,22 +83,23 @@ describe("schedule activation ownership", () => {
 
     const job = createJob({ deps: { nowMs: () => now, defaultAgentId: "main" } }, input);
 
-    expect(job.state.scheduleActivatedAtMs).toBeUndefined();
-    expect(job.state.runningScheduleChangeId).toBeUndefined();
+    expect([job.state.scheduleActivatedAtMs, job.state.runningScheduleChangeId]).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 
   it("ignores caller-supplied activation state during updates", () => {
     const job = makeJob({
       state: { scheduleActivatedAtMs: 456, runningScheduleChangeId: "pending-run-edit" },
     });
-    const patch = {
+    applyJobPatch(job, {
       state: { scheduleActivatedAtMs: 123, runningScheduleChangeId: null },
-    } as unknown as CronJobPatch;
-
-    applyJobPatch(job, patch);
-
-    expect(job.state.scheduleActivatedAtMs).toBe(456);
-    expect(job.state.runningScheduleChangeId).toBe("pending-run-edit");
+    } as unknown as CronJobPatch);
+    expect(job.state).toMatchObject({
+      scheduleActivatedAtMs: 456,
+      runningScheduleChangeId: "pending-run-edit",
+    });
   });
 
   it("rejects out-of-Date-range caller state for startupCatchupAtMs", () => {
@@ -118,23 +113,17 @@ describe("schedule activation ownership", () => {
 describe("applyJobPatch delivery merge", () => {
   it.each([
     {
-      name: "nullable clears",
-      delivery: {
-        channel: null,
-        to: null,
-        threadId: null,
-        accountId: null,
-        completionDestination: null,
-        failureDestination: null,
-      },
+      channel: null,
+      to: null,
+      threadId: null,
+      accountId: null,
+      completionDestination: null,
+      failureDestination: null,
     },
-    {
-      name: "explicitly disabled routes",
-      delivery: { mode: "none", channel: "telegram", to: "123", threadId: 0, accountId: "bot-a" },
-    },
-  ] satisfies Array<{ name: string; delivery: NonNullable<CronJobPatch["delivery"]> }>)(
-    "preserves main-session no-delivery semantics for $name",
-    ({ delivery }) => {
+    { mode: "none", channel: "telegram", to: "123", threadId: 0, accountId: "bot-a" },
+  ] satisfies NonNullable<CronJobPatch["delivery"]>[])(
+    "preserves main-session no-delivery semantics for %j",
+    (delivery) => {
       const job = makeMainJob();
 
       applyJobPatch(job, { delivery });
@@ -185,21 +174,13 @@ describe("applyJobPatch delivery merge", () => {
   it.each(["isolated", "main"] as const)(
     "clears %s failure routes as global opt-outs",
     (target) => {
-      const job =
-        target === "main"
-          ? makeMainJob()
-          : makeJob({
-              delivery: {
-                mode: "announce",
-                channel: "telegram",
-                to: "-1001234567890",
-                failureDestination: { mode: "announce", ...failureDefaults },
-              },
-            });
+      const job = target === "main" ? makeMainJob() : makeJob();
+      if (job.delivery) {
+        job.delivery.failureDestination = { mode: "announce", ...failureDefaults };
+      }
       applyJobPatch(job, { delivery: { failureDestination: clearFailureDestination } });
 
-      const failureDestination = job.delivery?.failureDestination;
-      expect(failureDestination).toStrictEqual(clearedFailureDestination);
+      expect(job.delivery?.failureDestination).toStrictEqual(clearedFailureDestination);
       if (target === "main") {
         expect(job.delivery?.mode).toBe("none");
       }
@@ -213,9 +194,8 @@ describe("applyJobPatch delivery merge", () => {
 
     applyJobPatch(job, { delivery: { failureDestination: { to: "C123" } } });
 
-    const failureDestination = job.delivery?.failureDestination;
-    expect(failureDestination).toEqual({ to: "C123" });
-    expect(Object.hasOwn(failureDestination as object, "channel")).toBe(false);
+    expect(job.delivery?.failureDestination).toEqual({ to: "C123" });
+    expect(Object.hasOwn(job.delivery?.failureDestination ?? {}, "channel")).toBe(false);
     expect(resolveFailureDestination(job, { channel: "slack", accountId: "bot-a" })).toEqual({
       mode: "announce",
       channel: "slack",
@@ -228,27 +208,21 @@ describe("applyJobPatch delivery merge", () => {
 describe("applyJobPatch failure alert merge", () => {
   it("clears explicit fields, preserves omitted fields, and persists the result", () => {
     const kept = { channel: "telegram", includeSkipped: true, mode: "announce" as const };
+    const cleared = {
+      after: undefined,
+      to: undefined,
+      cooldownMs: undefined,
+      accountId: undefined,
+    };
     const job = makeJob({
-      failureAlert: {
-        ...kept,
-        after: 2,
-        to: "123456",
-        cooldownMs: 60_000,
-        accountId: "bot-a",
-      },
+      failureAlert: { ...kept, after: 2, to: "123456", cooldownMs: 60_000, accountId: "bot-a" },
     });
 
     applyJobPatch(job, {
       failureAlert: { after: null, to: null, cooldownMs: null, accountId: null },
     });
 
-    expect(job.failureAlert).toEqual({
-      ...kept,
-      after: undefined,
-      to: undefined,
-      cooldownMs: undefined,
-      accountId: undefined,
-    });
+    expect(job.failureAlert).toEqual({ ...kept, ...cleared });
     expect(projectCronJobThroughStorageCodec(job).failureAlert).toEqual(kept);
 
     applyJobPatch(job, {

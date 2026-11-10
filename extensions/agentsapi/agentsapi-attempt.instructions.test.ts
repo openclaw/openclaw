@@ -6,13 +6,14 @@ import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harn
 import { prepareAgentWorkspaceAttachments } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import {
+  activatePluginForTest,
   loadUserTurnTranscriptRecorderFactoryForTest,
   createMockPluginRegistry,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import {
   createAttemptParams,
@@ -404,6 +405,13 @@ it("routes workspace memory through callable Gateway memory tools and plugin gui
 });
 
 it("includes shared policies for the admitted Gateway tools in the initial instructions", async () => {
+  // The skill-workshop plugin's tool registers the Workshop prompt section.
+  onTestFinished(
+    await activatePluginForTest({
+      config: { plugins: { enabled: true, allow: ["skill-workshop"] } },
+      pluginId: "skill-workshop",
+    }),
+  );
   const fixture = await createFixture({
     sessionKey: "agent:main:main",
     gitCoauthorPrompt: "Fixture Git co-authors: Example <example@example.test>.",
@@ -419,6 +427,8 @@ it("includes shared policies for the admitted Gateway tools in the initial instr
   await fixture.run();
   const instructions = fixture.requests[0]?.agent.instructions;
   expect(instructions).toContain("## UI Presentation");
+  expect(instructions).toContain("Permission blocks:");
+  expect(instructions).toContain("Omit unverified remediation advice");
   expect(instructions).toContain("## Skill Workshop");
   expect(instructions).toContain("## Delegation");
   expect(instructions).toContain("Use or store credentials the user supplies as requested");
@@ -449,9 +459,11 @@ it("refreshes temporal, delivery, and watched-session context on resumed turns",
     sourceReplyDeliveryMode: "message_tool_only",
     messageChannel: "telegram",
     currentChannelId: "123",
+    messageToolFinalByDefault: false,
   });
   expect(promptFixture.turnInputs[1]).toContain("Current date: 2026-09-26");
   expect(promptFixture.turnInputs[1]).toContain("Use `message(action=send)`");
+  expect(promptFixture.turnInputs[1]).toContain("A send ends this turn only with `final=true`.");
   expect(promptFixture.turnInputs[1]).toContain("Watched fixture session: fixture-two");
   expect(watchedSessionsContextMock).toHaveBeenLastCalledWith(
     expect.objectContaining({

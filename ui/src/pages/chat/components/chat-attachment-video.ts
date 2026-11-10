@@ -1,3 +1,5 @@
+import { listen } from "../../../lib/reactive/listener.ts";
+
 export type VideoCompressionRequest = { file: File; maxBytes: number };
 export type VideoCompressionError = "unsupported" | "too-large" | "failed";
 export type VideoCompressionResponse =
@@ -22,6 +24,7 @@ export function compressChatAttachmentVideo(
         type: "module",
       });
       const listeners = new AbortController();
+      const listenerOptions = { signal: listeners.signal };
       let timer: ReturnType<typeof setTimeout>;
       let settled = false;
       const finish = (prepared?: File, reason: VideoCompressionError = "failed") => {
@@ -32,7 +35,6 @@ export function compressChatAttachmentVideo(
         clearTimeout(timer);
         listeners.abort();
         worker.terminate();
-        signal.removeEventListener("abort", abort);
         if (prepared && !signal.aborted) {
           resolve(prepared);
         } else {
@@ -46,8 +48,9 @@ export function compressChatAttachmentVideo(
         clearTimeout(timer);
         timer = setTimeout(() => finish(), 120_000);
       };
-      signal.addEventListener("abort", abort, { once: true });
-      worker.addEventListener(
+      listen(signal, "abort", abort, { ...listenerOptions, once: true });
+      listen(
+        worker,
         "message",
         ({ data }: MessageEvent<VideoCompressionResponse>) => {
           if (settled) {
@@ -62,17 +65,18 @@ export function compressChatAttachmentVideo(
             finish(undefined, data.reason);
           }
         },
-        { signal: listeners.signal },
+        listenerOptions,
       );
-      worker.addEventListener(
+      listen(
+        worker,
         "error",
         (event) => {
           event.preventDefault();
           finish();
         },
-        { signal: listeners.signal },
+        listenerOptions,
       );
-      worker.addEventListener("messageerror", () => finish(), { signal: listeners.signal });
+      listen(worker, "messageerror", () => finish(), listenerOptions);
       armWatchdog();
       try {
         worker.postMessage({ file, maxBytes } satisfies VideoCompressionRequest, []);

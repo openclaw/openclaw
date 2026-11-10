@@ -26,7 +26,10 @@ describe("Devices inventory actions", () => {
       const approved = createDeferred<unknown>();
       const inventory = {
         paired: [{ deviceId: "paired-1", displayName: "Paired browser", roles: ["operator"] }],
-        pending: [{ requestId: "request-1", deviceId: "device-1", displayName: "Browser" }],
+        pending: [
+          { requestId: "request-1", deviceId: "device-1", displayName: "Browser" },
+          { requestId: "request-2", deviceId: "device-2", displayName: "Tablet" },
+        ],
       };
       const request = vi.fn(async (method: string) => {
         if (method === "device.pair.approve") {
@@ -46,10 +49,8 @@ describe("Devices inventory actions", () => {
       const approve = () => button(page.container, t("devices.inventory.approve"));
       await waitForSolid(() => expect(approve().disabled).toBe(false));
       const details = Array.from(
-        page.container.querySelectorAll<HTMLDetailsElement>(".device-entry__details"),
-      ).find((element) =>
-        element.closest(".device-entry")?.textContent?.includes("Paired browser"),
-      );
+        page.container.querySelectorAll<HTMLDetailsElement>("details.device-entry"),
+      ).find((element) => element.textContent?.includes("Paired browser"));
       if (!details) {
         throw new Error("Expected the paired browser details");
       }
@@ -57,6 +58,10 @@ describe("Devices inventory actions", () => {
       approve().click();
       try {
         await waitForSolid(() => expect(approve().disabled).toBe(true));
+        expect(
+          page.container.querySelector<HTMLButtonElement>('button[aria-label="Approve Tablet"]')
+            ?.disabled,
+        ).toBe(false);
         expect(details.isConnected).toBe(true);
         expect(details.open).toBe(true);
         expect(

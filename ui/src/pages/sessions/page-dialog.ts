@@ -7,7 +7,7 @@ import type { SessionsPageMutationResult } from "./mutation-runner.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
 
 /** Type-only, so the dialog itself stays behind its lazy boundary. */
-type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
+type InputDialogOpener = (typeof import("../../components/input-dialog.tsx"))["showInputDialog"];
 
 export function createSessionsDialog(onError: (error: unknown) => void) {
   /** Only one dialog is open at a time; disconnect closes whichever it is. */
@@ -25,7 +25,7 @@ export function createSessionsDialog(onError: (error: unknown) => void) {
     try {
       let showInputDialog: InputDialogOpener;
       try {
-        ({ showInputDialog } = await import("../../components/input-dialog.ts"));
+        ({ showInputDialog } = await import("../../components/input-dialog.tsx"));
       } catch (error) {
         onError(error);
         return null;

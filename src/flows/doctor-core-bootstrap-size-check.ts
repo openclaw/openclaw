@@ -38,7 +38,7 @@ export const bootstrapSizeCheck: Omit<DoctorHealthCheck, "kind" | "source"> = {
         category: "recommended",
         docsUrl: "https://docs.openclaw.ai/concepts/agent-workspace",
         severity: "warning",
-        message: `${file.name} exceeds bootstrap limits and will be truncated.`,
+        message: `${file.name} exceeds bootstrap limits and will be truncated. ${file.retention}`,
         path: file.path,
         fixHint,
       });

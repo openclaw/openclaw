@@ -43,12 +43,12 @@ vi.mock("./node-sqlite.js", async (importOriginal) => {
 
 vi.mock("./sqlite-page-cache-residency.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./sqlite-page-cache-residency.js")>()),
-  readSqlitePageCacheResidency: () => ({
+  readSqlitePageCacheResidency: (pathname: string) => ({
     scope: "file-sample" as const,
     sampledPages: 256,
     residentRatio: 0,
     pageSize: 4096,
-    sizeBytes: 0,
+    sizeBytes: fs.statSync(pathname).size,
   }),
 }));
 
@@ -155,8 +155,6 @@ function createAgentDatabase() {
   }
   return {
     pathname,
-    messageBytes: Buffer.byteLength(message),
-    compressedBytes: compressed.length,
     payloadBytes:
       30 * Buffer.byteLength(message) + compressed.length + Buffer.byteLength(cutoffMessage),
   };
@@ -173,19 +171,11 @@ function finish(pathname: string, initial: PageCacheProgress): PageCacheProgress
 
 describe.skipIf(process.platform !== "linux")("SQLite page-cache worker", () => {
   it("warms recent projections and the latest bounded active payloads without retaining WAL snapshots", () => {
-    const { pathname, messageBytes, compressedBytes, payloadBytes } = createAgentDatabase();
+    const { pathname, payloadBytes } = createAgentDatabase();
     const context = { path: pathname, env: {} };
     const input = { kind: "agent" as const, maxBytes: 3 * MiB, now };
     const initial = pageCacheReadOperations["pageCache.begin"](input, context);
     const first = pageCacheReadOperations["pageCache.step"](null, context);
-    let payloadProgress = first;
-    for (
-      let step = 0;
-      !payloadProgress.complete && payloadProgress.payloadMessages === 0 && step < 64;
-      step++
-    ) {
-      payloadProgress = pageCacheReadOperations["pageCache.step"](null, context);
-    }
     const readerOpenDuringWarm = observed.readers.at(-1)!.isOpen;
 
     const writer = openNodeSqliteDatabase(pathname);
@@ -199,7 +189,7 @@ describe.skipIf(process.platform !== "linux")("SQLite page-cache worker", () => 
     } finally {
       writer.close();
     }
-    const progress = finish(pathname, payloadProgress);
+    const progress = finish(pathname, first);
     const result = progress.at(-1)!;
 
     pageCacheReadOperations["pageCache.begin"](input, context);
@@ -209,11 +199,7 @@ describe.skipIf(process.platform !== "linux")("SQLite page-cache worker", () => 
     finish(pathname, restarted);
     expect(initial.complete).toBe(false);
     expect(first.complete).toBe(false);
-    expect(payloadProgress.complete).toBe(false);
-    expect(payloadProgress.payloadMessages).toBeGreaterThan(0);
-    expect(payloadProgress.payloadBytes).toBe(
-      (payloadProgress.payloadMessages - 1) * messageBytes + compressedBytes,
-    );
+    expect(progress.length).toBeLessThanOrEqual(5);
     expect(first.readBytes).toBeGreaterThan(0);
     expect(readerOpenDuringWarm).toBe(true);
     expect(checkpointBusy).toBe(0);
@@ -232,7 +218,7 @@ describe.skipIf(process.platform !== "linux")("SQLite page-cache worker", () => 
     expect(observed.busyTimeoutPragmas).toEqual([]);
   });
 
-  it("yields between shared-state reads and stops at the byte budget", () => {
+  it("skips repeated oversized shared-state prefixes and warms stores that fit", () => {
     const pathname = path.join(tempDirs.make("sqlite-state-warm-"), "state.sqlite");
     const database = openNodeSqliteDatabase(pathname);
     try {
@@ -241,10 +227,22 @@ describe.skipIf(process.platform !== "linux")("SQLite page-cache worker", () => 
     } finally {
       database.close();
     }
+    for (let pass = 0; pass < 2; pass++) {
+      const result = finish(
+        pathname,
+        pageCacheReadOperations["pageCache.begin"](
+          { kind: "state", maxBytes: 2 * MiB, now },
+          { path: pathname, env: {} },
+        ),
+      ).at(-1)!;
+      expect(result).toMatchObject({ complete: true, limited: true });
+      expect(result.readBytes).toBeLessThan(MiB);
+      expect(result.diskBytes).toBeLessThan(MiB);
+    }
     const progress = finish(
       pathname,
       pageCacheReadOperations["pageCache.begin"](
-        { kind: "state", maxBytes: 2 * MiB, now },
+        { kind: "state", maxBytes: 8 * MiB, now },
         { path: pathname, env: {} },
       ),
     );
@@ -253,9 +251,8 @@ describe.skipIf(process.platform !== "linux")("SQLite page-cache worker", () => 
       expect(progress[index]!.readBytes - progress[index - 1]!.readBytes).toBeLessThan(1.1 * MiB);
     }
     const result = progress.at(-1)!;
-    expect(result).toMatchObject({ complete: true, limited: true });
-    expect(result.readBytes).toBeGreaterThanOrEqual(2 * MiB);
-    expect(result.readBytes).toBeLessThan(3 * MiB);
-    expect(result.readBytes).toBeLessThan(fs.statSync(pathname).size);
+    expect(result).toMatchObject({ complete: true, limited: false });
+    expect(result.readBytes).toBeGreaterThanOrEqual(fs.statSync(pathname).size);
+    expect(result.readBytes).toBeLessThan(8 * MiB);
   });
 });

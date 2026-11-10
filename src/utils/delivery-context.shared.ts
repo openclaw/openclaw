@@ -122,7 +122,7 @@ export function mergeExternalDeliveryContextOverInternalRoute(
   });
 }
 
-type SessionDeliveryProjection = {
+export type SessionDeliveryProjection = {
   route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   origin?: SessionOrigin;

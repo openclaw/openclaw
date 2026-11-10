@@ -4,6 +4,7 @@ import {
   type NodePermissionRequest,
 } from "../../../packages/gateway-protocol/src/node-permissions.js";
 import { registerListener } from "../../../src/shared/listeners.js";
+import { t } from "../lib/local-error-catalog.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import {
   nativeChromeExtensionSetupActionSchema,
@@ -258,11 +259,12 @@ export type NativeDeviceSettingsCapability = {
   /** First accepted snapshot, or null when this capability retires before one arrives. */
   readonly initialSnapshot: Promise<NativeDeviceSettingsSnapshot | null>;
   subscribe(listener: (snapshot: NativeDeviceSettingsSnapshot) => void): () => void;
+  /** Settles after reply publication or retirement; edit failures use the callback. */
   set(
     key: SettingKey,
     value: boolean | string | string[] | null,
     onSettled?: (error?: Error) => void,
-  ): void;
+  ): Promise<void>;
   requestPermission(id: PermissionId): void;
   openSystemSettings(id: PermissionId): void;
   resolvePermission?: (this: void, request: NodePermissionRequest) => Promise<void>;
@@ -312,6 +314,8 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     initialSnapshot.resolve(snapshot);
   }
   let disposed = false;
+  // Retiring the host releases awaiting presenters without publishing another snapshot.
+  const pendingRequests = new Set<() => void>();
   const isCurrent = () =>
     !disposed &&
     nativeWindow.webkit?.messageHandlers?.openclawDeviceSettings === handler &&
@@ -343,22 +347,29 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     message: NativeDeviceSettingsMessage,
     onSettled?: (error?: Error) => void,
   ) => {
+    if (disposed) {
+      return;
+    }
     let failure: Error | undefined;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    pendingRequests.add(resolve);
     try {
-      const reply = await post(message);
+      const reply = await Promise.race([post(message), promise]);
       if (disposed) {
         return;
       }
       if (message.type === "set") {
         const result = nativeDeviceSettingsSnapshotSchema.safeParse(reply);
         if (!result.success) {
-          throw new Error("Native settings returned an invalid edit result");
+          throw new Error(t("nativeDeviceEditError"));
         }
         acceptSnapshot(result.data);
       }
     } catch (error) {
       failure = error instanceof Error ? error : new Error(String(error));
       console.warn("Native device settings request failed", error);
+    } finally {
+      pendingRequests.delete(resolve);
     }
     if (!disposed && message.type === "set") {
       // Clear the originating draft before notifying whichever page is now mounted.
@@ -409,7 +420,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
       return snapshot;
     },
     subscribe: (listener) => registerListener(listeners, listener),
-    set: (key, value, onSettled) => void send({ type: "set", key, value }, onSettled),
+    set: (key, value, onSettled) => send({ type: "set", key, value }, onSettled),
     requestPermission: (id) => void send({ type: "request-permission", id }),
     openSystemSettings: (id) => void send({ type: "open-system-settings", id }),
     get resolvePermission() {
@@ -452,6 +463,8 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     dispose() {
       disposed = true;
       initialSnapshot.resolve(null);
+      pendingRequests.forEach((stop) => stop());
+      pendingRequests.clear();
       stops.forEach((stop) => stop());
       listeners.clear();
     },

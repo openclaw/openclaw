@@ -48,7 +48,6 @@ export async function startGatewayEarlyRuntime(params: {
     | "activeWorkInspectors"
     | "isNixMode"
     | "runDeliveryQueueMediaGc"
-    | "runManagedOutgoingMediaGc"
   >;
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;

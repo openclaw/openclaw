@@ -1,27 +1,36 @@
-import { createMemo, Errored, For, Loading } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  Loading,
+  refresh,
+  Show,
+} from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
-import { NativeVoiceControls } from "./talk-device-controls.tsx";
+import { NativeVoiceControls, voiceControlErrorFallback } from "./talk-device-controls.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 type DeviceLocaleSelection = { primary: string; additional: string[] };
-const pendingDeviceLocales = new WeakMap<
-  NativeDeviceSettingsCapability,
-  Partial<DeviceLocaleSelection>
->();
+type PendingDeviceLocales = Partial<DeviceLocaleSelection> & {
+  errors: Partial<Record<keyof DeviceLocaleSelection, string>>;
+};
+const pendingDeviceLocales = new WeakMap<NativeDeviceSettingsCapability, PendingDeviceLocales>();
 
-function deviceLocaleSelection(
-  capability: NativeDeviceSettingsCapability,
-): DeviceLocaleSelection | null {
+function deviceLocaleSelection(capability: NativeDeviceSettingsCapability) {
   const locale = capability.snapshot?.voice.locale;
   if (!locale) {
     return null;
@@ -30,9 +39,11 @@ function deviceLocaleSelection(
   const primary = pending?.primary ?? locale.primary;
   return {
     primary,
+    available: locale.available,
     additional: [...new Set(pending?.additional ?? locale.additional)].filter(
       (id) => id !== primary,
     ),
+    error: pending?.errors.primary ?? pending?.errors.additional ?? null,
   };
 }
 
@@ -40,118 +51,176 @@ function changeDeviceLocales(
   capability: NativeDeviceSettingsCapability,
   change: Partial<DeviceLocaleSelection>,
 ) {
-  const desired = Object.assign(pendingDeviceLocales.get(capability) ?? {}, change);
+  const desired: PendingDeviceLocales = Object.assign(
+    pendingDeviceLocales.get(capability) ?? { errors: {} },
+    change,
+  );
   pendingDeviceLocales.set(capability, desired);
+  const writes: Promise<void>[] = [];
   for (const key of ["additional", "primary"] as const) {
     const value = change[key];
     if (value === undefined) {
       continue;
     }
-    capability.set(`voice.locale.${key}`, value, () => {
-      // Native settles before publishing its snapshot. Do not retire a newer edit.
-      if (desired[key] === value) {
-        delete desired[key];
-      }
-      if (
-        desired.primary === undefined &&
-        desired.additional === undefined &&
-        pendingDeviceLocales.get(capability) === desired
-      ) {
-        pendingDeviceLocales.delete(capability);
-      }
-    });
+    delete desired.errors[key];
+    writes.push(
+      capability.set(`voice.locale.${key}`, value, (error) => {
+        // Native settles before publishing its snapshot. Do not retire a newer edit.
+        if (desired[key] === value) {
+          if (error) {
+            desired.errors[key] = formatUiError(error);
+          } else {
+            delete desired[key];
+            delete desired.errors[key];
+          }
+        }
+        if (
+          desired.primary === undefined &&
+          desired.additional === undefined &&
+          pendingDeviceLocales.get(capability) === desired
+        ) {
+          pendingDeviceLocales.delete(capability);
+        }
+      }),
+    );
   }
+  return Promise.all(writes);
 }
 
 export type VoiceWakeEditorState =
   | { kind: "unavailable" }
-  | { kind: "ready"; text: string; phase: "saved" | "pending" | "saving"; error: string | null };
+  | { kind: "ready"; text: string; phase: "saved" | "pending" | "saving" };
 
-function VoiceWakeControls(props: {
+function VoiceWakeSection(props: { notice?: JSX.Element; control?: JSX.Element }) {
+  return (
+    <SettingsSection title={t("configPage.deviceTalk.triggerWords")} notice={props.notice}>
+      <SettingsRow
+        title={t("configPage.deviceTalk.triggerWords")}
+        description={t("configPage.deviceTalk.triggerWordsHint")}
+        stacked
+        control={props.control}
+      />
+    </SettingsSection>
+  );
+}
+
+function VoiceWakeWriteFailure(props: { readWriteResult: () => void; onRetry: () => void }) {
+  const outcome = () => {
+    props.readWriteResult();
+    return null;
+  };
+  return (
+    <Errored fallback={voiceControlErrorFallback(() => props.onRetry())}>
+      <Loading>{outcome()}</Loading>
+    </Errored>
+  );
+}
+
+function VoiceWakeReady(props: {
   state: VoiceWakeEditorState;
+  saving: boolean;
+  readWriteResult: () => void;
   onInput: (text: string) => void;
   onRetry: () => void;
 }) {
   const ready = () => props.state.kind === "ready";
-  const text = () => (props.state.kind === "ready" ? props.state.text : "");
-  const error = () => (props.state.kind === "ready" ? props.state.error : null);
+  const text = createMemo(() => (props.state.kind === "ready" ? props.state.text : ""));
+  // An empty draft still resets only the failure boundary, preserving the editor.
+  const statusDraft = createMemo(() => ({ text: text() }));
+  const status = () => {
+    if (props.saving) {
+      return t("common.saving");
+    }
+    // A failed write stays pending; its notice replaces this label.
+    return props.state.kind === "ready" && props.state.phase === "saved"
+      ? t("configPage.deviceTalk.saved")
+      : null;
+  };
   return (
-    <>
-      {ready() && (
-        <textarea
-          class="settings-input"
-          aria-label={t("configPage.deviceTalk.triggerWords")}
-          rows={4}
-          value={text()}
-          onInput={(event) => props.onInput(event.currentTarget.value)}
-        />
-      )}
-      {error() ? (
-        <div class="callout danger" role="alert">
-          {error()}
-          <button class="btn btn--sm" type="button" onClick={() => props.onRetry()}>
-            {t("common.retry")}
-          </button>
-        </div>
-      ) : props.state.kind === "unavailable" ? (
-        <span class="muted">{t("configPage.deviceTalk.triggerWordsUnavailable")}</span>
-      ) : (
-        <span class="muted" role="status">
-          {props.state.phase !== "saved" ? t("common.saving") : t("configPage.deviceTalk.saved")}
-        </span>
-      )}
-    </>
+    <VoiceWakeSection
+      notice={
+        ready() && (
+          <Show when={statusDraft()} keyed>
+            {(_draft) => (
+              <VoiceWakeWriteFailure
+                readWriteResult={props.readWriteResult}
+                onRetry={props.onRetry}
+              />
+            )}
+          </Show>
+        )
+      }
+      control={
+        <>
+          {ready() && (
+            <textarea
+              class="settings-input"
+              aria-label={t("configPage.deviceTalk.triggerWords")}
+              rows={4}
+              value={text()}
+              onInput={(event) => props.onInput(event.currentTarget.value)}
+            />
+          )}
+          {ready() ? (
+            <Show when={status()}>
+              {(label) => (
+                <span class="muted" role="status">
+                  {label()}
+                </span>
+              )}
+            </Show>
+          ) : (
+            <span class="muted">{t("configPage.deviceTalk.triggerWordsUnavailable")}</span>
+          )}
+        </>
+      }
+    />
   );
 }
 
 export function VoiceWakeEditor(props: {
   readState: () => VoiceWakeEditorState;
   scope?: object | null;
+  saving: boolean;
+  readWriteResult: () => void;
   onInput: (text: string) => void;
   onRetry: () => void;
 }) {
+  // Only an admitted read re-arms loading; reconnecting a retained draft keeps the editor.
+  const scope = createMemo(() => props.scope);
+  const failure = voiceControlErrorFallback(() => props.onRetry());
   return (
-    <SettingsSection title={t("configPage.deviceTalk.triggerWords")}>
-      <SettingsRow
-        title={t("configPage.deviceTalk.triggerWords")}
-        description={t("configPage.deviceTalk.triggerWordsHint")}
-        stacked
-        control={
-          <Errored
-            fallback={(error, reset) => (
-              <div class="callout danger" role="alert">
-                {formatUiError(error())}
-                <button
-                  class="btn btn--sm"
-                  type="button"
-                  onClick={() => {
-                    props.onRetry();
-                    reset();
-                  }}
-                >
-                  {t("common.retry")}
-                </button>
-              </div>
-            )}
-          >
-            <Loading
-              on={props.scope}
-              fallback={
+    <Errored fallback={(error, reset) => <VoiceWakeSection notice={failure(error, reset)} />}>
+      <Loading
+        on={scope()}
+        fallback={
+          <VoiceWakeSection
+            control={
+              <>
+                <textarea
+                  class="settings-input"
+                  aria-label={t("configPage.deviceTalk.triggerWords")}
+                  aria-busy="true"
+                  rows={4}
+                  disabled
+                />
                 <span class="muted" role="status">
                   {t("common.loading")}
                 </span>
-              }
-            >
-              <VoiceWakeControls
-                state={props.readState()}
-                onInput={props.onInput}
-                onRetry={props.onRetry}
-              />
-            </Loading>
-          </Errored>
+              </>
+            }
+          />
         }
-      />
-    </SettingsSection>
+      >
+        <VoiceWakeReady
+          state={props.readState()}
+          saving={props.saving}
+          readWriteResult={props.readWriteResult}
+          onInput={props.onInput}
+          onRetry={props.onRetry}
+        />
+      </Loading>
+    </Errored>
   );
 }
 
@@ -162,13 +231,20 @@ function DeviceVoiceSettings(props: {
 }) {
   const voice = () => props.snapshot.voice;
   const microphone = () => voice().microphone;
-  const languageOptions = createMemo(() =>
-    (voice().locale?.available ?? []).map(({ id, name }) => ({ value: id, label: name })),
-  );
-  const locale = createMemo(() => {
+  // Choices and selection share one optimistic frame during overlapping native edits.
+  const [locale, setLocale] = createOptimistic(() => {
     // Reading the published snapshot invalidates the pending-intent overlay.
     void props.snapshot;
     return deviceLocaleSelection(props.capability);
+  });
+  // Keep the controls owned by availability, not each optimistic selection frame.
+  const hasLocale = createMemo(() => locale() !== null);
+  const changeLocales = action(function* (completion: ReturnType<typeof changeDeviceLocales>) {
+    setLocale(deviceLocaleSelection(props.capability));
+    yield completion;
+    // Other edits may still hold this transition open after this write settles.
+    setLocale(deviceLocaleSelection(props.capability));
+    void refresh(locale);
   });
   return (
     <>
@@ -177,25 +253,27 @@ function DeviceVoiceSettings(props: {
         snapshot={props.snapshot}
         presentationRetired={props.presentationRetired}
       />
-      {locale() && (
+      {hasLocale() && (
         <SettingsSelectRow
           title={t("configPage.deviceTalk.primaryLanguage")}
           value={locale()!.primary}
-          options={languageOptions()}
+          options={locale()!.available.map(({ id, name }) => ({ value: id, label: name }))}
           onChange={(value) => {
             const current = deviceLocaleSelection(props.capability);
             if (current) {
-              changeDeviceLocales(props.capability, {
-                primary: value,
-                ...(current.additional.includes(value)
-                  ? { additional: current.additional.filter((id) => id !== value) }
-                  : {}),
-              });
+              void changeLocales(
+                changeDeviceLocales(props.capability, {
+                  primary: value,
+                  ...(current.additional.includes(value)
+                    ? { additional: current.additional.filter((id) => id !== value) }
+                    : {}),
+                }),
+              );
             }
           }}
         />
       )}
-      {locale() && (
+      {hasLocale() && (
         <SettingsRow
           title={t("configPage.deviceTalk.additionalLanguages")}
           stacked
@@ -204,7 +282,7 @@ function DeviceVoiceSettings(props: {
               <For each={locale()!.additional} keyed={(id) => id}>
                 {(id) => {
                   const name = () =>
-                    languageOptions().find((option) => option.value === id())?.label ?? id();
+                    locale()?.available.find((language) => language.id === id())?.name ?? id();
                   return (
                     <div>
                       {name()}
@@ -215,9 +293,11 @@ function DeviceVoiceSettings(props: {
                         onClick={() => {
                           const current = deviceLocaleSelection(props.capability);
                           if (current) {
-                            changeDeviceLocales(props.capability, {
-                              additional: current.additional.filter((value) => value !== id()),
-                            });
+                            void changeLocales(
+                              changeDeviceLocales(props.capability, {
+                                additional: current.additional.filter((value) => value !== id()),
+                              }),
+                            );
                           }
                         }}
                       >
@@ -239,27 +319,50 @@ function DeviceVoiceSettings(props: {
                     select.value !== current.primary &&
                     !current.additional.includes(select.value)
                   ) {
-                    changeDeviceLocales(props.capability, {
-                      additional: [...current.additional, select.value],
-                    });
+                    void changeLocales(
+                      changeDeviceLocales(props.capability, {
+                        additional: [...current.additional, select.value],
+                      }),
+                    );
                     select.value = "";
                   }
                 }}
               >
                 <option value="">{t("configPage.deviceTalk.addLanguage")}</option>
                 <For
-                  each={languageOptions().filter(
-                    ({ value }) =>
-                      value !== locale()!.primary && !locale()!.additional.includes(value),
+                  each={locale()!.available.filter(
+                    ({ id }) => id !== locale()!.primary && !locale()!.additional.includes(id),
                   )}
-                  keyed={(option) => option.value}
+                  keyed={false}
                 >
-                  {(option) => <option value={option().value}>{option().label}</option>}
+                  {(option) => <option value={option().id}>{option().name}</option>}
                 </For>
               </select>
             </>
           }
         />
+      )}
+      {locale()?.error && (
+        <InlineAlert tone="danger" role="alert">
+          {locale()!.error}
+          <button
+            class="btn btn--sm"
+            type="button"
+            onClick={() => {
+              const pending = pendingDeviceLocales.get(props.capability);
+              if (pending) {
+                void changeLocales(
+                  changeDeviceLocales(props.capability, {
+                    ...(pending.errors.primary ? { primary: pending.primary } : {}),
+                    ...(pending.errors.additional ? { additional: pending.additional } : {}),
+                  }),
+                );
+              }
+            }}
+          >
+            {t("common.retry")}
+          </button>
+        </InlineAlert>
       )}
       {microphone() && (
         <SettingsRow

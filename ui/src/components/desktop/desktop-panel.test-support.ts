@@ -4,7 +4,7 @@ import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
-import "./desktop-panel.ts";
+import "./desktop-panel-solid.tsx";
 
 type Panel = HTMLElementTagNameMap["openclaw-desktop-panel"];
 

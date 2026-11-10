@@ -2,9 +2,9 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import * as downloads from "../../lib/download.ts";
+import { suspendingGatewayError as suspensionError } from "../../test-helpers/gateway-errors.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { selectUsageExport } from "./export-menu.test-support.ts";
 import type { UsageSessionEntry, UsageRouteData } from "./types.ts";
@@ -20,22 +20,15 @@ import {
   createPendingUsageRouteData,
   focusDocument,
   refreshButton,
+  showRecentSessions,
   queryUsagePage,
   selectUsageSession,
   settleUsagePage,
   usageButton,
 } from "./usage-page.test-support.ts";
+import { openUsageDisplay } from "./view-render.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
-
-function suspensionError(message: string) {
-  return new GatewayRequestError({
-    code: "UNAVAILABLE",
-    message,
-    retryable: true,
-    details: { reason: "gateway-suspending", phase: "draining" },
-  });
-}
 
 function detailCalls<T extends readonly unknown[]>(request: { mock: { calls: T[] } }) {
   return request.mock.calls.filter(
@@ -44,6 +37,70 @@ function detailCalls<T extends readonly unknown[]>(request: { mock: { calls: T[]
 }
 
 describe("UsagePage detail requests", () => {
+  it("retains accepted details while refreshes wait, fail, and retry", async () => {
+    const snapshot = cacheSnapshot("fresh");
+    const session = {
+      key: "agent:main:retained-details",
+      label: "Retained details",
+      agentId: "main",
+      usage: snapshot.result.totals,
+      contextWeight: contextWeight("accepted"),
+    };
+    const result = { ...snapshot.result, sessions: [session] };
+    const pending = {
+      context: deferred<unknown>(),
+      timeline: deferred<unknown>(),
+      logs: deferred<unknown>(),
+    };
+    let hold = false;
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.usage") {
+        return hold && params?.key ? pending.context.promise : result;
+      }
+      if (method === "sessions.usage.timeseries") {
+        return hold ? pending.timeline.promise : { points: usagePoints(Date.now(), 2, 0.1) };
+      }
+      if (method === "sessions.usage.logs") {
+        return hold
+          ? pending.logs.promise
+          : {
+              logs: [{ timestamp: 1, role: "user", content: "Accepted conversation" }],
+            };
+      }
+      return { providers: [] };
+    });
+    const { page } = await loadUsagePage(request);
+    selectUsageSession(page);
+    await waitForFast(() => expect(page.textContent).toContain("Accepted conversation"));
+    const chart = page.querySelector(".timeseries-svg");
+    const log = page.querySelector(".session-log-content");
+    expect(chart).not.toBeNull();
+
+    hold = true;
+    refreshButton(page).click();
+    await waitForFast(() => expect(usageCalls(request, "sessions.usage.logs")).toHaveLength(2));
+    await page.updateComplete;
+    expect(page.querySelector(".timeseries-svg")).toBe(chart);
+    expect(page.querySelector(".session-log-content")).toBe(log);
+    expect(page.textContent).toContain("accepted");
+
+    for (const read of Object.values(pending)) {
+      read.reject(new Error("Refresh unavailable"));
+    }
+    await waitForFast(() => {
+      for (const kind of ["timeline", "conversation", "context"]) {
+        expect(textOf(page, `.usage-detail-error--${kind}`)).toContain("Refresh unavailable");
+      }
+    });
+    expect(page.querySelector(".timeseries-svg")).toBe(chart);
+    expect(page.querySelector(".session-log-content")).toBe(log);
+
+    hold = false;
+    refreshButton(page).click();
+    await waitForFast(() => expect(page.querySelector(".usage-detail-error")).toBeNull());
+    expect(page.textContent).toContain("Accepted conversation");
+  });
+
   it("keeps selected comparisons across pages and refreshes them with their overview", async () => {
     const snapshot = cacheSnapshot("fresh");
     let revision = snapshot.result.updatedAt;
@@ -67,6 +124,7 @@ describe("UsagePage detail requests", () => {
         : { providers: [], points: [], logs: [] },
     );
     const { page } = await loadUsagePage(request);
+    await showRecentSessions(page);
     const settle = () => settleUsagePage(page);
     const changePage = async (label: string) => {
       usageButton(page, label, ".data-table-pagination button").click();
@@ -119,7 +177,7 @@ describe("UsagePage detail requests", () => {
 
     await queryUsagePage(page, "label:missing");
     expect(page.querySelector(".session-bar-row, .sessions-selected-group")).toBeNull();
-    usageButton(page, "Clear Selection", ".sessions-card button").click();
+    usageButton(page, "Clear selection", ".sessions-card button").click();
     await settle();
     expect(page.usageSelectedSessions).toEqual([]);
   });
@@ -255,7 +313,7 @@ describe("UsagePage detail requests", () => {
     expect(
       page.querySelector(".usage-detail-error--timeline, .usage-detail-error--conversation"),
     ).toBeNull();
-    expect(textOf(page, ".session-logs-compact")).toContain("Loading");
+    expect(textOf(page, ".session-logs-compact")).toContain("Loading usage…");
 
     unavailable = false;
     context.setGatewaySnapshot({ suspensionPhase: "accepting" });
@@ -349,7 +407,7 @@ describe("UsagePage detail requests", () => {
         "agent:main:second",
       ]);
     second.reject(new Error("Selected timeline unavailable"));
-    await waitForFast(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
+    await page.read().detail.timeSeriesRead;
     first.reject(new Error("Retired timeline unavailable"));
     await first.promise.catch(() => {});
     expect(usageCalls(request, "sessions.usage.timeseries")).toHaveLength(2);
@@ -399,7 +457,9 @@ describe("UsagePage detail requests", () => {
 
     const selectSession = (index: number) => selectUsageSession(page, index);
     selectSession(0);
-    await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain("Loading"));
+    await waitForFast(() =>
+      expect(textOf(page, ".context-details-panel")).toContain("Loading usage…"),
+    );
     const firstContext = request.mock.calls.find(
       ([method, params]) => method === "sessions.usage" && params?.key === keys[0],
     )!;
@@ -420,7 +480,7 @@ describe("UsagePage detail requests", () => {
       expect(textOf(page, ".usage-detail-error--context")).toContain("context unavailable"),
     );
     expect(textOf(page, ".context-details-panel")).not.toContain("stale-context");
-    expect(textOf(page, ".context-details-panel")).not.toContain("No context data");
+    expect(textOf(page, ".context-details-panel")).not.toContain("No context data yet.");
 
     request.mockImplementation(async (method, params) =>
       method === "sessions.usage" && params?.key === keys[1]
@@ -447,7 +507,7 @@ describe("UsagePage detail requests", () => {
     const contextCalls = usageCalls(request).length;
     selectSession(2);
     await waitForFast(() =>
-      expect(textOf(page, ".context-details-panel")).toContain("No context data"),
+      expect(textOf(page, ".context-details-panel")).toContain("No context data yet."),
     );
     expect(usageCalls(request)).toHaveLength(contextCalls + 2);
   });
@@ -515,7 +575,7 @@ describe("UsagePage detail requests", () => {
     available = false;
     refreshButton(page).click();
     await waitForFast(() =>
-      expect(textOf(page, ".context-details-panel")).toContain("No context data"),
+      expect(textOf(page, ".context-details-panel")).toContain("No context data yet."),
     );
     expect(
       request.mock.calls.filter(([method, params]) => method === "sessions.usage" && params?.key),
@@ -576,7 +636,10 @@ describe("UsagePage detail requests", () => {
     pending = deferred<SessionsUsageResult>();
     await exportJson();
     await page.updateComplete;
-    usageButton(page, "Current instance").click();
+    const { surface } = openUsageDisplay(page, "Sessions");
+    surface
+      .querySelector<HTMLButtonElement>('[role="menuitemradio"][aria-label="Current instance"]')!
+      .click();
     await page.updateComplete;
     pending.resolve(full);
     await waitForFast(() => expect(refreshButton(page).disabled).toBe(false));

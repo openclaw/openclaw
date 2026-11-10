@@ -1,5 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderCatalogContext,
   ProviderCatalogOutcome,
@@ -286,13 +288,15 @@ export function createUpstreamProviderCatalog(params: {
   // Discovery identifies the client the same way inference does; the attribution
   // owner decides which providers and endpoints receive those headers.
   const buildRequestHeaders = (ctx: LiveModelCatalogHeaderContext): HeadersInit => ({
-    ...resolveProviderRequestHeaders({
-      provider: params.providerId,
-      api: params.providerConfig.api,
-      baseUrl: params.providerConfig.baseUrl,
-      capability: "llm",
-      transport: "http",
-    }),
+    ...omitNullRequestHeaders(
+      resolveProviderRequestHeaders({
+        provider: params.providerId,
+        api: params.providerConfig.api,
+        baseUrl: params.providerConfig.baseUrl,
+        capability: "llm",
+        transport: "http",
+      }),
+    ),
     ...buildDefaultLiveModelCatalogHeaders(ctx),
   });
   const buildStaticProvider = (apiKey?: string): ModelProviderConfig => ({
@@ -591,4 +595,43 @@ export async function buildOpenAICompatibleProviderCatalog(
     signal: params.ctx.signal,
     discoveryMode: params.discoveryMode,
   });
+}
+
+/**
+ * Picks a first-run default: the first hosted-catalog recommendation that the
+ * key's own model list serves. Refreshes the hosted catalog first so a fresh
+ * install can recommend. Returns undefined rather than a model the key cannot use.
+ */
+export async function resolveRecommendedStarterModel(params: {
+  providerId: string;
+  config: OpenClawConfig;
+  endpoint: string;
+  apiKey: string;
+  auditContext: string;
+  fetchGuard?: LiveModelCatalogFetchGuard;
+  signal?: AbortSignal;
+}): Promise<string | undefined> {
+  const [{ refreshRemoteModelCatalog }, { readRemoteModelCatalogProviderRecommendations }] =
+    await Promise.all([
+      import("../model-catalog/remote-refresh.js"),
+      import("../model-catalog/remote-overlay.js"),
+    ]);
+  const [served] = await Promise.all([
+    fetchLiveProviderModelIds({
+      providerId: params.providerId,
+      endpoint: params.endpoint,
+      discoveryApiKey: params.apiKey,
+      fetchGuard: params.fetchGuard,
+      signal: params.signal,
+      auditContext: params.auditContext,
+    }),
+    refreshRemoteModelCatalog({ config: params.config, signal: params.signal }),
+  ]);
+  const providerId = normalizeProviderId(params.providerId);
+  const recommended = await readRemoteModelCatalogProviderRecommendations(
+    params.config,
+    providerId,
+  );
+  const modelId = recommended?.find((id) => served.includes(id));
+  return modelId ? `${providerId}/${modelId}` : undefined;
 }

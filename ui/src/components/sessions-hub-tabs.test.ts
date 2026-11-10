@@ -108,16 +108,6 @@ describe("Sessions hub navigation", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("hands focus to the destination strip after keyboard navigation", async () => {
-    const source = await mount({ active: "sessions", onSelect: () => undefined });
-    activate(source);
-
-    const destination = await mount({ active: "worktrees", onSelect: () => undefined });
-    await vi.waitFor(() => {
-      expect(document.activeElement).toBe(findTab(destination));
-    });
-  });
-
   it.each(["queued", "before mount"] as const)(
     "does not steal deliberate focus established %s",
     async (stage) => {

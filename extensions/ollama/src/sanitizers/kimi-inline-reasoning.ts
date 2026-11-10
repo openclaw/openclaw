@@ -4,44 +4,12 @@ const INLINE_REASONING_MIN_PREFIX_CHARS = 80;
 const INLINE_REASONING_MAX_PENDING_CHARS = 512;
 const INLINE_REASONING_BOUNDARY_RE = /(^|\s)\uFE0F\s*/u;
 
-type InlineReasoningVisibleTextResolution =
-  | { kind: "visible"; text: string; bypassInlineReasoning?: boolean }
-  | { kind: "pending" };
-
 export function isOllamaCloudKimiModelRef(modelId: string): boolean {
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   const slashIndex = normalizedModelId.indexOf("/");
   const normalizedWireModelId =
     slashIndex === -1 ? normalizedModelId : normalizedModelId.slice(slashIndex + 1);
   return normalizedWireModelId.startsWith("kimi-k") && normalizedWireModelId.includes(":cloud");
-}
-
-function resolveInlineReasoningVisibleText(params: {
-  text: string;
-  final: boolean;
-}): InlineReasoningVisibleTextResolution {
-  const match = INLINE_REASONING_BOUNDARY_RE.exec(params.text);
-  if (!match || match[1] === undefined) {
-    if (!params.final && params.text.length <= INLINE_REASONING_MAX_PENDING_CHARS) {
-      return { kind: "pending" };
-    }
-    return {
-      kind: "visible",
-      text: params.text,
-      bypassInlineReasoning:
-        !params.final && params.text.length > INLINE_REASONING_MAX_PENDING_CHARS,
-    };
-  }
-
-  const boundaryStartIndex = match.index + match[1].length;
-  const boundaryEndIndex = match.index + match[0].length;
-  const prefix = params.text.slice(0, boundaryStartIndex).trim();
-  const answer = params.text.slice(boundaryEndIndex).trim();
-  if (prefix.length >= INLINE_REASONING_MIN_PREFIX_CHARS) {
-    return { kind: "visible", text: answer };
-  }
-
-  return params.final ? { kind: "visible", text: params.text } : { kind: "pending" };
 }
 
 export function createKimiInlineReasoningSanitizer() {
@@ -52,13 +20,25 @@ export function createKimiInlineReasoningSanitizer() {
       return params.text;
     }
 
-    const resolution = resolveInlineReasoningVisibleText(params);
-    if (resolution.kind === "pending") {
-      return undefined;
+    const match = INLINE_REASONING_BOUNDARY_RE.exec(params.text);
+    if (!match || match[1] === undefined) {
+      if (!params.final && params.text.length <= INLINE_REASONING_MAX_PENDING_CHARS) {
+        return undefined;
+      }
+      if (!params.final && params.text.length > INLINE_REASONING_MAX_PENDING_CHARS) {
+        bypassInlineReasoning = true;
+      }
+      return params.text;
     }
-    if (resolution.bypassInlineReasoning) {
-      bypassInlineReasoning = true;
+
+    const boundaryStartIndex = match.index + match[1].length;
+    const boundaryEndIndex = match.index + match[0].length;
+    const prefix = params.text.slice(0, boundaryStartIndex).trim();
+    const answer = params.text.slice(boundaryEndIndex).trim();
+    if (prefix.length >= INLINE_REASONING_MIN_PREFIX_CHARS) {
+      return answer;
     }
-    return resolution.text;
+
+    return params.final ? params.text : undefined;
   };
 }

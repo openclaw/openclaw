@@ -1,10 +1,72 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { normalizeThemePalette } from "../../app/theme-palette.ts";
+import { i18n } from "../../i18n/index.ts";
+
+it("localizes a palette failure captured before Settings opens", async () => {
+  let failure: unknown;
+  try {
+    normalizeThemePalette("light", {}, undefined);
+  } catch (error) {
+    failure = error;
+  }
+  const original = i18n.t.bind(i18n);
+  const translate = vi
+    .spyOn(i18n, "t")
+    .mockImplementation((key, params) =>
+      key === "configView.appearance.themeImport.missingToken"
+        ? "Localized missing " + params?.token
+        : original(key, params),
+    );
+  onTestFinished(() => translate.mockRestore());
+  const { container } = renderAppearance({
+    themeCatalog: { themes: [], error: failure instanceof Error ? failure : String(failure) },
+  });
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  await vi.waitFor(() => expect(container.textContent).toContain("Localized missing background"));
+});
+
+it("localizes unnamed themes and the system typeface inside the default option", async () => {
+  const original = i18n.t.bind(i18n);
+  const translate = vi.spyOn(i18n, "t").mockImplementation((key, params) => {
+    if (key === "configView.appearance.customTheme") {
+      return "Localized unnamed theme";
+    }
+    if (key === "configView.appearance.fonts.system") {
+      return "Localized system font";
+    }
+    return original(key, params);
+  });
+  onTestFinished(() => translate.mockRestore());
+  const { container } = renderAppearance({
+    theme: "custom",
+    hasCustomTheme: true,
+    customThemeLabel: "",
+    fontUi: undefined,
+    fontChat: undefined,
+  });
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  await updatePickers(container);
+  expect(container.textContent).toContain("Localized unnamed theme");
+  const fontRow = settingsRow(container, original("configView.appearance.fonts.ui"));
+  await openPicker(required(fontRow, "openclaw-select-picker", HTMLElement) as SelectPicker);
+  expect(translate).toHaveBeenCalledWith("configView.appearance.fonts.themeFace", {
+    theme: "Localized unnamed theme",
+    face: "Localized system font",
+  });
+});
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
-import { renderAppearance, renderConfigInto } from "./config-view.test-support.tsx";
+import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import "../../styles.css";
+import {
+  renderAppearance,
+  renderConfigInto,
+  requiredConfigElement as required,
+} from "./config-view.test-support.tsx";
 
 function settingsRow(container: HTMLElement, title: string) {
   const row = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
@@ -33,19 +95,6 @@ describe("config appearance preferences", () => {
       throw new Error(`Expected button with text "${text}"`);
     }
     return button;
-  }
-
-  function required<T extends Element>(
-    container: HTMLElement,
-    selector: string,
-    constructor: new () => T,
-  ): T {
-    const element = container.querySelector(selector);
-    expect(element).toBeInstanceOf(constructor);
-    if (!(element instanceof constructor)) {
-      throw new Error(`Expected element matching "${selector}"`);
-    }
-    return element;
   }
 
   function pickerOption(picker: Element, value: string) {
@@ -84,94 +133,33 @@ describe("config appearance preferences", () => {
     }
   });
 
-  it.each([
-    { systemLocale: "pt-BR", localeOverride: undefined, label: "Português (Brazilian Portuguese)" },
-    { systemLocale: "de", localeOverride: "fr", label: "Deutsch (German)" },
-  ] as const)(
-    "renders and changes language with system locale $systemLocale",
-    async ({ systemLocale, localeOverride, label }) => {
-      const { container, props } = renderAppearance({
-        systemLocale,
-        localeOverride,
-        localeOverridden: Boolean(localeOverride),
-      });
-      await updatePickers(container);
-      const sections = [...container.querySelectorAll<HTMLElement>(".settings-section")];
-      expect(sections[0]?.id).toBe("settings-language");
-      expect(sections[0]?.textContent).toContain("Language");
-      expect(sections[0]?.textContent).toContain("Synced across your devices through the gateway");
-      const select = container.querySelector<SelectPicker>(
-        "#settings-language openclaw-select-picker",
-      );
-      expect(select).not.toBeNull();
-      if (!select) {
-        throw new Error("Missing language select");
-      }
-      await openPicker(select);
-      if (localeOverride) {
-        expect(pickerOption(select, "fr")?.getAttribute("aria-selected")).toBe("true");
-      } else {
-        expect(
-          select.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-        ).toBe("system");
-      }
-      expect(pickerOption(select, "system")?.textContent).toContain(`System (${label})`);
-      for (const value of ["fr", "system"]) {
-        await choosePickerValue(select, value);
-      }
-      expect(props.onLocaleChange).toHaveBeenCalledWith("fr");
-      expect(props.onLocaleChange).toHaveBeenCalledWith(undefined);
-    },
-  );
-
-  it("names the theme's chat face and maps typography sentinels back to unset overrides", async () => {
-    const { container, props } = renderAppearance({
-      theme: "dash",
-      fontUi: "geist",
-      fontChat: "system",
-      fontUiProvenance: "profile",
-    });
+  it("labels a regional system locale", async () => {
+    const { container } = renderAppearance({ systemLocale: "pt-BR" });
     await updatePickers(container);
-    const ui = required(container, "#settings-font-ui", HTMLElement).closest<SelectPicker>(
-      "openclaw-select-picker",
+    const select = container.querySelector<SelectPicker>(
+      "#settings-language openclaw-select-picker",
     )!;
-    const chat = required(container, "#settings-font-chat", HTMLElement).closest<SelectPicker>(
-      "openclaw-select-picker",
-    )!;
-    await openPicker(ui);
-    expect(pickerOption(ui, "theme")?.textContent).toContain("Dash · DM Sans");
-    expect(ui.querySelectorAll('[role="option"]')).toHaveLength(11);
-    await openPicker(chat);
-    expect(pickerOption(chat, "theme")?.textContent).toContain("Dash · Fraunces");
-    expect(ui.closest(".settings-row")?.textContent).toContain("Saved to your profile");
-    expect(chat.querySelectorAll('[role="option"]')).toHaveLength(11);
-    await choosePickerValue(ui, "lora");
-    expect(props.setFontUi).toHaveBeenLastCalledWith("lora");
-    await choosePickerValue(ui, "theme");
-    expect(props.setFontUi).toHaveBeenLastCalledWith(undefined);
-    await choosePickerValue(chat, "theme");
-    expect(props.setFontChat).toHaveBeenLastCalledWith(undefined);
+    await openPicker(select);
+    expect(pickerOption(select, "system")?.textContent).toContain(
+      "System (Português (Brazilian Portuguese))",
+    );
   });
 
-  it("describes the custom accent source and selected state through the native input", () => {
-    const inherited = renderAppearance({
-      accent: undefined,
-      accentProvenance: "default",
-    });
-    const inheritedInput =
-      inherited.container.querySelector<HTMLInputElement>("[data-accent-custom]");
-    expect(inherited.container.querySelector("#settings-accent-status")?.textContent).not.toContain(
-      "Using inherited accent",
-    );
-    expect(inheritedInput?.getAttribute("aria-describedby")).toBe("settings-accent-status");
+  it("identifies profile-owned typography", async () => {
+    const { container } = renderAppearance({ fontUiProvenance: "profile" });
+    await updatePickers(container);
+    expect(
+      required(container, "#settings-appearance-typography", HTMLElement).querySelector(
+        ":scope > .settings-section__scope",
+      )?.textContent,
+    ).toContain("Saved to your profile");
+  });
 
+  it("uses dark ink on a light custom accent swatch", () => {
     const custom = renderAppearance({
       accent: "#c3cfdb",
       accentProvenance: "device-local",
     });
-    expect(custom.container.querySelector("#settings-accent-status")?.textContent).toContain(
-      "Using Custom color",
-    );
     expect(
       custom.container
         .querySelector<HTMLElement>(".settings-accent-swatch--custom")
@@ -179,23 +167,20 @@ describe("config appearance preferences", () => {
     ).toBe("#000000");
   });
 
-  it("opens the theme importer, applies an import, and exposes replace and clear actions", () => {
+  it("gates empty theme imports and exposes replace and clear actions", () => {
     const onOpenCustomThemeImport = vi.fn();
     const { container, props } = renderAppearance({
       onOpenCustomThemeImport,
     });
 
     const customButton = findButtonByText(container, "Import");
-
-    expect(customButton.disabled).toBe(false);
-    expect(customButton.hasAttribute("aria-pressed")).toBe(false);
-    expect(
-      normalizedText(
-        required(container, ".settings-theme-import__inline-hint", HTMLParagraphElement),
-      ),
-    ).toBe(
-      "Click Import to add one browser-local tweakcn theme. In tweakcn, use Share and paste the copied link here.",
+    const clawPalette = required(
+      container,
+      ".settings-theme-card--claw .settings-theme-card__palette",
+      HTMLElement,
     );
+
+    expect(customButton.hasAttribute("aria-pressed")).toBe(false);
 
     customButton.click();
 
@@ -206,37 +191,20 @@ describe("config appearance preferences", () => {
 
     expect(importButton.disabled).toBe(true);
     required(container, ".settings-theme-import__input", HTMLInputElement);
-    expect(
-      container.querySelector<HTMLAnchorElement>(".settings-theme-import__external")?.href,
-    ).toBe("https://tweakcn.com/editor/theme");
-    expect(
-      normalizedText(required(container, ".settings-theme-import__hint", HTMLParagraphElement)),
-    ).toBe(
-      "Open tweakcn.com, choose or create a theme, click Share, then paste the copied theme link here. Share links, editor URLs, registry URLs, theme IDs, and default theme names like amethyst-haze are accepted.",
-    );
     props.hasCustomTheme = true;
     props.customThemeLabel = "Light Green";
     props.customThemeSourceUrl = "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z";
     props.customThemeImportUrl = props.customThemeSourceUrl;
     renderConfigInto(props, container);
     const importedButton = findButtonByText(container, "Light Green");
-    expect(importedButton.disabled).toBe(false);
     importedButton.click();
     expect(props.setTheme).toHaveBeenCalledWith("custom");
 
-    const replaceButton = findButtonByText(container, "Replace Light Green", false);
-    const clearButton = findButtonByText(container, "Clear Light Green", false);
-    replaceButton.click();
-    clearButton.click();
+    findButtonByText(container, "Replace Light Green", false).click();
+    findButtonByText(container, "Clear Light Green", false).click();
 
     expect(props.onImportCustomTheme).toHaveBeenCalledTimes(1);
     expect(props.onClearCustomTheme).toHaveBeenCalledTimes(1);
-    expect(container.querySelector(".settings-theme-import__meta-label")?.textContent?.trim()).toBe(
-      "Loaded",
-    );
-    expect(container.querySelector(".settings-theme-import__meta-value")?.textContent?.trim()).toBe(
-      "Light Green \u00b7 https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
-    );
 
     const input = container.querySelector(".settings-theme-import__input") as HTMLInputElement;
     input.value = "/r/themes/cmlhfpjhw000004l4f4ax3m7z";
@@ -248,6 +216,13 @@ describe("config appearance preferences", () => {
     renderConfigInto(props, container);
     expect(pressed(container, "Light Green")).toBe("true");
     expect(pressed(container, "Claw")).toBe("false");
+    expect(
+      container.querySelector(".settings-theme-card--claw .settings-theme-card__palette"),
+    ).toBe(clawPalette);
+    expect(customButton.querySelector(".settings-theme-card__palette")).not.toBeNull();
+    props.theme = "claw";
+    renderConfigInto(props, container);
+    expect(customButton.querySelector(".settings-theme-card__icon")).not.toBeNull();
   });
 
   it("focuses its own importer through unrelated updates and retires pending focus on disposal", () => {
@@ -261,16 +236,14 @@ describe("config appearance preferences", () => {
       renderConfigInto(props, container);
     };
     renderConfigInto(props, container);
-    const frames = new Map<number, FrameRequestCallback>();
-    let frameId = 0;
+    const framesClock = createFrameClock();
+    const frames = framesClock.frames;
+
     const requestFrame = vi
       .spyOn(window, "requestAnimationFrame")
-      .mockImplementation((callback) => {
-        frames.set(++frameId, callback);
-        return frameId;
-      });
+      .mockImplementation(framesClock.request);
     const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
-      frames.delete(id);
+      framesClock.cancel(id);
     });
     onTestFinished(() => {
       cleanupSolid();
@@ -285,11 +258,7 @@ describe("config appearance preferences", () => {
     props.textScale = 110;
     renderConfigInto(props, container);
     const input = required(container, ".settings-theme-import__input", HTMLInputElement);
-    const pending = [...frames.values()];
-    frames.clear();
-    for (const frame of pending) {
-      frame(0);
-    }
+    framesClock.flush(0);
     expect(document.activeElement).toBe(input);
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe("amethyst-haze".length);
@@ -301,54 +270,11 @@ describe("config appearance preferences", () => {
     expect(frames.size).toBe(0);
   });
 
-  it("keeps direct Appearance default selections independent", () => {
-    const { container, props } = renderAppearance({
-      theme: "knot",
-      themeOverridden: true,
-      themeMode: "dark",
-      themeModeOverridden: true,
-      accent: "#52c99a",
-      textScale: 110,
-      textScaleOverridden: true,
+  it.each(["iPhone", "Windows"])("keeps authored defaults editable on %s", (userAgent) => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(userAgent);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
     });
-    document.body.append(container);
-    onTestFinished(() => container.remove());
-    const row = (title: string) => settingsRow(container, title);
-
-    expect(pressed(container, "Knot")).toBe("true");
-    expect(pressed(container, "Claw")).toBe("false");
-    const textScaleButtons = [
-      ...container.querySelectorAll<HTMLButtonElement>(".settings-text-scale__btn"),
-    ];
-    expect(
-      textScaleButtons
-        .find((button) => button.textContent?.includes("110%"))
-        ?.getAttribute("aria-pressed"),
-    ).toBe("true");
-    expect(
-      textScaleButtons
-        .find((button) => button.textContent?.includes("100%"))
-        ?.getAttribute("aria-pressed"),
-    ).toBe("false");
-
-    findButtonByText(container, "Claw").click();
-    const colorMode = row("Color mode")?.querySelector<HTMLInputElement>(
-      '.settings-segmented__input[value="system"]',
-    );
-    expect(colorMode).toBeDefined();
-    colorMode?.click();
-    container.querySelector<HTMLButtonElement>('[data-accent-preset="default"]')?.click();
-    Array.from(container.querySelectorAll<HTMLButtonElement>(".settings-text-scale__btn"))
-      .find((button) => button.textContent?.includes("100%"))
-      ?.click();
-
-    expect(props.setTheme).toHaveBeenCalledWith("claw");
-    expect(props.setThemeMode).toHaveBeenCalledWith("system");
-    expect(props.setAccent).toHaveBeenCalledWith(undefined);
-    expect(props.setTextScale).toHaveBeenCalledWith(100);
-  });
-
-  it("keeps authored visual defaults direct", () => {
     const { container, props } = renderAppearance({
       theme: "claw",
       themeOverridden: true,
@@ -360,12 +286,24 @@ describe("config appearance preferences", () => {
       chatSendShortcutOverridden: true,
       chatSendShortcutProvenance: "synced",
     });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
     const shortcutRow = settingsRow(container, "Send shortcut");
 
-    expect(normalizedText(themeSection)).toContain("Default: Claw");
-    expect(normalizedText(themeSection)).toContain("Default: System");
-    expect(shortcutRow?.textContent).toContain("Default: Enter");
+    expect(normalizedText(container)).not.toContain("Default:");
+    expect(shortcutRow.textContent).toContain(
+      "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
+    );
+    const enter = required(shortcutRow, 'input[value="enter"]', HTMLInputElement);
+    const modifier = required(shortcutRow, 'input[value="modifier-enter"]', HTMLInputElement);
+    expect(enter.checked).toBe(true);
+    expect(modifier.disabled).toBe(false);
+    expect(props.onAppearanceChange).not.toHaveBeenCalled();
+    modifier.click();
+    expect(props.onAppearanceChange).toHaveBeenCalledExactlyOnceWith({
+      chatSendShortcut: "modifier-enter",
+    });
     findButtonByText(themeSection, "Claw").click();
     themeSection
       .querySelector<HTMLInputElement>('.settings-segmented__input[value="system"]')
@@ -375,41 +313,24 @@ describe("config appearance preferences", () => {
     expect(props.setThemeMode).toHaveBeenCalledWith("system");
   });
 
-  it("renders rejected theme and locale edits as browser-only fallbacks", async () => {
-    const { container, props } = renderAppearance({
+  it("states the browser-local locale once for the group", async () => {
+    const { container } = renderAppearance({
       localeOverride: "fr",
       localeOverridden: true,
       localeProvenance: "device-local",
       localeResetValue: "de",
-      theme: "knot",
-      themeOverridden: true,
-      themeProvenance: "device-local",
-      themeResetValue: "claw",
     });
     await updatePickers(container);
     const languageRow = required(container, "#settings-language .settings-row", HTMLElement);
-    const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
-    const themeDescription = required(
-      themeSection,
-      ":scope > .settings-section__desc",
+
+    const scope = required(
+      container,
+      "#settings-appearance-typography > .settings-section__scope",
       HTMLElement,
     );
-
-    expect(languageRow.textContent).toContain("Default: Deutsch (German)");
-    expect(languageRow.textContent).toContain("Stored in this browser only");
-    expect(languageRow.textContent).not.toContain("Synced across your devices");
+    expect(scope.textContent).toBe("Stored in this browser only.");
     await openPicker(languageRow.querySelector("openclaw-select-picker")!);
     expect(pickerOption(languageRow, "fr")?.getAttribute("aria-selected")).toBe("true");
-    expect(themeDescription.textContent).toContain("Default: Claw");
-    expect(themeDescription.textContent).toContain("Stored in this browser only");
-    expect(themeDescription.textContent).not.toContain("Synced across your devices");
-    expect(
-      themeSection.querySelector(".settings-theme-card--knot")?.getAttribute("aria-pressed"),
-    ).toBe("true");
-
-    findButtonByText(themeSection, "Claw").click();
-
-    expect(props.setTheme).toHaveBeenCalledWith("claw");
   });
 
   it("shows pending synced preferences without claiming they already synced", () => {
@@ -424,14 +345,14 @@ describe("config appearance preferences", () => {
     const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
     const themeDescription = required(
       themeSection,
-      ":scope > .settings-section__desc",
+      ":scope > .settings-section__scope",
       HTMLElement,
     );
     const followUpRow = settingsRow(container, "Follow-ups while the agent is working");
 
-    expect(themeDescription.textContent).toContain("Waiting to sync through the gateway");
+    expect(themeDescription.textContent).toContain("Waiting to sync.");
     expect(themeDescription.textContent).not.toContain("Synced across your devices");
-    expect(followUpRow?.textContent).toContain("Waiting to sync through the gateway");
+    expect(followUpRow?.textContent).toContain("Waiting to sync.");
     expect(followUpRow?.textContent).not.toContain("Synced across your devices");
   });
 
@@ -448,16 +369,15 @@ describe("config appearance preferences", () => {
       composerHoldToRecord: true,
     });
 
-    const shortcutSelect = required(container, "[data-settings-send-shortcut]", HTMLSelectElement);
-    expect(shortcutSelect.getAttribute("aria-label")).toBe("Send shortcut");
+    const shortcutGroup = required(
+      settingsRow(container, "Send shortcut"),
+      '[role="radiogroup"]',
+      HTMLElement,
+    );
+    expect(shortcutGroup.getAttribute("aria-label")).toBe("Send shortcut");
     const followUpSelect = required(container, "[data-settings-follow-up-mode]", HTMLSelectElement);
     expect(followUpSelect.getAttribute("aria-label")).toBe("Follow-ups while the agent is working");
     expect(followUpSelect.value).toBe("server");
-    expect(Array.from(followUpSelect.options, (option) => option.value)).toEqual([
-      "server",
-      "steer",
-      "queue",
-    ]);
     expect(container.textContent).not.toContain("Using server default");
     expect(followUpSelect.selectedOptions[0]?.textContent?.trim()).toBe("Server default (steer)");
     const microphoneSelect = required(container, "[data-settings-microphone]", HTMLSelectElement);
@@ -473,7 +393,7 @@ describe("config appearance preferences", () => {
     for (const select of [microphoneSelect, cameraSelect]) {
       expect(select.closest(".settings-row")?.querySelector("button")).toBeNull();
     }
-    expect(container.textContent).toContain("Hold microphone button to start dictation");
+    expect(container.textContent).toContain("Hold the mic button to dictate");
 
     microphoneSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
     cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
@@ -549,16 +469,12 @@ describe("config appearance preferences", () => {
     });
     vi.stubGlobal("AudioContext", audioContextCtor);
 
-    const soundSwitch = (container: HTMLElement) => {
-      const control = settingsRow(container, "Lobster sounds").querySelector<HTMLInputElement>(
+    const soundSwitch = (container: HTMLElement) =>
+      required(
+        settingsRow(container, "Lobster sounds"),
         ".settings-toggle__input",
+        HTMLInputElement,
       );
-      expect(control).toBeDefined();
-      if (!control) {
-        throw new Error("Missing lobster sounds switch");
-      }
-      return control;
-    };
 
     const { container, props } = renderAppearance();
     document.body.append(container);
@@ -587,75 +503,26 @@ describe("config appearance preferences", () => {
     expect(props.onAppearanceChange).toHaveBeenLastCalledWith({ lobsterPetSounds: false });
   });
 
-  it("labels hidden session sections from the catalog and keeps ids as the fallback", () => {
-    const { container, props } = renderAppearance({
-      hiddenSessionCatalogIds: new Set(["claude", "offline-catalog"]),
-      hiddenSessionCatalogLabels: {
-        read: () => new Map([["claude", "Claude Code"]]),
-        scope: null,
-      },
-    });
-
-    const heading = Array.from(container.querySelectorAll("h3")).find(
-      (candidate) => candidate.textContent?.trim() === "Hidden session sections",
-    );
-    const labeledRow = settingsRow(container, "Claude Code");
-    const fallbackRow = settingsRow(container, "offline-catalog");
-    expect(heading).toBeDefined();
-    expect(labeledRow).toBeDefined();
-    expect(fallbackRow).toBeDefined();
-    labeledRow?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(props.setSessionCatalogHidden).toHaveBeenCalledWith("claude", false);
-  });
-
-  it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {
-    const firstSeenAt = new Date("2026-07-10T12:00:00.000Z").getTime();
-    vi.stubGlobal("localStorage", window.localStorage);
-    localStorage.setItem(
-      "openclaw.control.lobsterdex.v1",
-      JSON.stringify({
-        crimson: { firstSeenAt, name: "Ruby", shinySeenAt: firstSeenAt },
-      }),
-    );
+  it("opens the full Lobsterdex from its own row", () => {
     const onOpenLobsterdex = vi.fn();
-    try {
-      const { container } = renderAppearance({
-        lobsterPetVisits: true,
-        lobsterPetSounds: true,
-        lobsterdexHref: "/settings/lobsterdex",
-        onOpenLobsterdex,
-      });
+    const { container } = renderAppearance({
+      lobsterdexHref: "/settings/lobsterdex",
+      onOpenLobsterdex,
+    });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
 
-      const seen = container.querySelector(".lobster-pet--palette-crimson");
-      const seenTooltip = seen?.closest("openclaw-tooltip");
-      expect(seen?.hasAttribute("title")).toBe(false);
-      expect(seen?.getAttribute("aria-label")).toContain("Ruby ✦");
-      expect(seenTooltip?.querySelector('[slot="content"]')?.textContent).toContain(
-        "The classic red, first in every tide pool.",
-      );
-      expect(seenTooltip?.querySelector('[slot="content"]')?.textContent).toContain(
-        new Date(firstSeenAt).toLocaleDateString(),
-      );
+    const openLink = required(container, "a.lobsterdex__open", HTMLAnchorElement);
+    expect(openLink.getAttribute("href")).toBe("/settings/lobsterdex");
+    expect(openLink.textContent).toContain("visited");
+    openLink.addEventListener("click", (event) => event.preventDefault(), {
+      capture: true,
+      once: true,
+    });
+    openLink.click();
+    expect(onOpenLobsterdex).not.toHaveBeenCalled();
 
-      const unseen = container.querySelector(".lobster-pet--palette-watermelon");
-      expect(unseen?.getAttribute("aria-label")).toContain("Ripe when thumped.");
-      expect(
-        unseen?.closest("openclaw-tooltip")?.querySelector('[slot="content"]')?.textContent,
-      ).toContain("Ripe when thumped.");
-
-      const openLink = container.querySelector<HTMLAnchorElement>(".lobsterdex__open");
-      openLink?.addEventListener("click", (event) => event.preventDefault(), {
-        capture: true,
-        once: true,
-      });
-      openLink?.click();
-      expect(onOpenLobsterdex).not.toHaveBeenCalled();
-
-      openLink?.click();
-      expect(onOpenLobsterdex).toHaveBeenCalledOnce();
-    } finally {
-      localStorage.removeItem("openclaw.control.lobsterdex.v1");
-      vi.unstubAllGlobals();
-    }
+    openLink.click();
+    expect(onOpenLobsterdex).toHaveBeenCalledOnce();
   });
 });

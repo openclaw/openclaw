@@ -441,13 +441,13 @@ describe("anonymous public session HTTP boundary", () => {
     const first = await send(server);
     expect(first.res.statusCode).toBe(200);
     const etag = responseHeader(first, "ETag");
-    expect(etag).toBeDefined();
-    const unchanged = await send(server, { headers: { "if-none-match": etag! } });
-    expect(unchanged.res.statusCode).toBe(304);
-    expect(unchanged.getBody()).toBe("");
+    for (const validator of [etag!, `W/${etag}`, `"stale", W/${etag}`, "*"]) {
+      const unchanged = await send(server, { headers: { "if-none-match": validator } });
+      expect([unchanged.res.statusCode, unchanged.getBody()]).toEqual([304, ""]);
+    }
     expect(reader).toHaveBeenCalledTimes(1);
     shareActive.mockReturnValue(false);
-    const revoked = await send(server, { headers: { "if-none-match": etag! } });
+    const revoked = await send(server, { headers: { "if-none-match": "*" } });
     expect(revoked.res.statusCode).toBe(404);
     expect(revoked.getBody()).not.toContain("The public viewer is ready");
   });
@@ -476,6 +476,31 @@ describe("anonymous public session HTTP boundary", () => {
     expect(changed.getBody()).toContain("Updated public title");
     expect(reader).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["read", "publication"] as const)(
+    "serves a fresh public document when metadata changes during %s",
+    async (phase) => {
+      const server = createPublicGateway();
+      const changed = { ...PUBLIC_SESSION, title: "Updated public title" };
+      reader.mockResolvedValue(changed);
+      if (phase === "read") {
+        reader.mockImplementationOnce(async () => {
+          sessionChanges.emit({ sessionKey: LOCATOR.sessionKey, scope: "session-entry" });
+          return PUBLIC_SESSION;
+        });
+      } else {
+        reader.mockResolvedValueOnce(PUBLIC_SESSION);
+        shareActive.mockImplementationOnce(() => {
+          sessionChanges.emit({ sessionKey: LOCATOR.sessionKey, scope: "session-entry" });
+          return true;
+        });
+      }
+      const response = await send(server);
+      expect(response.res.statusCode).toBe(200);
+      expect(response.getBody()).toContain("Updated public title");
+      expect(reader).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("truncates titles and messages without splitting UTF-16 surrogate pairs", async () => {
     const server = createPublicGateway();

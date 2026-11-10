@@ -121,28 +121,3 @@ export function insertStoredDeviceIdentityIfAbsent(
   }
   return stored;
 }
-
-/** Doctor preserves valid key bytes and only replaces irreparable identities. */
-export function repairInvalidStoredDeviceIdentity(
-  candidate: StoredDeviceIdentity,
-  options: DeviceIdentityStoreOptions = {},
-): { identity: StoredDeviceIdentity; repaired: boolean; rotated: boolean } {
-  const { identityKey } = resolveDeviceIdentityStore(options);
-  const result = runClientCredentialOperation(resolveDeviceIdentityEnvironment(options), {
-    kind: "identity.repair",
-    identity: storedDeviceIdentityToRow(identityKey, candidate),
-  });
-  if (result.kind !== "identityRepair") {
-    throw new Error("Client credential owner returned an unexpected repair result.");
-  }
-  return {
-    identity: {
-      deviceId: result.identity.device_id,
-      publicKeyPem: result.identity.public_key_pem,
-      privateKeyPem: result.identity.private_key_pem,
-      createdAtMs: result.identity.created_at_ms,
-    },
-    repaired: result.repaired,
-    rotated: result.rotated,
-  };
-}

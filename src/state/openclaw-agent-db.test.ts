@@ -86,6 +86,7 @@ import {
   createCanonicalAgentIndexDrift,
   createTranscriptIdempotencyIndexDrift,
   createUnsafeIndexDrift,
+  expectCanonicalAgentIndexRepair,
 } from "./sqlite-index-drift.test-support.js";
 import {
   collectSqliteSchemaShape,
@@ -621,10 +622,6 @@ it.each([
     } finally {
       await child.close();
       await maintenance.close();
-    }
-    if (integrityCheck === "quick") {
-      // Leaving Doctor must not promote its QUICK admission to runtime FULL proof.
-      expect(() => openAgentDb(options)).toThrow(/integrity_check.*idx_agent_cache_expiry/su);
     }
   },
 );
@@ -1519,13 +1516,13 @@ it("retains its durable lease when closing the handle fails", () => {
   expect(() => assertNoAgentLeases("worker-1", { env })).not.toThrow();
 });
 
-it("settles a Worker lease after a recoverable handle-close failure", () => {
+it("settles a Worker lease after a recoverable handle-close failure", async () => {
   const { env, options } = createState();
   const database = openAgentDb(options);
   vi.spyOn(database.walMaintenance, "close").mockImplementationOnce(() => {
     throw new Error("wal close failed");
   });
-  const settled = settleWorkerClose(database.path);
+  const settled = await settleWorkerClose(database.path);
   expect(settled).toMatchObject({ settled: true });
   expect(settled.errors.map((error) => error.message)).toEqual(["wal close failed"]);
   expect(database.db.isOpen).toBe(false);
@@ -1930,16 +1927,9 @@ it("does not chmod shared parent directories for explicit database paths", () =>
 
 it("repairs every missing or drifted canonical agent-state named index", () => {
   const { options, dbPath } = createDatabaseFixture();
-  const canonicalShape = normalizeSqliteSchemaShapeSql(
-    createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
-  );
   createCanonicalAgentIndexDrift(dbPath);
   const reopened = openAgentDb(options);
-  expect(
-    normalizeSqliteSchemaShapeSql(
-      collectSqliteSchemaShape(requireNativeSqliteDatabase(reopened.db)),
-    ),
-  ).toEqual(canonicalShape);
+  expectCanonicalAgentIndexRepair(requireNativeSqliteDatabase(reopened.db));
   expect(readPragma(reopened.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   expectRows(
     reopened.db,

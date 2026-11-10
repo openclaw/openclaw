@@ -10,6 +10,7 @@ import {
 import type { UsersBackgroundResult } from "../../../../packages/gateway-protocol/src/schema/users-background.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
   adoptCommittedBackgroundPreference,
   resolveServerUiPrefWriteStatus,
@@ -18,11 +19,11 @@ import {
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
 import { subscribeServerUiPrefWrites } from "../../app/server-prefs.ts";
 import { patchSettings } from "../../app/settings.ts";
+import type { SessionBackground } from "../../components/session-background-host.tsx";
 import {
   backgroundImageReadIdentity,
   readBackgroundImage,
 } from "../../components/session-background-image.ts";
-import type { SessionBackground } from "../../components/session-background.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -133,7 +134,10 @@ export function createAppearanceBackground(
   } | null = null;
   function captureScope(): BackgroundScope | null {
     const snapshot = application.gateway.snapshot;
-    return snapshot.phase === "connected" && snapshot.client && snapshot.selfUser?.id
+    return snapshot.phase === "connected" &&
+      snapshot.client &&
+      snapshot.selfUser?.id &&
+      hasOperatorReadAccess(snapshot.hello?.auth ?? null)
       ? { client: snapshot.client, profileId: snapshot.selfUser.id }
       : null;
   }
@@ -317,7 +321,10 @@ export function createAppearanceBackground(
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       host().style.setProperty("--settings-background-preview-top", `${bounds.top}px`);
-      host().style.setProperty("--settings-background-preview-left", `${bounds.left}px`);
+      host().style.setProperty(
+        "--settings-background-preview-left",
+        `${bounds.left + canvas.clientLeft}px`,
+      );
       host().style.setProperty("--settings-background-preview-width", `${width}px`);
       host().style.setProperty("--settings-background-preview-height", `${height}px`);
       // Docks and responsive chrome can change the canvas without window resize.
@@ -402,7 +409,6 @@ export function createAppearanceBackground(
     }
     dismissReadStatus();
     patchSettings({ background: { ...readPreference(), ...patch } });
-    application.theme.refresh();
     mutation = null;
     setMessage(null);
   }
@@ -505,11 +511,8 @@ export function createAppearanceBackground(
       });
       metadata = { ...scope, revision: metadataRevision, snapshot: result };
       application.theme.refresh();
-      return t(
-        file
-          ? "configView.appearance.background.saved"
-          : "configView.appearance.background.removed",
-      );
+      // The selected image is already visible; no duplicate success notice.
+      return null;
     } catch (error) {
       if (isCurrent()) {
         throw error;
@@ -543,7 +546,7 @@ export function createAppearanceBackground(
       hasImage: Boolean(readSnapshot()?.asset),
       mutation,
       uploadAllowed: canUpload() && writeStatus.status === "saved",
-      scopeHint: !scope
+      scopeHint: !application.gateway.snapshot.selfUser?.id
         ? t("configView.appearance.background.browserOnly")
         : !canUpload()
           ? t("configView.appearance.background.readOnly")

@@ -26,16 +26,23 @@ import {
   type SecretRef,
 } from "../../../../src/secrets/ref-contract.ts";
 import type { ConfigNodeRenderParams } from "../../components/config-form.node.shared.ts";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import "./credential-editor.css";
 import "./custom-elements.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 
 registerPluginManagementEnglish();
 const credentialReferenceParts = ["provider", "id"] as const;
@@ -82,6 +89,11 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     { loadingValue: true },
   );
   const loading = () => isPending(inspectionPending) || latest(inspectionPending);
+  const [operationRequest, setOperationRequest] = createSignal<{ promise: Promise<void> }>();
+  const operationComplete = createMemo(() => operationRequest()?.promise.then(() => null) ?? null, {
+    loadingValue: null,
+  });
+  // Revision and unacknowledged-write outcomes are separate from rejected commands.
   const [error, setError] = createSignal("");
   const [dialogOpen, setDialogOpen] = createSignal(false);
   const [reference, setReference] = createStore<SecretRef>({
@@ -153,6 +165,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       }
       if (sourceChanged || next.epoch !== previous?.epoch) {
         pending = undefined;
+        setOperationRequest(undefined);
       }
       setInspectionRequest(undefined);
       setInspection((current) =>
@@ -254,7 +267,6 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     ) {
       return;
     }
-    setError("");
     setInspectionRequest(undefined);
     return commitOrDiscardReference(value);
   }
@@ -271,6 +283,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   }
 
   async function commitOrDiscardReference(value: string | SecretRef | undefined) {
+    setError("");
     const gateway = props.context.gateway;
     const retired = props.context.getPresentationLifetime();
     const capturedConnection = connection;
@@ -320,12 +333,15 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         }
       } catch (cause) {
         if (current()) {
-          setError(formatUiError(cause));
+          throw cause;
         }
       }
     })();
-    await Promise.resolve();
-    return presentOperation(admitted, completed, retired);
+    // Publish the completion before the action holds its saving presentation.
+    const result = Promise.resolve().then(() => presentOperation(admitted, completed, retired));
+    setOperationRequest({ promise: result });
+    // Feedback observes rejection; retired event callers only await settlement.
+    return result.catch(() => undefined);
   }
 
   const presentOperation = action(function* (
@@ -341,10 +357,6 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       yield Promise.race([completed, retired]);
       if (admitted.current()) {
         yield refresh(inspectionComplete);
-      }
-    } catch (cause) {
-      if (admitted.current()) {
-        setError(formatUiError(cause));
       }
     } finally {
       if (pending === admitted) {
@@ -369,9 +381,9 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   const Failure = (feedback: { message: string; dialog?: boolean }) => (
     <>
       {feedback.dialog ? (
-        <p role="alert" class="callout danger">
+        <InlineAlert tone="danger" role="alert">
           {feedback.message}
-        </p>
+        </InlineAlert>
       ) : (
         <div role="alert">
           {feedback.message}
@@ -386,23 +398,24 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     </>
   );
   const Feedback = (feedback: { dialog?: boolean }) => (
-    <Show
-      when={failure()}
-      fallback={
-        <Show when={inspectionRequest()} keyed>
-          {(request) => (
+    <Show when={!saving() && !cancelling()}>
+      <Show
+        when={failure()}
+        fallback={
+          <Loading on={inspectionRequest()}>
             <Errored
               fallback={(cause) => (
                 <Failure message={formatUiError(cause())} dialog={feedback.dialog} />
               )}
             >
-              <Loading on={request}>{inspectionComplete()}</Loading>
+              {operationComplete()}
+              {inspectionComplete()}
             </Errored>
-          )}
-        </Show>
-      }
-    >
-      {(message) => <Failure message={message()} dialog={feedback.dialog} />}
+          </Loading>
+        }
+      >
+        {(message) => <Failure message={message()} dialog={feedback.dialog} />}
+      </Show>
     </Show>
   );
   const configured = () =>
@@ -467,6 +480,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
             <div
               class="plugin-credential__input settings-secret"
               onFocusOut={(event) => {
+                clearCompositionEnd(event);
                 if (
                   event.relatedTarget instanceof Element &&
                   event.relatedTarget.closest(".plugin-credential__input") === event.currentTarget
@@ -495,7 +509,12 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                 }
                 disabled={disabled()}
                 onInput={(event) => setLiteral(event.currentTarget.value)}
+                onCompositionEnd={recordCompositionEnd}
+                onKeyUp={clearCompositionEnd}
                 onKeyDown={(event) => {
+                  if (isComposingKeyboardEvent(event)) {
+                    return;
+                  }
                   const value = enteredLiteral(event.currentTarget);
                   if (event.key === "Enter" && value) {
                     event.preventDefault();
@@ -557,97 +576,111 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
               void cancelReference();
             }}
           >
-            <section class="plugin-credential__dialog">
-              <h2>{t("pluginsPage.credentials.referenceTitle")}</h2>
-              {environment() ? (
-                <p>{t("pluginsPage.credentials.environmentHelp", { name: environment()! })}</p>
-              ) : (
-                <>
-                  <p>{t("pluginsPage.credentials.referenceHelp")}</p>
-                  <label>
-                    {t("pluginsPage.credentials.source")}
-                    <select
-                      ref={(element) => {
-                        referenceSourceSelect = element;
-                      }}
-                      autofocus
-                      class="settings-input"
-                      aria-label={t("pluginsPage.credentials.source")}
-                      value={reference.source}
-                      disabled={blocked()}
-                      onChange={(event) => {
-                        const source = credentialSources.find(
-                          (entry) => entry === event.currentTarget.value,
-                        );
-                        if (source) {
-                          setReference((draft) => {
-                            draft.source = source;
-                          });
-                        }
-                      }}
-                    >
-                      <For each={credentialSources}>
-                        {(source) => (
-                          <option value={source} selected={source === reference.source}>
-                            {t(`pluginsPage.credentials.sources.${source}`)}
-                          </option>
-                        )}
-                      </For>
-                    </select>
-                  </label>
-                  <For each={credentialReferenceParts}>
-                    {(key) => (
-                      <label>
-                        {t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}
-                        <input
-                          class="settings-input"
-                          value={reference[key]}
-                          disabled={blocked()}
-                          onInput={(event) =>
+            <section class="oc-dialog plugin-credential__dialog">
+              <DialogHeader
+                title={t("pluginsPage.credentials.referenceTitle")}
+                description={
+                  <p>
+                    {environment()
+                      ? t("pluginsPage.credentials.environmentHelp", { name: environment()! })
+                      : t("pluginsPage.credentials.referenceHelp")}
+                  </p>
+                }
+                closeDisabled={saving() || cancelling()}
+                onClose={() => void cancelReference()}
+              />
+              <div class="oc-dialog__body">
+                {environment() ? null : (
+                  <>
+                    <label>
+                      {t("pluginsPage.credentials.source")}
+                      <select
+                        ref={(element) => {
+                          referenceSourceSelect = element;
+                        }}
+                        autofocus
+                        class="settings-input"
+                        aria-label={t("pluginsPage.credentials.source")}
+                        value={reference.source}
+                        disabled={blocked()}
+                        onChange={(event) => {
+                          const source = credentialSources.find(
+                            (entry) => entry === event.currentTarget.value,
+                          );
+                          if (source) {
                             setReference((draft) => {
-                              draft[key] = event.currentTarget.value;
-                            })
+                              draft.source = source;
+                            });
                           }
-                        />
-                      </label>
-                    )}
-                  </For>
-                  <p class="muted">{t(`pluginsPage.credentials.help.${reference.source}`)}</p>
-                  {unresolved() ? (
-                    <p class="callout warn">{t("pluginsPage.credentials.unresolved")}</p>
-                  ) : null}
-                </>
-              )}
-              <Feedback dialog />
-              <openclaw-modal-actions>
-                <button
-                  class="btn"
-                  disabled={saving() || cancelling()}
-                  onClick={() => void cancelReference()}
-                >
-                  {t("common.cancel")}
-                </button>
-                {!inspection() && !loading() ? (
-                  <button class="btn" onClick={() => void inspect()}>
-                    {t("common.retry")}
-                  </button>
-                ) : null}
-                {!environment() ? (
+                        }}
+                      >
+                        <For each={credentialSources}>
+                          {(source) => (
+                            <option value={source} selected={source === reference.source}>
+                              {t(`pluginsPage.credentials.sources.${source}`)}
+                            </option>
+                          )}
+                        </For>
+                      </select>
+                    </label>
+                    <For each={credentialReferenceParts}>
+                      {(key) => (
+                        <label>
+                          {t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}
+                          <input
+                            class="settings-input"
+                            value={reference[key]}
+                            disabled={blocked()}
+                            onInput={(event) =>
+                              setReference((draft) => {
+                                draft[key] = event.currentTarget.value;
+                              })
+                            }
+                          />
+                        </label>
+                      )}
+                    </For>
+                    <p class="muted">{t(`pluginsPage.credentials.help.${reference.source}`)}</p>
+                    {unresolved() ? (
+                      <InlineAlert tone="warning">
+                        {t("pluginsPage.credentials.unresolved")}
+                      </InlineAlert>
+                    ) : null}
+                  </>
+                )}
+                <Feedback dialog />
+              </div>
+              {environment() && (inspection() || loading()) ? null : (
+                <openclaw-modal-actions class="oc-dialog__footer">
                   <button
-                    class="btn primary"
-                    disabled={blocked() || !isValidSecretRef(reference)}
-                    onClick={() =>
-                      void patch({
-                        source: reference.source,
-                        provider: reference.provider,
-                        id: reference.id,
-                      })
-                    }
+                    class="btn"
+                    disabled={saving() || cancelling()}
+                    onClick={() => void cancelReference()}
                   >
-                    {saving() ? t("common.saving") : t("common.save")}
+                    {t("common.cancel")}
                   </button>
-                ) : null}
-              </openclaw-modal-actions>
+                  {!inspection() && !loading() ? (
+                    <button class="btn" onClick={() => void inspect()}>
+                      {t("common.retry")}
+                    </button>
+                  ) : null}
+                  {!environment() ? (
+                    <button
+                      class="btn primary"
+                      disabled={blocked() || !isValidSecretRef(reference)}
+                      onClick={() =>
+                        void patch({
+                          source: reference.source,
+                          provider: reference.provider,
+                          id: reference.id,
+                        })
+                      }
+                    >
+                      {saving() ? t("common.saving") : t("common.save")}
+                    </button>
+                  ) : null}
+                </openclaw-modal-actions>
+              )}
             </section>
           </openclaw-modal-dialog>
         ) : null}

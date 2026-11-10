@@ -1,4 +1,3 @@
-import { canonicalizePath } from "../../agents/utils/paths.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -125,7 +124,6 @@ function loadLocalSkillTiers(
     agentCacheKey,
     executionWorkspaceDir,
     opts?.executionWorkspaceFileHost,
-    getSkillsSourceVersion(workspaceDir, opts),
   ]);
   const cachedEntries = skillEntryCache.get(cacheKey);
   if (cachedEntries) {
@@ -183,7 +181,7 @@ function mergeSkillTiers(
       entries,
       mergeSkillRecords(select(tiers.execution), tiers.sourceKey, collisions),
       (winner, loser) => {
-        if (canonicalizePath(winner.skill.filePath) !== canonicalizePath(loser.skill.filePath)) {
+        if (winner.skill.filePath !== loser.skill.filePath) {
           collisions.push({ winner: winner.skill, loser: loser.skill });
         }
       },
@@ -266,7 +264,11 @@ async function prepareCapturedWorkspaceSkillEntries(
         ? sources.entries
         : mergeSkillTiers(
             {
-              sourceKey: JSON.stringify(sourcePlan),
+              sourceKey: JSON.stringify([
+                sourcePlan,
+                opts?.executionWorkspaceDir,
+                opts?.gatewayOnly,
+              ]),
               agent: sources.entries,
               execution: sources.executionEntries,
             },

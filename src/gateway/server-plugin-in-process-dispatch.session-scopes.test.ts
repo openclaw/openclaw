@@ -21,6 +21,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareCronRunAdmission } from "../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../cron/scheduled-occurrence.test-support.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
@@ -148,6 +149,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
   const scheduled =
     source === "scheduled"
       ? prepareCronRunAdmission({
+          scheduledExecution: TEST_SCHEDULED_EXECUTION,
           deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
           cfg,
           runId: "scope-parent-run",
@@ -251,20 +253,31 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
       invoke,
     );
   };
-  const tool = await withCaller(createSessionsCreateTool);
-  return {
-    tool,
-    toolCreate: (
-      params: Record<string, unknown> = {},
-      toolCallId = "create-independent",
-      signal?: AbortSignal,
-    ) =>
-      withCaller(async () => {
-        if (!tool) {
-          throw new Error("Session creation unavailable");
-        }
-        return await tool.execute(toolCallId, params, signal);
+  // Production assembly passes the run's trusted spawn context; see openclaw-tools.ts.
+  const bindTool = async (extra: Parameters<typeof createSessionsCreateTool>[0] = {}) => {
+    const tool = await withCaller(() =>
+      createSessionsCreateTool({
+        config: cfg,
+        agentSessionKey: parentKey,
+        expectedParentSessionId: "scope-parent-session",
+        requesterAgentIdOverride: "main",
+        workspaceDir: state.workspaceDir,
+        ...extra,
       }),
+    );
+    return {
+      tool,
+      toolCreate: (
+        params: Record<string, unknown> = {},
+        toolCallId = "create-independent",
+        signal?: AbortSignal,
+      ) => withCaller(() => tool.execute(toolCallId, params, signal)),
+    };
+  };
+  return {
+    ...(await bindTool()),
+    bindTool,
+    workspaceDir: state.workspaceDir,
     create,
     spawn: (mode: SessionEntry["permissionMode"], agentId?: string) =>
       withCaller(() =>
@@ -447,7 +460,7 @@ describe("hosted visible spawn permission inheritance", () => {
 });
 
 describe("independent session creation tool", () => {
-  it("creates a guest-owned idle root with destination defaults and a bounded receipt", () =>
+  it("creates a guest-owned idle visible session with spawn lineage and a bounded receipt", () =>
     withHostedCreation(async ({ tool, toolCreate, read, profileId }) => {
       expect(tool?.name).toBe("sessions_create");
       const result = await toolCreate({ label: "Independent investigation" });
@@ -461,12 +474,14 @@ describe("independent session creation tool", () => {
       const entry = read(receipt.sessionKey);
       expect(entry).toMatchObject({
         sessionId: receipt.sessionId,
-        createdVia: "operator",
-        createdActor: { type: "human", source: "profile", id: profileId },
+        // Visible-spawn admission: guest ownership with bounded spawn depth, not a root.
+        createdVia: "spawn",
         sandbox: "required",
+        spawnedBy: parentKey,
+        spawnDepth: 1,
       });
-      expect(entry?.spawnedBy).toBeUndefined();
-      expect(entry?.spawnDepth ?? 0).toBe(0);
+      const guest = { type: "human", source: "profile", id: profileId } as const;
+      expect(entry?.createdActor).toEqual({ ...guest, delegatedBy: guest });
       expect(entry?.permissionMode).not.toBe("full");
       expect(kickoff.internal).not.toHaveBeenCalled();
       expect(kickoff.external).not.toHaveBeenCalled();
@@ -483,12 +498,10 @@ describe("independent session creation tool", () => {
       expect(chatHandler).toHaveBeenCalledOnce();
     }));
 
-  it("starts an agent-authored initial brief once, never a direct human command", () =>
+  it("starts an agent-authored initial brief, never a direct human command", () =>
     withHostedCreation(async ({ toolCreate }) => {
-      const args = { message: "/reset is an example to investigate, not a command" };
+      const args = { message: "    /reset is an example to investigate, not a command\n" };
       const first = await toolCreate(args);
-      const retried = await toolCreate(args);
-      expect(retried.details).toEqual(first.details);
       expect(first.details).toMatchObject({ runStarted: true, runId: "scope-independent-run" });
       expect(kickoff.internal).toHaveBeenCalledTimes(1);
       expect(kickoff.internal.mock.calls[0]?.[0].params).toMatchObject({
@@ -496,7 +509,7 @@ describe("independent session creation tool", () => {
         systemInputProvenance: {
           kind: "inter_session",
           sourceSessionKey: parentKey,
-          sourceTool: "sessions_create",
+          sourceTool: "sessions_spawn",
         },
         suppressCommandInterpretation: true,
       });
@@ -504,9 +517,6 @@ describe("independent session creation tool", () => {
         id: "agent:main",
       });
       expect(kickoff.external).not.toHaveBeenCalled();
-      await expect(toolCreate({ message: "A different brief" })).rejects.toThrow(
-        /idempotency key.*different parameters/,
-      );
     }));
 
   it("keeps the created session and reports failed kickoff without claiming a run", () =>
@@ -520,7 +530,7 @@ describe("independent session creation tool", () => {
       const result = await toolCreate({ message: "Investigate" });
       expect(result.details).toMatchObject({
         runStarted: false,
-        runError: { code: "UNAVAILABLE", message: "Test provider unavailable" },
+        runError: "Test provider unavailable",
       });
       const receipt = result.details as { sessionKey: string };
       expect(read(receipt.sessionKey)).toBeDefined();
@@ -541,26 +551,54 @@ describe("independent session creation tool", () => {
     }),
   );
 
-  it("retains backend role-agent, permission, and workspace restrictions", () =>
-    withHostedCreation(async ({ toolCreate, read }) => {
+  it("retains backend role-agent, creating-run permission, and workspace restrictions", () =>
+    withHostedCreation(async ({ toolCreate, bindTool, keys, read, workspaceDir }) => {
+      const before = await keys();
       await expect(toolCreate({ agentId: "reviewer" }, "forbidden-agent")).rejects.toThrow();
+      // Permission comes from the creating run, never from model input.
       await expect(toolCreate({ permissionMode: "full" }, "full-mode")).rejects.toThrow(
-        /operator.admin/,
+        /does not accept: permissionMode/,
       );
-      await expect(toolCreate({ cwd: "relative" }, "relative-cwd")).rejects.toThrow(/absolute/);
-      await expect(toolCreate({ cwd: "/" }, "outside-workspace")).rejects.toMatchObject(
-        missingAdmin,
-      );
-      expect(read()).toBeUndefined();
+      // Sandboxed visible sessions refuse any cwd outside the target workspace.
+      for (const cwd of ["relative", "/"]) {
+        const refused = await toolCreate({ cwd }, "outside-workspace");
+        expect(refused.details).toMatchObject({ status: "forbidden" });
+      }
+      expect(await keys()).toEqual(before);
+      const restricted = await bindTool({
+        sessionPermissionPolicy: { mode: "read-only", root: workspaceDir },
+      });
+      const result = await restricted.toolCreate({}, "restricted-run");
+      const receipt = result.details as { sessionKey: string };
+      expect(read(receipt.sessionKey)?.permissionMode).toBe("read-only");
     }));
 
   it.each(["unidentified", "scheduled"] as const)(
-    "does not turn a %s run into an operator creation grant",
+    "creates from a %s run with the parent's owner and containment, never an operator grant",
     (source) =>
-      withHostedCreation(async ({ tool, toolCreate, handler }) => {
-        expect(tool).toBeNull();
-        await expect(toolCreate({ message: "Investigate" })).rejects.toThrow(/unavailable/);
-        expect(handler).not.toHaveBeenCalled();
+      withHostedCreation(async ({ toolCreate, handler, read, profileId }) => {
+        const result = await toolCreate({ message: "Investigate" });
+        const receipt = result.details as { sessionKey: string };
+        // The handler asserts the router admitted no operator.admin or operator run authority.
+        expect(handler).toHaveBeenCalledOnce();
+        const entry = read(receipt.sessionKey);
+        expect(entry).toMatchObject({
+          createdVia: "spawn",
+          sandbox: "required",
+          spawnedBy: parentKey,
+          spawnDepth: 1,
+        });
+        // Ownership is inherited from the parent row, never from the run's source.
+        if (source === "scheduled") {
+          expect(entry?.createdActor).toBeUndefined();
+        } else {
+          expect(entry?.createdActor).toMatchObject({
+            type: "human",
+            source: "profile",
+            id: profileId,
+          });
+        }
+        expect(entry?.permissionMode).not.toBe("full");
       }, source),
   );
 
@@ -571,12 +609,10 @@ describe("independent session creation tool", () => {
       beforeCreate.mockImplementationOnce(async () => {
         abort.abort(new Error("Tool canceled"));
       });
-      // Saved-default admission normalizes a revoked caller into its public
-      // authorization error; the creation owner must still leave no new row.
-      await expect(toolCreate({}, "canceled-create", abort.signal)).rejects.toMatchObject({
-        name: "GatewayClientRequestError",
-        code: "FORBIDDEN",
-      });
+      // The creation owner checks the tool's source at commit and leaves no new row.
+      await expect(toolCreate({}, "canceled-create", abort.signal)).rejects.toThrow(
+        "Tool canceled",
+      );
       expect(await keys()).toEqual(before);
     }));
 });

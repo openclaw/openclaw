@@ -17,7 +17,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, expect } from "vitest";
+import { afterEach, beforeEach } from "vitest";
 
 type AuthoredAgents = NonNullable<OpenClawConfig["agents"]>;
 type AuthoredEntry = NonNullable<AuthoredAgents["entries"]>[string];
@@ -38,22 +38,18 @@ export type RawLegacyDoctorConfig = Omit<OpenClawConfig, "agents" | "memory"> & 
 
 export function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
-    getPluginStateCapacity() {
-      return getPluginStateCapacityForTests("memory-core", env);
-    },
-    importPluginStateEntries(options, entries) {
+    getPluginStateCapacity: () => getPluginStateCapacityForTests("memory-core", env),
+    importPluginStateEntries: (options, entries) =>
       importPluginStateEntriesForDoctorForTests(
         "memory-core",
         { ...options, env: options.env ?? env },
         entries,
-      );
-    },
-    openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      return createPluginStateKeyedStoreForTests<T>("memory-core", {
+      ),
+    openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("memory-core", {
         ...options,
         env: options.env ?? env,
-      });
-    },
+      }),
   };
 }
 
@@ -95,12 +91,6 @@ export function useDoctorWorkspace(prefix: string, resetDreaming?: () => void) {
 }
 
 export const read = (file: string) => fs.readFile(file, "utf8");
-export function hostEvent(query: string, timestamp = "2026-07-01T00:00:00.000Z") {
-  return { type: "memory.recall.recorded" as const, timestamp, query, resultCount: 0, results: [] };
-}
-export async function expectMissing(file: string) {
-  await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
-}
 export async function writeFiles(files: string[], contents: string) {
   for (const file of files) {
     await fs.mkdir(path.dirname(file), { recursive: true });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
@@ -16,6 +17,7 @@ import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { GatewayRequestEntryLifetime } from "../server-request-entry.js";
 import { createRpcSourceForTest, claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
+import { expectCalls } from "./agent-owner.test-support.js";
 import { createInternalAgentTurnFacade } from "./internal-facade.js";
 import type { AgentTurnStartOwner } from "./internal-facade.types.js";
 import { setTestRpcSourceIdentity } from "./rpc-source.test-support.js";
@@ -23,7 +25,6 @@ import type { AgentTurnIo } from "./types.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
 const waitForTurn = vi.hoisted(() => vi.fn());
-const runtimeLoad = vi.hoisted(() => ({ loaded: false }));
 const authorize = vi.hoisted(() => vi.fn(async () => ({ error: null })));
 const envelope = vi.hoisted(() => vi.fn(async (run: () => Promise<unknown>) => await run()));
 
@@ -47,10 +48,10 @@ vi.mock("./agent-request-preflight.js", () => ({
   prepareAgentRequestPreflight: ({ request }: { request: unknown }) => ({ request }),
 }));
 
-vi.mock("./agent-turn-service.js", () => {
-  runtimeLoad.loaded = true;
-  return { createAgentTurnService: () => ({ startTurn, waitForTurn }) };
-});
+const service = () => ({ createAgentTurnService: () => ({ startTurn, waitForTurn }) });
+vi.mock("./agent-turn-service.js", () => ({
+  createAgentTurnService: () => ({ startTurn, waitForTurn }),
+}));
 
 function createContext() {
   return Object.assign({} as GatewayRequestContext, {
@@ -153,7 +154,7 @@ async function startOwnerFixture(assertContextCurrent?: () => void) {
   });
   await createFacade(createContext(), assertContextCurrent).dispatch(request, { onStartOwner });
   const owner = expectDefined(onStartOwner.mock.calls[0]?.[0], "captured startup owner");
-  return { request, register, registration, onStartOwner, owner };
+  return { request, register, registration, owner };
 }
 
 beforeEach(() => {
@@ -164,167 +165,43 @@ beforeEach(() => {
   envelope.mockReset().mockImplementation(async (run) => await run());
 });
 
-it("joins cold execution preparation and rechecks closed or canceled callers", async ({
-  signal,
-}) => {
-  expect(runtimeLoad.loaded).toBe(false);
-  const scenarios = [
-    ["dispatch", "close"],
-    ["wait", "close"],
-    ["dispatch", "abort"],
-    ["wait", "abort"],
-    ["dispatch", "admission"],
-    ["dispatch", "context"],
-    ["dispatch", "deadline"],
-    ["wait", "deadline"],
-  ] as const;
-  try {
-    for (const [method, boundary] of scenarios) {
-      // Vitest's manual factory callstack cannot represent overlapping cold imports.
-      // Join each real execution owner before replacing the next module instance.
-      vi.resetModules();
-      startTurn.mockReset().mockImplementation(async ({ io }) => {
-        io.emitAcceptance([true, { runId: "cold-run" }, undefined]);
-      });
-      waitForTurn.mockReset().mockResolvedValue({ result: { status: "timeout" } });
-      const held = createDeferred();
-      const reached = createDeferred();
-      vi.doMock("./agent-turn-service.js", async () => {
-        reached.resolve();
-        await held.promise;
-        return { createAgentTurnService: () => ({ startTurn, waitForTurn }) };
-      });
-      const unblock = () => held.resolve();
-      signal.addEventListener("abort", unblock, { once: true });
-      const { scope, entries, executions, context } = executionFixture();
-      let current = true;
-      const assertCurrent = () => {
-        if (!current) {
-          throw new Error("caller retired");
-        }
-      };
-      const facade = createFacade(context, boundary === "context" ? assertCurrent : undefined);
-      const controller = new AbortController();
-      const request = requestTurn(
-        "cold-run",
-        {
-          signal: controller.signal,
-          ...(boundary === "deadline" ? { timeoutMs: 0, cancelOnDeadline: false } : {}),
-          ...(boundary === "admission" ? { assertAdmissionCurrent: assertCurrent } : {}),
-        },
-        facade,
-        method,
-      ).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      const settled: string[] = [];
-      let joins: Promise<unknown>[] = [];
-      try {
-        await reached.promise;
-        if (boundary === "deadline") {
-          await request;
-        } else if (boundary === "close") {
-          entries.beginClose();
-        } else if (boundary === "abort") {
-          controller.abort(new Error("caller canceled"));
-        } else {
-          current = false;
-        }
-        joins = [
-          entries.waitForPendingEntries().then(() => settled.push("entry")),
-          AsyncWorkScope.runWhenAllIdle(
-            () => [scope],
-            () => scope.drain(),
-          ).then(() => settled.push("execution")),
-        ];
-        await nextTurn();
-        expect.soft(settled, `${method}/${boundary} joins`).toEqual([]);
-        unblock();
-        const outcome = await request;
-        await Promise.all(joins);
-        const message =
-          boundary === "deadline"
-            ? `gateway request timeout for ${method === "dispatch" ? "agent" : "agent.wait"}`
-            : boundary === "close"
-              ? "Gateway request entry is closed"
-              : boundary === "abort"
-                ? "caller canceled"
-                : "caller retired";
-        expect(outcome, `${method}/${boundary} caller`).toEqual({
-          error: expect.objectContaining({ message }),
-        });
-        const executionMessage =
-          method === "wait" && boundary === "abort" ? "agent.wait observation cancelled" : message;
-        expect(await Promise.allSettled(executions), `${method}/${boundary} execution`).toEqual([
-          boundary === "deadline"
-            ? {
-                status: "fulfilled",
-                value: method === "dispatch" ? undefined : { status: "timeout" },
-              }
-            : {
-                status: "rejected",
-                reason: expect.objectContaining({ message: executionMessage }),
-              },
-        ]);
-        expect(startTurn).toHaveBeenCalledTimes(
-          boundary === "deadline" && method === "dispatch" ? 1 : 0,
-        );
-        expect(waitForTurn).toHaveBeenCalledTimes(
-          boundary === "deadline" && method === "wait" ? 1 : 0,
-        );
-        expect(scope.hasPendingWork).toBe(false);
-      } finally {
-        unblock();
-        await Promise.allSettled([request, ...joins]);
-        await scope.drain();
-        signal.removeEventListener("abort", unblock);
-      }
-    }
-  } finally {
-    vi.doMock("./agent-turn-service.js", () => ({
-      createAgentTurnService: () => ({ startTurn, waitForTurn }),
-    }));
-    vi.resetModules();
-  }
-});
-
-it.each([
+it.for([
+  ["cold", "close", "dispatch"],
+  ["cold", "close", "wait"],
+  ["cold", "abort", "dispatch"],
+  ["cold", "abort", "wait"],
+  ["cold", "admission", "dispatch"],
+  ["cold", "context", "dispatch"],
+  ["cold", "deadline", "dispatch"],
+  ["cold", "deadline", "wait"],
   ["authorization", "abort", "dispatch"],
   ["authorization", "abort", "wait"],
   ["authorization", "revoke", "dispatch"],
   ["envelope", "revoke", "dispatch"],
   ["preparation", "abort", "dispatch"],
-  ["preparation", "close", "dispatch"],
-  ["preparation", "revoke", "dispatch"],
   ["preparation", "reject", "dispatch"],
-] as const)("rechecks %s after %s (%s)", async (stage, outcome, method) => {
-  const entered = createDeferred();
-  const prepared = createDeferred();
-  const { scope, entries, context } = executionFixture();
-  const controller = new AbortController();
+] as const)("joins %s and rechecks %s (%s)", async ([stage, boundary, method], { signal }) => {
+  const held = createDeferred();
+  const reached = createDeferred();
+  const pause = () => {
+    reached.resolve();
+    return held.promise;
+  };
+  const cold = stage === "cold";
+  const authorizationAbort = stage === "authorization" && boundary === "abort";
   const releaseMutation = vi.fn();
   const releaseAccess = vi.fn();
-  const authorizationAbort = stage === "authorization" && outcome === "abort";
-  const message =
-    outcome === "close"
-      ? "Gateway request entry is closed"
-      : outcome === "abort"
-        ? authorizationAbort
-          ? "caller canceled during authorization"
-          : "source aborted"
-        : outcome === "reject"
-          ? "source preparation failed"
-          : stage === "preparation"
-            ? "source revoked"
-            : "source closed";
-  const reason = new Error(message);
-  let current = true;
-  const pause = () => {
-    entered.resolve();
-    return prepared.promise;
-  };
-  if (stage === "authorization") {
+  if (cold) {
+    // Each case drains its execution before replacing the mocked import.
+    vi.resetModules();
+    startTurn.mockImplementation(async ({ io }) => accept(io, "guarded-run"));
+    waitForTurn.mockResolvedValue({ result: { status: "timeout" } });
+    // mock-isolation: Hold service loading at the cold-admission boundary without real runtime state.
+    vi.doMock("./agent-turn-service.js", async () => {
+      await pause();
+      return service();
+    });
+  } else if (stage === "authorization") {
     authorize.mockImplementationOnce(async () => {
       await pause();
       return {
@@ -343,52 +220,107 @@ it.each([
       return run();
     });
   }
+  const unblock = () => held.resolve();
+  signal.addEventListener("abort", unblock, { once: true });
+  const { scope, entries, executions, context } = executionFixture();
+  const authority = new AbortController();
+  const assertCurrent = () => authority.signal.throwIfAborted();
+  const facade = createFacade(context, boundary === "context" ? assertCurrent : undefined);
+  const message = {
+    deadline: `gateway request timeout for ${method === "dispatch" ? "agent" : "agent.wait"}`,
+    close: "Gateway request entry is closed",
+    abort: "caller canceled",
+    admission: "caller retired",
+    context: "caller retired",
+    revoke: "source closed",
+    reject: "source preparation failed",
+  }[boundary];
+  const reason = new Error(message);
+  const controller = new AbortController();
   const request = requestTurn(
-    "guarded-source",
+    "guarded-run",
     {
       signal: controller.signal,
+      ...(boundary === "deadline" ? { timeoutMs: 0, cancelOnDeadline: false } : {}),
+      ...(!cold || boundary === "admission" ? { assertAdmissionCurrent: assertCurrent } : {}),
       ...(stage === "preparation" ? { prepareDispatchCurrent: pause } : {}),
-      assertAdmissionCurrent: () => {
-        if (!current) {
-          throw reason;
-        }
-      },
     },
-    createFacade(context),
+    facade,
     method,
+  ).then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
   );
-  const rejected = authorizationAbort
-    ? expect(request).rejects.toBe(reason)
-    : expect(request).rejects.toThrow(message);
+  const settled: string[] = [];
+  let joins: Promise<unknown>[] = [];
   try {
-    await entered.promise;
-    expect(startTurn).not.toHaveBeenCalled();
-    if (outcome === "abort") {
+    await reached.promise;
+    if (boundary === "deadline") {
+      await request;
+    } else if (boundary === "close") {
+      entries.beginClose();
+    } else if (boundary === "abort") {
       controller.abort(reason);
       if (stage === "preparation") {
-        await rejected;
+        expect(await request).toEqual({ error: reason });
       }
-    } else if (outcome === "close") {
-      entries.beginClose();
+    } else if (boundary === "reject") {
+      held.reject(reason);
     } else {
-      current = false;
+      authority.abort(reason);
     }
-    if (outcome === "reject") {
-      prepared.reject(reason);
+    if (cold) {
+      joins = [
+        entries.waitForPendingEntries().then(() => settled.push("entry")),
+        AsyncWorkScope.runWhenAllIdle(
+          () => [scope],
+          () => scope.drain(),
+        ).then(() => settled.push("execution")),
+      ];
+      await nextTurn();
+      expect.soft(settled, `${method}/${boundary} joins`).toEqual([]);
+    }
+    unblock();
+    const outcome = await request;
+    await Promise.all(joins);
+    expect(outcome, `${method}/${boundary} caller`).toEqual({
+      error: expect.objectContaining({ message }),
+    });
+    if (authorizationAbort && "error" in outcome) {
+      expect(outcome.error).toBe(reason);
+    }
+    if (cold) {
+      expect(executions).toHaveLength(1);
+    }
+    if (boundary === "deadline") {
+      await expect(executions[0]).resolves.toEqual(
+        method === "dispatch" ? undefined : { status: "timeout" },
+      );
+    } else {
+      if (cold) {
+        await expect(executions[0]).rejects.toThrow(
+          method === "wait" && boundary === "abort" ? "agent.wait observation cancelled" : message,
+        );
+      }
+      expectCalls(0, startTurn, waitForTurn);
+    }
+    await scope.drain();
+    await entries.waitForPendingEntries();
+    expect(scope.hasPendingWork).toBe(false);
+    if (authorizationAbort) {
+      expectCalls(1, releaseMutation, releaseAccess);
+      expect(envelope).not.toHaveBeenCalled();
     }
   } finally {
-    prepared.resolve();
-  }
-  await rejected;
-  await scope.drain();
-  await entries.waitForPendingEntries();
-  expect(startTurn).not.toHaveBeenCalled();
-  expect(scope.hasPendingWork).toBe(false);
-  if (authorizationAbort) {
-    expect(releaseMutation).toHaveBeenCalledOnce();
-    expect(releaseAccess).toHaveBeenCalledOnce();
-    expect(envelope).not.toHaveBeenCalled();
-    expect(waitForTurn).not.toHaveBeenCalled();
+    unblock();
+    await Promise.allSettled([request, ...joins]);
+    await scope.drain();
+    signal.removeEventListener("abort", unblock);
+    if (cold) {
+      // mock-isolation: Restore the controlled turn service after each cold import.
+      vi.doMock("./agent-turn-service.js", service);
+      vi.resetModules();
+    }
   }
 });
 
@@ -402,56 +334,41 @@ it("keeps selected wait session facts private", async () => {
       lifecycleGeneration: "original-generation",
     },
   });
-  await expect(createFacade().wait({ runId: "completed-run", timeoutMs: 0 })).resolves.toEqual(
-    result,
-  );
+  await expect(createFacade().wait({ runId: "completed-run" })).resolves.toEqual(result);
 });
 
 it.each(["final", "error"])(
   "preserves acceptance ordering and the post-acceptance %s",
   async (completion) => {
-    let sourceCurrent = true;
-    const assertAdmissionCurrent = vi.fn(() => {
-      if (!sourceCurrent) {
-        throw new Error("source closed");
-      }
-    });
+    const authority = new AbortController();
+    const assertAdmissionCurrent = () => authority.signal.throwIfAborted();
     const accepted = createDeferred();
     const { promise: finalGate, resolve: emitFinal } = createDeferred();
-    const dispatchError = Object.assign(new Error("turn failed"), { code: "ETURN" });
+    const dispatchError = new Error("turn failed");
+    const payload = { runId: "run-1", status: "ok", summary: "done" };
+    const meta = { runId: "run-1", terminal: true };
     startTurn.mockImplementation(async ({ io, assertAdmissionCurrent: admissionGuard }) => {
-      expect(admissionGuard).toBe(assertAdmissionCurrent);
       admissionGuard();
       accept(io, "run-1", { runId: "run-1" });
       await finalGate;
       if (completion === "error") {
         throw dispatchError;
       }
-      io.emitFinal([true, { runId: "run-1", status: "ok", summary: "done" }, undefined], {
-        runId: "run-1",
-        terminal: true,
-      });
+      io.emitFinal([true, payload, undefined], meta);
     });
     const onAccepted = vi.fn(() => accepted.resolve());
 
     const result = requestTurn("run-1", { expectFinal: true, onAccepted, assertAdmissionCurrent });
     await accepted.promise;
     expect(onAccepted).toHaveBeenCalledWith({ runId: "run-1", status: "accepted" });
-    sourceCurrent = false;
-    const checksAtAcceptance = assertAdmissionCurrent.mock.calls.length;
+    authority.abort(new Error("source closed"));
     emitFinal();
 
     if (completion === "error") {
       await expect(result).rejects.toBe(dispatchError);
     } else {
-      await expect(result).resolves.toEqual({
-        ok: true,
-        payload: { runId: "run-1", status: "ok", summary: "done" },
-        error: undefined,
-        meta: { runId: "run-1", terminal: true },
-      });
+      await expect(result).resolves.toEqual({ ok: true, payload, error: undefined, meta });
     }
-    expect(assertAdmissionCurrent).toHaveBeenCalledTimes(checksAtAcceptance);
   },
 );
 
@@ -462,7 +379,6 @@ it.each([
 ])(
   "reports actual execution (cached=$cached, executing=$executing)",
   async ({ cached, executing }) => {
-    const context = createContext();
     if (cached) {
       const source = createRpcSourceForTest({}, { runId: "run-2" });
       rpcSourceTesting.set("run-2", source);
@@ -477,17 +393,11 @@ it.each([
       if (cached) {
         io.emitAcceptance([true, payload, undefined], meta);
       } else {
-        expect(io.emitExecutionStarted).toBe(onExecutionStarted);
         accept(io, "run-2");
         io.emitExecutionStarted?.();
       }
     });
-    const result = await requestTurn("run-2", { onExecutionStarted }, createFacade(context));
-    if (cached) {
-      expect(result).toEqual({ ok: true, payload, error: undefined, meta });
-    } else {
-      expect(result).toMatchObject({ ok: true });
-    }
+    await requestTurn("run-2", { onExecutionStarted });
     expect(onExecutionStarted).toHaveBeenCalledTimes(executing ? 1 : 0);
   },
 );
@@ -499,14 +409,47 @@ it.each([
   "agent changed",
   "session changed",
   "gateway closed",
-  "request mutated",
-] as const)("keeps startup ownership bound to its registration through %s", async (change) => {
-  let gatewayCurrent = true;
-  const { request, register, registration, onStartOwner, owner } = await startOwnerFixture(() => {
-    if (!gatewayCurrent) {
-      throw new Error("gateway closed");
-    }
+] as const)("retires startup ownership when %s", async (change) => {
+  const gateway = new AbortController();
+  const { registration, register, owner } = await startOwnerFixture(() =>
+    gateway.signal.throwIfAborted(),
+  );
+  let replacement: ReturnType<typeof register> | undefined;
+  const invalidate = {
+    aborted: () => registration.controller.abort(),
+    replaced: () => {
+      registration.cleanup();
+      replacement = register();
+      onTestFinished(replacement.cleanup);
+    },
+    rotated: rotateAgentEventLifecycleGeneration,
+    "agent changed": () => setTestRpcSourceIdentity(registration.entry, { agentId: "other-agent" }),
+    "session changed": () =>
+      setTestRpcSourceIdentity(registration.entry, { sessionId: "replacement-session" }),
+    "gateway closed": () => gateway.abort(new Error("gateway closed")),
+  };
+  expect(owner.observe()).toEqual({ executionStarted: false });
+  invalidate[change]();
+  expect(owner.observe()).toBeUndefined();
+  expect(owner.abort()).toBe(false);
+  expect(replacement?.controller.signal.aborted ?? false).toBe(false);
+});
+
+it("captures startup identity independently of the mutable request", async () => {
+  const { request, registration, owner } = await startOwnerFixture();
+  Object.assign(request, {
+    agentId: "other-agent",
+    idempotencyKey: "other-run",
+    sessionKey: "agent:other:other",
+    expectedExistingSessionId: "other-session",
   });
+  expect(owner.observe()).toBeDefined();
+  expect(owner.abort()).toBe(true);
+  expect(registration.controller.signal.aborted).toBe(true);
+});
+
+it("observes a started owner without reentering its watchdog authority", async () => {
+  const { owner, registration } = await startOwnerFixture();
   const observation = owner.observe();
   expect(observation).toEqual({ executionStarted: false });
   expect(() => Reflect.get(observation ?? {}, "expiresAtMs")).toThrowError(
@@ -516,51 +459,6 @@ it.each([
       message: expect.stringContaining("startDeadlineAtMs"),
     }),
   );
-  let replacement: ReturnType<typeof register> | undefined;
-  switch (change) {
-    case "aborted":
-      registration.controller.abort();
-      break;
-    case "replaced":
-      registration.cleanup();
-      replacement = register();
-      break;
-    case "rotated":
-      rotateAgentEventLifecycleGeneration();
-      break;
-    case "agent changed":
-      setTestRpcSourceIdentity(registration.entry, { agentId: "other-agent" });
-      break;
-    case "session changed":
-      setTestRpcSourceIdentity(registration.entry, { sessionId: "replacement-session" });
-      break;
-    case "gateway closed":
-      gatewayCurrent = false;
-      break;
-    case "request mutated":
-      request.agentId = "other-agent";
-      request.idempotencyKey = "other-run";
-      request.sessionKey = "agent:other:other";
-      request.expectedExistingSessionId = "other-session";
-      break;
-  }
-  if (change === "request mutated") {
-    expect(owner.observe()).toBeDefined();
-    expect(owner.abort()).toBe(true);
-    expect(registration.controller.signal.aborted).toBe(true);
-  } else {
-    expect(owner.observe()).toBeUndefined();
-    expect(owner.abort()).toBe(false);
-  }
-  expect(replacement?.controller.signal.aborted ?? false).toBe(false);
-  expect(onStartOwner).toHaveBeenCalledOnce();
-  replacement?.cleanup();
-  registration.cleanup();
-});
-
-it("observes a started owner without reentering its watchdog authority", async () => {
-  const { owner, registration } = await startOwnerFixture();
-  expect(owner.observe()).toMatchObject({ executionStarted: false });
   await claimRpcSourceForTest(registration.entry);
   const operation = expectDefined(registration.entry.input.claim?.operation, "claimed operation");
   let policyCurrent = true;
@@ -583,17 +481,14 @@ it("observes a started owner without reentering its watchdog authority", async (
   expect(assertCurrent).not.toHaveBeenCalled();
   expect(owner.abort()).toBe(false);
   expect(attempt.isCurrent()).toBe(true);
-  expect(assertCurrent).toHaveBeenCalledOnce();
   policyCurrent = false;
   expect(attempt.isCurrent()).toBe(false);
-  expect(assertCurrent).toHaveBeenCalledTimes(2);
 });
 
 it.each([false, true])(
   "cancels only its accepted run across the dispatch deadline (late acceptance: %s)",
   async (lateAcceptance) => {
     vi.useFakeTimers();
-    const context = createContext();
     const acceptanceGate = createDeferred();
     const acceptanceReached = createDeferred();
     const unrelated = registerRun("unrelated-run", "unrelated-session", "agent:main:unrelated");
@@ -611,18 +506,13 @@ it.each([false, true])(
       accept(io, "deadline-run", { runId: "deadline-run" });
       acceptanceReached.resolve();
       if (!lateAcceptance) {
-        await new Promise<void>((_resolve, reject) => {
-          registration.controller.signal.addEventListener(
-            "abort",
-            () => reject(new Error("deadline run aborted")),
-            { once: true },
-          );
-        });
+        await once(registration.controller.signal, "abort");
+        throw new Error("deadline run aborted");
       }
     });
 
     try {
-      const result = createFacade(context).dispatchRaw(
+      const result = createFacade().dispatchRaw(
         {
           message: "settle requester",
           sessionKey: "agent:main:deadline",

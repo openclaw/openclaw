@@ -553,7 +553,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     active = true;
     const unsubscribe = [
       // Retire pending reads on every connection transition, even within one render.
-      gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
+      application.gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
       // Config receipts retire obsolete support probes before their results can settle.
       runtime.subscribe(() => syncSupport(application.runtimeConfig)),
       // Route receipts retire the plugin's settings scope before its pending reads settle.
@@ -576,14 +576,18 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     return next !== undefined ? { kind: "pinned", pluginId: next } : engineSelection();
   };
   const agentId = () => agentSelection.read().state.selectedId;
-  function readSettingsSnapshot(): ControlUiSettingsSnapshot {
+  function readSettingsSnapshot(panel: "overview" | "memories"): ControlUiSettingsSnapshot | null {
+    const routeData = props.admittedRoute.read();
+    // Retained rendering must not reactivate a plugin after its tab's owner has moved on.
+    if (!routeData || memoryTabForRoute(routeData, application.basePath) !== panel) {
+      return null;
+    }
     // Read authority directly from each live owner.
     const selection = resolveMemoryEngineSelection(
       currentConfigObject(application.runtimeConfig.state) ?? {},
     );
     const id = selectedEngineId(selection);
     const entry = findMemoryPlugin(catalogState.value, id);
-    const routeData = props.admittedRoute.read();
     return {
       agentId: application.settingsAgentSelection.state.selectedId,
       agentsLoading: application.agents.state.agentsLoading,
@@ -607,8 +611,8 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   function subscribeSettings(listener: () => void) {
     settingsListeners.add(listener);
     // The plugin bridge must retire its request scope synchronously, before a batched render.
-    const stops = [agentSelection, gateway, runtime, application.agents, i18n].map((source) =>
-      source.subscribe(listener),
+    const stops = [agentSelection, application.gateway, runtime, application.agents, i18n].map(
+      (source) => source.subscribe(listener),
     );
     return () => {
       settingsListeners.delete(listener);
@@ -628,7 +632,8 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         readAddonBusy={(id) => addonMutations.get(id)?.busy() ?? false}
         engineSelection={displayedEngineSelection()}
         enginePending={engineMutation.current() !== undefined}
-        engineBusy={engineMutation.busy() || props.mutationDisabled}
+        engineDisabled={props.mutationDisabled}
+        engineSaving={engineMutation.busy()}
         engineOutcome={engineOutcome()}
         onEngineChange={(nextEngineId) => void changeEngine(nextEngineId, engineSelection())}
         canToggleAddons={
@@ -643,7 +648,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
             <ControlUiSettingsPresentation
               application={application}
               placement={{ section: "memory", panel: "overview" }}
-              readSnapshot={readSettingsSnapshot}
+              readSnapshot={() => readSettingsSnapshot("overview")}
               subscribe={subscribeSettings}
               navigate={navigateTab}
               refreshAgents={() => {
@@ -657,7 +662,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
             <ControlUiSettingsPresentation
               application={application}
               placement={{ section: "memory", panel: "memories" }}
-              readSnapshot={readSettingsSnapshot}
+              readSnapshot={() => readSettingsSnapshot("memories")}
               subscribe={subscribeSettings}
               navigate={navigateTab}
               refreshAgents={() => {

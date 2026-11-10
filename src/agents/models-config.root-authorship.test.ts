@@ -93,7 +93,7 @@ it.each([undefined, "{broken"])("rebuilds a missing or malformed root (%s)", asy
     await fs.writeFile(rootPath, contents);
   }
 
-  await expect(ensureConfigured()).resolves.toMatchObject({ wrote: true });
+  await ensureConfigured();
   expect(JSON.parse(await fs.readFile(rootPath, "utf8"))).toMatchObject({
     providers: { configured: { baseUrl: native.baseUrl, models: [{ id: "native-model" }] } },
   });
@@ -110,31 +110,26 @@ it("preserves manual catalog bytes when the existing file cannot be read", async
   });
   const createStore = privateFileStoreRuntime.privateFileStore;
   let faultTriggered = false;
-  const storeSpy = vi
-    .spyOn(privateFileStoreRuntime, "privateFileStore")
-    .mockImplementation((rootDir) => {
-      const store = createStore(rootDir);
-      if (rootDir !== agentDir) {
-        return store;
-      }
-      return {
-        ...store,
-        readTextIfExists: async (relativePath, options) => {
-          if (relativePath === "models.json" && !faultTriggered) {
-            faultTriggered = true;
-            throw readError;
-          }
-          return store.readTextIfExists(relativePath, options);
-        },
-      };
-    });
-  try {
-    await expect(ensureConfigured()).rejects.toBe(readError);
-    expect(faultTriggered).toBe(true);
-    expect(await fs.readFile(rootPath)).toEqual(originalBytes);
-  } finally {
-    storeSpy.mockRestore();
-  }
+  using _ = vi.spyOn(privateFileStoreRuntime, "privateFileStore").mockImplementation((rootDir) => {
+    const store = createStore(rootDir);
+    if (rootDir !== agentDir) {
+      return store;
+    }
+    return {
+      ...store,
+      readTextIfExists: async (relativePath, options) => {
+        if (relativePath === "models.json" && !faultTriggered) {
+          faultTriggered = true;
+          throw readError;
+        }
+        return store.readTextIfExists(relativePath, options);
+      },
+    };
+  });
+
+  await expect(ensureConfigured()).rejects.toBe(readError);
+  expect(faultTriggered).toBe(true);
+  expect(await fs.readFile(rootPath)).toEqual(originalBytes);
 });
 
 it("keeps manual, implicit, and generated ids literal across replanning", async () => {
@@ -330,4 +325,33 @@ it("preserves an eligible shared-hook output without aliases", async () => {
   const discovered = await resolveImplicitProviders({ ...params, preparedStaticProviderCatalog });
   expect(discovered?.alternate?.models.map(({ id }) => id)).toEqual(["native-model"]);
   expect(discovered?.fixture).toBeUndefined();
+});
+
+it("keeps a recovered CLI backend catalog with its plugin when discovery skips it", async () => {
+  // claude-cli/<model> rows are published by the plugin that registers the CLI backend.
+  metadata = createPluginMetadataSnapshotFixture({
+    plugins: [{ ...catalogOwner, cliBackends: ["fixture-cli"] }],
+  });
+  await replacePersistedPluginModelCatalogs({
+    agentDir,
+    pluginCatalogWrites: {
+      "plugins/catalog-owner/catalog.json": JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: { "fixture-cli": native },
+      }),
+    },
+  });
+
+  // An authored provider keeps the plan from skipping, so the recovered entry must be placed.
+  const planned = await planSource(
+    { models: { providers: { configured: native } } },
+    agentDir,
+    context(),
+  );
+
+  assert(planned.modelsJsonContents, "The plan must write a root catalog");
+  expect(Object.keys(JSON.parse(planned.modelsJsonContents).providers)).toEqual(["configured"]);
+  const generated = planned.pluginCatalogs.find(({ pluginId }) => pluginId === "catalog-owner");
+  assert(generated, "The plan must keep the plugin catalog");
+  expect(Object.keys(JSON.parse(generated.contents).providers)).toContain("fixture-cli");
 });

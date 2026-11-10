@@ -12,6 +12,7 @@ import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptParamsV2,
 } from "../plugin-sdk/agent-harness-runtime.js";
+import { expectCollected } from "../test-utils/retention.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
   attachCronStreamExecPolicy,
@@ -84,6 +85,31 @@ function createManagementFixture(controlUiAdmin = true) {
 }
 
 describe("cron creator authority grants", () => {
+  it("retains the expired reason without retaining the revoking caller", async () => {
+    const formatter = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+    Reflect.deleteProperty(Error, "prepareStackTrace");
+    onTestFinished(() => {
+      if (formatter) {
+        Object.defineProperty(Error, "prepareStackTrace", formatter);
+      }
+    });
+    class RevokingCaller {
+      revoke() {
+        const scope = createCronCreatorAuthorityRunScope("expired-stack");
+        revokeScope(scope);
+        return scope.signal;
+      }
+    }
+    const { signal, caller: callerRef } = (() => {
+      const caller = new RevokingCaller();
+      return { signal: caller.revoke(), caller: new WeakRef(caller) };
+    })();
+    await expectCollected(callerRef);
+    expect(signal.reason).toBeInstanceOf(TypeError);
+    expect(signal.reason).toMatchObject({ name: "CronCreatorAuthorityExpiredError", status: 403 });
+    expect(() => signal.throwIfAborted()).toThrow(signal.reason);
+  });
+
   it("preserves the Control UI admin SDK projection without granting creator authority", () => {
     const scope = createScope("sdk-compat", { kind: "unknown" }, { source: "control-ui-admin" });
     const legacy: Pick<EmbeddedRunAttemptParams, "cronCreatorAuthorityCapability"> = {

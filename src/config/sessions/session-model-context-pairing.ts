@@ -94,10 +94,7 @@ function compactFrame(
 export function createModelContextPairing(
   messages: readonly AgentMessage[],
   retainedMessages: readonly AgentMessage[],
-  limits: { maxOccurrences?: number; maxBytes?: number } = {},
 ): ModelContextPairing {
-  const maxOccurrences = limits.maxOccurrences ?? 256;
-  const maxBytes = limits.maxBytes ?? 128 * 1024;
   let frames: CompactFrame[] = [];
   let unknownPrefix = false;
   let unavailableLastFrame = false;
@@ -146,7 +143,7 @@ export function createModelContextPairing(
       const frameBytes = Buffer.byteLength(
         JSON.stringify([frame.assistant, ...frame.results.map(({ message }) => message)]),
       );
-      if (count + occurrences > maxOccurrences || bytes + frameBytes > maxBytes) {
+      if (count + occurrences > 256 || bytes + frameBytes > 128 * 1024) {
         unknownPrefix ||=
           frame.results.length < occurrences ||
           frame.results.some(({ message }) => isSyntheticMissingToolResult(message));

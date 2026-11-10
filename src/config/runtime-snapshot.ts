@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import { prepareRuntimePluginsConfig } from "../plugins/config-state.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
   cloneEnvWithPlatformSemantics,
@@ -18,6 +19,7 @@ import {
   captureRuntimeConfigWithSource,
   type CapturedRuntimeConfigRead,
   getRuntimeConfigCapture,
+  recordPublishedRuntimeConfigSource,
 } from "./runtime-config-capture-state.js";
 import { runtimeConfigPublication } from "./runtime-config-publication.js";
 import { configSnapshotsMatch } from "./runtime-config-snapshot-match.js";
@@ -25,7 +27,6 @@ import { runtimeSessionPublicationChangeScope } from "./runtime-session-changes.
 import {
   hashRuntimeConfigValue,
   hashModelConfig,
-  matchesRuntimeConfigPublicationFact,
   matchesRuntimeConfigValueFact,
   matchesRuntimeSourceConfigValueFact,
   prepareRuntimeConfigValueFact,
@@ -186,7 +187,13 @@ function publishRuntimeConfigSnapshot(
   const previousEditedInPlace =
     runtimeConfigSnapshot !== null &&
     runtimeConfigValueFact !== null &&
-    !matchesRuntimeConfigPublicationFact(runtimeConfigSnapshot, runtimeConfigValueFact);
+    !(
+      matchesRuntimeConfigValueFact(runtimeConfigSnapshot, runtimeConfigValueFact) &&
+      isDeepStrictEqual(
+        serializeConfigResolutionFacts(runtimeConfigSnapshot),
+        runtimeConfigValueFact.facts,
+      )
+    );
   const previousSourceEditedInPlace =
     runtimeConfigSourceSnapshot !== null &&
     runtimeSourceConfigValueFact !== null &&
@@ -199,10 +206,10 @@ function publishRuntimeConfigSnapshot(
       : runtimeConfigSourceSnapshot !== null &&
         runtimeSourceConfigValueFact !== null &&
         matchesRuntimeSourceConfigValueFact(sourceConfig, runtimeSourceConfigValueFact);
-  // Compare with what the previous publication recorded, since its object may have been edited
-  // in place; withhold only a distinct object matching that record, or a proven no-op.
+  // Mutable same-object setters still invalidate. An immutable publication can reuse
+  // its capture, but provenance and source edits must pass the same recorded-fact checks.
   const matchesPublished =
-    runtimeConfigSnapshot !== config &&
+    (runtimeConfigSnapshot !== config || isDeeplyFrozenPlainData(config)) &&
     runtimeConfigSnapshotMetadata?.fingerprint === configFact.fingerprint &&
     isDeepStrictEqual(runtimeConfigValueFact?.facts, facts);
   if (
@@ -231,11 +238,17 @@ function publishRuntimeConfigSnapshot(
     sourceUnchanged: sourceMatchesPublished,
     previousEditedInPlace: previousEditedInPlace || previousSourceEditedInPlace,
   });
+  // SDK setters also accept opaque values; only proven plain revisions capture eagerly.
+  const captured =
+    configFact.value && sourceFact.value
+      ? captureRuntimeConfigWithSource(config, sourceConfig ?? config)
+      : null;
   prepareRuntimePluginsConfig(config);
   clearExecutablePathCache();
   runtimeConfigSnapshot = config;
-  runtimeConfigCapturedSnapshot = null;
+  runtimeConfigCapturedSnapshot = captured;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
+  recordPublishedRuntimeConfigSource(config, sourceConfig ?? config);
   runtimeConfigSnapshotMetadata = metadata;
   if (
     runtimeModelConfigCacheKey === null ||
@@ -435,6 +448,17 @@ export function selectApplicableRuntimeConfig(params: {
     return runtimeConfig;
   }
   return inputConfig;
+}
+
+/** Select current runtime values without rebinding an explicit scoped config. */
+export function selectLiveRuntimeConfig(inputConfig: OpenClawConfig): OpenClawConfig;
+export function selectLiveRuntimeConfig(inputConfig?: OpenClawConfig): OpenClawConfig | undefined;
+export function selectLiveRuntimeConfig(inputConfig?: OpenClawConfig): OpenClawConfig | undefined {
+  return selectApplicableRuntimeConfig({
+    inputConfig,
+    runtimeConfig: runtimeConfigSnapshot,
+    runtimeSourceConfig: runtimeConfigSourceSnapshot,
+  });
 }
 
 /** Bind a retained consumer to its current runtime owner while preserving scoped configs. */

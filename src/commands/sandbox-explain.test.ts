@@ -3,7 +3,13 @@ import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
@@ -41,6 +47,76 @@ async function explain(opts: Omit<Parameters<typeof sandboxExplainCommand>[0], "
 }
 
 describe("sandbox explain command", () => {
+  const direct = "agent:builder:telegram:direct:peer";
+  const slash = "telegram:slash:123";
+  const unknown = "unregistered-channel:slash:123";
+  const slashKey = `agent:builder:${slash}`;
+  const operatorKey = "agent:builder:operator";
+  it.each([
+    ["canonical delivery", direct, direct, "slack", "slack", "main"],
+    ["internal delivery", direct, direct, "webchat", "webchat", "main"],
+    ["unknown delivery", direct, direct, "unregistered-channel", "telegram", "main"],
+    ["short main", "telegram", "agent:builder:telegram", undefined, undefined, "telegram"],
+    ["blank session", "   ", operatorKey, undefined, undefined, "operator"],
+    ["main alias", "main", operatorKey, undefined, undefined, "operator"],
+    ["unscoped slash", slash, slashKey, undefined, "telegram", "main"],
+    ["scoped slash", slashKey, slashKey, undefined, "telegram", "main"],
+    ["stored slash delivery", slash, slashKey, "slack", "slack", "main"],
+    ["unknown alias", unknown, `agent:builder:${unknown}`, undefined, undefined, "main"],
+  ] as const)(
+    "reports %s through the stored session",
+    async (_label, session, sessionKey, delivery, channel, mainKey) => {
+      const previousRegistry = captureActivePluginRegistrySnapshot();
+      try {
+        setActivePluginRegistry(
+          createTestRegistry(
+            ["telegram", "slack"].map((id) => ({
+              pluginId: id,
+              plugin: createChannelTestPluginBase({ id }),
+              source: "test",
+            })),
+          ),
+        );
+        await withOpenClawTestState({ label: "sandbox-explain-channel" }, async (state) => {
+          const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
+          if (delivery) {
+            await replaceSessionEntry(
+              { storePath, sessionKey },
+              {
+                sessionId: "explain-session",
+                updatedAt: 1,
+                delivery: {
+                  kind: "external",
+                  route: { channel: delivery, target: { to: "synthetic-peer" } },
+                  context: { channel: delivery, to: "synthetic-peer" },
+                  origin: { provider: delivery },
+                },
+              },
+            );
+          }
+          mockCfg = config(
+            { mode: "off" },
+            { builder: { workspace: state.workspaceDir } },
+            {
+              session: { store: storePath, mainKey },
+              tools: { elevated: { allowFrom: { telegram: ["*"], slack: ["*"], webchat: ["*"] } } },
+            },
+          );
+          const result = await explain({ session });
+          expect(result.sessionKey).toBe(sessionKey);
+          expect(result.elevated.channel).toBe(channel);
+          expect(result.elevated.allowedByConfig).toBe(channel !== undefined);
+          expect(result.elevated.allowFrom.global).toEqual(channel ? ["*"] : undefined);
+          if (channel) {
+            expect(result.fixIt).toContain(`tools.elevated.allowFrom.${channel}`);
+          }
+        });
+      } finally {
+        restoreActivePluginRegistrySnapshot(previousRegistry);
+      }
+    },
+  );
+
   it.each([
     [
       "unknown",
@@ -184,6 +260,6 @@ describe("sandbox explain command", () => {
   it("rejects a fully qualified session from a different agent", async () => {
     mockCfg = config({ mode: "non-main" }, { main: {}, builder: {} });
     const execution = explain({ agent: "builder", session: "agent:main:main" });
-    await expect(execution).rejects.toThrow('agent "builder" does not match session agent "main"');
+    await expect(execution).rejects.toThrow('belongs to "main", not "builder"');
   });
 });

@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -17,27 +16,24 @@ import { finalizeUpdatedJob } from "../cron/service/jobs-mutation.js";
 import { computeJobNextRunAtMs } from "../cron/service/jobs-scheduling.js";
 import { assertExecutionPolicy } from "../cron/service/jobs-validation.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
 import {
   loadCronRuntimeAuthorities,
   replaceCronRuntimeAuthorityRows,
 } from "../cron/store/runtime-authority-store.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import {
-  decodeDoctorHeartbeatJobRows,
-  readDoctorHeartbeatJobs,
-  type DoctorCronJob,
-} from "./doctor-heartbeat-jobs.js";
+import { decodeDoctorHeartbeatJobRows, type DoctorCronJob } from "./doctor-heartbeat-jobs.js";
 import {
   resolveLegacyHeartbeatAgents,
   resolveLegacyHeartbeatConfig,
   resolveLegacyHeartbeatIntervalMs,
-  resolveLegacyHeartbeatVisibility,
+  resolveLegacyHeartbeatAlertsEnabled,
   migrateHeartbeatPrompt,
   validateLegacyHeartbeatConfig,
 } from "./doctor-heartbeat-legacy.js";
@@ -48,12 +44,16 @@ import {
   resolveDoctorHeartbeatReceiptJob,
   selectDoctorHeartbeatMonitor,
 } from "./doctor-heartbeat-monitors.js";
+import { recoverDoctorHeartbeatRun } from "./doctor-heartbeat-run-recovery.js";
 import {
   resolveHeartbeatPhaseMs,
   resolveHeartbeatSchedulerSeed,
 } from "./doctor-heartbeat-schedule.js";
 import { resolveLegacyHeartbeatSessionKey } from "./doctor-heartbeat-session.js";
-import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
+import {
+  isHeartbeatTaskCronJob,
+  resolveHeartbeatTaskPromptRepair,
+} from "./doctor-heartbeat-task-identity.js";
 
 const CHECK_ID = "core/doctor/heartbeat-cadence-migration";
 
@@ -85,8 +85,8 @@ function legacyAlertsEnabled(cfg: OpenClawConfig, target: string, accountId?: st
       const config = cfg.channels?.[channel];
       const accounts =
         isRecord(config) && isRecord(config.accounts) ? Object.keys(config.accounts) : [];
-      return (accountId ? [accountId] : accounts.length ? accounts : [undefined]).map(
-        (id) => resolveLegacyHeartbeatVisibility({ cfg, channel, accountId: id }).showAlerts,
+      return (accountId ? [accountId] : accounts.length ? accounts : [undefined]).map((id) =>
+        resolveLegacyHeartbeatAlertsEnabled({ cfg, channel, accountId: id }),
       );
     }),
   );
@@ -216,6 +216,15 @@ function convertMonitor(
         schedulingInputsRequested: true,
         scheduleChanged,
       });
+      if (previous.state.runningAtMs !== undefined) {
+        // Conversion may disable a monitor whose recovery needs Gateway startup.
+        // Keep its execution facts; cron still owns settlement of that result.
+        Object.assign(job.state, {
+          runningAtMs: previous.state.runningAtMs,
+          runningReceiptId: previous.state.runningReceiptId,
+          runningScheduleChangeId: previous.state.runningScheduleChangeId,
+        });
+      }
     }
   }
   job.updatedAtMs = nowMs;
@@ -231,21 +240,29 @@ export async function ensureHeartbeatMonitorJobs(
   legacyFileAgentIds: readonly string[] = [],
 ): Promise<Map<string, CronJob>> {
   validateLegacyHeartbeatConfig(cfg);
-  const loaded = readDoctorHeartbeatJobs(storePath, env);
-  const { agentIds, enrolledAgentIds } = planDoctorHeartbeatMonitors(
-    cfg,
-    loaded,
-    (agentId) =>
-      withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) => readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId),
-        { env },
-      ),
-    legacyFileAgentIds,
+  const inspected = await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+    ({ db }) => {
+      const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+      const loaded = decodeDoctorHeartbeatJobRows(loadCronRows(db, storeKey));
+      return {
+        loaded,
+        ...planDoctorHeartbeatMonitors(
+          cfg,
+          loaded,
+          (agentId) => readDefaultProactiveJobReceiptInDatabase(db, storeKey, agentId),
+          legacyFileAgentIds,
+        ),
+      };
+    },
+    { env },
   );
+  const loaded = inspected?.loaded ?? [];
+  const { agentIds, enrolledAgentIds } =
+    inspected ?? planDoctorHeartbeatMonitors(cfg, loaded, () => undefined, legacyFileAgentIds);
   if (agentIds.size === 0 && !loaded.some(isPendingLegacyHeartbeatRetry)) {
     return new Map();
   }
-  const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env, readOnly: true });
+  const schedulerSeed = await resolveHeartbeatSchedulerSeed(undefined, { env, readOnly: true });
   const nowMs = Date.now();
   const planned = [...agentIds].toSorted().flatMap((agentId) => {
     const legacyJobs = loaded.filter(
@@ -270,8 +287,10 @@ export async function ensureHeartbeatMonitorJobs(
     return conversions;
   });
   return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const rows = loadCronRows(db, cronStoreKey(storePath));
+    (database) => {
+      const { db } = database;
+      const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+      const rows = loadCronRows(db, storeKey);
       const currentJobs = decodeDoctorHeartbeatJobRows(rows);
       const result = new Map<string, CronJob>();
       let nextSortOrder = rows.reduce((max, row) => Math.max(max, row.sort_order + 1), 0);
@@ -291,7 +310,7 @@ export async function ensureHeartbeatMonitorJobs(
         // it to cron's existing catch-up owner without rewriting history or cadence.
         upsertCronJobRow(
           db,
-          cronStoreKey(storePath),
+          storeKey,
           {
             ...current,
             payload: current.payload,
@@ -302,7 +321,7 @@ export async function ensureHeartbeatMonitorJobs(
       }
       for (const item of planned) {
         const receipt = item.defaultMonitor
-          ? readDefaultProactiveJobReceiptInDatabase(db, storePath, item.agentId)
+          ? readDefaultProactiveJobReceiptInDatabase(db, storeKey, item.agentId)
           : undefined;
         if (receipt) {
           const current = resolveDoctorHeartbeatReceiptJob(
@@ -317,7 +336,7 @@ export async function ensureHeartbeatMonitorJobs(
           }
           continue;
         }
-        const current = item.previous
+        let current = item.previous
           ? currentJobs.find((job) => job.id === item.previous!.id)
           : undefined;
         if (
@@ -332,8 +351,18 @@ export async function ensureHeartbeatMonitorJobs(
           );
         }
         if (current?.state.runningAtMs !== undefined) {
-          throw new Error(
-            `Automation ${current.id} is running; stop the Gateway and rerun Doctor to preserve its execution boundary.`,
+          current = recoverDoctorHeartbeatRun({ database, storeKey, job: current, cfg, nowMs });
+          if (!current) {
+            continue;
+          }
+          item.job = convertMonitor(
+            cfg,
+            item.agentId,
+            current,
+            nowMs,
+            schedulerSeed,
+            env,
+            enrolledAgentIds.has(item.agentId),
           );
         }
         const sortOrder = current
@@ -355,7 +384,7 @@ export async function ensureHeartbeatMonitorJobs(
           : item.job;
         loadCronRuntimeAuthorities({
           db,
-          storeKey: cronStoreKey(storePath),
+          storeKey,
           jobs: [authoritySource],
         });
         item.job.runtimeAuthority = authoritySource.runtimeAuthority;
@@ -363,24 +392,25 @@ export async function ensureHeartbeatMonitorJobs(
           authoritySource.runtimeAuthorityRecoveryRequired;
         // The transaction already revalidated the full row. Persist scheduling state
         // together with its changed definition instead of retaining the stale slot.
-        const job = upsertCronJobRow(db, cronStoreKey(storePath), item.job, sortOrder);
+        const job = upsertCronJobRow(db, storeKey, item.job, sortOrder);
         replaceCronRuntimeAuthorityRows({
           db,
-          storeKey: cronStoreKey(storePath),
+          storeKey,
           jobs: [item.job],
         });
         if (item.defaultMonitor) {
           recordDefaultProactiveJobInDatabase(
             db,
-            storePath,
+            storeKey,
             item.agentId,
             job.id,
             nowMs,
             "pending",
+            job.enabled,
           );
           result.set(item.agentId, job);
         } else {
-          recordConvertedProactiveJobInDatabase(db, storePath, item.agentId, job.id);
+          recordConvertedProactiveJobInDatabase(db, storeKey, item.agentId, job.id);
         }
       }
       return result;
@@ -391,40 +421,55 @@ export async function ensureHeartbeatMonitorJobs(
 }
 
 /** Inspection errors remain failures until the findings renderer translates them. */
-export function hasPendingHeartbeatCadenceMigration(
+export async function hasPendingHeartbeatCadenceMigration(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
-): boolean {
+): Promise<boolean> {
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
-  const loaded = readDoctorHeartbeatJobs(storePath, env);
   const configured = new Set(
     resolveLegacyHeartbeatAgents(cfg)
       .filter((agent) => agent.heartbeat !== undefined)
       .map((agent) => agent.agentId),
   );
-  const agentIds = new Set([
-    ...listAgentIds(cfg),
-    ...loaded.flatMap((job) => (job.agentId ? [job.agentId] : [])),
-  ]);
-  if (
-    loaded.some(
-      (job) =>
-        job.payload.kind === "heartbeat" ||
-        isHeartbeatTaskCronJob(job) ||
-        isPendingLegacyHeartbeatRetry(job),
-    )
-  ) {
-    return true;
-  }
   return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) =>
-        [...agentIds].some((agentId) => {
-          const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
-          return receipt?.phase === "pending" || (configured.has(agentId) && !receipt);
-        }),
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      ({ db }) => {
+        const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+        const rows = loadCronRows(db, storeKey);
+        const loaded = decodeDoctorHeartbeatJobRows(rows);
+        const agentIds = new Set([
+          ...listAgentIds(cfg),
+          ...loaded.flatMap((job) => (job.agentId ? [job.agentId] : [])),
+        ]);
+        if (
+          loaded.some(
+            (job) =>
+              job.payload.kind === "heartbeat" ||
+              isHeartbeatTaskCronJob(job) ||
+              isPendingLegacyHeartbeatRetry(job),
+          )
+        ) {
+          return true;
+        }
+        return [...agentIds].some((agentId) => {
+          const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, agentId);
+          return (
+            receipt?.phase === "pending" ||
+            (configured.has(agentId) && !receipt) ||
+            loaded.some(
+              (job) =>
+                job.agentId === agentId &&
+                resolveHeartbeatTaskPromptRepair(
+                  job,
+                  receipt,
+                  rows.find((row) => row.job_id === job.id)?.updated_at,
+                ),
+            )
+          );
+        });
+      },
       { env },
-    ) ?? configured.size > 0
+    )) ?? configured.size > 0
   );
 }
 
@@ -434,7 +479,7 @@ export async function collectHeartbeatCadenceMigrationFindings(
 ): Promise<readonly HealthFinding[]> {
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   try {
-    if (!hasPendingHeartbeatCadenceMigration(cfg, env)) {
+    if (!(await hasPendingHeartbeatCadenceMigration(cfg, env))) {
       return [];
     }
     return [
@@ -448,42 +493,18 @@ export async function collectHeartbeatCadenceMigrationFindings(
       },
     ];
   } catch (error) {
+    const deferred = error instanceof CronStoreSelectionRequiredError;
     return [
       {
         checkId: CHECK_ID,
-        severity: "error",
+        severity: deferred ? "warning" : "error",
         path: storePath,
         message: formatErrorMessage(error),
-        requirement: "heartbeat-retirement-inspection",
-        fixHint: "Resolve the state error and rerun openclaw doctor --fix.",
+        requirement: deferred ? "heartbeat-migration-deferred" : "heartbeat-retirement-inspection",
+        fixHint: deferred
+          ? "Run openclaw doctor --fix in an interactive terminal and complete Select the default cron partition. --yes does not choose a partition."
+          : "Resolve the state error and rerun openclaw doctor --fix.",
       },
     ];
-  }
-}
-
-export async function maybeMigrateHeartbeatCadenceToCron(params: {
-  cfg: OpenClawConfig;
-  shouldRepair: boolean;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const findings = await collectHeartbeatCadenceMigrationFindings(params.cfg, params.env);
-  if (!params.shouldRepair || !findings.length) {
-    return { changes: [], warnings: findings.map((finding) => finding.message) };
-  }
-  try {
-    await ensureHeartbeatMonitorJobs(
-      params.cfg,
-      resolveCronJobsStorePathFromConfig(params.cfg, params.env),
-      params.env,
-    );
-    const changes = [
-      "Converted legacy heartbeat cadence to ordinary editable automations; recorded one-way provisioning receipts.",
-    ];
-    note(changes.join("\n"), "Doctor changes");
-    return { changes, warnings: [] };
-  } catch (error) {
-    const warnings = [formatErrorMessage(error)];
-    note(warnings.join("\n"), "Doctor warnings");
-    return { changes: [], warnings };
   }
 }

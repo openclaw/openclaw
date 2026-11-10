@@ -9,11 +9,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import { extractTtsDirectiveFacts } from "../../tts/directive-facts.js";
-import { resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
+import { resolveTtsSettingsSnapshotAsync } from "../../tts/tts-settings.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
-  hasReplyPayloadSpeechContent,
   isReplyPayloadTerminalContent,
   markReplyPayloadAsTtsSupplement,
   retainSilentFinalPayloads,
@@ -67,16 +67,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     turnLedger,
     waitForPendingDirectBlockReplyDelivery,
   } = state;
-  const heartbeat = state.replyOperationRunState.heartbeat;
-  const pendingFinalOptions = { preserveActivity: heartbeat !== undefined };
   throwIfDispatchOperationAborted();
-  const heartbeatReply = await heartbeat?.prepareReply(replyResult, state.replyOperationRunState);
-  throwIfDispatchOperationAborted();
-  const finalResult = heartbeatReply ? heartbeatReply.reply : replyResult;
+  const finalResult = replyResult;
   const explicitSilence = state.replyOperationRunState.replyCompletion?.outcome === "silent";
   const finalReplies = Array.isArray(finalResult) ? finalResult : finalResult ? [finalResult] : [];
-  const replies =
-    explicitSilence && !heartbeatReply ? retainSilentFinalPayloads(finalReplies) : finalReplies;
+  const replies = explicitSilence ? retainSilentFinalPayloads(finalReplies) : finalReplies;
   const scheduledPayload = state.params.replyOptions?.scheduledAutomation?.job.payload;
   // Automation result assembly already requires a successful, meaningful final.
   // This opt-in must not enable reasoning blocks before that outcome is known.
@@ -95,19 +90,21 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     setReplyPayloadMetadata(refusalNotice, { queueAdmissionNotice: true });
     replies.push(refusalNotice);
   }
+  const explicitFollowupQueued =
+    queueAdmission?.status === "accepted" && queueAdmission.reason === "explicit-followup";
+  const durableDropOutcome = Boolean(state.params.replyOptions?.turnAdoptionLifecycle?.onDropped);
+  const explicitFollowup = isExplicitFollowupCommandTurn(ctx);
+  const isPolicyDrop = () => {
+    const disposition = state.replyOperationRunState.followupQueueDisposition;
+    return disposition === "queue-cap-old" || disposition === "queue-cap-new";
+  };
   let queuedRequesterNotice: ReplyPayload | undefined;
-  if (
-    queueAdmission?.status === "accepted" &&
-    queueAdmission.mode === "followup" &&
-    (queueAdmission.reason === "requester-mismatch" ||
-      queueAdmission.reason === "explicit-followup" ||
-      queueAdmission.reason === "steering-unavailable")
-  ) {
+  if (queueAdmission?.status === "accepted" && queueAdmission.mode === "followup") {
     queuedRequesterNotice = markReplyPayloadForSourceSuppressionDelivery({
       text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
       isStatusNotice: true,
     });
-    setReplyPayloadMetadata(queuedRequesterNotice, { queueAdmissionNotice: true });
+    setReplyPayloadMetadata(queuedRequesterNotice, { queueAdmissionNotice: "queued" });
     replies.push(queuedRequesterNotice);
   }
   const pendingFinalDeliveryIdentity = replies
@@ -158,12 +155,17 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Progress and earlier final deliveries can wait while a later input evicts this followup.
-      if (
-        reply === queuedRequesterNotice &&
-        state.replyOperationRunState.followupQueueDisposition === "queue-cap-old"
-      ) {
-        reply.text =
-          "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.";
+      if (reply === queuedRequesterNotice) {
+        if (isPolicyDrop() && (!durableDropOutcome || explicitFollowup)) {
+          reply.text =
+            "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress." +
+            (durableDropOutcome || explicitFollowup
+              ? ""
+              : " Please send it again after the current response finishes.");
+          setReplyPayloadMetadata(reply, { queueAdmissionNotice: true });
+        } else if (isPolicyDrop() || !explicitFollowupQueued) {
+          continue;
+        }
       }
       const laneSuppressed =
         (reply.isReasoning === true && !finalReasoningEnabled) ||
@@ -178,18 +180,16 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         finalPayloadDedupeKey === undefined ||
         sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)
       ) {
-        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
-        await heartbeatReply?.settle?.("cancelled");
+        await suppressPendingFinalDelivery(reply);
         continue;
       }
       sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       if (getReplyPayloadMetadata(reply)?.pendingFinalDeliveryCompletion) {
-        setReplyPayloadMetadata(reply, { pendingFinalDeliveryCleanup: pendingFinalOptions });
+        setReplyPayloadMetadata(reply, { pendingFinalDeliveryCleanup: {} });
       }
       const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(reply);
       const finalReply = await state.sendFinalPayload(reply, {
         deliveryId: String(replyIndex),
-        ...(heartbeat ? { skipTts: !hasReplyPayloadSpeechContent(reply) } : {}),
         ...(shouldAttachDeferredText
           ? {
               deferredTtsText: deferredTtsTextPending,
@@ -204,26 +204,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ) {
         deferredTtsTextPending = "";
       }
-      if (finalReply.dispatcherOutcome) {
-        const operation = state.getDispatchReplyOperation();
-        void finalReply.dispatcherOutcome.then(
-          (outcome) => {
-            if (outcome === "delivered") {
-              operation?.watchdog.progress("finalization", "reply:final_delivered");
-            }
-          },
-          () => {},
-        );
-      }
-      if (heartbeatReply?.settle) {
-        const settle = heartbeatReply.settle;
-        const outcome =
-          finalReply.dispatcherOutcome ??
-          Promise.resolve(
-            finalReply.blockDeliveryOutcome ?? finalReply.routedOutcome ?? "cancelled",
-          );
-        registerReplyDispatcherSettledTask(dispatcher, () => outcome.then(settle));
-      }
+      state.observeDeliveryProgress(finalReply.dispatcherOutcome, "reply:final_delivered");
       if (finalReply.suppressionReason) {
         channelTransformSuppressedFinal ||= finalReply.suppressionReason === "channel_transform";
         if (!finalReply.blockDeliveryOutcome) {
@@ -249,7 +230,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
           ]);
         } else {
           // Explicit block custody covers this prepared duplicate; queued/unknown source survives.
-          await suppressPendingFinalDelivery(reply, pendingFinalOptions);
+          await suppressPendingFinalDelivery(reply);
         }
         continue;
       }
@@ -329,10 +310,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
               (outcome) => outcome === "cancelled" || outcome === "failed-before-deliver",
             )
           ) {
-            await clearPendingFinalDeliveryAfterSuccess(
-              pendingFinalDeliveryIdentity,
-              pendingFinalOptions,
-            );
+            await clearPendingFinalDeliveryAfterSuccess(pendingFinalDeliveryIdentity);
           }
         })
         .catch((error: unknown) => {
@@ -344,10 +322,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     } else {
       // Routed delivery has a transport result already. Custom dispatchers that
       // do not expose the core observer retain the legacy queue-admission behavior.
-      await clearPendingFinalDeliveryAfterSuccess(
-        pendingFinalDeliveryIdentity,
-        pendingFinalOptions,
-      );
+      await clearPendingFinalDeliveryAfterSuccess(pendingFinalDeliveryIdentity);
     }
     // Register any remaining cleanup before honoring a late abort. The outer
     // settle owner still runs it from finally (#89115).
@@ -359,7 +334,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !channelTransformSuppressed &&
     deferredTtsTextPending.trim()
   ) {
-    const { autoMode, config: ttsConfig } = resolveTtsSettingsSnapshot({
+    const { autoMode, config: ttsConfig } = await resolveTtsSettingsSnapshotAsync({
       cfg,
       preparedTtsPreferences: state.preparedTtsPreferences,
       sessionAuto: state.sessionTtsAuto,
@@ -438,6 +413,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
 
   await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
   const replyCompletion = () => {
+    if (isPolicyDrop() && durableDropOutcome && !explicitFollowup) {
+      return resolveReplyCompletion("optional", "silent");
+    }
     const delivery = turnLedger.resolveTerminalDelivery();
     const owned = state.replyOperationRunState.replyCompletion;
     return resolveReplyCompletion(
@@ -470,8 +448,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       sessionKey,
       messageChannel: ctx.Provider ?? ctx.Surface,
       inputProvenance: ctx.InputProvenance,
+      scheduledAutomation: state.params.replyOptions?.scheduledAutomation !== undefined,
       currentInboundEventKind: ctx.InboundEventKind,
-      isHeartbeat: heartbeat !== undefined || state.params.replyOptions?.isHeartbeat === true,
       trigger: ctx.InternalTurnSource === "event" ? "event" : undefined,
     });
   const noVisibleReplyFallbackAllowed = () =>
@@ -520,7 +498,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     try {
       throwIfDispatchOperationAborted();
       const fallbackPayload: ReplyPayload = queueCapRejected
-        ? { text: QUEUE_CAP_REJECTION_TEXT }
+        ? {
+            text:
+              explicitFollowup || (isPolicyDrop() && durableDropOutcome)
+                ? "This message was not queued because the session queue is full."
+                : QUEUE_CAP_REJECTION_TEXT,
+          }
         : createMissingReplyNotice();
       const result = await routeReplyToOriginating(fallbackPayload, {
         abortSignal: getDispatchAbortSignal(),

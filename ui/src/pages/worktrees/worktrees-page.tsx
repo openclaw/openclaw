@@ -9,6 +9,7 @@ import {
   Show,
 } from "solid-js";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -19,7 +20,7 @@ import {
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -29,9 +30,10 @@ import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import { WorktreesModel } from "./worktrees-model.ts";
+import { sessionHubTabs } from "../sessions/session-hub-tabs.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
+import { WorktreesModel } from "./worktrees-model.ts";
 
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
@@ -94,10 +96,6 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
   }
   const operation = () => pending().operation() ?? view().operation;
   const busy = () => operation() !== null || view().operationPending;
-  const readList = () => {
-    latest(listRead);
-    return null;
-  };
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {
@@ -112,13 +110,9 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
         <a
           href={target.href}
           title={record.ownerId}
-          onClick={(event) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            model.context.navigate(face, target.options);
-          }}
+          onClick={(event) =>
+            handleNavigationClick(event, () => model.context.navigate(face, target.options))
+          }
         >
           {t("worktrees.ownerSession")}
         </a>
@@ -135,34 +129,21 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
     <>
       <HubPageHeader<"sessions" | "worktrees">
         active="worktrees"
-        tabs={{
-          id: "sessions",
-          items: [
-            { value: "sessions", label: t("tabs.sessions") },
-            { value: "worktrees", label: t("tabs.worktrees") },
-          ],
-          ariaLabel: t("sessionsPage.hubTablistLabel"),
-          panelId: "sessions-hub-panel",
-          onSelect: (value) => {
-            if (value === "sessions") {
-              model.context.navigate("sessions");
-            }
-          },
-        }}
+        tabs={sessionHubTabs("worktrees", (tab) => model.context.navigate(tab))}
         docsUrl={WORKTREES_DOCS_URL}
         class="sessions-hub-header"
       />
       <SettingsWorkspace id="sessions-hub-panel">
         <SettingsPage wide>
           <Show when={!view().operatorAccess.canAdmin}>
-            <div class="callout info" role="note">
+            <InlineAlert tone="info" role="note">
               {t("worktrees.adminRequired")}
-            </div>
+            </InlineAlert>
           </Show>
           <Show when={view().error}>
-            <div class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {view().error}
-            </div>
+            </InlineAlert>
           </Show>
           <SettingsSection
             title={t("worktrees.title")}
@@ -184,9 +165,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                   disabled={!model.gateway.connected || !view().operatorAccess.canAdmin || busy()}
                   onClick={() => void mutate("gc", () => model.gc())}
                 >
-                  {operation() === "gc" || view().loading
-                    ? t("common.loading")
-                    : t("worktrees.cleanNow")}
+                  {operation() === "gc" ? t("common.loading") : t("worktrees.cleanNow")}
                 </button>
               </>
             }
@@ -245,6 +224,9 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                     <datalist id="worktrees-create-branches">
                       <For each={view().createBranches}>{(name) => <option value={name} />}</For>
                     </datalist>
+                    {view().createBranchesRefreshing ? (
+                      <span role="status">{t("common.refreshing")}</span>
+                    ) : undefined}
                   </>
                 }
               />
@@ -278,7 +260,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                 on={latest(scope)}
                 fallback={<SettingsEmpty message={t("common.loading")} />}
               >
-                {readList()}
+                {(latest(listRead), null)}
                 <Show
                   when={view().records.length > 0}
                   fallback={<SettingsEmpty message={t("worktrees.empty")} />}

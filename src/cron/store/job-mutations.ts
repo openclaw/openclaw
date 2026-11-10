@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { assertCronBindApplies } from "../bind-parent.js";
+import { retireTransferredCronAuthority } from "../human-owner.js";
 import {
   decodePluginCommandSchedule,
   isPluginCommandScheduleCapPeer,
@@ -17,13 +19,36 @@ import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js"
 import {
   reconcileCronChannelRequesterAuthority,
   reconcileCronOperatorSource,
+  resolveCronOperatorExecutionRevision,
   reconcileRuntimeAuthority,
 } from "../service/jobs-tool-policy.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "../service/jobs.js";
+import { cronUpdateRequiresStreamExecAuthority } from "../stream-exec-authority.js";
+import { decodeCronStreamOperatorSource } from "../stream-operator-source.js";
 import type { CronStoredJob, CronStoreFile } from "../types.js";
 import type { CronJobMutation, CronJobMutationPlan } from "./job-mutations.types.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 import type { CronSchedulerConfig } from "./scheduler-actor.types.js";
+
+// Only existing stream-exec edges replace the process grant; payload edits retain it.
+function applyCronStreamOperatorSource(params: {
+  job: CronStoredJob;
+  previousJob?: CronStoredJob;
+  source?: CronStoredJob["streamOperatorSource"];
+  patch: Record<string, unknown>;
+}): void {
+  const { job, previousJob, source, patch } = params;
+  if (job.schedule.kind !== "stream" || job.streamSandbox) {
+    delete job.streamOperatorSource;
+    return;
+  }
+  if (
+    source !== undefined &&
+    (!previousJob || cronUpdateRequiresStreamExecAuthority(patch, previousJob))
+  ) {
+    job.streamOperatorSource = decodeCronStreamOperatorSource(source);
+  }
+}
 
 type CronJobMutationContext = Pick<
   CronSchedulerConfig,
@@ -36,6 +61,8 @@ function commandDeclarationDefinition(job: CronStoredJob): unknown {
     createdAtMs: _createdAtMs,
     updatedAtMs: _updatedAtMs,
     state: _state,
+    // Derived from the envelope, which the caller compares separately; a candidate has none yet.
+    payloadSource: _payloadSource,
     ...definition
   } = toPublicCronJob(job);
   // Compare the stored JSON contract, not omitted-versus-undefined JS properties.
@@ -61,6 +88,7 @@ export function planCronJobMutation(
     const validation = { ...options, defaultAgentId, cronConfig, configuredChannels };
     let previousJob: CronStoredJob | undefined;
     let nextJob: CronStoredJob;
+    let requestedExecutionRevision: string | undefined;
     if (mutation.kind === "add") {
       if (Object.hasOwn(mutation.input, "pluginCommand")) {
         throw new Error("plugin command schedules require private creation options");
@@ -109,11 +137,17 @@ export function planCronJobMutation(
       }
       if (
         pluginCommand &&
-        previous.jobs.filter((job) => isPluginCommandScheduleCapPeer(job, pluginCommand)).length >=
-          MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT
+        previous.jobs.filter((job) =>
+          isPluginCommandScheduleCapPeer(
+            job,
+            pluginCommand,
+            now,
+            options.pluginCommandSourceDigest,
+          ),
+        ).length >= MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT
       ) {
-        // Retired schedules and those of a replaced plugin instance or earlier Gateway process do
-        // not count: none can run plugin code again, and they must not block re-enrollment.
+        // Retired schedules, those bound to a replaced plugin instance or other code, and
+        // non-restartable ones of an earlier Gateway process do not count: none can run again.
         throw new Error(
           `plugin command schedules are limited to ${MAX_ACTIVE_PLUGIN_COMMAND_SCHEDULES_PER_PARENT} active jobs per plugin and parent session`,
         );
@@ -127,6 +161,15 @@ export function planCronJobMutation(
           nowMs: now,
         });
         applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
+        applyCronStreamOperatorSource({
+          job: nextJob,
+          previousJob,
+          source: options.streamOperatorSource,
+          patch: {
+            schedule: nextJob.schedule,
+            ...(options.enabledExplicit ? { enabled: nextJob.enabled } : {}),
+          },
+        });
         finalizeUpdatedJob({
           job: previousJob,
           nextJob,
@@ -145,16 +188,39 @@ export function planCronJobMutation(
           mutation.input,
           {
             ...validation,
+            createdAtMs: mutation.createdAtMs,
             scheduledToolPolicy: options.scheduledToolPolicy ?? undefined,
           },
         );
         applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
+        applyCronStreamOperatorSource({
+          job: nextJob,
+          previousJob,
+          source: options.streamOperatorSource,
+          patch: {
+            schedule: nextJob.schedule,
+            ...(options.enabledExplicit ? { enabled: nextJob.enabled } : {}),
+          },
+        });
         if (pluginCommand) {
           nextJob.pluginCommand = pluginCommand;
           nextJob.state.pluginCommandRuns = 0;
+          // Restart continuity: a later Gateway process can re-arm this schedule at its claim
+          // onto an instance that loaded exactly this code. Without captured source it ends with
+          // this process, as on hosts without continuity.
+          if (options.pluginCommandSourceDigest) {
+            nextJob.state.pluginCommandBinding = {
+              hostProcessId: pluginCommand.hostProcessId,
+              pluginIncarnation: pluginCommand.pluginIncarnation,
+              sourceDigest: options.pluginCommandSourceDigest,
+            };
+          }
         }
         if (options.createdActor) {
           nextJob.createdActor = options.createdActor;
+          if (options.createdActor.type === "human" && options.createdActor.source === "profile") {
+            nextJob.ownerProfileId = options.createdActor.id;
+          }
         }
         if (options.sourceConversation) {
           nextJob.sourceConversation = options.sourceConversation;
@@ -176,7 +242,22 @@ export function planCronJobMutation(
       }
       nextJob = cloneCronJobForMutation(previousJob);
       applyJobPatch(nextJob, mutation.patch, { ...validation, scheduleValidationNowMs: now });
+      if (options.bindSourceConversation) {
+        assertCronBindApplies(previousJob, options.bindSourceConversation);
+        nextJob.sourceConversation = { ...options.bindSourceConversation };
+      }
       applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
+      // Fresh source consent names the requested definition. Cadence anchors are produced below
+      // by this owner; the source seal records the final committed definition afterward.
+      if (options.operatorSource) {
+        requestedExecutionRevision = resolveCronOperatorExecutionRevision(nextJob);
+      }
+      applyCronStreamOperatorSource({
+        job: nextJob,
+        previousJob,
+        source: options.streamOperatorSource,
+        patch: mutation.patch,
+      });
       finalizeUpdatedJob({
         job: previousJob,
         nextJob,
@@ -204,6 +285,8 @@ export function planCronJobMutation(
     // Declarative re-registration is not a fresh authorization of an existing account.
     if (options.inferenceBinding && (!previousJob || mutation.kind === "update")) {
       nextJob.inferenceBinding = options.inferenceBinding;
+    } else if (mutation.kind === "update" && options.inferenceBinding === null) {
+      delete nextJob.inferenceBinding;
     }
     const explicitlyMutatesToolsAllow =
       mutation.kind === "add"
@@ -216,19 +299,58 @@ export function planCronJobMutation(
       runtimeAuthority: options.runtimeAuthority,
       explicitlyMutatesToolsAllow,
     });
+    // Neither an ordinary edit nor an app-only recovery flag proves fresh inference consent.
+    // Capture is admitted and rechecked by the caller's existing mutation commit guard.
+    if (
+      mutation.kind === "update" &&
+      (options.runtimeAuthority || options.inferenceBinding !== undefined)
+    ) {
+      delete nextJob.ownerTransferPending;
+    }
     if (nextJob.runtimeAuthority) {
       // Native inference authority replaces, rather than supplements, host credentials.
       delete nextJob.inferenceBinding;
     }
     reconcileCronChannelRequesterAuthority({
       job: nextJob,
-      previousJob,
+      // Bind only records the parent link; the authenticated requester stays bound to an
+      // unchanged executable definition, so compare against the same link.
+      previousJob:
+        previousJob && options.bindSourceConversation
+          ? { ...previousJob, sourceConversation: nextJob.sourceConversation }
+          : previousJob,
       toolsAllowProvenance: options.toolsAllowProvenance,
       reauthorize: mutation.kind === "add" || explicitlyMutatesToolsAllow,
       reauthorizeCallerOrigin: mutation.kind === "update" && explicitlyMutatesToolsAllow,
     });
     resolveCronJobEffectiveAgentId(nextJob, defaultAgentId);
-    reconcileCronOperatorSource({ job: nextJob, previousJob, captured: options.operatorSource });
+    reconcileCronOperatorSource({
+      job: nextJob,
+      previousJob,
+      captured: options.operatorSource,
+      requestedExecutionRevision,
+      capturedExecutionRevision:
+        mutation.kind === "add"
+          ? resolveCronOperatorExecutionRevision(nextJob)
+          : options.operatorSourceExecutionRevision,
+      defaultAgentId,
+    });
+    if (previousJob && nextJob.ownerProfileId !== previousJob.ownerProfileId) {
+      retireTransferredCronAuthority(nextJob);
+    }
+    // An incomplete old OCID row must not lose its last source marker through a payload edit.
+    // Normal stream-exec reauthorization supplies the independent process snapshot instead.
+    if (
+      nextJob.schedule.kind === "stream" &&
+      !nextJob.streamSandbox &&
+      !nextJob.streamOperatorSource &&
+      previousJob?.operatorSource?.source.snapshot.openclawIdPrincipal &&
+      !nextJob.operatorSource?.source.snapshot.openclawIdPrincipal
+    ) {
+      throw new TypeError(
+        "Re-enable this stream from an authenticated turn before editing its source.",
+      );
+    }
     plan.created = !previousJob;
     plan.updated =
       previousJob !== undefined &&

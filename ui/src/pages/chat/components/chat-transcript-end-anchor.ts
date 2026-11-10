@@ -1,21 +1,65 @@
+import type { Virtualizer } from "@tanstack/virtual-core";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../scroll.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
+
+/** Sample an owned end journey through the range owner's existing frame queue. */
+export function createTranscriptEndSettlement(
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  isCurrent: () => boolean,
+  rowsMeasured: (indexes: readonly number[]) => boolean,
+  retry: () => void,
+  settled: () => void,
+): () => (() => void) | void {
+  let previous: string | undefined;
+  let stableFrames = 0;
+  return () => {
+    if (!isCurrent()) {
+      previous = undefined;
+      stableFrames = 0;
+      return undefined;
+    }
+    const element = virtualizer.scrollElement;
+    const last = virtualizer.options.count - 1;
+    const max = maxTranscriptScrollOffset(element);
+    const geometry = element && `${element.scrollTop}:${max}:${element.clientHeight}`;
+    const ready =
+      element &&
+      max !== null &&
+      !virtualizer.isScrolling &&
+      Math.abs(max - element.scrollTop) <= 8 &&
+      (last < 0 || rowsMeasured([last]));
+    stableFrames = ready ? (geometry === previous ? stableFrames + 1 : 1) : 0;
+    previous = geometry ?? undefined;
+    if (stableFrames >= 3) {
+      return () => isCurrent() && settled();
+    }
+    retry();
+    return undefined;
+  };
+}
 
 /** Geometric end anchoring; the pane still owns permission to follow. */
 export class TranscriptEndAnchor {
   private offset: number | null = null;
   private frame: number | null = null;
+  private pendingReconcile: (() => void) | null = null;
+  private lastObservedContentSize: number | null = null;
+
+  constructor(private readonly afterCommit: (effect: () => void) => void) {}
+
+  private readonly flushReconcile = () => {
+    const reconcile = this.pendingReconcile;
+    this.cancelReconcile();
+    reconcile?.();
+  };
 
   isResizeAnchor(element: HTMLDivElement | null): boolean {
+    if (this.offset === null || element === null) {
+      return false;
+    }
     const max = maxTranscriptScrollOffset(element);
-    return (
-      this.offset !== null &&
-      max !== null &&
-      element !== null &&
-      Math.abs(element.scrollTop - this.offset) <= 1 &&
-      this.offset !== max
-    );
+    return max !== null && Math.abs(element.scrollTop - this.offset) <= 1 && this.offset !== max;
   }
 
   recordLayoutCorrection(before: number, after: number): void {
@@ -29,16 +73,21 @@ export class TranscriptEndAnchor {
     }
   }
 
-  scheduleReconcile(reconcile: () => void): void {
+  scheduleReconcile(reconcile: () => void, contentSize?: number): void {
+    // Native offsets already record geometry; unchanged content needs no deferred read.
+    if (contentSize !== undefined) {
+      if (contentSize === this.lastObservedContentSize) {
+        return;
+      }
+      this.lastObservedContentSize = contentSize;
+    }
     if (this.frame !== null) {
       return;
     }
-    // Nested Lit children still change layout after the pane's commit.
-    // Coalesce end-follow after those commits using the current reader's anchor.
-    this.frame = requestAnimationFrame(() => {
-      this.frame = null;
-      reconcile();
-    });
+    this.pendingReconcile = reconcile;
+    // A measured range commit can follow before paint; external layout still has a frame fallback.
+    this.frame = requestAnimationFrame(this.flushReconcile);
+    this.afterCommit(this.flushReconcile);
   }
 
   cancelReconcile(): void {
@@ -46,11 +95,13 @@ export class TranscriptEndAnchor {
       cancelAnimationFrame(this.frame);
       this.frame = null;
     }
+    this.pendingReconcile = null;
   }
 
   disconnect(): void {
     this.cancelComposerResize();
     this.cancelReconcile();
+    this.lastObservedContentSize = null;
   }
 
   private maxOffset: number | null = null;
@@ -112,9 +163,11 @@ export class TranscriptEndAnchor {
         ? previousOffset
         : before;
     const correction = { before: beforeResize, after: element.scrollTop, resumeFollow };
-    if (previousMax !== max || correction.before !== correction.after) {
+    // A native return can reach the old end before the viewport itself resizes.
+    if (resumeFollow || previousMax !== max || correction.before !== correction.after) {
       publishTranscriptScroll(element, {
         type: "resize",
+        resumeFollow,
         viewport: {
           clientHeight: element.clientHeight,
           scrollHeight: element.scrollHeight,
@@ -133,11 +186,11 @@ export class TranscriptEndAnchor {
   }
 
   get atEnd(): boolean {
-    return (
-      this.maxOffset !== null &&
-      this.lastOffset !== null &&
-      Math.abs(this.maxOffset - this.lastOffset) <= 1
-    );
+    return this.lastOffset !== null && this.isRecordedEnd(this.lastOffset);
+  }
+
+  isRecordedEnd(offset: number): boolean {
+    return this.maxOffset !== null && Math.abs(this.maxOffset - offset) <= 1;
   }
 
   recordViewport(element: HTMLDivElement | null): boolean {
@@ -153,8 +206,9 @@ export class TranscriptEndAnchor {
     this.offset = null;
   }
 
-  capture(element: HTMLDivElement | null): void {
+  capture(element: HTMLDivElement | null): boolean {
     this.offset = this.recordViewport(element) ? this.maxOffset : null;
+    return this.offset !== null;
   }
 
   reconcile(
@@ -163,6 +217,8 @@ export class TranscriptEndAnchor {
     suspended: boolean,
     follow: () => void,
   ): void {
+    // Native return and composer resize need current geometry even while the
+    // reader owns scrolling and this anchor cannot follow.
     const atEnd = this.recordViewport(element);
     // A resized viewport can clamp a reader to the end without granting follow.
     if (!canFollow) {

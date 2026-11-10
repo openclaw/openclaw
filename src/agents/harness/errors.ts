@@ -1,10 +1,7 @@
 export class MissingAgentHarnessError extends Error {
-  readonly harnessId: string;
-
   constructor(harnessId: string) {
     super(`Requested agent harness "${harnessId}" is not registered.`);
     this.name = "MissingAgentHarnessError";
-    this.harnessId = harnessId;
   }
 }
 
@@ -36,15 +33,18 @@ export class AgentHarnessPreflightError extends Error {
   readonly scope?: "harness";
   /** Owner-authored public explanation; message and cause remain diagnostic. */
   readonly userMessage?: string;
+  /** Optional public detail for desktop chat viewers, never channel replies. */
+  readonly desktopMessage?: string;
 
   constructor(
     message: string,
-    options?: ErrorOptions & { scope?: "harness"; userMessage?: string },
+    options?: ErrorOptions & { scope?: "harness"; userMessage?: string; desktopMessage?: string },
   ) {
     super(message, options);
     this.name = "AgentHarnessPreflightError";
     this.scope = options?.scope;
     this.userMessage = options?.userMessage;
+    this.desktopMessage = options?.desktopMessage;
   }
 }
 

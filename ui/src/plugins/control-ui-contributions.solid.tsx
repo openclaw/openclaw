@@ -1,10 +1,15 @@
 import type { JSX } from "@solidjs/web";
 import { Errored, For, Loading, Show, createMemo, createSignal, onSettled } from "solid-js";
+import {
+  normalizeSessionIconValue,
+  SESSION_ICON_SVG_DATA_URL_PREFIX,
+} from "../../../packages/gateway-protocol/src/session-agent-status.ts";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
-import { iconData, type IconName } from "../components/icon-data.ts";
+import { isIconName, type IconName } from "../components/icon-data.ts";
 import type { SidebarMenus } from "../components/sidebar-menus.tsx";
 import { Icon } from "../components/solid/icon.tsx";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
@@ -111,9 +116,15 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
   type Navigation = ReturnType<typeof navigation>[number];
   const iconName = (entry: Navigation["entry"], fallback = "plug"): IconName => {
     const icon = entry.value.icon;
-    const name = icon && Object.hasOwn(iconData, icon) ? icon : fallback;
-    // SAFETY: the own-key check admits only names from the fixed icon registry.
-    return Object.hasOwn(iconData, name) ? (name as IconName) : "plug";
+    const name = isIconName(icon) ? icon : fallback;
+    return isIconName(name) ? name : "plug";
+  };
+  // Destinations may carry an emoji appearance instead of an icon name (Workboard boards);
+  // show it as the board page does instead of the fallback icon.
+  const emojiIcon = (entry: Navigation["entry"]) => {
+    const icon = entry.value.icon;
+    const appearance = icon && !isIconName(icon) ? normalizeSessionIconValue(icon) : null;
+    return appearance?.startsWith(SESSION_ICON_SVG_DATA_URL_PREFIX) ? null : appearance;
   };
   function NavigationLink(link: { item: Navigation; child?: boolean; fallbackIcon?: string }) {
     const menu: JSX.EventHandler<HTMLAnchorElement, MouseEvent | KeyboardEvent> = (event) => {
@@ -150,16 +161,19 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         aria-haspopup={link.item.entry.value.actions?.length ? "menu" : undefined}
         onContextMenu={menu}
         onKeyDown={menu}
-        onClick={(event) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          link.item.entry.host.navigation.openPage(link.item.entry.value.page);
-        }}
+        onClick={(event) =>
+          handleNavigationClick(event, () => {
+            link.item.entry.host.navigation.openPage(link.item.entry.value.page);
+          })
+        }
       >
         <span class="nav-item__icon" aria-hidden="true">
-          <Icon name={iconName(link.item.entry, link.fallbackIcon)} />
+          <Show
+            when={emojiIcon(link.item.entry)}
+            fallback={<Icon name={iconName(link.item.entry, link.fallbackIcon)} />}
+          >
+            {(icon) => <span class="session-glyph__emoji">{icon()}</span>}
+          </Show>
         </span>
         <span class="nav-item__text">{link.item.entry.value.label}</span>
       </a>
@@ -208,7 +222,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                     fallback={(error) => {
                       const message = () => {
                         const failure = error();
-                        return failure instanceof Error ? failure.message : String(failure);
+                        return formatUiError(failure);
                       };
                       return <span role="alert">{message()}</span>;
                     }}

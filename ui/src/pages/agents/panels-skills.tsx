@@ -6,6 +6,7 @@ import {
   Loading,
   Show,
   action,
+  createDeferred,
   createMemo,
   createOptimistic,
   createSignal,
@@ -15,6 +16,7 @@ import {
   refresh,
 } from "solid-js";
 import type { SkillStatusReport } from "../../api/types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsSection,
   SettingsRow,
@@ -33,12 +35,11 @@ import {
 } from "../../lib/skills-shared.ts";
 import { SkillStatusChips } from "../skills/skill-status.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
-import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
-import { AgentPanelAction } from "./panel-ui.tsx";
+import { AgentPanelAction, type AgentConfigState } from "./panel-ui.tsx";
 
 registerSettingsEnglish();
 
-type AgentSkillsProps = AgentConfigActions &
+type AgentSkillsProps = AgentConfigState &
   AgentsPageView["agentSkills"] &
   Pick<AgentsPageView, "readData"> & {
     agentId: string;
@@ -53,14 +54,29 @@ export function AgentSkills(params: AgentSkillsProps) {
       ? params.readData().agentSkillsReport
       : null,
   );
-  const report = createMemo(async () => {
-    const read = issued();
-    return read?.agentId === params.agentId ? read.result : cached();
-  });
   const scope = createMemo(() => `${params.agentId}:${params.readData().requestGeneration}`);
   return (
     <Show when={scope()} keyed>
       {(capturedScope) => {
+        // Keep one list mounted; JSX reads this scope's cached report until the first result.
+        const report = createDeferred<
+          { report: SkillStatusReport | null; error?: string } | undefined
+        >(
+          async () => {
+            const read = issued();
+            const fallback = cached();
+            try {
+              return {
+                report:
+                  read?.agentId === params.agentId ? ((await read.result) ?? fallback) : fallback,
+              };
+            } catch (error) {
+              return { report: fallback, error: formatUiError(error) };
+            }
+          },
+          { loadingValue: undefined },
+        );
+        const pending = createMemo(() => report() === undefined || isPending(report));
         const config = createMemo(() => resolveAgentConfig(params.configForm, params.agentId));
         const [explicit, setExplicit] = createOptimistic(() =>
           Array.isArray(config().entry?.skills),
@@ -90,11 +106,7 @@ export function AgentSkills(params: AgentSkillsProps) {
             void reset(completion).catch(() => undefined);
           });
         };
-        const Content = (props: {
-          report: SkillStatusReport | null;
-          pending: boolean;
-          readError?: string;
-        }) => (
+        return (
           <AgentSkillsContent
             {...params}
             explicit={explicit()}
@@ -102,25 +114,10 @@ export function AgentSkills(params: AgentSkillsProps) {
             resetting={resetting()}
             command={command()}
             onClear={onClear}
-            report={props.report}
-            pending={props.pending}
-            readError={props.readError}
+            report={report()?.report ?? cached()}
+            pending={pending()}
+            readError={pending() ? undefined : report()?.error}
           />
-        );
-        return (
-          <Show when={issued() ?? scope()} keyed>
-            {(_receipt) => (
-              <Errored
-                fallback={(error) => (
-                  <Content report={cached()} pending={false} readError={formatUiError(error())} />
-                )}
-              >
-                <Loading fallback={<Content report={cached()} pending />}>
-                  <Content report={report() ?? cached()} pending={isPending(report)} />
-                </Loading>
-              </Errored>
-            )}
-          </Show>
         );
       }}
     </Show>
@@ -148,15 +145,26 @@ function AgentSkillsContent(
   const allowSet = createMemo(() => new Set(params.allowlist ?? []));
   const usingAllowlist = () => params.allowlist !== undefined;
   const rawSkills = createMemo(() => params.report?.skills ?? []);
-  const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter));
-  const filtered = createMemo(() =>
-    filter()
-      ? rawSkills().filter((skill) =>
-          normalizeLowercaseStringOrEmpty(
-            [skill.name, skill.description, skill.source].join(" "),
-          ).includes(filter()),
-        )
-      : rawSkills(),
+  const searchableSkills = createMemo(() =>
+    rawSkills().map((skill) => ({
+      skill,
+      text: normalizeLowercaseStringOrEmpty(
+        [skill.name, skill.description, skill.source].join(" "),
+      ).normalize("NFC"),
+    })),
+  );
+  const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter).normalize("NFC"));
+  const filtered = createMemo(
+    () =>
+      filter()
+        ? searchableSkills()
+            .filter((entry) => entry.text.includes(filter()))
+            .map((entry) => entry.skill)
+        : rawSkills(),
+    {
+      equals: (previous, next) =>
+        previous.length === next.length && previous.every((skill, index) => skill === next[index]),
+    },
   );
   const groups = createMemo(() => groupSkills(filtered()));
   const enabledCount = createMemo(() =>
@@ -164,13 +172,16 @@ function AgentSkillsContent(
       ? rawSkills().filter((skill) => isWorkshopSkill(skill) || allowSet().has(skill.name)).length
       : rawSkills().length,
   );
+  const inventoryReady = createMemo(
+    () => !params.pending && !params.readError && Boolean(params.report),
+  );
 
   return (
     <>
       {!params.configForm ? (
-        <div class="callout info">{t("agents.skillsPanel.loadConfig")}</div>
+        <InlineAlert tone="info">{t("agents.skillsPanel.loadConfig")}</InlineAlert>
       ) : undefined}
-      <div class="callout info">
+      <InlineAlert tone="info">
         {t(
           usingAllowlist()
             ? !params.explicit
@@ -178,17 +189,19 @@ function AgentSkillsContent(
               : "agents.skillsPanel.customAllowlist"
             : "agents.skillsPanel.allEnabled",
         )}
-      </div>
+      </InlineAlert>
       {!params.report && !params.pending ? (
-        <div class="callout info">{t("agents.skillsPanel.loadAgent")}</div>
+        <InlineAlert tone="info">{t("agents.skillsPanel.loadAgent")}</InlineAlert>
       ) : undefined}
       {params.readError ? (
-        <div class="callout danger">{params.readError}</div>
+        <InlineAlert tone="danger">{params.readError}</InlineAlert>
       ) : (
         <Show when={params.command} keyed>
           {(command) => (
             <Errored
-              fallback={(error) => <div class="callout danger">{formatUiError(error())}</div>}
+              fallback={(error) => (
+                <InlineAlert tone="danger">{formatUiError(error())}</InlineAlert>
+              )}
             >
               <AgentSkillsResetCompletion completion={command.completion} />
             </Errored>
@@ -199,7 +212,7 @@ function AgentSkillsContent(
         title={t("agents.skillsPanel.title")}
         description={
           <>
-            {t("agents.skillsPanel.subtitle")}
+            {t("agents.skillsPanel.subtitle")}{" "}
             {rawSkills().length > 0 ? (
               <span class="mono">
                 {enabledCount()}/{rawSkills().length}
@@ -219,19 +232,21 @@ function AgentSkillsContent(
               disabled={!params.canPatchConfig || !params.explicit || !configReady()}
               onClick={() => params.onClear()}
             />
-            <AgentConfigButtons {...params}>
-              <AgentPanelAction
-                label={params.pending ? t("common.loading") : t("common.refresh")}
-                disabled={params.pending}
-                onClick={params.onRefresh}
-              />
-            </AgentConfigButtons>
+            <AgentPanelAction
+              label={params.pending ? t("common.refreshing") : t("common.refresh")}
+              disabled={params.pending}
+              onClick={params.onRefresh}
+            />
           </>
         }
       >
         <SettingsRow
           title={t("agents.skillsPanel.filter")}
-          description={t("agents.skillsPanel.shown", { count: String(filtered().length) })}
+          description={
+            inventoryReady()
+              ? t("agents.skillsPanel.shown", { count: String(filtered().length) })
+              : undefined
+          }
           control={
             <input
               class="settings-input"
@@ -244,7 +259,7 @@ function AgentSkillsContent(
             />
           }
         />
-        {filtered().length === 0 ? (
+        {inventoryReady() && filtered().length === 0 ? (
           <SettingsEmpty message={t("agents.skillsPanel.empty")} />
         ) : (
           <div class="agents-panel-body agent-skills-groups">
@@ -282,14 +297,15 @@ function AgentSkillsContent(
                                     ["agents.skillsPanel.reason", computeSkillReasons(skill())],
                                   ] as const
                                 }
+                                keyed={(entry) => entry[0]}
                               >
-                                {(entry) =>
-                                  entry[1].length > 0 ? (
+                                {(entry) => (
+                                  <Show when={entry()[1].length > 0}>
                                     <span class="settings-row__desc">
-                                      {t(entry[0], { items: entry[1].join(", ") })}
+                                      {t(entry()[0], { items: entry()[1].join(", ") })}
                                     </span>
-                                  ) : undefined
-                                }
+                                  </Show>
+                                )}
                               </For>
                               {learned() ? (
                                 <span class="settings-row__desc">

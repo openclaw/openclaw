@@ -24,6 +24,7 @@ import {
   hasEventScope,
   isPlainEventPayload,
   isSessionReadInvalidation,
+  isTargetedTranscriptionEvent,
   modelMetadataInvalidationFragment,
 } from "./server-broadcast-scopes.js";
 import type {
@@ -309,18 +310,17 @@ export function createGatewayBroadcaster(params: {
     let sessionReadContext: boolean | undefined;
     const hasSessionReadContext = () =>
       (sessionReadContext ??=
-        ((event === "users.prefs.changed" || event === "mentions.changed") && isTargeted) ||
-        (params.canReceiveSessionEvent !== undefined &&
-          sessionKeys.length > 0 &&
-          sessionKeys.every((key) => key.trim().length > 0)) ||
-        metadataInvalidation !== undefined ||
-        isSessionReadInvalidation(event, payload, isTargeted));
+        (event !== "talk.event" || isTargetedTranscriptionEvent(payload, isTargeted)) &&
+        ((event === "users.prefs.changed" && isTargeted) ||
+          (params.canReceiveSessionEvent !== undefined &&
+            sessionKeys.length > 0 &&
+            sessionKeys.every((key) => key.trim().length > 0)) ||
+          metadataInvalidation !== undefined ||
+          isSessionReadInvalidation(event, payload, isTargeted)));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let presenceFragments: Map<SystemPresence[], Buffer> | undefined;
     let sessionFragments: Map<unknown, string | EncodedSessionPayload> | undefined;
-    let projectSession:
-      | ((client: GatewayWsClient) => SessionEventProjection | undefined)
-      | undefined;
+    let projectSession: ReturnType<NonNullable<typeof params.prepareSessionEventProjection>>;
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;
@@ -576,7 +576,7 @@ export function createGatewayBroadcaster(params: {
               ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
               : (frames.snapshot ??= frameBaseFor(payload));
       let frame: SerializedGatewayFrame | undefined;
-      let delivered: (() => void) | undefined;
+      let delivered: SessionEventProjection["delivered"];
       let presenceDelivery: ReturnType<typeof preparePresenceDelivery> | undefined;
       try {
         if (!sessionProjectionPrepared) {
@@ -636,17 +636,17 @@ export function createGatewayBroadcaster(params: {
           if (projected === undefined) {
             continue;
           }
+          const fragments = projected.serializeSession && (sessionFragments ??= new Map());
           payloadFragment =
-            (projected.serializeSession && sessionFragments?.get(projected.payload)) ||
+            fragments?.get(projected.payload) ||
+            projected.serializePayload?.() ||
             serializeFrameField(
               "payload",
               projected.payload,
               projected.serializeSession,
               projected.serializeMessage,
             );
-          if (projected.serializeSession) {
-            (sessionFragments ??= new Map()).set(projected.payload, payloadFragment);
-          }
+          fragments?.set(projected.payload, payloadFragment);
           delivered = projected.delivered;
         }
         // A drained write can refresh the recipient; cache only the profile at this send.
@@ -710,7 +710,7 @@ export function createGatewayBroadcaster(params: {
       };
       try {
         // Publish the baseline before send can reenter; failures retire this transport.
-        delivered?.();
+        delivered?.(c);
         state.socket.batchWrites?.();
         const wireBytes = state.socket.send(frame, { binary: false }, sent);
         if (presenceDelivery && !state.retired) {

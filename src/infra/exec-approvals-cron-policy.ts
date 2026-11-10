@@ -7,7 +7,6 @@ import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-rea
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { resolveExecApprovalsDisplayPath } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecAsk, ExecSecurity } from "./exec-approvals-core.js";
-import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
 import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
 import { snapshotFromExecApprovalsRow } from "./exec-approvals-sqlite.js";
@@ -132,7 +131,6 @@ export async function prepareCronExecHostPolicyUse(
         }
       },
     });
-    assertNoPendingLegacyExecApprovals({ env: context.environment });
     const reply = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
       { type: "exec-approvals.read" },
@@ -143,6 +141,7 @@ export async function prepareCronExecHostPolicyUse(
     }
     const file = snapshotFromExecApprovalsRow({
       path: resolveExecApprovalsDisplayPath(context.environment),
+      env: context.environment,
       row: reply.row,
     }).file;
     // A commit during this read permanently retires the old use, even after policy restoration.

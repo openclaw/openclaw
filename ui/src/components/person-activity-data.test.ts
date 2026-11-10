@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import {
   createTestSessionCapability,
   sessionsResult,

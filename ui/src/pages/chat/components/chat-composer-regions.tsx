@@ -1,7 +1,9 @@
-import { createMemo, lazy, Loading, Show, untrack } from "solid-js";
+import { createMemo, lazy, Show, untrack } from "solid-js";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
-import { isChatRunWorking } from "./chat-composer-state.ts";
+import { isChatRunWorking } from "../chat-run-working.ts";
+import { projectProgressCardRuntime } from "../chat-subagent-wait.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 const ChatQueue = lazy(() => import("./chat-composer-queue.tsx"), {
   export: "renderChatQueueSolid",
@@ -24,7 +26,7 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
         view.composer.queuedEdit?.source
       }
     >
-      <Loading>
+      <ChatLazyBoundary>
         <ChatQueue
           queue={view.composer.queue}
           displayQueue={view.composer.displayQueue}
@@ -35,10 +37,13 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
           onQueueRetry={canAct() ? view.composer.onQueueRetry : undefined}
           onQueueSteer={canAct() ? view.composer.onQueueSteer : undefined}
           onQueueMove={view.composer.onQueueMove}
+          queuePaused={view.composer.queuePaused}
+          onQueueResume={canAct() ? view.composer.onQueueResume : undefined}
+          onQueueClear={view.composer.onQueueClear}
           queuedEdit={view.composer.queuedEdit}
           onQueueRemove={view.composer.onQueueRemove}
         />
-      </Loading>
+      </ChatLazyBoundary>
     </Show>
   );
 }
@@ -68,7 +73,7 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
       }
     >
       <div class="agent-chat__progress-float" hidden={!view.shown}>
-        <Loading>
+        <ChatLazyBoundary>
           <SessionProgressCard
             card={view.composer.progressCard}
             placement="composer"
@@ -77,6 +82,12 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
             startedAt={view.composer.selectedSession?.startedAt}
             endedAt={view.composer.selectedSession?.endedAt}
             hasActiveRun={isChatRunWorking(view.composer)}
+            runtime={projectProgressCardRuntime(
+              view.composer.selectedSession,
+              view.composer,
+              view.composer.progressCard!.updatedAt,
+              view.composer.connected,
+            )}
             collapseComposerByDefault={view.composer.collapseTaskProgress}
             composerDisclosureContext={{
               presented: view.shown,
@@ -94,7 +105,7 @@ export function ComposerProgress(view: { composer: ChatComposerProps; shown: boo
             }
             onClearSaved={view.composer.onClearSavedProgressCard}
           />
-        </Loading>
+        </ChatLazyBoundary>
       </div>
     </Show>
   );

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { runBuildAllSteps } from "../../scripts/build-all.mts";
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const lockFile = ".artifacts/dist-artifacts.lock/owner.json";
@@ -18,12 +19,7 @@ function installedCheckout() {
     .mockResolvedValue({ refuse: false });
   onTestFinished(() => fence.mockRestore());
   const root = tempDirs.make("openclaw-installed-artifact-preflight-");
-  const write = (relative: string, content: string) => {
-    const file = path.join(root, relative);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, content);
-    return file;
-  };
+  const { write } = fixtureFiles(root);
   fs.mkdirSync(path.join(root, ".git"));
   write("package.json", '{"name":"openclaw","type":"module"}');
   write("tsconfig.json", '{"compilerOptions":{"target":"ESNext","module":"ESNext"}}');
@@ -92,7 +88,6 @@ describe("published source updater candidate-build preflight", () => {
       f.expectPreserved();
     },
   );
-
   it.each(["current", "2026.4.27", "2026.9.4", true, false])(
     "preserves installed completion and consumes driver preparation: %s",
     async (variant) => {

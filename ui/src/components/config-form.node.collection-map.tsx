@@ -1,13 +1,16 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo } from "solid-js";
-import { containsRedactedSentinel } from "../lib/config-form-utils.ts";
+import { For, Show, createMemo, createSignal } from "solid-js";
+import { containsRedactedSentinel, copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { liveValue } from "../lib/reactive/live-value.ts";
+import { createProgressiveList } from "../lib/reactive/progressive-list.ts";
 import {
   ConfigCollectionDraft,
   type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
-import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
+import { configValuesEqual, defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
+import { configLabelInContext } from "./config-form.label-context.ts";
 import {
   configChildRenderOptions,
   createCollectionFocus,
@@ -15,6 +18,8 @@ import {
   isAnySchema,
   jsonValue,
   CollectionRemoveButton,
+  ConfigFieldHelp,
+  configRowCopy,
   FieldRow,
   JsonTextareaControl,
   type CollectionRowFocus,
@@ -29,6 +34,9 @@ type MapParams = ConfigNodeRenderParams & {
   reservedKeys: Set<string>;
   validateKey: (key: string) => boolean;
 };
+
+/** A map that is all its object holds is that setting: the object's own copy heads the row. */
+type MapHeading = { label: string; help?: string };
 
 type MapProps = {
   params: MapParams;
@@ -61,14 +69,19 @@ function ConfigMapRow(
   const key = createMemo(() => props.entry[0]);
   const entryValue = () => props.entry[1];
   const valuePath = createMemo(() => [...props.params.path, key()]);
-  const sensitiveState = createMemo(() =>
-    getSensitiveRenderState({
-      path: valuePath(),
-      value: entryValue(),
-      hints: props.params.hints,
-      revealSensitive: props.params.revealSensitive ?? false,
-      isSensitivePathRevealed: props.params.isSensitivePathRevealed,
-    }),
+  const errorId = createMemo(() => configFieldId(valuePath(), "key-error"));
+  const [renameError, setRenameError] = createSignal("");
+  const keyValue = liveValue<HTMLInputElement>(() => key());
+  const sensitiveState = createMemo(
+    () =>
+      getSensitiveRenderState({
+        path: valuePath(),
+        value: entryValue(),
+        hints: props.params.hints,
+        revealSensitive: props.params.revealSensitive ?? false,
+        isSensitivePathRevealed: props.params.isSensitivePathRevealed,
+      }),
+    { lazy: true },
   );
   const node = createMemo(
     () =>
@@ -82,58 +95,65 @@ function ConfigMapRow(
         controlIdentity: props.params.value,
         searchCriteria: props.params.searchCriteria,
         showLabel: false,
+        contextLabel: props.params.contextLabel,
         onPatch: props.params.onPatch,
       }) satisfies ConfigNodeRenderParams,
+    { lazy: true },
   );
   return (
     <>
-      <div class="settings-row">
+      <div class="settings-row cfg-collection-row">
         <div class="settings-row__text">
           <input
             type="text"
             class="settings-input"
             placeholder={t("configForm.key")}
             aria-label={`${t("configForm.key")}: ${key()}`}
-            value={key()}
+            ref={keyValue}
+            aria-describedby={renameError() ? errorId() : undefined}
             disabled={props.params.disabled}
+            onInput={() => setRenameError("")}
             onChange={(event) => {
+              setRenameError("");
               const target = event.currentTarget;
               const nextKey = target.value.trim();
-              if (!nextKey || nextKey === key()) {
+              if (nextKey === key()) {
                 target.value = key();
                 return;
               }
               // A new key must never carry a server-redacted credential sentinel.
-              const error = !props.params.validateKey(nextKey)
-                ? t("configForm.invalidString")
-                : containsRedactedSentinel(props.params.value[key()])
-                  ? t("configForm.renameRedactedBlocked")
-                  : "";
-              if (
-                Object.hasOwn(props.params.value, nextKey) ||
-                props.params.reservedKeys.has(nextKey) ||
-                error
-              ) {
+              const error =
+                Object.hasOwn(props.params.value, nextKey) || props.params.reservedKeys.has(nextKey)
+                  ? t("configForm.renameDuplicateKey")
+                  : !nextKey || !props.params.validateKey(nextKey)
+                    ? t("configForm.renameInvalidKey")
+                    : containsRedactedSentinel(props.params.value[key()])
+                      ? t("configForm.renameRedactedBlocked")
+                      : "";
+              if (error) {
                 target.value = key();
-                if (error) {
-                  target.setCustomValidity(error);
-                  target.reportValidity();
-                  target.setCustomValidity("");
-                }
+                // The restored key is valid; describe the rejected action, not an invalid field.
+                setRenameError(t("configForm.renameRejected", { reason: error }));
                 return;
               }
               const nextValue = { ...props.params.value, [nextKey]: props.params.value[key()] };
               delete nextValue[key()];
               if (props.params.onPatch(props.params.path, nextValue) === false) {
                 target.value = key();
+                setRenameError(
+                  t("configForm.renameRejected", { reason: t("configForm.renameChangeRejected") }),
+                );
               }
             }}
           />
+          <span id={errorId()} class="cfg-field__error" role="alert" hidden={!renameError()}>
+            {renameError()}
+          </span>
         </div>
         <div class="settings-row__control">
           <CollectionRemoveButton
             focus={props.focus}
-            label={t("configForm.removeEntry")}
+            label={t("configForm.removeEntryKey", { key: key() })}
             disabled={props.params.disabled}
             remove={() => {
               const nextValue = { ...props.params.value };
@@ -160,6 +180,8 @@ function ConfigMapRow(
               disabled={props.params.disabled}
               isRequired={true}
               onToggleSensitivePath={props.params.onToggleSensitivePath}
+              hints={props.params.hints}
+              secretFields={props.params.secretFields}
               onPatch={props.params.onPatch}
             />
           }
@@ -169,18 +191,101 @@ function ConfigMapRow(
   );
 }
 
-export function ConfigMapField(props: MapProps): JSX.Element {
+export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.Element {
   let draft!: ConfigCollectionDraftHandle;
   const content = createMemo(() => resolveMapContent(props.params));
+  const visible = createProgressiveList(() => content().visibleEntries, {
+    initial: 2,
+    batch: 5,
+    enabled: () => props.params.progressive === true,
+  });
+  let localEdit: { expected: unknown; retained: unknown } | undefined;
+  let sourceRevision = 0;
+  let sourceSnapshot: { source: unknown; revision: number } | undefined;
+  const draftSource = createMemo(() => {
+    const source = props.params.sourceIdentity ?? props.params.value;
+    if (localEdit && configValuesEqual(source, localEdit.expected)) {
+      return localEdit.retained;
+    }
+    // Returning to the pre-edit value is still an external context change.
+    // Keep its reset distinct from the retained source, without changing draft ownership.
+    if (localEdit) {
+      sourceRevision += 1;
+      localEdit = undefined;
+    }
+    // Unset maps use a symbol, which cannot survive JSON equality in a cloned wrapper.
+    if (
+      !sourceSnapshot ||
+      !Object.is(sourceSnapshot.source, source) ||
+      sourceSnapshot.revision !== sourceRevision
+    ) {
+      sourceSnapshot = { source, revision: sourceRevision };
+    }
+    return sourceSnapshot;
+  });
+  const patchChild: MapParams["onPatch"] = (path, value) => {
+    const root = props.params.path;
+    const previous = localEdit;
+    if (path.length > root.length && root.every((segment, index) => path[index] === segment)) {
+      const next = copyWithPathPatch(
+        props.params.value,
+        path.slice(root.length),
+        value,
+        "copy-set",
+      );
+      if (next.ok) {
+        // The parent may synchronously render; record this exact local result before dispatch.
+        localEdit = { expected: next.value, retained: draftSource() };
+      }
+    }
+    const accepted = props.params.onPatch(path, value);
+    if (accepted === false) {
+      localEdit = previous;
+    }
+    return accepted;
+  };
   const focus = createCollectionFocus(() => content().visibleEntries.map(([key]) => key));
   return (
     <Show when={content().visible}>
-      <div class="cfg-block cfg-map">
-        <div class="settings-row">
-          <Show when={props.params.showLabel !== false || props.params.reservedKeys.size > 0}>
-            <div class="settings-row__text">
-              <span class="settings-row__title">{t("configForm.customEntries")}</span>
-            </div>
+      <div class="cfg-block cfg-map" aria-busy={visible.pending() ? "true" : undefined}>
+        <div class="settings-row cfg-collection-row">
+          <Show
+            when={props.heading}
+            fallback={
+              <Show when={props.params.showLabel !== false || props.params.reservedKeys.size > 0}>
+                <div class="settings-row__text">
+                  <span class="settings-row__title">{t("configForm.customEntries")}</span>
+                </div>
+              </Show>
+            }
+          >
+            {(heading) => {
+              const copy = createMemo(() =>
+                configRowCopy({
+                  label: heading().label,
+                  help: heading().help,
+                  context: props.params.helpContext,
+                }),
+              );
+              return (
+                <div class="settings-row__text">
+                  <span class="settings-row__title">
+                    {configLabelInContext(heading().label, props.params.contextLabel)}
+                    <Show when={copy().hasHelp}>
+                      <ConfigFieldHelp
+                        path={props.params.path}
+                        label={heading().label}
+                        help={heading().help}
+                        context={props.params.helpContext}
+                      />
+                    </Show>
+                  </span>
+                  <Show when={copy().summary}>
+                    <span class="settings-row__desc config-field__summary">{copy().summary}</span>
+                  </Show>
+                </div>
+              );
+            }}
           </Show>
           <div class="settings-row__control">
             <button
@@ -207,12 +312,13 @@ export function ConfigMapField(props: MapProps): JSX.Element {
                 }
               }}
             >
-              {t("configForm.addEntry")}
+              {t("configForm.add")}
             </button>
           </div>
         </div>
         <ConfigCollectionDraft
           {...content().draftProps}
+          sourceIdentity={draftSource()}
           id={content().draftId}
           ref={(handle) => (draft = handle)}
           onCommit={({ key, value }) =>
@@ -226,11 +332,11 @@ export function ConfigMapField(props: MapProps): JSX.Element {
           }
         />
         <Show when={content().visibleEntries.length > 0}>
-          <div class="settings-subrows">
-            <For each={content().visibleEntries} keyed={(entry) => entry[0]}>
+          <div class="settings-subrows cfg-subrows">
+            <For each={visible.items()} keyed={(entry) => entry[0]}>
               {(entry) => (
                 <ConfigMapRow
-                  params={props.params}
+                  params={{ ...props.params, onPatch: patchChild }}
                   renderNode={props.renderNode}
                   entry={entry()}
                   anySchema={content().anySchema}

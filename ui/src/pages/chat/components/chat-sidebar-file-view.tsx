@@ -8,6 +8,7 @@ import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-sk
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
 import "../../../components/tooltip.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
@@ -141,13 +142,16 @@ export function SidebarFile(props: {
         },
       ]}
     >
-      <Show when={desktop() && !props.controls?.workspace?.showingFolder && props.controls}>
+      {/* Folder navigation hides the chrome; its retiring children still need valid controls. */}
+      <Show when={props.controls}>
         {(controls) => (
-          <DesktopFileChrome
-            content={props.content}
-            controls={controls()}
-            runtime={props.runtime}
-          />
+          <Show when={desktop() && !controls().workspace?.showingFolder}>
+            <DesktopFileChrome
+              content={props.content}
+              controls={controls()}
+              runtime={props.runtime}
+            />
+          </Show>
         )}
       </Show>
       <Show when={mobile() && props.controls}>
@@ -210,6 +214,9 @@ export function SidebarFile(props: {
               aria-label={t("chat.detailPanel.searchInFile")}
               placeholder={t("common.search")}
               value={controls().query}
+              onBlur={clearCompositionEnd}
+              onCompositionEnd={recordCompositionEnd}
+              onKeyUp={clearCompositionEnd}
               onInput={(event) => controls().onSearchInput(event.currentTarget.value)}
             />
             <span class="file-view__search-counter" role="status">
@@ -285,7 +292,7 @@ export function SidebarFile(props: {
           >
             <Show when={desktop()}>
               <div class="sidebar-file-view__floating-copy">
-                <FileCopyButton action="contents" controls={props.controls} />
+                <FileCopyButton controls={props.controls} />
               </div>
             </Show>
             <Show when={props.controls?.markdown && props.controls.readingMode === "preview"}>

@@ -1,5 +1,5 @@
 import type { Event } from "nostr-tools";
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { isStateDatabaseAdmissionClosedError, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 
 const CURSOR_WRITE_RETRY_MS = [0, 100, 300] as const;
@@ -64,7 +64,6 @@ export function createNostrCursorStateWriter(options: {
   let desiredCursor = Math.max(options.minimumCursor, options.initialCursor);
   let dirty = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let writeTail: Promise<void> = Promise.resolve();
   let activeFlush: Promise<void> | undefined;
   let recoveryFlush: Promise<void> | undefined;
 
@@ -81,12 +80,6 @@ export function createNostrCursorStateWriter(options: {
     }
   };
 
-  const enqueueWrite = (cursor: number): Promise<void> => {
-    const write = writeTail.then(() => writeWithRetry(cursor));
-    writeTail = write.catch(() => undefined);
-    return write;
-  };
-
   const clearTimer = (): void => {
     clearTimeout(timer);
     timer = undefined;
@@ -95,7 +88,8 @@ export function createNostrCursorStateWriter(options: {
   const runFlush = async (): Promise<void> => {
     for (;;) {
       if (!dirty) {
-        await writeTail;
+        // Let an immediately queued persistNow join this active flush before it settles.
+        await Promise.resolve();
         if (!dirty) {
           return;
         }
@@ -103,7 +97,8 @@ export function createNostrCursorStateWriter(options: {
       dirty = false;
       const cursor = desiredCursor;
       try {
-        await enqueueWrite(cursor);
+        // Publish activeFlush before invoking a writer that may queue another cursor.
+        await Promise.resolve().then(() => writeWithRetry(cursor));
       } catch (error) {
         dirty = true;
         throw error;
@@ -149,6 +144,9 @@ export function createNostrCursorStateWriter(options: {
             await flush();
             return;
           } catch (error) {
+            if (isStateDatabaseAdmissionClosedError(error)) {
+              throw error;
+            }
             options.onBackgroundError?.(error as Error);
             await sleepWithAbort(CURSOR_RECOVERY_RETRY_MS);
           }

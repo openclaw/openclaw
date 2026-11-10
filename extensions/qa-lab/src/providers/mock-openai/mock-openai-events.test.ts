@@ -38,14 +38,13 @@ describe("mock OpenAI Responses output item slots", () => {
     expectSlots(buildReasoningOnlyEvents("thinking", "reasoning-only"), ["reasoning-only"]);
   });
 
-  it("preserves an explicit answer ID after the reasoning slot", () => {
+  it("indexes the default answer after the reasoning slot", () => {
     expectSlots(
       buildReasoningAndAssistantEvents({
         reasoningId: "reasoning-before-answer",
-        answerId: "reasoned-answer",
         answerText: "reasoned final",
       }),
-      ["reasoning-before-answer", "reasoned-answer"],
+      ["reasoning-before-answer", "msg_mock_reasoned_answer"],
     );
   });
 });

@@ -5,14 +5,17 @@ import { getQueriesForElement } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import type { PresenceEntry } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
+import {
+  beginConfigRead,
+  invalidateConfigConnection,
+} from "../../lib/config/config-state-model.ts";
 import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
 } from "../../test-helpers/devices-fixtures.ts";
+import { missingReadScopeErrorFixture } from "../../test-helpers/gateway-client.ts";
 import { waitForRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -45,6 +48,102 @@ describe("DevicesPage gateway lifecycle", () => {
     ).toBe("Devices");
   });
 
+  it("waits for the first inventory before painting policy sections below it", async () => {
+    const page = mountPage(
+      gatewayFixture(gatewaySnapshot(clientFor().client, true, [], ["operator.admin"])),
+      { nodes: [{ nodeId: "office", displayName: "Office Mac" }] },
+      null,
+    );
+    expect(page.container.querySelectorAll(".settings-loading-skeleton")).toHaveLength(1);
+    expect(page.container.textContent).not.toContain(t("devices.binding.execNodeBinding"));
+    page.refreshPresentation();
+    await waitForSolid(() => expect(page.container.textContent).toContain("Office Mac"));
+    expect(page.container.textContent).toContain(t("devices.binding.execNodeBinding"));
+  });
+
+  it("keeps inventory usable and retires a held approval read on Gateway replacement", async () => {
+    const policyMethod = "exec.approvals.get";
+    const pending = createDeferred<unknown>();
+    const { client, request } = clientFor(
+      vi.fn(async (method: string) =>
+        method === policyMethod ? pending.promise : responseFor(method),
+      ),
+    );
+    const page = mountPage(gatewayFixture(gatewaySnapshot(client, true, [], ["operator.admin"])), {
+      nodes: [{ nodeId: "available", displayName: "Available node" }],
+    });
+    await waitForSolid(() => expect(page.container.textContent).toContain("Available node"));
+    expect(page.container.querySelector('select[aria-label="Security"]')).toBeNull();
+    expect(page.container.textContent).toContain(t("common.loading"));
+    expect(request.mock.calls.filter(([method]) => method === policyMethod)).toHaveLength(1);
+
+    const replacement = clientFor();
+    page.replaceGateway(
+      gatewayFixture(gatewaySnapshot(replacement.client, true, [], ["operator.admin"])),
+    );
+    await waitForSolid(() =>
+      expect(page.container.querySelector('select[aria-label="Security"]')).not.toBeNull(),
+    );
+    pending.reject(new Error("Retired read"));
+    await waitForSolid(() => expect(page.container.textContent).not.toContain("Retired read"));
+  });
+
+  it("surfaces the shared config read failure and retries through its owner", async () => {
+    const { client } = clientFor();
+    const page = mountPage(gatewayFixture(gatewaySnapshot(client, true, [], ["operator.admin"])));
+    page.config.configSnapshot = null;
+    page.config.configForm = null;
+    const read = beginConfigRead(page.config, client);
+    read.completion.resolve({ ok: false, error: "Config failed" });
+    page.publishConfig();
+    await waitForSolid(() => expect(page.container.textContent).toContain("Config failed"));
+    button(page.container, t("common.retry")).click();
+    expect(page.reloadConfig).toHaveBeenCalledExactlyOnceWith({ reloadOnly: true });
+    const retry = beginConfigRead(page.config, client);
+    retry.completion.resolve({ ok: true, value: undefined });
+    page.publishConfig();
+    await waitForSolid(() => expect(page.container.textContent).not.toContain("Config failed"));
+  });
+
+  it.each(["reload", "reconnect"])(
+    "retains editable bindings after a failed %s",
+    async (reason) => {
+      const { client } = clientFor();
+      const snapshot = gatewaySnapshot(client, true, [], ["operator.admin"]);
+      const fixture = gatewayFixture(snapshot);
+      const page = mountPage(fixture, {
+        nodes: [{ nodeId: "draft-node", commands: ["system.run"] }],
+      });
+      page.config.configForm = { tools: { exec: { node: "draft-node" } } };
+      page.config.configFormDirty = true;
+      page.publishConfig();
+      const queries = getQueriesForElement(page.container);
+      await waitForSolid(() =>
+        expect(queries.getByRole("combobox", { name: "Device" })).toHaveProperty("disabled", false),
+      );
+      const binding = queries.getByRole("combobox", { name: "Device" });
+      if (reason === "reconnect") {
+        invalidateConfigConnection(page.config);
+        fixture.emitSnapshot({ ...snapshot, phase: "reconnecting", hello: null });
+        fixture.emitSnapshot(snapshot);
+      }
+      page.config.configLoading = true;
+      const read = beginConfigRead(page.config, client);
+      page.publishConfig();
+      await waitForSolid(() => expect(binding).toHaveProperty("disabled", true));
+      page.config.configLoading = false;
+      read.completion.resolve({ ok: false, error: "Config failed" });
+      page.publishConfig();
+      await waitForSolid(() => {
+        expect(queries.getByRole("combobox", { name: "Device" })).toBe(binding);
+        expect(binding).toHaveProperty("value", "draft-node");
+        expect(binding).toHaveProperty("disabled", false);
+        expect(page.config.configFormDirty).toBe(true);
+        expect(queries.queryByRole("button", { name: t("common.retry") })).toBeNull();
+      });
+    },
+  );
+
   it("preserves matching route data, then clears inventory on provider replacement", async () => {
     const fixture = gatewayFixture(gatewaySnapshot(null, false));
     const page = mountPage(fixture, {
@@ -56,8 +155,10 @@ describe("DevicesPage gateway lifecycle", () => {
     });
     await waitForSolid(() => expect(page.container.textContent).toContain("Stale presence"));
     page.replaceGateway(gatewayFixture(gatewaySnapshot(null, false)));
-    expect(page.container.textContent).not.toContain("Preloaded Mac");
-    expect(page.container.textContent).not.toContain("Stale presence");
+    await waitForSolid(() => {
+      expect(page.container.textContent).not.toContain("Preloaded Mac");
+      expect(page.container.textContent).not.toContain("Stale presence");
+    });
   });
 
   it("retains inventory and an edited approval policy through a same-client reconnect", async () => {
@@ -75,31 +176,41 @@ describe("DevicesPage gateway lifecycle", () => {
       execApprovalsForm: { version: 1, defaults: { security: "deny" } },
     });
     await waitForSolid(() =>
-      expect(page.container.querySelector('select[aria-label="Mode"]')).not.toBeNull(),
+      expect(page.container.querySelector('select[aria-label="Security"]')).not.toBeNull(),
     );
-    const policy = page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]')!;
+    const policy = page.container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Security"]',
+    )!;
     expect(policy).not.toBeNull();
     policy.value = "allowlist";
     policy.dispatchEvent(new Event("change", { bubbles: true }));
     flush();
     page.config.configForm = { tools: { exec: { node: "draft-node" } } };
+    page.publishConfig();
+    await waitForSolid(() =>
+      expect(
+        page.container.querySelector<HTMLSelectElement>('select[aria-label="Device"]')?.value,
+      ).toBe("draft-node"),
+    );
     invalidateConfigConnection(page.config);
     fixture.emitSnapshot({ ...snapshot, phase: "reconnecting", hello: null });
     expect(page.container.textContent).toContain("Retained Mac");
     expect(
-      page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]')?.value,
+      page.container.querySelector<HTMLSelectElement>('select[aria-label="Security"]')?.value,
     ).toBe("allowlist");
     expect(button(page.container, "Save").disabled).toBe(true);
     expect(
-      page.container.querySelector<HTMLSelectElement>('select[aria-label="Node"]')?.value,
+      page.container.querySelector<HTMLSelectElement>('select[aria-label="Device"]')?.value,
     ).toBe("draft-node");
     fixture.emitSnapshot(snapshot);
     expect(
-      page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]')?.value,
+      page.container.querySelector<HTMLSelectElement>('select[aria-label="Security"]')?.value,
     ).toBe("allowlist");
     page.replaceGateway(gatewayFixture(gatewaySnapshot(null, false)));
-    expect(page.container.textContent).not.toContain("Retained Mac");
-    expect(page.container.querySelector('select[aria-label="Mode"]')).toBeNull();
+    await waitForSolid(() => {
+      expect(page.container.textContent).not.toContain("Retained Mac");
+      expect(page.container.querySelector('select[aria-label="Security"]')).toBeNull();
+    });
   });
 
   it("rejects preloaded data after a same-client gateway epoch change", async () => {
@@ -237,15 +348,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const { client, request } = clientFor(
       vi.fn(async (method: string) => {
         if (method === "system.info") {
-          throw new GatewayRequestError({
-            code: "FORBIDDEN",
-            message: "permission denied",
-            details: {
-              code: "MISSING_SCOPE",
-              missingScope: "operator.read",
-              requiredScopes: ["operator.read"],
-            },
-          });
+          throw missingReadScopeErrorFixture();
         }
         return responseFor(method);
       }),
@@ -396,28 +499,35 @@ describe("DevicesPage gateway lifecycle", () => {
     );
   });
 
-  it("keeps initial and event-driven pairing and exec-approval loads gated by scopes", async () => {
-    const { client, request } = clientFor();
-    const fixture = gatewayFixture(
-      gatewaySnapshot(
-        client,
-        true,
-        ["node.list", "device.pair.list", "exec.approvals.get"],
-        ["operator.read"],
-      ),
-    );
-    const page = mountPage(fixture);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
-    fixture.emitEvent("presence", {
-      presence: [{ instanceId: "browser-1", ts: 2_000, reason: "connect" }],
-    });
-    fixture.emitEvent("device.pair.changed", {});
-    await Promise.resolve();
-    flush();
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
-    expect(button(page.container, t("devices.pairing.button")).disabled).toBe(true);
-  });
+  it.each([true, false, undefined])(
+    "keeps pairing and command approvals gated with admin ceiling %s",
+    async (roleAllowsAdmin) => {
+      const { client, request } = clientFor();
+      const fixture = gatewayFixture(
+        gatewaySnapshot(
+          client,
+          true,
+          ["node.list", "device.pair.list", "exec.approvals.get"],
+          ["operator.read"],
+          roleAllowsAdmin,
+        ),
+      );
+      const page = mountPage(fixture);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
+      fixture.emitEvent("presence", {
+        presence: [{ instanceId: "browser-1", ts: 2_000, reason: "connect" }],
+      });
+      fixture.emitEvent("device.pair.changed", {});
+      expect(page.container.textContent).toContain(
+        roleAllowsAdmin === true ? "this browser needs approval" : "only admins can change them",
+      );
+      await Promise.resolve();
+      flush();
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
+      expect(button(page.container, t("devices.pairing.button")).disabled).toBe(true);
+    },
+  );
 
   it.each([
     { name: "node disconnects", role: "node", nodeRoles: ["node"], operatorRoles: ["operator"] },
@@ -725,13 +835,12 @@ describe("DevicesPage gateway lifecycle", () => {
     expect(document.body.querySelector(".secret-reveal__callout")?.textContent).toContain(
       t("devices.inventory.rotateWithheldException"),
     );
-    expect(document.body.querySelector(".secret-reveal__status")).not.toBeNull();
     expect(document.body.querySelector(".secret-reveal__note")?.textContent).toContain(
       t("devices.inventory.rotateWithheldNote"),
     );
     expect(document.body.querySelector(".secret-reveal__code")).toBeNull();
-    expect(document.body.querySelector(".chat-copy-btn")).toBeNull();
-    expect(dialogButton(t("common.close")).className).toBe("btn secret-reveal__dismiss");
+    expect(document.body.querySelector("openclaw-modal-dialog .chat-copy-btn")).toBeNull();
+    expect(dialogButton(t("common.close")).className).toBe("btn");
     dialogButton(t("common.close")).click();
     await expectNoModal();
   });

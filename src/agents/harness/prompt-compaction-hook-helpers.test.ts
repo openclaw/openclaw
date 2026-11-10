@@ -231,6 +231,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     });
     expect(calls).toEqual(["prepare", "first", "second", "build", "authorized"]);
     expect(result.prompt).toBe("prepare\n\nfirst\n\nsecond\n\nauthorized\n\nhello");
+    expect(result).not.toHaveProperty("systemPromptReplaced");
     expect(messages[0]!.content[0]!.text).toBe("original");
   });
   it("classifies restrictive globs before building system instructions", async () => {
@@ -253,6 +254,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(build).toHaveBeenCalledWith({ toolsAllow, hasToolRestrictions: true });
     expect(result).toMatchObject({
       toolsAllow,
+      systemPromptReplaced: true,
       threadDeveloperInstructions: "hook replacement",
       turnDeveloperInstructions:
         "---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nbefore replacement\n\n---\n\n---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\nafter replacement\n\n---",
@@ -261,38 +263,4 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     });
     expect(result.developerInstructions).not.toContain("policy-filtered base");
   });
-
-  it.each([
-    ["only", "read", "beat", "beat\n\nread"],
-    ["ordered", "hello", "beat", "beat\n\nprompt\n\nhello"],
-    ["user", "hello", "should not appear", "hello"],
-  ] as const)(
-    "dispatches heartbeat contributions for %s turns",
-    async (mode, prompt, contribution, expected) => {
-      const calls: string[] = [];
-      const handler = vi.fn(() => {
-        calls.push("heartbeat");
-        return { prependContext: contribution };
-      });
-      const hooks = [promptHook(handler, { hookName: "heartbeat_prompt_contribution" })];
-      if (mode === "ordered") {
-        hooks.push(
-          promptHook(() => {
-            calls.push("before_prompt_build");
-            return { prependContext: "prompt" };
-          }),
-        );
-      }
-      installHooks(...hooks);
-      const result = await buildPrompt({
-        prompt,
-        messages: mode === "only" ? () => Promise.reject(new Error("History unavailable")) : [],
-        ctx: { trigger: mode === "user" ? "user" : "heartbeat" },
-      });
-      expect(handler).toHaveBeenCalledTimes(mode === "user" ? 0 : 1);
-      const orderedCalls = ["heartbeat", ...(mode === "ordered" ? ["before_prompt_build"] : [])];
-      expect(calls).toEqual(mode === "user" ? [] : orderedCalls);
-      expect(result).toMatchObject({ prompt: expected, developerInstructions: "base" });
-    },
-  );
 });

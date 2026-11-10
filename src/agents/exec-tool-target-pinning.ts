@@ -161,6 +161,8 @@ export function pinExecToolTarget(tool: AnyAgentTool, target: PinnedExecToolTarg
   const getExecutionTimeoutMs = tool.getExecutionTimeoutMs;
   return {
     ...tool,
+    // Remote system.run does not expose an owned process cancellation handle.
+    interruptible: target.host === "node" ? undefined : tool.interruptible,
     parameters: restrictExecToolParameters(tool.parameters, target.host, Boolean(pinnedNode)),
     ...(getExecutionTimeoutMs
       ? { getExecutionTimeoutMs: (args: unknown) => getExecutionTimeoutMs(pinArgs(args)) }
@@ -202,6 +204,13 @@ function pinExecToolArgs(
       );
     }
     return { ...rest, host: "gateway", ...(target.ask ? { ask: target.ask } : {}) };
+  }
+  if (source.durable === true) {
+    throw markToolExecutionNotStarted(
+      new Error(
+        "Durable exec requires Gateway-host background execution on Linux with a reachable systemd user manager; node execution is unsupported.",
+      ),
+    );
   }
   const nodeArgs = Object.fromEntries(
     Object.entries(rest).filter(([name]) => NODE_EXEC_PARAMETER_NAMES.has(name)),

@@ -50,6 +50,8 @@ type TalkViewProps = {
   voiceWake?: {
     readState: () => VoiceWakeEditorState;
     scope?: object | null;
+    saving: boolean;
+    readWriteResult: () => void;
     onInput: (text: string) => void;
     onRetry: () => void;
   };
@@ -147,10 +149,11 @@ function StatusRow(props: TalkViewProps) {
       label: t(catalog.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
     };
   };
+  // The first catalog reply supplies this line without moving the schema editor below it.
   return (
     <SettingsRow
       title={t("talkPage.status.title")}
-      description={status().description}
+      description={status().description ?? "\u00a0"}
       control={<SettingsStatus kind={status().kind} label={status().label} />}
     />
   );
@@ -363,6 +366,8 @@ export function Talk(props: TalkViewProps) {
           <VoiceWakeEditor
             readState={props.voiceWake.readState}
             scope={props.voiceWake.scope}
+            saving={props.voiceWake.saving}
+            readWriteResult={props.voiceWake.readWriteResult}
             onInput={props.voiceWake.onInput}
             onRetry={props.voiceWake.onRetry}
           />

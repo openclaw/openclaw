@@ -3,13 +3,6 @@ import path from "node:path";
 
 const LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES = 1024 * 1024 * 1024;
 
-type DiskSpaceSnapshot = {
-  targetPath: string;
-  checkedPath: string;
-  availableBytes: number;
-  totalBytes: number | null;
-};
-
 function finiteNonNegativeNumber(value: unknown): number | null {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null;
@@ -32,7 +25,12 @@ function findExistingDiskSpacePath(targetPath: string): string | null {
 }
 
 /** Reads available bytes for the volume containing a target path. */
-export function tryReadDiskSpace(targetPath: string): DiskSpaceSnapshot | null {
+export function tryReadDiskSpace(targetPath: string): {
+  targetPath: string;
+  checkedPath: string;
+  availableBytes: number;
+  totalBytes: number | null;
+} | null {
   // Install/update targets may not exist yet; statfs needs the nearest existing
   // ancestor to identify the backing volume.
   const checkedPath = findExistingDiskSpacePath(targetPath);

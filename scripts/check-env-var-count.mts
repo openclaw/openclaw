@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { runtimeProcessScriptEntrypoints } from "../src/infra/runtime-process-manifest.ts";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import {
   loadRatchetReference,
@@ -16,9 +17,18 @@ const BUDGET_PATH = "config/env-var-count-budget.txt";
 const SOURCE_ROOTS = ["src", "packages", "extensions"];
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
 const ENV_VAR_PATTERN = /OPENCLAW_[A-Z0-9_]+/gu;
+// Compiled copies carry their source owner's names; only authored inputs define configuration.
+const generatedScriptArtifacts = new Set<string>(
+  Object.values(runtimeProcessScriptEntrypoints).flatMap((entry) =>
+    "buildSource" in entry ? [entry.sourceModule] : [],
+  ),
+);
 
 export function isCountedSourcePath(filePath: string) {
   const normalized = filePath.replaceAll("\\", "/");
+  if (generatedScriptArtifacts.has(normalized)) {
+    return false;
+  }
   if (!SOURCE_ROOTS.some((root) => normalized.startsWith(root + "/"))) {
     return false;
   }
@@ -122,24 +132,14 @@ export function main(
     throw new Error(growth[0]!.message);
   }
   const names = collectEnvVarNames(root, { staged, preparedNames });
-  const messages =
-    names.length === budget
-      ? []
-      : [
-          `OPENCLAW_* count ${names.length} ${names.length < budget ? "is below" : "exceeds"} budget ${budget}; update ${BUDGET_PATH}`,
-        ];
-  if (
-    reportLimitViolations(
-      messages.map((message) => ({
-        file: BUDGET_PATH,
-        title: "Environment variable count budget",
-        message,
-      })),
-    )
-  ) {
-    throw new Error(messages.join("\n"));
+  // The budget must describe the tree in CI too, so unrecorded names cannot reach main
+  // and fail every later local run. Recorded growth follows the limit severity policy.
+  if (names.length !== budget) {
+    throw new Error(
+      `OPENCLAW_* count ${names.length} ${names.length < budget ? "is below" : "exceeds"} budget ${budget}; update ${BUDGET_PATH}`,
+    );
   }
-  if (messages.length === 0 && growth.length === 0) {
+  if (growth.length === 0) {
     console.log(`OPENCLAW_* count ${names.length}/${budget}`);
   }
   return names.length;

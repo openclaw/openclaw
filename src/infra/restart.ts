@@ -1,4 +1,3 @@
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { abortPendingChannelReloads } from "../gateway/server-reload-generation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -68,6 +67,17 @@ let pendingRestartPreparing = false;
 let pendingRestartSignalAdmission: GatewayRestartSignalAdmissionLease | null = null;
 let restartTransientGeneration = 0;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
+
+/** Live restart work, including preparation that still leaves inbound admission open. */
+export function hasPendingGatewayRestart(): boolean {
+  // Idle preparation owns a poll; fenced preparation owns its admission lease. The preparing
+  // flag alone can outlive a refused custom emission and does not establish live recovery.
+  return (
+    pendingRestartTimer !== null ||
+    activeDeferralPolls.size > 0 ||
+    pendingRestartSignalAdmission !== null
+  );
+}
 
 function shouldPreferRestartReason(next?: string, current?: string): boolean {
   const isUpdateRestart = (reason?: string) => reason === "update.run" || reason === "update.auto";
@@ -654,7 +664,6 @@ export function deferGatewayRestartUntilIdle(
     getPendingCount: () => number;
     hooks?: RestartDeferralHooks;
     emitHooks?: RestartEmitHooks;
-    pollMs?: number;
     maxWaitMs?: number;
     reason?: string;
     timeoutIntent?: GatewayRestartIntent;
@@ -667,10 +676,9 @@ export function deferGatewayRestartUntilIdle(
   },
   scheduledRequest?: PendingGatewayRestart,
 ): RestartDeferralHandle {
-  const pollMs = resolveTimerTimeoutMs(opts.pollMs, DEFAULT_DEFERRAL_POLL_MS, 10);
   const maxWaitMs =
     typeof opts.maxWaitMs === "number" && Number.isFinite(opts.maxWaitMs) && opts.maxWaitMs > 0
-      ? Math.max(pollMs, Math.floor(opts.maxWaitMs))
+      ? Math.max(DEFAULT_DEFERRAL_POLL_MS, Math.floor(opts.maxWaitMs))
       : undefined;
   // Idle deferral leaves admission open; only the run loop spends the drain budget.
   const timeoutIntent = { waitMs: resolveGatewayRestartDeferralTimeoutMs(), ...opts.timeoutIntent };
@@ -853,7 +861,7 @@ export function deferGatewayRestartUntilIdle(
     }
   };
   const pending = readPendingCount();
-  poll = setInterval(inspectPending, pollMs);
+  poll = setInterval(inspectPending, DEFAULT_DEFERRAL_POLL_MS);
   activeDeferralPolls.add(poll);
   if (pending !== undefined && pending <= 0) {
     attemptEmission(false);

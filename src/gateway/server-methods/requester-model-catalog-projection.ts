@@ -18,6 +18,9 @@ export function projectRequesterModelCatalog(
           provider: model.provider,
           name: model.name,
         };
+        if (model.family) {
+          choice.family = model.family;
+        }
         if (model.thinkingLevels) {
           choice.thinkingLevels = model.thinkingLevels.map((level) => level.id);
         }

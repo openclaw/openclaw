@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { i18n } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   answerConfirmDialog,
@@ -10,6 +11,33 @@ import {
 import { openSubmenu, selectMenuValue } from "../../test-helpers/session-menu.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { mountSessionsRoute } from "./sessions-route.test-support.tsx";
+
+it("keeps hub labels live and navigates only after activating another tab", async () => {
+  const { context, container, dispose } = await mountSessionsRoute(() => sessionsResult([]));
+  const navigate = vi.spyOn(context, "navigate").mockImplementation(() => {});
+  const locale = i18n.getLocale();
+  try {
+    document.body.append(container);
+    const selected = container.querySelector<HTMLButtonElement>("#sessions-tab-sessions")!;
+    const worktrees = container.querySelector<HTMLButtonElement>("#sessions-tab-worktrees")!;
+    selected.click();
+    selected.focus();
+    selected.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(document.activeElement).toBe(worktrees);
+    expect(navigate).not.toHaveBeenCalled();
+    await i18n.setLocale("pt-BR");
+    await waitForSolid(() => {
+      expect(selected.textContent).toBe(i18n.t("tabs.sessions"));
+      expect(worktrees.textContent).toBe(i18n.t("tabs.worktrees"));
+    });
+    worktrees.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("worktrees");
+  } finally {
+    navigate.mockRestore();
+    dispose();
+    await i18n.setLocale(locale);
+  }
+});
 
 it("retires a held delete before rendering the destination route and ignores its late failure", async () => {
   const pending = createDeferred<{ deleted: boolean }>();
@@ -57,9 +85,9 @@ it("retires a held delete before rendering the destination route and ignores its
 
     await context.navigateAndWait("about");
     await waitForSolid(() => {
-      expect(container.querySelector("openclaw-about-page .about-hero__name")?.textContent).toBe(
-        "OpenClaw",
-      );
+      expect(
+        container.querySelector("openclaw-about-page .about-identity__name")?.textContent,
+      ).toBe("OpenClaw");
       expect(container.querySelector("openclaw-sessions-page")).toBeNull();
       expect(container.textContent).not.toContain(row.label);
       expect(container.textContent).not.toContain("Working…");
@@ -68,9 +96,9 @@ it("retires a held delete before rendering the destination route and ignores its
     pending.reject(new Error("Late deleted-session failure"));
     await Promise.allSettled([deletion.mock.results[0]!.value]);
     await waitForSolid(() => {
-      expect(container.querySelector("openclaw-about-page .about-hero__name")?.textContent).toBe(
-        "OpenClaw",
-      );
+      expect(
+        container.querySelector("openclaw-about-page .about-identity__name")?.textContent,
+      ).toBe("OpenClaw");
       expect(container.querySelector("openclaw-sessions-page")).toBeNull();
       expect(document.body.textContent).not.toContain("Late deleted-session failure");
     });

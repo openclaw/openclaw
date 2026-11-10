@@ -10,7 +10,6 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { isHeartbeatWakeEvent } from "../../infra/heartbeat-events-filter.js";
 import {
   isSystemEventStoreCurrent,
   resolveSystemEventQueueKey,
@@ -39,7 +38,7 @@ function compactSystemEvent(event: SystemEvent): string | null {
   if (
     lower.includes("reason periodic") ||
     lower.startsWith("read heartbeat.md") ||
-    isHeartbeatWakeEvent(trimmed)
+    /^heartbeat (?:poll|wake)/i.test(trimmed)
   ) {
     return null;
   }

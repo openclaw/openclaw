@@ -6,6 +6,7 @@ import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   isCloudModelRef,
+  resolveDefaultModelMaxTokens,
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
@@ -451,11 +452,12 @@ export function buildOllamaModelDefinition(
     input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: resolvedContext,
-    maxTokens: resolveOllamaOutputBudget({
-      modelId,
-      contextWindow: resolvedContext,
-      remote: opts?.remote,
-    }),
+    maxTokens:
+      resolveOllamaOutputBudget({
+        modelId,
+        contextWindow: resolvedContext,
+        remote: opts?.remote,
+      }) ?? resolveDefaultModelMaxTokens(Math.min(resolvedContext, OLLAMA_LOCAL_CONTEXT_TOKENS)),
     ...(opts?.parameterCount !== undefined ? { parameterCount: opts.parameterCount } : {}),
     ...(opts?.thinkingLevelMap ? { thinkingLevelMap: opts.thinkingLevelMap } : {}),
     compat: {

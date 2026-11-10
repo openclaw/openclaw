@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { createQaPollingErrorState } from "../../qa-transport.js";
 import { releaseQaCredentialLease } from "../shared/credential-lease-cleanup.js";
 import {
   acquireQaCredentialLease,
@@ -21,7 +21,6 @@ import {
 import { createDiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
-type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 function discordSnowflakeForTimestamp(timestampMs: number) {
@@ -30,7 +29,7 @@ function discordSnowflakeForTimestamp(timestampMs: number) {
 }
 
 export async function createDiscordQaTransportAdapter(
-  context: FactoryContext,
+  context: Parameters<AdapterFactory["create"]>[0],
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
   const lease = await acquireQaCredentialLease({
@@ -77,7 +76,7 @@ export async function createDiscordQaTransportAdapter(
     await waitForDiscordChannelRunning(gateway as never, accountId);
     assertActive();
   };
-  let pollingError: Error | undefined;
+  const pollingError = createQaPollingErrorState(() => stopped);
   let afterSnowflake = discordSnowflakeForTimestamp(Date.now());
   const polling = (async () => {
     for (;;) {
@@ -109,11 +108,7 @@ export async function createDiscordQaTransportAdapter(
       }
       await sleep(250);
     }
-  })().catch((error: unknown) => {
-    if (!stopped) {
-      pollingError = toStringifiedError(error);
-    }
-  });
+  })().catch(pollingError.capture);
   const scenarioEnvironment = createDiscordQaScenarioEnvironment({
     accountId,
     driverIdentity,
@@ -129,9 +124,7 @@ export async function createDiscordQaTransportAdapter(
     ...(options.agentE2e ? { whenUnhealthy: heartbeat.whenFailed } : {}),
     assertTransportHealthy() {
       assertActive();
-      if (pollingError) {
-        throw pollingError;
-      }
+      pollingError.assertHealthy();
       activeE2eSession?.assertHealthy();
     },
     async sendInbound(input) {

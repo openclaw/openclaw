@@ -25,6 +25,7 @@ import {
   seedLegacyExecApprovalPolicy,
 } from "./exec-approval-fixture.mjs";
 import { readDatabase } from "./observations.mjs";
+import { captureSessionArchives, readSessionArchiveBytes } from "./session-archive-proof.mjs";
 import * as sessionSourceFixture from "./session-source-fixture.mjs";
 import {
   assertUpgradeVolumeMigrated,
@@ -495,6 +496,21 @@ function assertConfigSurvived() {
     }
   }
 
+  if (coverage && acceptsIntent(coverage, "skill-library-split")) {
+    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    assert(
+      JSON.stringify(config.tools?.allow) ===
+        JSON.stringify(
+          baseline ? ["read", "skill_workshop"] : ["read", "skill_workshop", "skill_library"],
+        ),
+      "Pre-split skill_workshop allowlist did not keep covering skill_library exactly once",
+    );
+    assert(
+      baseline || config.meta?.migrations?.skillLibraryToolSplit === true,
+      "Skill library split migration marker was not recorded",
+    );
+  }
+
   if (coverage && acceptsIntent(coverage, "silent-reply-internal-retirement")) {
     const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
     assertStrict.deepEqual(
@@ -522,6 +538,16 @@ function assertConfigSurvived() {
 
   if (acceptsIntent(coverage, "skills")) {
     assert(config.skills?.allowBundled?.includes("memory"), "memory skill allowlist changed");
+  }
+
+  if (coverage && acceptsIntent(coverage, "skill-workshop-settings")) {
+    // Candidates since the plugin move keep these settings in the plugin's own config.
+    const workshop = config.plugins?.entries?.["skill-workshop"]?.config ?? config.skills?.workshop;
+    assertStrict.deepEqual(
+      { mode: workshop?.autonomous?.mode, maxSkillBytes: workshop?.maxSkillBytes },
+      { mode: "off", maxSkillBytes: 8000 },
+      "Skill Workshop settings changed across the update",
+    );
   }
 
   if (acceptsIntent(coverage, "plugins")) {
@@ -666,6 +692,9 @@ function captureLegacyOperatorPendingDelivery([stateDir, artifactRoot]) {
   }
   let witness;
   try {
+    // Managed candidate workers strip NODE_OPTIONS. The external service shim
+    // observes after Doctor, before startup recovery and terminal cleanup.
+    captureSessionArchives(stateDir, path.join(artifactRoot, "session-archives"));
     readDatabase(path.join(stateDir, "agents/ops/agent/openclaw-agent.sqlite"), (db) => {
       witness = { row: readLegacyOperatorPendingDelivery(db) };
     });
@@ -736,14 +765,17 @@ function assertLegacyOperatorPendingDelivery([updateJson, updateErr]) {
     .readdirSync(runsDir)
     .filter((name) => name.endsWith(".json"))
     .map((name) => readJson(path.join(runsDir, name)))
-    .filter((run) => run.completedAt)
-    .flatMap((run) => run.targets.flatMap((target) => target.completedMoves))
+    .filter((run) => run.completedAt && !run.failedAt)
+    .flatMap((run) =>
+      run.targets
+        .filter((target) => target.validationBeforeArchive === "passed")
+        .flatMap((target) => target.completedMoves),
+    )
     .some(
       (move) =>
         move.kind === "legacy-store" &&
         move.sourcePath === fixture.storePath &&
-        fs.existsSync(move.archivePath) &&
-        fs.readFileSync(move.archivePath, "utf8") === fixture.original,
+        readSessionArchiveBytes(move).toString("utf8") === fixture.original,
     );
   assert(archived, "published update did not archive the original legacy session bytes");
   assert(liveRow, "startup removed the imported legacy session");
@@ -781,7 +813,7 @@ function assertLegacyOperatorPendingDelivery([updateJson, updateErr]) {
     );
   }
   console.log(
-    "Published updater: legacy pending delivery imported into SQLite; original JSON archived unchanged.",
+    "Published updater: legacy pending delivery imported into SQLite; original JSON archived unchanged and retained or verifiably retired.",
   );
 }
 
@@ -1358,13 +1390,20 @@ function readInstalledPluginIndex() {
 
 function assertBaselinePlugin([expectedVersion, pluginId, tag]) {
   assert(["latest", "beta", "alpha"].includes(tag), "baseline plugin selector is not moving");
-  const record = readInstalledPluginIndex().installRecords[pluginId];
-  assert(record?.source === "npm", "baseline plugin was not installed from npm");
-  assert(record.spec === `@openclaw/${pluginId}@${tag}`, "baseline plugin selector changed");
-  const installed = readJson(path.join(resolveHomePath(record.installPath), "package.json"));
+  const records = readInstalledPluginIndex().installRecords;
+  const record = records[pluginId];
+  const installed =
+    record?.source === "npm"
+      ? readJson(path.join(resolveHomePath(record.installPath), "package.json"))
+      : assertExternalPluginInstall(records, pluginId, `@openclaw/${pluginId}`);
+  const prefix = record.source === "clawhub" ? "clawhub:" : "";
+  assert(
+    record.spec === `${prefix}@openclaw/${pluginId}@${tag}`,
+    "baseline plugin selector changed",
+  );
   assert(installed.name === `@openclaw/${pluginId}`, "baseline plugin package identity changed");
   assert(installed.version === expectedVersion, "baseline plugin is not the baseline version");
-  console.log(`Baseline npm plugin: @openclaw/${pluginId}@${expectedVersion}, selector=${tag}.`);
+  console.log(`Baseline plugin: @openclaw/${pluginId}@${expectedVersion}, selector=${tag}.`);
 }
 
 function assertExternalPluginInstall(records, pluginId, packageName) {
@@ -1502,7 +1541,6 @@ function assertNpmPluginInstall([
   const records = readInstalledPluginIndex().installRecords ?? {};
   const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
   const record = records[pluginId];
-  assert(record.source === "npm", `${pluginId} plugin must be installed from npm`);
   assertPluginArtifactConsent(
     record,
     pluginId,
@@ -1529,8 +1567,25 @@ function assertNpmPluginInstall([
     expectedTarball = publishedCompanionTarball;
   }
   const archive = fs.readFileSync(expectedTarball);
-  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
-  assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
+  const npmIntegrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  // ClawHub records the archive's SHA-256 separately from npm's SHA-512.
+  // Check every recorded digest so a matching field cannot hide stale provenance.
+  const expectedDigests =
+    record.source === "clawhub"
+      ? {
+          integrity: `sha256-${createHash("sha256").update(archive).digest("base64")}`,
+          npmIntegrity,
+          clawpackSha256: createHash("sha256").update(archive).digest("hex"),
+        }
+      : { integrity: npmIntegrity };
+  const recordedDigests = Object.keys(expectedDigests).filter(
+    (field) => record[field] !== undefined,
+  );
+  assert(
+    recordedDigests.length > 0 &&
+      recordedDigests.every((field) => record[field] === expectedDigests[field]),
+    `${pluginId} plugin registry artifact integrity changed`,
+  );
 }
 
 function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {

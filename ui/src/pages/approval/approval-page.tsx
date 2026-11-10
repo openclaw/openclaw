@@ -1,14 +1,14 @@
 import "../../styles/approval.css";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { JSX } from "@solidjs/web";
 import {
+  action,
   createMemo,
+  createOptimistic,
   createSignal,
   isPending,
   latest,
   Loading,
   onSettled,
-  Show,
   For,
 } from "solid-js";
 import {
@@ -19,23 +19,21 @@ import {
   type ApprovalResolveResult,
   type ApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
-import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import {
+  ApprovalContent,
+  approvalSeverity,
   approvalTitle,
-  decisionLabel,
-  renderApprovalPresentation,
-  terminalDescription,
-  terminalTitle,
   type ResolutionOrigin,
 } from "./approval-presentation.tsx";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
@@ -66,18 +64,6 @@ function appliedDecisionMatches(
   return decision === "deny"
     ? result.approval.status === "denied"
     : result.approval.status === "allowed" && result.approval.decision === decision;
-}
-
-function ApprovalChip(props: { kind: "plugin" | "tool" | "agent"; value?: string | null }) {
-  return (
-    <Show when={props.value?.trim()}>
-      {(value) => (
-        <span class="approval-page__chip mono" data-approval-chip={props.kind}>
-          {value()}
-        </span>
-      )}
-    </Show>
-  );
 }
 
 type ApprovalPageProps = { approvalId: string };
@@ -115,10 +101,33 @@ function createApprovalPage(
     completion.resolve();
     completion = Promise.withResolvers<void>();
     setRequest({ completion: completion.promise });
-    return completion.resolve;
   }
+  const [optimisticDecision, setOptimisticDecision] = createOptimistic<ApprovalDecision | null>(
+    null,
+  );
+  let presentationLifetime = Promise.withResolvers<void>();
+  function retirePresentation() {
+    presentationLifetime.resolve();
+    presentationLifetime = Promise.withResolvers<void>();
+  }
+  const presentDecision = action(function* (
+    decision: ApprovalDecision,
+    pending: Promise<void>,
+    retired: Promise<void>,
+    isCurrent: () => boolean,
+  ) {
+    if (isCurrent() && state.resolvingDecision !== null) {
+      setOptimisticDecision(decision);
+    }
+    // Retiring the UI does not cancel an already admitted Gateway decision.
+    yield Promise.race([pending, retired]);
+  });
   let clientOwner: GatewayBrowserClient | null = null;
   let operationGeneration = 0;
+  // Refreshes during an in-flight approval.get queue one follow-up instead of another request.
+  let activeLookup:
+    | { client: GatewayBrowserClient; id: string; generation: number; followUp: boolean }
+    | undefined;
   let pollTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let boundApprovalId: string | undefined;
   let heading: HTMLHeadingElement | undefined;
@@ -149,6 +158,7 @@ function createApprovalPage(
       }
       boundApprovalId = id;
       operationGeneration += 1;
+      retirePresentation();
       clearPollTimer();
       state.approval = null;
       beginRead();
@@ -190,6 +200,7 @@ function createApprovalPage(
         approvalGrantAccessChanged
       ) {
         operationGeneration += 1;
+        retirePresentation();
         completion.resolve();
         clearPollTimer();
         state.resolvingDecision = null;
@@ -243,11 +254,26 @@ function createApprovalPage(
     if (!client || !state.connected || !id || !hasApprovalAccess()) {
       return;
     }
+    if (
+      activeLookup?.generation === operationGeneration &&
+      activeLookup.client === client &&
+      activeLookup.id === id
+    ) {
+      activeLookup.followUp = true;
+      if (!options.background) {
+        beginRead();
+        notify();
+      }
+      return;
+    }
     const generation = ++operationGeneration;
+    const lookup = (activeLookup = { client, id, generation, followUp: false });
     const previousStatus = state.approval?.status;
     let shouldFocusTerminal = false;
     clearPollTimer();
-    const completeRead = options.background ? completion.resolve : beginRead();
+    if (!options.background) {
+      beginRead();
+    }
     notify();
     try {
       const result = await client.request<ApprovalGetResult>("approval.get", { id });
@@ -278,11 +304,19 @@ function createApprovalPage(
         state.requestError = "connection";
       }
     } finally {
+      if (activeLookup === lookup) {
+        activeLookup = undefined;
+      }
       if (isCurrentOperation(client, generation, id)) {
-        completeRead();
+        // Retry can attach a foreground read receipt to this same lookup.
+        completion.resolve();
         schedulePoll();
         notify();
       }
+    }
+    // Stale lookups returned above; a queued follow-up replaces the poll just armed.
+    if (lookup.followUp && pollTimer !== undefined) {
+      void loadApproval({ background: true });
     }
     if (shouldFocusTerminal && isCurrentOperation(client, generation, id)) {
       await focusTerminalState();
@@ -309,54 +343,70 @@ function createApprovalPage(
     completion.resolve();
     const isCurrentDecision = () =>
       isCurrentOperation(client, generation, id) && hasApprovalGrantAccess();
+    const retired = presentationLifetime.promise;
     let shouldFocusTerminal = false;
     let shouldRecoverCanonicalState = false;
     clearPollTimer();
     state.resolvingDecision = decision;
     state.requestError = null;
     notify();
+    const pending = applyDecision(client);
+    // Publish the owner's admission before opening its optimistic transition.
+    await Promise.resolve();
     try {
-      const result = await client.request<ApprovalResolveResult>("approval.resolve", {
-        id,
-        kind,
-        decision,
-      });
-      if (!isCurrentDecision()) {
-        return;
-      }
-      if (
-        !validateApprovalResolveResult(result) ||
-        result.approval.id !== id ||
-        result.approval.presentation.kind !== kind ||
-        !appliedDecisionMatches(result, decision)
-      ) {
-        // The write outcome is unknown. Keep every decision disabled until a
-        // fresh, strictly validated read establishes canonical Gateway truth.
-        state.requestError = "connection";
-        shouldRecoverCanonicalState = true;
-      } else {
-        state.approval = result.approval;
-        state.resolutionOrigin = result.applied ? "here" : "elsewhere";
-        shouldFocusTerminal = true;
-      }
+      await presentDecision(decision, pending, retired, isCurrentDecision);
     } catch (error) {
-      if (!isCurrentDecision()) {
-        return;
-      }
-      state.requestError = isUnavailableApprovalError(error) ? "unavailable" : "connection";
-    } finally {
       if (isCurrentDecision()) {
-        state.resolvingDecision = null;
-        schedulePoll();
+        state.requestError = isUnavailableApprovalError(error) ? "unavailable" : "connection";
         notify();
       }
     }
+
     if (shouldRecoverCanonicalState && isCurrentDecision()) {
       await loadApproval({ background: true });
       return;
     }
     if (shouldFocusTerminal && isCurrentDecision()) {
       await focusTerminalState();
+    }
+
+    async function applyDecision(admittedClient: GatewayBrowserClient) {
+      try {
+        const result = await admittedClient.request<ApprovalResolveResult>("approval.resolve", {
+          id,
+          kind,
+          decision,
+        });
+        if (!isCurrentDecision()) {
+          return;
+        }
+        if (
+          !validateApprovalResolveResult(result) ||
+          result.approval.id !== id ||
+          result.approval.presentation.kind !== kind ||
+          !appliedDecisionMatches(result, decision)
+        ) {
+          // The write outcome is unknown. Keep every decision disabled until a
+          // fresh, strictly validated read establishes canonical Gateway truth.
+          state.requestError = "connection";
+          shouldRecoverCanonicalState = true;
+        } else {
+          state.approval = result.approval;
+          state.resolutionOrigin = result.applied ? "here" : "elsewhere";
+          shouldFocusTerminal = true;
+        }
+      } catch (error) {
+        if (!isCurrentDecision()) {
+          return;
+        }
+        state.requestError = isUnavailableApprovalError(error) ? "unavailable" : "connection";
+      } finally {
+        if (isCurrentDecision()) {
+          state.resolvingDecision = null;
+          schedulePoll();
+          notify();
+        }
+      }
     }
   }
 
@@ -427,6 +477,7 @@ function createApprovalPage(
       stopVisibility();
       stopGateway();
       operationGeneration += 1;
+      retirePresentation();
       completion.resolve();
       clearPollTimer();
       clientOwner = null;
@@ -448,6 +499,7 @@ function createApprovalPage(
   });
   return {
     read: view.read,
+    resolvingDecision: () => optimisticDecision() ?? view.read().resolvingDecision,
     request,
     hasGatewayConnection: () => hasGatewayConnection(view.read()),
     hasApprovalAccess: () => hasApprovalAccess(view.read()),
@@ -460,7 +512,7 @@ function createApprovalPage(
   };
 }
 
-defineSolidBridge<ApprovalPageProps>(
+export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
   "openclaw-approval-page",
   (_props, host) => {
     const context = useApplication();
@@ -498,15 +550,7 @@ defineSolidBridge<ApprovalPageProps>(
             : disconnected()
               ? "connection-error"
               : (read().approval?.status ?? "loading");
-      const severity = () => {
-        const active = read().approval?.presentation;
-        const raw = active?.kind === "plugin" ? active.severity?.trim().toLowerCase() : null;
-        return active?.kind === "exec" || raw === "warning" || raw === "warn"
-          ? "warning"
-          : raw === "danger" || raw === "critical" || raw === "error"
-            ? "danger"
-            : "info";
-      };
+      const severity = () => approvalSeverity(read().approval?.presentation);
       const retry = (className: string) => (
         <button
           type="button"
@@ -564,7 +608,7 @@ defineSolidBridge<ApprovalPageProps>(
           <section
             class={["approval-page__card", `approval-page__card--severity-${severity()}`]}
             aria-labelledby="approval-page-title"
-            aria-busy={props.loading || read().resolvingDecision !== null ? "true" : "false"}
+            aria-busy={props.loading || page.resolvingDecision() !== null ? "true" : "false"}
           >
             <header class="approval-page__brand">
               <img
@@ -612,117 +656,3 @@ defineSolidBridge<ApprovalPageProps>(
     propertyChanged: (host) => approvalIdHandlers.get(host)?.(),
   },
 );
-
-function ApprovalContent(props: {
-  approval: ApprovalSnapshot;
-  page: ReturnType<typeof createApprovalPage>;
-  retry: (className: string) => JSX.Element;
-}) {
-  const pending = () => props.approval.status === "pending";
-  const presentation = () => props.approval.presentation;
-  const origin = () => props.page.read().resolutionOrigin;
-  const pluginPresentation = () => {
-    const value = presentation();
-    return value.kind === "plugin" ? value : null;
-  };
-  const resolvedAt = () => {
-    const approval = props.approval;
-    return approval.status === "pending" ? approval.expiresAtMs : approval.resolvedAtMs;
-  };
-  return (
-    <>
-      <div class="approval-page__status" aria-live="polite" aria-atomic="true">
-        <span
-          class={[
-            "approval-page__status-dot",
-            `approval-page__status-dot--${props.approval.status}`,
-          ]}
-          aria-hidden="true"
-        />
-        {pending() ? t("approvalPage.pending") : terminalTitle(props.approval, origin())}
-      </div>
-      <div class="approval-page__heading">
-        <h1
-          ref={props.page.setHeading}
-          id="approval-page-title"
-          tabindex={pending() ? undefined : -1}
-        >
-          {approvalTitle(props.approval, origin())}
-        </h1>
-        <div class="approval-page__chips">
-          <Show when={pluginPresentation()}>
-            {(value) => (
-              <>
-                <ApprovalChip kind="plugin" value={value().pluginId} />
-                <ApprovalChip kind="tool" value={value().toolName} />
-              </>
-            )}
-          </Show>
-          <ApprovalChip kind="agent" value={presentation().agentId} />
-        </div>
-        <p>
-          {pending()
-            ? t(
-                props.page.hasApprovalGrantAccess()
-                  ? "approvalPage.pendingDescription"
-                  : "execApproval.reviewOnly",
-              )
-            : terminalDescription(props.approval, origin())}
-        </p>
-      </div>
-      {renderApprovalPresentation(presentation())}
-      <div class="approval-page__timing">
-        <span>{pending() ? t("approvalPage.expiresLabel") : t("approvalPage.resolvedLabel")}</span>
-        <time datetime={new Date(resolvedAt()).toISOString()}>
-          {formatDateTimeMs(resolvedAt(), { dateStyle: "medium", timeStyle: "short" })}
-        </time>
-      </div>
-      <Show when={props.page.read().requestError === "connection"}>
-        <div class="approval-page__callout" role="alert">
-          <div>
-            <strong>{t("approvalPage.connectionErrorTitle")}</strong>
-            <span>{t("approvalPage.connectionErrorDescription")}</span>
-          </div>
-          {props.retry("btn btn--sm")}
-        </div>
-      </Show>
-      <Show
-        when={pending()}
-        fallback={
-          <div class="approval-page__terminal" role="status">
-            {t("approvalPage.safeToClose")}
-          </div>
-        }
-      >
-        <div
-          class="approval-page__actions"
-          role="group"
-          aria-label={t("approvalPage.actionsLabel")}
-        >
-          <For each={presentation().allowedDecisions} keyed={(decision) => decision}>
-            {(decision) => (
-              <button
-                type="button"
-                class={["btn approval-page__action", `approval-page__action--${decision()}`]}
-                data-decision={decision()}
-                disabled={
-                  props.page.read().resolvingDecision !== null ||
-                  !props.page.hasGatewayConnection() ||
-                  !props.page.hasApprovalGrantAccess() ||
-                  props.page.read().requestError !== null
-                }
-                onClick={() => void props.page.resolveApproval(decision())}
-              >
-                {props.page.read().resolvingDecision === decision()
-                  ? t("approvalPage.resolvingDecision", {
-                      decision: decisionLabel(decision(), presentation()),
-                    })
-                  : decisionLabel(decision(), presentation())}
-              </button>
-            )}
-          </For>
-        </div>
-      </Show>
-    </>
-  );
-}

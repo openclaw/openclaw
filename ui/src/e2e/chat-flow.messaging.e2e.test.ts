@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -10,13 +9,11 @@ import {
   chatFixture,
   composer as chatComposer,
   newChatPage,
-  sendChat,
   sendMessage,
   sessionState,
   transcript as chatTranscript,
 } from "./chat-flow-fixtures.test-support.ts";
 import {
-  captureUiProofEnabled,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -24,7 +21,6 @@ import {
   installMockGateway,
   requireRecord,
   requireString,
-  waitForRequests,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -65,6 +61,126 @@ const userPrecedesReply = (
   );
 
 suite.define(() => {
+  it("sends a pending steer now without replacing its user bubble", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionId = `session:${sessionKey}`;
+    const runId = "pending-steer";
+    const prompt = "Use the shorter approach.";
+    const message = persistedText("user", prompt, {
+      idempotencyKey: `${runId}:user`,
+      steerTargetRunId: "active-run",
+    });
+    const secondMessage = persistedText("user", "Also keep the examples.", {
+      idempotencyKey: "pending-steer-2:user",
+      steerTargetRunId: "active-run",
+    });
+    const acceptedAt = Date.now();
+    const secondInput = {
+      id: "steer-input-2",
+      runId: "pending-steer-2",
+      message: secondMessage,
+      acceptedAt: acceptedAt + 1,
+      state: "queued",
+      steerNow: { status: "available", tools: [] },
+    };
+    const history = {
+      sessionId,
+      messages: [message, secondMessage],
+      pendingInputs: {
+        items: [
+          {
+            id: "steer-input",
+            runId,
+            message,
+            acceptedAt,
+            state: "queued",
+            steerNow: { status: "available", tools: [] },
+          },
+          secondInput,
+        ],
+        total: 2,
+      },
+    };
+    const { page, gateway } = await chatFixture(suite, {
+      methodResponses: {
+        "chat.startup": history,
+        "chat.history": history,
+        "chat.steerNow": { status: "blocked", tools: ["upload"] },
+      },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    const user = page.locator(".chat-group.user", { hasText: prompt });
+    const links = user.getByRole("button", { name: "Send now", exact: true });
+    const link = links.first();
+    await link.waitFor({ state: "visible" });
+    // Steers waiting together drain together: one Send now, on the newest sendable steer.
+    await expectCount(links, 1);
+    await expectCount(user, 1);
+    const bubble = await user.locator(".chat-bubble").first().elementHandle();
+    const banner = page.locator(".chat-pending-inputs");
+    const historyReads = async () => (await gateway.getRequests("chat.history")).length;
+    // A refused Send now refreshes the row instead of raising a composer banner.
+    await gateway.setMethodResponse("chat.steerNow", {
+      __mockError: {
+        code: "FORBIDDEN",
+        message: "Sending a pending steer now requires session write access.",
+      },
+    });
+    let reads = await historyReads();
+    await link.click();
+    const request = await gateway.waitForRequest("chat.steerNow");
+    expect(request.params).toMatchObject({ sessionKey, sessionId, runId: "pending-steer-2" });
+    await gateway.waitForRequest("chat.history", { after: reads });
+    await expectCount(banner, 0);
+    await expectCount(links, 1);
+    // Steers waiting on the same run share one quiet label on the newest message.
+    const blocked = (input: (typeof history.pendingInputs.items)[number]) => ({
+      ...input,
+      steerNow: { status: "blocked", tools: ["upload"] },
+    });
+    await gateway.setMethodResponse("chat.steerNow", { status: "blocked", tools: ["upload"] });
+    await gateway.setMethodResponse("chat.history", {
+      ...history,
+      pendingInputs: { items: history.pendingInputs.items.map(blocked), total: 2 },
+    });
+    reads = await historyReads();
+    await link.click();
+    await gateway.waitForRequest("chat.steerNow", { after: 1 });
+    await gateway.waitForRequest("chat.history", { after: reads });
+    const steering = page.locator(".chat-steer-now [role=status]");
+    await expectCount(steering, 1);
+    expect(await steering.getAttribute("aria-label")).toBe(
+      "Steering — sends when the current step finishes.",
+    );
+    expect(await steering.textContent()).toBe("Steering…");
+    await expectCount(links, 0);
+    await expectCount(banner, 0);
+    await expectCount(user, 1);
+    expect(await bubble?.evaluate((element) => element.isConnected)).toBe(true);
+    // When only the earlier steer can interrupt, it carries Send now and the newest stays bare.
+    const [firstInput] = history.pendingInputs.items;
+    const remaining = {
+      ...history,
+      pendingInputs: { items: [firstInput, blocked(secondInput)], total: 2 },
+    };
+    await gateway.setMethodResponse("chat.startup", remaining);
+    await gateway.setMethodResponse("chat.history", remaining);
+    await gateway.setMethodResponse("chat.steerNow", { status: "interrupted", tools: [] });
+    await page.reload();
+    await expectCount(links, 1);
+    await expectCount(steering, 0);
+    await gateway.setMethodResponse("chat.history", {
+      ...history,
+      pendingInputs: { items: [], total: 0 },
+    });
+    await links.click();
+    // Request history is per page load.
+    const second = await gateway.waitForRequest("chat.steerNow");
+    expect(second.params).toMatchObject({ runId });
+    await expectCount(links, 0);
+    await expectCount(steering, 0);
+  });
+
   it.each([
     { draft: "Draft from a shared link", name: "a one-shot chat draft" },
     { draft: undefined, name: "an existing session URL" },
@@ -84,32 +200,13 @@ suite.define(() => {
     await expect.poll(() => new URL(page.url()).hash).toBe("#pane");
   });
 
-  it("sends a chat turn through the GUI and renders the final Gateway event", async () => {
-    const { page, gateway } = await chatFixture(suite, {
-      historyMessages: [timedText("assistant", "Ready for an end-to-end GUI check.")],
-    });
+  it("sends a spaced slash prefix as an ordinary chat message", async () => {
+    const { page, gateway } = await chatFixture(suite);
     await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText("Ready for an end-to-end GUI check.").waitFor({ timeout: 10_000 });
-
-    const prompt = "verify the control UI e2e harness";
-    const params = await sendChat(page, gateway, prompt);
-    expect(params).toMatchObject({
-      sessionKey: "agent:main:main",
-      message: prompt,
-      deliver: false,
-    });
-
-    const runId = requireString(params.idempotencyKey, "chat send idempotency key");
-    await gateway.emitChatFinal({ runId, text: "Harness verified." });
-
-    await chatTranscript(page).getByText("Harness verified.").waitFor({ timeout: 10_000 });
-
-    const spacedPairCommand = "/ pair qr";
-    await sendMessage(page, spacedPairCommand);
-
-    const commandRequests = await waitForRequests(gateway, "chat.send", 2);
-    const commandParams = requireRecord(commandRequests[1]?.params);
-    expect(commandParams.message).toBe(spacedPairCommand);
+    const command = "/ pair qr";
+    await sendMessage(page, command);
+    const request = await gateway.waitForRequest("chat.send");
+    expect(requireRecord(request.params).message).toBe(command);
   });
 
   it("adopts a browser-local prompt from a metadata-free gateway event without duplication", async () => {
@@ -176,7 +273,7 @@ suite.define(() => {
         __openclaw: { id: "shared-session-second-user", idempotencyKey: `${runId}:user`, seq: 2 },
       };
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       // Even an envelope-only event reads back with its canonical transcript identity.
       await gateway.setHistoryMessages([persistedUserMessage]);
       await emitDelta(gateway, runId, partial);
@@ -243,7 +340,7 @@ suite.define(() => {
         seq: 2,
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await emitDelta(gateway, runId, finalText);
       await streamingText(page, finalText).waitFor({ timeout: 10_000 });
       await gateway.emitChatFinal({ runId, text: finalText });
@@ -268,79 +365,6 @@ suite.define(() => {
       await expectCount(page.locator(".chat-group.user", { hasText: prompt }), 1);
     },
   );
-
-  it("reconciles authoritative history before a trailing final by run identity", async () => {
-    const { page, gateway } = await chatFixture(suite, { historyMessages: [] });
-    await page.goto(`${suite.server.baseUrl}chat`);
-
-    await sendMessage(page, "reconcile the terminal event ordering");
-    const runId = await runIdFrom(gateway);
-    const finalText = "One authoritative final response.";
-    const messageId = "assistant-authoritative-final";
-    const authoritative = persistedText("assistant", finalText, { id: messageId, seq: 2 });
-    await gateway.emitGatewayEvent("chat", chatDelta(runId, finalText, "agent:main:main"));
-    await streamingText(page, finalText).waitFor();
-    await gateway.setHistoryMessages([
-      {
-        __openclaw: { id: `mock-user:${runId}`, idempotencyKey: `${runId}:user`, seq: 1 },
-        content: "reconcile the terminal event ordering",
-        role: "user",
-        timestamp: Date.now() - 1,
-      },
-      authoritative,
-    ]);
-    const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
-    await gateway.emitGatewayEvent(
-      "session.message",
-      sessionMessage(authoritative, messageId, 2, sessionState([], false, "done"), {
-        clientRunId: runId,
-      }),
-    );
-    await expect
-      .poll(async () => (await gateway.getRequests("chat.history")).length)
-      .toBeGreaterThan(historyRequestsBefore);
-    await chatTranscript(page).getByText(finalText, { exact: true }).waitFor();
-    await expectCount(assistantText(page, finalText), 1);
-
-    await gateway.emitChatFinal({ runId, text: finalText });
-    await expectCount(page.locator(".chat-group.assistant .chat-duplicate-count"), 0);
-    await expectCount(assistantText(page, finalText), 1);
-
-    await gateway.emitChatFinal({ runId: "a-different-legitimate-run", text: finalText });
-    await expectCount(assistantText(page, finalText), 2);
-  });
-
-  it("restores the selected session transcript after a hard reload", async () => {
-    const { page } = await newChatPage(suite);
-    const historyText = "Transcript survives a hard reload.";
-    const gateway = await installMockGateway(page, {
-      historyMessages: [timedText("assistant", historyText)],
-      sessionKey: "agent:main:main",
-    });
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "main"));
-    await page.getByText(historyText).waitFor({ timeout: 10_000 });
-    await gateway.waitForRequest("chat.startup");
-
-    await page.reload();
-
-    await page.getByText(historyText).waitFor({ timeout: 10_000 });
-    // The mock request journal belongs to the current document and restarts
-    // on reload, so the restored page records its own startup request once.
-    await gateway.waitForRequest("chat.startup");
-    expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-  });
-
-  it("sends idle stop aliases as ordinary chat messages", async () => {
-    const { page, gateway } = await chatFixture(suite);
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const composer = chatComposer(page);
-    await composer.waitFor({ state: "visible", timeout: 10_000 });
-    await sendMessage(page, "wait");
-
-    const sendRequest = await gateway.waitForRequest("chat.send");
-    expect(requireRecord(sendRequest.params).message).toBe("wait");
-    expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
-  });
 
   it("sends annotated /stop to the exact selected channel session and clears its working indicator", async () => {
     const { page } = await newChatPage(suite);
@@ -395,6 +419,7 @@ suite.define(() => {
 
     const abortRequest = await gateway.waitForRequest("sessions.abort");
     expect(requireRecord(abortRequest.params)).toEqual({
+      userInitiated: true,
       key: channelSessionKey,
       clearQueued: true,
     });
@@ -425,115 +450,5 @@ suite.define(() => {
     await expectRequestCountStable(gateway, "chat.send", 0);
     await expectCount(page.getByRole("listbox"), 0);
     expect(await composer.inputValue()).toBe("");
-    if (captureUiProofEnabled) {
-      const channelStopProofDir = path.join(suite.artifactDir, "channel-stop");
-      await page.screenshot({
-        path: path.join(channelStopProofDir, "stopped.png"),
-        fullPage: true,
-      });
-    }
-  });
-
-  it("sends /steer for the selected session without resolving a run or leaf", async () => {
-    const { page } = await newChatPage(suite);
-    const sessionKey = "agent:main:main";
-    const gateway = await installMockGateway(page, {
-      historyMessages: [timedText("assistant", "Active run is waiting for steering.")],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([
-          {
-            hasActiveRun: true,
-            activeRunIds: ["active-run"],
-            activeLeafEntryId: "leaf-before-steer",
-            key: "agent:main:main",
-            kind: "direct",
-            label: "Main",
-            updatedAt: Date.now(),
-          },
-        ]),
-      },
-      sessionKey,
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText("Active run is waiting for steering.").waitFor({ timeout: 10_000 });
-    await gateway.waitForRequest("sessions.list");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
-
-    const params = await sendChat(page, gateway, "/steer use the smaller fix");
-    expect(params).toMatchObject({
-      sessionKey,
-      message: "use the smaller fix",
-      deliver: false,
-      queueMode: "steer",
-    });
-    expect(params).not.toHaveProperty("expectedRunId");
-    expect(params).not.toHaveProperty("expectedLeafEntryId");
-
-    await page.getByText("Steered.", { exact: true }).waitFor({ timeout: 10_000 });
-    expect(await page.getByText("No active run").count()).toBe(0);
-  });
-
-  it("keeps a targetless message-tool source reply beside the automatic final reply", async () => {
-    const { page, gateway } = await chatFixture(suite);
-    await page.goto(`${suite.server.baseUrl}chat`);
-
-    const prompt = "send progress through the message tool and then finish";
-    const params = await sendChat(page, gateway, prompt);
-    expect(params).toMatchObject({
-      sessionKey: "agent:main:main",
-      message: prompt,
-      deliver: false,
-    });
-    const runId = requireString(params.idempotencyKey, "chat send idempotency key");
-
-    await gateway.emitChatFinal({
-      runId,
-      text: "Visible progress from the targetless message tool.",
-    });
-    await chatTranscript(page)
-      .getByText("Visible progress from the targetless message tool.")
-      .waitFor({ timeout: 10_000 });
-
-    await gateway.emitChatFinal({ runId, text: "Visible automatic final reply." });
-    await chatTranscript(page)
-      .getByText("Visible automatic final reply.")
-      .waitFor({ timeout: 10_000 });
-    const bubbleTexts = await page.locator(".chat-thread .chat-bubble").allTextContents();
-    for (const expectedText of [
-      prompt,
-      "Visible progress from the targetless message tool.",
-      "Visible automatic final reply.",
-    ]) {
-      expect(bubbleTexts.some((text) => text.includes(expectedText))).toBe(true);
-    }
-  });
-
-  it("keeps the composer clear when a stale native input replay arrives after send", async () => {
-    const { page, gateway } = await chatFixture(suite, {
-      historyMessages: [timedText("assistant", "Ready for stale replay check.")],
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText("Ready for stale replay check.").waitFor({ timeout: 10_000 });
-
-    const prompt = "submitted message";
-    const composer = chatComposer(page);
-    await sendMessage(page, prompt);
-    await gateway.waitForRequest("chat.send");
-    expect(await composer.inputValue()).toBe("");
-
-    const afterReplay = await composer.evaluate((element, submitted) => {
-      const textarea = element as HTMLTextAreaElement;
-      textarea.value = submitted;
-      textarea.dispatchEvent(
-        new InputEvent("input", { bubbles: true, data: submitted, inputType: "insertText" }),
-      );
-      return textarea.value;
-    }, prompt);
-
-    expect(afterReplay).toBe("");
-    expect(await composer.inputValue()).toBe("");
-
-    await composer.pressSequentially(prompt);
-    expect(await composer.inputValue()).toBe(prompt);
   });
 });

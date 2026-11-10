@@ -12,6 +12,7 @@ import {
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 import {
   admit,
   attachHarness,
@@ -113,22 +114,20 @@ describe("dedicated worker RPC", () => {
       },
     });
     expect(events).toEqual([]);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const gate = createRequestGate();
     const result = await harness.service.commitTranscript();
     harness.service.commitTranscript.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
+      await gate.wait();
       return result;
     });
     harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT, "commit-request");
     try {
-      await entered.promise;
+      await gate.entered;
       now = 140;
       harness.sendRequest("worker.inference.start", INFERENCE_START, "inference-request");
       expect(harness.service.startInference).not.toHaveBeenCalled();
       now = 180;
-      release.resolve();
+      gate.release();
       await settled(events, 2);
       const inference = events.filter((event) => event.method === "worker.inference.start");
       expect(inference).toMatchObject([
@@ -155,7 +154,7 @@ describe("dedicated worker RPC", () => {
         expect(JSON.stringify(events)).not.toContain(value);
       }
     } finally {
-      release.resolve();
+      gate.release();
     }
   });
 
@@ -163,20 +162,18 @@ describe("dedicated worker RPC", () => {
     const { events, harness } = await connect();
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const gate = createRequestGate();
     let signal: AbortSignal | undefined;
     harness.service.executeComputer.mockImplementationOnce(
       async (_identity, _request, receivedSignal) => {
         signal = receivedSignal;
-        entered.resolve();
-        await release.promise;
+        await gate.wait();
         return { ok: true, result: { resultJson: "{}" } };
       },
     );
     harness.sendRequest("worker.computer", computerRequest, "computer");
     try {
-      await entered.promise;
+      await gate.entered;
       now = 120;
       harness.sendRequest("worker.inference.start", INFERENCE_START, "inference");
       await settled(events);
@@ -187,7 +184,7 @@ describe("dedicated worker RPC", () => {
       now = 200;
       harness.close();
       expect(signal?.aborted).toBe(true);
-      release.resolve();
+      gate.release();
       await settled(events, 2);
       const computer = events.filter((event) => event.method === "worker.computer");
       expect(computer).toMatchObject([
@@ -200,7 +197,7 @@ describe("dedicated worker RPC", () => {
         harness.responses.filter((frame) => (frame as { id?: string }).id === "computer"),
       ).toHaveLength(0);
     } finally {
-      release.resolve();
+      gate.release();
     }
   });
 

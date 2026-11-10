@@ -68,10 +68,14 @@ export function createStructuredOutputTool(params: {
           throw new ToolInputError("structured_output already recorded for this run");
         }
         if (prior && prior.invalidAttempts >= 2) {
+          // The one-retry budget is spent, so this payload is not validated; the
+          // reply must say so instead of presenting the earlier attempt's error
+          // as a verdict on it.
           return jsonResult({
             status: "rejected",
             success: false,
-            schemaError: prior.schemaError,
+            reason: "retry_budget_exhausted",
+            error: `structured_output retry budget exhausted: this call was not evaluated and the run completes without a structured result. Last validation error: ${prior.schemaError}`,
           });
         }
         let validation: ReturnType<typeof validateJsonSchemaValue>;

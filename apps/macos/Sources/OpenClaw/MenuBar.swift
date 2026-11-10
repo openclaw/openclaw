@@ -101,7 +101,6 @@ struct OpenClawApp: App {
                 Button("New Gateway Window…") {
                     AppNavigationActions.newGatewayWindow()
                 }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
 
                 if !self.state.nativeExperienceEnabled {
                     Button("New Thread") {
@@ -345,9 +344,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let root = DeviceIdentityStore.stateDirectoryURL
                 let executionRoot = OpenClawPaths.stateDirURL
                 if BundledRuntime.isBundledApp {
-                    try await ClientCredentialStartup.prepare(
-                        executionRoot: executionRoot,
-                        configURL: OpenClawPaths.configURL)
+                    let prepare = {
+                        try await ClientCredentialStartup.prepare(
+                            executionRoot: executionRoot,
+                            configURL: OpenClawPaths.configURL)
+                    }
+                    if let replacement = await StaleGatewayServiceReplacement.detect() {
+                        self.credentialLogger
+                            .info("Replacing the previous build's Gateway service before credential preparation")
+                        if let error = try await replacement.run(prepareCredentials: prepare) {
+                            self.credentialLogger
+                                .error("Stale Gateway service replacement failed: \(error, privacy: .public)")
+                        }
+                    } else {
+                        try await prepare()
+                    }
                 }
                 try Task.checkCancellation()
                 // Independent native identities retain their native import owner.

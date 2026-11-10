@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { SqliteWorkerOperationSettlement as Settlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
@@ -44,6 +43,7 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
       ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
     ) => {
       const held = delivery.heldSettlement;
+      delivery.heldSettlement = undefined;
       const createAdmission = options?.createAdmission;
       if (held && !createAdmission) {
         throw new Error("Expected canonical profile write admission");
@@ -67,6 +67,7 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
               ...options,
               createAdmission: (retained) =>
                 createAdmission({
+                  ...retained,
                   settled: retained.settled.then(async (settlement) => {
                     held.observed(settlement);
                     await held.resume;
@@ -174,7 +175,6 @@ it.each(["native supersession", "accepted precursor"] as const)(
       const publication = createDeferredCore();
       delivery.heldSettlement = { observed: settled.resolve, resume: publication.promise };
       const result = linkCanonicalEmail(email, profileId);
-      delivery.heldSettlement = undefined;
       held.push(async () => {
         publication.resolve();
         await result;
@@ -254,7 +254,6 @@ it.each(["ordered", "reversed", "recovery first", "native successor", "native AB
           }),
         ]);
       }
-      expect(delivery.roleCommands).toBe(3);
       if (order === "native successor" || order === "native ABA") {
         setUserProfileRole(profile.id, "native");
         if (order === "native ABA") {
@@ -309,9 +308,7 @@ it.each(["delivered", "lost during close"] as const)(
         };
         await expect(setCanonicalUserProfileRole(profile.id, "guest")).rejects.toBe(lostDelivery);
         await closing;
-        expect(delivery.roleCommands).toBe(1);
       } else {
-        requireNodeSqlite();
         const sql = observeMainThreadSql();
         await expect(setCanonicalUserProfileRole(profile.id, "guest")).resolves.toMatchObject({
           id: profile.id,

@@ -9,8 +9,12 @@ export async function questionPanelIn(container: ParentNode): Promise<ChatQuesti
     throw new Error("Expected a question card");
   }
   await card.updateComplete;
+  // Join the native lazy import before polling its committed DOM.
+  await customElements.whenDefined("openclaw-chat-question-panel");
   const panel = await waitForSolid(() => {
-    const loaded = card.querySelector<ChatQuestionPanel>("openclaw-chat-question-panel");
+    // Plugin replacement can retire the original card while its import is pending.
+    const current = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card");
+    const loaded = current?.querySelector<ChatQuestionPanel>("openclaw-chat-question-panel");
     if (!loaded) {
       throw new Error("Expected a loaded question panel");
     }

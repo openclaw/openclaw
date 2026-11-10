@@ -291,7 +291,7 @@ it.each([
     try {
       await waitForSolid(() => {
         const profiles = [...page.querySelectorAll(".settings-section")].find((section) =>
-          section.querySelector("h2")?.textContent?.trim().startsWith("Machines"),
+          section.querySelector("h2")?.textContent?.trim().startsWith("Cloud devices"),
         );
         expect(profiles?.querySelectorAll(".settings-row code")).toHaveLength(2);
       });
@@ -357,7 +357,7 @@ it.each([
         expect(retainedRow?.textContent).toContain("Advertised");
       });
       if (action !== "delete") {
-        await waitText(() => page, "Profile saved.");
+        await waitText(() => page, "Profile saved");
         expect(request).not.toHaveBeenCalledWith("environments.prepare", expect.anything());
       }
       expect(patches[0]).toMatchObject({
@@ -459,24 +459,26 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
       expect(patches).toBe(1);
       expect(actionButton(page, "Saving…").disabled).toBe(true);
       expect(lifetime.disabled).toBe(true);
+      expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(true);
     });
     pending.reject(new Error("Synthetic profile save unavailable"));
     await waitText(() => page, "Synthetic profile save unavailable");
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
     expect(lifetime.value).toBe("9h");
     await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
+    expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(false);
 
     pending = createDeferred<unknown>();
     click(page, "Save");
     await waitForSolid(() => expect(patches).toBe(2));
     gatewayHarness.publish(true, client, gatewayHelloForMethods([], ["operator.read"]));
-    await waitText(() => page, "Administrator access is required to manage cloud worker profiles.");
+    await waitText(() => page, "You need admin access to manage cloud device profiles.");
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
     pending.resolve({ ok: true, config, hash: "after" });
     await pending.promise;
     flush();
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
-    expect(page.textContent).not.toContain("Profile saved.");
+    expect(page.textContent).not.toContain("Profile saved");
   } finally {
     view.unmount();
     runtimeConfig.dispose();

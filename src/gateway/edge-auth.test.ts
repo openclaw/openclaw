@@ -34,6 +34,15 @@ describe("gateway edge auth headers", () => {
     [{ "Bad Header": "test-secret" }, /invalid gateway\.remote\.edgeAuth header name/u],
     [{}, /must not be empty/u],
     [{ "X-Edge-Auth": "one", "x-edge-auth": "two" }, /differ only by case/u],
+    [{ "X-Edge-Auth": " " }, /header "X-Edge-Auth": expected a non-empty SecretInput/u],
+    [
+      { "X-Edge-Auth": { source: "env", provider: "default", id: "" } },
+      /header "X-Edge-Auth": expected a non-empty SecretInput/u,
+    ],
+    [
+      { "X-Edge-Auth": { source: "env", id: "EDGE_AUTH_TOKEN" } },
+      /header "X-Edge-Auth": expected a non-empty SecretInput/u,
+    ],
   ])("rejects invalid header map %j", (value, error) => {
     expect(() => normalizeEdgeAuthHeadersConfig(value)).toThrow(error);
   });

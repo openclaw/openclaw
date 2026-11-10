@@ -85,28 +85,12 @@ it.skipIf(process.platform !== "linux").each([false, true])(
     const base = git(source, "rev-parse", "HEAD");
     git(source, "checkout", "-b", "candidate");
     git(source, "commit", "--allow-empty", "-m", "candidate");
-    const candidate = git(source, "rev-parse", "HEAD");
     git(source, "checkout", "main");
     git(source, "merge", "--no-ff", "candidate", "-m", "merge");
     const root = tempDirs.make("openclaw-ci-ratchet-shallow-");
     git(root, "clone", "--depth=1", pathToFileURL(source).href, ".");
     git(root, "fetch", "--depth=1", "origin", `${base}:refs/remotes/origin/ci-ratchet-base`);
     expect(spawnSync("git", ["merge-base", "HEAD", base], { cwd: root }).status).not.toBe(0);
-    const scripts = [
-      "check:max-lines-ratchet",
-      "check:line-cap-ratchet",
-      "check:assertion-safety",
-      "check:database-worker-ratchet",
-      "check:database-dialect-ratchet",
-      "check:test-timeout-race-ratchet",
-      "check:test-mock-exports",
-      "config:docs:check",
-      "plugins:inventory:check",
-    ];
-    fs.writeFileSync(
-      path.join(root, "package.json"),
-      JSON.stringify({ scripts: Object.fromEntries(scripts.map((name) => [name, "true"])) }),
-    );
     fs.mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
     fs.writeFileSync(
       path.join(root, "scripts/lib/shrink-ratchet.mts"),
@@ -114,41 +98,18 @@ it.skipIf(process.platform !== "linux").each([false, true])(
         ? 'export function parseRatchetArgs(args) { if (args.includes("--no-merge-base")) throw new Error("Unknown argument"); return { base: args[1] }; }\n'
         : fs.readFileSync("scripts/lib/shrink-ratchet.mts", "utf8"),
     );
-    const cases = [
-      [
-        "checks-baseline-ratchets",
-        "Run baseline ratchets",
-        7,
-        { RATCHET_PR_HEAD_SHA: candidate, RATCHET_BASE_REF: base },
-      ],
-      ["security-fast", "Check main push ratchets and protocol additions", 6, { BASE_SHA: base }],
-    ] as const;
-    for (const [job, name, count, env] of cases) {
-      const script = step(job, name)
-        .replace(
-          "source .ci-harness/scripts/ci-collect-checks.sh",
-          `source '${path.resolve("scripts/ci-collect-checks.sh")}'`,
-        )
-        .replace(
-          "run_check protocol-additions node --import ./scripts/tsx.mjs scripts/check-protocol-since.mts",
-          "run_check protocol-additions true",
-        );
-      const result = spawnSync(
-        "/bin/bash",
-        ["-c", 'pnpm() { printf "CHECK %s\\n" "$*"; }\n' + script],
-        {
-          cwd: root,
-          encoding: "utf8",
-          env: { ...createNestedGitEnv(), ...env },
-        },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      const calls = result.stdout.split("\n").filter((line) => line.startsWith("CHECK check:"));
-      expect(calls).toHaveLength(count);
-      for (const call of calls) {
-        expect(call).toContain(`--base ${base}`);
-        expect(call.includes("--no-merge-base")).toBe(!historical);
-      }
-    }
+    const result = runWorkflowShellScript(
+      `set -euo pipefail
+source '${path.resolve("scripts/ci-collect-checks.sh")}'
+prepare_ratchet_base_args '${base}'
+printf '%s\\n' "\${ratchet_base_args[@]}"`,
+      { cwd: root, env: createNestedGitEnv() },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "--base",
+      base,
+      ...(historical ? [] : ["--no-merge-base"]),
+    ]);
   },
 );

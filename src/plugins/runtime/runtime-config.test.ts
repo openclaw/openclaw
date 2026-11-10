@@ -1,40 +1,40 @@
 // Runtime config tests cover plugin runtime config normalization and lookup.
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { enqueueSessionEventForHost } from "../../auto-reply/reply/session-event-handoff.js";
 import {
   createConfigResolutionFacts,
   getResolvedConfigEnvSecretRef,
   setConfigResolutionFacts,
 } from "../../config/resolution-facts.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 
-const getRuntimeConfigMock = vi.fn();
 const mutateConfigFileMock = vi.fn();
 const replaceConfigFileMock = vi.fn();
-
-vi.mock("../../config/io.runtime.js", () => ({
-  getRuntimeConfig: () => getRuntimeConfigMock(),
-}));
 
 vi.mock("../../config/mutate.js", () => ({
   mutateConfigFile: (...args: unknown[]) => mutateConfigFileMock(...args),
   replaceConfigFile: (...args: unknown[]) => replaceConfigFileMock(...args),
 }));
 
-const { createRuntimeConfig } = await import("./runtime-config.js");
+const { createRuntimeBase } = await import("./runtime-base.js");
 
-describe("createRuntimeConfig", () => {
+describe("plugin runtime config", () => {
+  afterEach(() => clearRuntimeConfigSnapshot());
   beforeEach(() => {
-    getRuntimeConfigMock.mockReset();
     mutateConfigFileMock.mockReset();
     replaceConfigFileMock.mockReset();
-    getRuntimeConfigMock.mockReturnValue({ plugins: {} });
+    setRuntimeConfigSnapshot({ plugins: {} });
   });
 
   it("reads config from the runtime snapshot", () => {
     const runtimeConfig = { plugins: { entries: {} } };
-    getRuntimeConfigMock.mockReturnValue(runtimeConfig);
+    setRuntimeConfigSnapshot(runtimeConfig);
 
-    expect(createRuntimeConfig().current()).toBe(runtimeConfig);
+    expect(createRuntimeBase(enqueueSessionEventForHost).config.current()).toBe(runtimeConfig);
   });
 
   it("clones mutable config without losing its resolved secret facts", () => {
@@ -49,9 +49,9 @@ describe("createRuntimeConfig", () => {
         new Map([[configPath, "FIXTURE_API_KEY"]]),
       ),
     );
-    getRuntimeConfigMock.mockReturnValue(runtimeConfig);
+    setRuntimeConfigSnapshot(runtimeConfig);
 
-    const cloned = createRuntimeConfig().current({ clone: true });
+    const cloned = createRuntimeBase(enqueueSessionEventForHost).config.current({ clone: true });
     expectDefined(cloned.env?.vars, "cloned config variables").FIXTURE_API_KEY = "changed";
 
     expect(runtimeConfig.env.vars.FIXTURE_API_KEY).toBe("synthetic-key");
@@ -65,7 +65,7 @@ describe("createRuntimeConfig", () => {
   it("exposes canonical mutation helpers", async () => {
     mutateConfigFileMock.mockResolvedValue({ result: "updated" });
     replaceConfigFileMock.mockResolvedValue({ persistedHash: "hash" });
-    const configApi = createRuntimeConfig();
+    const configApi = createRuntimeBase(enqueueSessionEventForHost).config;
     const mutateParams = { mutate: vi.fn() };
     const replaceParams = { nextConfig: { plugins: {} } };
 

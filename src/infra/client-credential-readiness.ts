@@ -53,7 +53,6 @@ function assertSupportedVersion(version: number): void {
 
 /** The receipt is a cross-process migration-phase guard, including in-place copied → complete transitions. */
 export function readClientCredentialAdmission(database: DatabaseSync): {
-  version: number;
   stored: ClientCredentialReceiptState | null;
 } {
   let row: Record<string, SQLOutputValue> | undefined;
@@ -78,7 +77,6 @@ export function readClientCredentialAdmission(database: DatabaseSync): {
   assertSupportedVersion(row.user_version);
   const localPath = database.location();
   return {
-    version: row.user_version,
     stored:
       row.source_store === null
         ? null

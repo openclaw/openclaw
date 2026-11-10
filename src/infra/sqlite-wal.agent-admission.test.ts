@@ -19,6 +19,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { onSqliteWalCheckpoint } from "./sqlite-wal-checkpoint.js";
 import { observeSqliteWalPeriodicWork } from "./sqlite-wal-scheduler.test-support.js";
+import * as walAdmission from "./sqlite-wal-write-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -34,8 +35,28 @@ it.each(["keep", "close", "replace"] as const)(
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       openOpenClawStateDatabase();
       const scheduled = observeSqliteWalPeriodicWork();
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      scheduled.restore();
+      const queued = createDeferredCore();
+      const register = walAdmission.registerSqliteWalWorkerMaintenance;
+      const registration = vi
+        .spyOn(walAdmission, "registerSqliteWalWorkerMaintenance")
+        .mockImplementation((database, execute, cancel) =>
+          register(
+            database,
+            (request) => {
+              const work = execute(request);
+              queued.resolve();
+              return work;
+            },
+            cancel,
+          ),
+        );
+      let database: ReturnType<typeof openOpenClawAgentDatabase>;
+      try {
+        database = openOpenClawAgentDatabase({ agentId: "main" });
+      } finally {
+        registration.mockRestore();
+        scheduled.restore();
+      }
       const periodic = scheduled.periodic;
       database.db
         .prepare(
@@ -84,11 +105,11 @@ it.each(["keep", "close", "replace"] as const)(
           await release.promise;
         });
         await entered.promise;
-        const initialPeriodicWork: Promise<unknown>[] = [];
+        let initialPeriodicWork: Promise<unknown> | undefined;
         try {
-          initialPeriodicWork.push(Promise.resolve(periodic()));
-          initialPeriodicWork.push(Promise.resolve(periodic()));
-          initialPeriodicWork.push(Promise.resolve(periodic()));
+          initialPeriodicWork = Promise.resolve(periodic());
+          // Retire queued maintenance only after sidecar inspection has released its guard.
+          await queued.promise;
           expect(vacuumCalls()).toHaveLength(0);
           expect(checkpointCalls()).toHaveLength(0);
           expect(freePages()).toBe(before);
@@ -110,7 +131,7 @@ it.each(["keep", "close", "replace"] as const)(
             await runOpenClawAgentWriteAdmission(options, () => undefined);
             await foreground;
           } finally {
-            await Promise.all(initialPeriodicWork);
+            await initialPeriodicWork;
           }
         }
         if (retirement === "keep") {
@@ -176,6 +197,7 @@ it.each(["keep", "close", "replace"] as const)(
 
 const workerSource = String.raw`
   const { parentPort, workerData } = require("node:worker_threads");
+  const { setImmediate: nextTurn } = require("node:timers/promises");
   const messages = [];
   let receiver;
   parentPort.on("message", (message) => {
@@ -222,6 +244,11 @@ const workerSource = String.raw`
     scheduled.restore();
     const periodic = scheduled.periodic;
     const periodicWork = [];
+    const fs = require("node:fs");
+    const readdir = fs.promises.readdir.bind(fs.promises);
+    // Sidecar identity has separate coverage; drain this scan to the real deferred admission.
+    fs.promises.readdir = (pathname, ...args) => pathname === "/proc/self/fd"
+      ? Promise.resolve([]) : readdir(pathname, ...args);
     const nativeExec = database.db.exec.bind(database.db);
     const withinAdmission = [];
     database.db.exec = (sql) => {
@@ -231,21 +258,24 @@ const workerSource = String.raw`
     parentPort.postMessage({ type: "ready" });
     const command = await receive();
     if (command.type !== "tick") throw new Error("Expected timer command");
-    if (!workerData.revoke) { periodicWork.push(periodic(), periodic(), periodic()); }
+    if (!workerData.revoke) {
+      periodicWork.push(periodic(), periodic(), periodic());
+      await nextTurn();
+    }
     parentPort.postMessage({ type: "ticked", count: withinAdmission.length });
     if (!workerData.retire) {
       phase = "flush";
       await agent.withOpenClawAgentDatabaseAdmission(workerData.options, withAdmission, async () => {
         if (workerData.revoke) {
           periodicWork.push(periodic());
-          await Promise.resolve();
+          await nextTurn();
           authorized = false;
         }
       });
     }
     phase = "close";
-    await withAdmission(() => {
-      const cleanup = agent.settleOpenClawAgentDatabaseWorkerClose(database.path);
+    await withAdmission(async () => {
+      const cleanup = await agent.settleOpenClawAgentDatabaseWorkerClose(database.path);
       if (!cleanup.settled) throw new Error("Worker database cleanup did not settle");
       state.closeOpenClawStateDatabaseForTest();
     });

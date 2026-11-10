@@ -14,10 +14,12 @@ const TOKEN_FIELD = "_pluginCommandCreation";
 type Creation = {
   token: string;
   envelope: PluginCommandSchedule;
+  /** Code identity of the admitting instance; absent without captured plugin source. */
+  sourceDigest?: string;
   input: CronJobCreate;
   assertCurrent: () => void;
   consumed: boolean;
-  committed?: { jobId: string; deadlineAtMs: number; maxRuns: number };
+  committed?: { jobId: string; deadlineAtMs: number; maxRuns: number; survivesRestart: boolean };
 };
 const creationScope = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginCommandScheduleCreation"),
@@ -30,10 +32,12 @@ export async function withPluginCommandScheduleCreation(
   input: CronJobCreate,
   assertCurrent: () => void,
   execute: () => Promise<unknown>,
+  sourceDigest?: string,
 ) {
   const creation: Creation = {
     token: randomUUID(),
     envelope: structuredClone(envelope),
+    ...(sourceDigest ? { sourceDigest } : {}),
     input: structuredClone(input),
     assertCurrent,
     consumed: false,
@@ -121,6 +125,7 @@ export function readPluginCommandCreation(params: Record<string, unknown>) {
     params: job,
     creation: {
       envelope: creation.envelope,
+      sourceDigest: creation.sourceDigest,
       assertCurrent: creation.assertCurrent,
       record(stored: CronStoredJob) {
         if (!stored.pluginCommand || !isDeepStrictEqual(stored.pluginCommand, creation.envelope)) {
@@ -130,6 +135,7 @@ export function readPluginCommandCreation(params: Record<string, unknown>) {
           jobId: stored.id,
           deadlineAtMs: creation.envelope.deadlineAtMs,
           maxRuns: creation.envelope.maxRuns,
+          survivesRestart: stored.state.pluginCommandBinding !== undefined,
         };
       },
     },

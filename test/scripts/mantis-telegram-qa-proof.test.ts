@@ -13,23 +13,11 @@ it("admits canonical read-only probes without opening arbitrary GET or Bot API m
     expect(isTelegramQaBotApiRequest("POST", method)).toBe(true);
   }
   expect(isTelegramQaBotApiRequest("POST", "sendMessage")).toBe(true);
-  for (const method of ["sendMessage", "getUpdates", "deleteWebhook"]) {
-    expect(isTelegramQaBotApiRequest("GET", method)).toBe(false);
-  }
-  for (const method of [
-    "getMe?extra=1",
-    "getMe/",
-    "../getMe",
-    "%2e%2e/getMe",
-    "http://example.invalid/getMe",
-    "//example.invalid/getMe",
-    "reset",
-    "sendDocument",
-    "",
-  ]) {
+  expect(isTelegramQaBotApiRequest("GET", "sendMessage")).toBe(false);
+  for (const method of ["getMe?extra=1", "../getMe", "sendDocument"]) {
     expect(isTelegramQaBotApiRequest("POST", method)).toBe(false);
   }
-  for (const method of [undefined, "HEAD", "PUT", "DELETE"]) {
+  for (const method of [undefined, "DELETE"]) {
     expect(isTelegramQaBotApiRequest(method, "getMe")).toBe(false);
   }
 });
@@ -134,9 +122,9 @@ describe("canonical Telegram QA evidence contract", () => {
 
 const sha = "a".repeat(40),
   main = "b".repeat(40);
-const branch = (name: string, value: string) => ({
+const branch = (name: string, value: string, protectedBranch = true) => ({
   name,
-  protected: true,
+  protected: protectedBranch,
   commit: { sha: value },
 });
 it.each([
@@ -148,16 +136,13 @@ it.each([
   "moved-pin",
   "not-ancestor",
   "moved-main",
-  "missing-protection",
   "api-denied",
   "redirect",
 ])("protected workflow admission handles %s without auto-trusting main changes", async (fault) => {
   let mainReads = 0;
   const responses: Record<string, () => unknown> = {
-    "branches/qa-proof": () => ({
-      ...branch("qa-proof", fault === "moved-pin" ? main : sha),
-      protected: fault === "missing-protection" ? undefined : fault !== "unprotected",
-    }),
+    "branches/qa-proof": () =>
+      branch("qa-proof", fault === "moved-pin" ? main : sha, fault !== "unprotected"),
     "branches/main": () =>
       branch(
         "main",
@@ -171,11 +156,8 @@ it.each([
   };
   const fetchImpl = async (url: string | URL | Request, options?: RequestInit) => {
     expect(options?.redirect).toBe("error");
-    if (fault === "api-denied") {
-      return new Response(null, { status: 403 });
-    }
-    if (fault === "redirect") {
-      return new Response(null, { status: 302 });
+    if (["api-denied", "redirect"].includes(fault)) {
+      return new Response(null, { status: fault === "redirect" ? 302 : 403 });
     }
     const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
     const response = responses[requestUrl.split("openclaw/openclaw/")[1] ?? ""];

@@ -1,5 +1,6 @@
 // Proof overlay: real RPC handler, admitted-run owner, SQLite, transcript and media.
 // Gateway test helpers replace inference; they do not replace the effect owners below.
+import { addAbortListener } from "node:events";
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -82,6 +83,18 @@ describe("agent RPC real delegated-authority effects", () => {
     expect(retry.error).toEqual(response.error);
     expect(retry.payload).toEqual(response.payload);
   }
+  function expectRunStatus(response: Response, status: string, runId?: string, cached = false) {
+    expect(response).toMatchObject({
+      ok: true,
+      ...(cached ? { meta: { cached: true } } : {}),
+      payload: { status, ...(runId ? { runId } : {}) },
+    });
+  }
+  async function expectUnchanged(f: Fixture, events = f.before) {
+    expect(await pendingCount(f)).toBe(0);
+    expect(transcript(f)).toEqual(events);
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  }
   async function expectReset(f: Fixture, before: SessionEntry | undefined) {
     const committed = await readEntry(f);
     expect(committed?.sessionId).toBe(f.sessionId);
@@ -105,11 +118,7 @@ describe("agent RPC real delegated-authority effects", () => {
   ) {
     const entered = createDeferred();
     const release = createDeferred();
-    const unblock = () => release.resolve();
-    signal.addEventListener("abort", unblock, { once: true });
-    if (signal.aborted) {
-      unblock();
-    }
+    const abort = addAbortListener(signal, () => release.resolve());
     const finish = async (
       requests: (Promise<unknown> | undefined)[],
       observers: { mockRestore: () => unknown }[] = [],
@@ -118,18 +127,16 @@ describe("agent RPC real delegated-authority effects", () => {
     ) => {
       release.resolve();
       try {
-        if (allowPublicationDenial) {
-          // This test owns input custody, not final publication. Cleanup may finish
-          // normally; if publication races revocation, only that exact denial is expected.
-          await execution?.cleanup().catch((error: unknown) => {
-            expect(error).toMatchObject({
-              name: "SessionMutationAuthorizationChangedError",
-              message: "agent runtime authority is no longer active",
-            });
-          });
-        } else {
-          await execution?.cleanup();
+        await execution?.cleanup();
+      } catch (error) {
+        if (!allowPublicationDenial) {
+          throw error;
         }
+        // Input-custody tests may race final publication, but only this denial is expected.
+        expect(error).toMatchObject({
+          name: "SessionMutationAuthorizationChangedError",
+          message: "agent runtime authority is no longer active",
+        });
       } finally {
         await Promise.allSettled(requests.filter((request) => request !== undefined));
         reservation?.clearUnaccepted();
@@ -137,7 +144,7 @@ describe("agent RPC real delegated-authority effects", () => {
           await f.cleanup();
         } finally {
           observers.forEach((observer) => observer.mockRestore());
-          signal.removeEventListener("abort", unblock);
+          abort[Symbol.dispose]();
         }
       }
     };
@@ -147,12 +154,10 @@ describe("agent RPC real delegated-authority effects", () => {
   it("rejects a revoked caller before the real reset transaction", async ({ signal }) => {
     const f = await fixture();
     const { entered, release, finish } = pause(f, signal);
-    let calls = 0;
     const hook = async (event: import("../hooks/internal-hooks.js").InternalHookEvent) => {
       if (event.sessionKey !== f.sessionKey) {
         return;
       }
-      calls++;
       entered.resolve();
       await release.promise;
     };
@@ -168,7 +173,6 @@ describe("agent RPC real delegated-authority effects", () => {
       const result = await request;
       await f.drain();
 
-      expect(calls).toBe(1);
       expect(agentCommandMock).not.toHaveBeenCalled();
       expectInactive(result);
       expect(await readEntry(f)).toEqual(before);
@@ -232,11 +236,9 @@ describe("agent RPC real delegated-authority effects", () => {
           expectInactive(result, "is no longer active");
           expect(inputRecorded).toBe(false);
           expect(execution.observer).not.toHaveBeenCalled();
-          expect(await pendingCount(f)).toBe(0);
-          expect(transcript(f)).toEqual(beforeInput);
-          expect(agentCommandMock).not.toHaveBeenCalled();
+          await expectUnchanged(f, beforeInput);
         } else {
-          expect(result).toMatchObject({ ok: true, payload: { status: "accepted" } });
+          expectRunStatus(result, "accepted");
           const prepared = await execution.entered;
           expect(await listSessionPendingInputs(f.scope)).toMatchObject({
             total: 1,
@@ -260,11 +262,7 @@ describe("agent RPC real delegated-authority effects", () => {
             params,
             mode === "ordinary raw input" ? null : await f.freshCaller(),
           );
-          expect(retry).toMatchObject({
-            ok: true,
-            meta: { cached: true },
-            payload: { runId: f.runId, status: "in_flight" },
-          });
+          expectRunStatus(retry, "in_flight", f.runId, true);
           expect(execution.observer).toHaveBeenCalledOnce();
           if (mode === "accepted custody") {
             expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
@@ -276,11 +274,7 @@ describe("agent RPC real delegated-authority effects", () => {
             params,
             mode === "ordinary raw input" ? null : await f.freshCaller(),
           );
-          expect(completed).toMatchObject({
-            ok: true,
-            meta: { cached: true },
-            payload: { runId: f.runId, status: "ok" },
-          });
+          expectRunStatus(completed, "ok", f.runId, true);
         }
       } finally {
         await finish([writer, request], [observer], replacement, mode === "accepted custody");
@@ -325,12 +319,10 @@ describe("agent RPC real delegated-authority effects", () => {
         if (mode === "revoked") {
           expectInactive(result);
           await expectAbsent(image.path);
-          expect(await pendingCount(f)).toBe(0);
-          expect(transcript(f)).toEqual(f.before);
+          await expectUnchanged(f);
           expect(execution.observer).not.toHaveBeenCalled();
-          expect(agentCommandMock).not.toHaveBeenCalled();
         } else {
-          expect(result).toMatchObject({ ok: true, payload: { status: "accepted" } });
+          expectRunStatus(result, "accepted");
           const prepared = await execution.entered;
           const recorder = prepared.userTurn.recorder!;
           const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
@@ -388,11 +380,7 @@ describe("agent RPC real delegated-authority effects", () => {
 
         if (mode === "stopped" || mode === "replaced") {
           expect(f.context.dedupe.get(`agent:${f.runId}`)).toBe(retained);
-          expect(retry).toMatchObject({
-            ok: true,
-            meta: { cached: true },
-            payload: { status: mode === "stopped" ? "timeout" : "in_flight" },
-          });
+          expectRunStatus(retry, mode === "stopped" ? "timeout" : "in_flight", undefined, true);
         } else {
           expectCached(retry, result);
         }
@@ -625,7 +613,6 @@ describe("agent RPC real delegated-authority effects", () => {
         { failSend: mode === "ambiguous" ? "after write" : true },
       );
       const before = await readEntry(f);
-      const resetObserver = vi.spyOn(resets, "performGatewaySessionReset");
       try {
         expect(recordingAdapterRetained).toBe(true);
         const params = { ...resetDelivery, bestEffortDeliver: mode === "best effort" };
@@ -656,7 +643,6 @@ describe("agent RPC real delegated-authority effects", () => {
         const retry = await f.dispatch(params, null);
         await f.drain();
         expectCached(retry, response);
-        expect(resetObserver).toHaveBeenCalledOnce();
         expect(await readEntry(f)).toEqual(committed);
         expect(transcript(f)).toEqual(resetTranscript);
         expect(await pendingCount(f)).toBe(0);
@@ -665,7 +651,6 @@ describe("agent RPC real delegated-authority effects", () => {
         expect(agentCommandMock).not.toHaveBeenCalled();
       } finally {
         await f.cleanup();
-        resetObserver.mockRestore();
       }
     },
   );

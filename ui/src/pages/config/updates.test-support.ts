@@ -37,6 +37,7 @@ export function createUpdatesViewProps(overrides: UpdatesViewOverrides = {}): Up
     onChannelChange: vi.fn(),
     onUpdateChecksChange: vi.fn(),
     onAutomaticUpdatesChange: vi.fn(),
+    onAutomaticScheduleChange: vi.fn(),
     onUpdateNow: vi.fn(async () => undefined),
     onHoldUpdate: vi.fn(async () => true),
     onCheckStatus: vi.fn(async () => true),
@@ -123,7 +124,9 @@ export function nativeSettings(snapshot: NativeDeviceSettingsCapability["snapsho
     snapshot,
     initialSnapshot: Promise.resolve(snapshot),
     subscribe: () => () => undefined,
-    set: vi.fn<NativeDeviceSettingsCapability["set"]>((_key, _value, onSettled) => onSettled?.()),
+    set: vi.fn<NativeDeviceSettingsCapability["set"]>((_key, _value, onSettled) =>
+      Promise.resolve(onSettled?.()),
+    ),
     requestPermission: vi.fn(),
     openSystemSettings: vi.fn(),
     openPanel: vi.fn(),

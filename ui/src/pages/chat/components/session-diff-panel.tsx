@@ -13,11 +13,12 @@ import {
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { nativeGatewaysCapability } from "../../../app/native-gateways.runtime.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import "../../../styles/chat/session-diff-mobile.css";
 import "../../../styles/session-panel-rail.css";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import "../../../components/tooltip.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import {
   expandSessionDiffGap,
   splitSessionDiffFileText,
@@ -52,7 +53,7 @@ import { createSessionDiffPanelFrame, SessionDiffNativeGaps } from "./session-di
 import { SessionDiffSyncMobile } from "./session-diff-sync-mobile.tsx";
 import type { DiffValue, FileSource, FileView } from "./session-diff-types.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 const shellArgument = (value: string) =>
   /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
@@ -90,8 +91,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
   // Local scope choices survive until a new request from this owner arrives.
   const [scope, setScope] = createSignal<SessionDiffScope>((previous) => {
     const request = props.scopeRequest;
-    const owner = props.owner;
-    return request?.owner === owner ? request.scope : (previous ?? { scope: "all" });
+    return request?.owner === props.owner ? request.scope : (previous ?? { scope: "all" });
   });
   const [split, setSplit] = createSignal(preferences.split);
   const [wrap, setWrap] = createSignal(preferences.wrap);
@@ -676,7 +676,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
             {(failed) => (
               <Errored
                 fallback={(error, reset) => (
-                  <div class="callout danger">
+                  <InlineAlert tone="danger">
                     {formatUiError(error())}
                     <Show when={mobile()}>
                       <button
@@ -692,7 +692,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
                         {t("common.retry")}
                       </button>
                     </Show>
-                  </div>
+                  </InlineAlert>
                 )}
               >
                 {raiseReadFailure(failed().error)}

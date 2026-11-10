@@ -1,6 +1,11 @@
 import { createMemo, Errored, isPending, latest, Loading, type Accessor } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { SettingsLoadingSkeleton, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import {
+  RetryAction,
+  SettingsLoadingSkeleton,
+  SettingsSection,
+} from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { DevicesPageDataState } from "../../lib/nodes/page-operations.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -9,26 +14,19 @@ import type { DevicesProps } from "./view.types.ts";
 
 export function DeviceInventory(props: DevicesProps) {
   const scope = createMemo(() => props.inventoryScope);
-  const readInventory = () => {
-    latest(() => props.inventoryRead());
-    return null;
-  };
   return (
     <Errored
       fallback={(error, reset) => (
         <>
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {formatUiError(error())}{" "}
-            <button
-              class="btn btn--sm"
-              onClick={() => {
+            <RetryAction
+              onRetry={() => {
                 props.onReloadInventory();
                 reset();
               }}
-            >
-              {t("common.retry")}
-            </button>
-          </div>
+            />
+          </InlineAlert>
           <DeviceInventoryContent {...props} pending={false} />
         </>
       )}
@@ -41,7 +39,7 @@ export function DeviceInventory(props: DevicesProps) {
           </SettingsSection>
         }
       >
-        {readInventory()}
+        {(latest(() => props.inventoryRead()), null)}
         <DeviceInventoryContent {...props} pending={isPending(() => props.inventoryRead())} />
       </Loading>
     </Errored>

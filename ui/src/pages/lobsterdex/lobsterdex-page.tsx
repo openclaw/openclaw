@@ -1,7 +1,6 @@
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import "../../styles/settings.css";
-import { createMemo, createSignal, For, onSettled } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
@@ -9,16 +8,24 @@ import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster
 import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { SettingsPage, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
-import { t, getLocale } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
+import { registerEnglishCatalog, t, getLocale } from "../../lib/reactive/i18n.ts";
 // Page stars must override the shared mini-star rules loaded by lobster-pet-look.
 import "../../styles/lobsterdex.css";
+import { listen } from "../../lib/reactive/listener.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+
+registerRouteSubtitlesEnglish();
+
+registerEnglishCatalog(registerPreferencesEnglish);
 
 type LobsterdexCopyFeedback = { paletteId: LobsterPetPaletteId; status: "copied" | "error" };
 
@@ -42,6 +49,14 @@ export function LobsterdexPage() {
     projectOwner(context.theme, (theme) => theme.branding, Object.is),
   );
   const entries = projectLobsterdex();
+  const seenCount = createMemo(
+    () => LOBSTER_PET_PALETTES.filter((palette) => entries.read().has(palette.id)).length,
+  );
+  const countLabel = () =>
+    t("quickSettings.appearance.lobsterdexSeen", {
+      seen: String(seenCount()),
+      total: String(LOBSTER_PET_PALETTES.length),
+    });
   const [copyFeedback, setCopyFeedback] = createSignal<LobsterdexCopyFeedback | null>(null);
   let disposed = false;
   let copyAttempt = 0;
@@ -94,35 +109,15 @@ export function LobsterdexPage() {
   }
 
   function LobsterdexView(props: { entries: ReturnType<typeof getLobsterdexEntries> }) {
-    const seenCount = createMemo(
-      () => LOBSTER_PET_PALETTES.filter((palette) => props.entries.has(palette.id)).length,
-    );
-    const countLabel = () =>
-      t("quickSettings.appearance.lobsterdexSeen", {
-        seen: String(seenCount()),
-        total: String(LOBSTER_PET_PALETTES.length),
-      });
     return (
       <section class="lobsterdex-page">
-        <header
-          class={[
-            "lobsterdex-page__header",
-            { "lobsterdex-page__header--complete": seenCount() === LOBSTER_PET_PALETTES.length },
-          ]}
-        >
-          <div>
-            <h2>{t("tabs.lobsterdex")}</h2>
-            <p>{t("subtitles.lobsterdex")}</p>
-          </div>
-          <span class="lobsterdex-page__count">{countLabel()}</span>
-        </header>
         <span class="sr-only" role="status">
           {copyFeedback()?.status === "copied" ? t("common.copied") : undefined}
         </span>
         {copyFeedback()?.status === "error" && (
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {t("common.copyFailed")}
-          </div>
+          </InlineAlert>
         )}
         <section class="lobsterdex-page__grid" aria-label={countLabel()}>
           <For each={LOBSTER_PET_PALETTES}>
@@ -213,31 +208,41 @@ export function LobsterdexPage() {
 
   return (
     <openclaw-lobsterdex-page ref={(element) => (host = element)}>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <h1 class="page-title">{t("tabs.lobsterdex")}</h1>
-        </section>
-      </ShellLayoutBoundary>
-      <SettingsWorkspace>
-        {branding().read().lobsterdex ? (
-          <LobsterdexView entries={entries.read()} />
-        ) : (
-          <section class="settings-section" role="status">
-            <p>{t("quickSettings.appearance.lobsterdexThemeHidden")}</p>
-            <a
-              class="btn btn--sm"
-              href={pathForRoute("appearance", context.basePath)}
-              onClick={(event) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  context.navigate("appearance");
-                }
-              }}
+      <SettingsPageHeader
+        title={t("tabs.lobsterdex")}
+        subtitle={branding().read().lobsterdex ? t("subtitles.lobsterdex") : undefined}
+        actions={
+          <Show when={branding().read().lobsterdex}>
+            <span
+              class={[
+                "lobsterdex-page__count",
+                { "lobsterdex-page__count--complete": seenCount() === LOBSTER_PET_PALETTES.length },
+              ]}
             >
-              {t("tabs.appearance")}
-            </a>
-          </section>
-        )}
+              {countLabel()}
+            </span>
+          </Show>
+        }
+      />
+      <SettingsWorkspace>
+        <SettingsPage wide>
+          {branding().read().lobsterdex ? (
+            <LobsterdexView entries={entries.read()} />
+          ) : (
+            <section class="settings-section" role="status">
+              <p>{t("quickSettings.appearance.lobsterdexThemeHidden")}</p>
+              <a
+                class="btn btn--sm"
+                href={pathForRoute("appearance", context.basePath)}
+                onClick={(event) =>
+                  handleNavigationClick(event, () => context.navigate("appearance"))
+                }
+              >
+                {t("tabs.appearance")}
+              </a>
+            </section>
+          )}
+        </SettingsPage>
       </SettingsWorkspace>
     </openclaw-lobsterdex-page>
   );

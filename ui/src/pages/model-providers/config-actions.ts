@@ -1,11 +1,18 @@
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import { activateAddedKey, startAddedChat } from "./add-provider-activation.ts";
 import type { createModelProviderMutationPresentation } from "./config-mutation-presentation.ts";
 import {
   modelProviderErrorMessage,
   runModelProviderApiKeyMutation,
   runModelProviderDefaultsMutation,
+  type ModelDefaultsSaveField,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import type { ModelProvidersState } from "./page-state.ts";
@@ -21,7 +28,7 @@ export function createModelProviderConfigActions(deps: {
   refresh: () => Promise<void>;
   setBusy: (key: string, busy: boolean) => void;
   setMessage: (key: string, message: ModelProviderRowMessage | null) => void;
-  setAddProviderOpen: (open: boolean) => void;
+  setAddProviderOpen: (open: boolean | ((open: boolean) => boolean)) => void;
 }) {
   const {
     context,
@@ -41,11 +48,104 @@ export function createModelProviderConfigActions(deps: {
     state.keyDraft = "";
   }
 
+  // A save warns about its own provider's listing, not another provider's failure.
+  function providerCatalogWarning(provider: string): string | null {
+    const id = canonicalModelAuthProviderId(provider);
+    const own = (state.data?.providerOutcomes ?? []).filter(
+      (outcome) => canonicalModelAuthProviderId(outcome.provider) === id,
+    );
+    if (own.length === 0) {
+      // A pending provider has no outcome yet; another provider's failure is not its warning.
+      if (
+        !state.data?.catalogRequestFailed &&
+        state.data?.pendingProviders.some(
+          (pendingProvider) => canonicalModelAuthProviderId(pendingProvider) === id,
+        )
+      ) {
+        return null;
+      }
+      return state.data?.catalogError ?? null;
+    }
+    return own.some((outcome) => outcome.status !== "ready")
+      ? t("modelProviders.defaults.discoverFailed")
+      : null;
+  }
+
+  // The same check as Test access, run on the key just saved. Null when the Gateway can't check.
+  async function checkSavedKey(params: {
+    client: GatewayBrowserClient;
+    agentId: string;
+    provider: string;
+    configKey: string;
+    action: "edit" | "add";
+    activateProfileId?: string;
+  }): Promise<ModelProviderRowMessage | null> {
+    // With no usable model yet, activation runs the same check and makes the key the default.
+    if (params.activateProfileId) {
+      const activated = await activateAddedKey({
+        context,
+        client: params.client,
+        agentId: params.agentId,
+        profileId: params.activateProfileId,
+        provider: params.provider,
+      });
+      state.addStartChat = activated.model ?? null;
+      if (activated.model) {
+        void context.runtimeConfig.refresh({ background: true });
+        void refresh();
+      }
+      return activated.message;
+    }
+    if (isGatewayMethodAdvertised(context.gateway.snapshot, "models.probe") === false) {
+      return null;
+    }
+    let result: ModelsProbeResult;
+    try {
+      result = await params.client.request<ModelsProbeResult>("models.probe", {
+        provider: params.configKey,
+        agentId: params.agentId,
+      });
+    } catch (error) {
+      return {
+        kind: "warning",
+        text: t("modelProviders.apiKey.checkUnavailable"),
+        warning: modelProviderErrorMessage(error),
+      };
+    }
+    if (result.status === "ok") {
+      return {
+        kind: "success",
+        text: t(
+          params.action === "add"
+            ? "modelProviders.add.verified"
+            : "modelProviders.apiKey.verified",
+          { provider: params.provider },
+        ),
+      };
+    }
+    // The Gateway reports a fixed, secret-free reason per status; fall back to the status label.
+    const reason = formatUiExternalText(
+      result.error ?? t(`modelProviders.probe.status.${result.status}`),
+    );
+    // Only a refused credential or account is about the key; anything else leaves it unproven.
+    const inconclusive = result.status !== "auth" && result.status !== "billing";
+    return {
+      kind: inconclusive ? "warning" : "error",
+      text: t(
+        inconclusive
+          ? "modelProviders.apiKey.checkInconclusive"
+          : "modelProviders.apiKey.checkFailed",
+        { reason },
+      ),
+    };
+  }
+
   async function mutateApiKey(
     provider: string,
     configKey: string,
-    apiKey: string | null,
+    apiKey: string,
     action: "edit" | "add" = "edit",
+    activate = false,
   ) {
     const client = gateway.client;
     const key = action === "add" ? "add" : `key:${provider}`;
@@ -54,12 +154,12 @@ export function createModelProviderConfigActions(deps: {
     }
     const clientEpoch = gateway.epoch;
     const capturedAgentEpoch = getAgentEpoch();
+    const agentId = state.selectedAgentId;
     const isCurrent = () =>
       gateway.isCurrent({ client, epoch: clientEpoch }) && getAgentEpoch() === capturedAgentEpoch;
     clearProbe(provider);
     const result = await mutations.run(
       "apiKey",
-      key,
       () =>
         runModelProviderApiKeyMutation(
           {
@@ -67,6 +167,23 @@ export function createModelProviderConfigActions(deps: {
             isCurrentClient: isCurrent,
             isCurrentAgent: isCurrent,
             canMutate: () => canMutate(),
+            checkSavedKey: async (receipt) => {
+              setBusy(`check:${key}`, true);
+              try {
+                return await checkSavedKey({
+                  client,
+                  agentId,
+                  provider,
+                  configKey,
+                  action,
+                  ...(activate && receipt.profileId
+                    ? { activateProfileId: receipt.profileId }
+                    : {}),
+                });
+              } finally {
+                setBusy(`check:${key}`, false);
+              }
+            },
             refreshProviders: async () => {
               const previous = state.data;
               await refresh();
@@ -75,7 +192,7 @@ export function createModelProviderConfigActions(deps: {
                 state.data = previous;
                 return warning;
               }
-              return state.data?.error ?? state.data?.catalogError ?? null;
+              return state.data?.error ?? providerCatalogWarning(provider) ?? null;
             },
             setBusy: (busy) => setBusy(key, busy),
             setMessage: (message) => {
@@ -87,15 +204,11 @@ export function createModelProviderConfigActions(deps: {
           },
           {
             client,
-            agentId: state.selectedAgentId,
+            agentId,
             provider: configKey,
             apiKey,
             success: t(
-              action === "add"
-                ? "modelProviders.add.saved"
-                : apiKey === null
-                  ? "modelProviders.apiKey.removed"
-                  : "modelProviders.apiKey.saved",
+              action === "add" ? "modelProviders.add.saved" : "modelProviders.apiKey.saved",
               { provider },
             ),
           },
@@ -109,7 +222,17 @@ export function createModelProviderConfigActions(deps: {
     if (!result?.ok || !isCurrent()) {
       return;
     }
+    // A key the provider rejected stays in its form, ready to correct. A check that couldn't
+    // finish says nothing about the key, so the saved key closes its form as before.
+    if (result.rejected) {
+      return;
+    }
     if (action === "add") {
+      // An activated first provider keeps its dialog open on Start chat.
+      if (state.addStartChat) {
+        state.addProviderKey = "";
+        return;
+      }
       if (state.addProviderId === provider && state.addProviderKey.trim() === apiKey) {
         setAddProviderOpen(Boolean(result.warning));
         if (!result.warning) {
@@ -122,21 +245,25 @@ export function createModelProviderConfigActions(deps: {
     }
   }
 
-  async function saveDefaults() {
+  async function saveDefaults(field: ModelDefaultsSaveField) {
     const defaults = state.defaultsDraft;
     if (!defaults) {
       return;
     }
     const capturedAgentEpoch = getAgentEpoch();
     const settled = await mutations.run(
-      "defaults",
-      "defaults",
-      () =>
+      field,
+      (onAdmitted) =>
         runModelProviderDefaultsMutation(context, gateway, {
           defaults,
           busy: Boolean(state.busy.defaults),
           isCurrentAgent: () => getAgentEpoch() === capturedAgentEpoch,
-          setBusy: (busy) => setBusy("defaults", busy),
+          setBusy: (busy) => {
+            if (busy) {
+              onAdmitted();
+            }
+            setBusy("defaults", busy);
+          },
           setMessage: (message) => setMessage("defaults", message),
         }),
       (error) => setMessage("defaults", { kind: "error", text: modelProviderErrorMessage(error) }),
@@ -147,5 +274,41 @@ export function createModelProviderConfigActions(deps: {
     }
   }
 
-  return { closeKeyEditor, mutateApiKey, saveDefaults };
+  // The add dialog's actions; Save activates the key when the agent has no usable model yet.
+  const addProviderActions = {
+    onAddProviderToggle: () => {
+      setAddProviderOpen((open) => !open);
+      state.addProviderKey = "";
+      state.addStartChat = null;
+      setMessage("add", null);
+    },
+    onAddProviderKeyChange: (value: string) => (state.addProviderKey = value),
+    onAddProvider: (activate: boolean) => {
+      const provider = state.addProviderId;
+      if (provider) {
+        void mutateApiKey(provider, provider, state.addProviderKey.trim(), "add", activate);
+      }
+    },
+    onAddStartChat: async () => {
+      const model = state.addStartChat;
+      if (!model || state.busy.add) {
+        return;
+      }
+      setBusy("add", true);
+      try {
+        const error = await startAddedChat(context, state.selectedAgentId, model);
+        if (error) {
+          setMessage("add", { kind: "error", text: error });
+          return;
+        }
+        state.addStartChat = null;
+        state.addProviderId = "";
+        setAddProviderOpen(false);
+      } finally {
+        setBusy("add", false);
+      }
+    },
+  };
+
+  return { closeKeyEditor, mutateApiKey, saveDefaults, addProviderActions };
 }

@@ -1,5 +1,5 @@
 ---
-summary: "Connect a machine to an OpenClaw Gateway with one pasted command"
+summary: "Connect a device to an OpenClaw Gateway with one pasted command"
 read_when:
   - Pairing a new headless node with a Gateway
   - Installing a node host from a join URL or setup code
@@ -9,13 +9,49 @@ title: "Connect"
 # `openclaw connect`
 
 Connect the current machine to an OpenClaw Gateway as a headless node. The
-command redeems a short-lived bootstrap credential, saves the Gateway endpoint
-in the existing node-host state, and runs the same runtime as
+command accepts an OpenClaw ID node invitation or a short-lived Gateway bootstrap
+credential, saves the connection target, and runs the same runtime as
 [`openclaw node run`](/cli/node).
+
+## OpenClaw ID invitations
+
+An `openclaw-node://` link from the Gateway owner's browser uses the same flow as
+[`openclaw node join`](/cli/node#join-with-openclaw-id):
+
+```bash
+openclaw connect "openclaw-node://join#<invitation>" \
+  --discovery-url https://discovery.example --display-name "Build Node"
+```
+
+The node needs no account sign-in or Gateway token. It generates a private node
+key locally and waits for explicit owner approval. Compare **all six digits**
+in the terminal and browser dialog, review the displayed commands and
+capabilities, then explicitly click **Approve**. If the codes differ, deny the
+request. Merely opening the approval dialog does not approve the node.
+
+Discovery is separate from the link. `--discovery-url` overrides the saved
+Discovery origin; when none is saved, this flag is required because there is no
+default origin. Never substitute the claw hostname or relay URL. The origin must
+use HTTPS (HTTP only for localhost testbeds), without credentials, path, query,
+or fragment. The selected origin is saved with the verified target.
+
+After approval, the node runs in the foreground. Add `--service` to install and
+run a user service instead. `--display-name`, `--commands`, and `--all-commands`
+are forwarded to enrollment. `--ephemeral` and `--session-host` are not supported
+for these invitations and produce an error instead of being ignored.
+
+Treat the full quoted link as a secret. The locally generated private key is
+stored at `$OPENCLAW_STATE_DIR/node-openclaw-id/endpoint.key` with mode `0600`,
+separately from the saved public target. Later connections use that key and the
+saved target, not the single-use invitation; resume with `openclaw node run` or
+the installed service.
+
+The following Gateway join-code instructions describe the other accepted target
+forms, not OpenClaw ID invitations.
 
 ## Create a join command
 
-On the Gateway host, use admin credentials to mint a single-use join URL:
+On the Gateway’s computer, use an admin account to mint a single-use join URL:
 
 ```bash
 openclaw devices join-code
@@ -197,6 +233,7 @@ hosting and exact capacity from this durable consent when it starts.
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `--commands <ids>`      | Save an exact comma-separated node command allowlist (repeatable). Applies to foreground runs and installed services. |
 | `--all-commands`        | Advertise the full default command surface and forget any saved `--commands` allowlist. Conflicts with `--commands`.  |
+| `--discovery-url <url>` | Select the Discovery API origin for an OpenClaw ID node invitation only.                                              |
 | `--display-name <name>` | Set the node display name.                                                                                            |
 | `--service`             | Pair first, then install the node as a user service.                                                                  |
 | `--session-host`        | Consent to worker hosting. An explicit command allowlist disables hosting.                                            |
@@ -205,6 +242,7 @@ hosting and exact capacity from this durable consent when it starts.
 
 `openclaw connect <target>` accepts:
 
+- an `openclaw-node://` OpenClaw ID node invitation;
 - an `https://<gateway>/j/<shortcode>` join URL;
 - an `oc-pair://<setup-code>` URL;
 - a bare base64url setup code.
@@ -216,10 +254,14 @@ allowed; OpenClaw reads its target, removes the symlink after a successful read,
 and keeps the backing file. The dormant installer wrapper uses this handoff to
 keep the single-use target out of child-process arguments.
 
-Join URLs must use HTTPS. Plain HTTP is accepted only for loopback Gateway URLs
+Gateway join URLs must use HTTPS. Plain HTTP is accepted only for loopback Gateway URLs
 such as `http://127.0.0.1/j/<shortcode>`. Direct setup codes can carry the
 Gateway TLS certificate fingerprint, which lets the node host pin a self-signed
 Gateway certificate after decoding the payload.
+
+Ctrl-C or SIGTERM stops an in-progress join HTTP lookup before entering the node
+runtime. A join code already redeemed by the Gateway remains single-use; mint a
+new code before retrying if it was consumed.
 
 The payload determines the saved host, port, TLS mode, WebSocket context path,
 and ordered fallback endpoints. Normal and foreground connections do not add
@@ -237,6 +279,9 @@ A join code and a paired device have separate lifecycles:
 - Environment-managed `--ephemeral` nodes are removed automatically when their owning cloud environment is destroyed.
 
 ## Troubleshooting
+
+Startup failures show the redacted top-level reason. Use `--debug` when you need
+stack traces and nested error details.
 
 If the join URL reports that it is missing or expired, mint a new one with
 `openclaw devices join-code`. A used code intentionally returns the same result

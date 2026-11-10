@@ -331,21 +331,12 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     });
   }
 
-  function createJsonResponse(body: unknown, init?: { status?: number }): Response {
-    return new Response(JSON.stringify(body), {
-      status: init?.status ?? 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-  }
-
   function mockRealtimeClientSecretResponse(
     overrides: { clientSecret?: string; expiresAt?: number } = {},
   ): ReturnType<typeof vi.fn> {
     const release = vi.fn(async () => undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: createJsonResponse({
+      response: Response.json({
         client_secret: { value: overrides.clientSecret ?? "client-secret-123" },
         ...(overrides.expiresAt === undefined ? {} : { expires_at: overrides.expiresAt }),
       }),
@@ -499,7 +490,6 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     connectReadyBridge,
     expectedResponseCreateEvent,
     expectedResponseCancelEvent,
-    createJsonResponse,
     createQuicksilverBrowserBrokerFixture,
     mockRealtimeClientSecretResponse,
     rejectedKeyMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,

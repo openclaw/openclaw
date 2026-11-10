@@ -253,6 +253,27 @@ export function createNodeWorkerSupervisorFixture(
   return { ...fixture, supervisor: createNodeWorkerSupervisor({ bundleRoot, env, ...options }) };
 }
 
+export function createObservedNodeWorkerSupervisorFixture(
+  root: string,
+  options: Parameters<typeof createNodeWorkerSupervisor>[0] = {},
+) {
+  const capacities: Array<{ total: number; available: number }> = [];
+  const value = createNodeWorkerSupervisorFixture(root, {
+    onCapacityChanged: (capacity) => capacities.push(capacity),
+    ...options,
+  });
+  const { env, supervisor, workspaceDir } = value;
+  return {
+    ...value,
+    capacities,
+    terminal: (id: string) => waitForNodeWorkerTerminal(supervisor, id),
+    receipt: (id: string) =>
+      new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(id),
+    file: (name: string) => path.join(workspaceDir, name),
+    [Symbol.asyncDispose]: () => supervisor.close(),
+  };
+}
+
 export async function waitForNodeWorkerTerminal(
   supervisor: ReturnType<typeof createNodeWorkerSupervisor>,
   launchId: string,

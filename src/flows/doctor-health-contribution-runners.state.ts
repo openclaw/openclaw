@@ -32,9 +32,9 @@ export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairCodexSessionRoutes } =
     await import("../commands/doctor/shared/codex-route-warnings.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
   const result = await maybeRepairCodexSessionRoutes({
     cfg: ctx.cfg,
+    modelReplacements: ctx.options.modelReplacements,
     ...(ctx.configResult.retiredModelRefConfig
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
@@ -53,7 +53,10 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
         }
       : {}),
   });
-  noteDoctorRepairResult(result, note);
+  if (result.requiresFullDoctor || result.warnings.length > 0) {
+    ctx.retirementOnly = false;
+  }
+  noteDoctorRepairResult(result);
 }
 
 export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -74,6 +77,9 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     onStepReceipt: (receipt) => {
       ctx.configResult.stateMigrationStepReceipts ??= [];
       ctx.configResult.stateMigrationStepReceipts.push(receipt);
+      if (receipt.outcome === "deferred" || receipt.warnings.length > 0) {
+        ctx.retirementOnly = false;
+      }
     },
   });
 }
@@ -100,7 +106,11 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
       shouldRepair: ctx.prompter.shouldRepair,
     }),
   );
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  noteDoctorRepairResult(inference, note);
+  noteDoctorRepairResult(inference);
   recordDoctorHealthWarnings(ctx, [], inference.warnings);
+  const { noteScheduledContextReport } =
+    await import("../commands/doctor/cron/execution-context-check.js");
+  await measureGatewayBootstrapStep("doctor.legacy-cron.execution-context", () =>
+    noteScheduledContextReport({ cfg: ctx.cfg, env: ctx.env }),
+  );
 }

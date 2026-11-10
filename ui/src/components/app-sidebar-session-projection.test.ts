@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runningRow as makeRunningRow } from "../test-helpers/app-sidebar-session-narration.ts";
+import { sidebarVisibleRowsInOrder } from "./app-sidebar-personal-navigation.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
@@ -15,6 +16,8 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 const project = (rows: SidebarRecentSession[], overrides: Partial<ProjectionInput> = {}) =>
   projection.project(projectionInput(rows, overrides));
+const sectionIds = (rows: SidebarRecentSession[], overrides: Partial<ProjectionInput>) =>
+  project(rows, overrides).sections.map(({ id }) => id);
 const runningRow = (overrides: Partial<SidebarRecentSession> = {}) =>
   sessionRow("running", { hasActiveRun: true, activeRunIds: ["run-one"], ...overrides });
 const parentRow = (...childSessionKeys: string[]) => sessionRow("parent", { childSessionKeys });
@@ -39,6 +42,7 @@ function projectionInput(
 ): ProjectionInput {
   return {
     rows,
+    selectedSessionKey: null,
     grouping: "category",
     knownGroups: [],
     collapsedSections: new Set(),
@@ -75,40 +79,81 @@ function subtitle(
   });
 }
 
-it.each(["active", "archived", "snoozed"] as const)(
-  "hides empty native groups with the %s status filter and preserves other section owners",
-  (statusFilter) => {
-    const rows = [sessionRow("matching", { category: "Matching" })];
-    const input = {
-      statusFilter,
-      knownGroups: ["Matching", "Empty"],
-      catalogIds: ["external"],
-      collapsedSections: new Set(["category:Matching"]),
+describe("SidebarSessionProjection personal pins", () => {
+  it("excludes collapsed and archived pins from selection order", () => {
+    const pin = sessionRow("pin");
+    const archived = sessionRow("archived", { archived: true });
+    const pending = sessionRow("pending");
+    const plain = sessionRow("plain");
+    const zone = {
+      entries: [pin, archived, pending].map((row) => ({ type: "session" as const, key: row.key })),
+      sessionRows: new Map([pin, archived, pending].map((row) => [row.key, row])),
     };
-    const filtered = project(rows, input);
-    expect(filtered.sections.map(({ id }) => id)).toEqual([
-      "category:Matching",
-      "catalog:external",
-    ]);
-    expect(filtered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
-
-    const unfiltered = project(rows, { ...input, statusFilter: "all" });
-    expect(unfiltered.sections.map(({ id }) => id)).toContain("category:Empty");
-    expect(unfiltered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
+    const visibility = {
+      collapsedSessionSections: new Set<string>(),
+      sessionDataContext: {
+        sessions: {
+          archiveVisibility: (key: string) =>
+            key === "pending" ? ("pending" as const) : undefined,
+        },
+      },
+    };
+    expect(sidebarVisibleRowsInOrder(zone, [plain], visibility)).toEqual([pin, plain]);
     expect(
-      project(rows, { ...input, emptyGroupsMode: "never" }).sections.map(({ id }) => id),
-    ).toContain("category:Empty");
-  },
-);
+      sidebarVisibleRowsInOrder(zone, [plain], {
+        ...visibility,
+        collapsedSessionSections: new Set(["pinned"]),
+      }),
+    ).toEqual([plain]);
+  });
+  it("lists active pins only in Pinned and names the remaining sessions Other", () => {
+    const rows = [
+      sessionRow("agent:main:pinned"),
+      sessionRow("agent:main:archived", { archived: true }),
+      sessionRow("agent:main:plain"),
+    ];
+    const pinnedKeys = new Set(["agent:main:pinned", "agent:main:archived"]);
+    for (const grouping of ["category", "none"] as const) {
+      const { sections, visibleRows } = new SidebarSessionProjection().project(
+        projectionInput(rows, { grouping, pinnedKeys }),
+      );
+      const ungrouped = sections.find((section) => section.id === "ungrouped")!;
+      // Archived pins stay in place so the archived view can still list them.
+      expect(ungrouped.rows.map((row) => row.key)).toEqual([
+        "agent:main:archived",
+        "agent:main:plain",
+      ]);
+      expect(ungrouped.renderHeader).toBe(true);
+      expect(visibleRows.map((row) => row.key)).not.toContain("agent:main:pinned");
+    }
+    const { sections } = new SidebarSessionProjection().project(
+      projectionInput(rows, { grouping: "none" }),
+    );
+    expect(sections.find((section) => section.id === "ungrouped")!.renderHeader).toBe(false);
+  });
+});
+
+it("hides empty filtered native groups and preserves other section owners", () => {
+  const rows = [sessionRow("matching", { category: "Matching" })];
+  const input = {
+    statusFilter: "active" as const,
+    knownGroups: ["Matching", "Empty"],
+    catalogIds: ["external"],
+    collapsedSections: new Set(["category:Matching"]),
+  };
+  const filtered = project(rows, input);
+  expect(filtered.sections.map(({ id }) => id)).toEqual(["category:Matching", "catalog:external"]);
+  expect(filtered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
+  const unfiltered = project(rows, { ...input, statusFilter: "all" });
+  expect(unfiltered.sections.map(({ id }) => id)).toContain("category:Empty");
+  expect(unfiltered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
+  expect(sectionIds(rows, { ...input, emptyGroupsMode: "never" })).toContain("category:Empty");
+});
 
 it("retains unloaded group destinations until the session list establishes their contents", () => {
   const input = { knownGroups: ["Awaiting sessions"], statusFilter: "active" as const };
-  expect(project([], { ...input, listLoaded: false }).sections.map(({ id }) => id)).toContain(
-    "category:Awaiting sessions",
-  );
-  expect(project([], input).sections.map(({ id }) => id)).not.toContain(
-    "category:Awaiting sessions",
-  );
+  expect(sectionIds([], { ...input, listLoaded: false })).toContain("category:Awaiting sessions");
+  expect(sectionIds([], input)).not.toContain("category:Awaiting sessions");
 });
 
 it("renders a single selected owner's sessions inline instead of under a person header", () => {
@@ -283,4 +328,81 @@ it("never leaks a held backing-work subtitle into a catalog display that omits o
     subtitle: undefined,
     narration: undefined,
   });
+});
+
+it("reveals late active ancestry once per navigation without changing other disclosure choices", () => {
+  const treeProjection = new SidebarSessionProjection();
+  const leaf = sessionRow("leaf", { active: true, visuallyActive: true });
+  const middle = sessionRow("middle", {
+    children: [leaf],
+    childSessionKeys: [leaf.key],
+    containsActiveDescendant: true,
+  });
+  const root = sessionRow("root", {
+    children: [middle],
+    childSessionKeys: [middle.key],
+    containsActiveDescendant: true,
+  });
+  const runningChild = sessionRow("unrelated-running", { hasActiveRun: true });
+  const unrelated = sessionRow("unrelated", {
+    children: [runningChild],
+    childSessionKeys: [runningChild.key],
+    containsActiveDescendant: true,
+  });
+  treeProjection.children.restore(
+    [root, middle, unrelated].map(({ key }) => ({
+      key,
+      childrenDisplayMode: "collapsed-by-user",
+    })),
+  );
+  const projectTree = (
+    rows: SidebarRecentSession[],
+    selectedSessionKey: string | null = leaf.key,
+  ) => treeProjection.project(projectionInput(rows, { selectedSessionKey }));
+  projectTree([sessionRow(root.key), unrelated]);
+  expect(treeProjection.children.isExpanded(root.key)).toBe(false);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isExpanded(root.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(unrelated.key)).toBe(false);
+  treeProjection.children.showMore(root.key);
+  treeProjection.children.toggle(middle.key);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isFullyShown(root.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(false);
+  // A partial refresh is not a navigation away from the selected session.
+  projectTree([
+    {
+      ...root,
+      containsActiveDescendant: false,
+      children: [
+        { ...middle, children: [], loadingChildren: true, containsActiveDescendant: false },
+      ],
+    },
+    unrelated,
+  ]);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(false);
+  projectTree([unrelated], null);
+  projectTree([root, unrelated]);
+  expect(treeProjection.children.isExpanded(middle.key)).toBe(true);
+  expect(treeProjection.children.isExpanded(unrelated.key)).toBe(false);
+});
+
+it("keeps the selected descendant's root visible beyond the first sidebar page", () => {
+  const treeProjection = new SidebarSessionProjection();
+  const selected = sessionRow("selected", { active: true, visuallyActive: true });
+  const ancestor = sessionRow("older-ancestor", {
+    childSessionKeys: [selected.key],
+    children: [selected],
+    containsActiveDescendant: true,
+  });
+  const quietRoots = Array.from({ length: 30 }, (_, index) => sessionRow("quiet-" + index));
+  const projected = treeProjection.project(
+    projectionInput([...quietRoots, ancestor], { grouping: "none" }),
+  );
+  expect(treeProjection.children.isExpanded(ancestor.key)).toBe(true);
+  expect(projected.sections.flatMap(({ rows }) => rows.map(({ key }) => key))).toContain(
+    ancestor.key,
+  );
 });

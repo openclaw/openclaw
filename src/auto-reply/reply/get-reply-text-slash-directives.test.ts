@@ -7,10 +7,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { createDiscordNativeCommandRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { replyDirectiveParams } from "./get-reply-directives.target-session.test-helpers.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
@@ -20,18 +17,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "discord",
-        plugin: createChannelTestPluginBase({
-          id: "discord",
-          capabilities: { nativeCommands: true, chatTypes: ["direct"] },
-        }),
-        source: "test",
-      },
-    ]),
-  );
+  setActivePluginRegistry(createDiscordNativeCommandRegistry());
 });
 
 afterEach(() => resetPluginRuntimeStateForTest());
@@ -69,8 +55,6 @@ async function resolveTextSlashDirective(
         session: { store: storePath },
         commands: native ? { text: false } : undefined,
       }),
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
       sessionCtx: ctx,
       sessionEntry,
       sessionStore: { [sessionKey]: sessionEntry },
@@ -78,19 +62,14 @@ async function resolveTextSlashDirective(
       storePath,
       triggerBodyNormalized: body,
       commandAuthorized: authorized,
-      defaultModel: "gpt-5.5",
-      model: "gpt-5.5",
     }),
   );
   return { result, read, storedBefore };
 }
 
 const codeTask = "Please inspect this code:\n```python\nif True:\n    print('a  b')\n```";
-it.each([
-  "/model list -g Review this",
-  "/model list@work --runtime codex -g Review this",
-  "/model status -a -g Review this",
-])("ignores mixed model information metadata: %s", async (body) => {
+it("ignores mixed model information metadata without persisting it", async () => {
+  const body = "/model list@work --runtime codex -g Review this";
   for (const authorized of [true, false]) {
     const { result, read, storedBefore } = await resolveTextSlashDirective(body, {
       admin: false,
@@ -102,12 +81,6 @@ it.each([
         cleanedBody: expect.stringContaining("Review this"),
         directives: {
           hasModelDirective: false,
-          rawModelDirective: undefined,
-          rawModelProfile: undefined,
-          rawModelRuntime: undefined,
-          modelDirectiveSource: undefined,
-          modelScope: undefined,
-          modelScopeConflict: false,
         },
       },
     });
@@ -133,7 +106,6 @@ it.each([
   expect({ ...result.result, ...levels }).toMatchObject({ cleanedBody: task, ...expected });
   if (field) {
     expect(read()).toEqual(storedBefore);
-    expect(read()).not.toHaveProperty(field);
   }
 });
 

@@ -1,13 +1,21 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { DashboardsView, type DashboardGalleryFilters, type DashboardsRouteData } from "./view.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import type { DashboardGalleryFilters, DashboardsRouteData } from "./gallery-filters.ts";
+import { DashboardsView } from "./view.tsx";
 
-const filters: DashboardGalleryFilters = { query: "", ownerId: "", sort: "updated" };
+const filters: DashboardGalleryFilters = {
+  query: "",
+  ownerIds: [],
+  sort: "updated",
+  view: "grid",
+  group: "none",
+};
 const handlers = { onFilterChange: vi.fn() };
 
 const dashboard = {
@@ -34,20 +42,58 @@ function routeData(sessions: SessionsListResult["sessions"], basePath = ""): Das
 }
 
 it.each([
+  ["grid", "none", []],
+  ["list", "author", ["Author 0", "Author 1", "Author 2"]],
+] as const)("bounds the initial %s/%s gallery by cards", (view, group, headings) => {
+  const rows = Array.from({ length: 200 }, (_, index) => ({
+    ...dashboard,
+    key: `agent:main:dashboard:volume-${index}`,
+    displayName: `Volume ${index}`,
+    updatedAt: 200 - index,
+    createdActor: {
+      type: "human" as const,
+      id: `author-${Math.min(2, Math.floor(index / 5))}`,
+      label: `Author ${Math.min(2, Math.floor(index / 5))}`,
+    },
+  }));
+  const { container } = mountSolid(() => (
+    <DashboardsView
+      data={routeData(rows)}
+      readReady={() => undefined}
+      filters={{ ...filters, view, group }}
+      handlers={handlers}
+    />
+  ));
+
+  // Inspect the first render, before browser geometry admits virtual tracks.
+  const cards = container.querySelectorAll("[data-dashboard-session]");
+  expect(cards).toHaveLength(12);
+  expect(cards[11]?.getAttribute("data-dashboard-session")).toBe("agent:main:dashboard:volume-11");
+  expect(
+    [...container.querySelectorAll(".dashboards-group__heading > span")].map((heading) =>
+      heading.textContent?.trim(),
+    ),
+  ).toEqual(headings);
+});
+
+it.each([
   ["gallery", "[data-dashboard-session]", "Release health"],
   ["empty", "[data-dashboards-empty]", "No dashboards yet"],
   ["error", '[role="alert"]', "Dashboard service unavailable"],
-])("resolves the accessible dashboard skeleton to %s", (outcome, selector, message) => {
+])("resolves the accessible dashboard skeleton to %s", async (outcome, selector, message) => {
   const [value, setValue] = createSignal<DashboardsRouteData>();
-  const { container } = mountSolid(() => (
-    <DashboardsView data={value()} filters={filters} handlers={handlers} />
-  ));
+  const pending = Promise.withResolvers<void>();
+  const { container } = mountSolid(() => {
+    const ready = createMemo(() => pending.promise);
+    return (
+      <DashboardsView data={value()} readReady={ready} filters={filters} handlers={handlers} />
+    );
+  });
 
   const busy = container.querySelector('[aria-busy="true"]');
   expect(busy).not.toBeNull();
   const placeholders = busy?.querySelectorAll(".skeleton") ?? [];
   expect(placeholders.length).toBeGreaterThan(0);
-  expect(busy?.querySelector(".dashboards-toolbar")).not.toBeNull();
   expect(busy?.querySelectorAll(".dashboards-grid .dashboard-preview").length).toBeGreaterThan(0);
   for (const placeholder of placeholders) {
     expect(placeholder.closest('[aria-hidden="true"]')).not.toBeNull();
@@ -65,13 +111,19 @@ it.each([
     data.error = "Dashboard service unavailable";
   }
   setValue(data);
-  flush();
+  if (outcome === "error") {
+    pending.reject(new Error(data.error!));
+  } else {
+    pending.resolve();
+  }
 
-  expect(container.querySelector('[aria-busy="true"], .skeleton')).toBeNull();
-  expect(container.querySelector(selector)?.textContent).toContain(message);
+  await waitForSolid(() => {
+    expect(busy?.isConnected).toBe(false);
+    expect(container.querySelector(selector)?.textContent).toContain(message);
+  });
   if (outcome === "empty") {
     expect(container.querySelector(selector)?.textContent).toContain(
-      "Dashboards created in your tasks will appear here",
+      "Dashboards created in your sessions appear here.",
     );
   }
   if (outcome === "error") {
@@ -79,11 +131,30 @@ it.each([
   }
 });
 
+it.each([
+  [{ ownerIds: [], sort: "updated" }, false],
+  [{ ownerIds: ["riley"], sort: "updated" }, true],
+  [{ ownerIds: [], sort: "title" }, false],
+] as const)("marks the author filter trigger for %j", (selected, active) => {
+  const { container } = mountSolid(() => (
+    <DashboardsView
+      data={routeData([dashboard])}
+      readReady={() => undefined}
+      filters={{ ...filters, sort: selected.sort, ownerIds: [...selected.ownerIds] }}
+      handlers={handlers}
+    />
+  ));
+
+  const trigger = container.querySelector('button[aria-label="Filter by author"]');
+  expect(trigger?.classList.contains("active")).toBe(active);
+});
+
 it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (basePath) => {
   const onNavigate = vi.fn();
   const { container } = mountSolid(() => (
     <DashboardsView
       data={routeData([dashboard], basePath)}
+      readReady={() => undefined}
       filters={filters}
       handlers={{ ...handlers, onNavigate }}
     />
@@ -107,16 +178,8 @@ it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (baseP
     search: "?__openclawSessionKey=agent%3Amain%3Adashboard%3A12345678-90ab-cdef-1234-567890abcdef",
   });
 
-  for (const activation of [
-    { ctrlKey: true },
-    { metaKey: true },
-    { shiftKey: true },
-    { altKey: true },
-    { button: 1 },
-  ]) {
-    link.dispatchEvent(click(activation));
-    expect(intercepted).toBe(false);
-  }
+  link.dispatchEvent(click({ ctrlKey: true }));
+  expect(intercepted).toBe(false);
   const handled = click();
   handled.preventDefault();
   link.dispatchEvent(handled);

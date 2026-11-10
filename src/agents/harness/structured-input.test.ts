@@ -72,18 +72,13 @@ function decodeForm(
   result: StructuredInputCompileResult,
   answers: Record<string, string[]>,
 ): Record<string, unknown> | string {
-  const plan = requireForm(result);
-  const entries: Array<[string, unknown]> = [];
-  for (const field of plan.fields) {
-    const decoded = field.decode(answers[field.question.id] ?? []);
-    if (decoded.kind === "invalid") {
-      return decoded.message;
-    }
-    if (decoded.kind === "present") {
-      entries.push(...decoded.entries);
-    }
-  }
-  return Object.fromEntries(entries);
+  const decoded = requireForm(result).fields.map((field) =>
+    field.decode(answers[field.question.id] ?? []),
+  );
+  return (
+    decoded.find((field) => field.kind === "invalid")?.message ??
+    Object.fromEntries(decoded.flatMap((field) => (field.kind === "present" ? field.entries : [])))
+  );
 }
 
 describe("structured input compiler", () => {
@@ -106,53 +101,43 @@ describe("structured input compiler", () => {
       );
     },
   );
-  it("projects bounded primitive fields and decodes defaults, choices, and multi-select", () => {
+  it.each<[Record<string, unknown>, string[], unknown]>([
+    [string({ minLength: 2, maxLength: 20 }), ["Ada"], "Ada"],
+    [string({ format: "email" }), ["ada@example.com"], "ada@example.com"],
+    [{ type: "boolean" }, ["Yes"], true],
+    [{ type: "integer", minimum: 1, maximum: 9 }, ["7"], 7],
+    [
+      strings({ minItems: 1, maxItems: 2 }, string({ enum: ["Red", "Blue", "Green"] })),
+      ["Red", "Blue"],
+      ["Red", "Blue"],
+    ],
+    [{ type: "number", default: 1.5 }, [], 1.5],
+    [string(), [], undefined],
+  ])("decodes primitive field %j", (field, answer, value) => {
+    const result = compile(
+      { value: field },
+      value === undefined || answer.length === 0 ? [] : ["value"],
+    );
+    expect(decodeForm(result, { value: answer })).toEqual(value === undefined ? {} : { value });
+  });
+
+  it("projects choice labels and descriptions while decoding the underlying value", () => {
     const result = compile(
       {
-        "Display Name": string({ minLength: 2, maxLength: 20 }),
-        contact: string({ format: "email" }),
         theme: string({
           oneOf: [
             { const: "day", title: "Day" },
             { const: "night", title: "Night", description: "Use dark colors" },
           ],
         }),
-        enabled: { type: "boolean" },
-        count: { type: "integer", minimum: 1, maximum: 9 },
-        tags: strings({ minItems: 1, maxItems: 2 }, string({ enum: ["Red", "Blue", "Green"] })),
-        score: { type: "number", default: 1.5 },
-        optional: string(),
       },
-      ["Display Name", "contact", "theme", "enabled", "count", "tags"],
+      ["theme"],
     );
-    const plan = requireForm(result);
-    expect(plan.fields.map((field) => field.question.id)).toEqual(
-      "display_name contact theme enabled count tags score optional".split(" "),
-    );
-    expect(plan.fields[2]?.question.options).toEqual([
+    expect(requireForm(result).fields[0]?.question.options).toEqual([
       { label: "Day" },
       { label: "Night", description: "Use dark colors" },
     ]);
-    expect(
-      decodeForm(result, {
-        display_name: ["Ada"],
-        contact: ["ada@example.com"],
-        theme: ["Night"],
-        enabled: ["Yes"],
-        count: ["7"],
-        tags: ["Red", "Blue"],
-        score: [],
-        optional: [],
-      }),
-    ).toEqual({
-      "Display Name": "Ada",
-      contact: "ada@example.com",
-      theme: "night",
-      enabled: true,
-      count: 7,
-      tags: ["Red", "Blue"],
-      score: 1.5,
-    });
+    expect(decodeForm(result, { theme: ["Night"] })).toEqual({ theme: "night" });
   });
 
   it("normalizes colliding ids and preserves __proto__ as inert accepted content", () => {
@@ -400,6 +385,37 @@ describe("OpenAI rich forms", () => {
     ).toBe("unsupported");
   });
 
+  it("checks resource aliases once across the complete choice list", () => {
+    const resources = Array.from({ length: 64 }, (_, index) => ({
+      uri: `cad://parts/item-${index}`,
+      name: `Part ${index}`,
+    }));
+    using lowercase = vi.spyOn(String.prototype, "toLowerCase");
+
+    const result = richCompile({
+      parts: resourceFields({ type: "resource", options: resources }),
+    });
+    expect(requireForm(result).fields[0]?.question.options).toHaveLength(64);
+    expect(lowercase.mock.contexts.filter((value) => value === resources[0]!.uri)).toHaveLength(1);
+  });
+
+  it.each([
+    { uri: "cad://parts/washer", name: "Other" },
+    { uri: "cad://parts/other", name: " WASHER " },
+    { uri: "cad://parts/other", name: "CAD://PARTS/WASHER" },
+  ])("rejects cross-resource URI and title collisions: %j", (second) => {
+    const result = richCompile({
+      parts: resourceFields({
+        type: "resource",
+        options: [{ uri: "cad://parts/washer", name: "Washer" }, second],
+      }),
+    });
+    expect(result).toMatchObject({
+      kind: "unsupported",
+      message: expect.stringContaining("duplicate choice"),
+    });
+  });
+
   it("preserves all rich choices without increasing the ordinary form bound", () => {
     const values = Array.from({ length: 12 }, (_, index) => ({
       const: "value-" + index,
@@ -521,7 +537,9 @@ it("batches ordinary questions by three and isolates secret input from Gateway r
     content,
   });
   expect(gateway.requested.map((request) => request.questions.length)).toEqual([3, 3, 1]);
-  expect(gateway.requested.flatMap((r) => r.questions)).not.toContainEqual({ questionId: "token" });
+  expect(gateway.requested.flatMap((r) => r.questions.map((q) => q.questionId))).not.toContain(
+    "token",
+  );
 });
 
 it("delivers a visible unsupported outcome without creating a Gateway record", async () => {

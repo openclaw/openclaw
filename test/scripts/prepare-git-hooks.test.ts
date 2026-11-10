@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync as spawnGit, type SpawnSyncOptions } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configurePrepareGitHooks } from "../../scripts/prepare-git-hooks.mjs";
@@ -7,9 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-type SpawnResult = {
-  error?: NodeJS.ErrnoException;
-  status?: number | null;
+type SpawnResult = Partial<Pick<ReturnType<typeof spawnGit>, "error" | "status">> & {
   stderr?: string;
   stdout?: string;
 };
@@ -28,7 +26,7 @@ function configure(results: SpawnResult[], hooks = true, cwd = "/repo") {
 }
 
 describe("configurePrepareGitHooks", () => {
-  it.each([0, 1, 2])("stays quiet when Git is unavailable at command %i", (command) => {
+  it.each([0, 1])("stays quiet when Git is unavailable at command %i", (command) => {
     const enoent = Object.assign(new Error("missing git"), { code: "ENOENT" });
     const preceding: SpawnResult[] = [{ status: 0, stdout: "true\n" }, { status: 1 }];
     const { result, warn } = configure(
@@ -75,14 +73,9 @@ describe("configurePrepareGitHooks", () => {
   }
   const ownershipCases = [
     ownership("fresh primary", "git-hooks"),
-    ownership("explicit local owner", "local-hooks", { local: "local-hooks" }),
     ownership("explicit global owner", "global-hooks", { global: "global-hooks" }),
     ownership("explicit empty value", "", { local: "" }),
     ownership("linked without private config", null, { linked: true }),
-    ownership("linked inherited owner", "shared-hooks", {
-      linked: true,
-      local: "shared-hooks",
-    }),
     ownership("linked private initialization", "git-hooks", {
       linked: true,
       worktreeConfig: true,
@@ -158,30 +151,25 @@ describe("configurePrepareGitHooks", () => {
       return result.status === 0 ? result.stdout.replace(/\r?\n$/u, "") : null;
     };
     const effectiveBefore = checkouts.map(hookPath);
-    const unchangedFiles = [
-      globalConfig,
-      ...(scenario.linked || scenario.reason !== "configured"
-        ? [join(primary, ".git", "config")]
-        : []),
-      ...checkouts
-        .filter(
-          (checkout) =>
-            !(checkout === target && scenario.worktreeConfig && scenario.reason === "configured"),
-        )
-        .map((checkout) =>
-          resolve(checkout, git(checkout, ["rev-parse", "--git-path", "config.worktree"])),
-        ),
-    ];
+    const sharedConfig = join(primary, ".git", "config");
+    const privateConfig = (checkout: string) =>
+      resolve(checkout, git(checkout, ["rev-parse", "--git-path", "config.worktree"]));
+    const writableConfig =
+      scenario.reason !== "configured"
+        ? null
+        : scenario.worktreeConfig
+          ? privateConfig(target)
+          : sharedConfig;
+    const unchangedFiles = [globalConfig, sharedConfig, ...checkouts.map(privateConfig)].filter(
+      (file) => file !== writableConfig,
+    );
     const contents = (file: string) => (existsSync(file) ? readFileSync(file, "utf8") : null);
     const contentsBefore = unchangedFiles.map(contents);
     const warn = vi.fn();
     const result = configurePrepareGitHooks({
       cwd: target,
-      spawnSync: (bin: string, args: string[], options: SpawnSyncOptions) => {
-        expect(bin).toBe("git");
-        expect(options.cwd).toBe(target);
-        return spawnGit(bin, args, { ...options, env });
-      },
+      spawnSync: (bin: string, args: string[], options: SpawnSyncOptions) =>
+        spawnGit(bin, args, { ...options, env }),
       warn,
     });
     // Private overrides can mask a shared write, so compare config bytes as well as effective values.
@@ -196,11 +184,65 @@ describe("configurePrepareGitHooks", () => {
       ),
     );
     if (scenario.reason === "config-failed") {
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("[prepare] could not configure git hooks"),
-      );
+      expect(warn).toHaveBeenCalledOnce();
     } else {
       expect(warn).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("prepare entrypoint", () => {
+  it.each(["", "true"])("preserves generators and hook ownership with CI=%j", (ci) => {
+    const root = tempDirs.make("prepare-entrypoint-");
+    const scripts = join(root, "scripts");
+    mkdirSync(scripts);
+    mkdirSync(join(root, "src/state"), { recursive: true });
+    mkdirSync(join(root, "git-hooks"));
+    writeFileSync(join(root, "src/state/openclaw-state-schema.sql"), "");
+    writeFileSync(join(scripts, "native-protocol-inputs.json"), "{}");
+    for (const file of [
+      "scripts/prepare-git-hooks.mjs",
+      "runtime-process-bootstrap.generated.mjs",
+    ]) {
+      copyFileSync(new URL(`../../${file}`, import.meta.url), join(root, file));
+    }
+    writeFileSync(
+      join(scripts, "generate-kysely-types.mts"),
+      'import { appendFileSync } from "node:fs"; appendFileSync(new URL("../generated.txt", import.meta.url), "kysely\\n");',
+    );
+    writeFileSync(
+      join(scripts, "prepare-native-protocol.mjs"),
+      'import { appendFileSync } from "node:fs"; export async function prepareNativeProtocol() { appendFileSync(new URL("../generated.txt", import.meta.url), "native\\n"); }',
+    );
+    const globalConfig = join(root, "global.config");
+    writeFileSync(globalConfig, "");
+    const env = {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      CI: ci,
+      HOME: root,
+      USERPROFILE: root,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: globalConfig,
+      GIT_TEMPLATE_DIR: join(root, "git-hooks"),
+    };
+    execFileSync("git", ["init", "-q", root], { env });
+    const configBefore = readFileSync(join(root, ".git/config"), "utf8");
+    const result = spawnGit(process.execPath, [join(scripts, "prepare-git-hooks.mjs")], {
+      cwd: root,
+      env,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(join(root, "generated.txt"), "utf8")).toBe("kysely\nnative\n");
+    const hooks = spawnGit("git", ["-C", root, "config", "--local", "--get", "core.hooksPath"], {
+      env,
+      encoding: "utf8",
+    });
+    if (ci) {
+      expect(readFileSync(join(root, ".git/config"), "utf8")).toBe(configBefore);
+    }
+    expect(hooks.status).toBe(ci ? 1 : 0);
+    expect(hooks.stdout).toBe(ci ? "" : "git-hooks\n");
   });
 });

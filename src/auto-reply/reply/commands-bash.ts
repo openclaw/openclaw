@@ -13,14 +13,7 @@ export const handleBashCommand: CommandHandler = defineAuthorizedTextCommand(
         : null,
   },
   async (params) => {
-    const reply = await handleBashChatCommand({
-      ctx: params.ctx,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      isGroup: params.isGroup,
-      elevated: params.elevated,
-    });
+    const reply = await handleBashChatCommand(params);
     return { shouldContinue: false, reply };
   },
 );

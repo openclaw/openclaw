@@ -107,6 +107,20 @@ OpenClaw release:
         ```bash
         openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
         ```
+
+        API-key setup asks for an optional **Anthropic workspace ID**. If your key
+        is not scoped to a workspace, enter its `wrkspc_...` ID from the Claude
+        Console. Leave it blank for a workspace-scoped key. Existing workspace
+        headers are preserved.
+
+        This is a provider account setting, separate from an agent's local
+        workspace directory. It applies to all requests through the configured
+        Anthropic provider. Use workspace-scoped keys or separate provider
+        configurations when accounts need different workspaces.
+
+        For non-interactive setup, configure
+        `models.providers.anthropic.headers["anthropic-workspace-id"]` beforehand.
+        See [Anthropic authentication](https://platform.claude.com/docs/en/manage-claude/authentication#select-a-workspace).
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -165,8 +179,9 @@ OpenClaw release:
         native login tokens. Claude owns the login and token refresh lifecycle.
         Gateway startup shares the native login check across agent workspaces using
         the same config and environment. Checks use `claude auth status --json`;
-        an explicit logged-out response blocks the native route, while a timeout
-        or unreadable response allows Claude to try the request. Captures expire
+        an explicit logged-out response or a `claude` executable missing from
+        `PATH` blocks the native route, while a timeout or unreadable response
+        allows Claude to try the request. Captures expire
         after one minute. If a selected native login is unavailable, spawn admission
         rechecks it immediately, so signing in does not require a Gateway restart.
 
@@ -254,8 +269,11 @@ OpenClaw release:
     Claude Code client version, or the installed CLI version when newer.
     Anthropic uses that identity to gate newer models. A missing, older, or
     failed CLI check uses OpenClaw's maintained version floor. Discovery is
-    shared with the CLI backend and cached until process restart; API-key
-    requests do not run the check.
+    shared with the CLI backend and cached for the resolved executable file.
+    After an in-place update or symlink change, the next request checks the new
+    file without a Gateway restart. Failed checks keep the floor until the
+    executable changes. Native-install fallback locations outside `PATH` keep
+    their existing process-scoped lookup. API-key requests do not run the check.
 
     ### Config example
 
@@ -488,6 +506,8 @@ consecutive user turns on the Messages API; Bedrock Converse still merges
 consecutive user turns. Those carriers contain the delimited context body,
 with interpretation guidance once in the stable system prompt. Routes without
 either capability keep transient carriers and normal user-turn merging.
+Fallback attempts keep the same route-specific context format without repeating
+the original user message or attachments.
 Transient carriers remain the cheaper shape on routes without in-history
 system updates when thinking does not bind the prefix: old carriers consume no
 later context or repeated cache-read charges.
@@ -927,7 +947,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     - For other direct Anthropic models, `/fast` retains the existing Priority Tier mapping: on uses `service_tier: "auto"` and off uses `service_tier: "standard_only"`.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
     - Claude Sonnet 5.5 and Sonnet 5 support neither native fast mode nor Priority Tier, so OpenClaw omits both fields.
-    - The Control UI disables confirmed no-op Fast choices, including Sonnet 5.5, Sonnet 5, and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
+    - The Control UI disables confirmed no-op Fast choices, including Claude CLI, Sonnet 5.5, Sonnet 5, and requests governed by an explicit service tier. Saved Fast preferences remain clearable; unknown route or auth facts preserve existing controls.
 
     </Note>
 
@@ -976,8 +996,9 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
     When `anthropicCompactThreshold` is omitted, OpenClaw uses
     `max(50000, floor(budget * 0.7))`, where the budget is the model's
-    `contextTokens` cap when set and its `contextWindow` otherwise. With the
-    default trigger, Anthropic compacts before local preflight compaction
+    `contextTokens` cap when set and its `contextWindow` otherwise. Explicit session
+    context-window choices still apply when live model discovery is unavailable.
+    With the default trigger, Anthropic compacts before local preflight compaction
     would. If a trigger falls inside the local compaction reserve, for example
     the 50000 minimum on a small window, local compaction may run first; that
     only skips server compaction, never overflows. An explicit
@@ -1075,6 +1096,31 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   <Accordion title="Claude Opus 5 1M context">
     `anthropic/claude-opus-5` and its `claude-cli` variant have a 1M context
     window by default; no `params.context1m: true` needed.
+  </Accordion>
+
+  <Accordion title="Claude Code native subagents on managed turns">
+    `plugins.entries.anthropic.config.managedNativeTools` keeps selected Claude
+    Code orchestration tools on `claude-cli` turns that OpenClaw manages. It is
+    off by default. `default` applies to every agent; `agents.<id>` replaces it
+    for one agent, and `[]` opts that agent out. Accepted values: `Agent`,
+    `Workflow`.
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          anthropic: {
+            config: {
+              managedNativeTools: { default: ["Agent", "Workflow"], agents: { ops: [] } },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Scope and limitations: [CLI backends](/gateway/cli-backends#keeping-claude-code-orchestration-tools-on-managed-turns).
+
   </Accordion>
 </AccordionGroup>
 

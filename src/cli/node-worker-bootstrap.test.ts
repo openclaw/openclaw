@@ -92,10 +92,6 @@ function fixture() {
     channels: ["fixture-channel"],
     channelConfigs: { "fixture-channel": { schema: enabledSchema } },
   });
-  const nodeHost = {
-    skills: { enabled: false },
-    mcp: { servers: { fixture: { enabled: false, command: "fixture-mcp" } } },
-  };
   const config = {
     channels: { "fixture-channel": { enabled: true, futureOption: true } },
     plugins: {
@@ -103,12 +99,14 @@ function fixture() {
       load: { paths: [nodePlugin.file, channelPlugin.file] },
       entries: { [nodePlugin.id]: { enabled: true, config: { enabled: true } } },
     },
-    nodeHost,
+    nodeHost: {
+      skills: { enabled: false },
+      mcp: { servers: { fixture: { enabled: false, command: "fixture-mcp" } } },
+    },
   };
   writeJson(configPath, config);
   return {
     root,
-    stateDir,
     databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
     configPath,
     config,
@@ -190,36 +188,27 @@ describe("private node worker bootstrap", () => {
     closeOpenClawStateDatabaseForTest();
     const filesBefore = readFiles(configPath, includePath, databasePath);
 
-    // Prove the fixture really exceeds the older channel owner's schema.
-    const full = await readConfigFileSnapshot({ observe: false });
-    expect(full.valid).toBe(false);
-    expect(full.issues).toEqual(
-      expect.arrayContaining([
+    expect(await readConfigFileSnapshot({ observe: false })).toMatchObject({
+      valid: false,
+      issues: expect.arrayContaining([
         expect.objectContaining({
           path: "channels.fixture-channel",
           message: expect.stringContaining("futureOption"),
         }),
       ]),
-    );
+    });
     await bootstrap();
     const pinned = getRuntimeConfig();
-    expect(pinned).toEqual(
-      expect.objectContaining({
-        nodeHost: config.nodeHost,
-        channels: expect.objectContaining(config.channels),
-      }),
-    );
+    expect(pinned.nodeHost).toEqual(config.nodeHost);
+    expect(pinned.channels).toMatchObject(config.channels);
     // A cold worker must admit mature state even when snapshot storage is full.
     closeOpenClawStateDatabaseForTest();
     const allocateSnapshot = vi.spyOn(fs, "mkdtempSync").mockImplementation(() => {
       throw Object.assign(new Error("snapshot storage is full"), { code: "ENOSPC" });
     });
-    try {
-      initializeNativeOpenClawStateDatabase();
-      expect(allocateSnapshot).not.toHaveBeenCalled();
-    } finally {
-      allocateSnapshot.mockRestore();
-    }
+    initializeNativeOpenClawStateDatabase();
+    expect(allocateSnapshot).not.toHaveBeenCalled();
+    allocateSnapshot.mockRestore();
     await ensureNodeHostStateReady();
     const prepared = await prepareNodeHostRuntime();
     expect(getRuntimeConfig()).toBe(pinned);

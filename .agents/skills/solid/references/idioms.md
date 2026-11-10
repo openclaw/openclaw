@@ -1,6 +1,6 @@
 # Solid 2 idioms
 
-Use this when writing or auditing rendering consumers. The installed rc.16
+Use this when writing or auditing rendering consumers. The installed rc.18
 `solid-js/CHEATSHEET.md`, `solid-js/types/client/flow.d.ts`, and
 `@solidjs/signals/dist/types/` own the API contract; Solid 1 examples are not a
 substitute. Examples below abbreviate code from the named OpenClaw modules.
@@ -118,17 +118,15 @@ using it to mirror owner state. Gateway decisions and synchronous domain state
 remain in their existing TypeScript owners.
 
 Split effects into tracked preparation and imperative application. For example,
-`components/solid/tabs.tsx` collects options and items in compute, then calls the
-plain tabs controller's `sync()` after DOM bindings. That controller integration
-is an effect; calculating which tab is selected is a derivation.
+`lib/reactive/shadow-styles.ts` tracks the style list, binds it to the external
+shadow root in apply, and returns the binding's disposal. That DOM integration
+is an effect; calculating the style list is a derivation.
 
 ```ts
-createEffect(
-  () => props.title,
-  (title) => {
-    element.title = title;
-  },
-);
+createEffect(getStyles, (styles) => {
+  const binding = bindShadowStyles(getElement(), styles);
+  return () => binding.dispose();
+});
 ```
 
 An apply callback is untracked and unowned. Capture all reactive facts in
@@ -177,8 +175,9 @@ inside a stable callback when the parent may replace the handler:
 A local lifetime-stable function can be bound directly. Dynamic elements use
 runtime prop spreads, which can update handlers; do not add wrappers solely for
 that case. Native capture/options and events stopped by an enclosing native
-boundary still need the owned listener/ref pattern. Dashed events use
-`onWa-select`, not `onWaSelect`. Prefer the existing owned primitive to `wa-*`.
+boundary still need the owned listener/ref pattern. Dashed events keep their
+exact names, such as `onOverlay-after-show` in
+[Menu](../../../../ui/src/components/solid/menu.tsx).
 
 Commit-on-change inputs need special care: unrelated props refreshes must not
 rewrite the DOM draft. Memoize the committed owner value and bind it through the
@@ -250,7 +249,7 @@ identities. Never serialize a store proxy as the authoritative data model;
 
 ## Key lists by the lifetime you intend
 
-rc.16 callback arguments depend on `For`'s keying mode:
+rc.18 callback arguments depend on `For`'s keying mode:
 
 | Mode                        | Item          | Index    | Lifetime               |
 | --------------------------- | ------------- | -------- | ---------------------- |
@@ -292,7 +291,7 @@ control flow, not just the resulting markup.
 
 ## Async values and mutations
 
-rc.16 has **no `createAsync` export**. Pure async reads are computations returning
+rc.18 has **no `createAsync` export**. Pure async reads are computations returning
 a Promise or AsyncIterable. Read all reactive dependencies before the first
 `await`; later reads are untracked.
 
@@ -382,7 +381,7 @@ captures the node and writes to it.
 
 ## Dev diagnostics are bug reports
 
-Treat these rc.16 dev warnings as real defects, not noise:
+Treat these rc.18 dev warnings as real defects, not noise:
 
 - **Top-level reactive read in a component body.** The body runs once. Read in
   JSX, a memo, or an accessor.
@@ -396,6 +395,12 @@ Treat these rc.16 dev warnings as real defects, not noise:
 - **`LOADING_ON_OUTSIDE_HOLD`.** The same pending data is read outside the
   `Loading` boundary, so its fallback can never show. Move the read under the
   boundary.
+- **`STORE_WRITE_OUTSIDE_SETTER`.** A store proxy is readonly outside its draft
+  setter; such writes are ignored. Mutate through `setStore`, not the proxy.
+- **`UNCOMMITTED_INPUT_OVERWRITTEN`.** A binding is overwriting a DOM edit that
+  never reached its signal. Use a local draft or the existing `liveValue` ref
+  for commit-on-change fields. Restore rejected edits directly in the handler;
+  `equals: false` does not fix the ownership conflict.
 
 `onSettled` also works inside an event handler: it defers follow-up work
 (focus, measurement) until the transition that handler started has settled.

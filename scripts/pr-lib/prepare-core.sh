@@ -9,7 +9,7 @@ checkout_prep_branch() {
 
   local prep_branch
   prep_branch=$(resolve_prep_branch_name "$pr")
-  pr_git checkout "$prep_branch"
+  GIT_NO_LAZY_FETCH=1 pr_git checkout "$prep_branch"
 }
 
 resolve_pr_author_access_at_prepare() {
@@ -60,6 +60,12 @@ retire_prep_evidence() {
     cmp -s "$artifact" "$archive/${artifact##*/}" || return 1
   done
   [ -n "$archive" ] || return 0
+  if [ "${2:-}" = proof ]; then
+    for artifact in .local/pr-meta.json .local/pr-meta.env .local/review.json; do
+      [ -f "$artifact" ] && [ ! -L "$artifact" ] || return 1
+      cp -p "$artifact" "$archive/" && cmp -s "$artifact" "$archive/${artifact##*/}" || return 1
+    done
+  fi
   PREP_RETIRED_EVIDENCE="$archive"
   [ "${1:-}" != retain ] || return 0
 
@@ -78,6 +84,65 @@ retire_prep_evidence() {
   printf '%s\n' "- Prior preparation evidence retained at $archive." >> .local/prep.md || return 1
   echo "Prior preparation evidence retained at $archive."
 }
+
+prepare_workflow_successor() (
+  local pr="$1" request="${PR_WORKFLOW_SUCCESSOR:-}" head tree review hosted snapshot next
+  local purpose=qualified
+  [ -n "$request" ] || return 1
+  [ "$(printf '%s\n' "$request" | jq -r '.purpose // "qualified"')" != proof ] || purpose=proof
+  enter_worktree "$pr" false true || return 1
+  [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
+  require_artifact .local/prep-context.env || return 1
+  local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE="" PREP_REVIEW_MODE=""
+  source .local/prep-context.env || return 1
+  [ "$PR_NUMBER" = "$pr" ] && [ "$PREP_REVIEW_MODE" = correction ] || {
+    echo "Workflow succession requires an existing correction preparation." >&2; return 1;
+  }
+  IFS=$'\t' read -r head tree review hosted < <(printf '%s\n' "$request" | jq -r '[.head,.tree,.review,.hostedHead] | @tsv')
+  [ "$(pr_git rev-parse HEAD)" = "$head" ] && [ "$(pr_git rev-parse 'HEAD^{tree}')" = "$tree" ] &&
+    [ -z "$(pr_git status --porcelain --untracked-files=no)" ] &&
+    [ "$(pr_git branch --show-current)" = "$(resolve_prep_branch_name "$pr")" ] || {
+    echo "Workflow succession requires the unchanged retained preparation branch and tree." >&2; return 1;
+  }
+  if has_worktree_merge_output . ||
+    { [ -f .local/gates.env ] && grep -q '^PENDING_CRABBOX_' .local/gates.env; }; then
+    echo "Retained merge or pending dispatch evidence requires its existing reconciliation owner." >&2; return 1
+  fi
+  snapshot=$(correction_review_snapshot "$pr" "$purpose") || return 1
+  [ -n "$snapshot" ] && [ "$(pr_git hash-object --no-filters -- .local/correction-review.json)" = "$review" ] || return 1
+  resolve_prep_publication_target "$pr" "$head" || return 1
+  [ "$PREP_PUBLICATION_LEASE_SHA" = "$hosted" ] || {
+    echo "Workflow succession hosted authority changed; retain the publication receipts." >&2; return 1;
+  }
+  # Compare one fresh observation with retained review identity. A successor
+  # changes tooling, never the hosted lease or a GraphQL local/hosted alias.
+  local observation
+  observation=$(cat .local/pr-meta.json) || return 1
+  revalidate_pr_publication "$pr" "$observation" "$PR_HEAD" "$hosted" "$hosted" || return 1
+  if [ "$purpose" = proof ]; then
+    require_proof_publication_hosted_state "$pr" "$hosted" "$hosted" || return 1
+  fi
+  verify_correction_review_snapshot "$pr" "$snapshot" "$purpose" || return 1
+  retire_prep_evidence retain || return 1
+  verify_correction_review_snapshot "$pr" "$snapshot" "$purpose" || return 1
+  # prep.env can be the only surviving authority for a completed publication.
+  # Retire only qualification, before CAS: either binding then fails closed.
+  if [ -e .local/gates.env ] || [ -L .local/gates.env ]; then
+    [ -f .local/gates.env ] && [ ! -L .local/gates.env ] &&
+      cmp -s .local/gates.env "$PREP_RETIRED_EVIDENCE/gates.env" || return 1
+    rm .local/gates.env || return 1
+  fi
+  verify_correction_review_snapshot "$pr" "$snapshot" "$purpose" || return 1
+  next=$(pr_batch_wrapper_git workflow-successor-commit "$canonical_repo_root" "$pr" \
+    "$PR_WORKFLOW_SOURCE_REVISION" "$request" "$PR_WORKFLOW_TRUST_ANCHOR" "$snapshot" \
+    "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "$PWD") || return 1
+  printf 'Correction workflow successor admitted: %s\n' "$next"
+  if [ "$purpose" = proof ]; then
+    printf 'Source and pending proof retained; only scripts/pr prepare-publish-for-proof %s is admitted. Ordinary gates and merge remain blocked.\n' "$pr"
+  else
+    printf 'Source and review retained; run scripts/pr prepare-gates %s before publication.\n' "$pr"
+  fi
+)
 
 prepare_baseline_successor() (
   # Explicit admission, never inferred by refresh or recovery from a present binding.
@@ -119,13 +184,14 @@ recover_correction_continuation() (
   shift
   root=$(repo_root) || return 1
   helper="$(dirname "$(review_artifacts_helper_path)")/correction-continuation.mjs"
-  facts=$(node "$helper" replay "$pr" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "$@") || return 1
+  [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
+  facts=$(node "$helper" replay "$pr" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "$PR_MAIN_SHA" "$@") || return 1
   observation=$(cat .local/pr-meta.json) || return 1
   incoming=$(printf '%s' "$facts" | jq -er .request.incoming) || return 1
   head_ref=$(printf '%s' "$observation" | jq -er .headRefName) || return 1
   revalidate_pr_publication "$pr" "$observation" "$head_ref" "$incoming" "$incoming" || return 1
   mark_pr_operation_side_effects_started
-  printf '%s' "$facts" | node "$helper" apply "$pr" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
+  printf '%s' "$facts" | node "$helper" apply "$pr" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "$PR_MAIN_SHA"
 )
 
 prepare_correction_continue() (
@@ -154,6 +220,9 @@ prepare_correction_continue() (
   esac
   # This route must never refresh/reset the retained preparation branch.
   enter_worktree "$pr" false true || return 1
+  # Existing-only entry skips main acquisition. Baseline signature exclusion needs
+  # the canonical owner's private checkpoint, including during transition recovery.
+  [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
   if [ -e .local/review-transition.json ] || [ -L .local/review-transition.json ]; then
     recover_correction_continuation "$pr" "$head" "$tree" "$incoming" "$review" "$receipt" "$receipt_oid" || return 1
   else
@@ -170,11 +239,11 @@ prepare_correction_continue() (
     mark_pr_operation_side_effects_started
     retire_prep_evidence retain || return 1
     facts=$(node "$helper" prepare "$pr" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" \
-      "$head" "$tree" "$incoming" "$review" "$receipt" "$receipt_oid" "$PREP_RETIRED_EVIDENCE") || return 1
+      "$PR_MAIN_SHA" "$head" "$tree" "$incoming" "$review" "$receipt" "$receipt_oid" "$PREP_RETIRED_EVIDENCE") || return 1
     observation=$(cat .local/pr-meta.json) || return 1
     head_ref=$(printf '%s' "$observation" | jq -er .headRefName) || return 1
     revalidate_pr_publication "$pr" "$observation" "$head_ref" "$incoming" "$incoming" || return 1
-    printf '%s' "$facts" | node "$helper" apply "$pr" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+    printf '%s' "$facts" | node "$helper" apply "$pr" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "$PR_MAIN_SHA" || return 1
   fi
   echo "Continued correction at retained HEAD $head; source and prior proof preserved."
   echo "Fresh exact-candidate correction review and native gates are required."
@@ -185,19 +254,30 @@ prepare_baseline_materialize() (
   shift
   local pr="$1" expected="" baseline="" resolutions="" option signer=""
   local expected_tree="" expected_review="" predecessor_head="" predecessor_binding=""
-  local successor=false
+  local successor=false proof=false source_review="" incoming_head="" incoming_review="" receipt="" receipt_oid=""
+  local coauthors_path="" coauthors='[]' helper
   [ "$admission" != successor ] || successor=true
   shift
   while [ "$#" -gt 0 ]; do
     option="$1"
+    if [ "$option" = --for-proof ]; then
+      [ "$proof" = false ] && [ "$admission" = initial ] || return 2
+      proof=true; shift; continue
+    fi
     [ "$#" -ge 2 ] && [ -n "$2" ] || return 2
     case "$option" in
+      --source-review) [ -z "$source_review" ] || return 2; source_review="$2" ;;
+      --coauthors) [ -z "$coauthors_path" ] || return 2; coauthors_path="$2" ;;
+      --incoming-head) [ -z "$incoming_head" ] || return 2; incoming_head="$2" ;;
+      --incoming-review) [ -z "$incoming_review" ] || return 2; incoming_review="$2" ;;
+      --publication-receipt) [ -z "$receipt" ] || return 2; receipt="$2" ;;
+      --publication-oid) [ -z "$receipt_oid" ] || return 2; receipt_oid="$2" ;;
       --expected-head) [ -z "$expected" ] || return 2; expected="$2" ;;
       --baseline) [ -z "$baseline" ] || return 2; baseline="$2" ;;
       --resolutions) [ -z "$resolutions" ] || return 2; resolutions="$2" ;;
       --signer) [ "$admission" = request ] && [ -z "$signer" ] || return 2; signer="$2" ;;
-      --expected-tree) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$expected_tree" ] || return 2; expected_tree="$2" ;;
-      --expected-review) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$expected_review" ] || return 2; expected_review="$2" ;;
+      --expected-tree) [ -z "$expected_tree" ] || return 2; expected_tree="$2" ;;
+      --expected-review) [ -z "$expected_review" ] || return 2; expected_review="$2" ;;
       --predecessor-head) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$predecessor_head" ] || return 2; predecessor_head="$2" ;;
       --predecessor-binding) { [ "$successor" = true ] || [ "$admission" = request ]; } && [ -z "$predecessor_binding" ] || return 2; predecessor_binding="$2" ;;
       *) return 2 ;;
@@ -214,19 +294,73 @@ prepare_baseline_materialize() (
       [[ "$option" =~ ^[0-9a-f]{40}$ ]] || return 2
     done
   fi
-  enter_worktree "$pr" false || return 1
+  local continuation=null
+  helper="$(dirname "$(review_artifacts_helper_path)")/baseline-refresh.mjs"
+  if [ "$proof" = true ]; then
+    # Snapshot caller-relative metadata before checkout, evidence retirement or admission.
+    if [ -n "$coauthors_path" ]; then coauthors=$(node "$helper" coauthors "$coauthors_path") || return 1; fi
+    [ "$admission" = initial ] && [ "$successor" = false ] && [ -z "$signer$predecessor_head$predecessor_binding" ] || return 2
+    [[ "$expected_tree" =~ ^[0-9a-f]{40}$ ]] && [[ "$expected_review" =~ ^[0-9a-f]{40}$ ]] || return 2
+    [ -n "$source_review" ] || source_review=.local/correction-review.json
+    if [ -n "$incoming_head$incoming_review$receipt$receipt_oid" ]; then
+      for option in "$incoming_head" "$incoming_review" "$receipt_oid"; do [[ "$option" =~ ^[0-9a-f]{40}$ ]] || return 2; done
+      case "$receipt" in push|sync) receipt="prepare-$receipt-result.env" ;; *) return 2 ;; esac
+      continuation=$(jq -cn --arg tree "$expected_tree" --arg incoming "$incoming_head" --arg review "$incoming_review" --arg receipt "$receipt" --arg receiptOid "$receipt_oid" '{tree:$tree,incoming:$incoming,review:$review,receipt:$receipt,receiptOid:$receiptOid}') || return 1
+    fi
+    enter_worktree "$pr" false true || return 1
+    [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
+    if [ -e .local/review-transition.json ] || [ -L .local/review-transition.json ]; then
+      jq -e --arg source "$expected" --arg baseline "$baseline" --arg review "$expected_review" --arg tree "$expected_tree" --argjson continuation "$continuation" --argjson coauthors "$coauthors" '
+        .mode == "prep" and .source == $source and (.binding | @base64d | fromjson |
+        .version == 2 and .purpose == "proof" and .baselineHead == $baseline and .proofSource.sourceReviewOid == $review and .proofSource.sourceTree == $tree and (.coauthors // []) == $coauthors and
+        (if $continuation == null then .proofSource.continuation == null else .proofSource.continuation.incoming == $continuation.incoming and .proofSource.continuation.review == $continuation.review and .proofSource.continuation.receipt == $continuation.receipt and .proofSource.continuation.receiptOid == $continuation.receiptOid end))' .local/review-transition.json >/dev/null || { echo "Proof baseline operation or co-author attribution changed." >&2; return 1; }
+      recover_review_transition "$pr" || return 1
+      run_prepared_correction_review "$pr" init || return 1
+      echo "Recovered the exact admitted proof baseline transition; fresh candidate review is required."
+      return 0
+    fi
+  else
+    [ -z "$source_review$incoming_head$incoming_review$receipt$receipt_oid$coauthors_path" ] || return 2
+    if [ "$successor" = false ] && [ "$admission" != request ]; then [ -z "$expected_tree$expected_review" ] || return 2; fi
+    enter_worktree "$pr" false || return 1
+  fi
   local PREP_BRANCH="" PREP_REVIEW_MODE="" PR_NUMBER="" PR_HEAD_SHA_BEFORE=""
   local PREP_INCOMING_JSON_OID=""
   local PREP_BASELINE_REFRESH_HEAD="" PREP_BASELINE_REFRESH_OID=""
   source .local/prep-context.env || return 1
   [ "$PREP_REVIEW_MODE" = correction ] && [ "$PR_NUMBER" = "$pr" ] &&
     [ "$PREP_BRANCH" = "pr-$pr-prep" ] || return 1
-  local snapshot target helper root observation prepared binding source_directory
+  local snapshot target root observation prepared binding source_directory
   source_directory=$(pwd -P) || return 1
   root=$(repo_root) || return 1
   helper="$(dirname "$(review_artifacts_helper_path)")/baseline-refresh.mjs"
   node "$helper" check-signing-source "$expected" || return 1
-  if [ "$successor" = false ] && [ "$expected" = "$PR_HEAD_SHA_BEFORE" ]; then
+
+  if [ "$proof" = true ] && [ "$(pr_git rev-parse HEAD)" != "$expected" ]; then
+    snapshot=$(node "$helper" completed-proof "$pr" "$expected" "$baseline" "$expected_tree" "$expected_review" "$continuation" "$PR_MAIN_SHA" "$coauthors") || return 1
+    observation=$(cat .local/pr-meta.json) || return 1
+    local completed_head
+    completed_head=$(pr_git rev-parse HEAD) || return 1
+    revalidate_baseline_publication "$pr" "$observation" "$completed_head" || return 1
+    require_proof_publication_custody "$pr" proof || return 1
+    printf '%s' "$snapshot" | node "$helper" check-source "$pr" "$completed_head" "$source_directory" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+    if [ ! -e .local/correction-review.json ] || [ ! -e .local/correction-incoming-review.json ]; then
+      run_prepared_correction_review "$pr" init || return 1
+    fi
+    echo "The exact proof baseline is installed; complete its fresh independent candidate review."
+    return 0
+  fi
+  local proof_source="" proof_prepared=""
+  if [ "$proof" = true ]; then
+    [ "$(pr_git rev-parse HEAD)" = "$expected" ] && [ "$(pr_git rev-parse 'HEAD^{tree}')" = "$expected_tree" ] || return 1
+    # Retain old context/receipts and fresh incoming metadata separately. The
+    # continuation owner derives the new context but installs nothing yet.
+    mark_pr_operation_side_effects_started
+    retire_prep_evidence retain proof || return 1
+    proof_prepared=$(node "$helper" proof-source "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" "$PREP_RETIRED_EVIDENCE" "$source_review" "$expected_review" "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$continuation") || return 1
+    snapshot=$(printf '%s' "$proof_prepared" | jq -er .snapshot) || return 1
+    proof_source=$(printf '%s' "$proof_prepared" | jq -ce .proofSource) || return 1
+  elif [ "$successor" = false ] && [ "$expected" = "$PR_HEAD_SHA_BEFORE" ]; then
     snapshot=$(node "$helper" incoming-source-snapshot "$pr" "$expected" "$PREP_INCOMING_JSON_OID") || return 1
   else
     snapshot=$(correction_review_snapshot "$pr") || return 1
@@ -235,6 +369,10 @@ prepare_baseline_materialize() (
   [ -n "$snapshot" ] && [ -n "$PR_MAIN_SHA" ] || return 1
   require_baseline_source() {
     revalidate_baseline_publication "$pr" "$observation" "$expected" || return 1
+    if [ "$proof" = true ]; then
+      require_proof_publication_hosted_state "$pr" "$(printf '%s' "$proof_source" | jq -er .expectedHostedHead)" "$expected" || return 1
+      require_proof_publication_custody "$pr" proof || return 1
+    fi
     # The initial snapshot and create owner already validate the signed review.
     # After the live observation compare exact bytes, never replay that history.
     printf '%s' "$snapshot" | node "$helper" check-source "$pr" "$expected" "$source_directory" \
@@ -252,10 +390,13 @@ prepare_baseline_materialize() (
   require_baseline_source || return 1
   pr_git merge-base --is-ancestor "$baseline" "$PR_MAIN_SHA" || return 1
   mark_pr_operation_side_effects_started
-  retire_prep_evidence retain || return 1
+  if [ "$proof" = false ]; then retire_prep_evidence retain || return 1; fi
   local create_command=create
   set -- "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" "$PREP_RETIRED_EVIDENCE" "$snapshot" "$resolutions"
-  if [ "$successor" = true ]; then
+  if [ "$proof" = true ]; then
+    create_command=create-proof
+    set -- "$@" "$proof_source" "$coauthors"
+  elif [ "$successor" = true ]; then
     create_command=create-successor
     set -- "$@" "$predecessor_head" "$predecessor_binding" "$expected_review" "$expected_tree"
   fi
@@ -279,6 +420,11 @@ prepare_baseline_materialize() (
   require_baseline_source || return 1
   write_review_transition_journal "$pr" "$expected" "$target" prep "$PREP_BRANCH" "$binding" || return 1
   recover_review_transition "$pr" || return 1
+  if [ "$proof" = true ]; then
+    # Seed, never approve, the new candidate through the existing review owner
+    # while this current-main invocation still owns the operation and checkout.
+    run_prepared_correction_review "$pr" init || return 1
+  fi
   echo "Refreshed candidate $target; prior proof retained at $PREP_RETIRED_EVIDENCE."
   printf '%s' "$prepared" | jq -r '.resolutions[] | "Resolved \(.path): \(if .resolved == null then "deleted" else .resolved.mode + " " + .resolved.oid end)"' || return 1
   echo "Fresh exact-candidate correction review and native gate qualification are required."
@@ -368,7 +514,8 @@ refresh_prep_branch_for_reviewed_head() {
   prior_prep_head=$(pr_git rev-parse "refs/heads/$prep_branch")
   echo "Prep source head changed from $recorded_source_head to reviewed head $reviewed_head_sha."
   echo "Rebuilding $prep_branch from the reviewed PR head and invalidating stale prepare evidence."
-  pr_git checkout -B "$prep_branch" "$reviewed_head_sha" || return 1
+  prefetch_review_transition_objects "$reviewed_head_sha" || return 1
+  GIT_NO_LAZY_FETCH=1 pr_git checkout -B "$prep_branch" "$reviewed_head_sha" || return 1
   retire_prep_evidence || return 1
 
   # Security: shell-escape values before sourcing this context later.
@@ -432,7 +579,7 @@ verify_prep_branch_matches_prepared_head() {
 prepare_init() {
   local pr="$1" observation="${2:-}" review_mode="${3:-ready}"
   local incoming_json_oid=""
-  # Validate the exact reviewed head before taking the lock past its reversible phase.
+  # Review validation leaves this shell in the admitted worktree before side effects.
   case "$review_mode" in
     ready) review_validate_artifacts "$pr" true || return 1 ;;
     correction)
@@ -443,7 +590,6 @@ prepare_init() {
     *) echo "Unknown preparation review mode: $review_mode" >&2; return 1 ;;
   esac
   mark_pr_operation_side_effects_started
-  enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
 
@@ -495,7 +641,7 @@ prepare_init() {
   fi
 
   fetch_pr_head "$pr" "$reviewed_head_sha" "refs/heads/pr-$pr" "$json" || return 1
-  pr_git checkout -B "pr-$pr-prep" "$reviewed_head_sha" || return 1
+  GIT_NO_LAZY_FETCH=1 pr_git checkout -B "pr-$pr-prep" "$reviewed_head_sha" || return 1
   retire_prep_evidence || return 1
 
   # Security: shell-escape values to prevent command injection via malicious branch names.
@@ -569,6 +715,7 @@ prepare_validate_commit() {
 
 read_prep_publication_result() {
   local file="$1" line key value seen=" " count=0 valid=true
+  PUSH_PURPOSE="" PUSH_REVIEW_OID="" PUSH_PENDING_FINDINGS=""
   if [ ! -f "$file" ] || [ -L "$file" ]; then
     echo "Invalid publication receipt $file: expected a regular file." >&2
     return 1
@@ -581,6 +728,12 @@ read_prep_publication_result() {
         [[ "$value" =~ ^[0-9a-f]{40}$ ]] || { valid=false; break; } ;;
       PUSH_REPLACED_HOSTED_ANCESTRY)
         [ "$value" = true ] || [ "$value" = false ] || { valid=false; break; } ;;
+      PUSH_PURPOSE)
+        [ "$value" = proof ] || { valid=false; break; } ;;
+      PUSH_REVIEW_OID)
+        [[ "$value" =~ ^[0-9a-f]{40}$ ]] || { valid=false; break; } ;;
+      PUSH_PENDING_FINDINGS)
+        [[ "$value" =~ ^[A-Za-z0-9_.-]+(,[A-Za-z0-9_.-]+)*$ ]] || { valid=false; break; } ;;
       *) valid=false; break ;;
     esac
     case "$seen" in *" $key "*) valid=false; break ;; esac
@@ -588,7 +741,11 @@ read_prep_publication_result() {
     seen="$seen$key "
     count=$((count + 1))
   done < "$file"
-  if [ "$valid" != true ] || [ "$count" -ne 5 ] ||
+  if [ "$valid" != true ] ||
+    { [ "$count" -ne 5 ] && [ "$count" -ne 8 ]; } ||
+    { [ "$count" -eq 5 ] && [ -n "$PUSH_PURPOSE$PUSH_REVIEW_OID$PUSH_PENDING_FINDINGS" ]; } ||
+    { [ "$count" -eq 8 ] && { [ "$PUSH_PURPOSE" != proof ] || [ -z "$PUSH_REVIEW_OID$PUSH_PENDING_FINDINGS" ] ||
+      [ "$PUSH_PREP_HEAD_SHA" != "$PUSH_LOCAL_PREP_HEAD_SHA" ]; }; } ||
     [ "$PUSH_PREP_HEAD_SHA" != "$PR_HEAD_SHA_AFTER_PUSH" ]; then
     echo "Invalid publication receipt $file: expected the complete native result." >&2
     return 1
@@ -683,9 +840,15 @@ resolve_prep_publication_target() {
 
 verify_correction_publication_authority() {
   [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ] || return 0
-  require_correction_publication_gates "$PREP_PUBLICATION_PR" "$(pr_git rev-parse HEAD)" \
-    "$PREP_PUBLICATION_ALLOW_PENDING" || return 1
-  verify_correction_review_snapshot "$PREP_PUBLICATION_PR" "$PREP_PUBLICATION_REVIEW_SNAPSHOT"
+  if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" = proof ]; then
+    [ "$(pr_git branch --show-current)" = "$(resolve_prep_branch_name "$PREP_PUBLICATION_PR")" ] || return 1
+    require_proof_publication_hosted_state "$PREP_PUBLICATION_PR" "$PREP_PROOF_HOSTED_HEAD" "$(pr_git rev-parse HEAD)" || return 1
+  else
+    require_correction_publication_gates "$PREP_PUBLICATION_PR" "$(pr_git rev-parse HEAD)" \
+      "$PREP_PUBLICATION_ALLOW_PENDING" || return 1
+  fi
+  verify_correction_review_snapshot "$PREP_PUBLICATION_PR" "$PREP_PUBLICATION_REVIEW_SNAPSHOT" "${PREP_PUBLICATION_PURPOSE:-qualified}" || return 1
+  require_proof_publication_custody
 }
 
 advance_correction_publication_authority() {
@@ -693,15 +856,122 @@ advance_correction_publication_authority() {
   [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ] || return 0
   # Only the verified writer's expected receipt may change during publication.
   # Advance hosted authority after checking the rest of the review stayed fixed.
-  verify_correction_review_snapshot "$pr" "$snapshot" || return 1
+  verify_correction_review_snapshot "$pr" "$snapshot" "${PREP_PUBLICATION_PURPOSE:-qualified}" || return 1
   resolve_prep_publication_target "$pr" "$local_head" || return 1
   PREP_PUBLICATION_REVIEW_SNAPSHOT="$snapshot"
+  require_proof_publication_custody
+}
+
+require_proof_publication_custody() (
+  local pr="${1:-${PREP_PUBLICATION_PR:-}}" purpose="${2:-${PREP_PUBLICATION_PURPOSE:-qualified}}"
+  [ "$purpose" = proof ] || return 0
+  local binding observed_binding observed_source
+  local MERGE_OUTCOME_REF="" MERGE_OUTCOME_OID="" MERGE_OUTCOME_RECORD=""
+  # Hosted reads yield authority. Recheck live local custody after the last
+  # observation and at each effect; never publish under a replacement owner.
+  [ "$(pr_git branch --show-current)" = "$(resolve_prep_branch_name "$pr")" ] || return 1
+  if has_worktree_merge_output .; then
+    echo "Retained merge evidence must be reconciled before proof publication." >&2; return 1
+  fi
+  merge_outcome_load_local "$pr" || return 1
+  [ -z "$MERGE_OUTCOME_OID" ] || {
+    echo "A retained merge outcome blocks proof publication; use its reconciliation owner." >&2; return 1;
+  }
+  binding=$(pr_batch_wrapper_git workflow-inspect "$canonical_repo_root" "$pr") || return 1
+  IFS=$'\t' read -r observed_binding observed_source <<< "$binding"
+  local expected_source="$PR_WORKFLOW_SOURCE_REVISION"
+  if [ "${PR_WORKFLOW_ADMISSION:-0}" = proof-baseline ]; then
+    # The native selection descriptor authenticated this one current-main
+    # producer. It does not rewrite the historical binding or grant publication.
+    pr_git merge-base --is-ancestor "$observed_source" "$expected_source" || return 1
+    expected_source="$observed_source"
+  fi
+  [ "$observed_binding" = "$PR_WORKFLOW_BINDING_OID" ] &&
+    [ "$observed_source" = "$expected_source" ] || {
+    echo "Workflow binding changed before proof publication." >&2; return 1;
+  }
+  pr_operation_lock_owner_is_current "$canonical_repo_root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || {
+    echo "Operation custody changed before proof publication." >&2; return 1;
+  }
+)
+
+require_proof_publication_hosted_state() (
+  local pr="$1" expected="$2" candidate="$3" response observed
+  # The existing GraphQL observation reports queue and auto-merge state directly;
+  # its qualified REST fallback remains owned by the same reader.
+  local MERGE_TRANSPORT=graphql MERGE_PRIOR_CI_REST_OBSERVATION=false MERGE_USE_PRIOR_CI_ADMIN=false
+  local MERGE_ADMISSION_ACTIVE=false MERGE_OUTCOME_REF="" MERGE_OUTCOME_OID="" MERGE_OUTCOME_RECORD=""
+  local MERGE_REPO="" MERGE_REPO_URL="" MERGE_REPO_HOST="" MERGE_REPO_NAME="" MERGE_ENTRY_OBSERVATION=""
+  if has_worktree_merge_output .; then
+    echo "Retained merge evidence must be reconciled before proof publication." >&2; return 1
+  fi
+  merge_outcome_init "$pr" || return 1
+  [ -z "$MERGE_OUTCOME_OID" ] || {
+    echo "A retained merge outcome blocks proof publication; use its reconciliation owner." >&2; return 1;
+  }
+  response=$(merge_read observe "$pr") || return 1
+  # Check presence before the canonical projection: omitted GraphQL fields are
+  # unknown, not an attestation that an automatic landing request is absent.
+  printf '%s\n' "$response" | jq -e '.payload.data.repository.pullRequest |
+    has("autoMergeRequest") and has("isInMergeQueue")' >/dev/null || return 1
+  observed=$(merge_outcome_normalize "$response" "$pr") || return 1
+  printf '%s\n' "$observed" | jq -e --arg expected "$expected" --arg candidate "$candidate" '
+    .pr | .state == "OPEN" and .baseRefName == "main" and
+    (.headRefOid == $expected or .headRefOid == $candidate) and
+    .autoMergeRequest == null and .isInMergeQueue == false' >/dev/null || {
+    echo "Proof publication requires the exact open head with no auto-merge or queue request." >&2; return 1;
+  }
+)
+
+prepare_publish_for_proof() {
+  local pr="$1" proof head lease observation publication_baseline
+  local PREP_PUBLICATION_PURPOSE=proof PREP_PUBLICATION_PR="$pr" PREP_PUBLICATION_REVIEW_SNAPSHOT=""
+  local PREP_PROOF_HOSTED_HEAD="" PREP_PROOF_REVIEW_OID="" PREP_PROOF_PENDING_FINDINGS=""
+  enter_worktree "$pr" false true || return 1
+  [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
+  require_artifact .local/prep-context.env || return 1
+  require_artifact .local/pr-meta.env || return 1
+  if [ -f .local/gates.env ] && grep -q '^PENDING_CRABBOX_' .local/gates.env; then
+    echo "Pending proof execution requires its existing reconciliation owner." >&2; return 1
+  fi
+  source .local/pr-meta.env || return 1
+  source .local/prep-context.env || return 1
+  [ "$(pr_git branch --show-current)" = "$(resolve_prep_branch_name "$pr")" ] || return 1
+  proof=$(require_proof_publication_review "$pr") || return 1
+  head=$(pr_git rev-parse HEAD) || return 1
+  PREP_PROOF_HOSTED_HEAD=$(printf '%s\n' "$proof" | jq -er .expectedHostedHead) || return 1
+  PREP_PROOF_REVIEW_OID=$(pr_git hash-object --no-filters .local/correction-review.json) || return 1
+  PREP_PROOF_PENDING_FINDINGS=$(printf '%s\n' "$proof" | jq -er '[.pendingFindings[].id] | sort | join(",")') || return 1
+  # Exact commit identity is the artifact producer's input. Neither an unsigned
+  # override nor GitHub's same-tree GraphQL alias can satisfy this purpose.
+  case "${OPENCLAW_PR_PUSH_MODE:-auto}" in auto|git) ;; *) echo "Proof publication requires exact Git transport." >&2; return 1 ;; esac
+  [ "${OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH:-}" != 1 ] || { echo "Unsigned publication is unavailable for proof." >&2; return 1; }
+  pr_git verify-commit "$head" >/dev/null 2>&1 || return 1
+  # Reconciliation may advance the transport lease to HEAD. Keep signature
+  # admission anchored to the review's original lease, including on a no-op.
+  publication_baseline=$(require_proof_publication_review "$pr" proof-publication-baseline) || return 1
+  verify_prep_commit_range_signed "$PREP_PROOF_HOSTED_HEAD" "$head" "$publication_baseline" || {
+    echo "Proof publication requires a signed correction range from the reviewed hosted head." >&2; return 1;
+  }
+  resolve_prep_publication_target "$pr" "$head" || return 1
+  lease="$PREP_PUBLICATION_LEASE_SHA"
+  [ "$PREP_PUBLICATION_HEAD_SHA" = "$head" ] &&
+    { [ "$lease" = "$PREP_PROOF_HOSTED_HEAD" ] || [ "$lease" = "$head" ]; } || {
+    echo "Proof publication cannot substitute a hosted alias or different lease." >&2; return 1;
+  }
+  PREP_PUBLICATION_REVIEW_SNAPSHOT=$(correction_review_snapshot "$pr" proof) || return 1
+  observation=$(cat .local/pr-meta.json) || return 1
+  verify_correction_publication_authority || return 1
+  mark_pr_operation_side_effects_started || return 1
+  push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$head" "$lease" .local/prepare-push-result.env "$observation" || return $?
+  printf 'Published exact candidate %s for pending proof: %s\n' "$head" "$PREP_PROOF_PENDING_FINDINGS"
+  echo "Publication only: NEEDS WORK and unresolved findings remain; fresh proof, READY review and ordinary gates are still required."
 }
 
 prepare_push() {
   local pr="$1"
   local observation="${2:-}" resume_run="${3:-}"
-  local PREP_PUBLICATION_REVIEW_SNAPSHOT="" PREP_PUBLICATION_PR="$pr" PREP_PUBLICATION_ALLOW_PENDING=true
+  local PREP_PUBLICATION_REVIEW_SNAPSHOT="" PREP_PUBLICATION_PR="$pr" PREP_PUBLICATION_ALLOW_PENDING=true PREP_PUBLICATION_PURPOSE=qualified
   PR_MAIN_SHA=""
   enter_worktree "$pr" false true || return 1
   require_artifact .local/pr-meta.env
@@ -826,6 +1096,11 @@ resume_prepare_crabbox_gate() {
   [[ "$base" =~ ^[0-9a-f]{40}$ ]] || return 1
   local mainline_base
   mainline_base=$(pr_git merge-base "$local_head" "$base") || return 1
+  # Review authenticates its baseline against current main; dispatch keeps its
+  # separately retained base above, including when the two checkpoints differ.
+  if [ -n "${PREP_BASELINE_REFRESH_HEAD:-}" ] && [ -z "$PR_MAIN_SHA" ]; then
+    refresh_main_snapshot || return 1
+  fi
   require_prepared_review "$pr" || return 1
   PREP_PUBLICATION_REVIEW_SNAPSHOT=$(correction_review_snapshot "$pr") || return 1
   verify_correction_publication_authority || return 1

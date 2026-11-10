@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it as baseIt, vi } from "vitest";
+import { expect, it as baseIt, vi } from "vitest";
 import { patchConfigHealthEntryToStore } from "../config/io.health-state.js";
 import { createConfigIO } from "../config/io.js";
 import { createConfigHealthFingerprint } from "../config/io.observe-state.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
@@ -17,8 +16,6 @@ const repairOptions = {
   repairPrefixedConfig: true,
   invalidConfigNote: false,
 } satisfies DoctorConfigPreflightOptions;
-
-afterEach(closeOpenClawStateDatabaseForTest);
 
 const it = baseIt.extend<{ home: string; configPath: string }>({
   home: ({ task: _task }, use) => withDoctorConfigPreflightHome(use),
@@ -37,6 +34,49 @@ async function expectClobbered(configPath: string, original?: string) {
     await expectFiles({ [path.join(stateDir, files[0]!)]: original });
   }
 }
+
+it.for([true, false])(
+  "keeps the active included prompt grant %s ahead of an opposite older backup",
+  async (grant, { configPath, home }) => {
+    const backup = JSON.stringify({
+      gateway: { mode: "local" },
+      plugins: {
+        enabled: false,
+        entries: { example: { hooks: { allowPromptInjection: !grant } } },
+      },
+    });
+    const lastGoodPath = configPath + ".last-good";
+    await fs.writeFile(lastGoodPath, backup);
+    const fingerprint = createConfigHealthFingerprint({
+      raw: backup,
+      parsed: JSON.parse(backup),
+      stat: await fs.stat(lastGoodPath),
+    });
+    patchConfigHealthEntryToStore(
+      { env: process.env, homedir: () => home, logger: { warn() {} } },
+      configPath,
+      { lastKnownGood: fingerprint, lastPromotedGood: fingerprint },
+    );
+    const includePath = path.join(path.dirname(configPath), "active-policy.json");
+    const included = JSON.stringify({
+      enabled: false,
+      entries: { example: { hooks: { allowPromptInjection: grant } } },
+    });
+    const original = JSON.stringify({
+      gateway: { mode: "local" },
+      plugins: { $include: "active-policy.json" },
+      update: { channel: "beta" },
+    });
+    await fs.writeFile(includePath, included);
+    await fs.writeFile(configPath, original);
+    const result = await runDoctorConfigPreflight(repairOptions);
+    expect(result.snapshot.sourceConfig.plugins?.entries?.example?.hooks).toMatchObject({
+      allowPromptInjection: grant,
+    });
+    await expectFiles({ [configPath]: original, [includePath]: included, [lastGoodPath]: backup });
+    await expectClobbered(configPath);
+  },
+);
 
 it("preserves an invalid future-writer config instead of restoring an older backup", async ({
   configPath,
@@ -110,12 +150,9 @@ it("recovers roster ownership and the legacy default after runtime recovery refu
   configPath,
   home,
 }) => {
-  const workspace = (id: string) => ({ workspace: path.join(home, `workspace-${id}`) });
-  const entries = {
-    alpha: workspace("alpha"),
-    beta: workspace("beta"),
-    gamma: workspace("gamma"),
-  };
+  const entries = Object.fromEntries(
+    ["alpha", "beta", "gamma"].map((id) => [id, { workspace: path.join(home, `workspace-${id}`) }]),
+  );
   const bindings = [{ agentId: "beta", match: { channel: "discord" } }];
   const backup = JSON.stringify({
     gateway: { mode: "local" },

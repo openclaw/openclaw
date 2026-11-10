@@ -10,11 +10,16 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import * as commands from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
+import { createSqliteSnapshotStagingTokenSync } from "./sqlite-snapshot-staging.js";
+import { acquireSqliteStagingToken } from "./sqlite-staging-token.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { useStateReceipts, stateClock } from "./update-candidate-state-fixtures.test-support.js";
+import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 
@@ -110,13 +115,7 @@ it.each([
         files?: string[];
         mode?: string;
       };
-      const result = {
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-        stderr: "",
-      };
+      const result = createCommandResult();
       if (input.directory) {
         return { ...result, stdout: JSON.stringify({ facts: "0".repeat(64), bytes: 0 }) };
       }
@@ -225,6 +224,52 @@ it("preserves the parent agent writer lock and excludes its uncommitted migratio
   }
 });
 
+it("keeps inspection staging owned through result publication after the launcher releases it", async ({
+  signal,
+}) => {
+  const stateDir = dirs.make("update-inspection-custody-");
+  const staging = createSqliteSnapshotStagingTokenSync(stateDir);
+  const marker = path.join(stateDir, "publication-started");
+  const preload = path.join(stateDir, "publication-gate.cjs");
+  fs.writeFileSync(
+    preload,
+    `const fs = require("node:fs");
+     const write = fs.promises.writeFile;
+     fs.promises.writeFile = async function(file, ...args) {
+       if (String(file).includes("inspection-result-")) {
+         fs.writeFileSync(${JSON.stringify(marker)}, "entered");
+         ${nativeEntryReceiptSource(marker)}
+         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+       }
+       return write.call(this, file, ...args);
+     };`,
+  );
+  const controller = new AbortController();
+  const operation = runUpdateStateInspectionWorker({
+    input: { mode: "sqlite-generations", paths: [], stateDir, config: {} },
+    nodeRunner: process.execPath,
+    sourceEnv: workerEnv(preload),
+    stagingRoot: staging.directory,
+    databases: [],
+    signal: controller.signal,
+  });
+  const settled = operation.catch((error: unknown) => error);
+  try {
+    await withinTest(nativeEntryBeforeSettlement(marker, settled), signal);
+    staging.release();
+    expect(() => {
+      const release = acquireSqliteStagingToken(staging.directory, "reclaim");
+      release();
+    }).toThrow(/locked/);
+  } finally {
+    controller.abort();
+    await settled;
+    staging.release();
+  }
+  const reclaim = acquireSqliteStagingToken(staging.directory, "reclaim");
+  reclaim();
+});
+
 it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
   "settles the schema worker before releasing ownership after %s",
   { timeout: 15_000 },
@@ -288,7 +333,6 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       }
       const failure = await rejected;
       if (outcome === "cancel") {
-        expect(failure).toMatchObject({ name: "AbortError" });
         expect(failure).toBe(cancellation);
       } else {
         expect(failure).toBeInstanceOf(Error);
@@ -304,7 +348,11 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       const { pid } = JSON.parse(fs.readFileSync(marker, "utf8")) as { pid: number };
       expect(() => process.kill(pid, 0)).toThrow();
       expect(fs.readdirSync(cache).toSorted()).toEqual(["openclaw", "unrelated.txt"]);
-      expect(fs.readdirSync(path.join(cache, "openclaw"))).toEqual([]);
+      expect(
+        fs.readdirSync(
+          resolvePrivateSqliteSnapshotStagingRoot({ ...process.env, XDG_CACHE_HOME: cache }),
+        ),
+      ).toEqual([]);
       expect(fs.readFileSync(sentinel, "utf8")).toBe("preserved");
       expect(writer.prepare("PRAGMA user_version").get()).toEqual({
         user_version: blocked ? 4 : 3,

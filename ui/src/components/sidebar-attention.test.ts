@@ -126,6 +126,45 @@ async function openPanel(element: ParentNode, trigger: HTMLButtonElement) {
 }
 
 describe("model auth attention", () => {
+  it.each([
+    ["oauth", "Sign-in required", "Sign in"],
+    ["api_key", "API key needs attention", "Update API key"],
+    ["token", "Account needs attention", "Review account"],
+  ] as const)("offers the right recovery for %s", (type, status, action) => {
+    const snapshot = authStatus(1);
+    snapshot.providers = [
+      {
+        provider: "openai",
+        displayName: "OpenAI",
+        status: "missing",
+        profiles: [{ profileId: "openai:test", type, status: "missing" }],
+      },
+    ];
+    const item = authItems("main", snapshot)[0];
+    expect(item?.meta?.status).toBe(status);
+    expect(item?.inlineAction?.label).toBe(action);
+    expect(item?.detail).toContain(status);
+  });
+  it.each([
+    ["setup_inactive", "Sign in"],
+    [undefined, "Review account"],
+  ] as const)("handles mixed account inventory with reason %s", (reasonCode, action) => {
+    const snapshot = authStatus(1);
+    snapshot.providers = [
+      {
+        provider: "openai",
+        displayName: "OpenAI",
+        status: "expired",
+        profiles: [
+          { profileId: "openai:a-key", type: "api_key", status: "missing", reasonCode },
+          { profileId: "openai:z-login", type: "oauth", status: "expired" },
+        ],
+      },
+    ];
+    const item = authItems("main", snapshot)[0];
+    expect(item?.inlineAction?.label).toBe(action);
+    expect(item?.meta?.context).toBe(reasonCode ? "openai:z-login" : "main");
+  });
   it("keeps identical provider warnings distinct across agents", () => {
     expect(authItems("main")[0]?.signature).toBe("agent:main\nopenai");
     expect(authItems("writer")[0]?.signature).toBe("agent:writer\nopenai");
@@ -152,7 +191,7 @@ describe("model auth attention", () => {
     const item = authItems("main")[0];
     expect(item).toMatchObject({
       label: "OpenAI",
-      inlineAction: { label: "Reconnect", routeId: "model-providers" },
+      inlineAction: { label: "Review account", routeId: "model-providers" },
     });
     const action = item?.action;
     expect(action).toMatchObject({ kind: "askCustodian" });
@@ -325,7 +364,7 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() => expect(issues(element, "button__count")?.textContent).toBe("1"));
     await openPanel(element, trigger);
     const details = attention(element, "modelAuthExpired") as HTMLDetailsElement;
-    const first = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")!;
+    const first = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__more")!;
     const summary = details.querySelector("summary")!;
     const dismiss = summary.querySelector<HTMLButtonElement>("button")!;
     const wrap = (from: HTMLElement, shiftKey = false) => {
@@ -356,7 +395,17 @@ describe("sidebar attention refresh ownership", () => {
     flush();
     expect(attention(element, "modelAuthExpired")).toBeNull();
     wrap(issues(element, "panel__list")!);
-    expect(document.activeElement).toBe(element.querySelector(".sidebar-brand__icon[href]"));
+    expect(document.activeElement).toBe(first);
+
+    // Escape closes the open header menu alone and leaves focus on its trigger.
+    first.click();
+    await waitForFast(() => expect(first.getAttribute("aria-expanded")).toBe("true"));
+    first.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await waitForFast(() => expect(first.getAttribute("aria-expanded")).toBe("false"));
+    expect(issues(element, "panel__list")).not.toBeNull();
+    expect(document.activeElement).toBe(first);
   });
 
   it.each([false, true])(
@@ -428,14 +477,10 @@ describe("sidebar attention refresh ownership", () => {
         ".sidebar-mention-row .sidebar-issues-panel__dismiss",
       )?.disabled,
     ).toBe(true);
-    expect(
-      element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")?.disabled,
-    ).toBe(true);
+    expect(element.querySelector('[data-value="dismiss-shown"]')).toBeNull();
     harness.update(connected);
     await waitForFast(() =>
-      expect(
-        element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")?.disabled,
-      ).toBe(false),
+      expect(element.querySelector('[data-value="dismiss-shown"]')).not.toBeNull(),
     );
     element.querySelector<HTMLAnchorElement>(".sidebar-mention-row a")!.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
@@ -618,9 +663,12 @@ describe("sidebar attention refresh ownership", () => {
         id: "selected",
         decision: "allow-once",
       });
+      await waitForFast(() =>
+        expect(element.querySelector<HTMLButtonElement>(decisionSelector)?.disabled).toBe(true),
+      );
       if (reopen) {
         element.dismissPanel();
-        flush();
+        await waitForFast(() => expect(issues(element, "panel")).toBeNull());
         trigger.click();
         await waitForFast(() =>
           expect(document.activeElement).toBe(issues(element, "panel__list")),

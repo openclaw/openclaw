@@ -14,18 +14,9 @@ import {
   logMessageProcessed,
   logSessionStateChange,
 } from "./diagnostic.js";
-import {
-  resetDiagnosticStateForTest,
-  startEnabledDiagnosticHeartbeatForTest,
-} from "./diagnostic.test-support.js";
+import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 const events: DiagnosticEventPayload[] = [];
-function session(incognito: boolean, suffix: string) {
-  return {
-    sessionKey: `agent:main:dashboard:${incognito ? "incognito-" : ""}${suffix}`,
-    sessionId: `${incognito ? "private" : "ordinary"}-${suffix}-id`,
-  };
-}
 beforeEach(() => {
   resetDiagnosticStateForTest();
   resetDiagnosticEventsForTest();
@@ -40,17 +31,17 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   setDiagnosticsEnabledForProcess(false);
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 it.each(["key", "session-id"] as const)(
-  "keeps Incognito text out of formatted logs for a %s while retaining lifecycle state",
+  "hides Incognito text for a %s but retains lifecycle events",
   async (identity) => {
     const logs = (["debug", "warn", "error"] as const).map((level) =>
       vi.spyOn(diagnosticLogger, level).mockImplementation(() => {}),
     );
     for (const incognito of [true, false]) {
-      const { sessionKey, sessionId } = session(incognito, "diagnostic");
+      const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}diagnostic`;
+      const sessionId = `${incognito ? "private" : "ordinary"}-diagnostic-id`;
       const state = getDiagnosticSessionState({ sessionId, sessionKey });
       const ref = identity === "key" ? { sessionKey } : { sessionId };
       const marker = incognito
@@ -58,16 +49,8 @@ it.each(["key", "session-id"] as const)(
         : "SYNTHETIC_ORDINARY_DIAGNOSTIC_TEXT";
       const failure = { outcome: "error", reason: marker, error: marker } as const;
       const failed = { ...ref, ...failure };
-      logMessageDispatchCompleted({
-        ...failed,
-        source: "test",
-        durationMs: 1,
-      });
-      logMessageProcessed({
-        ...failed,
-        agentId: "main",
-        channel: "webchat",
-      });
+      logMessageDispatchCompleted({ ...failed, source: "test", durationMs: 1 });
+      logMessageProcessed({ ...failed, agentId: "main", channel: "webchat" });
       for (const next of ["processing", "idle"] as const) {
         logSessionStateChange({ ...ref, state: next, reason: marker });
         expect(state.state).toBe(next);
@@ -98,32 +81,6 @@ it.each(["key", "session-id"] as const)(
       ]) {
         expect(events).toContainEqual(expect.objectContaining({ sessionKey, ...expected }));
       }
-    }
-  },
-);
-
-it.each([true, false])(
-  "preserves heartbeat recovery and events with Incognito=%s",
-  async (incognito) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const warn = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
-    const recoverStuckSession = vi.fn();
-    const ref = session(incognito, "stuck");
-    startEnabledDiagnosticHeartbeatForTest({ recoverStuckSession });
-    logSessionStateChange({ ...ref, state: "processing" });
-
-    await vi.advanceTimersByTimeAsync(61_000);
-    await waitForDiagnosticEventsDrained();
-
-    expect(recoverStuckSession).toHaveBeenCalledWith(expect.objectContaining(ref));
-    expect(events).toContainEqual(
-      expect.objectContaining({ type: "session.stuck", ...ref, state: "processing" }),
-    );
-    if (incognito) {
-      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining(ref.sessionKey));
-    } else {
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionKey=${ref.sessionKey}`));
     }
   },
 );

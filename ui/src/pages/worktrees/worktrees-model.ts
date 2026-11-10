@@ -1,6 +1,8 @@
+import { sleepWithAbort } from "@openclaw/retry";
 import type {
   WorktreeRecord,
   WorktreesBranchesResult,
+  WorktreesGcResult,
   WorktreesListResult,
   WorktreesRemoveResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -8,12 +10,15 @@ import type { ApplicationContext } from "../../app/context-types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
 import type { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
-import { gcManagedWorktrees } from "../../lib/worktrees/gc-worktrees.ts";
+
+registerSessionOrganizationEnglish();
 
 /** Request admission stays synchronous while Solid projects this page's presentation. */
 export class WorktreesModel {
@@ -28,6 +33,9 @@ export class WorktreesModel {
   createName = "";
   createBaseRef = "";
   createBranches: string[] = [];
+  get createBranchesRefreshing() {
+    return this.branchesRequest.pending;
+  }
   gateway!: ReturnType<typeof useGatewayPage>;
   private readonly listRequest = createPageRequest(() => this.update({}), {
     task: (scope: GatewayConnectionScope, { signal }) =>
@@ -41,14 +49,21 @@ export class WorktreesModel {
     },
   });
   private readonly branchesRequest = createPageRequest(() => this.update({}), {
-    task: ({ scope, repoRoot }: { scope: GatewayConnectionScope; repoRoot: string }, { signal }) =>
-      scope.client.request<WorktreesBranchesResult>("worktrees.branches", { repoRoot }, { signal }),
-    onComplete: (result) => {
-      this.createBranches = result.branches.map((branch) => branch.name);
-    },
-    onError: () => {
-      this.createBranches = [];
-    },
+    task: ({ repoRoot }: { scope: GatewayConnectionScope; repoRoot: string }, { signal }) =>
+      requestCheckoutSnapshot<WorktreesBranchesResult>(
+        this.context.gateway,
+        "worktrees.branches",
+        { repoRoot },
+        {
+          signal,
+          onSnapshot: (result) => {
+            this.createBranches = result.branches.map((branch) => branch.name);
+            this.publish();
+          },
+        },
+      ),
+    onComplete: () => {},
+    onError: () => {},
   });
 
   constructor(
@@ -142,7 +157,8 @@ export class WorktreesModel {
     }
     if (
       !(await showConfirmDialog({
-        message: t("worktrees.confirmDelete", { name: record.name }),
+        title: t("worktrees.confirmDelete", { name: record.name }),
+        message: t("worktrees.confirmDeleteBody"),
         confirmLabel: t("common.delete"),
         danger: true,
       })) ||
@@ -163,6 +179,7 @@ export class WorktreesModel {
       }
       const reason = result.snapshotError ?? "";
       const force = await showConfirmDialog({
+        title: t("worktrees.confirmForceDeleteTitle"),
         message: t("worktrees.confirmForceDelete", { error: reason }),
         confirmLabel: t("common.delete"),
         danger: true,
@@ -201,9 +218,36 @@ export class WorktreesModel {
       return;
     }
     this.update({ operation: "gc" });
-    await this.runOperation(scope, () =>
-      gcManagedWorktrees(scope.client, () => this.gateway.isCurrent(scope)),
-    );
+    await this.runOperation(scope, async () => {
+      if (!this.gateway.isCurrent(scope)) {
+        return;
+      }
+      let result = await scope.client.request<WorktreesGcResult>("worktrees.gc", {});
+      const jobId = result.jobId;
+      while (result.state === "queued" || result.state === "running") {
+        if (!this.gateway.isCurrent(scope)) {
+          return;
+        }
+        if (!jobId) {
+          throw new Error(t("sessionsView.deletePreservedReasons.cleanup-failed"));
+        }
+        await sleepWithAbort(1_000);
+        if (!this.gateway.isCurrent(scope)) {
+          return;
+        }
+        result = await scope.client.request<WorktreesGcResult>("worktrees.gc", { jobId });
+      }
+      if (!this.gateway.isCurrent(scope)) {
+        return;
+      }
+      if (result.state === "failed" || result.outcome === "partial") {
+        throw new Error(
+          result.error ||
+            result.issues?.map((issue) => issue.reason).join("; ") ||
+            t("sessionsView.deletePreservedReasons.cleanup-failed"),
+        );
+      }
+    });
   }
 
   toggleCreate() {

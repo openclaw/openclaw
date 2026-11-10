@@ -1,15 +1,14 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { bindGatewayToolPolicyControl } from "./agent-tool-metadata.js";
-import type { HookContext } from "./agent-tools.before-tool-call.js";
-import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import {
   attachInternalToolResultContentSource,
   copyInternalToolResultState,
-} from "./runtime/internal-hooks.js";
-import { bindAgentToolReplaySafety } from "./tool-replay-safety.js";
+} from "../../packages/agent-core/src/internal-hooks.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { bindGatewayToolPolicyControl, copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import type { HookContext } from "./agent-tools.before-tool-call.js";
+import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
   INCOMPLETE_INSTRUCTIONS_HINT,
@@ -19,7 +18,22 @@ import {
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
-import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
+import {
+  applyToolSchemaDirectoryCatalog,
+  buildMcpToolSearchDirectory,
+} from "./tool-search-directory.js";
+import {
+  MAX_TOOL_SEARCH_BATCH_QUERIES,
+  MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
+  MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
+  MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
+  MAX_TOOL_SEARCH_RESULTS,
+  TOOL_CALL_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
+  TOOL_SEARCH_RAW_TOOL_NAME,
+  type ToolSearchMode,
+} from "./tool-search-protocol.js";
 import {
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
@@ -31,20 +45,7 @@ import {
   formatToolSearchControlResult,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
-import {
-  MAX_TOOL_SEARCH_BATCH_QUERIES,
-  MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
-  MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
-  MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
-  MAX_TOOL_SEARCH_RESULTS,
-  TOOL_CALL_RAW_TOOL_NAME,
-  TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
-  TOOL_SEARCH_RAW_TOOL_NAME,
-  type ToolSearchCatalogRef,
-  type ToolSearchMode,
-  type ToolSearchToolContext,
-} from "./tool-search-types.js";
+import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
 import { textResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 export {
@@ -63,12 +64,12 @@ export {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
-} from "./tool-search-types.js";
+} from "./tool-search-protocol.js";
+export type { ToolSearchConfig } from "./tool-search-protocol.js";
 export type {
   ToolSearchCatalogEntry,
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
-  ToolSearchConfig,
   ToolSearchToolContext,
 } from "./tool-search-types.js";
 
@@ -213,6 +214,9 @@ function formatToolSearchBatchResponse(
   return networkContent ? attachInternalToolResultContentSource(result, "network") : result;
 }
 
+const TOOL_SEARCH_DESCRIPTION =
+  "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action. Use tool_describe when you need its input schema or when a result includes instructionsHint; call it before dispatch_action to load the complete server instructions.";
+
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
   return mode === "tools" && TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(name);
 }
@@ -228,12 +232,31 @@ export function applyToolSearchCatalog(params: {
 }) {
   const config = resolveToolSearchConfig(params.config);
   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
-  return applyToolCatalogCompaction({
+  const result = applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
+    selection: config,
     isVisibleControlTool: (tool) => shouldExposeControlTool(tool.name, config.mode),
     isVisibleCatalogTool: (tool) => isDirectVisibleCatalogTool(tool, directToolNames),
   });
+  const catalog = result.catalogRegistered ? params.catalogRef?.current : undefined;
+  const directory = catalog ? buildMcpToolSearchDirectory(catalog) : "";
+  if (!directory) {
+    return result;
+  }
+  // The directory follows the registered catalog snapshot; an unchanged MCP
+  // inventory keeps identical description bytes across turns.
+  return {
+    ...result,
+    tools: result.tools.map((tool) =>
+      tool.name === TOOL_SEARCH_RAW_TOOL_NAME
+        ? copyAgentToolMetadata(tool, {
+            ...tool,
+            description: `${TOOL_SEARCH_DESCRIPTION}\n\n${directory}`,
+          })
+        : tool,
+    ),
+  };
 }
 
 export { applyToolSchemaDirectoryCatalog };
@@ -306,8 +329,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
     {
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
-      description:
-        "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action. Use tool_describe when you need its input schema or when a result includes instructionsHint; call it before dispatch_action to load the complete server instructions.",
+      description: TOOL_SEARCH_DESCRIPTION,
       parameters: resolveSearchParameters(config.searchDefaultLimit),
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const request = readToolSearchRequest(args, config);
@@ -384,10 +406,12 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           }
           // Invocation results need identity, not another copy of the discovery metadata.
           // Keep the full target result in details; forward its already-projected images as content.
+          // Compact: indenting would escape and re-indent target text the model already reads,
+          // spending the shared output cap on whitespace.
           const controlResult = formatToolSearchControlResult(
             { tool: { id, name, source }, result: modelResult },
             runtime,
-            { parentToolCallId: toolCallId, images },
+            { parentToolCallId: toolCallId, images, compact: true },
           );
           const failureKind = resolveToolResultFailureKind(callResult.result);
           // Keep the model-visible `{ tool, result }` envelope stable while the
@@ -403,8 +427,6 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
     },
   ].map((tool) => {
     bindGatewayToolPolicyControl(tool);
-    return tool.name === TOOL_CALL_RAW_TOOL_NAME
-      ? bindAgentToolReplaySafety(tool, "dispatcher")
-      : tool;
+    return tool;
   });
 }

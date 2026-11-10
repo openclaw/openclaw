@@ -31,7 +31,15 @@ export async function updateSessionProfileInvolvementAsync(
       (result, location, database, currentKeys) => {
         if (result.changed && database && (!currentKeys || currentKeys.has(location.sessionKey))) {
           publishSessionCollaborationChanges(
-            [{ ...location, facts: { kind: "unchanged" } }],
+            [
+              ...(result.memberFacts ?? []).map((facts) => ({
+                agentId: location.agentId,
+                storePath: location.storePath,
+                sessionKey: location.sessionKey,
+                facts,
+              })),
+              { ...location, facts: { kind: "unchanged" } },
+            ],
             database,
           );
           emitSessionLifecycleEvent({

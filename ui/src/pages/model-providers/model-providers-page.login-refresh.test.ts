@@ -157,8 +157,8 @@ it("refreshes the connected provider without reloading usage or replacing other 
     (method) => request.mock.calls.filter(([name]) => name === method).length,
   );
   const catalogReads = request.mock.calls.filter(([name]) => name === "models.list").length;
-  publishEvent({ type: "event", event: "config.changed", payload: {} });
-  publishEvent({ type: "event", event: "config.changed", payload: {} });
+  publishEvent({ type: "event", event: "chat.metadata.changed", payload: { authChanged: true } });
+  publishEvent({ type: "event", event: "chat.metadata.changed", payload: { authChanged: true } });
   connected = true;
 
   answer.resolve({ done: true, status: "done" });
@@ -253,7 +253,7 @@ it.each(["close", "cancel", "complete"] as const)(
       ["usage.status", "sessions.usage"].includes(method),
     ).length;
     externalUpdate = true;
-    publishEvent({ type: "event", event: "config.changed", payload: {} });
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: { authChanged: true } });
     expect(page.querySelector('[data-provider-id="openai"]')).toBeNull();
     if (action === "complete") {
       answer.resolve({ done: true, status: "done" });
@@ -315,12 +315,12 @@ it("retains search and Retry controls through admitted core error feedback", asy
     expect(page.renderRoot.textContent).toContain("Core status unavailable"),
   );
   expect(refresh.disabled).toBe(false);
-  const receipt = page.view.props.coreReceipt;
   search.dispatchEvent(new Event("input", { bubbles: true }));
   await page.updateComplete;
-  expect(page.view.props.coreReceipt).toBe(receipt);
   expect(
-    page.querySelectorAll(".model-providers__provider-list .provider-usage-error"),
+    page
+      .querySelector(".model-providers__provider-list")
+      ?.textContent?.match(/Core status unavailable/g),
   ).toHaveLength(1);
   const button = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
     (candidate) => candidate.textContent?.trim() === "Retry",

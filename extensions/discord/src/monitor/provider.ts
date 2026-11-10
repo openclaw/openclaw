@@ -8,7 +8,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
-import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import { asDateTimestampMs, resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -35,6 +35,7 @@ import {
   normalizeOptionalString,
   summarizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   resolveDiscordAccount,
   resolveDiscordAccountAllowFrom,
@@ -79,7 +80,6 @@ import {
   createDiscordModelPickerFallbackSelect,
   createDiscordNativeCommand,
 } from "./native-command.js";
-import { probeDiscordAcpBindingHealth } from "./provider.acp.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { resolveDiscordProviderCommandSpecs } from "./provider.commands.js";
 import { runDiscordCommandDeployInBackground } from "./provider.deploy.js";
@@ -111,6 +111,8 @@ export type MonitorDiscordOpts = {
 };
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
+const DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS = 8_000;
+const DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS = 2 * 60 * 1000;
 
 type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
@@ -319,19 +321,78 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
           accountId: account.accountId,
           sendFarewell: false,
           healthProbe: async ({ sessionKey, session }) => {
-            const probe = await probeDiscordAcpBindingHealth({
-              cfg,
-              sessionKey,
-              agentId: session.agentId,
-              storedState: session.acp?.state,
-              lastActivityAt: session.acp?.lastActivityAt,
-              providerSessionRuntime: {
-                getAcpSessionManager: discordProviderSessionRuntime.getAcpSessionManager,
-                isAcpRuntimeError: discordProviderSessionRuntime.isAcpRuntimeError,
-                rethrowIncognitoSessionError:
-                  discordProviderSessionRuntime.rethrowIncognitoSessionError,
-              },
-            });
+            const agentId = session.agentId;
+            const storedState = session.acp?.state;
+            const lastActivityAt = session.acp?.lastActivityAt;
+            const probe = await (async (): Promise<{
+              status: "healthy" | "stale" | "uncertain";
+              reason?: string;
+            }> => {
+              const { getAcpSessionManager, isAcpRuntimeError } = discordProviderSessionRuntime;
+              const manager = getAcpSessionManager();
+              const statusProbeAbortController = new AbortController();
+              const statusPromise = manager
+                .getSessionStatus({
+                  cfg,
+                  sessionKey,
+                  agentId,
+                  signal: statusProbeAbortController.signal,
+                })
+                .then((status) => ({ kind: "status" as const, status }))
+                .catch((error: unknown) => ({ kind: "error" as const, error }));
+              const result = await raceWithTimeout(
+                statusPromise,
+                DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS,
+                () => ({ kind: "timeout" as const }),
+                { ref: false },
+              );
+              if (result.kind === "timeout") {
+                statusProbeAbortController.abort();
+              }
+              let runningForMs = 0;
+              if (storedState === "running") {
+                const activityAtMs = asDateTimestampMs(lastActivityAt);
+                const boundedActivityAtMs =
+                  activityAtMs === undefined ? 0 : Math.max(0, Math.floor(activityAtMs));
+                runningForMs = Math.max(0, Date.now() - boundedActivityAtMs);
+              }
+              const isStaleRunning =
+                storedState === "running" && runningForMs >= DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS;
+              if (result.kind === "timeout") {
+                return isStaleRunning
+                  ? { status: "stale", reason: "status-timeout-running-stale" }
+                  : { status: "uncertain", reason: "status-timeout" };
+              }
+              if (result.kind === "error") {
+                discordProviderSessionRuntime.rethrowIncognitoSessionError(result.error);
+                const error = result.error;
+                if (
+                  isAcpRuntimeError(error) &&
+                  ["SESSION_OWNER_MIGRATION_REQUIRED", "SESSION_OWNER_UNSUPPORTED"].includes(
+                    error.detailCode ?? "",
+                  )
+                ) {
+                  return { status: "uncertain", reason: formatErrorMessage(error) };
+                }
+                if (isAcpRuntimeError(error) && error.code === "ACP_SESSION_INIT_FAILED") {
+                  return { status: "stale", reason: "session-init-failed" };
+                }
+                const message = formatErrorMessage(error);
+                if (
+                  message.includes("Session is not ACP-enabled") ||
+                  message.includes("ACP session metadata missing")
+                ) {
+                  return { status: "stale", reason: "session-missing" };
+                }
+                return isStaleRunning
+                  ? { status: "stale", reason: "status-error-running-stale" }
+                  : { status: "uncertain", reason: "status-error" };
+              }
+              if (result.status.state === "error") {
+                return { status: "uncertain", reason: "status-error-state" };
+              }
+              return { status: "healthy" };
+            })();
             if (probe.status === "uncertain") {
               uncertainProbeKeys.add(`${sessionKey}${probe.reason ? ` (${probe.reason})` : ""}`);
             }

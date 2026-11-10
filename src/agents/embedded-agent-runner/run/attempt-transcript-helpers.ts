@@ -120,7 +120,7 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(
   }
   const now = Date.now();
   const maintenance = resolveQuotaSuspensionEntryMaintenance({ entry, now });
-  if (!maintenance.patch) {
+  if (!maintenance) {
     return entry;
   }
   const updated = await patchSessionEntryCore(
@@ -129,7 +129,7 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(
       resolveQuotaSuspensionEntryMaintenance({
         entry: currentEntry,
         now,
-      }).patch,
+      }),
     {
       skipMaintenance: true,
       takeCacheOwnership: true,

@@ -5,7 +5,7 @@ import { getAiTransportHost, type AssistantMessage, type Model } from "@openclaw
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../../config/validation-core.js";
@@ -32,6 +32,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readGlobalSingleton } from "../../shared/global-singleton.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -52,7 +53,7 @@ import type { ExtensionContext } from "../sessions/extensions/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { compactEmbeddedAgentSession } from "./compact.queued.js";
+import { compactQueuedEmbeddedAgentSession as compactEmbeddedAgentSession } from "./compact.queued.js";
 import { createCompactionResourceProvider } from "./compact.resources.test-support.js";
 import { attachCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 
@@ -444,6 +445,13 @@ describe("delegate compaction resource retirement", () => {
     "keeps actual work owned through %s",
     { timeout: 30_000 },
     async (mode, { signal }) => {
+      const listeners = readGlobalSingleton(
+        Symbol.for("openclaw.internalSessionTranscriptListeners"),
+      );
+      if (!(listeners instanceof Set)) {
+        throw new Error("Transcript listener registry is unavailable");
+      }
+      const listenersBefore = listeners.size;
       const lspCancelled = mode === "lsp-parent-abort";
       const mcpCancelled = mode === "mcp-caller-abort";
       const pendingPreparation = lspCancelled || mcpCancelled;
@@ -697,7 +705,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 }
               }
               const result = pendingPreparation
-                ? await withTestTimeout(operation, 5_000, "Tool preparation did not settle")
+                ? await withinTest(operation, signal)
                 : await operation;
               const cancelled =
                 mode === "reload-abort-before-commit" || mode === "abort-after-commit";
@@ -713,6 +721,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
               }
               expect(current.envRestored).toBe(true);
               expect(current.disposals).toBe(preparationFailed ? 0 : 1);
+              expect(listeners.size).toBe(listenersBefore);
               if (lspCancelled || mcpCancelled) {
                 expect(current.session).toBeUndefined();
                 expect(current.tools).toHaveLength(1);
@@ -742,7 +751,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 if (mode !== "cleanup-tail") {
                   expect(current.tools.every((tool) => tool.database.isOpen)).toBe(true);
                 }
-                const owner = captured?.work ?? parent;
+                const owner = captured?.active.work ?? parent;
                 expect(owner.hasPendingWork).toBe(true);
                 let finished = false;
                 drained = owner.drain().then(() => {
@@ -784,7 +793,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
               current.finish.resolve();
               await Promise.allSettled([operation, ...current.pending]);
               await (drained ?? parent.drain());
-              await captured?.work.drain();
+              await captured?.active.work.drain();
               await captured?.release();
               await previousLease?.[Symbol.asyncDispose]();
               await resetPreparedModelRuntimeSnapshotsForTest();

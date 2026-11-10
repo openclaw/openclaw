@@ -22,6 +22,17 @@ export function isMonitoredAuthProvider(p: ModelAuthStatusProvider): boolean {
   );
 }
 
+/** Only the measured account may consume account-specific quota facts. */
+export function providerUsageForAccount(
+  provider: Pick<ModelAuthStatusProvider, "usage">,
+  authProfileId: string | undefined,
+): ModelAuthStatusProvider["usage"] {
+  if (!authProfileId || provider.usage?.authProfileId !== authProfileId) {
+    return undefined;
+  }
+  return provider.usage;
+}
+
 const AUTH_STATUS_PRIORITY = ["expired", "missing", "expiring", "ok", "static"] as const;
 
 /** Collapse auth aliases before display; Gateway rows retain their auth facts. */
@@ -52,33 +63,6 @@ export function listEffectiveModelAuthProviders(
   });
 }
 
-function authStatusRefreshAt(
-  result: ModelAuthStatusResult,
-  requestedAt: number,
-): number | undefined {
-  let next: number | undefined;
-  // Probe the Gateway's warning windows conservatively: OAuth refresh ownership is private.
-  // These are at most three freshness reads per expiry, never local health classifications.
-  for (const provider of result.providers) {
-    for (const credential of [provider, ...provider.profiles]) {
-      if (!credential.expiry) {
-        continue;
-      }
-      for (const margin of [24 * 60 * 60_000, 5 * 60_000, 0]) {
-        const at = credential.expiry.at - margin;
-        // Map the Gateway clock onto this request's local start, preserving time in transport.
-        if (at > result.ts) {
-          const localAt = requestedAt + (at - result.ts);
-          if (next === undefined || localAt < next) {
-            next = localAt;
-          }
-        }
-      }
-    }
-  }
-  return next;
-}
-
 export function nextModelAuthStatusRefreshAt(result: ModelAuthStatusResult): number | undefined {
   return authRefreshDeadlines.get(result);
 }
@@ -104,7 +88,27 @@ export async function loadModelAuthStatus(
     // RPC result types do not validate payloads; keep malformed auth data out of the cache.
     const snapshot = result ?? EMPTY_AUTH_STATUS;
     if (Array.isArray(snapshot.providers)) {
-      authRefreshDeadlines.set(snapshot, authStatusRefreshAt(snapshot, requestedAt));
+      let next: number | undefined;
+      // Probe the Gateway's warning windows conservatively: OAuth refresh ownership is private.
+      // These are at most three freshness reads per expiry, never local health classifications.
+      for (const provider of snapshot.providers) {
+        for (const credential of [provider, ...provider.profiles]) {
+          if (!credential.expiry) {
+            continue;
+          }
+          for (const margin of [24 * 60 * 60_000, 5 * 60_000, 0]) {
+            const at = credential.expiry.at - margin;
+            // Map the Gateway clock onto this request's local start, preserving time in transport.
+            if (at > snapshot.ts) {
+              const localAt = requestedAt + (at - snapshot.ts);
+              if (next === undefined || localAt < next) {
+                next = localAt;
+              }
+            }
+          }
+        }
+      }
+      authRefreshDeadlines.set(snapshot, next);
     }
     return snapshot;
   };

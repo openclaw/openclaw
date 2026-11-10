@@ -17,6 +17,7 @@ import {
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { importClientCredentialLegacy } from "./client-credential-legacy.js";
 import {
@@ -37,7 +38,10 @@ import {
 } from "./client-credential-readiness.js";
 import { serializeClientCredentialReceipt } from "./client-credential-receipt.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
-import { runClientCredentialOperation } from "./client-credential-store.js";
+import {
+  openClientCredentialCustodyAsync,
+  runClientCredentialOperation,
+} from "./client-credential-store.js";
 import { createLegacyNodeAuthFixture } from "./client-credential-store.test-support.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
@@ -137,6 +141,61 @@ function seedIndependent(
 }
 
 describe("local client credential extraction", () => {
+  it("preserves shared credentials when prepared local custody is absent", async () => {
+    await using f = await fixture();
+    const prepared = await openClientCredentialCustodyAsync(f.env, { migration: true });
+    expect(prepared).toBeUndefined();
+    const credentials = f.source.prepare("SELECT * FROM device_identities").all();
+    expect(() =>
+      f.maintenance.run(() =>
+        runSqliteImmediateTransactionSync(f.source, () =>
+          prepareClientCredentialMigration(f.source, {
+            path: f.sourcePath,
+            env: f.env,
+            fromVersion: 25,
+            capture: f.maintenance.capture,
+            custody: prepared ?? null,
+          }),
+        ),
+      ),
+    ).toThrow("Client credential migration could not acquire local custody.");
+    expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
+    expect(f.source.prepare("SELECT * FROM device_identities").all()).toEqual(credentials);
+    expect(f.source.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
+      token: "token-original",
+    });
+    f.migrate();
+    using target = openMigrationCredentials(f.env);
+    expect(target.database.prepare("SELECT * FROM device_identities").all()).toEqual(credentials);
+  });
+
+  it("refuses prepared absence when local credentials appear before recovery", async () => {
+    await using f = await fixture();
+    f.migrate();
+    f.source.exec(
+      `UPDATE schema_meta SET schema_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION}; PRAGMA user_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION};`,
+    );
+    const pathname = resolveClientCredentialStorePath(f.env);
+    const retainedPath = `${pathname}.retained`;
+    fs.renameSync(pathname, retainedPath);
+    const prepared = await openClientCredentialCustodyAsync(f.env, { migration: true });
+    expect(prepared).toBeUndefined();
+    fs.renameSync(retainedPath, pathname);
+    expect(() =>
+      recoverClientCredentialStore(f.source, {
+        path: f.sourcePath,
+        env: f.env,
+        custody: prepared ?? null,
+      }),
+    ).toThrow("Local credentials are missing; restore the matching client credential backup.");
+    recoverClientCredentialStore(f.source, { path: f.sourcePath, env: f.env });
+    using target = openMigrationCredentials(f.env);
+    expect(target.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
+      token: "token-original",
+    });
+    expect(readClientCredentialReceipt(target.database)?.phase).toBe("complete");
+  });
+
   it.each([false, true])(
     "treats native auth absence as authoritative only when its table existed (table: %s)",
     async (authTablePresent) => {
@@ -701,10 +760,12 @@ it("decrypts a pre-cutover public-session token with the exactly migrated identi
   const token =
     "v1.BwcHBwcHBwcHBwcHwqVwqlDFAwNPJ4TDoOKwRBzmmVH2zD4hlWSM9INXdYUuW35wvupzTDJq6OCFmLkD2varXqKRCJOHZq6zmCs_5a138mgvyTNU00swEQPLnTdZ5VEr2n-115k4EmS30yAm0EtylQ6rpbzjqNtSCCySwtnlYtDQrzcc-uV3cucEmEgsYpLSIf4qFVHiP0Ohc6JxVSv1xofWUQBR29jEQWdv9PyiJix1YE7n4vNCcEZA";
   f.migrate();
-  await expect(resolvePublicSessionShareToken(token, { env: f.env })).resolves.toEqual({
-    agentId: "synthetic",
-    sessionKey: "agent:synthetic:public",
-    sessionId: "migration-proof",
-    shareId: "a".repeat(48),
+  await withEnvAsync({ OPENCLAW_STATE_DIR: f.env.OPENCLAW_STATE_DIR }, async () => {
+    await expect(resolvePublicSessionShareToken(token)).resolves.toEqual({
+      agentId: "synthetic",
+      sessionKey: "agent:synthetic:public",
+      sessionId: "migration-proof",
+      shareId: "a".repeat(48),
+    });
   });
 });

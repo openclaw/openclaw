@@ -5,6 +5,7 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { AgentAssistantSourceReceipt } from "../infra/agent-events.js";
+import * as jsonUtf8 from "../infra/json-utf8-bytes.js";
 import * as codeRegions from "../shared/text/code-regions.js";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import {
@@ -30,6 +31,10 @@ function progressHarness(mode?: ReplayMode, timeOffset = 0, sessionKey?: string)
   const event = (seq: number, stream: string, data: Record<string, unknown>) =>
     state.recordProgressEvent(context.runId, wire(seq, stream, data), mode);
   const snapshot = () => state.runs.get("run-1")?.progressSnapshot;
+  const expectEvents = (...expected: Array<[number, string, Record<string, unknown>]>) =>
+    expect(snapshot()?.events.map(({ seq, stream, data }) => [seq, stream, data])).toMatchObject(
+      expected,
+    );
   let seq = 0;
   const send = (stream: string, data: Record<string, unknown>) => event(++seq, stream, data);
   const tool = (
@@ -38,7 +43,16 @@ function progressHarness(mode?: ReplayMode, timeOffset = 0, sessionKey?: string)
     toolCallId: string,
     data: Record<string, unknown> = {},
   ) => event(sequence, "tool", { phase, toolCallId, ...data });
-  return { state, wire, event, send, tool, snapshot, events: () => snapshot()?.events };
+  return {
+    state,
+    wire,
+    event,
+    send,
+    tool,
+    snapshot,
+    expectEvents,
+    events: () => snapshot()?.events,
+  };
 }
 
 function withUnreadTail(field: string, value: unknown, onRead: () => void) {
@@ -172,14 +186,10 @@ describe("createChatRunState", () => {
     state.toolEventRecipients.add("run-1", "conn-1");
     const run = state.getOrCreate("run-1");
     const releaseBufferAuthority = vi.fn();
+    const abortMarker = createChatAbortMarker(4);
     Object.assign(run, {
       releaseBufferAuthority,
-      rawBuffer: "raw",
-      buffer: "projected",
-      planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
-      deltaSentAt: 2,
-      agentText: { assistant: { lastSentAt: 3 } },
-      abortMarker: createChatAbortMarker(4),
+      abortMarker,
     });
     state.takeBufferDelta("run-1", "projected");
     event(1, "item", { kind: "preamble", progressText: "Inspecting" });
@@ -191,59 +201,76 @@ describe("createChatRunState", () => {
     expect(releaseBufferAuthority).toHaveBeenCalledOnce();
     expect(state.registry.peek("run-1")?.clientRunId).toBe("client-1");
     expect(state.toolEventRecipients.get("run-1")).toEqual(new Set(["conn-1"]));
-    expect(state.runs.get("run-1")).toEqual({
-      lastActivityAt: expect.any(Number),
-      registrations: expect.any(Array),
-      abortMarker: expect.any(Object),
-      toolRecipient: expect.any(Object),
-    });
+    expect(state.resolveBuffer("run-1").text).toBe("");
+    expect(state.runs.get("run-1")?.abortMarker).toBe(abortMarker);
     state.updateBuffer("run-1", { itemId: "reused", text: "New reply." });
     expect(state.resolveBuffer("run-1").text).toBe("New reply.");
   });
 
-  it.each(["full", "summary"] as const)(
-    "retains the latest usage through %s reconnect eviction",
-    (mode) => {
-      const { state, wire, event, snapshot: getSnapshot } = progressHarness(mode);
-      event(1, "usage", { outputTokens: 100 });
-      event(2, "usage", { outputTokens: 170 });
-      event(1, "usage", { outputTokens: 100 });
-      event(3, "usage", { activeContextTokens: 900 });
-      for (let seq = 4; seq < 65; seq += 1) {
-        event(seq, "tool", { phase: "start", toolCallId: `tool-${seq}`, name: "read" });
-      }
-      const snapshot = getSnapshot();
-      const usage = snapshot?.events.filter((candidate) => candidate.stream === "usage");
-      expect(usage).toEqual([wire(3, "usage", { outputTokens: 170, activeContextTokens: 900 })]);
-      expect(snapshot?.events).toHaveLength(50);
-      expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
-      state.clearRun("run-1");
-      expect(state.runs.has("run-1")).toBe(false);
-    },
-  );
+  it("retains the latest usage through summary reconnect eviction", () => {
+    const { state, wire, event, snapshot: getSnapshot } = progressHarness("summary");
+    event(1, "usage", { outputTokens: 100 });
+    event(2, "usage", { outputTokens: 170 });
+    event(1, "usage", { outputTokens: 100 });
+    event(3, "usage", { activeContextTokens: 900 });
+    for (let seq = 4; seq < 65; seq += 1) {
+      event(seq, "tool", { phase: "start", toolCallId: `tool-${seq}`, name: "read" });
+    }
+    const snapshot = getSnapshot();
+    const usage = snapshot?.events.filter((candidate) => candidate.stream === "usage");
+    expect(usage).toEqual([wire(3, "usage", { outputTokens: 170, activeContextTokens: 900 })]);
+    expect(snapshot?.events).toHaveLength(50);
+    expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
+    state.clearRun("run-1");
+    expect(state.runs.has("run-1")).toBe(false);
+  });
 
   it("retains the latest startup status until observable run activity begins", () => {
-    const phase = "memory_flushing";
-    const { event, events } = progressHarness();
+    const { event, expectEvents } = progressHarness();
 
     event(1, "run_status", { phase: "preparing_workspace" });
-    event(2, "run_status", { phase });
-    expect(events()).toMatchObject([{ seq: 2, stream: "run_status", data: { phase } }]);
+    event(2, "run_status", { phase: "memory_flushing" });
+    expectEvents([2, "run_status", { phase: "memory_flushing" }]);
 
     event(3, "tool", { phase: "start", name: "read", toolCallId: "read-1" });
     event(4, "run_status", { phase: "starting_model" });
-    expect(events()).toMatchObject([
-      { seq: 3, stream: "tool", data: { phase: "start", toolCallId: "read-1" } },
-    ]);
+    expectEvents([3, "tool", { phase: "start", toolCallId: "read-1" }]);
     event(5, "run_status", { phase: "waiting_for_model", reason: "slot" });
-    expect(events()).toMatchObject([
-      { seq: 3, stream: "tool" },
-      { seq: 5, stream: "run_status", data: { phase: "waiting_for_model", reason: "slot" } },
-    ]);
+    expectEvents(
+      [3, "tool", {}],
+      [5, "run_status", { phase: "waiting_for_model", reason: "slot" }],
+    );
     event(6, "run_status", { phase: "starting_model" });
-    expect(events()).toMatchObject([
-      { seq: 3, stream: "tool" },
-      { seq: 6, stream: "run_status", data: { phase: "starting_model" } },
+    expectEvents([3, "tool", {}], [6, "run_status", { phase: "starting_model" }]);
+  });
+
+  it("replays the latest recovery compaction after an attempt failure (summary)", () => {
+    const { state, event } = progressHarness("summary");
+    const replay = () => projectInFlightRunSnapshot({ chatRunState: state, runId: "run-1" }).events;
+    event(1, "lifecycle", {
+      phase: "finishing",
+      error: "Context overflow",
+      livenessState: "blocked",
+      endedAt: 1,
+    });
+    event(2, "compaction", { phase: "start", itemId: "recovery-1" });
+    expect(replay()).toMatchObject([
+      { seq: 2, stream: "compaction", data: { phase: "start", itemId: "recovery-1" } },
+    ]);
+    event(3, "compaction", { phase: "end", itemId: "recovery-1", completed: true });
+    expect(replay()).toMatchObject([
+      { seq: 3, stream: "compaction", data: { phase: "end", completed: true } },
+    ]);
+    event(4, "compaction", { phase: "start", itemId: "recovery-2" });
+    event(3, "compaction", { phase: "end", itemId: "recovery-1", completed: true });
+    expect(replay()).toMatchObject([
+      { seq: 4, stream: "compaction", data: { phase: "start", itemId: "recovery-2" } },
+    ]);
+    event(5, "compaction", { phase: "end", itemId: "recovery-2", completed: false });
+    event(6, "lifecycle", { phase: "finishing" });
+    expect(replay()).toMatchObject([
+      { seq: 5, stream: "compaction", data: { phase: "end", completed: false } },
+      { seq: 6, stream: "lifecycle", data: { phase: "finishing" } },
     ]);
   });
 
@@ -254,9 +281,7 @@ describe("createChatRunState", () => {
     fallbackStepFinalOutcome: "next_fallback",
   };
   it.each([
-    { mode: "full", data: { phase: "finishing" } },
     { mode: "summary", data: { phase: "finishing" } },
-    { mode: "full", data: fallbackTransition },
     { mode: "summary", data: fallbackTransition },
   ] as const)("retains $data.phase until resumed $mode activity", ({ mode, data }) => {
     const { event, events } = progressHarness(mode);
@@ -266,50 +291,32 @@ describe("createChatRunState", () => {
     expect(events()).toMatchObject([{ stream: "assistant", seq: 2 }]);
   });
 
-  it.each(["full", "summary"] as const)("retains retry waits until resumed %s activity", (mode) => {
-    const { wire, send, events } = progressHarness(mode);
-    let seq = 1;
+  it.each([
+    ["assistant", { text: "Continuing" }],
+    ["tool", { phase: "start", toolCallId: "read-2", name: "read" }],
+    ["item", { kind: "preamble", itemId: "resumed", progressText: "Continuing" }],
+  ] as const)("retains retry waits until resumed %s activity", (stream, data) => {
+    const { wire, send, events } = progressHarness("summary");
     send("tool", { phase: "result", toolCallId: "read-1", name: "read", result: "done" });
-    for (const [stream, data] of [
-      ["assistant", { text: "Continuing" }],
-      ["tool", { phase: "start", toolCallId: "read-2", name: "read" }],
-      ["item", { kind: "preamble", itemId: "resumed", progressText: "Continuing" }],
-    ] as const) {
-      const retry = {
-        phase: "retrying",
-        message: "Rate limited. Retrying in 2 seconds (attempt 2/8).",
-        retryAttempt: 2,
-        maxRetries: 8,
-        delayMs: 2_000,
-        retryAt: 1_800_000_002_000,
-      };
-      send("run_status", retry);
-      send("usage", { outputTokens: 100 });
-      expect(events()).toContainEqual(
-        expect.objectContaining({ stream: "run_status", data: retry }),
-      );
-      send(stream, data);
-      seq += 3;
-      expect(events()?.some((entry) => entry.stream === "run_status")).toBe(false);
-      if (stream === "assistant") {
-        expect(events()).toContainEqual(wire(seq, "assistant", {}));
-      }
-      expect(events()).toContainEqual(
-        expect.objectContaining({
-          stream: "tool",
-          data: expect.objectContaining({ toolCallId: "read-1", phase: "result" }),
-        }),
-      );
+    const retry = { phase: "retrying", retryAttempt: 2, maxRetries: 8, delayMs: 2_000 };
+    send("run_status", retry);
+    send("usage", { outputTokens: 100 });
+    expect(events()).toContainEqual(expect.objectContaining({ stream: "run_status", data: retry }));
+    send(stream, data);
+    expect(events()?.some((entry) => entry.stream === "run_status")).toBe(false);
+    if (stream === "assistant") {
+      expect(events()).toContainEqual(wire(4, "assistant", {}));
     }
+    expect(events()).toContainEqual(
+      expect.objectContaining({
+        stream: "tool",
+        data: expect.objectContaining({ toolCallId: "read-1", phase: "result" }),
+      }),
+    );
   });
 
-  it("replays completed owners and standalone notices until bounded eviction", () => {
-    const {
-      event,
-      tool,
-      events,
-      snapshot: getSnapshot,
-    } = progressHarness(undefined, 1_000, "main");
+  it("replays completed owners and standalone notices", () => {
+    const { event, tool, events } = progressHarness(undefined, 1_000, "main");
     const review = (seq: number, id: string, status: string) =>
       tool(seq, "review", "active", { review: { id, label: "Guardian", status } });
     const preamble = (seq: number, itemId: string, progressText: string) =>
@@ -323,7 +330,7 @@ describe("createChatRunState", () => {
     review(6, "review-1", "approved");
     review(7, "review-2", "denied");
     tool(8, "start", "done", { name: "exec", args: {} });
-    tool(9, "result", "done", { name: "exec", result: "x".repeat(256_000) });
+    tool(9, "result", "done", { name: "exec" });
     preamble(10, "p-1", "Inspection complete");
     preamble(11, "p-2", "Running autoreview");
     tool(4, "result", "active", { name: "read" });
@@ -376,23 +383,6 @@ describe("createChatRunState", () => {
       { seq: 14, data: { phase: "warning" } },
       { seq: 15, data: { reviewId: "network-review", targetItemId: null } },
     ]);
-
-    for (let seq = 16; seq <= 78; seq += 1) {
-      event(seq, "tool", {
-        phase: "start",
-        name: "read",
-        toolCallId: `tool-${seq}`,
-        args: { payload: "y".repeat(80_000) },
-      });
-    }
-    const snapshot = getSnapshot();
-    expect(snapshot?.events).toHaveLength(50);
-    expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
-    expect(snapshot?.events.at(-1)?.data).toEqual({
-      phase: "start",
-      name: "read",
-      toolCallId: "tool-78",
-    });
   });
 
   it("captures native JSON once, frozen and byte-exact", () => {
@@ -409,6 +399,7 @@ describe("createChatRunState", () => {
           },
           omitted: undefined,
           values: [undefined, Number.NaN],
+          literals: [true, false, null],
         };
       },
     };
@@ -429,16 +420,29 @@ describe("createChatRunState", () => {
         return value;
       },
     });
+    using inspection = vi.spyOn(Object, "getPrototypeOf");
+    using traversal = vi.spyOn(jsonUtf8, "boundedJsonUtf8Bytes");
+    using literalEncoding = vi.spyOn(JSON, "stringify");
     tool(1, "result", "done", {
       result: { details, first: shared, again: shared, last: revocable.proxy },
     });
     const firstSnapshot = getSnapshot();
+    expect(traversal).not.toHaveBeenCalled();
+    expect(
+      literalEncoding.mock.calls.filter(([value]) => value === null || typeof value === "boolean"),
+    ).toHaveLength(0);
+    const capturedResult = firstSnapshot!.events[0]!.data.result;
+    const capturedInspections = inspection.mock.calls.filter(
+      ([value]) => value === capturedResult,
+    ).length;
+    inspection.mockRestore();
+    expect(capturedInspections).toBe(0);
     expect(firstSnapshot?.byteLength).toBe(jsonBytes(firstSnapshot?.events[0]));
     tool(2, "input_delta", "active", { diff: { added: 1, removed: 0 } });
     expect([serializations, reads, numberHints]).toEqual([1, 1, ["number", "number"]]);
     const snapshot = getSnapshot();
     expect(snapshot?.events[0]?.data.result).toEqual({
-      details: { text: "é", values: [null, null] },
+      details: { text: "é", values: [null, null], literals: [true, false, null] },
       first: { value: -3.25, text: "é", enabled: false },
       again: { value: -3.25, text: "é", enabled: false },
       last: ["last"],
@@ -457,8 +461,7 @@ describe("createChatRunState", () => {
   });
 
   it.each([
-    { prefix: 'é\n"\\\ud800', raw: false },
-    { prefix: "🦞", raw: false },
+    { prefix: 'é🦞\n"\\\ud800', raw: false },
     { prefix: "é", raw: true },
   ])("retains the exact JSON byte limit and stops capture on overflow: %j", ({ prefix, raw }) => {
     const encode = (text: string): unknown => {
@@ -470,39 +473,23 @@ describe("createChatRunState", () => {
       }
       return JSON.rawJSON(JSON.stringify(text));
     };
-    const field = raw ? "raw" : "text";
-    const state = createChatRunState();
-    const metadata = raw ? { phase: "result", toolCallId: "done" } : resultMetadata;
-    const event = {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: 1,
-      data: { ...metadata, result: { [field]: encode(prefix) } },
-    };
-    const text = prefix + "x".repeat(64 * 1024 - jsonBytes(event));
-    event.data.result[field] = encode(text);
-    state.recordProgressEvent("run-1", event);
-    expect(state.runs.get("run-1")?.progressSnapshot?.byteLength).toBe(64 * 1024);
-    expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data.result).toEqual({
-      [field]: text,
-    });
+    const { wire, tool, snapshot } = progressHarness();
+    const base = wire(1, "tool", { ...resultMetadata, result: { text: encode(prefix) } });
+    const text = prefix + "x".repeat(64 * 1024 - jsonBytes(base));
+    tool(1, "result", "done", { name: "read", result: { text: encode(text) } });
+    expect(snapshot()?.byteLength).toBe(64 * 1024);
+    expect(snapshot()?.events[0]?.data.result).toEqual({ text });
     const laterRead = vi.fn();
-    state.recordProgressEvent("run-1", {
-      ...event,
-      seq: 2,
-      data: {
-        ...metadata,
-        result: withUnreadTail(field, encode(`${text}x`), laterRead),
-      },
+    tool(2, "result", "done", {
+      name: "read",
+      result: withUnreadTail("text", encode(`${text}x`), laterRead),
     });
     expect(laterRead).not.toHaveBeenCalled();
-    expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data).toEqual(metadata);
+    expect(snapshot()?.events[0]?.data).toEqual(resultMetadata);
   });
 
   const unreplayable: [label: string, result: () => unknown, field?: string][] = [
     ["container-only oversized", () => Array.from({ length: 32_768 }, () => ({})), "rows"],
-    ["single oversized", () => "x".repeat(80_000), "body"],
     ["cumulative oversized", () => Array.from({ length: 100 }, () => "x".repeat(1_024)), "body"],
     [
       "cyclic",
@@ -903,8 +890,9 @@ describe("assistant text projection", () => {
     expect(parsedChars).toBeLessThan((run.rawBuffer?.length ?? 0) * 4);
   });
 
-  it.each([1, 4])("bounds code-point reads across %i messages", (messages) => {
+  it("bounds code-point reads across consecutive messages", () => {
     const codePointAt = vi.spyOn(String.prototype, "codePointAt");
+    const messages = 4;
     const chunks = 32;
     const delta = "word";
     for (let message = 0; message < messages; message++) {

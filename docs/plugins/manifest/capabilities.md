@@ -85,6 +85,7 @@ Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list 
 | `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
 | `commandRuntimeCapabilities`     | `string[]` | Command runtime capabilities a command may request: `subagents` and `scheduledTurns`.                                                |
 | `sessionScheduledTurns`          | `string[]` | Scheduled command turns the plugin may request; currently `requester-command`.                                                       |
+| `subagentProfiles`               | `string[]` | Plugin-local native subagent profile IDs registered through `api.agent.registerSubagentProfile`.                                     |
 | `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
 
 Document extractors may return optional completeness metadata with their text and images. `pages.processed` is a bounded list of 1-based pages actually processed; `pages.total` is the document page count; `pages.selection` distinguishes automatic limits from an explicit request; and `pages.truncated`, `textTruncated`, and `imagesTruncated` report known omissions. `maxPages` is a count cap; automatic page choice remains extractor-owned, while `pageNumbers` restricts an explicit selection. Omit `metadata` when the extractor cannot establish these facts; do not infer completeness downstream.
@@ -103,7 +104,11 @@ Commands requesting `runtimeCapabilities: ["subagents", "scheduledTurns"]` also
 declare `scheduledTurns` in `contracts.commandRuntimeCapabilities` and
 `contracts.sessionScheduledTurns: ["requester-command"]`. Probe
 `api.runtime.capabilities` for `command-scheduled-turns-v1` before registering
-such a command: hosts without it reject the registration. See
+such a command: hosts without it reject the registration. Hosts that also
+advertise `command-scheduled-turns-restart-v1` keep accepted schedules across a
+Gateway restart when the same plugin code loads again, including core-bundled
+plugins on the same OpenClaw build; each accepted schedule reports this as
+`survivesRestart`. See
 [requester-admitted scheduled commands](/plugins/sdk-runtime/background-work#requester-admitted-scheduled-commands).
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`. Tool discovery uses this list to load only the plugin runtimes that can own the requested tools.
@@ -227,7 +232,7 @@ model descriptor.
 
 - `profiles`: built-in tool profiles that expose the plugin tool by default. Valid values are `minimal`, `coding`, `messaging`, and `full`. These contributions merge into the corresponding profile allowlist; explicit operator allowlists and deny rules remain authoritative.
 - `optional`: marks the tool as non-required for plugin activation.
-- `replaySafe`: marks tool execution as safe to repeat after an incomplete model turn.
+- `replaySafe`: marks tool execution as safe to repeat during live model retry or overflow handling in the same process. It does not enable execution replay after a Gateway restart.
 - `sideEffecting`: marks execution as potentially changing durable or external state.
 
 These fields supplement the shared `configSignals` and `authSignals` fields above.

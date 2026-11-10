@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import * as cli from "./test-support/cli-harness.js";
 import { MEET_URL, meetSession } from "./test-support/fixtures.test-helpers.js";
@@ -22,6 +22,8 @@ const health = {
 
 const { run, output, json } = cli.useCli();
 
+afterEach(() => vi.unstubAllEnvs());
+
 it.each([false, true])("prints local doctor output (json=%s)", async (asJson) => {
   const status = vi.fn<GoogleMeetRuntime["status"]>().mockResolvedValue({ found: false });
   await run(["doctor", "meet_missing", ...(asJson ? ["--json"] : [])], { runtime: { status } });
@@ -43,6 +45,63 @@ it("preserves the original gateway doctor error without output", async () => {
   ).rejects.toBe(error);
   expect(output()).toBe("");
 });
+
+it.each([
+  { command: "resolve-space", explicit: true, json: false },
+  { command: "resolve-space", explicit: false, json: true },
+  { command: "preflight", explicit: true, json: true },
+  { command: "preflight", explicit: false, json: false },
+])(
+  "resolves $command (explicit=$explicit, json=$json)",
+  async ({ command, explicit, json: asJson }) => {
+    const meeting = explicit ? "spaces/explicit" : "spaces/configured";
+    const space = { name: meeting, meetingCode: "abc-defg-hij" };
+    const fetchMock = vi.fn(async () => cli.jsonResponse(space));
+    vi.stubGlobal("fetch", fetchMock);
+    await run(
+      [
+        command,
+        ...(explicit ? ["--meeting", "  spaces/explicit  "] : []),
+        ...(asJson ? ["--json"] : []),
+      ],
+      {
+        config: {
+          defaults: { meeting: "spaces/configured" },
+          oauth: { accessToken: "fixture-token", expiresAt: Date.now() + 3_600_000 },
+        },
+      },
+    );
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      `https://meet.googleapis.com/v2/${meeting}`,
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer fixture-token" }),
+      }),
+    );
+    if (asJson) {
+      expect(json()).toMatchObject(
+        command === "resolve-space" ? space : { input: meeting, resolvedSpaceName: meeting },
+      );
+    } else {
+      expect(output()).toContain(`input: ${meeting}\n`);
+      expect(output()).toContain("meeting code: abc-defg-hij\n");
+      expect(output()).toContain("token source: cached-access-token\n");
+    }
+  },
+);
+
+it.each(["resolve-space", "preflight"])(
+  "rejects missing %s meeting before OAuth",
+  async (command) => {
+    vi.stubEnv("OPENCLAW_GOOGLE_MEET_DEFAULT_MEETING", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(run([command])).rejects.toThrow(
+      "Meeting input is required. Pass a URL/meeting code or configure defaults.meeting.",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(output()).toBe("");
+  },
+);
 
 it.each([
   {
@@ -138,6 +197,49 @@ it("can prove Google Meet API create access", async () => {
       "Content-Type": "application/json",
     },
   });
+});
+
+it.each([
+  ["oauth-token", "https://oauth2.googleapis.com/token"],
+  ["meet-spaces-get", "https://meet.googleapis.com/v2/spaces/existing"],
+  ["meet-spaces-create", "https://meet.googleapis.com/v2/spaces"],
+])("reports and redacts %s failures without losing other checks", async (id, failedUrl) => {
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url === failedUrl) {
+      throw new Error(
+        "access_token=fixture-access refresh_token=fixture-refresh client_secret=fixture-secret",
+      );
+    }
+    return cli.jsonResponse(
+      url === "https://oauth2.googleapis.com/token"
+        ? { access_token: "fixture-access", expires_in: 3600, token_type: "Bearer" }
+        : { name: "spaces/fixture", meetingUri: MEET_URL },
+    );
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  await run(["doctor", "--oauth", "--meeting", "spaces/existing", "--create-space", "--json"], {
+    config: { oauth: { clientId: "fixture-client", refreshToken: "fixture-refresh" } },
+  });
+  const report = json();
+  expect(report).toMatchObject({
+    ok: false,
+    configured: true,
+    checks: expect.arrayContaining([
+      {
+        id,
+        ok: false,
+        message:
+          id === "oauth-token"
+            ? "Google Meet OAuth refresh transport failed"
+            : "access_token=[redacted] refresh_token=[redacted] client_secret=[redacted]",
+      },
+    ]),
+  });
+  expect(report.checks).toHaveLength(id === "oauth-token" ? 2 : 4);
+  expect(fetchMock).toHaveBeenCalledTimes(id === "oauth-token" ? 1 : 3);
+  for (const secret of ["fixture-access", "fixture-refresh", "fixture-secret"]) {
+    expect(output()).not.toContain(secret);
+  }
 });
 
 it("recovers and summarizes an existing Meet tab", async () => {

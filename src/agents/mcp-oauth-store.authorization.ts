@@ -2,6 +2,8 @@ import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import { McpConnectionAuthorityError } from "./mcp-connection-authority-error.js";
 import type { McpOAuthAuthorizationFact } from "./mcp-oauth-authorization-facts.js";
+import { mcpOAuthSignInHint, type McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { recordMcpStartupAuthorizationRequired } from "./mcp-startup-backoff.js";
 
 type AuthorizationState = {
   revision: object;
@@ -67,6 +69,17 @@ export function retainMcpOAuthAuthorizationState(
   };
   return {
     assertSettled,
+    captureRevision() {
+      const revision = owner.revision;
+      return () => {
+        try {
+          assertSettled();
+          return owner.revision === revision;
+        } catch {
+          return false;
+        }
+      };
+    },
     assertAuthorization(authorizationId: string) {
       assertSettled();
       if (
@@ -134,4 +147,19 @@ export function retainMcpOAuthAuthorizationState(
       }
     },
   };
+}
+
+export function mcpOAuthAuthorizationRequiredError(
+  identity: McpOAuthIdentity,
+  admission: OpenClawStateDatabaseReadAdmission,
+  additional = false,
+): Error {
+  const error = new Error(
+    `MCP server "${identity.serverName}" requires ${additional ? "additional " : ""}OAuth authorization. ${mcpOAuthSignInHint(identity)}`,
+  );
+  recordMcpStartupAuthorizationRequired(error, () => {
+    const owner = retainMcpOAuthAuthorizationState(admission, identity.storeKey);
+    return { isCurrent: owner.captureRevision(), dispose: owner.release };
+  });
+  return error;
 }

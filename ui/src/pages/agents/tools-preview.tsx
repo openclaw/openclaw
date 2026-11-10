@@ -1,6 +1,7 @@
-import { For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
-import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../api/types.ts";
+import type { ToolsEffectiveResult } from "../../api/types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsSection,
   SettingsEmpty,
@@ -22,28 +23,14 @@ export function renderToolMetaBadges(labels: string[]) {
   );
 }
 
-export function buildToolPresentation(
-  section: AgentToolSection,
-  tool: AgentToolEntry,
-  activeEntry: ToolsEffectiveEntry | null,
-) {
+export function buildToolPresentation(section: AgentToolSection, tool: AgentToolEntry) {
   const source = tool.source ?? section.source;
   const pluginId = tool.pluginId ?? section.pluginId;
   const sourceLabel =
     source === "plugin" && pluginId
       ? t("agentTools.plugin", { id: pluginId })
       : t("agentTools.builtIn");
-  const badges: string[] = [];
-  if (activeEntry && !activeEntry.deniedBySession) {
-    badges.push(t("agentTools.inPreview"));
-  }
-  if (source === "core" || (source === "plugin" && pluginId)) {
-    badges.push(sourceLabel);
-  }
-  if (tool.optional) {
-    badges.push(t("agentTools.optional"));
-  }
-  return { badges, sourceLabel };
+  return { sourceLabel };
 }
 
 export function toToolAnchorId(toolId: string) {
@@ -88,7 +75,6 @@ export function resolvePreviewTools(result: ToolsEffectiveResult | null) {
     ),
   };
 }
-const EMPTY_PREVIEW_TOOLS = resolvePreviewTools(null);
 
 export type EffectivePreview = {
   status: "otherAgent" | "previewLoading" | "previewUnavailable" | "previewNotLoaded" | null;
@@ -97,36 +83,8 @@ export type EffectivePreview = {
   facts?: ReturnType<typeof resolvePreviewTools>;
 };
 
-function previewFacts(props: { preview: EffectivePreview; configDirty?: boolean }) {
-  const previewStatus = () => {
-    const status = props.preview.status;
-    return status ? t(`agentTools.${status}`) : null;
-  };
-  const previewResult = () => props.preview.result;
-  const unverifiedReason = () =>
-    previewStatus() ?? (props.configDirty ? t("agentTools.unsavedAvailability") : null);
-  const toolAccess = () => (unverifiedReason() ? null : (previewResult()?.toolAccess ?? null));
-  const facts = () => props.preview.facts ?? EMPTY_PREVIEW_TOOLS;
-  const diagnosticMap = () =>
-    unverifiedReason() ? EMPTY_PREVIEW_TOOLS.diagnostics : facts().diagnostics;
-  const activeToolMap = () => facts().active;
-  const availableTools = () => facts().available;
-  const uniqueEffectiveTools = () => [...availableTools().values()];
-  const visibleEffectiveTools = () => uniqueEffectiveTools().slice(0, MAX_RUNTIME_TOOL_CHIPS);
-  const hiddenEffectiveToolCount = () =>
-    uniqueEffectiveTools().length - visibleEffectiveTools().length;
-  return {
-    previewStatus,
-    previewResult,
-    unverifiedReason,
-    toolAccess,
-    diagnosticMap,
-    activeToolMap,
-    availableTools,
-    uniqueEffectiveTools,
-    visibleEffectiveTools,
-    hiddenEffectiveToolCount,
-  };
+function previewStatus(preview: EffectivePreview) {
+  return preview.status ? t(`agentTools.${preview.status}`) : null;
 }
 
 export function ToolRuntime(props: {
@@ -134,8 +92,10 @@ export function ToolRuntime(props: {
   sessionKey: string;
   onJump: (event: Event, anchorId: string) => void;
 }) {
-  const { previewResult, uniqueEffectiveTools, visibleEffectiveTools, hiddenEffectiveToolCount } =
-    previewFacts(props);
+  const uniqueEffectiveTools = () => [...(props.preview.facts?.available.values() ?? [])];
+  const visibleEffectiveTools = () => uniqueEffectiveTools().slice(0, MAX_RUNTIME_TOOL_CHIPS);
+  const hiddenEffectiveToolCount = () =>
+    uniqueEffectiveTools().length - visibleEffectiveTools().length;
   const availability = () => {
     const current = props.preview.status ? props.preview : null;
     return current ? (
@@ -189,21 +149,21 @@ export function ToolRuntime(props: {
       title={t("agentTools.previewTitle")}
       description={
         <>
-          {t("agentTools.previewSubtitle")}
+          {t("agentTools.previewSubtitle")}{" "}
           <span class="mono">{props.sessionKey || t("agentTools.noSession")}</span>
         </>
       }
     >
-      <Show when={previewResult()?.notices?.length}>
+      <Show when={props.preview.result?.notices?.length}>
         <div class="agent-tools-notices">
-          <For each={previewResult()?.notices}>
+          <For each={props.preview.result?.notices}>
             {(notice) => (
-              <div
-                class={["callout", notice.severity === "warning" ? "warning" : "info"]}
+              <InlineAlert
+                tone={notice.severity === "warning" ? "warning" : "info"}
                 style={{ "margin-top": "12px" }}
               >
                 {formatUiExternalText(notice.message)}
-              </div>
+              </InlineAlert>
             )}
           </For>
         </div>
@@ -214,23 +174,29 @@ export function ToolRuntime(props: {
 }
 
 export function ToolListed(props: { preview: EffectivePreview }) {
-  const { previewStatus, uniqueEffectiveTools } = previewFacts(props);
-  return <code>{previewStatus() ?? uniqueEffectiveTools().length}</code>;
+  return <code>{previewStatus(props.preview) ?? props.preview.facts?.available.size ?? 0}</code>;
 }
 
 export function ToolPreview(props: {
   preview: EffectivePreview;
-  section: AgentToolSection;
   tool: AgentToolEntry;
-  part: "summary" | "badges" | "details" | "policy";
+  part: "details" | "policy";
   configDirty: boolean;
 }) {
-  const { previewStatus, unverifiedReason, toolAccess, diagnosticMap, activeToolMap } =
-    previewFacts(props);
-  const activeEntry = () => activeToolMap().get(normalizeToolPolicyName(props.tool.id)) ?? null;
-  const diagnostic = () => diagnosticMap().get(normalizeToolPolicyName(props.tool.id)) ?? null;
-  const availability = () =>
-    resolveToolAvailability(diagnostic(), activeEntry(), unverifiedReason(), previewStatus());
+  const status = () => previewStatus(props.preview);
+  const unverifiedReason = () =>
+    status() ?? (props.configDirty ? t("agentTools.unsavedAvailability") : null);
+  const toolAccess = () => (unverifiedReason() ? null : (props.preview.result?.toolAccess ?? null));
+  const activeEntry = () =>
+    props.preview.facts?.active.get(normalizeToolPolicyName(props.tool.id)) ?? null;
+  const diagnostic = () =>
+    unverifiedReason()
+      ? null
+      : (props.preview.facts?.diagnostics.get(normalizeToolPolicyName(props.tool.id)) ?? null);
+  const availability = createMemo(
+    () => resolveToolAvailability(diagnostic(), activeEntry(), unverifiedReason(), status()),
+    { lazy: true },
+  );
   const label = () => {
     const reason = unverifiedReason();
     if (reason) {
@@ -244,34 +210,6 @@ export function ToolPreview(props: {
         : availability().reason || availability().summary;
   };
   return (
-    <>
-      {props.part === "summary" ? (
-        <>
-          {availability().summary}
-          {availability().reason ? <div class="muted">{availability().reason}</div> : undefined}
-        </>
-      ) : props.part === "badges" ? (
-        renderToolMetaBadges(buildToolPresentation(props.section, props.tool, activeEntry()).badges)
-      ) : props.part === "details" ? (
-        label()
-      ) : (
-        renderToolPolicyDetails(diagnostic(), toolAccess())
-      )}
-    </>
-  );
-}
-
-export function ToolListedCount(props: { preview: EffectivePreview; tools: AgentToolEntry[] }) {
-  const { availableTools } = previewFacts(props);
-  const count = () =>
-    props.tools.filter((tool) => availableTools().has(normalizeToolPolicyName(tool.id))).length;
-  return (
-    <Show when={count()}>
-      {(value) => (
-        <span>
-          {t(`agentTools.listedTools${value() === 1 ? "One" : ""}`, { count: String(value()) })}
-        </span>
-      )}
-    </Show>
+    <>{props.part === "details" ? label() : renderToolPolicyDetails(diagnostic(), toolAccess())}</>
   );
 }

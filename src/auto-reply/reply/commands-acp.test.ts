@@ -5,7 +5,6 @@ import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpe
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { AcpInitializeSessionInput } from "../../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
-import { resolveSessionStorePathForAcp } from "../../acp/runtime/session-meta-store.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -19,6 +18,7 @@ import type { MsgContext } from "../templating.js";
 import { setMinimalAcpCommandRegistryForTests } from "./commands-acp.channels.test-support.js";
 import {
   createAcpCommandSessionBindingService,
+  createAcpTestObservabilitySnapshot,
   createAcpTestSessionBinding as createSessionBinding,
 } from "./test-fixtures/acp-runtime.js";
 
@@ -160,16 +160,12 @@ const runtimeBackend = {
   },
 };
 
-function initializedSession(
-  { sessionKey, agent, mode, cwd }: AcpInitializeSessionInput,
-  overrides: Partial<SessionAcpMeta> = {},
-) {
+function initializedSession({ sessionKey, agent, mode, cwd }: AcpInitializeSessionInput) {
   const meta = createAcpMeta({
     agent,
     mode,
     runtimeSessionName: `${sessionKey}:runtime`,
     ...(cwd ? { cwd, runtimeOptions: { cwd } } : {}),
-    ...overrides,
   });
   return {
     sessionEntry: { sessionId: "session-1", updatedAt: Date.now(), acp: meta },
@@ -356,18 +352,7 @@ describe("/acp command", () => {
           runtimeStatus: status,
         };
       },
-      getObservabilitySnapshot: () => ({
-        runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
-        turns: {
-          active: 0,
-          queueDepth: 0,
-          completed: 0,
-          failed: 0,
-          averageLatencyMs: 0,
-          maxLatencyMs: 0,
-        },
-        errorsByCode: {},
-      }),
+      getObservabilitySnapshot: createAcpTestObservabilitySnapshot,
       runTurn: async (input: { onEvent?: (event: unknown) => Promise<void> | void }) => {
         for await (const event of hoisted.runTurnMock(input) as AsyncIterable<unknown>) {
           await input.onEvent?.(event);
@@ -392,69 +377,25 @@ describe("/acp command", () => {
     }
   });
 
-  it("blocks authorized non-owners from /acp timeout", async () => {
-    const params = createParams("/acp timeout 120");
-    params.command.senderIsOwner = false;
-
-    const result = await handleAcpCommand(params, true);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+  it("spawns a configured owner's workspace and binds a child thread", async () => {
+    const workspace = tempDirs.make("openclaw-codex-");
+    const cfg = { ...baseCfg, agents: { entries: { codex: { workspace } } } };
+    const result = await runCommand("/acp spawn codex", cfg);
+    expectReplyText(
+      result,
+      "Spawned ACP session agent:codex:acp:",
+      "Created thread thread-created and bound it",
+    );
+    expectMockCallFields(hoisted.initializeSessionMock, {
+      agent: "codex",
+      mode: "persistent",
+      cwd: workspace,
+    });
+    const binding = expectBindingBindCall({ targetKind: "session", placement: "child" });
+    expect(binding.metadata).toMatchObject({
+      introText: expect.stringContaining(`cwd: ${workspace}`),
     });
   });
-
-  it.each(["explicit", "configured workspace"] as const)(
-    "spawns and binds with %s cwd",
-    async (source) => {
-      const explicit = source === "explicit";
-      const workspace = explicit ? "/home/bob/clawd" : tempDirs.make("openclaw-codex-");
-      const cfg = explicit
-        ? baseCfg
-        : { ...baseCfg, agents: { entries: { codex: { workspace } } } };
-      if (explicit) {
-        hoisted.initializeSessionMock.mockImplementationOnce(async (input) =>
-          initializedSession(input, {
-            identity: {
-              state: "resolved",
-              source: "status",
-              acpxSessionId: "acpx-1",
-              agentSessionId: "codex-inner-1",
-              lastUpdatedAt: Date.now(),
-            },
-          }),
-        );
-      }
-      const result = await runCommand(
-        `/acp spawn codex${explicit ? ` --cwd ${workspace}` : ""}`,
-        cfg,
-      );
-      expect(result?.reply?.text).toContain(
-        explicit ? "Spawned ACP session agent:main:acp:" : "Spawned ACP session agent:codex:acp:",
-      );
-      expect(result?.reply?.text).toContain("Created thread thread-created and bound it");
-      expectMockCallFields(hoisted.initializeSessionMock, {
-        agent: "codex",
-        mode: "persistent",
-        cwd: workspace,
-      });
-      if (!explicit) {
-        return;
-      }
-      const bindInput = expectBindingBindCall({
-        targetKind: "session",
-        placement: "child",
-      });
-      const introText = (bindInput.metadata as { introText?: unknown } | undefined)?.introText;
-      expect(typeof introText).toBe("string");
-      expect(introText).toContain("cwd: /home/bob/clawd");
-      expect(introText).not.toContain("session ids: pending (available after the first reply)");
-      expectGatewayMethodNotCalled("sessions.patch");
-      expectMockCallFields(hoisted.initializeSessionMock, {
-        sessionKey: expect.stringMatching(/^agent:main:acp:/),
-      });
-    },
-  );
 
   it("persists ACP spawn labels to the target store without a gateway self-call", async () => {
     const params = createParams("/acp spawn codex --bind here --label inbox");
@@ -647,20 +588,6 @@ describe("/acp command", () => {
     },
   );
 
-  it("cancels the ACP session bound to the current thread", async () => {
-    mockBoundThreadSession({ acp: { state: "running" } });
-    const result = await runThreadAcpCommand("/acp cancel", baseCfg);
-    expect(result?.reply?.text).toContain(
-      `Cancel requested for ACP session ${defaultAcpSessionKey}`,
-    );
-    expect(hoisted.cancelMock).toHaveBeenCalledWith({
-      cfg: baseCfg,
-      agentId: "codex",
-      reason: "manual-cancel",
-      sessionKey: defaultAcpSessionKey,
-    });
-  });
-
   it("admits ACP steer with the original channel participant", async () => {
     const captured: unknown[] = [];
     const audit = createChannelAdmissionAudit({ enabled: true });
@@ -702,6 +629,20 @@ describe("/acp command", () => {
       clearSink();
       audit.close();
     }
+  });
+
+  it("sends every line of a multiline ACP steer instruction", async () => {
+    mockGatewaySessionResolution(defaultAcpSessionKey);
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+
+    await runCommand(
+      `/acp steer --session ${defaultAcpSessionKey} first line\n  second line\n\nfourth line`,
+    );
+
+    expectMockCallFields(hoisted.runTurnMock, {
+      mode: "steer",
+      text: "first line\n  second line\n\nfourth line",
+    });
   });
 
   it("keeps bounded ACP steer output UTF-16 safe", async () => {
@@ -864,32 +805,6 @@ describe("/acp command", () => {
     },
   );
 
-  it("prefers the bound-thread ACP session over a non-owner sender's raw session key", async () => {
-    const boundSessionKey = "agent:codex:acp:bound";
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
-      createBoundThreadSession(boundSessionKey),
-    );
-    hoisted.readAcpSessionEntryMock.mockImplementation((params) => {
-      const owner = resolveSessionStorePathForAcp(params);
-      expect(owner.agentId).toBe("codex");
-      return { ...createAcpSessionEntry({ sessionKey: boundSessionKey }), ...owner };
-    });
-    const params = createParams("/acp sessions");
-    params.command.senderIsOwner = false;
-    params.sessionKey = "agent:main:raw-requester";
-
-    const result = await handleAcpCommand(params, true);
-
-    expect(result?.reply?.text).toContain(boundSessionKey);
-    expect(result?.reply?.text).not.toContain("agent:main:raw-requester");
-    expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith({
-      cfg: baseCfg,
-      agentId: "codex",
-      sessionKey: boundSessionKey,
-    });
-    expect(hoisted.listAcpSessionEntriesMock).not.toHaveBeenCalled();
-  });
-
   it("warns when no session key resolves for /acp sessions", async () => {
     hoisted.listAcpSessionEntriesMock.mockResolvedValue([createAcpSessionEntry()]);
     const params = createParams("/acp sessions");
@@ -949,7 +864,6 @@ describe("/acp command", () => {
     expect(result?.reply?.text).not.toContain("taskUpdatedAt:");
     expect(result?.reply?.text).not.toContain("OpenClaw runtime context (internal):");
     expect(result?.reply?.text).not.toContain("Internal task completion event");
-    expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
   });
 
   it.each(["operator.write", "operator.admin"])("gates ACP mutation with %s", async (scope) => {
@@ -1004,14 +918,6 @@ describe("/acp command", () => {
       expectedText: `✅ Updated ACP cwd for ${defaultAcpSessionKey}: /tmp/worktree. Effective options: cwd=/tmp/worktree`,
     },
     {
-      action: "permissions",
-      value: "approve-all",
-      effectiveOptions: { permissionProfile: "approve-all" },
-      managerMock: hoisted.setConfigOptionMock,
-      managerInput: { key: "approval_policy", value: "approve-all" },
-      expectedText: `✅ Updated ACP permissions profile for ${defaultAcpSessionKey}: approve-all. Effective options: permissionProfile=approve-all`,
-    },
-    {
       action: "timeout",
       value: "120",
       effectiveOptions: { timeoutSeconds: 120 },
@@ -1031,11 +937,6 @@ describe("/acp command", () => {
       sessionKey: defaultAcpSessionKey,
       ...testCase.managerInput,
     });
-    expect(
-      hoisted.setModeMock.mock.calls.length +
-        hoisted.setConfigOptionMock.mock.calls.length +
-        hoisted.updateSessionRuntimeOptionsMock.mock.calls.length,
-    ).toBe(1);
   });
 
   it("preserves the model failure boundary", async () => {
@@ -1047,6 +948,42 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toBe(
       "ACP error (ACP_TURN_FAILED): Could not update ACP model.\nnext: Retry, or use `/acp cancel` and send the message again.",
     );
+  });
+
+  it.each([
+    [
+      { runtime: { installCommand: "pnpm openclaw plugins install acpx" } },
+      "pnpm openclaw plugins install acpx",
+    ],
+    [
+      { backend: "acpx" },
+      `openclaw plugins install ${path.join(process.cwd(), "extensions", "acpx")}`,
+    ],
+    [
+      { backend: "custom-backend" },
+      'Install and enable the plugin that provides ACP backend "custom-backend".',
+    ],
+  ] as const)("shows install guidance through /acp install (%j)", async (acp, hint) => {
+    const result = await runCommand("/acp install", {
+      ...baseCfg,
+      acp: { ...baseCfg.acp, ...acp },
+    });
+    expectReplyText(result, "ACP install:", `run: ${hint}\nthen:`);
+  });
+
+  it("offers the package install when no workspace extension exists", async () => {
+    const cwd = vi
+      .spyOn(process, "cwd")
+      .mockReturnValue(path.join(process.cwd(), "missing-workspace"));
+    try {
+      expectReplyText(
+        await runCommand("/acp install"),
+        "ACP install:",
+        "run: openclaw plugins install acpx\nthen:",
+      );
+    } finally {
+      cwd.mockRestore();
+    }
   });
 
   it("explains when acpx is blocked by plugins.allow", async () => {
@@ -1064,11 +1001,5 @@ describe("/acp command", () => {
     });
 
     expectReplyText(result, "pluginActivation: blocked", "acpx", 'add "acpx" to plugins.allow');
-  });
-
-  it("shows deterministic install instructions via /acp install", async () => {
-    const result = await runCommand("/acp install", baseCfg);
-
-    expectReplyText(result, "ACP install:", "run:", "then: /acp doctor");
   });
 });

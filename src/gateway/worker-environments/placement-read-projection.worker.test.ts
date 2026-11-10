@@ -39,7 +39,7 @@ import {
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
-import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
+import { matchesWorkspaceResultClaim } from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { prepareSessionWorkerPlacementMutationCheckAsync } from "./session-placement-lifecycle.js";
 import { createWorkerEnvironmentStore } from "./store.js";
@@ -348,10 +348,15 @@ it.each(["worker-turn", "remote-exec"] as const)(
   },
 );
 
-it("derives inference without rewriting its bound snapshot", async () => {
+it("derives inference from an environment with a recorded resource receipt", async () => {
   const sessionId = "snapshot-worker";
   const environmentId = "environment-" + sessionId;
   const profileSnapshot = { settings: { device: "paired-node", inference: "worker" } };
+  const resourceReceipt = {
+    version: 1 as const,
+    leaseId: `lease:${environmentId}`,
+    identity: { resourceId: "resource-1" },
+  };
   writePlacementEnvironmentFixture(database, {
     environmentId,
     state: "attached",
@@ -361,6 +366,7 @@ it("derives inference without rewriting its bound snapshot", async () => {
     profileId: "named-device",
     nodeDeviceId: "paired-node",
     profileSnapshot,
+    resourceReceipt,
   });
   const { store, placement } = await activePlacement(sessionId);
   const snapshot = await store.readProjection([sessionId]);
@@ -397,6 +403,7 @@ it("discovers disk probes off thread before sampling", async () => {
   let discoverySql: string[] | undefined;
   const requestedEnvironments: string[] = [];
   const warn = vi.fn();
+  using _ = vi.spyOn(Date, "now").mockReturnValue(2000);
   const monitor = createWorkerPlacementDiskSpaceMonitor({
     placements: store,
     runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -416,7 +423,6 @@ it("discovers disk probes off thread before sampling", async () => {
       },
     },
     warn,
-    now: () => 2000,
   });
   await monitor.sweep();
 
@@ -562,7 +568,7 @@ it.each([false, true])(
       "journal-stale",
       "result-reclaimed",
     ].map((sessionId) => {
-      const pending: WorkerWorkspacePendingResult = {
+      const pending: Omit<WorkerWorkspacePendingResult, "repositoryDiskAuthority"> = {
         sessionId,
         environmentId: `env-${sessionId}`,
         ownerEpoch: sessionId === "journal-stale" ? 8 : 7,
@@ -656,11 +662,13 @@ it.each([false, true])(
       state: "local",
       environmentId: null,
       moveSourceEnvironmentId: "source-move-z-local",
+      workspaceRecoveryPending: true,
     });
     expect(candidates.find((candidate) => candidate.sessionId === "journal-draining")).toEqual({
       sessionId: "journal-draining",
       state: "draining",
       environmentId: "env-journal-draining",
+      workspaceRecoveryPending: true,
     });
     counters.expectIdle();
     db.prepare("UPDATE worker_session_placements SET updated_at_ms = ? WHERE session_id = ?").run(

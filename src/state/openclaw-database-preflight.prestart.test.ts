@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -39,16 +40,7 @@ function beginPreflight(agentEngine: "postgres" | "sqlite", signal?: AbortSignal
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
   fs.writeFileSync(statePath, "synthetic PostgreSQL store anchor");
   const selection: DatabaseEngineSelection = {
-    effectiveEngines: {
-      state: "postgres",
-      agent: agentEngine,
-      workboard: "sqlite",
-      logbook: "sqlite",
-      "team-reports": "sqlite",
-      quarantine: "sqlite",
-      "managed-update": "sqlite",
-      "package-activation": "sqlite",
-    },
+    effectiveEngines: createSqliteFamilyEngines({ state: "postgres", agent: agentEngine }),
     postgres: { connection: "postgresql://unused.invalid/preflight", schemaPrefix: "preflight" },
   };
   return withDatabaseEngineSelection(selection, () =>

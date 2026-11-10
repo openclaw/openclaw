@@ -1,16 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
-import type {
-  CliBackendParseJsonlEvent,
-  CliBackendParsedJsonlEvent,
-} from "../plugins/cli-backend.types.js";
+import type { CliBackendParseJsonlEvent } from "../plugins/cli-backend.types.js";
 import type {
   CliJsonlStreamingParserOptions,
   CliOutput,
   CliUsage,
 } from "./cli-output-contracts.js";
-import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 import type { CliEventProjectionState, ThinkingTracker } from "./cli-output-events.js";
 import {
   createLeadingTaggedReasoningRouter,
@@ -45,9 +41,9 @@ import {
 } from "./cli-output-records.js";
 import { appendCliResultText, recordItemText, withCliRawFinalText } from "./cli-output-results.js";
 import {
+  chargeClaudeStreamJsonLine,
   CLI_STREAM_JSON_OUTPUT_LIMITS,
   frameBoundedCliJsonlChunk,
-  measureClaudePartialMessage,
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
 import { resolveCliStreamOutput } from "./cli-output-stream-output.js";
@@ -203,36 +199,6 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       ? ""
       : assistantText.slice(Math.max(currentMessageStart, flushedMessageStart)).trim());
 
-  const handleCustomJsonlEvent = (event: CliBackendParsedJsonlEvent) => {
-    const previousOutput = output;
-    const state: CliEventProjectionState = {
-      assistantText,
-      customThinkingText,
-      sessionId,
-      usage,
-      output,
-      sawCustomJsonlEvent,
-    };
-    projectCliBackendEvent({
-      ...params,
-      event,
-      state,
-      texts,
-      toolTracker,
-    });
-    ({ assistantText, customThinkingText, sessionId, usage, output, sawCustomJsonlEvent } = state);
-    // Custom events carry no message boundaries: a tool start begins the next
-    // final-message segment, so pre-tool narration is never the final message.
-    if (event.kind === "toolStart") {
-      currentMessageStart = assistantText.length;
-    } else if (event.kind === "result" && output && !output.errorText) {
-      // A metadata-only result keeps the earlier result's final message.
-      const prior = previousOutput?.rawFinalText ?? previousOutput?.text.trim();
-      const finalText = event.text?.trim() || (prior ?? finalStreamedMessageText());
-      output = withCliRawFinalText(output, finalText);
-    }
-  };
-
   const accountClaudeJsonlLine = (lineChars: number, partialMessage = false): boolean => {
     if (!partialMessage && ++ordinaryClaudeLines > outputLimits.maxTurnLines) {
       parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
@@ -305,7 +271,34 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (event.kind === "result") {
         sawTerminalResult = true;
       }
-      handleCustomJsonlEvent(event);
+      const previousOutput = output;
+      const state: CliEventProjectionState = {
+        assistantText,
+        customThinkingText,
+        sessionId,
+        usage,
+        output,
+        sawCustomJsonlEvent,
+      };
+      projectCliBackendEvent({
+        ...params,
+        event,
+        state,
+        texts,
+        toolTracker,
+      });
+      ({ assistantText, customThinkingText, sessionId, usage, output, sawCustomJsonlEvent } =
+        state);
+      // Custom events carry no message boundaries: a tool start begins the next
+      // final-message segment, so pre-tool narration is never the final message.
+      if (event.kind === "toolStart") {
+        currentMessageStart = assistantText.length;
+      } else if (event.kind === "result" && output && !output.errorText) {
+        // A metadata-only result keeps the earlier result's final message.
+        const prior = previousOutput?.rawFinalText ?? previousOutput?.text.trim();
+        const finalText = event.text?.trim() || (prior ?? finalStreamedMessageText());
+        output = withCliRawFinalText(output, finalText);
+      }
     }
     return true;
   };
@@ -419,7 +412,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       resetReplySegment();
     }
 
-    let result = parseClaudeCliJsonlResult({
+    const result = parseClaudeCliJsonlResult({
       backend: params.backend,
       providerId: params.providerId,
       parsed,
@@ -434,10 +427,8 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         result.terminalFailure?.reason === "turn_stopped" ? result.terminalFailure : undefined;
       const stoppedTurnErrorText = stoppedTurn ? (result.errorText ?? "") : "";
       if (stoppedTurn) {
-        const delivered = { ...result };
-        delete delivered.errorText;
-        delete delivered.terminalFailure;
-        result = delivered;
+        delete result.errorText;
+        delete result.terminalFailure;
       } else if (result.errorText) {
         output = result;
         return;
@@ -457,7 +448,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
               onVisibleText: emitClaudeVisibleText,
             });
           }
-          result = { ...result, text: taggedResult.visibleText.trim() };
+          result.text = taggedResult.visibleText.trim();
         }
       }
       // Empty terminal result can follow already-streamed text; keep that text.
@@ -665,21 +656,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     const parsedRecords = decodeCliRecords(line);
     if (claudeStreamJson) {
-      const partialChars =
-        parsedRecords.length === 1
-          ? measureClaudePartialMessage(parsedRecords[0]!, rawLine)
-          : undefined;
-      const normalized =
-        parsedRecords.length === 1
-          ? normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!)
-          : undefined;
-      // Neither media omission nor token-envelope discounts may erase wire whitespace.
-      const retainedChars =
-        partialChars ??
-        (normalized
-          ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
-          : rawLine.length);
-      if (!accountClaudeJsonlLine(retainedChars, partialChars !== undefined)) {
+      const record = parsedRecords.length === 1 ? parsedRecords[0] : undefined;
+      const charge = chargeClaudeStreamJsonLine(record, rawLine);
+      if (!accountClaudeJsonlLine(charge.chars, charge.partialMessage)) {
         return;
       }
     }

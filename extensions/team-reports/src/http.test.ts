@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import fs from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
@@ -7,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createTeamReportsHttpHandler } from "./http.js";
 import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
@@ -60,7 +60,7 @@ function report(period: Period, key: string, partial = false): ReportDocument {
   return reportDocument(
     [
       {
-        ...member("alice", "Alice"),
+        ...member("alice", "Alice &copy; a > b <b>x</b>"),
         github: {
           ...counts,
           items: [
@@ -219,13 +219,7 @@ beforeAll(async () => {
       res.destroy(error instanceof Error ? error : new Error(String(error)));
     });
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected a TCP server address");
-  }
-  port = address.port;
+  port = await listenOnLoopback(server);
 });
 
 afterAll(async () => {
@@ -393,7 +387,7 @@ describe("Team Reports HTTP responses", () => {
     const markdown = await fetchPath(`/reports/${period}/${key}/report.md`);
     expect(markdown.status).toBe(200);
     expect(markdown.headers["content-type"]).toBe("text/markdown; charset=utf-8");
-    expect(markdown.body).toContain(key);
+    expect(markdown.body).toContain("### Alice \\&copy; a \\> b \\<b\\>x\\</b\\> (@alice)\n");
     expect(markdown.body).not.toContain(maliciousTitle);
     expect(markdown.body).toContain("> Model summary unavailable: completion failed\n");
     expect(markdown.body).toBe(renderMarkdown(report(period, key), summary) + markdownSuffix);

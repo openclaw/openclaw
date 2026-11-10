@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
+import {
+  decodeSessionTranscriptWorkerReadError,
+  encodeSessionTranscriptWorkerError,
+  sessionHistoryCleanupError,
+} from "../config/sessions/session-history-worker-errors.js";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
 import { WorkerNodeLostError } from "../worker/worker-node-loss.js";
 import {
@@ -87,6 +94,19 @@ async function expectTerminalStop(
 
 class PolicyRefusal extends AgentHarnessPreflightError {}
 const transcriptConflict = () => new SqliteTranscriptMutationConflictError("conflicting-session");
+function transportedSessionReadFailure() {
+  const failure = encodeSessionTranscriptWorkerError(
+    sessionHistoryCleanupError(
+      new SessionEntryChangedDuringReadError(),
+      new Error("reader cleanup failed"),
+      "worker retirement",
+    ),
+  );
+  if (!failure) {
+    throw new Error("Expected a serializable session read failure");
+  }
+  return decodeSessionTranscriptWorkerReadError(failure);
+}
 it.each([
   [
     "unscoped preflight",
@@ -103,6 +123,15 @@ it.each([
     false,
   ],
   ["transcript conflict", transcriptConflict, false],
+  ["session read failure through worker cleanup transport", transportedSessionReadFailure, false],
+  [
+    "transcript admission identity change",
+    () =>
+      new SessionTranscriptReadFenceError(
+        "Current-turn transcript admission identity changed: fixture",
+      ),
+    false,
+  ],
   [
     "session reader invalidation",
     () =>

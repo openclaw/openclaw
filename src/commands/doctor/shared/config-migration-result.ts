@@ -12,6 +12,7 @@ import type {
 import type { PluginCache } from "../../../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import type { AutomaticHeartbeatRepairAdmission } from "../../doctor-automatic-heartbeat-repair.js";
+import type { DoctorOptions, DoctorPrompter } from "../../doctor-prompter.js";
 import type { CronCodexRuntimePolicyTarget } from "../cron/store-migration.js";
 
 export type DoctorConfigPreflightOptions = {
@@ -31,10 +32,14 @@ export type DoctorConfigPreflightOptions = {
   observe?: boolean;
   measure?: ConfigSnapshotReadMeasure;
   beforeWorkspaceStateMigration?: (config: OpenClawConfig) => Promise<void>;
+  /** Interactive Doctor resolves a moved partition before consuming legacy heartbeat inputs. */
+  cronStoreSelection?: { options: DoctorOptions; prompter?: DoctorPrompter };
   /** Load one authoritative plugin metadata snapshot for the caller's full lifecycle. */
   preparePluginMetadataSnapshot?: boolean;
   /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
   doctorOnlyStateMigrations?: boolean;
+  /** Unattended diagnostics inspect plugin packages without downloading or replacing them. */
+  deferPluginPackageRepair?: boolean;
 };
 
 export type DoctorConfigPreflightResult = {
@@ -50,11 +55,19 @@ export type DoctorConfigPreflightResult = {
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   modelBillingRouteMigrationSource?: OpenClawConfig;
   heartbeatMigrationSource?: OpenClawConfig;
+  /** Keep retired config intact until an operator selects its destination partition. */
+  heartbeatMigrationDeferred?: true;
+  /** Cron work waits for a partition; unrelated config repairs remain available. */
+  cronStoreSelectionUnresolved?: true;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   cronCodexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
   stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
+  /** Config whose pre-session state migrations completed without unresolved work. */
+  preflightLegacyStateConfig?: OpenClawConfig;
+  configChanged?: boolean;
+  stateMigrationUnsettled?: boolean;
 };
 
 /** Keep migrated selectors with Doctor's model-policy owner until billing facts are captured. */
@@ -136,14 +149,14 @@ export function prepareDoctorConfigMigrationResult(
     if (planBound && params.pluginInventoryChanged && postSession) {
       const { preparePostSessionPluginMigration } =
         await import("../../../infra/state-migrations.plugin-plan.js");
-      const { resolveLivePluginDoctorStateMigrationInventory } =
-        await import("../../../plugins/doctor-contract-registry.js");
+      const { prepareLivePluginDoctorStateMigrationInventory } =
+        await import("../../../plugins/doctor-contract-preparation.js");
       // Installation replaces the selected owner generation after preflight. Freeze
       // that generation before session writers; never reopen a blocked handoff.
-      postSession = params.runWithCurrentPluginMetadata(params.cfg, () =>
+      postSession = await params.runWithCurrentPluginMetadata(params.cfg, async () =>
         preparePostSessionPluginMigration({
           mode: "doctor",
-          inventory: resolveLivePluginDoctorStateMigrationInventory({
+          inventory: await prepareLivePluginDoctorStateMigrationInventory({
             config: params.cfg,
             env: process.env,
           }),
@@ -169,6 +182,11 @@ export function prepareDoctorConfigMigrationResult(
       ...(receipts ? { stateMigrationStepReceipts: receipts } : {}),
       ...(postSession ? { postSessionPluginMigration: postSession } : {}),
       ...(planBound ? { postSessionPluginMigrationPlanBound: true } : {}),
+      ...(!params.shouldWriteConfig &&
+      !params.pluginInventoryChanged &&
+      isDeepStrictEqual(preflight.preflightLegacyStateConfig, params.cfg)
+        ? { preflightLegacyStateConfig: preflight.preflightLegacyStateConfig }
+        : {}),
     };
   };
 }

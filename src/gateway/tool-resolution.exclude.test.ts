@@ -43,7 +43,7 @@ vi.mock("../agents/openclaw-tools.js", () => ({
 }));
 
 // mock-isolation: Filter synthetic mediated tools without filesystem or exec initialization.
-vi.mock("../agents/agent-tools.js", () => ({
+vi.mock("../agents/agent-tools.async.js", () => ({
   createOpenClawCodingToolsInternalAsync: async (...args: Parameters<typeof codingTools>) =>
     codingTools(...args),
 }));
@@ -240,6 +240,50 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
           expect(sessions.execute).not.toHaveBeenCalled();
         }
         expect(readCreateToolsArgs().senderIsOwner).toBe(senderIsOwner);
+      } finally {
+        admission.close();
+      }
+    },
+  );
+
+  it.each([
+    ["event", "internal_system", "cron", true],
+    // The agent RPC can assert provenance but never the host-derived trigger.
+    ["user", "internal_system", "cron", false],
+    // Every host event turn takes the same rule, whatever its source label.
+    ["event", "internal_system", "exec", true],
+    ["event", "internal_system", "cron_failure_repair", true],
+    ["event", "inter_session", "cron", false],
+    [undefined, undefined, undefined, false],
+  ] as const)(
+    "serves CLI automation reads on a trigger=%s %s/%s non-owner turn: %s",
+    async (trigger, kind, sourceTool, readsServed) => {
+      const admission = prepareSystemAgentRunAdmission({}, "system-notice", "main", "test");
+      try {
+        const automations = makeTool("automations");
+        const gateway = makeTool("gateway");
+        createTools.mockReturnValueOnce([automations, gateway]);
+        const result = await resolveTools({
+          cfg: { gateway: { tools: { allow: ["automations", "gateway"] } } },
+          sessionKey: "agent:main:telegram:group:chat123",
+          senderIsOwner: false,
+          admittedRunContext: await admission.admit("gateway"),
+          ...(trigger ? { trigger } : {}),
+          ...(kind ? { inputProvenance: { kind, sourceTool } } : {}),
+        });
+        const run = (name: string, args: object) =>
+          result.tools.find((tool) => tool.name === name)?.execute(`call-${name}`, args);
+
+        await run("automations", { action: "runs", jobId: "job-1" });
+        expect(automations.execute).toHaveBeenCalledTimes(readsServed ? 1 : 0);
+        await expect(
+          run("automations", { action: "update", jobId: "job-1" }),
+        ).resolves.toMatchObject({ details: { gated: true } });
+        await expect(run("gateway", { action: "config.get" })).resolves.toMatchObject({
+          details: { gated: true },
+        });
+        expect(automations.execute).toHaveBeenCalledTimes(readsServed ? 1 : 0);
+        expect(gateway.execute).not.toHaveBeenCalled();
       } finally {
         admission.close();
       }

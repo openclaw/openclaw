@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import * as execApprovals from "../infra/exec-approvals.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 
 const {
   callGatewayFromCli,
@@ -142,10 +143,10 @@ describe("exec approvals CLI", () => {
 
   it("redacts the socket token from local write JSON while preserving its path", async () => {
     setLocalSocket("/tmp/local-exec-approvals.sock", "fixture-token");
-    localSnapshot.file = {
+    localSnapshot.file = freezeTrustedJsonSnapshot({
       version: 1,
       agents: {},
-    };
+    });
 
     await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname", "--json"]);
 
@@ -241,6 +242,27 @@ describe("exec approvals CLI", () => {
     expect(callGatewayFromCli.mock.calls[2]?.[0]).toBe("exec.approvals.node.get");
     expect(runtimeErrors).toHaveLength(0);
   });
+
+  it.each([
+    [{ ...nativeSnapshot, ...nativePolicy }, "hostname"],
+    [{ enabled: false, message: "Configured on the host only" }, "Configured on the host only"],
+  ])(
+    "renders host-native policy for people without file-policy inference",
+    async (snapshot, detail) => {
+      callGatewayFromCli.mockResolvedValue(snapshot);
+
+      await runApprovalsCommand(["approvals", "get", "--node", "windows"]);
+
+      const output = loggedOutput();
+      expect(output).toContain("host-native");
+      expect(output).toContain(detail);
+      expect(output).toContain("OpenClaw approvals-file policy math does not apply.");
+      expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+        "exec.approvals.node.get",
+      ]);
+      expect(runtimeErrors).toHaveLength(0);
+    },
+  );
 
   it("rejects unknown host-native policy fields instead of dropping them", async () => {
     const policyPath = policyFile({ rules: [{ ...nativePolicy.rules[0], shell: "powershell" }] });
@@ -388,14 +410,14 @@ describe("exec approvals CLI", () => {
   });
 
   it("removes wildcard allowlist entry and prunes empty agent", async () => {
-    localSnapshot.file = {
+    localSnapshot.file = freezeTrustedJsonSnapshot({
       version: 1,
       agents: {
         "*": {
           allowlist: [{ pattern: "/usr/bin/uname", lastUsedAt: Date.now() }],
         },
       },
-    };
+    });
 
     const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
     updateExecApprovals.mockClear();
