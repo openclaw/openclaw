@@ -261,9 +261,20 @@ claw id, fp(R) and hostname, none of the machine keys. The membership is unchang
   statements.md, "Freshness").
 - **A leaked kit.** R alone moves a claw: every pinned client follows any binding R signs at
   a higher seq. Discovery therefore asks for a one-time code from the claw's owner account
-  before it accepts a new K_gw (discovery.md, "Re-bind"). A Gateway whose publication is
-  refused because Discovery holds a newer binding this Gateway did not commit reports
-  `binding_superseded`.
+  before it accepts a new K_gw (discovery.md, "Re-bind"). The owner learns of a re-bind they
+  did not make from the email to the owner account, whose text says "if this wasn't you".
+- **Superseded machine.** Discovery refuses a descriptor with `stale_binding` or `conflict`
+  and names the binding it publishes (discovery.md, "Errors"). The Gateway verifies that
+  binding under the root. If it verifies and names other keys, status is
+  `binding_superseded` with both binding_seqs and the published key fingerprints. If it does
+  not verify, it is an integrity error (`discovery_integrity`), not superseded. The Gateway
+  cannot tell a restore from an older backup from someone else's re-bind with the kit, so
+  the remedy and the copy cover both. The remedy is **Move to new keys**, which signs above
+  the published binding (step 2) and needs the kit and the account's code. The copy: "Discovery
+  lists newer keys for this claw that this computer doesn't have. If you restored this
+  computer from a backup, choose Move to new keys. If you didn't, someone may have your
+  recovery kit: move to new keys now, and if that fails because your account is also
+  compromised, relink this claw as a new claw from this computer."
 
 ### Admission
 
