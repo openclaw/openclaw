@@ -36,6 +36,7 @@ export type SessionEntryCurrentFacts = {
   activeWriterRunId?: unknown;
   spawnedBy?: unknown;
   spawnDepth?: unknown;
+  spawnMode?: unknown;
   completionOwnerSessionKey?: unknown;
   subagentRole?: unknown;
   subagentControlScope?: unknown;

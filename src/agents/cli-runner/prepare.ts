@@ -140,6 +140,7 @@ import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
+import { prepareCliChildInstructions } from "./prepare-child-instructions.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import { prepareCliTurnHookContext } from "./prepare-hook-context.js";
 import * as mcp from "./prepare-mcp.js";
@@ -504,14 +505,13 @@ async function prepareCliRunContextWithinReadFence(
       }
     }
   }
-  const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
+  const { extraSystemPrompt, baseExtraSystemPromptHash } = await prepareCliChildInstructions({
+    params,
+    runConfig,
+    sessionAgentId,
+    skipsTurnPreparation,
+  });
   const bindingFacts = params.cliSessionBindingFacts;
-  const bindingExtraSystemPromptStatic =
-    bindingFacts?.extraSystemPromptStatic ?? params.extraSystemPromptStatic;
-  const baseExtraSystemPromptHash =
-    bindingExtraSystemPromptStatic !== undefined
-      ? hashCliSessionText(bindingExtraSystemPromptStatic.trim() || undefined)
-      : hashCliSessionText(extraSystemPrompt);
   const requireExplicitMessageTarget =
     params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey);
   const hasCliSessionBindingFacts = bindingFacts !== undefined;

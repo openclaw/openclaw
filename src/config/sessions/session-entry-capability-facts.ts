@@ -22,6 +22,7 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
     sessionRoot: entry.sessionRoot,
     spawnedBy: entry.spawnedBy,
     spawnDepth: entry.spawnDepth,
+    spawnMode: entry.spawnMode,
     completionOwnerSessionKey: entry.completionOwnerSessionKey,
     subagentRole: entry.subagentRole,
     subagentControlScope: entry.subagentControlScope,
