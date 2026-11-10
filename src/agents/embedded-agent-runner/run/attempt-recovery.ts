@@ -453,6 +453,7 @@ export async function recoverEmbeddedRunAttempt(input: {
         ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)
         : assistantSignal?.retryAfterMs,
       maxRetryDelayMs: attempt.providerRetryMaxDelayMs,
+      flexProcessing: attempt.providerFlexProcessing,
       // Fallback and rotation both require a replay-safe attempt; without one the
       // only recovery left is to wait out the floor and continue the transcript.
       failoverEligible: currentAttemptReplaySafe,
