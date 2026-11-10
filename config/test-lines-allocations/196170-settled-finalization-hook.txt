@@ -1,0 +1,4 @@
+# before_agent_finalize on the settled-turn finalization answer: revision carried and retried,
+# accepted answer delivered, budget and no-answer skips, committed session identity.
+# Exact net growth for PR #196170.
+174

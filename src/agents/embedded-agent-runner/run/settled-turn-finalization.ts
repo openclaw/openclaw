@@ -389,7 +389,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     !input.finalization.abortSignal.aborted
   ) {
     const revisionReason = await runSettledTurnBeforeAgentFinalize({
-      preparedAttempt: input.finalization.preparedAttempt,
+      // The committed identity: the attempt may have adopted a successor session.
+      preparedAttempt: finalizationParams,
       attempt,
       provider: errorContext.provider,
       model: errorContext.model,

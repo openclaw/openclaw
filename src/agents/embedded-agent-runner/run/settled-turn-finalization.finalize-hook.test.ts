@@ -16,6 +16,7 @@ const hookMocks = vi.hoisted(() => ({
   runBeforeAgentFinalize: vi.fn(),
 }));
 
+// mock-isolation: no runtime plan exists in these fixtures, so the model attempt stays empty.
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: vi.fn(() => undefined),
 }));
@@ -92,6 +93,11 @@ describe("before_agent_finalize on the settled-turn finalization answer", () => 
     });
 
     const input = finalizationInput();
+    // The settled attempt adopted a successor session: the hook must see that one.
+    Object.assign(input.initial, {
+      sessionIdUsed: "session-successor",
+      sessionFileUsed: "/tmp/session-successor.jsonl",
+    });
     const finalized = await finalize(input);
 
     expect(finalized.finalizationOutcome).toBe("answered");
@@ -101,11 +107,13 @@ describe("before_agent_finalize on the settled-turn finalization answer", () => 
     const [event, ctx] = call;
     expect(event).toMatchObject({
       runId: "run-settled",
+      sessionId: "session-successor",
+      transcriptPath: "/tmp/session-successor.jsonl",
       lastAssistantMessage: "Built: the plugin is ready.",
       stopHookActive: false,
     });
     expect(Array.isArray(event.messages)).toBe(true);
-    expect(ctx).toMatchObject({ runId: "run-settled" });
+    expect(ctx).toMatchObject({ runId: "run-settled", sessionId: "session-successor" });
     expect(finalized.attempt.beforeAgentFinalizeRevisionReason).toBe(
       "The project changed after its last build: build it, then answer.",
     );
