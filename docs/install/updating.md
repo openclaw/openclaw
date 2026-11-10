@@ -53,10 +53,6 @@ backup.
 
 ## Update implementation contract
 
-Doctor reports launcher-override repair guidance even when a split installation
-prevents maintenance admission. Reinstalling the managed base cannot change an
-operator-owned launcher override; inspect and update that override first.
-
 Candidate Doctor recovers interrupted legacy heartbeat runs through cron's startup
 recovery owner before converting them to automations, while holding offline
 maintenance custody. Live or unproved runtime ownership leaves the conversion and
@@ -1185,6 +1181,10 @@ config and plugins may advance beyond the version that CLI supports. The updater
 warns about this in progress output and text/JSON dry-run notes. Use the CLI from
 the service installation for diagnostics, or align the invoking installation with
 the Gateway version before using it against the shared state.
+
+Doctor reports launcher-override repair guidance even when a split installation
+prevents maintenance admission. Reinstalling the managed base cannot change an
+operator-owned launcher override; inspect and update that override first.
 
 An `ExecStart` drop-in cannot be repaired by rewriting the base systemd unit.
 Inspect the service with `openclaw gateway status --deep` and
