@@ -558,6 +558,7 @@ export async function ensureSandboxWorkspace(
       assertFilesystem();
     };
     assertHost();
+    assertNoUnmigratedWorkspaceState({ workspaceDir: dir });
     const { copyWorkspaceBootstrapFiles } = await import("./workspace-bootstrap-copy.js");
     assertHost();
     await copyWorkspaceBootstrapFiles(dir, seed, assertCurrent);

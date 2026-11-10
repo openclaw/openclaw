@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { getAcpSessionManager, testing } from "../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../acp/control-plane/manager.lifecycle.js";
@@ -42,8 +44,16 @@ import { resetInboundDedupe } from "./inbound-dedupe.js";
 
 const channelAccount = { channel: "discord", accountId: "default" };
 
-it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"] as const)(
-  "dispatches %s ACP sessions without confusing the configured owner and harness storage",
+it.each([
+  "spawned",
+  "legacy",
+  "configured",
+  "removed",
+  "reassigned",
+  "reopened",
+  "retained",
+] as const)(
+  "handles %s ACP sessions without confusing the configured owner and harness storage",
   (kind) =>
     withOpenClawTestState(
       { label: "acp-spawn-owner", env: { OPENCLAW_TEST_FAST: "0" } },
@@ -130,6 +140,23 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
           },
         });
         try {
+          if (kind === "retained") {
+            await fs.mkdir(state.workspaceDir, { recursive: true });
+            const source = path.join(state.workspaceDir, "openclaw-workspace-state.json");
+            await fs.writeFile(source, "not-json");
+            const args = ["free-harness", "--thread", "off"];
+            const params = buildCommandTestParams(
+              `/acp spawn ${args.join(" ")}`,
+              cfg,
+              { AgentId: "main", SessionKey: "agent:main:main" },
+              { workspaceDir: state.workspaceDir },
+            );
+            const result = await handleAcpSpawnAction(params, args);
+            expect(result?.reply?.text).toContain("openclaw doctor --fix");
+            expect(result?.reply?.text).not.toContain(state.workspaceDir);
+            expect(await fs.readFile(source, "utf8")).toBe("not-json");
+            return;
+          }
           let sessionKey: string;
           const storeAgentId =
             kind === "spawned" ? "main" : kind === "configured" ? "work" : "free-harness";

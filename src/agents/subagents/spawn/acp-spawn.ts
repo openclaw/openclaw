@@ -29,6 +29,7 @@ import {
   listSessionBindingsBySessionAsync,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { findStartupMaintenanceRequiredError } from "../../../infra/startup-maintenance-required.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isIncognitoSessionKey, normalizeOptionalAgentId } from "../../../routing/session-key.js";
 import { recordSessionCreated } from "../../../sessions/session-created.js";
@@ -373,7 +374,12 @@ export async function spawnAcpDirect(
       explicitCwd: senderRestricted ? requesterRoot : params.cwd,
     });
   } catch (error) {
-    return buildAcpSpawnError("cwd_resolution_failed", formatErrorMessage(error));
+    return buildAcpSpawnError(
+      "cwd_resolution_failed",
+      findStartupMaintenanceRequiredError(error)?.kind === "legacy-workspace"
+        ? "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`."
+        : formatErrorMessage(error),
+    );
   }
 
   let preparedBinding: PreparedSpawnThreadBinding | null = null;

@@ -152,6 +152,38 @@ it("keeps an unreadable local source for manual repair while image activation co
   expect(fs.readFileSync(source, "utf8")).toBe("not-json");
 });
 
+it.each(["configured", "orphan"] as const)(
+  "keeps an unreadable %s state attestation blocking during image activation",
+  async (kind) => {
+    const context = setup({ mode: "off" });
+    const source =
+      kind === "configured"
+        ? resolveLegacyWorkspaceSourcePaths(path.join(context.homeDir, "workspace"), {
+            env: context.env,
+            homedir: () => context.homeDir,
+          }).stateDirAttestationPaths[0]!
+        : path.join(context.stateDir, "workspace-attestations", `${"f".repeat(64)}.attested`);
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, "not-attestation");
+    const detected = await detectLegacyWorkspaceState({
+      cfg: context.cfg,
+      stateDir: context.stateDir,
+      env: context.env,
+      homedir: () => context.homeDir,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.sources.map((candidate) => candidate.sourcePath)).toContain(source);
+    const result = await migrateLegacyWorkspaceState({
+      detected,
+      stateDir: context.stateDir,
+      env: { ...context.env, OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: "/tmp/image-capture" },
+    });
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.warningDisposition).toBeUndefined();
+    expect(fs.readFileSync(source, "utf8")).toBe("not-attestation");
+  },
+);
+
 it.each(["discovered workspace", "read failure"] as const)(
   "awaits persisted session keys before reporting readiness: %s",
   async (outcome) => {

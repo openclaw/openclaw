@@ -35,6 +35,7 @@ import {
   DEFAULT_SOUL_FILENAME as SOUL,
   DEFAULT_USER_FILENAME as USER,
   ensureAgentWorkspace,
+  ensureSandboxWorkspace,
   isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
   resolveWorkspaceBootstrapStatus,
@@ -432,6 +433,22 @@ it("refuses retained local setup state for a registered remote workspace", async
   } finally {
     release();
   }
+  await expect(fs.readFile(source, "utf8")).resolves.toBe("not-json");
+});
+
+it("does not copy bootstrap files into a sandbox with retained setup state", async () => {
+  const targetDir = testState!.path("sandbox-retained");
+  const seedDir = testState!.path("sandbox-seed");
+  await fs.mkdir(targetDir, { recursive: true });
+  await fs.mkdir(seedDir, { recursive: true });
+  const source = path.join(targetDir, "openclaw-workspace-state.json");
+  await fs.writeFile(source, "not-json");
+  await fs.writeFile(path.join(seedDir, AGENTS), "seeded instructions");
+
+  await expect(ensureSandboxWorkspace(targetDir, seedDir)).rejects.toMatchObject({
+    kind: "legacy-workspace",
+  });
+  await expectPathMissing(path.join(targetDir, AGENTS));
   await expect(fs.readFile(source, "utf8")).resolves.toBe("not-json");
 });
 

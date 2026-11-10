@@ -38,6 +38,7 @@ import { formatAbortReplyText } from "../abort.js";
 import { prepareChannelRunAdmission } from "../channel-run-admission.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
+import { replyForUnavailableWorkspace } from "../reply-workspace.js";
 import {
   bindSpawnedAcpSession,
   resolveBoundReplyPayload,
@@ -148,6 +149,10 @@ export async function handleAcpSpawnAction(
       explicitCwd: spawn.cwd,
     });
   } catch (error) {
+    const unavailable = replyForUnavailableWorkspace(error);
+    if (unavailable) {
+      return commandReply(unavailable);
+    }
     return acpCommandErrorReply(
       error,
       "Could not resolve ACP session workspace.",

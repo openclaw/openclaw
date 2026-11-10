@@ -410,6 +410,25 @@ function trackActiveAcpTurn(sessionKey: string, ownerSessionKey: string) {
 }
 
 describe("spawnAcpDirect", () => {
+  it("refuses a retained workspace before starting an ACP runtime", async () => {
+    const workspace = await workspaceFixture("codex", true);
+    const source = path.join(workspace.mainWorkspace, "openclaw-workspace-state.json");
+    await fs.writeFile(source, "not-json");
+    try {
+      const result = await spawn({ agentId: "codex", mode: "run" });
+      expect(result).toMatchObject({
+        status: "error",
+        errorCode: "cwd_resolution_failed",
+        error: expect.stringContaining("openclaw doctor --fix"),
+      });
+      expect(JSON.stringify(result)).not.toContain(workspace.mainWorkspace);
+      expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+      expect(await fs.readFile(source, "utf8")).toBe("not-json");
+    } finally {
+      await fs.rm(workspace.workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { agent: "codex", exists: true, denied: false },
     { agent: "claude-code", exists: true, denied: false },

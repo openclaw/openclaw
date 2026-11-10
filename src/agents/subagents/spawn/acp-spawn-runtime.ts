@@ -23,6 +23,7 @@ import {
 } from "../../model-selection.js";
 import { buildThinkingCatalog } from "../../model-thinking-default-core.js";
 import type { PreparedSpawnThreadBinding } from "../../spawn-plan.js";
+import { assertNoUnmigratedWorkspaceState } from "../../workspace-legacy-state.js";
 import { buildSpawnThreadBinding } from "./spawn-thread-binding.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
@@ -36,18 +37,18 @@ export async function resolveRuntimeCwdForAcpSpawn(params: {
   if (!params.resolvedCwd) {
     return undefined;
   }
-  if (normalizeOptionalString(params.explicitCwd)) {
-    return params.resolvedCwd;
-  }
-  try {
-    await fs.access(params.resolvedCwd);
-    return params.resolvedCwd;
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return undefined;
+  if (!normalizeOptionalString(params.explicitCwd)) {
+    try {
+      await fs.access(params.resolvedCwd);
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        return undefined;
+      }
+      throw error;
     }
-    throw error;
   }
+  assertNoUnmigratedWorkspaceState({ workspaceDir: params.resolvedCwd });
+  return params.resolvedCwd;
 }
 
 type AcpSpawnInitializedSession = Awaited<
