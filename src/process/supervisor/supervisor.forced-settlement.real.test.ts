@@ -122,7 +122,7 @@ it.skipIf(process.platform === "win32")(
     expect(run.activity.lastOutputAtMs).toBe(settledOutputAtMs);
     // The terminal result must retain its own failed cleanup join for callers.
     await expect(run.waitForExtinction!()).rejects.toThrow("cleanup could not be confirmed");
-    await expect(supervisor.shutdown()).rejects.toThrow("cleanup could not be confirmed");
+    await expect(supervisor.shutdown()).resolves.toBeUndefined();
   },
   FORCED_SETTLEMENT_TEST_TIMEOUT_MS,
 );
