@@ -52,6 +52,18 @@ function screenshotClient() {
 }
 
 describe("browser tab previews", () => {
+  it("retains the empty selection across unrelated receipts and other sessions", () => {
+    const empty = latestBrowserTabCards([], []);
+    const message = { role: "toolResult", toolName: "exec", content: "complete" };
+    expect(latestBrowserTabCards([message], [])).toBe(empty);
+    expect(latestBrowserTabCards([], [message])).toBe(empty);
+    expect([...latestBrowserTabCards([browserResult("capture")], [])]).toEqual([
+      selected("capture"),
+    ]);
+    expect(latestBrowserTabCards([message], [])).toBe(empty);
+    expect(empty.size).toBe(0);
+  });
+
   it("keeps anonymous result revisions stable across reads but distinct across results", () => {
     const message = {
       role: "toolResult",

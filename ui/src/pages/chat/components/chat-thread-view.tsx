@@ -36,6 +36,7 @@ import {
   subscribeExpansionState,
 } from "../chat-thread.ts";
 import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
+import { yieldChatTask } from "../yield-chat-task.ts";
 import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
@@ -97,8 +98,13 @@ type ChatThreadInput = {
 };
 
 export function ChatThread(input: ChatThreadInput) {
-  // Restored snapshots join the header and composer in their first visible frame.
-  const initialReady = Boolean(input.props.restoring);
+  // Use the existing warm-frame hold to split pane and transcript construction.
+  // Cached route handoffs still render immediately.
+  const initialRestoring = Boolean(input.props.restoring);
+  const heldWarmBoot =
+    initialRestoring &&
+    document.documentElement.getAttribute("data-openclaw-warm-frame") === "holding";
+  const initialReady = initialRestoring && !heldWarmBoot;
   const [ready, setReady] = createSignal(initialReady);
   const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   const reveal = createTimeout(() => {
@@ -111,9 +117,19 @@ export function ChatThread(input: ChatThreadInput) {
       <Show when={ready() || isPresented()}>
         {(_presented) => {
           onSettled(() => {
-            // Let this frame paint the composer before preparing the transcript in a task.
-            scheduleLayout(reveal, () => () => reveal.schedule());
+            let active = true;
+            if (heldWarmBoot) {
+              void yieldChatTask().then(() => {
+                if (active && isPresented()) {
+                  setReady(true);
+                }
+              });
+            } else {
+              // Let this frame paint the composer before preparing the transcript in a task.
+              scheduleLayout(reveal, () => () => reveal.schedule());
+            }
             return () => {
+              active = false;
               cancelLayout(reveal);
               reveal.cancel();
             };
@@ -130,7 +146,7 @@ export function ChatThread(input: ChatThreadInput) {
                   ]}
                   ref={[elementRef(input.bindViewport)]}
                 >
-                  <ChatConversationLoading route />
+                  {!heldWarmBoot && <ChatConversationLoading route />}
                 </div>
               )}
             </>

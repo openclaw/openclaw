@@ -1,9 +1,11 @@
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
+import { page } from "vitest/browser";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   ChatComposerNoticesContent,
+  ChatPlacementStartupNotice,
   ChatTopbarNoticesContent,
 } from "./chat-view-notices-content.tsx";
 import "../../styles.css";
@@ -109,4 +111,77 @@ it("keeps the recovery action beside the title with a visible dismiss", async ()
   expect(getComputedStyle(close).opacity).toBe("1");
   close.click();
   expect(dismiss).toHaveBeenCalledOnce();
+});
+
+it.each([300, 500])("keeps recovery and reporting clickable at %ipx", async (width) => {
+  const previous = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(width, previous.height);
+  try {
+    const view = mountSolid(() => (
+      <ChatComposerNoticesContent
+        sessionKey="agent:main:main"
+        connected
+        messages={[]}
+        runError={{
+          runId: "synthetic-run",
+          summary: "Error: Restore failed.\nprovider reported lease destroyed",
+        }}
+        onRefresh={() => {}}
+      />
+    ));
+    await waitForSolid(() => {
+      const recovery = view.container.querySelector<HTMLElement>(".chat-error__refresh")!;
+      const report = view.container.querySelector<HTMLAnchorElement>("a.report-issue-link")!;
+      const a = recovery.getBoundingClientRect(),
+        b = report.getBoundingClientRect();
+      expect(a.width).toBeGreaterThan(0);
+      expect(b.width).toBeGreaterThan(0);
+      expect(a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top).toBe(
+        false,
+      );
+      for (const target of [recovery, report]) {
+        const bounds = target.getBoundingClientRect();
+        expect(
+          target.contains(
+            document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+          ),
+        ).toBe(true);
+      }
+    });
+  } finally {
+    await page.viewport(previous.width, previous.height);
+  }
+});
+
+it("keeps discard recovery below the full warning on mobile", async () => {
+  const previous = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(300, previous.height);
+  const discard = vi.fn();
+  try {
+    const view = mountSolid(() => (
+      <ChatPlacementStartupNotice
+        messages={[]}
+        connected
+        status={{
+          sessionKey: "agent:main:main",
+          phase: "failed",
+          startedAt: 1,
+          error: "Recovery needs a reload. Unsaved starts will be lost.",
+          discardAndReload: discard,
+        }}
+      />
+    ));
+    await waitForSolid(() => {
+      const action = view.container.querySelector<HTMLElement>(".chat-error__discard")!;
+      const message = view.container.querySelector<HTMLElement>(".app-toast__message")!;
+      expect(action.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        message.getBoundingClientRect().bottom,
+      );
+      expect(message.getBoundingClientRect().width).toBeGreaterThan(200);
+    });
+    view.container.querySelector<HTMLButtonElement>(".chat-error__discard")!.click();
+    expect(discard).toHaveBeenCalledOnce();
+  } finally {
+    await page.viewport(previous.width, previous.height);
+  }
 });

@@ -298,7 +298,9 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await card.waitFor();
       expect(await card.textContent()).toContain("@openclaw");
       const detail = await openDetail(page);
-      await page.waitForURL(/\/templates\/packages\/%40openclaw%2Fworkflow-operator$/u);
+      await page.waitForURL(
+        /\/templates\/packages\/%40openclaw%2Fworkflow-operator\?version=1\.2\.0$/u,
+      );
       if (viewport.name === "desktop") {
         await capture(
           page,
