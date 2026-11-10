@@ -1,3 +1,4 @@
+import { AuthProfileAuthorizationError } from "../agents/auth-profiles/authorization-contract.js";
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import { recordModelFallbackStop } from "../agents/model-fallback-stop.js";
@@ -183,16 +184,33 @@ export function createCronRunInferenceCandidates(params: {
   agentDir: string;
 }) {
   const leases = new Map<string, CronRunInference | undefined>();
+  let disposed = false;
   const primaryKey = modelKey(params.primary.provider, params.primary.model);
   const bindingFor = (provider: string, model: string) =>
     resolveCronCandidateInferenceBinding(params, provider, model);
   // Losing any admitted account ends the run; another grant cannot replace that authority.
   const assertCurrent = () => {
+    if (disposed) {
+      stopInferenceFallback(new AuthProfileAuthorizationError("retired"));
+    }
     for (const lease of leases.values()) {
       lease?.runParams.authProfileBinding?.assertCurrent();
     }
   };
+  const acquire = async (key: string, binding: CronInferenceBinding | undefined) => {
+    if (!leases.has(key)) {
+      const lease = await prepareCronRunInference({ ...params, binding });
+      if (disposed) {
+        lease?.dispose();
+        assertCurrent();
+      }
+      leases.set(key, lease);
+    }
+  };
   const admit = async (provider: string, model: string): Promise<string | undefined> => {
+    assertCurrent();
+    // The saved primary remains authoritative even when selection omits its model.
+    await acquire(primaryKey, params.binding);
     assertCurrent();
     const key = modelKey(provider, model);
     if (params.grants !== undefined && key !== primaryKey && !Object.hasOwn(params.grants, key)) {
@@ -202,9 +220,7 @@ export function createCronRunInferenceCandidates(params: {
     if (binding && binding.provider !== provider) {
       return incompatibleCandidateError({ binding, provider, cliExecution: false }).message;
     }
-    if (!leases.has(key)) {
-      leases.set(key, await prepareCronRunInference({ ...params, binding }));
-    }
+    await acquire(key, binding);
     await leases.get(key)?.runParams.authProfileBinding?.revalidate();
     assertCurrent();
     return undefined;
@@ -233,6 +249,7 @@ export function createCronRunInferenceCandidates(params: {
             ...account,
             assertCurrent,
             async revalidate() {
+              assertCurrent();
               await account.revalidate();
               assertCurrent();
             },
@@ -245,6 +262,7 @@ export function createCronRunInferenceCandidates(params: {
         async resolveCliAuthProfile(
           resolve: Parameters<CronRunInference["resolveCliAuthProfile"]>[0],
         ) {
+          assertCurrent();
           const profileId = await lease.resolveCliAuthProfile(resolve);
           assertCurrent();
           return profileId;
@@ -252,6 +270,7 @@ export function createCronRunInferenceCandidates(params: {
       };
     },
     dispose: () => {
+      disposed = true;
       for (const lease of leases.values()) {
         lease?.dispose();
       }

@@ -9,6 +9,7 @@ import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth
 import { createAuthOwnerTestFixtures } from "../agents/auth-profiles/store-state-owner.test-support.js";
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
+import { isRecordedModelFallbackStop } from "../agents/model-fallback-stop.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolvePreparedRuntimeModelAuth } from "../agents/runtime-plan/resolve-auth.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
@@ -24,7 +25,9 @@ import {
   acquireCronInferenceAuthorization,
   captureCronInferenceBinding,
 } from "./inference-binding.runtime.js";
+import * as inferenceRuntime from "./inference-binding.runtime.js";
 import { toPublicCronJob } from "./public-job.js";
+import { createCronRunInferenceCandidates } from "./run-inference.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
@@ -204,32 +207,68 @@ async function resolveFreshRun(
 // isolated-agent.auth-continuity.integration.test.ts; retain refresh and explicit adoption here.
 describe("durable cron inference authorization", () => {
   it.each([platformId, subscriptionId])(
-    "allows concurrent runs to reacquire the same saved account (%s)",
+    "keeps concurrent saved-account leases independent and terminal after disposal (%s)",
     async (profileId) => {
       await fixture(async (root, cfg) => {
-        // capture releases its observation, as saving a job does before its runs start.
         const binding = await capture(cfg, profileId);
-        const results = await Promise.allSettled(
-          [0, 1].map(() =>
-            acquireCronInferenceAuthorization({ binding, cfg, agentDir: root.agentDir }),
-          ),
+        const disposals: Array<ReturnType<typeof vi.fn>> = [];
+        const acquire = inferenceRuntime.acquireCronInferenceAuthorization;
+        vi.spyOn(inferenceRuntime, "acquireCronInferenceAuthorization").mockImplementation(
+          async (params) => {
+            const authority = await acquire(params);
+            expect(authority.authorizationId).toBe(binding.authorizationId);
+            disposals.push(vi.spyOn(authority, "dispose"));
+            return authority;
+          },
         );
+        const owners = [0, 1, 2].map(() =>
+          createCronRunInferenceCandidates({
+            binding,
+            cfg,
+            agentDir: root.agentDir,
+            primary: { provider: "openai", model: "gpt-4.1" },
+          }),
+        );
+        const runs = owners.map((owner) => owner.prepare("openai", "gpt-4.1"));
+        owners[2]!.dispose(); // Settlement while authorization is still being acquired.
+        const results = await Promise.allSettled(runs);
+        const terminal = async (run: () => unknown) => {
+          const error = await Promise.resolve()
+            .then(run)
+            .catch((failure: unknown) => failure);
+          expect(error).toMatchObject({ code: "MCP_AUTHORIZATION_RETIRED" });
+          expect(isRecordedModelFallbackStop(error)).toBe(true);
+        };
         try {
-          for (const result of results) {
-            if (result.status === "rejected") {
-              throw result.reason;
+          for (const [index, result] of results.entries()) {
+            if (index === 2) {
+              expect(result.status).toBe("rejected");
+              if (result.status === "rejected") {
+                await terminal(() => result.reason);
+              }
+              continue;
             }
-            expect(result.value.authorizationId).toBe(binding.authorizationId);
-            await result.value.revalidate();
-            expect(result.value.assertCurrent).not.toThrow();
+            if (result.status === "rejected" || !result.value) {
+              throw new Error("Expected independent live lease");
+            }
+            const lease = result.value;
+            const account = lease.runParams.authProfileBinding!;
+            await account.revalidate();
+            expect(() => account.assertCurrent()).not.toThrow();
+            owners[index]!.dispose();
+            await terminal(() => account.assertCurrent());
+            await terminal(() => account.revalidate());
+            await terminal(() => lease.assertCandidate("openai", false));
+            const resolve = vi.fn(async () => profileId);
+            await terminal(() => lease.resolveCliAuthProfile(resolve));
+            expect(resolve).not.toHaveBeenCalled();
+            await terminal(() => owners[index]!.prepare("openai", "gpt-4.1"));
           }
         } finally {
-          for (const result of results) {
-            if (result.status === "fulfilled") {
-              result.value.dispose();
-            }
-          }
+          owners.forEach((owner) => owner.dispose());
         }
+        expect(disposals).toHaveLength(3);
+        disposals.forEach((dispose) => expect(dispose).toHaveBeenCalledOnce());
       });
     },
   );

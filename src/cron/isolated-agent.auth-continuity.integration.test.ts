@@ -172,6 +172,24 @@ async function captureAccounts(cfg: OpenClawConfig, model: string) {
   return { primary, alternate };
 }
 
+async function omitPrimary(state: OpenClawTestState, cfg: OpenClawConfig, mode: string) {
+  if (!mode.startsWith("changed primary")) {
+    return;
+  }
+  const defaults = cfg.agents!.defaults!;
+  const model = defaults.model;
+  if (!model || typeof model === "string") {
+    throw new Error("Expected fallback policy");
+  }
+  model.primary = "local/gpt-4.1";
+  Object.assign(defaults.models!, runtimeModels("local/gpt-4.1"));
+  cfg.models!.providers!.local = provider("https://changed.invalid/v1");
+  await writeConfig(state, cfg);
+  if (mode.endsWith("revoked") || mode.endsWith("replaced")) {
+    await changeAccount(platformId, mode.endsWith("replaced"));
+  }
+}
+
 function keyProfile(profileId: string, key: string) {
   return { profileId, credential: { type: "api_key" as const, provider: "openai", key } };
 }
@@ -329,6 +347,9 @@ const alternateModes = [
   "in-flight primary replacement",
   "alternate preparation primary revocation",
   "alternate preparation primary replacement",
+  "changed primary approved",
+  "changed primary unapproved",
+  "changed primary revoked",
 ] as const;
 it.each([
   ...alternateModes.map((mode) => ({ mode, target: "isolated" as const })),
@@ -338,6 +359,8 @@ it.each([
       "unapproved",
       "alternate preparation primary revocation",
       "alternate preparation primary replacement",
+      "changed primary approved",
+      "changed primary replaced",
     ] as const
   ).map((mode) => ({ mode, target: "session:agent:main:approved-alternate" as const })),
 ])(
@@ -399,8 +422,9 @@ it.each([
         ...storedJob("approved-alternate"),
         sessionTarget: target,
         inferenceBinding: primary,
-        inferenceGrants: mode === "unapproved" ? {} : { "openai/gpt-4o": alternate },
+        inferenceGrants: mode.endsWith("unapproved") ? {} : { "openai/gpt-4o": alternate },
       };
+      await omitPrimary(state, cfg, mode);
       if (mode === "shadowed primary runtime") {
         job.inferenceGrants!["openai/gpt-4.1"] = { ...alternate, runtime: "codex" };
       }
@@ -432,22 +456,33 @@ it.each([
       if (mode.startsWith("alternate preparation")) {
         expect(alternatePreparation).toBe(true);
       }
-      const succeeds =
-        mode === "approved" || mode === "in-flight edit" || mode === "shadowed primary runtime";
-      expect(result.status, result.error).toBe(succeeds ? "ok" : "error");
-      expect(models).toEqual(succeeds ? ["gpt-4.1", "gpt-4o"] : ["gpt-4.1"]);
+      const succeeds = [
+        "approved",
+        "in-flight edit",
+        "shadowed primary runtime",
+        "changed primary approved",
+      ].includes(mode);
+      const initial = mode.startsWith("changed primary") ? [] : ["gpt-4.1"];
+      expect(models).toEqual(succeeds ? [...initial, "gpt-4o"] : initial);
+      const initialAuth = initial.map(() => "Bearer " + platformKey);
       expect(requests).toEqual(
-        succeeds
-          ? [`Bearer ${platformKey}`, "Bearer synthetic-approved-alternate-key"]
-          : [`Bearer ${platformKey}`],
+        succeeds ? [...initialAuth, "Bearer synthetic-approved-alternate-key"] : initialAuth,
       );
+      expect(result.status, result.error).toBe(succeeds ? "ok" : "error");
     });
   },
 );
 
 it.each(
   (["isolated", "session:agent:main:cli-alternate"] as const).flatMap((target) =>
-    ["approved", "unapproved", "revoked primary", "replaced primary"].map((mode) => ({
+    [
+      "approved",
+      "unapproved",
+      "revoked primary",
+      "replaced primary",
+      "changed primary approved",
+      target === "isolated" ? "changed primary replaced" : "changed primary revoked",
+    ].map((mode) => ({
       target,
       mode,
     })),
@@ -560,6 +595,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         "anthropic/claude-sonnet-4-6@anthropic:alternate",
       );
       expect(alternate).toMatchObject({ profileId: "anthropic:alternate", runtime: "claude-cli" });
+      await omitPrimary(state, cfg, mode);
       const result = await runStoredTurn(
         cfg,
         {
@@ -571,17 +607,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         },
         "openclaw",
       );
-      expect(alternatePreparation).toBe(mode !== "unapproved");
-      expect(result.status, result.error).toBe(mode === "approved" ? "ok" : "error");
+      const succeeds = mode === "approved" || mode === "changed primary approved";
       expect(await fs.readFile(launch, "utf8").catch(() => undefined)).toBe(
-        mode === "approved" ? "launched" : undefined,
+        succeeds ? "launched" : undefined,
       );
       expect(await fs.readFile(effect, "utf8").catch(() => undefined)).toBe(
-        mode === "approved" ? "approved CLI account" : undefined,
+        succeeds ? "approved CLI account" : undefined,
       );
       expect(browser).not.toHaveBeenCalled();
       expect(prompt).not.toHaveBeenCalled();
-      expect(requests).toEqual([`Bearer ${platformKey}`]);
+      expect(requests).toEqual(mode.startsWith("changed primary") ? [] : [`Bearer ${platformKey}`]);
+      expect(alternatePreparation).toBe(
+        mode !== "unapproved" && (!mode.startsWith("changed primary") || succeeds),
+      );
+      expect(result.status, result.error).toBe(succeeds ? "ok" : "error");
     });
   },
 );

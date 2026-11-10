@@ -450,8 +450,8 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     },
   );
 
-  it.each(["migration", "unreadable", "abort", "terminal"] as const)(
-    "preserves a CLI account %s failure after acquiring scheduled authorization",
+  it.each(["migration", "unreadable", "abort", "terminal", "missing", "incompatible"] as const)(
+    "preserves CLI account %s recovery advice after acquiring scheduled authorization",
     async (kind) => {
       const cfg = await claudeCliConfig();
       const binding = await capture(cfg);
@@ -461,7 +461,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         agentDir: state.agentDir(),
       });
       if (!inference) {
-        throw new Error("Expected the captured account's run authorization");
+        throw new Error("Expected captured account authorization");
       }
       const secret = "sk-abcdefghijklmnopqrstuv";
       const failure =
@@ -476,71 +476,44 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         recordModelFallbackStop(failure);
       }
       try {
-        // Fail the resolver's second store read, after the saved account was admitted.
-        // Failing initial authorization would never reach the compatibility wrapper.
-        await expect(
-          inference.resolveCliAuthProfile((selected) =>
-            resolveCliExecutionAuthProfileId({
-              cliExecutionProvider: "claude-cli",
-              authProfileProvider: "anthropic",
-              config: cfg,
-              agentDir: state.agentDir(),
-              selected,
-              loadAuthProfileStoreForRuntimeAsync: async () => {
-                throw failure;
-              },
-            }),
-          ),
-        ).rejects.toBe(failure);
-        const message = normalizeCronRunErrorText(failure);
-        expect(message).not.toContain(secret);
-        expect(message).not.toContain("incompatible with its recorded inference account");
-        if (
-          failure instanceof AuthProfileMigrationRequiredError ||
-          failure instanceof AuthProfileStoreUnreadableError
-        ) {
-          expect(message).toContain(failure.code);
-          expect(message).toContain("openclaw doctor --fix");
+        // Fail the second store read, after admission, so the compatibility wrapper is reached.
+        const resolve = inference.resolveCliAuthProfile((selected) =>
+          resolveCliExecutionAuthProfileId({
+            cliExecutionProvider: "claude-cli",
+            authProfileProvider: "anthropic",
+            config: cfg,
+            agentDir: state.agentDir(),
+            selected,
+            loadAuthProfileStoreForRuntimeAsync: async (): Promise<AuthProfileStore> => {
+              if (kind === "missing" || kind === "incompatible") {
+                return {
+                  version: 1,
+                  profiles: kind === "missing" ? {} : { [claudeProfile]: apiKey() },
+                };
+              }
+              throw failure;
+            },
+          }),
+        );
+        if (kind === "missing" || kind === "incompatible") {
+          await expect(resolve).rejects.toMatchObject({
+            message: expect.stringContaining("--model <provider/model>@<profileId>"),
+            cause: expect.objectContaining({ name: "CliExecutionAuthProfileError" }),
+          });
+        } else {
+          await expect(resolve).rejects.toBe(failure);
+          const message = normalizeCronRunErrorText(failure);
+          expect(message).not.toContain(secret);
+          expect(message).not.toContain("incompatible with its recorded inference account");
+          if (
+            failure instanceof AuthProfileMigrationRequiredError ||
+            failure instanceof AuthProfileStoreUnreadableError
+          ) {
+            expect(message).toContain(failure.code);
+            expect(message).toContain("openclaw doctor --fix");
+          }
+          expect(isRecordedModelFallbackStop(failure)).toBe(kind === "terminal");
         }
-        expect(isRecordedModelFallbackStop(failure)).toBe(kind === "terminal");
-      } finally {
-        inference.dispose();
-      }
-    },
-  );
-
-  it.each(["missing", "incompatible"] as const)(
-    "keeps account adoption advice for a %s CLI profile",
-    async (kind) => {
-      const cfg = await claudeCliConfig();
-      const binding = await capture(cfg);
-      const inference = await prepareCronRunInference({
-        binding: binding ?? undefined,
-        cfg,
-        agentDir: state.agentDir(),
-      });
-      if (!inference) {
-        throw new Error("Expected the captured account's run authorization");
-      }
-      try {
-        await expect(
-          inference.resolveCliAuthProfile((selected) =>
-            resolveCliExecutionAuthProfileId({
-              cliExecutionProvider: "claude-cli",
-              authProfileProvider: "anthropic",
-              config: cfg,
-              agentDir: state.agentDir(),
-              selected,
-              loadAuthProfileStoreForRuntimeAsync: async (): Promise<AuthProfileStore> => ({
-                version: 1,
-                profiles: kind === "missing" ? {} : { [claudeProfile]: apiKey() },
-              }),
-            }),
-          ),
-        ).rejects.toMatchObject({
-          message: expect.stringContaining("--model <provider/model>@<profileId>"),
-          cause: expect.objectContaining({ name: "CliExecutionAuthProfileError" }),
-        });
       } finally {
         inference.dispose();
       }
@@ -719,37 +692,48 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     },
   );
 
-  it("keeps the recorded runtime when an edit selects a different account", async () => {
-    const cfg = await embeddedAnthropicConfig({
-      type: "api_key",
-      provider: "anthropic",
-      key: "synthetic-anthropic-key",
-    });
-    const recorded = await captureFromCreator(cfg, claudeCliCreator());
-    expect(recorded?.runtime).toBe("claude-cli");
-    const payload = {
-      kind: "agentTurn" as const,
-      message: "check status",
-      model: `${claudeRef}@${claudeProfile}`,
-    };
-
-    // Config alone would pick the embedded runtime; the job keeps the one it runs on.
-    const edited = await captureCronUpdatedInferenceBinding(
-      makeAuthJob({ payload, inferenceBinding: recorded }),
-      { payload },
-      cfg,
-      {} as Parameters<typeof captureCronUpdatedInferenceBinding>[3],
-    );
-    try {
-      expect(edited?.inferenceBinding).toMatchObject({
-        profileId: claudeProfile,
-        source: "user",
-        runtime: "claude-cli",
-      });
-    } finally {
-      edited?.disposeInferenceAuthorization?.();
-    }
-  });
+  it.each([false, true])(
+    "preserves the recorded runtime on account edits (runtime unavailable=%s)",
+    async (unavailable) => {
+      const cfg = await embeddedAnthropicConfig();
+      const recorded = await captureFromCreator(cfg, claudeCliCreator());
+      expect(recorded?.runtime).toBe("claude-cli");
+      if (unavailable) {
+        h.isCliProviderMock.mockImplementation(() => false);
+        cliBackendsTesting.setDepsForTest({
+          resolveRuntimeCliBackends: () => [],
+          resolvePluginSetupCliBackend: () => undefined,
+        });
+      }
+      const payload = {
+        kind: "agentTurn" as const,
+        message: "check status",
+        model: claudeRef + "@" + claudeProfile,
+      };
+      const job = makeAuthJob({ payload, inferenceBinding: recorded });
+      const edit = captureCronUpdatedInferenceBinding(
+        job,
+        { payload },
+        cfg,
+        {} as Parameters<typeof captureCronUpdatedInferenceBinding>[3],
+      );
+      if (unavailable) {
+        await expect(edit).rejects.toThrow(/runs on runtime claude-cli, which is unavailable/);
+        expect(job.inferenceBinding).toBe(recorded);
+      } else {
+        const edited = await edit;
+        try {
+          expect(edited?.inferenceBinding).toMatchObject({
+            profileId: claudeProfile,
+            source: "user",
+            runtime: "claude-cli",
+          });
+        } finally {
+          edited?.disposeInferenceAuthorization?.();
+        }
+      }
+    },
+  );
 
   it.each(["unavailable stored profile", "native login default"])(
     "keeps a session account pin above a configured %s",
@@ -798,37 +782,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     },
   );
 
-  it("rejects an account edit that would move the job off its unavailable recorded runtime", async () => {
-    const cfg = await embeddedAnthropicConfig({
-      type: "api_key",
-      provider: "anthropic",
-      key: "synthetic-anthropic-key",
-    });
-    const recorded = await captureFromCreator(cfg, claudeCliCreator());
-    expect(recorded?.runtime).toBe("claude-cli");
-    // claude-cli stops being a CLI backend for this config after capture.
-    h.isCliProviderMock.mockImplementation(() => false);
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [],
-      resolvePluginSetupCliBackend: () => undefined,
-    });
-    const payload = {
-      kind: "agentTurn" as const,
-      message: "check status",
-      model: `${claudeRef}@${claudeProfile}`,
-    };
-    const job = makeAuthJob({ payload, inferenceBinding: recorded });
-
-    await expect(
-      captureCronUpdatedInferenceBinding(
-        job,
-        { payload },
-        cfg,
-        {} as Parameters<typeof captureCronUpdatedInferenceBinding>[3],
-      ),
-    ).rejects.toThrow(/runs on runtime claude-cli, which is unavailable/);
-    expect(job.inferenceBinding).toBe(recorded);
-  });
   // The Oct 20 shape: a `current` job created from a conversation that runs Claude through
   // claude-cli, on an Anthropic model the config alone would run embedded, with a stored
   // Anthropic key. The run copies the conversation's runtime, so capture must resolve it too.
@@ -840,7 +793,13 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     modelOverrideSource: "user",
     agentRuntimeOverride: "claude-cli",
   });
-  const embeddedAnthropicConfig = async (credential: AuthProfileCredential) => {
+  const embeddedAnthropicConfig = async (
+    credential: AuthProfileCredential = {
+      type: "api_key",
+      provider: "anthropic",
+      key: "synthetic-anthropic-key",
+    },
+  ) => {
     await saveProfiles({ [claudeProfile]: credential });
     setupClaudeCliBackend();
     const cfg = config(claudeRef);
@@ -877,73 +836,36 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     return runWithConfig(cfg, job);
   };
 
-  it("binds the account a claude-cli creator's job always paid with and records claude-cli", async () => {
-    const cfg = await embeddedAnthropicConfig({
-      type: "api_key",
-      provider: "anthropic",
-      key: "synthetic-anthropic-key",
-    });
-    const binding = await captureFromCreator(cfg, claudeCliCreator());
-    // The account is the one capture bound before runtimes were recorded; only the runtime is new.
-    expect(binding).toMatchObject({
-      provider: "anthropic",
-      profileId: claudeProfile,
-      authRequirement: "api-key",
-      runtime: "claude-cli",
-    });
-    h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
-
-    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: binding }));
-
-    // claude-cli runs with the recorded key, as the job did before.
-    expect(result.status, result.error).toBe("ok");
-    expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
-      provider: "claude-cli",
-      authProfileId: claudeProfile,
-    });
-    expect(h.runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
-    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
-
-  it("resolves a binding recorded without a runtime exactly as before", async () => {
-    const cfg = await embeddedAnthropicConfig({
-      type: "api_key",
-      provider: "anthropic",
-      key: "synthetic-anthropic-key",
-    });
-    const { runtime: _runtime, ...legacy } = (await capture(cfg))!;
-    h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
-
-    // The cron session's copied claude-cli override still selects the runtime.
-    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: legacy }));
-
-    expect(result.status, result.error).toBe("ok");
-    expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
-      provider: "claude-cli",
-      authProfileId: claudeProfile,
-    });
-    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
-
-  it("records the forwarded account with its claude-cli runtime and runs on that runtime", async () => {
-    const cfg = await embeddedAnthropicConfig(claudeToken());
-    const binding = await captureFromCreator(cfg, claudeCliCreator());
-    expect(binding).toMatchObject({
-      provider: "anthropic",
-      profileId: claudeProfile,
-      runtime: "claude-cli",
-    });
-    h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
-
-    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: binding }));
-
-    expect(result.status, result.error).toBe("ok");
-    expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
-      provider: "claude-cli",
-      authProfileId: claudeProfile,
-    });
-    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
+  it.each(["API key", "token", "legacy runtime"] as const)(
+    "runs the creator's forwarded %s account on its recorded or inherited CLI runtime",
+    async (kind) => {
+      const cfg = await embeddedAnthropicConfig(kind === "token" ? claudeToken() : undefined);
+      const captured =
+        kind === "legacy runtime"
+          ? await capture(cfg)
+          : await captureFromCreator(cfg, claudeCliCreator());
+      if (!captured) {
+        throw new Error("Expected creator account");
+      }
+      const { runtime: _runtime, ...legacy } = captured;
+      const binding = kind === "legacy runtime" ? legacy : captured;
+      expect(binding).toMatchObject({
+        provider: "anthropic",
+        profileId: claudeProfile,
+        authRequirement: kind === "token" ? "subscription" : "api-key",
+        ...(kind === "legacy runtime" ? {} : { runtime: "claude-cli" }),
+      });
+      h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
+      const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: binding }));
+      expect(result.status, result.error).toBe("ok");
+      expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+        provider: "claude-cli",
+        authProfileId: claudeProfile,
+      });
+      expect(h.runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
+      expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs a bound job on its captured runtime, not the runtime its cron session copied", async () => {
     const cfg = await embeddedAnthropicConfig(claudeToken());
