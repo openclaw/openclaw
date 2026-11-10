@@ -54,6 +54,21 @@ async function repairConfig(configPath: string) {
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
+it.each([false, true])("preserves cron concurrency while repairing retired knobs: %s", (retired) =>
+  withCoreHome(async (home) => {
+    const cron = { maxConcurrentRuns: 2, triggers: { enabled: true, maxConcurrentEvaluations: 5 } };
+    const configPath = await writeCoreConfig(home, {
+      cron: retired
+        ? { ...cron, retry: {}, triggers: { ...cron.triggers, minIntervalMs: 1_000 } }
+        : cron,
+    });
+    expect((await readConfigFileSnapshot()).valid).toBe(!retired);
+    await repairConfig(configPath);
+    expect((await readConfigFileSnapshot()).valid).toBe(true);
+    expect(JSON.parse(await read(configPath)).cron).toEqual(cron);
+  }),
+);
+
 it("preserves the July TTS preference locator before retiring its config keys", () =>
   withCoreHome(async (home) => {
     const prefsPath = path.join(home, "speech-preferences.json");

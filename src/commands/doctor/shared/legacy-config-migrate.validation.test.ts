@@ -34,7 +34,7 @@ describe("legacy config migrate validation", () => {
   });
 
   it("preserves the restored MCP idle TTL during migration", () => {
-    const raw = { mcp: { sessionIdleTtlMs: 1000.9 }, cron: { maxConcurrentRuns: 2 } };
+    const raw = { mcp: { sessionIdleTtlMs: 1000.9 }, cron: { retry: {} } };
     const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
     expect(result.config?.mcp?.sessionIdleTtlMs).toBe(1000.9);
     expect(result.partiallyValid).toBeUndefined();

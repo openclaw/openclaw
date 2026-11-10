@@ -145,7 +145,6 @@ describe("dead config keys", () => {
     "session.typingMode",
     "session.writeLock",
     "session.agentToAgent",
-    "cron.maxConcurrentRuns",
     "cron.store",
     "cron.triggers.minIntervalMs",
     "cron.retry",

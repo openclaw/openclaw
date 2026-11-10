@@ -1,3 +1,4 @@
 # Positive-integer config validation and configured/default capacity coverage at trigger,
-# scheduler, manual-run queue, and Gateway lane boundaries. Exact net test growth.
-53
+# scheduler, manual-run queue, Gateway lanes, and Doctor repair/persistence boundaries.
+# Exact net test growth, including retirement-contract coverage updates.
+67

@@ -155,7 +155,6 @@ const RETIRED_TUNING_PATHS = [
   ["session", "typingIntervalSeconds"],
   ["session", "writeLock"],
   ["session", "agentToAgent", "maxPingPongTurns"],
-  ["cron", "maxConcurrentRuns"],
   ["cron", "triggers", "minIntervalMs"],
   ["cron", "retry"],
   ["diagnostics", "stuckSessionWarnMs"],
