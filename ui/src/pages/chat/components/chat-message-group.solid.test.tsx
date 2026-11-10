@@ -19,7 +19,7 @@ import { buildLocalUserMessage } from "../user-message-content.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
-import { prepareGroupMessage } from "./chat-message-group-frame.ts";
+import { prepareGroupMessage, prepareMessageGroupFrame } from "./chat-message-group-frame.ts";
 import {
   ActivityGroup,
   MessageGroup,
@@ -248,6 +248,7 @@ it.each([false, true])(
         options={{
           streamOptions: { bubbleMode },
           workPreviews: new Map(),
+          partDependencies: (part) => [part],
           renderGroupOptions: () => ({
             bubbleMode,
             showReasoning: false,
@@ -275,6 +276,66 @@ it.each([false, true])(
   },
 );
 
+it.each([false, true])(
+  "keeps every settled tool-only group without reply chrome (bubble=%s)",
+  async (bubbleMode) => {
+    const tool = createMessageGroup(
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "inspect", name: "read", arguments: { path: "report.md" } },
+          { type: "toolCall", id: "check", name: "exec", arguments: { command: "git status -sb" } },
+        ],
+        timestamp: 1000,
+      },
+      "tool",
+      { runId: "poll-run" },
+    );
+    const later = createMessageGroup(
+      createToolResultMessage("later", "read", "Later operation retained", { timestamp: 1001 }),
+      "tool",
+      { key: "later-group", runId: "poll-run" },
+    );
+    const [expanded, setExpanded] = createSignal(false);
+    const view = mountSolid(() => (
+      <AgentRunFrame
+        frame={{
+          kind: "agent-run-frame",
+          key: "poll",
+          runId: "poll-run",
+          boundaryId: "send:poll-run",
+          outcome: { kind: "completed", actionOwner: null },
+          parts: [tool, later],
+        }}
+        options={{
+          streamOptions: { bubbleMode },
+          workPreviews: new Map(),
+          partDependencies: (part) => [part],
+          renderGroupOptions: () => ({
+            showReasoning: false,
+            showToolCalls: true,
+            assistantName: "Assistant",
+            bubbleMode,
+            isToolMessageExpanded: () => expanded(),
+            onToggleToolMessageExpanded: () => setExpanded(true),
+          }),
+          isWorkExpanded: () => false,
+          onToggleWork: () => {},
+        }}
+      />
+    ));
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".chat-activity-group__summary")).not.toBeNull(),
+    );
+    expect(view.container.querySelector(".chat-avatar-slot")).toBeNull();
+    expect(view.container.querySelector(".chat-group-footer")).toBeNull();
+    view.container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!.click();
+    await waitForSolid(() =>
+      expect(view.container.textContent).toContain("Later operation retained"),
+    );
+  },
+);
+
 it("does not give provider speech unframed answer actions", () => {
   const speech = {
     role: "assistant",
@@ -291,6 +352,21 @@ it("does not give provider speech unframed answer actions", () => {
   expect(prepared.ownsActions).toBe(false);
   expect(prepared.actions?.replyTarget).toBeUndefined();
   expect(prepared.source.displayMarkdown).toBe(speech.content);
+});
+
+it("paints every right-side user turn with the viewer accent and only peers with identity hues", () => {
+  const profile = (id: string) => ({ id, name: id, identity: { type: "profile" as const, id } });
+  // [sender, viewer profile, peer]; without a viewer profile every user turn is the viewer's.
+  for (const [sender, userId, peer] of [
+    [profile("viewer"), "viewer", false],
+    [profile("peer"), "viewer", true],
+    [{ id: "pat@example.com" }, undefined, false],
+    [profile("viewer"), undefined, false],
+  ] as const) {
+    const group = createMessageGroup({ role: "user", content: "Hi" }, "user", { sender });
+    const frame = prepareMessageGroupFrame(group, { showReasoning: false, userId });
+    expect([frame.isPeerGroup, frame.senderHue !== null]).toEqual([peer, peer]);
+  }
 });
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {

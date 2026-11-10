@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { isPreparedClawHubTrustedPublisher } from "./clawhub-prepared-artifact.mjs";
 import { canonicalizeJsonValue, compareAscii } from "./lib/canonical-json.mjs";
-import { classifyClawHubPublication } from "./lib/clawhub-publication-state.mjs";
+import {
+  classifyClawHubPublication,
+  isPreparedClawHubTrustedPublisher,
+} from "./lib/clawhub-publication-state.mjs";
 import {
   dispatchEnvelopeFromInputs,
   publicationInputRecord as object,
@@ -844,7 +846,21 @@ export function createPublicationObservations(source, observations) {
   });
 }
 
-export function createPublicationAdmission(source, observations, artifact, admittedAt) {
+export function createPublicationAdmission(
+  source,
+  observations,
+  artifact,
+  admittedAt,
+  { workflowPath = ".github/workflows/full-release-validation.yml" } = {},
+) {
+  if (
+    ![
+      ".github/workflows/full-release-validation.yml",
+      ".github/workflows/full-release-receipt-recovery.yml",
+    ].includes(workflowPath)
+  ) {
+    throw new Error("unsupported publication admission workflow");
+  }
   const admission = {
     observations,
     binding: {
@@ -854,7 +870,7 @@ export function createPublicationAdmission(source, observations, artifact, admit
       parentRunId: source.runId,
       parentRunAttempt: source.runAttempt,
       workflow: {
-        path: ".github/workflows/full-release-validation.yml",
+        path: workflowPath,
         event: "workflow_dispatch",
         ...source.workflow,
       },
@@ -865,12 +881,15 @@ export function createPublicationAdmission(source, observations, artifact, admit
       status: "admitted-for-validation",
     },
   };
-  return validatePublicationAdmissionBinding({
-    sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
-    sourceAdmission: source,
-    publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
-    publicationAdmission: admission,
-  });
+  return validatePublicationAdmissionBinding(
+    {
+      sourceAdmissionContract: FULL_RELEASE_SOURCE_ADMISSION_CONTRACT,
+      sourceAdmission: source,
+      publicationAdmissionContract: FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT,
+      publicationAdmission: admission,
+    },
+    { workflowPath },
+  );
 }
 
 export function validatePublicationAdmissionBinding(record, expected = {}) {
@@ -931,7 +950,8 @@ export function validatePublicationAdmissionBinding(record, expected = {}) {
     binding.repository !== source.repository ||
     binding.parentRunId !== source.runId ||
     binding.parentRunAttempt !== source.runAttempt ||
-    binding.workflow.path !== ".github/workflows/full-release-validation.yml" ||
+    binding.workflow.path !==
+      (expected.workflowPath ?? ".github/workflows/full-release-validation.yml") ||
     binding.workflow.event !== "workflow_dispatch" ||
     binding.workflow.ref !== source.workflow.ref ||
     binding.workflow.sha !== source.workflow.sha ||

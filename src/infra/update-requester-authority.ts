@@ -28,11 +28,21 @@ export function resolveManagedUpdateRequester(
 }
 
 export class UpdateRequesterRevokedError extends Error {
-  readonly code = "requester-revoked";
+  readonly code: "requester-revoked" | "interrupted" = "requester-revoked";
+
+  constructor(message = "requester-revoked") {
+    super(message);
+    this.name = "UpdateRequesterRevokedError";
+  }
+}
+
+/** Forward work stops exactly as for a revocation, but the requester kept its authority. */
+export class UpdateInterruptedError extends UpdateRequesterRevokedError {
+  override readonly code = "interrupted";
 
   constructor() {
-    super("requester-revoked");
-    this.name = "UpdateRequesterRevokedError";
+    super("interrupted");
+    this.name = "UpdateInterruptedError";
   }
 }
 

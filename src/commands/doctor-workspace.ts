@@ -8,7 +8,6 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { findGitRoot } from "../infra/git-root.js";
 import { statIfExists as statPathIfExists } from "../infra/path-existence.js";
 import {
@@ -258,7 +257,6 @@ async function migrateLegacyRootMemoryFile(
     // and continues to reject a symlink at the final MEMORY.md path.
     const publicationDir = await fs.promises.realpath(detection.workspaceDir);
     await replaceFileAtomic({
-      allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(publicationDir),
       filePath: path.join(publicationDir, CANONICAL_ROOT_MEMORY_FILENAME),
       content: merged,
       dirMode: (await fs.promises.stat(publicationDir)).mode & 0o7777,

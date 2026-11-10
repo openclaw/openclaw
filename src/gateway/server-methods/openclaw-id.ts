@@ -2,12 +2,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { Ed25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { isEd25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
 // OpenClaw ID remote access methods. The root ceremony (the link ceremony "Make
 // reachable") runs only for a direct-loopback client;
 // relayed clients can read status and send owner-signed membership changes, which
 // the authority verifies itself. Status is the same small summary for every client;
 // people, devices and activity come only from openclawId.people, for an owner.
-import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
+import { VERSION } from "../../version.js";
 import { createOpenClawIdSignIn, type OpenClawIdSignIn } from "../openclaw-id/account-sign-in.js";
 import {
   resolveOpenClawIdClientChannel,
@@ -221,6 +222,7 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
   //   pending redemption is a submit too. A claw's root never changes: there is no
   //   owner reset in this version (OCF-319);
   // - register_invite: an owner-signed InviteCap and its base64url proof key;
+  // - register_node_invite: an owner-signed NodeInviteCap and its base64url proof key;
   // - account_*: the Control UI's OpenClaw ID sign-in (see handleAccount).
   "openclawId.authority": async (opts) => {
     if (!isOpenClawIdEnabled(opts.context.getRuntimeConfig().gateway?.openclawId)) {
@@ -296,24 +298,39 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    if (params.action === "register_invite") {
+    if (params.action === "register_invite" || params.action === "register_node_invite") {
       const proofKey = decodeInviteProofKey(params.proofKey);
       if (!params.cap || !proofKey) {
         refuse(opts, { code: "malformed", detail: "cap and a 32-byte proofKey are required" });
         return;
       }
-      const result = await service.registerInvite(channel, { cap: params.cap, proofKey });
+      const input = { cap: params.cap, proofKey };
+      const result =
+        params.action === "register_node_invite"
+          ? await service.registerNodeInvite(channel, input)
+          : await service.registerInvite(channel, input);
       if (!result.ok) {
         refuse(opts, result);
         return;
       }
-      opts.respond(true, { status: result.status, link: await linkAfterWrite(service, opts) });
+      opts.respond(true, {
+        status: result.status,
+        link: await linkAfterWrite(service, opts),
+        ...(params.action === "register_node_invite"
+          ? {
+              discoveryUrl:
+                opts.context.getRuntimeConfig().gateway?.openclawId?.discoveryUrl ?? null,
+              version: VERSION,
+            }
+          : {}),
+      });
       return;
     }
     if (params.action !== "commit") {
       refuse(opts, {
         code: "malformed",
-        detail: "action must be check_name, prepare, commit, publish, submit or register_invite",
+        detail:
+          "action must be check_name, prepare, commit, publish, submit, register_invite or register_node_invite",
       });
       return;
     }

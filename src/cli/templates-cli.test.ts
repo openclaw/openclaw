@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Command } from "commander";
+import { create as createTar } from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -171,12 +173,91 @@ describe("templates cli", () => {
 
   it("blocks local Add while Templates Labs is off", async () => {
     mocks.loadConfig.mockReturnValue({});
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
     expect(await add(["--dry-run", "--json"])).toMatchObject({
       ok: false,
       error: { code: "templates_labs_disabled" },
     });
     expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
   });
+
+  it("resolves a registry name to verified artifact bytes for dry-run and scoped Add", async () => {
+    const registry = await registryFixture();
+    const workspace = join(tempDirs.make("openclaw-registry-cli-"), "workspace");
+    const preview = await add(["--dry-run", "--json", "--workspace", workspace], registry.name);
+    expect(preview).toMatchObject({
+      template: {
+        name: registry.name,
+        version: "1.2.3",
+        integrityKind: "artifact",
+        integrity: registry.integrity,
+      },
+      summary: { blockedActions: 0 },
+    });
+    expect(existsSync(workspace)).toBe(false);
+    expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+    mocks.runtime.writeJson.mockClear();
+    let extractedRoot = "";
+    mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (plan) => {
+      extractedRoot = plan.template.packageRoot;
+      expect(await readFile(join(extractedRoot, "workspace", "AGENTS.md"), "utf8")).toBe(
+        "# Demo\n",
+      );
+      return {
+        status: "partial",
+        agent: plan.agent,
+        error: { code: "fixture_partial", message: "Inspect retained resources." },
+      };
+    });
+    expect(await add(["--json", "--workspace", workspace], registry.name)).toMatchObject({
+      status: "partial",
+      error: { code: "fixture_partial" },
+    });
+    expect(existsSync(extractedRoot)).toBe(false);
+    expect(mocks.runtime.writeJson).toHaveBeenCalledTimes(1);
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps registry trust acknowledgement separate from dependency preflight", async () => {
+    const registry = await registryFixture("trust");
+    expect(await add(["--dry-run", "--json"], registry.name)).toMatchObject({
+      riskAcknowledgementRequired: true,
+    });
+    mocks.runtime.writeJson.mockClear();
+    expect(await add(["--acknowledge-clawhub-risk", "--json"], registry.name)).toMatchObject({
+      status: "complete",
+    });
+    mocks.runtime.writeJson.mockClear();
+    mocks.applyTemplateAddPlanStateless.mockClear();
+    await registryFixture("dependency");
+    expect(await add(["--acknowledge-clawhub-risk", "--json"], registry.name)).toMatchObject({
+      summary: { blockedActions: 1 },
+      blockers: expect.arrayContaining([
+        expect.objectContaining({ code: "package_install_unavailable" }),
+      ]),
+    });
+    expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+  });
+
+  it.for(["family", "name", "digest", "version", "trust"] as const)(
+    "rejects registry %s mismatches before applying",
+    async (failure) => {
+      const registry = await registryFixture(failure);
+      expect(await add(["--json"], registry.name)).toMatchObject({
+        error: {
+          code:
+            failure === "digest"
+              ? "clawhub_artifact_integrity_mismatch"
+              : failure === "version"
+                ? "clawhub_version_unavailable"
+                : failure === "trust"
+                  ? "clawhub_risk_acknowledgement_required"
+                  : "clawhub_identity_mismatch",
+        },
+      });
+      expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+    },
+  );
 
   it("prints versioned experimental JSON for a development manifest", async () => {
     const manifestPath = await writeManifest();
@@ -401,3 +482,81 @@ describe("templates cli", () => {
     });
   });
 });
+
+// Wire fixtures keep the real registry client, trust gate, downloader, extractor,
+// manifest reader, and Add planner; only HTTP responses and the final mutation are controlled.
+async function registryFixture(
+  failure?: "family" | "name" | "digest" | "version" | "trust" | "dependency",
+) {
+  const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+  const manifestPath = join(root, "CLAW.md");
+  const manifest = JSON.parse((await readFile(manifestPath, "utf8")).split("---")[1]!);
+  if (failure !== "dependency") {
+    manifest.packages = [];
+  }
+  await writeFile(manifestPath, `---\n${JSON.stringify(manifest)}\n---\n`);
+  const archive = join(tempDirs.make("openclaw-registry-archive-"), "package.tgz");
+  await createTar({ gzip: true, file: archive, cwd: dirname(root) }, [root.split("/").at(-1)!]);
+  const bytes = await readFile(archive);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const npmIntegrity = "sha512-" + createHash("sha512").update(bytes).digest("base64");
+  const name = "@acme/demo-agent";
+  const pkg = {
+    name,
+    family: "template",
+    displayName: "Demo",
+    channel: "community",
+    isOfficial: false,
+    updatedAt: 1,
+    latestVersion: failure === "version" ? "latest" : "1.2.3",
+  };
+  const artifact = {
+    kind: "npm-pack",
+    sha256: failure === "digest" ? "0".repeat(64) : sha256,
+    npmIntegrity,
+  };
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const route = decodeURIComponent(url.pathname);
+    if (route.endsWith("/artifact/download")) {
+      return new Response(bytes, { headers: { "X-ClawHub-Artifact-Sha256": sha256 } });
+    }
+    if (route.endsWith("/artifact")) {
+      return Response.json({ package: pkg, version: "1.2.3", artifact });
+    }
+    if (route.endsWith("/security")) {
+      return Response.json({
+        package: pkg,
+        release: {
+          version: "1.2.3",
+          artifactKind: "npm-pack",
+          artifactSha256: artifact.sha256,
+          npmIntegrity,
+        },
+        overview: "Synthetic security review.",
+        securityAuditUrl: "https://clawhub.ai/acme/templates/demo-agent/security-audit",
+        verdict: failure === "trust" ? "suspicious" : "benign",
+        trust: {
+          scanStatus: "clean",
+          moderationState: "approved",
+          blockedFromDownload: false,
+          reasons: [],
+          pending: false,
+          stale: false,
+        },
+      });
+    }
+    if (route === "/api/v1/packages/" + name) {
+      return Response.json({
+        package: {
+          ...pkg,
+          ...(failure === "family" ? { family: "plugin" } : {}),
+          ...(failure === "name" ? { name: "@acme/other" } : {}),
+        },
+        owner: { handle: "acme" },
+      });
+    }
+    throw new Error("Unexpected registry request: " + route);
+  });
+  return { name, integrity: "sha256:" + sha256 };
+}

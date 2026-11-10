@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type * as IrohNative from "../../../../crates/openclaw-iroh-node/index.js";
 
 /** Receiving half of a bidirectional stream. */
 export type IrohRecvStream = {
@@ -83,7 +84,7 @@ function findSourceCheckoutBinding(): string | undefined {
 }
 
 /** Loads the binding: the installed package first, then a source checkout build. */
-export function loadIrohBinding(): IrohBinding {
+export function loadIrohBinding(): typeof IrohNative {
   const require = createRequire(import.meta.url);
   const errors: string[] = [];
   for (const specifier of [PACKAGE_NAME, findSourceCheckoutBinding()]) {
@@ -91,8 +92,8 @@ export function loadIrohBinding(): IrohBinding {
       continue;
     }
     try {
-      // SAFETY: the iroh-node package exports this binding surface; IrohBinding lists only what the child calls.
-      const loaded = require(specifier) as IrohBinding;
+      // SAFETY: both entry points export the generated native binding interface.
+      const loaded = require(specifier) as typeof IrohNative;
       // The child needs the relay watcher: it reports relay denials and ends when the
       // endpoint closes, which lets the child exit on its own.
       if (typeof loaded.Endpoint.prototype.watchHomeRelay !== "function") {

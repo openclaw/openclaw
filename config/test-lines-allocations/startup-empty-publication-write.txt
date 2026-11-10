@@ -1,0 +1,2 @@
+# Extend the existing empty-startup regression to reject an orphan-recovery writer request.
+2

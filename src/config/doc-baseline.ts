@@ -5,7 +5,6 @@ import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
@@ -464,7 +463,6 @@ function writeFileAtomic(filePath: string, content: string): void {
   replaceFileAtomicSync({
     filePath,
     content,
-    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(filePath)),
     dirMode: 0o755,
     mode: 0o644,
     tempPrefix: path.basename(filePath),

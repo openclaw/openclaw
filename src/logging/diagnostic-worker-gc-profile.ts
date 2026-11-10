@@ -4,7 +4,6 @@ import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { WorkerGcProfiles, WorkerGcStorm } from "../infra/diagnostic-process-types.js";
-import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { sanitizeDiagnosticCpuProfile } from "./diagnostic-cpu-profile.js";
 import { sanitizeDiagnosticHeapProfile, type SamplingProfile } from "./diagnostic-heap-profile.js";
 import { captureDiagnosticProfile, createInspectorProfileCapture } from "./diagnostic-profile.js";
@@ -131,7 +130,6 @@ export function writeWorkerGcProfiles(profiles: WorkerGcProfiles): Promise<strin
     ] as const) {
       const filename = `${prefix}.${kind}profile.json`;
       await replaceFileAtomic({
-        allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(directory),
         filePath: path.join(directory, filename),
         content,
         mode: 0o600,

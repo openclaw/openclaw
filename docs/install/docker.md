@@ -295,24 +295,6 @@ repair-specific backups still apply. If a capture fails, the next
 start tries again. A new image, a recreated container, or a container whose
 `/tmp` does not persist across restarts captures again.
 
-### Windows-drive bind mounts
-
-Docker Desktop with WSL2 can hide a renamed file on a Windows-drive bind mount
-until the last open file descriptor closes. This can make config and state writes
-fail with `ENOENT` even though the file appears in the directory listing.
-
-OpenClaw enables fs-safe's rename-recovery exception only after verifying the
-directory descriptor belongs to a DrvFS mount. It logs
-`DRVFS_RENAME_RECOVERY` once per process when this policy becomes active.
-fs-safe independently verifies the mount again before recovery and checks the
-reopened file's identity, ownership, permissions, size, link count, and available
-content. Other mounts keep strict behavior.
-
-Recovery closes the final descriptor, so a recycled file identity with identical
-replacement content can still be indistinguishable from the original file.
-Prefer a Docker named volume or a bind mount from a WSL ext4 path when possible;
-these avoid that exception. Keep only one Gateway on the state volume.
-
 ### Read-only container root
 
 A read-only container root still needs writable runtime storage. For example,

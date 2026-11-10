@@ -28,7 +28,7 @@ const buildOwners = [
 const voiceOwners = [
   /^apps\/ios\/WatchApp\/(?:Sources\/|Info\.plist$)/u,
   /^apps\/ios\/ActivityWidget\//u,
-  /^apps\/ios\/Tests\/(?:TalkRealtimeVoiceSessionCleanupTests|TalkRealtimeConsultCancellationTests|TalkRealtimeTranscriptWriteQueueTests|TalkModeConfigParsingTests|ManagedDocumentEnvelopeTests|IOSMediaArtifactLoaderTests|OpenClawTypographyTests)\.swift$/u,
+  /^apps\/ios\/Tests\/(?:TalkRealtimeVoiceSessionCleanupTests|TalkRealtimeConsultCancellationTests|TalkRealtimeTranscriptWriteQueueTests|TalkModeConfigParsingTests|TalkTranscriptCompletionTests|ManagedDocumentEnvelopeTests|IOSMediaArtifactLoaderTests|OpenClawTypographyTests)\.swift$/u,
   /^apps\/ios\/Tests\/Fixtures\/managed-document-message\.json$/u,
 ];
 

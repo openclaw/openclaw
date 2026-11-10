@@ -176,6 +176,8 @@ export type CreateGatewaySessionParams = {
   /** Clear a prior node binding when a new Gateway-host session replaces it. */
   clearExecBinding?: boolean;
   clearSpawnedCwd?: boolean;
+  /** Explicit worktree creation keeps the active-parent refusal. */
+  worktree?: boolean;
   fork?: boolean;
   forkFrom?: "last-completed";
   /** Live requester capability for an agent's current-transcript fork; never a wire parameter. */

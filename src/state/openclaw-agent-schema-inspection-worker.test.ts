@@ -1,6 +1,7 @@
-import { fork } from "node:child_process";
+import { execFile, fork } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
@@ -11,10 +12,6 @@ import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-age
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -80,17 +77,40 @@ it("hands its prestarted child to the first scheduler slot without spending insp
   }
 });
 
-it("reads closed live state in cold children without copying or executing comparison DDL", async () => {
+it("reuses clean state proof in cold children and verifies unsealed state", async () => {
   const directory = tempDirs.make("state-schema-contract-transfer-");
-  const pathname = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: directory } }).path;
-  closeOpenClawStateDatabaseForTest();
+  // The ordinary test pool is an unhosted worker; only a real process owns seal custody.
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [
+      ...(process.versions.bun ? ["--no-install"] : ["--import", import.meta.resolve("tsx")]),
+      "--input-type=module",
+      "--eval",
+      `import { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } from ${JSON.stringify(new URL("./openclaw-state-db.ts", import.meta.url).href)};
+       const state = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: ${JSON.stringify(directory)} } });
+       await closeOpenClawStateDatabaseAsync();
+       console.log(state.path);`,
+    ],
+    { timeout: 30_000 },
+  );
+  const pathname = stdout.trim();
+  expect(fs.existsSync(`${pathname}.seal`)).toBe(true);
   const ddlLog = path.join(directory, "comparison-ddl.log");
   const preload = path.join(directory, "observe-comparison-ddl.cjs");
   fs.writeFileSync(ddlLog, "");
   fs.writeFileSync(
     preload,
     `const fs = require('node:fs');
-const { DatabaseSync } = require('node:sqlite');
+const { DatabaseSync, StatementSync } = require('node:sqlite');
+for (const method of ['all', 'get', 'iterate']) {
+  const read = StatementSync.prototype[method];
+  StatementSync.prototype[method] = function(...args) {
+    if (/^PRAGMA (?:integrity|quick|foreign_key)_check/i.test(this.sourceSQL)) {
+      fs.appendFileSync(${JSON.stringify(ddlLog)}, this.sourceSQL + '\\n');
+    }
+    return read.apply(this, args);
+  };
+}
 const exec = DatabaseSync.prototype.exec;
 DatabaseSync.prototype.exec = function(sql) {
   if (this.location() === null && /CREATE TABLE/i.test(sql)) {
@@ -107,6 +127,7 @@ DatabaseSync.prototype.exec = function(sql) {
           pathname,
           supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
           verifyCurrentSchemaShape: true,
+          requireStartupMigrationReadiness: true,
           purpose: "runtime",
           scope: "state",
         },
@@ -114,7 +135,32 @@ DatabaseSync.prototype.exec = function(sql) {
       );
       expect(result?.schemas).toEqual({ incompatible: [], indeterminate: [] });
       expect(fs.readFileSync(ddlLog, "utf8")).toBe("");
+      expect(result?.startupMetrics).toEqual({
+        stateIntegrityCheckCount: 0,
+        stateIntegrityMs: 0,
+        stateSealCount: 1,
+      });
     }
+    // An external write invalidates the real close receipt; fresh inspection must refuse it.
+    using writer = new (sqlite.requireNodeSqlite().DatabaseSync)(pathname);
+    writer.exec(`PRAGMA foreign_keys=OFF;
+      INSERT INTO acp_replay_events
+        (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
+        VALUES ('missing-session', 1, 10, 'session', NULL, '{}', 0)`);
+    await using reader = createAgentSchemaInspectionWorker();
+    await expect(
+      reader.inspectState(
+        {
+          pathname,
+          supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+          requireStartupMigrationReadiness: true,
+          purpose: "runtime",
+          scope: "state",
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/foreign_key_check/);
+    expect(fs.readFileSync(ddlLog, "utf8")).toContain("PRAGMA integrity_check");
   });
 });
 

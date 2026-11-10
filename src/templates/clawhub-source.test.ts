@@ -162,7 +162,7 @@ const emptyManifest: TemplateManifest = {
   workspace: { bootstrapFiles: {}, files: [] },
   packages: [],
   mcpServers: {},
-  cronJobs: [],
+  automations: [],
 };
 const listPage = (items: unknown[], nextCursor: string | null = null) => ({ items, nextCursor });
 function mockArchive(archivePath: string, extractedRoot: string) {
@@ -237,7 +237,7 @@ beforeEach(async () => {
       { kind: "plugin", source: "clawhub", ref: "@openclaw/source-plugin", version: "2.0.0" },
     ],
     mcpServers: { sources: { command: "source-tool" } },
-    cronJobs: [
+    automations: [
       {
         id: "daily-briefing",
         name: "Daily briefing",

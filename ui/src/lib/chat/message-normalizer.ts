@@ -25,6 +25,7 @@ import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recomm
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
 import { getMediaFileExtension, labelForMediaPath } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
+import { getMessageDerivations, readMessageDerivations } from "./message-derivations.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import {
   resolveMessageSender,
@@ -396,11 +397,9 @@ function resolveDeliveryReplyTarget(
       : null;
 }
 
-const normalizedMessages = new WeakMap<object, NormalizedMessage>();
-
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const original = asOptionalRecord(message);
-  const cached = original && normalizedMessages.get(original);
+  const cached = original && readMessageDerivations(original)?.normalized;
   if (cached) {
     return cached;
   }
@@ -621,7 +620,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   // Retained and live messages are immutable snapshots. Missing timestamps
   // still resolve against the current clock on each call.
   if (original && asFiniteNumber(m.timestamp) !== undefined) {
-    normalizedMessages.set(original, normalized);
+    getMessageDerivations(original).normalized = normalized;
   }
   return normalized;
 }

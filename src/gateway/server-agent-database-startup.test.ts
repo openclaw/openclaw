@@ -61,9 +61,9 @@ import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import "./server-methods/chat-send-external-entry.js";
 // Keep cold module evaluation outside the lifecycle and RPC behavior deadlines.
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
-import "./server-methods/chat-send-external-entry.js";
 import { gatewayReplyMock, testState } from "./test-helpers.runtime-state.js";
 import {
   connectWebchatClient,

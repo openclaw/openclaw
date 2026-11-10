@@ -61,7 +61,7 @@ it.each(["0.78.1-local.gce7e7554", "0.81.0-local.g22111202", "missing"])(
     const { provider, runCommand, warn } = fixture(async ([binary, command]) => {
       if (command === "--version") {
         const observed =
-          binary === SIBLING_BINARY ? "0.81.0+local.g22111202" : await fs.readFile(binary!, "utf8");
+          binary === SIBLING_BINARY ? "0.82.0+local.g22111202" : await fs.readFile(binary!, "utf8");
         return commandResult({ stdout: `crabbox ${observed}` });
       }
       if (binary !== SIBLING_BINARY || command !== "inspect") {

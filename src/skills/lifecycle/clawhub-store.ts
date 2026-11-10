@@ -15,7 +15,6 @@ import {
 } from "../../infra/clawhub-skills.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
-import { allowDrvfsRenameRecovery } from "../../infra/fs-safe-drvfs.js";
 import { pathExists, statRegularFile } from "../../infra/fs-safe.js";
 import {
   JsonFileReadError,
@@ -274,7 +273,6 @@ async function writeClawHubTrackingJson(
 ): Promise<void> {
   assertCurrent?.();
   await replaceFileAtomic({
-    allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(path.dirname(filePath)),
     filePath,
     content: `${JSON.stringify(value, null, 2)}\n`,
     mode: 0o600,

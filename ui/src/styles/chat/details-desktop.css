@@ -4,7 +4,7 @@
   border: 0;
   border-radius: 0;
   background: transparent;
-  line-height: 24px;
+  line-height: calc(24px * var(--control-ui-text-scale));
 }
 
 .chat-details-desktop-section + .chat-details-desktop-section {
@@ -19,8 +19,8 @@
   padding: 0;
   list-style: none;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 24px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: calc(24px * var(--control-ui-text-scale));
   cursor: var(--cursor-action);
 }
 
@@ -130,7 +130,7 @@
   min-height: 28px;
   margin-inline: 0;
   padding: 0;
-  line-height: 24px;
+  line-height: calc(24px * var(--control-ui-text-scale));
 }
 
 .chat-details-session[data-details-desktop]
@@ -328,7 +328,7 @@
   font-family: var(--font-body);
   font-size: var(--details-row-font-size);
   font-weight: 400;
-  line-height: 20px;
+  line-height: calc(20px * var(--control-ui-text-scale));
   letter-spacing: normal;
 }
 
@@ -489,8 +489,8 @@
   line-height: inherit;
 }
 
-/* Icon buttons keep their hit area but draw their glyph on the right content edge. */
-.chat-details .chat-details-desktop-body .chat-pr__actions-trigger,
+/* Only unboxed icon buttons hang past the content edge; publication groups own their surface. */
+.chat-details .chat-details-desktop-body .chat-pr--summary .chat-pr__actions-trigger,
 .chat-details .chat-details-desktop-body .session-progress-card__options {
   margin-inline-end: -6px;
 }

@@ -165,6 +165,15 @@ describe("method scope resolution and authorization", () => {
       WRITE,
       OWN_WRITE,
     ],
+    // URL clones reuse or register repositories with the Gateway's GitHub identity.
+    [
+      "sessions.create",
+      { projectGitUrl: "https://github.com/openclaw/openclaworg.git" },
+      WRITE,
+      OWN_WRITE,
+    ],
+    ["projects.searchRemote", { query: "openclaw" }, WRITE, READ],
+    ["worktrees.list", {}, WRITE, READ],
     ["sessions.create", { agentId: "main", incognito: true }, ADMIN, WRITE],
     ["sessions.create", { key: incognitoKey }, ADMIN, WRITE],
     ["sessions.create", { parentSessionKey: incognitoKey }, ADMIN, WRITE],

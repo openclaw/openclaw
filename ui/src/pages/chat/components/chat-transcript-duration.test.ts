@@ -186,7 +186,8 @@ it.each([false, true])(
     const messages = [
       prompt("first", 1_000),
       work("first", 2_000),
-      ...(steer ? [] : [reply("first", 3_000)]),
+      // The earlier run's reply was written after its creation timestamp.
+      ...(steer ? [] : [{ ...reply("first", 3_000), __openclaw: { recordTimestampMs: 9_000 } }]),
       prompt("second", 4_000, steer ? "first" : undefined),
       work(runId, 5_000),
       reply(runId, 6_000),
@@ -202,7 +203,7 @@ it.each([false, true])(
       summaries.map(
         (summary) => summary.querySelector(".chat-activity-group__label")?.textContent ?? null,
       ),
-    ).toEqual(steer ? ["Worked for 20s"] : ["Worked", "Worked for 20s"]);
+    ).toEqual(steer ? ["Worked for 20s"] : ["Worked for 8s", "Worked for 20s"]);
   },
 );
 it("keeps progress after accepted steers and before queued input", async () => {

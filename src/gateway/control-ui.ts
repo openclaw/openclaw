@@ -47,7 +47,7 @@ import { matchesControlUiBootstrapConfigPath } from "./control-ui-bootstrap-cont
 import { prepareControlUiBootstrapConfig } from "./control-ui-bootstrap.js";
 import {
   isControlUiRootPublicAsset,
-  isControlUiVersionedPublicAsset,
+  isImmutableControlUiPublicAsset,
   parseControlUiResourcePath,
 } from "./control-ui-contract.js";
 import { applyControlUiSecurityHeaders } from "./control-ui-csp.js";
@@ -389,7 +389,8 @@ export async function handleControlUiAssistantMediaRequest(
     const stream = byteStream;
     await publishResponse(() => {
       media.assertSourceCurrent();
-      if (media.outsideRoots && mediaKind === "image") {
+      // Allowed roots authorize file reads, not active document content.
+      if (mediaKind === "image") {
         applyHttpImageContentSecurityPolicy(res);
       }
       res.setHeader("Content-Type", contentType);
@@ -700,8 +701,7 @@ export async function handleControlUiHttpRequest(
     fingerprintedAsset ||
     Boolean(
       publicAssetBuildId &&
-      url.searchParams.get("v") === publicAssetBuildId &&
-      isControlUiVersionedPublicAsset(fileRel),
+      isImmutableControlUiPublicAsset(fileRel, url.searchParams.get("v"), publicAssetBuildId),
     );
   const readBody =
     req.method !== "HEAD" &&

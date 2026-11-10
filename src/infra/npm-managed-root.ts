@@ -9,16 +9,14 @@ import { filterStringEntries } from "@openclaw/normalization-core/string-normali
 import { parse as parseYaml } from "yaml";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { ignoreMissingPath } from "./errno.js";
-import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
-import type { NpmSpecResolution } from "./install-source-utils.js";
 import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import { resolveNpmCommand } from "./npm-command.js";
 import {
   filterUnsupportedManagedNpmRootOverrides,
   readOverrideRecord,
 } from "./npm-managed-root-overrides.js";
-import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
+import type { NpmSpecResolution, ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { isPackageDependencyName } from "./package-json.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
@@ -739,7 +737,6 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   const changed = JSON.stringify(next) !== JSON.stringify(manifest);
   if (changed) {
     await replaceFileAtomic({
-      allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(params.npmRoot),
       filePath: manifestPath,
       assertBeforeMutation: params.beforePersistentApply,
       content: `${JSON.stringify(next, null, 2)}\n`,

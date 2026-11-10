@@ -4,6 +4,7 @@ import * as pinPolicy from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import { getSessionListBaseMiss } from "./session-list-diagnostics.js";
+import * as listFilters from "./session-list-filters.js";
 import type { SessionListFilteredEntries } from "./session-list-filters.js";
 import { SessionListViewCache } from "./session-list-view-cache.js";
 import { shareSidebarSessionRows } from "./session-row-presentation.js";
@@ -14,7 +15,6 @@ import {
   type EntryRow,
 } from "./session-row-projection-record.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
-import * as sessionCore from "./session-utils-core.js";
 import { selectSessionEntries } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
@@ -196,6 +196,7 @@ it("keeps sidebar baselines when fixed query partitions advance through many rev
     state.put(`agent:main:retention-${index}`, {
       sessionId: String(index),
       updatedAt: now + index,
+      archivedAt: index % 2 ? 0 : undefined,
     });
   }
   const cache = new SessionListViewCache();
@@ -210,7 +211,7 @@ it("keeps sidebar baselines when fixed query partitions advance through many rev
   };
   try {
     const initialBytes = queries.map((opts) => read(opts).bytes);
-    const partitions = state.selection.read().partitions!;
+    const partitions = state.selection.read().partitions!.filter((part) => part.entries.size);
     const keys = partitions.map((partition) => partition.entries.keys().next().value!);
     // Keep old revision tokens live: pruning must follow the owner, never collection.
     const oldRevisions: object[] = [];
@@ -311,25 +312,36 @@ it("keeps concurrent audience baselines under a daytime roster's selection press
   }
 });
 
-it("filters partition entries as they are read without an eager roster copy", () => {
+it("reads only the requested archive partitions without an eager roster copy", () => {
   const state = fixture();
   for (let index = 0; index < 1024; index++) {
-    state.put(`agent:main:stream-${index}`, { sessionId: String(index), updatedAt: index });
+    state.put(`agent:main:stream-${index}`, {
+      sessionId: String(index),
+      updatedAt: index,
+      archivedAt: index % 2 ? 0 : undefined,
+    });
   }
   const partitions = state.selection.read().partitions!;
+  const largestPartition = Math.max(...partitions.map((part) => part.entries.size));
+  let archived: boolean | "all" = false;
   let read = 0;
   const spies = partitions.flatMap((part) => {
+    const visit = (entry: SessionEntry) => {
+      expect(entry.archivedAt !== undefined).toBe(part.archived);
+      expect(archived === "all" || part.archived === archived).toBe(true);
+      read++;
+    };
     const each = part.entries.forEach.bind(part.entries);
-    const direct = vi.spyOn(part.entries, "forEach").mockImplementation((visit) => {
+    const direct = vi.spyOn(part.entries, "forEach").mockImplementation((callback) => {
       each((pair, key, map) => {
-        read++;
-        visit(pair, key, map);
+        visit(pair[1]);
+        callback(pair, key, map);
       });
     });
     const values = part.entries.values.bind(part.entries);
     const iterated = vi.spyOn(part.entries, "values").mockImplementation(function* () {
       for (const pair of values()) {
-        read++;
+        visit(pair[1]);
         yield pair;
       }
       return undefined;
@@ -337,20 +349,26 @@ it("filters partition entries as they are read without an eager roster copy", ()
     return [direct, iterated];
   });
   let filtered = 0;
-  const matches = sessionCore.matchesSessionArchiveFilter;
-  using archive = vi
-    .spyOn(sessionCore, "matchesSessionArchiveFilter")
-    .mockImplementation((entry, archived) => {
-      expect(read - filtered++).toBe(1);
-      return matches(entry, archived);
-    });
+  const filter = listFilters.filterSessionEntries;
+  using _ = vi.spyOn(listFilters, "filterSessionEntries").mockImplementation((params) => {
+    expect(read).toBe(filtered);
+    const result = filter(params);
+    expect(read - filtered).toBeLessThanOrEqual(largestPartition);
+    filtered = read;
+    return result;
+  });
   try {
-    const result = state.select(state.selection, { limit: 10 }, new Map());
-    expect(result.totalCount).toBe(1024);
-    expect(result.entries.map(([, entry]) => entry.sessionId)).toEqual(
-      Array.from({ length: 10 }, (_, index) => String(1023 - index)),
-    );
-    expect(archive).toHaveBeenCalledTimes(1024);
+    for (archived of [false, true, "all"] as const) {
+      read = filtered = 0;
+      const result = state.select(state.selection, { archived, limit: 10 }, new Map());
+      expect(result.totalCount).toBe(archived === "all" ? 1024 : 512);
+      expect(read).toBe(result.totalCount);
+      expect(result.entries.map(([, entry]) => entry.sessionId)).toEqual(
+        Array.from({ length: 10 }, (_value, index) =>
+          String(1023 - Number(archived === false) - index * (archived === "all" ? 1 : 2)),
+        ),
+      );
+    }
   } finally {
     spies.forEach((spy) => spy.mockRestore());
   }
@@ -374,8 +392,7 @@ it("reads only the requested page from retained ordered partitions", () => {
     const retained = new Map<object, SessionListFilteredEntries>();
     state.select(state.selection, opts, retained);
     const reads = { entries: 0, ownerEntries: 0 };
-    for (const partition of state.selection.read().partitions!) {
-      const part = retained.get(partition.revision)!;
+    for (const part of retained.values()) {
       for (const field of ["entries", "ownerEntries"] as const) {
         part[field] = new Proxy(part[field], {
           get(target, key, receiver) {
@@ -401,8 +418,8 @@ it("reads only the requested page from retained ordered partitions", () => {
       nextOffset: (opts.offset ?? 0) + opts.limit,
     });
     expect(result.ownerFacet.map((owner) => owner.id)).toEqual(["ada", "bob"]);
-    expect(reads.entries).toBeLessThanOrEqual((opts.offset ?? 0) + opts.limit + 64);
-    expect(reads.ownerEntries).toBeLessThanOrEqual(owned.length + 64);
+    expect(reads.entries).toBeLessThanOrEqual((opts.offset ?? 0) + opts.limit + retained.size);
+    expect(reads.ownerEntries).toBeLessThanOrEqual(owned.length + retained.size);
     expect(pins).toHaveBeenCalledTimes(reads.entries + reads.ownerEntries);
   }
 });

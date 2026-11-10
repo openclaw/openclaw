@@ -14,7 +14,6 @@ import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identit
 import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
-import { allowDrvfsRenameRecovery } from "./fs-safe-drvfs.js";
 import { resolveUserPath } from "./home-dir.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
@@ -368,7 +367,6 @@ async function migrateOneSource(params: {
     }
     assertConfiguredWorkspaceIdentity(params.source);
     sourceRoot = await root(params.source.rootDir, {
-      allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(params.source.rootDir),
       hardlinks: "reject",
       symlinks: "reject",
     });

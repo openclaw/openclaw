@@ -7,7 +7,6 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { allowDrvfsRenameRecovery } from "../infra/fs-safe-drvfs.js";
 import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { redactSecrets } from "../logging/redact.js";
@@ -468,7 +467,6 @@ export async function scrubConfigAuditLog(params: {
     await replaceFileAtomic({
       filePath: path.join(directory, path.basename(auditPath)),
       content: outLines.join("\n"),
-      allowDrvfsRenameRecovery: allowDrvfsRenameRecovery(directory),
       mode: 0o600 & ~process.umask(),
       dirMode: "preserve",
       beforeRename: async ({ filePath }) => {

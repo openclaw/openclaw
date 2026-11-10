@@ -14,6 +14,32 @@ Creation summaries strip terminal escape sequences and show embedded newlines,
 tabs, and carriage returns as `\n`, `\t`, and `\r`. Workspace paths and other
 values in saved configuration and `--json` output retain their original contents.
 
+## Reserved agent IDs and setup recovery
+
+`openclaw` and `crestodian` are reserved system-agent IDs (case-insensitive),
+not names for configured user agents. A display name such as `OpenClaw` is fine
+when the agent's ID is different.
+
+An existing configured agent with a reserved ID conflicts with managed setup.
+For the `openclaw` ID, the setup helper is also omitted to prevent recursive
+self-delegation. Full Access and tool allowlists do not resolve that collision.
+The agent prompt reports the configured conflict instead of treating it as an
+approval problem.
+
+Have the Gateway operator plan a move to a non-reserved ID, preserving the
+workspace, sessions and database ownership, channel bindings, and credentials.
+Changing only the config key or deleting and recreating the agent is not a
+history-preserving migration. Back up the affected state before making changes;
+there is no automatic rename in this recovery path.
+
+The `openclaw` setup tool manages the Gateway hosting the conversation; it does
+not select another Gateway by node or host. For an authorized task on another
+machine, verify the destination and use the available remote execution tools
+with their normal approvals; local agent-ID migration is not a prerequisite for
+that separately authorized remote task. `/openclaw` rescue accepts supported
+commands, not arbitrary setup instructions; it cannot enable a missing tool from
+free-form text.
+
 ## Examples
 
 ```bash
@@ -192,6 +218,7 @@ Options: `--force`, `--json`.
 - Deletion closes every terminal for the agent, including detached terminals and terminals opened without a chat session, and waits for their processes to exit before retiring storage. Terminals for surviving agents remain usable.
 - Independent background commands are also cancelled and drained when their agent is deleted. Idle MCP runtimes retire before storage, while active MCP views keep deletion pending; close those views and retry. Tracked browser tabs use the same best-effort cleanup as session deletion.
 - During an upgrade, Doctor backs up and prepares a resumable pending deletion's old database schema under deletion ownership. Gateway recovery then completes normal session cleanup, including native bindings and related state, before applying the recorded file-removal choice.
+- Gateway `agents.delete` with `deleteFiles: false` retains the database, workspace, and transcript directories; it still retires session entries under the deletion owner's authority, including after restart. Startup's refusal of ordinary agent access does not block that cleanup. Deleting or deleted agents appear under `agentDeletions` in detailed readiness responses and do not fail readiness or core readiness.
 - If session-store cleanup fails, the agent is removed from config but its files and pending cleanup are retained. Resolve the reported storage error, then retry the same deletion command. After config publication succeeds, Gateway deletion returns `UNAVAILABLE`, names the failing cleanup step and database path in `failed`, and attaches `purgeFailed: true` to its error response; offline `--json` reports the same flag until the purge succeeds.
 - On installations that have not migrated shared auth yet, the legacy owner cannot be deleted. Run `openclaw doctor --fix`; after relocation into shared state SQLite, `main` follows the same deletion rules as any other agent.
 - An agent that owns a session database still used by another configured agent cannot be deleted, even when retaining files. Keep that owner configured; moving shared history to another owner requires a supported migration, which is not currently available.

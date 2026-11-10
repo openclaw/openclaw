@@ -1,0 +1,2 @@
+46
+# Compaction summary priority regressions: generated body vs verbatim preserved turns, tool-output excerpts, split-turn required-section retention (#195028).
