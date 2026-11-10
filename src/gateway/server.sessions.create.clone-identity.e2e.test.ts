@@ -82,6 +82,8 @@ test.each(
           env: Object.fromEntries(
             Object.entries(commandOptions.env ?? {}).map(([key, value]) => [
               key,
+              // Test-only routing retains the selected auth header and its config index.
+              // nosemgrep: security.opengrep.ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
               key.startsWith("GIT_CONFIG_KEY_") &&
               (value === `http.${new URL(REPOSITORY_URL).origin}/.extraHeader` ||
                 value === `http.${REPOSITORY_URL}.extraHeader`)
