@@ -116,6 +116,7 @@ async function runCodeModeAgent(params: {
     RecoveryProgram | ((context: Context) => RecoveryProgram | Promise<RecoveryProgram>)
   >;
   hiddenTools: AnyAgentTool[];
+  executor?: "node" | "quickjs";
   execInput?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   embeddedSession?: boolean;
@@ -124,7 +125,9 @@ async function runCodeModeAgent(params: {
     harness: { tools: AnyAgentTool[]; ctx: Parameters<typeof createCodeModeTools>[0] },
   ) => void;
 }) {
-  const harness = createCodeModeHarness();
+  const harness = createCodeModeHarness({
+    codeMode: params.executor ? { executor: params.executor } : undefined,
+  });
   const ctx = harness.ctx;
   const tools = params.abortSignal
     ? createCodeModeTools({ ...ctx, abortSignal: params.abortSignal }).map((candidate) =>
@@ -202,6 +205,54 @@ async function runCodeModeAgent(params: {
 
 describe("Code Mode agent-loop error recovery", () => {
   const tempDirs = createTempDirTracker();
+  it.for(["node", "quickjs"] as const)(
+    "%s returns a rejected cell while a sibling bridge has no response",
+    async (executor, { signal }) => {
+      const started = createDeferred();
+      let enqueueFollowUp!: () => void;
+      const held = tool("held_action", async (_id, _args, abort) => {
+        enqueueFollowUp();
+        started.resolve();
+        if (!abort) {
+          throw new Error("Expected the bridge cancellation signal");
+        }
+        return await withinTest(createDeferred<never>().promise, abort);
+      });
+      const failing = tool("failing_action", async () => {
+        await started.promise;
+        throw new Error("bridge unavailable");
+      });
+      const code = "await Promise.all([held_action({}), failing_action({})]);";
+      const { agent } = await runCodeModeAgent({
+        hiddenTools: [held, failing],
+        executor,
+        programs: [code],
+        execInput: { code, awaitResults: true },
+        abortSignal: signal,
+        configureAgent: (loop) => {
+          enqueueFollowUp = () =>
+            loop.followUp({ role: "user", content: "queued follow-up", timestamp: Date.now() });
+        },
+      });
+      expectRecovered(agent);
+      expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+        isError: true,
+        details: {
+          status: "failed",
+          failurePhase: "bridge",
+          error: expect.stringContaining("bridge unavailable"),
+        },
+      });
+      expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
+      expect(
+        agent.state.messages.filter((message) => message.role === "assistant").slice(-2),
+      ).toEqual([
+        expect.objectContaining({ content: [{ type: "text", text: "recovered" }] }),
+        expect.objectContaining({ content: [{ type: "text", text: "recovered" }] }),
+      ]);
+    },
+  );
+
   it.each(["unchanged", "tool", "middleware", "unmatched middleware"])(
     "bounds repeated bridge failures independently of telemetry (error change=%s)",
     async (errorChange) => {
