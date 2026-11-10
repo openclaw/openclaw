@@ -210,6 +210,8 @@ export type CreateGatewaySessionParams = {
   atomicInitialization?: true;
   /** Trusted ordinary creation owner retains this pending row for later exact-incarnation completion. */
   deferInitialization?: true;
+  /** Internal ordinary Template admission; never accepted from sessions.create params. */
+  templateInitialization?: SessionEntry["templateInitialization"];
   /** Public callers need admin before reconfiguring an adopted keyed session. */
   allowExistingModelSelection?: boolean;
   /** Admitted operator scopes; omitted only by trusted in-process callers. */

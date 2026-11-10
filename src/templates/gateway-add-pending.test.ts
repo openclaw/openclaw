@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { completeAgentOnboarding } from "../gateway/server-methods/agents-onboarding.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { withResolvedClawHubSource } from "./clawhub-source.js";
@@ -43,12 +44,22 @@ it.each([
   "abort-before-commit",
   "admitted-applied",
   "admitted-session-replaced",
+  "admitted-source-retry",
+  "admitted-runtime-retry",
 ] as const)(
   "prepares empty ordinary Template chat before runtime publication: %s",
   async (outcome) => {
     await withOpenClawTestState({ label: "template-agent-first-integration" }, async (state) => {
       const root = state.path("template-source");
       await fs.mkdir(root);
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "@fixture/template-first",
+          version: "1.0.0",
+          openclaw: { template: "CLAW.md" },
+        }),
+      );
       await fs.writeFile(path.join(root, "SOUL.md"), "A calm fixture personality.\n");
       const manifest = path.join(root, "CLAW.md");
       await fs.writeFile(
@@ -61,7 +72,7 @@ it.each([
           }) +
           "\n---\n",
       );
-      const source = await readTemplateManifestFile(manifest);
+      const source = await readTemplateManifestFile(root);
       if (!source.ok) {
         throw new Error("Invalid fixture manifest");
       }
@@ -88,9 +99,14 @@ it.each([
         }),
       );
       let sourceEntered = false;
+      let sourceFailed = false;
       const sourceImplementation = resolveSource.getMockImplementation()!;
       resolveSource.mockImplementation(async (...args) => {
         sourceEntered = true;
+        if (outcome === "admitted-source-retry" && !sourceFailed) {
+          sourceFailed = true;
+          throw new Error("Transient fixture download failure");
+        }
         if (outcome === "admitted-session-replaced") {
           const key = "agent:fixture-first:main";
           const entry = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey: key })!;
@@ -144,6 +160,7 @@ it.each([
       let admittedSessionId: string | undefined;
       let current = true;
       let publicationReached = false;
+      let runtimeFailed = false;
       const sessionKey = "agent:fixture-first:main";
       const prepareAgentChat = vi.fn(
         async (
@@ -182,7 +199,7 @@ it.each([
           ),
         ).toBe("A calm fixture personality.\n");
       });
-      const result = await applyTemplateAddForGateway({
+      const applyInput: Parameters<typeof applyTemplateAddForGateway>[0] = {
         source: { packageName: "@fixture/template-first", version: "1.0.0" },
         ...(outcome.startsWith("admitted-")
           ? { agentId: "fixture-first", planIntegrity: review!.planIntegrity }
@@ -225,11 +242,41 @@ it.each([
           if (outcome === "revoked") {
             current = false;
           }
+          if (outcome === "admitted-runtime-retry" && !runtimeFailed) {
+            runtimeFailed = true;
+            return "applied-restart-required";
+          }
           return outcome === "restart-required" ? "applied-restart-required" : "applied";
         },
         onAgentReady,
-      });
-      expect(prepareAgentChat).toHaveBeenCalledOnce();
+      };
+      let result = await applyTemplateAddForGateway(applyInput);
+      if (outcome === "admitted-source-retry" || outcome === "admitted-runtime-retry") {
+        expect(result).toMatchObject({
+          status: "partial",
+          agentRetained: true,
+          initializationPending: true,
+        });
+        const retained = loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey });
+        expect(retained?.sessionId).toBe(admittedSessionId);
+        const profile = path.join(config.agents!.entries!["fixture-first"]!.workspace!, "SOUL.md");
+        const before = outcome === "admitted-runtime-retry" ? await fs.stat(profile) : undefined;
+        result = await applyTemplateAddForGateway(applyInput);
+        if (before) {
+          const after = await fs.stat(profile);
+          expect({ ino: after.ino, mtimeMs: after.mtimeMs }).toEqual({
+            ino: before.ino,
+            mtimeMs: before.mtimeMs,
+          });
+        }
+        expect(result, JSON.stringify(result)).toMatchObject({ status: "complete", sessionKey });
+        expect(loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.sessionId).toBe(
+          admittedSessionId,
+        );
+        expect(prepareAgentChat).toHaveBeenCalledTimes(2);
+      } else {
+        expect(prepareAgentChat).toHaveBeenCalledOnce();
+      }
       if (outcome === "admitted-session-replaced") {
         expect(result).toMatchObject({
           status: "partial",
@@ -264,15 +311,31 @@ it.each([
         ).toBeTruthy();
         expect(result).toMatchObject({
           agentId: "fixture-first",
-          status: outcome === "applied" || outcome === "admitted-applied" ? "complete" : "partial",
+          status:
+            outcome === "applied" ||
+            outcome === "admitted-applied" ||
+            outcome === "admitted-source-retry" ||
+            outcome === "admitted-runtime-retry"
+              ? "complete"
+              : "partial",
         });
         expect(result.sessionKey).toBe(sessionKey);
-        if (outcome !== "applied" && outcome !== "admitted-applied") {
+        if (
+          outcome !== "applied" &&
+          outcome !== "admitted-applied" &&
+          outcome !== "admitted-source-retry" &&
+          outcome !== "admitted-runtime-retry"
+        ) {
           expect(result.agentRetained).toBe(true);
         }
       }
       expect(onAgentReady).toHaveBeenCalledTimes(
-        outcome === "applied" || outcome === "admitted-applied" ? 1 : 0,
+        outcome === "applied" ||
+          outcome === "admitted-applied" ||
+          outcome === "admitted-source-retry" ||
+          outcome === "admitted-runtime-retry"
+          ? 1
+          : 0,
       );
     });
   },
@@ -381,6 +444,26 @@ it("publishes the ordinary durable agent and empty canonical chat before resolvi
       expect(await fs.readdir(stored.agents!.entries!["fixture-first"]!.workspace!)).not.toContain(
         "SOUL.md",
       );
+      const secondary = await createGatewaySession({
+        cfg: stored,
+        agentId: "fixture-first",
+        key: "agent:fixture-first:secondary",
+        commandSource: "webchat",
+      });
+      expect(secondary.ok).toBe(true);
+      const effect = await beginSessionEffect({
+        agentId: "fixture-first",
+        scope: "agent:fixture-first",
+        identities: ["agent:fixture-first:secondary"],
+        run: { runId: "pending-secondary-run" },
+      }).then(
+        (value) => {
+          value.release();
+          return "admitted";
+        },
+        (error: unknown) => error,
+      );
+      expect(effect).toMatchObject({ reason: "initialization_pending" });
       expect(onAgentReady).not.toHaveBeenCalled();
     } finally {
       source.reject(new Error("Fixture source verification rejected"));

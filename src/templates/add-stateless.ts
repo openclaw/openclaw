@@ -1,9 +1,10 @@
-import { lstat, mkdir, readdir, rm } from "node:fs/promises";
+import { lstat, mkdir, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { claimCompletedAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
+import { deferWorkspaceBootstrap } from "../agents/workspace-preparation.js";
 import { pruneAgentConfig } from "../commands/agents.config.js";
 import { readConfigFileSnapshotForWrite, transformConfigFileWithRetry } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
@@ -24,6 +25,11 @@ import type {
 import { readAgentDeletionJournalAsync } from "../state/agent-deletion-journal.js";
 import { resolveUserPath } from "../utils.js";
 import { addTemplateAgentToConfig } from "./add-agent-config.js";
+import {
+  configuredPlanDigest,
+  configuredSourceIntegrity,
+  workspaceIdentity,
+} from "./add-checkpoint.js";
 import { TemplateAddMutationError } from "./add-mutation-error.js";
 import { sameCommittedAgent } from "./add-plan-helpers.js";
 import { rollbackWorkspaceBootstrapSeedForAdd } from "./add-state-write.js";
@@ -37,7 +43,6 @@ import {
   type TemplateCronGateway,
   type PersistedTemplateCronRef,
 } from "./cron.js";
-import { digestTemplateValue } from "./digest.js";
 import {
   installTemplateMcpServersStateless,
   rollbackStatelessTemplateMcpServers,
@@ -60,11 +65,23 @@ type ConfigCommit = (
   transform: (config: OpenClawConfig, runtimeConfig?: OpenClawConfig) => OpenClawConfig,
 ) => Promise<void>;
 
+type TemplateConfiguredAgentCheckpoint = {
+  config: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
+  workspaceIdentity: string;
+  /** Plan content normalized across verified source extraction roots. */
+  planDigest: string;
+  /** Manifest, profile, bootstrap and declared workspace source bytes. */
+  sourceIntegrity: string;
+};
+
 export type StatelessTemplateAddOptions = TemplateMutationStateOptions & {
   /** Exact in-flight ordinary admission, not permission to merge an existing agent. */
   admittedAgent?: {
     config: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
     workspaceIdentity: string;
+    phase?: "admitted" | "configured";
+    planDigest?: string;
+    sourceIntegrity?: string;
     assertCurrent: () => Promise<void>;
   };
   assertForwardCurrent?: () => void;
@@ -82,6 +99,8 @@ export type StatelessTemplateAddOptions = TemplateMutationStateOptions & {
   commitConfig?: ConfigCommit;
   /** Save ordinary session state before publishing its new agent; returns exact owned cleanup. */
   prepareAgentSession?: (config: OpenClawConfig) => Promise<() => Promise<void>>;
+  /** Persist verified configuration before runtime wait. Uncertain acknowledgement retains custody. */
+  onAgentConfigured?: (checkpoint: TemplateConfiguredAgentCheckpoint) => Promise<void>;
   /** Confirm active runtime publication before transferring rollback custody. */
   waitForAgentRuntime?: () => Promise<"applied" | "applied-restart-required">;
   /** Instructions, canonical chat, and active runtime are ready; setup continues here. */
@@ -111,31 +130,6 @@ export type StatelessTemplateAddResult = {
   error?: { code: string; message: string };
 };
 
-export type StatelessTemplateAddStage =
-  | { kind: "partial"; result: StatelessTemplateAddResult }
-  | {
-      kind: "ready";
-      continue: (options?: StatelessTemplateAddOptions) => Promise<StatelessTemplateAddResult>;
-      stageAgent: (
-        options?: StatelessTemplateAddOptions,
-      ) => Promise<StatelessTemplateAddAgentStage>;
-      failBeforeContinue: (error: unknown, code: string) => Promise<StatelessTemplateAddResult>;
-    };
-
-type StatelessTemplateAddAgentStage =
-  | { kind: "partial"; result: StatelessTemplateAddResult }
-  | {
-      kind: "ready";
-      /** Transfer rollback custody once the Gateway has exposed this ordinary agent. */
-      retain: () => void;
-      finish: (options?: StatelessTemplateAddOptions) => Promise<StatelessTemplateAddResult>;
-      fail: (
-        error: unknown,
-        code: string,
-        options?: StatelessTemplateAddOptions,
-      ) => Promise<StatelessTemplateAddResult>;
-    };
-
 function assertWorkspacePathUnchanged(workspace: string): void {
   const current = resolvePathViaExistingAncestorSync(workspace);
   const normalize = (path: string) =>
@@ -146,27 +140,6 @@ function assertWorkspacePathUnchanged(workspace: string): void {
       `Workspace ancestry changed after planning: ${JSON.stringify(workspace)}.`,
     );
   }
-}
-
-export async function workspaceIdentity(workspace: string): Promise<string> {
-  const entries: string[] = [];
-  const inspect = async (relative: string): Promise<void> => {
-    const target = resolve(workspace, relative);
-    const stat = await lstat(target);
-    if (stat.isSymbolicLink()) {
-      throw new Error(`Workspace path ${JSON.stringify(relative)} became a symlink.`);
-    }
-    entries.push(
-      `${relative}:${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`,
-    );
-    if (stat.isDirectory()) {
-      for (const name of (await readdir(target)).toSorted()) {
-        await inspect(relative ? `${relative}/${name}` : name);
-      }
-    }
-  };
-  await inspect("");
-  return digestTemplateValue(entries);
 }
 
 async function commitConfig(
@@ -198,31 +171,26 @@ export async function applyTemplateAddPlanStateless(
   plan: TemplateAddPlan,
   options: StatelessTemplateAddOptions = {},
 ): Promise<StatelessTemplateAddResult> {
-  const staged = await stageTemplateAddHostRequirementsStateless(plan, options);
-  return staged.kind === "partial" ? staged.result : await staged.continue();
-}
-
-/** Prepare one in-flight Add; effects begin with the ordinary agent, not integrations. */
-export async function stageTemplateAddHostRequirementsStateless(
-  plan: TemplateAddPlan,
-  initialOptions: StatelessTemplateAddOptions = {},
-): Promise<StatelessTemplateAddStage> {
   if (plan.blockers.length > 0 || plan.actions.some((action) => action.blocked)) {
     throw new TemplateAddMutationError("plan_blocked", "The Template add plan contains blockers.");
   }
-  if (initialOptions.consentPlanIntegrity !== plan.planIntegrity) {
+  if (options.consentPlanIntegrity !== plan.planIntegrity) {
     throw new TemplateAddMutationError(
       "plan_integrity_mismatch",
       "Consent does not match the current Template add plan.",
     );
   }
-  let options = initialOptions;
   const workspace = resolve(resolveUserPath(plan.agent.workspace));
+  const configuredRetry = options.admittedAgent?.phase === "configured";
+  const checkpointPlanDigest = configuredPlanDigest(plan);
+  let configuredCheckpoint: TemplateConfiguredAgentCheckpoint | undefined;
+  let initialSourceIntegrity: string | undefined;
+  let releaseBootstrapDeferral: (() => void) | undefined;
   let workspaceCreated = false;
   let workspaceExposed = false;
   let workspaceBeforeExposure: string | undefined;
   let configCommitted = false;
-  let retained = initialOptions.admittedAgent !== undefined;
+  let retained = options.admittedAgent !== undefined;
   let rollbackAgentSession: (() => Promise<void>) | undefined;
   let configCommitAttempted = false;
   let workspaceFiles: PersistedTemplateWorkspaceFile[] = [];
@@ -230,7 +198,6 @@ export async function stageTemplateAddHostRequirementsStateless(
   let packages: PersistedTemplatePackageRef[] = [];
   const mcpServers: PersistedTemplateMcpServerRef[] = [];
   let cronJobs: PersistedTemplateCronRef[] = [];
-  let continued = false;
   const result = (
     status: StatelessTemplateAddResult["status"],
     error?: StatelessTemplateAddResult["error"],
@@ -259,6 +226,41 @@ export async function stageTemplateAddHostRequirementsStateless(
       options.assertReviewedConfig(options.getCurrentConfig(), phase);
     }
     options.assertCurrent?.();
+  };
+  const currentAgentConfig = async () => {
+    const config = options.getCurrentConfig
+      ? options.getCurrentConfig()
+      : (await readConfigFileSnapshotForWrite({ observe: false })).snapshot.sourceConfig;
+    const agent = config.agents?.entries?.[plan.agent.finalId];
+    const entry = listAgentEntries(config).find((candidate) => candidate.id === plan.agent.finalId);
+    if (!agent || !entry || !sameCommittedAgent(entry, plan)) {
+      throw new Error("The configured agent changed before Template initialization");
+    }
+    return agent;
+  };
+  const assertConfigured = async (checkpoint: TemplateConfiguredAgentCheckpoint) => {
+    await options.admittedAgent?.assertCurrent();
+    assertForwardCurrent("after-agent-commit");
+    assertWorkspacePathUnchanged(workspace);
+    if (
+      !checkpoint.planDigest ||
+      checkpoint.planDigest !== configuredPlanDigest(plan) ||
+      !checkpoint.sourceIntegrity ||
+      checkpoint.sourceIntegrity !== (await configuredSourceIntegrity(plan)) ||
+      checkpoint.workspaceIdentity !== (await workspaceIdentity(workspace)) ||
+      !isDeepStrictEqual(checkpoint.config, await currentAgentConfig())
+    ) {
+      throw new Error("The configured Template plan, source, workspace or agent changed");
+    }
+    const deletion = await readAgentDeletionJournalAsync(plan.agent.finalId);
+    if (deletion && !deletion.cleanupCompleted) {
+      throw new TemplateAddMutationError(
+        "agent_deletion_pending",
+        "The configured agent has pending deletion cleanup.",
+      );
+    }
+    await options.admittedAgent?.assertCurrent();
+    assertForwardCurrent("after-agent-commit");
   };
   let assertPluginRequirementsCurrent: (() => Promise<void>) | undefined;
   const stageOptions = (phase?: "after-agent-commit") => ({
@@ -393,6 +395,9 @@ export async function stageTemplateAddHostRequirementsStateless(
         ...(await rollbackStatelessTemplatePackages(packages, options)),
       );
     }
+    if (!configCommitted && !workspaceCreated) {
+      releaseBootstrapDeferral?.();
+    }
     const message = coerceErrorMessage(error);
     const sharedRetained =
       packages.some(
@@ -411,31 +416,42 @@ export async function stageTemplateAddHostRequirementsStateless(
         retainedMessage,
     });
   };
-  const stageAgent = async (agentOptions = options): Promise<StatelessTemplateAddAgentStage> => {
-    if (continued) {
-      throw new Error("Template Add was already continued");
+  try {
+    assertForwardCurrent(configuredRetry ? "after-agent-commit" : undefined);
+    assertWorkspacePathUnchanged(workspace);
+    const existing = await lstat(workspace).catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return undefined;
+      }
+      throw error;
+    });
+    if (options.admittedAgent) {
+      await options.admittedAgent.assertCurrent();
+      if ((await workspaceIdentity(workspace)) !== options.admittedAgent.workspaceIdentity) {
+        throw new Error("The admitted workspace changed before Template initialization");
+      }
+    } else if (existing) {
+      throw new TemplateAddMutationError(
+        "workspace_collision",
+        `Workspace ${JSON.stringify(workspace)} was created after planning.`,
+      );
     }
-    continued = true;
-    options = agentOptions;
-    try {
-      assertForwardCurrent();
-      assertWorkspacePathUnchanged(workspace);
-      const existing = await lstat(workspace).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
-      if (options.admittedAgent) {
-        await options.admittedAgent.assertCurrent();
-        if ((await workspaceIdentity(workspace)) !== options.admittedAgent.workspaceIdentity) {
-          throw new Error("The admitted workspace changed before Template initialization");
-        }
-      } else if (existing) {
-        throw new TemplateAddMutationError(
-          "workspace_collision",
-          `Workspace ${JSON.stringify(workspace)} was created after planning.`,
-        );
+    if (plan.actions.some((action) => action.kind === "bootstrap")) {
+      releaseBootstrapDeferral = deferWorkspaceBootstrap(workspace);
+    }
+    if (configuredRetry) {
+      const admitted = options.admittedAgent!;
+      configuredCheckpoint = {
+        config: admitted.config,
+        workspaceIdentity: admitted.workspaceIdentity,
+        planDigest: admitted.planDigest ?? "",
+        sourceIntegrity: admitted.sourceIntegrity ?? "",
+      };
+      await assertConfigured(configuredCheckpoint);
+      configCommitted = true;
+    } else {
+      if (options.onAgentConfigured) {
+        initialSourceIntegrity = await configuredSourceIntegrity(plan);
       }
       await options.prepareEffect?.();
       assertForwardCurrent();
@@ -505,162 +521,124 @@ export async function stageTemplateAddHostRequirementsStateless(
       }, options);
       configCommitted = true;
       workspaceExposed = true;
-      let finished = false;
-      const finishOnce = (nextOptions: StatelessTemplateAddOptions) => {
-        if (finished) {
-          throw new Error("Template Add was already finished");
-        }
-        finished = true;
-        options = nextOptions;
-      };
-      return {
-        kind: "ready",
-        retain: () => {
-          retained = true;
-          rollbackAgentSession = undefined;
-        },
-        finish: async (nextOptions = options) => {
-          finishOnce(nextOptions);
-          try {
-            if (options.waitForAgentRuntime) {
-              const outcome = await options.waitForAgentRuntime();
-              retained = true;
-              rollbackAgentSession = undefined;
-              if (outcome === "applied-restart-required") {
-                throw new TemplateAddMutationError(
-                  "agent_runtime_recovery_required",
-                  "The Gateway published the agent but requires a recovery restart. Wait for Gateway recovery before continuing setup.",
-                );
-              }
-            }
-            await options.prepareEffect?.();
-            assertForwardCurrent("after-agent-commit");
-            if (options.onAgentReady) {
-              if (
-                (!options.prepareAgentSession && !options.admittedAgent) ||
-                !options.waitForAgentRuntime
-              ) {
-                throw new Error(
-                  "Agent-ready publication requires prepared chat and active runtime",
-                );
-              }
-              await options.onAgentReady({
-                agentId: plan.agent.finalId,
-                sessionKey: resolveAgentMainSessionKey({
-                  cfg: options.getCurrentConfig?.() ?? options.config,
-                  agentId: plan.agent.finalId,
-                }),
-              });
-              assertForwardCurrent("after-agent-commit");
-            }
-            if (plan.actions.some((action) => action.kind === "package")) {
-              packages = await installTemplatePackages(plan, stageOptions("after-agent-commit"));
-            }
-            await installTemplateMcpServersStateless(plan, {
-              ...stageOptions("after-agent-commit"),
-              refs: mcpServers,
-            });
-            cronJobs = await installTemplateCronJobsStateless(plan, {
-              ...stageOptions("after-agent-commit"),
-              gateway: options.cronGateway,
-            });
-            const bootstrapNow = Date.now();
-            const bootstrap = await seedTemplatePackageBootstrap(plan, {
-              ...stageOptions("after-agent-commit"),
-              nowMs: bootstrapNow,
-            });
-            if (bootstrap === "seeded") {
-              bootstrapSeededAt = new Date(bootstrapNow).toISOString();
-            }
-            return result("complete");
-          } catch (error) {
-            if (error instanceof TemplatePackageInstallError) {
-              packages = error.installedPackages;
-            }
-            if (error instanceof TemplateCronInstallError) {
-              cronJobs = error.cronJobs;
-              if (error.code === "cron_scratch_import_incomplete") {
-                // A scratch conflict or lost write acknowledgement may contain user edits.
-                return result("partial", {
-                  code: error.code,
-                  message: `${error.message} The new agent and its automations were kept. Inspect their scratch and enabled state before retrying.`,
-                });
-              }
-            }
-            return await fail(
-              error,
-              error instanceof TemplateAddMutationError ? error.code : "add_failed",
-            );
-          }
-        },
-        fail: async (error, code, nextOptions = options) => {
-          finishOnce(nextOptions);
-          return await fail(error, code);
-        },
-      };
-    } catch (error) {
-      if (
-        error instanceof TemplateAddMutationError &&
-        error.code === "agent_session_outcome_uncertain"
-      ) {
-        return {
-          kind: "partial",
-          result: result("partial", { code: error.code, message: error.message }),
-        };
-      }
-      if (configCommitAttempted && !configCommitted) {
-        try {
-          const current = options.commitConfig
-            ? options.getCurrentConfig?.()
-            : (await readConfigFileSnapshotForWrite({ observe: false })).snapshot.sourceConfig;
-          if (!current) {
-            throw new Error("Current config is unavailable", { cause: error });
-          }
-          const agent = listAgentEntries(current).find(
-            (entry) => normalizeAgentId(entry.id) === normalizeAgentId(plan.agent.finalId),
-          );
-          if (agent) {
-            if (!sameCommittedAgent(agent, plan)) {
-              throw new Error("Agent config changed during Add", { cause: error });
-            }
-            configCommitted = true;
-            workspaceExposed = true;
-          }
-        } catch (reconcileError) {
-          return {
-            kind: "partial",
-            result: result("partial", {
-              code: "config_commit_uncertain",
-              message: `${coerceErrorMessage(error)} Could not verify whether the new agent was committed: ${coerceErrorMessage(reconcileError)}. Workspace retained for inspection.`,
-            }),
-          };
-        }
-      }
-      if (error instanceof TemplatePackageInstallError) {
-        packages = [...packages, ...error.installedPackages];
-      }
-      return {
-        kind: "partial",
-        result: await fail(
-          error,
-          error instanceof TemplateAddMutationError ? error.code : "add_failed",
-        ),
-      };
     }
-  };
-  return {
-    kind: "ready",
-    stageAgent,
-    continue: async (nextOptions = options) => {
-      const staged = await stageAgent(nextOptions);
-      return staged.kind === "partial" ? staged.result : await staged.finish();
-    },
-    failBeforeContinue: async (error, code) => {
-      if (continued) {
-        throw new Error("Template Add was already continued");
+  } catch (error) {
+    if (
+      error instanceof TemplateAddMutationError &&
+      error.code === "agent_session_outcome_uncertain"
+    ) {
+      return result("partial", { code: error.code, message: error.message });
+    }
+    if (configCommitAttempted && !configCommitted) {
+      try {
+        const current = options.commitConfig
+          ? options.getCurrentConfig?.()
+          : (await readConfigFileSnapshotForWrite({ observe: false })).snapshot.sourceConfig;
+        if (!current) {
+          throw new Error("Current config is unavailable", { cause: error });
+        }
+        const agent = listAgentEntries(current).find(
+          (entry) => normalizeAgentId(entry.id) === normalizeAgentId(plan.agent.finalId),
+        );
+        if (agent) {
+          if (!sameCommittedAgent(agent, plan)) {
+            throw new Error("Agent config changed during Add", { cause: error });
+          }
+          configCommitted = true;
+          workspaceExposed = true;
+        }
+      } catch (reconcileError) {
+        return result("partial", {
+          code: "config_commit_uncertain",
+          message: `${coerceErrorMessage(error)} Could not verify whether the new agent was committed: ${coerceErrorMessage(reconcileError)}. Workspace retained for inspection.`,
+        });
       }
-      continued = true;
-      return await fail(error, code);
-    },
-  };
+    }
+    return await fail(error, error instanceof TemplateAddMutationError ? error.code : "add_failed");
+  }
+  try {
+    if (options.onAgentConfigured && !configuredRetry) {
+      await options.prepareEffect?.();
+      configuredCheckpoint = {
+        config: structuredClone(await currentAgentConfig()),
+        workspaceIdentity: workspaceBeforeExposure!,
+        planDigest: checkpointPlanDigest,
+        sourceIntegrity: initialSourceIntegrity!,
+      };
+      await assertConfigured(configuredCheckpoint);
+      // The canonical pending session now owns this configured incarnation, even
+      // if persistence acknowledgement is lost. Only its owner may reconcile it.
+      retained = true;
+      rollbackAgentSession = undefined;
+      await options.onAgentConfigured(configuredCheckpoint);
+      await assertConfigured(configuredCheckpoint);
+    }
+    if (options.waitForAgentRuntime) {
+      const outcome = await options.waitForAgentRuntime();
+      retained = true;
+      rollbackAgentSession = undefined;
+      if (outcome === "applied-restart-required") {
+        throw new TemplateAddMutationError(
+          "agent_runtime_recovery_required",
+          "The Gateway published the agent but requires a recovery restart. Wait for Gateway recovery before continuing setup.",
+        );
+      }
+    }
+    await options.prepareEffect?.();
+    assertForwardCurrent("after-agent-commit");
+    if (configuredCheckpoint) {
+      await assertConfigured(configuredCheckpoint);
+    }
+    if (options.onAgentReady) {
+      if (
+        (!options.prepareAgentSession && !options.admittedAgent) ||
+        !options.waitForAgentRuntime
+      ) {
+        throw new Error("Agent-ready publication requires prepared chat and active runtime");
+      }
+      await options.onAgentReady({
+        agentId: plan.agent.finalId,
+        sessionKey: resolveAgentMainSessionKey({
+          cfg: options.getCurrentConfig?.() ?? options.config,
+          agentId: plan.agent.finalId,
+        }),
+      });
+      assertForwardCurrent("after-agent-commit");
+    }
+    if (plan.actions.some((action) => action.kind === "package")) {
+      packages = await installTemplatePackages(plan, stageOptions("after-agent-commit"));
+    }
+    await installTemplateMcpServersStateless(plan, {
+      ...stageOptions("after-agent-commit"),
+      refs: mcpServers,
+    });
+    cronJobs = await installTemplateCronJobsStateless(plan, {
+      ...stageOptions("after-agent-commit"),
+      gateway: options.cronGateway,
+    });
+    const bootstrapNow = Date.now();
+    const bootstrap = await seedTemplatePackageBootstrap(plan, {
+      ...stageOptions("after-agent-commit"),
+      nowMs: bootstrapNow,
+    });
+    if (bootstrap === "seeded") {
+      bootstrapSeededAt = new Date(bootstrapNow).toISOString();
+    }
+    return result("complete");
+  } catch (error) {
+    if (error instanceof TemplatePackageInstallError) {
+      packages = error.installedPackages;
+    }
+    if (error instanceof TemplateCronInstallError) {
+      cronJobs = error.cronJobs;
+      if (error.code === "cron_scratch_import_incomplete") {
+        // A scratch conflict or lost write acknowledgement may contain user edits.
+        return result("partial", {
+          code: error.code,
+          message: `${error.message} The new agent and its automations were kept. Inspect their scratch and enabled state before retrying.`,
+        });
+      }
+    }
+    return await fail(error, error instanceof TemplateAddMutationError ? error.code : "add_failed");
+  }
 }

@@ -39,6 +39,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,
     initializationPending: entry.initializationPending,
+    templateInitialization: structuredClone(entry.templateInitialization),
     providerReview: entry.providerReview,
     modelSelectionLocked: entry.modelSelectionLocked,
     pluginOwnerId: entry.pluginOwnerId,

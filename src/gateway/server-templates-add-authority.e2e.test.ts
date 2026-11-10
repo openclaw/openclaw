@@ -3,6 +3,12 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import type { TemplateLifecyclePlanResult } from "../../packages/gateway-protocol/src/schema/templates.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
+import {
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+} from "../../test/helpers/openai-responses-model-fixture.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -244,15 +250,36 @@ describe("Template Add dependency consent authority (real Gateway RPC)", () => {
       throw new Error("Template Add must hot-apply without a recovery restart");
     });
     let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
+    let model: Awaited<ReturnType<typeof startOpenAiResponsesModelServer>> | undefined;
     try {
       const [allowedFixture, revokedFixture] = await Promise.all([
         makeFixture("allowed"),
         makeFixture("revoked"),
       ]);
       setClawHubFixtures([allowedFixture, revokedFixture]);
+      model = await startOpenAiResponsesModelServer({
+        modelId: "template-greeting",
+        bindError: "Expected synthetic Template greeting model address",
+        onRequest: async (request, response) => {
+          await readRequestText(request);
+          writeOpenAiResponsesText(response, {
+            text: "Your Template agent is ready.",
+            messageId: "template-greeting",
+            responseId: "template-greeting-response",
+          });
+        },
+      });
+      const modelConfig = createOpenAiResponsesModelConfig({
+        baseUrl: model.baseUrl,
+        providerId: "synthetic",
+        modelId: "template-greeting",
+        reasoning: false,
+        toolProfile: "minimal",
+      });
       const claim = await acquireGatewayE2ePortBlock();
       const port = claim.port;
       await state.writeConfig({
+        ...modelConfig,
         gateway: {
           mode: "local",
           bind: "loopback",
@@ -260,7 +287,10 @@ describe("Template Add dependency consent authority (real Gateway RPC)", () => {
           controlUi: { enabled: false, experimental: { templates: true } },
         },
         logging: { level: "silent", consoleLevel: "silent" },
-        agents: { defaults: { workspace: state.workspaceDir } },
+        agents: {
+          ...modelConfig.agents,
+          defaults: { ...modelConfig.agents?.defaults, workspace: state.workspaceDir },
+        },
       });
       server = await startClaimedGateway(claim, () =>
         startGatewayServerCore(port, {
@@ -341,6 +371,13 @@ describe("Template Add dependency consent authority (real Gateway RPC)", () => {
         });
       };
 
+      const expectRetainedWithoutPlugin = async (fixture: Fixture) => {
+        expect(await installed(fixture)).toEqual({
+          agent: expect.objectContaining({}),
+          plugin: undefined,
+          extension: false,
+        });
+      };
       const allowedPlan = await plan(reader.client, allowedFixture);
       expect(allowedPlan.pluginReviews).toHaveLength(1);
       expect(allowedPlan.blockers).toEqual([]);
@@ -410,7 +447,8 @@ describe("Template Add dependency consent authority (real Gateway RPC)", () => {
         reply,
         "Template Add settled before final effect",
       );
-      await expectNotInstalled(revokedFixture);
+      // Verified instructions and the greeting precede optional plugin effects.
+      await expectRetainedWithoutPlugin(revokedFixture);
       expect(recoveryRestart).not.toHaveBeenCalled();
       await admin.client.request("device.token.revoke", {
         deviceId: identity.deviceId,
@@ -420,7 +458,7 @@ describe("Template Add dependency consent authority (real Gateway RPC)", () => {
       release.resolve();
       expect(await withinTest(settled.promise, signal)).toBeDefined();
       await reply;
-      await expectNotInstalled(revokedFixture);
+      await expectRetainedWithoutPlugin(revokedFixture);
     } finally {
       release.resolve();
       clawhub.pauseBeforeEffect = async () => {};
@@ -429,6 +467,7 @@ describe("Template Add dependency consent authority (real Gateway RPC)", () => {
         async () => {},
         ...clients.map((client) => () => client.stopAndWait()),
         async () => server?.close(),
+        async () => model?.close(),
         () => state.cleanup(),
         () => clearPluginMetadataLifecycleCaches(),
       );

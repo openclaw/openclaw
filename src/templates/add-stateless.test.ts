@@ -1,6 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
@@ -33,10 +33,11 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { workspaceIdentity } from "./add-checkpoint.js";
 import {
   applyTemplateAddPlanStateless,
-  stageTemplateAddHostRequirementsStateless,
   type StatelessTemplateAddOptions,
+  type TemplateConfiguredAgentCheckpoint,
 } from "./add-stateless.js";
 import * as bootstrapInstall from "./bootstrap.js";
 import { createTemplateCronGateway } from "./cron-gateway.js";
@@ -263,29 +264,32 @@ describe("stateless Template Add", () => {
 
   it("retains an adopted agent and its chat when later setup fails", async () => {
     const plan = await buildPlan();
-    const host = await stageTemplateAddHostRequirementsStateless(plan, {
-      consentPlanIntegrity: plan.planIntegrity,
-      commitConfig,
+    const rollbackChat = vi.fn(async () => {});
+    const result = await apply(plan, {
+      getCurrentConfig: () => config,
+      prepareAgentSession: async () => rollbackChat,
+      waitForAgentRuntime: async () => {
+        runOpenClawAgentWriteTransaction(
+          (database) =>
+            writeSessionEntry(database, "agent:workspace-agent:main", {
+              sessionId: "chat-after-runtime-publication",
+              updatedAt: Date.now(),
+            }),
+          { agentId: plan.agent.finalId, env: process.env },
+        );
+        return "applied";
+      },
+      onAgentReady: async () => {
+        throw new Error("setup policy changed");
+      },
     });
-    assert(host.kind === "ready");
-    const agent = await host.stageAgent();
-    assert(agent.kind === "ready");
-    // The Gateway publishes its runtime roster before transferring rollback custody.
-    agent.retain();
-    runOpenClawAgentWriteTransaction(
-      (database) =>
-        writeSessionEntry(database, "agent:workspace-agent:main", {
-          sessionId: "chat-after-runtime-publication",
-          updatedAt: Date.now(),
-        }),
-      { agentId: plan.agent.finalId, env: process.env },
-    );
-    const result = await agent.fail(new Error("setup policy changed"), "policy_recheck_failed");
+    expect(rollbackChat).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       status: "partial",
       configCommitted: true,
       workspaceCreated: true,
-      error: { code: "policy_recheck_failed" },
+      agentRetained: true,
+      error: { code: "add_failed", message: expect.stringContaining("setup policy changed") },
     });
     expect(config.agents.entries).toHaveProperty(plan.agent.finalId);
     expect(existsSync(plan.agent.workspace)).toBe(true);
@@ -295,6 +299,212 @@ describe("stateless Template Add", () => {
         { agentId: plan.agent.finalId, env: process.env },
       ),
     ).toBe("chat-after-runtime-publication");
+  });
+
+  it.each([
+    "unchanged",
+    "source-root",
+    "workspace",
+    "config",
+    "source",
+    "consent",
+    "plan",
+    "phase-only",
+  ] as const)(
+    "retries configured initialization without rewriting its agent or chat (%s)",
+    async (change) => {
+      if (change === "source-root") {
+        const root = path.join(stateDir, "source");
+        await writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({
+            name: "@test/workspace-agent-template",
+            version: "1.0.0",
+            openclaw: { template: "CLAW.md" },
+          }),
+        );
+        const loaded = await readTemplateManifestFile(root);
+        assert(loaded.ok);
+        source = {
+          ...loaded,
+          source: {
+            ...loaded.source,
+            integrityKind: "artifact",
+            integrity: `sha256:${"a".repeat(64)}`,
+          },
+        };
+      }
+      const plan = await buildPlan();
+      let checkpoint: TemplateConfiguredAgentCheckpoint | undefined;
+      const onAgentReady = vi.fn(async () => {});
+      const prepareAgentSession = vi.fn(async () => {
+        runOpenClawAgentWriteTransaction(
+          (database) =>
+            writeSessionEntry(database, "agent:workspace-agent:main", {
+              sessionId: "pending-configured-chat",
+              updatedAt: Date.now(),
+            }),
+          { agentId: plan.agent.finalId, env: process.env },
+        );
+        return async () => {
+          throw new Error("Retained chat must not be deleted");
+        };
+      });
+      let policyConfig = config;
+      const failed = await apply(plan, {
+        getCurrentConfig: () => policyConfig,
+        prepareEffect: async () => {
+          policyConfig = config;
+        },
+        prepareAgentSession,
+        onAgentConfigured: async (value) => {
+          checkpoint = value;
+          expect(value.planDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+          expect(value.sourceIntegrity).toMatch(/^sha256:[a-f0-9]{64}$/);
+        },
+        waitForAgentRuntime: async () => {
+          throw new Error("runtime unavailable");
+        },
+        onAgentReady,
+      });
+      expect(failed).toMatchObject({
+        status: "partial",
+        agentRetained: true,
+        configCommitted: true,
+        error: { message: expect.stringContaining("runtime unavailable") },
+      });
+      assert(checkpoint);
+      expect(onAgentReady).not.toHaveBeenCalled();
+      if (change === "workspace") {
+        await writeFile(path.join(plan.agent.workspace, "SOUL.md"), "User-edited instructions.");
+      } else if (change === "config") {
+        config = {
+          ...config,
+          agents: {
+            entries: { ...config.agents.entries, [plan.agent.finalId]: { name: "Changed" } },
+          },
+        };
+      } else if (change === "source") {
+        await writeFile(path.join(stateDir, "source", "SOUL.md"), "Changed after consent.");
+      } else if (change === "plan") {
+        plan.actions[0]!.reason = "Changed plan despite unchanged claimed integrity";
+      } else if (change === "source-root") {
+        const oldRoot = plan.template.packageRoot;
+        const newRoot = path.join(stateDir, "retry-source");
+        await cp(oldRoot, newRoot, { recursive: true });
+        plan.template.packageRoot = newRoot;
+        plan.template.manifestPath = path.join(newRoot, "CLAW.md");
+        for (const action of plan.actions) {
+          if (action.source) {
+            action.source = path.join(newRoot, path.relative(oldRoot, action.source));
+          }
+        }
+        plan.planIntegrity = "newly-reviewed-integrity-at-new-source-root";
+      }
+      const writeWorkspace = vi.spyOn(workspaceFiles, "createTemplateWorkspaceFiles");
+      const commit = vi.fn(commitConfig);
+      const runtimeStarted = createDeferred();
+      const runtimeReady = createDeferred();
+      const waitForAgentRuntime = vi.fn(async () => {
+        runtimeStarted.resolve();
+        await runtimeReady.promise;
+        return "applied" as const;
+      });
+      const retry = apply(plan, {
+        consentPlanIntegrity: change === "consent" ? "changed" : plan.planIntegrity,
+        getCurrentConfig: () => config,
+        commitConfig: commit,
+        prepareAgentSession,
+        admittedAgent: {
+          ...checkpoint,
+          ...(change === "phase-only" ? { planDigest: undefined, sourceIntegrity: undefined } : {}),
+          phase: "configured",
+          assertCurrent: async () => {},
+        },
+        waitForAgentRuntime,
+        onAgentReady,
+      }).catch((error: unknown) => ({ error }));
+      const succeeds = change === "unchanged" || change === "source-root";
+      if (succeeds) {
+        try {
+          await awaitGateBeforeSettlement(
+            runtimeStarted.promise,
+            retry,
+            "Configured retry settled before runtime readiness",
+          );
+          expect(onAgentReady).not.toHaveBeenCalled();
+          expect(await workspaceIdentity(plan.agent.workspace)).toBe(checkpoint.workspaceIdentity);
+        } finally {
+          runtimeReady.resolve();
+        }
+      }
+      const retried = await retry;
+      expect(writeWorkspace).not.toHaveBeenCalled();
+      expect(commit).not.toHaveBeenCalled();
+      expect(prepareAgentSession).toHaveBeenCalledOnce();
+      if (succeeds) {
+        expect(retried).toMatchObject({ status: "complete", agentRetained: true });
+        expect(waitForAgentRuntime).toHaveBeenCalledOnce();
+        expect(onAgentReady).toHaveBeenCalledOnce();
+      } else {
+        expect(retried.error).toBeDefined();
+        expect(waitForAgentRuntime).not.toHaveBeenCalled();
+        expect(onAgentReady).not.toHaveBeenCalled();
+      }
+      expect(
+        runOpenClawAgentWriteTransaction(
+          (database) =>
+            readSessionEntryRow(database, "agent:workspace-agent:main")?.entry.sessionId,
+          { agentId: plan.agent.finalId, env: process.env },
+        ),
+      ).toBe("pending-configured-chat");
+    },
+  );
+
+  it("keeps a failed configured checkpoint pending without starting runtime or greeting", async () => {
+    const plan = await buildPlan();
+    const waitForAgentRuntime = vi.fn(async () => "applied" as const);
+    const onAgentReady = vi.fn(async () => {});
+    const rollbackChat = vi.fn(async () => {});
+    let checkpoint: TemplateConfiguredAgentCheckpoint | undefined;
+    const result = await apply(plan, {
+      prepareAgentSession: async () => rollbackChat,
+      getCurrentConfig: () => config,
+      onAgentConfigured: async (value) => {
+        checkpoint = value;
+        throw new Error("checkpoint acknowledgement lost");
+      },
+      waitForAgentRuntime,
+      onAgentReady,
+    });
+    expect(result).toMatchObject({
+      status: "partial",
+      agentRetained: true,
+      configCommitted: true,
+      error: { message: expect.stringContaining("checkpoint acknowledgement lost") },
+    });
+    expect(rollbackChat).not.toHaveBeenCalled();
+    expect(config.agents.entries).toHaveProperty(plan.agent.finalId);
+    expect(await readFile(path.join(plan.agent.workspace, "SOUL.md"), "utf8")).toBe(
+      "Workspace agent instructions.\n",
+    );
+    expect(waitForAgentRuntime).not.toHaveBeenCalled();
+    expect(onAgentReady).not.toHaveBeenCalled();
+    assert(checkpoint);
+    const retry = await apply(plan, {
+      getCurrentConfig: () => config,
+      admittedAgent: {
+        config: checkpoint.config,
+        workspaceIdentity: await workspaceIdentity(plan.agent.workspace),
+        phase: "admitted",
+        assertCurrent: async () => {},
+      },
+      waitForAgentRuntime,
+      onAgentReady,
+    });
+    expect(retry).toMatchObject({ status: "partial", agentRetained: true });
+    expect(waitForAgentRuntime).not.toHaveBeenCalled();
+    expect(onAgentReady).not.toHaveBeenCalled();
   });
 
   it("adds numbered ordinary agents without an install record", async () => {

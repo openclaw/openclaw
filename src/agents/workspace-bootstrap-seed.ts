@@ -8,7 +8,10 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "./workspace-bootstrap-policy.js";
 import { WorkspaceBootstrapSeedConflictError } from "./workspace-bootstrap-publish.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace-bootstrap-read.js";
 import { readWorkspaceFileWithGuards } from "./workspace-file-read.js";
-import { runWorkspacePreparation } from "./workspace-preparation.js";
+import {
+  runWorkspacePreparation,
+  settleWorkspaceBootstrapDeferral,
+} from "./workspace-preparation.js";
 import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
 import { mergeWorkspaceSetupState } from "./workspace-state-store.js";
 
@@ -52,9 +55,11 @@ export async function seedWorkspaceBootstrap(
   if (text.trim().length === 0) {
     throw new WorkspaceBootstrapSeedConflictError("BOOTSTRAP.md must not be empty.");
   }
-  return runWorkspacePreparation(captured.dir, (assertCurrent) =>
-    seedWorkspaceBootstrapOwned(captured, assertCurrent),
-  );
+  return runWorkspacePreparation(captured.dir, async (assertCurrent) => {
+    const result = await seedWorkspaceBootstrapOwned(captured, assertCurrent);
+    settleWorkspaceBootstrapDeferral(captured.dir);
+    return result;
+  });
 }
 
 async function seedWorkspaceBootstrapOwned(

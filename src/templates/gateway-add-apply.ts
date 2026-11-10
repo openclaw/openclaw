@@ -5,6 +5,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/templates.js";
 import { withCurrentConfigPolicyReader } from "../config/io.runtime.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAgentConfigEntry } from "../gateway/server-methods/agents-config-mutations.js";
 import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
@@ -14,9 +15,9 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { readRetainedTemplateInitialization, workspaceIdentity } from "./add-checkpoint.js";
 import {
   applyTemplateAddPlanStateless,
-  workspaceIdentity,
   type StatelessTemplateAddOptions,
 } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
@@ -40,6 +41,9 @@ import type { TemplateAddPlan } from "./types.js";
 type PreparedAgentChat = (() => Promise<void>) & {
   assertCurrent?: () => Promise<void>;
   complete?: () => Promise<void>;
+  checkpoint?: (
+    initialization: NonNullable<SessionEntry["templateInitialization"]>,
+  ) => Promise<void>;
 };
 
 export class TemplateGatewayPlanChangedError extends Error {
@@ -85,7 +89,11 @@ export async function applyTemplateAddForGateway(
     prepareAgentChat?: (
       agentId: string,
       config: OpenClawConfig,
-      pending?: { initializationPending: true },
+      pending?: {
+        initializationPending: true;
+        templateInitialization?: SessionEntry["templateInitialization"];
+        recover?: true;
+      },
     ) => Promise<PreparedAgentChat>;
     admissionConfigWriteOptions?: StatelessTemplateAddOptions["configWriteOptions"];
     waitForAdmissionRuntime?: () => Promise<"applied" | "applied-restart-required">;
@@ -112,6 +120,7 @@ export async function applyTemplateAddForGateway(
         config: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
         chat: PreparedAgentChat;
         workspaceIdentity: string;
+        configured?: { planDigest: string; sourceIntegrity: string };
       }
     | undefined;
   let initialized = false;
@@ -174,44 +183,77 @@ export async function applyTemplateAddForGateway(
             const agentId = normalizeAgentId(input.agentId!);
             const workspace = await selectTemplateAgentWorkspace(config, agentId);
 
-            let chat: PreparedAgentChat | undefined;
-            let identity = "";
-            const created = await createAgentConfigEntry(
-              {
-                entry: { id: agentId, name: agentId },
+            const existingConfig = config.agents?.entries?.[agentId];
+            if (existingConfig) {
+              const { sessionKey, continuation } = await readRetainedTemplateInitialization(
+                config,
+                agentId,
                 workspace,
-                deferInitialization: true,
-                beforePersistentApply: assertCurrent,
-                prepareConfigCommit: async (prospective) => {
-                  assertCurrent();
-                  chat = await input.prepareAgentChat!(agentId, prospective, {
-                    initializationPending: true,
-                  });
-                  identity = await workspaceIdentity(workspace);
-                  return { commit: () => {}, rollback: chat };
-                },
-                onCommitted: (result) => {
-                  if (result.status !== "created" || !chat) {
-                    throw new Error("Ordinary admission did not create its target");
-                  }
-                  admitted = {
-                    agentId,
-                    workspace,
-                    chat,
-                    workspaceIdentity: identity,
-                    config: structuredClone(result.config.agents!.entries![agentId]!),
-                  };
-                  readySessionKey = resolveAgentMainSessionKey({ cfg: result.config, agentId });
-                },
-              },
-              input.admissionConfigWriteOptions ?? input.configWriteOptions,
-            );
-            if (created.status !== "created") {
-              throw new Error(
-                created.status === "error" ? created.message : "The requested agent already exists",
+                input.source,
+                assertCurrent,
               );
+              const chat = await input.prepareAgentChat!(agentId, config, {
+                initializationPending: true,
+                templateInitialization: continuation,
+                recover: true,
+              });
+              await chat.assertCurrent?.();
+              admitted = {
+                agentId,
+                workspace,
+                config: structuredClone(existingConfig),
+                chat,
+                workspaceIdentity: continuation.workspaceIdentity,
+                ...(continuation.configured ? { configured: continuation.configured } : {}),
+              };
+              readySessionKey = sessionKey;
+            } else {
+              let chat: PreparedAgentChat | undefined;
+              let identity = "";
+              const created = await createAgentConfigEntry(
+                {
+                  entry: { id: agentId, name: agentId },
+                  workspace,
+                  deferInitialization: true,
+                  beforePersistentApply: assertCurrent,
+                  prepareConfigCommit: async (prospective) => {
+                    assertCurrent();
+                    identity = await workspaceIdentity(workspace);
+                    chat = await input.prepareAgentChat!(agentId, prospective, {
+                      initializationPending: true,
+                      templateInitialization: {
+                        source: input.source,
+                        agentConfig: structuredClone(prospective.agents!.entries![agentId]!),
+                        workspaceIdentity: identity,
+                      },
+                    });
+                    identity = await workspaceIdentity(workspace);
+                    return { commit: () => {}, rollback: chat };
+                  },
+                  onCommitted: (result) => {
+                    if (result.status !== "created" || !chat) {
+                      throw new Error("Ordinary admission did not create its target");
+                    }
+                    admitted = {
+                      agentId,
+                      workspace,
+                      chat,
+                      workspaceIdentity: identity,
+                      config: structuredClone(result.config.agents!.entries![agentId]!),
+                    };
+                    readySessionKey = resolveAgentMainSessionKey({ cfg: result.config, agentId });
+                  },
+                },
+                input.admissionConfigWriteOptions ?? input.configWriteOptions,
+              );
+              if (created.status !== "created") {
+                throw new Error(
+                  created.status === "error"
+                    ? created.message
+                    : "The requested agent already exists",
+                );
+              }
             }
-
             const applied = await (input.waitForAdmissionRuntime ?? input.waitForAgentRuntime!)();
             if (applied !== "applied") {
               throw new Error(
@@ -536,10 +578,38 @@ export async function applyTemplateAddForGateway(
                                 admittedAgent: {
                                   config: admitted.config,
                                   workspaceIdentity: admitted.workspaceIdentity,
+                                  ...(admitted.configured
+                                    ? { phase: "configured" as const, ...admitted.configured }
+                                    : {}),
                                   assertCurrent: async () => {
                                     input.assertCurrent();
                                     await admitted!.chat.assertCurrent?.();
                                   },
+                                },
+                              }
+                            : {}),
+                          ...(admitted
+                            ? {
+                                onAgentConfigured: async (checkpoint) => {
+                                  const pending = admitted!;
+                                  if (!pending.chat.checkpoint) {
+                                    throw new Error(
+                                      "Template initialization checkpoint owner is unavailable",
+                                    );
+                                  }
+                                  const configured = {
+                                    planDigest: checkpoint.planDigest,
+                                    sourceIntegrity: checkpoint.sourceIntegrity,
+                                  };
+                                  await pending.chat.checkpoint({
+                                    source: input.source,
+                                    agentConfig: checkpoint.config,
+                                    workspaceIdentity: checkpoint.workspaceIdentity,
+                                    configured,
+                                  });
+                                  pending.config = structuredClone(checkpoint.config);
+                                  pending.workspaceIdentity = checkpoint.workspaceIdentity;
+                                  pending.configured = configured;
                                 },
                               }
                             : {}),
