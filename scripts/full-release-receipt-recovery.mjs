@@ -357,57 +357,70 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     },
     token: deps.token,
   });
-  const children = [];
-  for (const role of ROLES) {
-    const selection = request.children[role];
-    requireValue(
-      selection.sourceParentRunId === request.originalParent.runId &&
-        selection.sourceParentAttempt === 1 &&
-        selection.workflowRef === admission.request.transportRef,
-      "child does not belong to the original parent",
-    );
-    const spec = releaseChildSpec(role);
-    const source = client.getWorkflowSource(qualificationSha, ".github/workflows/" + spec.workflow);
-    const inputs = receiptRecoveryChildInputs(role, admission, binding, source);
-    const verified = await validateReusableReleaseChild(
-      selection,
-      {
+  // The five fixed roles are independent reads. Share the existing four-process
+  // GitHub budget instead of serializing whole histories; settle every reader
+  // before returning a failure, and retain the original role order.
+  const childResults = await Promise.allSettled(
+    ROLES.map(async (role) => {
+      const selection = request.children[role];
+      requireValue(
+        selection.sourceParentRunId === request.originalParent.runId &&
+          selection.sourceParentAttempt === 1 &&
+          selection.workflowRef === admission.request.transportRef,
+        "child does not belong to the original parent",
+      );
+      const spec = releaseChildSpec(role);
+      const source = client.getWorkflowSource(
+        qualificationSha,
+        ".github/workflows/" + spec.workflow,
+      );
+      const inputs = receiptRecoveryChildInputs(role, admission, binding, source);
+      const verified = await validateReusableReleaseChild(
+        selection,
+        {
+          repository: request.repository,
+          targetSha: target,
+          workflowSha: qualificationSha,
+          role,
+          inputs,
+        },
+        // Recovery must enumerate every historical attempt, including long rerun chains.
+        { token: deps.token, deadlineMs: Date.now() + 10 * 60_000 },
+      );
+      const coverage = admission.coverage.children.find((child) => child.key === role);
+      validateQualificationJobs(verified.receipt.jobs, coverage.requiredJobs, "Original " + role);
+      const dispatchJobs = parentJobs.filter((job) => job.name === coverage.parentJobName);
+      requireValue(
+        dispatchJobs.length === 1 &&
+          dispatchJobs[0].status === "completed" &&
+          dispatchJobs[0].conclusion === "success",
+        "original dispatch did not succeed exactly once",
+      );
+      validateReleaseChildDispatchBinding({
+        child: { key: role, runId: selection.runId },
+        log: await client.getJobLog(dispatchJobs[0].id),
+        coveragePolicy: "npm-beta-v1",
+        plannedRunAttempt: 1,
         repository: request.repository,
         targetSha: target,
-        workflowSha: qualificationSha,
+      });
+      return {
         role,
-        inputs,
-      },
-      // Recovery must enumerate every historical attempt, including long rerun chains.
-      { token: deps.token, deadlineMs: Date.now() + 10 * 60_000 },
-    );
-    const coverage = admission.coverage.children.find((child) => child.key === role);
-    validateQualificationJobs(verified.receipt.jobs, coverage.requiredJobs, "Original " + role);
-    const dispatchJobs = parentJobs.filter((job) => job.name === coverage.parentJobName);
-    requireValue(
-      dispatchJobs.length === 1 &&
-        dispatchJobs[0].status === "completed" &&
-        dispatchJobs[0].conclusion === "success",
-      "original dispatch did not succeed exactly once",
-    );
-    validateReleaseChildDispatchBinding({
-      child: { key: role, runId: selection.runId },
-      log: await client.getJobLog(dispatchJobs[0].id),
-      coveragePolicy: "npm-beta-v1",
-      plannedRunAttempt: 1,
-      repository: request.repository,
-      targetSha: target,
-    });
-    children.push({
-      role,
-      runId: selection.runId,
-      runAttempt: selection.runAttempt,
-      workflowSha: qualificationSha,
-      sourceParentRunId: request.originalParent.runId,
-      conclusion: "success",
-      receipt: verified.receipt,
-    });
-  }
+        runId: selection.runId,
+        runAttempt: selection.runAttempt,
+        workflowSha: qualificationSha,
+        sourceParentRunId: request.originalParent.runId,
+        conclusion: "success",
+        receipt: verified.receipt,
+      };
+    }),
+  );
+  const children = childResults.map((result) => {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+    return result.value;
+  });
   const originalRoot = {
     workflowName: "Full Release Validation",
     runId: request.originalParent.runId,

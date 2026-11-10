@@ -1,0 +1,3 @@
+# Recovery owner regression: overlapping fixed child histories, joining failed readers,
+# unchanged per-child deadlines and payload verification after every child succeeds.
+39
