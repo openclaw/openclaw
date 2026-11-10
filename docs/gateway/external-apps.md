@@ -193,7 +193,14 @@ together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
 Each status call immediately returns a fresh active-work snapshot, including
 pending protected lifecycle or final-chat writes. Polling never waits for those
 writes, cancels work, releases custody, or renews the lease. The handoff owner
-checks write custody again before authorizing a stop.
+checks write custody again before authorizing a stop. If a final chat write arrives
+after readiness, handoff waits for settlement within the original 30-second drain
+budget; it does not consume the 15-second cleanup grace or extend the lease.
+Unsettled writes still return `UNAVAILABLE`. The refusal message, Gateway log, and
+RPC error `details.terminalPersistence` include the pending count, oldest observed
+terminal-event age in milliseconds (`null` when unavailable), and up to eight
+redacted run IDs, each capped at 256 characters. Session keys are omitted.
+Idle freeze handoffs remain immediate.
 Once every blocker has finished, the same lease transitions to
 `{"status":"ready","expiresAtMs":...}`.
 Status preserves the original response shape by default for published validators.

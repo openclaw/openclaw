@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { createGatewayHostLifecycle } from "../cli/gateway-cli/host-lifecycle.js";
 import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
@@ -21,6 +22,7 @@ import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.j
 import { createDeferredCore } from "../shared/deferred.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { getGatewayProcessInstanceId } from "./process-instance.js";
 import { runWithGatewayRequestEnvelope } from "./server-methods.js";
 import { createRequestGate, expectRejected } from "./server-methods.request-gate.test-support.js";
 import { dispatchSuspensionRequest } from "./server-methods.suspension-admission.test-support.js";
@@ -171,6 +173,104 @@ describe("gateway request suspension admission", () => {
       expect(reopened.respond).toHaveBeenCalledWith(true, { sessions: [] });
       expect(cron.resumeScheduling).toHaveBeenCalledOnce();
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("drain deadline expired"));
+    },
+  );
+
+  it.each(["settles", "leaked", "resumed"] as const)(
+    "waits within the original drain budget for late terminal writes: %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const log = { warn: vi.fn(), info: vi.fn() };
+      const { context } = createSuspendContext({ size: 0 }, log);
+      const commitStop = vi.fn(() => markGatewayRestartDraining());
+      const host = createGatewayHostLifecycle({
+        processOwner: { ownsProcessLifecycle: true, supervisor: "external" },
+        isCurrent: () => true,
+        isServing: () => true,
+        acceptStop: () => {},
+        commitExternalStop: commitStop,
+      });
+      context.hostLifecycle = host.capability;
+      const prepared = await suspensionRpc(context, "prepare", {
+        requestId: "late-final-writes",
+        drain: true,
+      });
+      const { suspensionId } = prepared.mock.calls[0]![1] as { suspensionId: string };
+      expect(prepared).toHaveBeenCalledWith(true, expect.objectContaining({ status: "ready" }));
+      const writes = await Promise.all(
+        Array.from({ length: 10 }, (_, index) =>
+          registerTerminalPersistenceFixture(
+            `run-${index}\n\u001b${index === 0 ? "password=synthetic-secret" : "x".repeat(300)}`,
+            {
+              sessionId: `session-${index}`,
+              sessionKey: `agent:main:private-session-${index}`,
+            },
+          ),
+        ),
+      );
+      for (const [index, write] of writes.entries()) {
+        write.source.adapter.projectSessionTerminalObservedAt = Date.now() - index * 1_000;
+      }
+      await vi.advanceTimersByTimeAsync(6_000);
+      const handoff = dispatch(
+        "gateway.suspend.handoff",
+        suspendHandlers["gateway.suspend.handoff"]!,
+        {
+          context,
+          core: true,
+          requestParams: {
+            suspensionId,
+            commit: true,
+            target: { pid: process.pid, processInstanceId: getGatewayProcessInstanceId() },
+          },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(handoff.respond).not.toHaveBeenCalled();
+      if (outcome === "resumed") {
+        resumeGatewaySuspend(suspensionId);
+      } else if (outcome === "settles") {
+        await Promise.all(writes.map((write) => write.settle()));
+      }
+      await vi.advanceTimersByTimeAsync(outcome === "leaked" ? 23_000 : 250);
+      await handoff.request;
+      if (outcome === "settles") {
+        expect(handoff.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "committed" }),
+        );
+        expect(commitStop).toHaveBeenCalledOnce();
+      } else {
+        expect(commitStop).not.toHaveBeenCalled();
+        expect(handoff.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+        if (outcome === "leaked") {
+          const error = handoff.respond.mock.calls[0]![2];
+          expect(error.details).toMatchObject({
+            terminalPersistence: {
+              count: 10,
+              oldestAgeMs: 39_000,
+              runIds: expect.any(Array),
+            },
+          });
+          expect(error.details.terminalPersistence.runIds).toHaveLength(8);
+          const diagnostic = JSON.stringify(error);
+          expect(diagnostic).toContain("run-0");
+          expect(diagnostic).not.toContain("synthetic-secret");
+          expect(diagnostic).not.toContain("private-session");
+          expect(
+            error.details.terminalPersistence.runIds.every(
+              (id: string) => id.length <= 256 && !/\p{Cc}/u.test(id),
+            ),
+          ).toBe(true);
+          expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(error.message));
+        }
+      }
+      await Promise.all(writes.map((write) => write.settle()));
+      await host.retire();
     },
   );
 
