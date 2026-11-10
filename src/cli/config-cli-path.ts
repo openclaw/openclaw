@@ -1,6 +1,7 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
+import { pruneEmptyConfigParents } from "../config/config-path-mutation.js";
 import { normalizeConfigModelSelectionParent } from "../config/model-input-normalization.js";
 import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -543,5 +544,6 @@ export function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]):
     return { removed: false };
   }
   delete record[last];
+  pruneEmptyConfigParents(root, path);
   return { removed: true, leafContainer: "object" };
 }

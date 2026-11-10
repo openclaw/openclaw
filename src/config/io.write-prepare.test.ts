@@ -554,6 +554,28 @@ describe("config io write prepare", () => {
     expect(input).toEqual(before);
   });
 
+  it("keeps a keyed agent entry emptied by an inner-field unset", () => {
+    const input = { agents: { entries: { main: {}, research: { name: "Research" } } } };
+    const before = structuredClone(input);
+    expect(applyUnsetPathsForWrite(input, [["agents", "entries", "research", "name"]])).toEqual({
+      agents: { entries: { main: {}, research: {} } },
+    });
+    // Only a whole-entry deletion authorizes roster removal; the shared owner must
+    // leave the emptied entry as {} or the roster-loss guard rejects the save.
+    expect(input).toEqual(before);
+  });
+
+  it("removes a keyed agent entry on whole-entry unset", () => {
+    const input = { agents: { entries: { main: {}, research: { name: "Research" } } } };
+    const before = structuredClone(input);
+    // The leaf is the entry itself, so this is an authorized roster removal: the
+    // entry must be deleted from the persisted payload, not retained as {}.
+    expect(applyUnsetPathsForWrite(input, [["agents", "entries", "research"]])).toEqual({
+      agents: { entries: { main: {} } },
+    });
+    expect(input).toEqual(before);
+  });
+
   it.each([
     ["invalid array suffix", ["tools", "alsoAllow", "1abc"]],
     ["prototype key", ["commands", "__proto__"]],
