@@ -374,7 +374,12 @@ it.each([
     const stop = subscribeSubagentRunChanges("persistence", observeChild);
     // Terminal session effects publish after the registry row; join their own receipt.
     const stopClosed = onSessionLifecycleEvent((event) => {
-      if (event.sessionKey === child?.childSessionKey && event.reason === "subagent-status") {
+      if (
+        event.sessionKey === child?.childSessionKey &&
+        event.reason === "subagent-status" &&
+        child &&
+        getSubagentRunByRunId(child.runId)?.execution.outcome
+      ) {
         closed.resolve();
       }
     });
@@ -386,16 +391,22 @@ it.each([
         idempotencyKey: `message-wait-${randomUUID()}`,
         deliver: false,
       });
-      child = await within(model.spawned, 30_000, () => "requester never spawned the child");
+      const bootstrap = await within(
+        model.spawned,
+        30_000,
+        () => "requester never spawned the child",
+      );
       if (laterTurn) {
         await expect(
-          gateway.client.request("agent.wait", { runId: child.runId, timeoutMs: 30_000 }),
+          gateway.client.request("agent.wait", { runId: bootstrap.runId, timeoutMs: 30_000 }),
         ).resolves.toMatchObject({ status: "ok" });
         model.allowFollowup();
         child = await within(model.claimed, 30_000, () => "requester never claimed the child");
         expect(
           subagentRuns.getRequesterRunInstance(getSubagentRunByRunId(child.runId)!)?.runId,
         ).toBe(requester.runId);
+      } else {
+        child = bootstrap;
       }
       observeChild();
       const finishRequester = async () => {
