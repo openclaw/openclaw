@@ -5,6 +5,9 @@ import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { chatHistoryRequestParams } from "../pages/chat/chat-history-request-params.ts";
+import { peekPrewarmedChatSnapshot } from "../pages/chat/chat-snapshot-prewarm.ts";
+import type { ChatSessionSnapshot } from "../pages/chat/session-message-cache.ts";
+import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import type { prepareApplicationStartup } from "./bootstrap-connection.ts";
 import { createGatewayCredentials } from "./gateway-store.credentials.ts";
 
@@ -22,7 +25,6 @@ export function startEarlyApplicationGateway(
   initial: ReturnType<typeof prepareApplicationStartup>,
 ): EarlyApplicationGateway | undefined {
   const { settings, startup, applicationLocation, basePath } = initial;
-  const route = sessionRefFromPath(applicationLocation.pathname, basePath);
   const isNewSession = routeIdFromPath(applicationLocation.pathname, basePath) === "new-session";
   // Short references, native handoffs, and confirmation-required endpoints keep
   // their startup owner. A name-shaped literal is a guess: if route resolution
@@ -49,6 +51,7 @@ export function startEarlyApplicationGateway(
       },
     };
   }
+  const route = sessionRefFromPath(applicationLocation.pathname, basePath);
   if (route?.kind !== "literal") {
     return undefined;
   }
@@ -66,11 +69,21 @@ export function startEarlyApplicationGateway(
     false,
     null,
   );
-  const {
-    sessionKey: _key,
-    agentId: _agent,
-    ...initialHistory
-  } = chatHistoryRequestParams("chat.startup", route.sessionKey, undefined);
+  const historyFor = (snapshot?: ChatSessionSnapshot) => {
+    const {
+      sessionKey: _key,
+      agentId: _agent,
+      ...history
+    } = chatHistoryRequestParams(
+      "chat.startup",
+      route.sessionKey,
+      undefined,
+      snapshot?.deltaCursor,
+      [],
+      snapshot?.sessionId ? snapshot.historyState : undefined,
+    );
+    return history;
+  };
   const transport = new EarlyGateway(
     {
       ...connection,
@@ -82,8 +95,21 @@ export function startEarlyApplicationGateway(
       modelCatalog: { agentId: route.agentId, sessionKey: route.sessionKey },
     },
     route.sessionKey,
-    connection.offlineRecoveryScope ? undefined : initialHistory,
+    connection.offlineRecoveryScope ? undefined : historyFor(),
     window.location.href,
   );
+  initial.prewarmChatSnapshot();
+  const entry = peekPrewarmedChatSnapshot();
+  if (
+    entry &&
+    entry.cacheKey === resolveChatSnapshotKey({ settings, client: transport.client }, route)
+  ) {
+    void entry.ready?.then(() => {
+      const snapshot = entry.prepared?.snapshot;
+      if (snapshot && peekPrewarmedChatSnapshot() === entry) {
+        transport.startHistory(historyFor(snapshot));
+      }
+    });
+  }
   return { transport, credentials };
 }
