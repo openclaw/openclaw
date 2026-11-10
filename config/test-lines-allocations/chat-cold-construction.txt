@@ -1,3 +1,3 @@
 # 114 regression lines for restored frames, asynchronous row admission, and retained scroll.
-# Plus exactly 70 existing debt lines, coordinator-accepted for this PR; no added headroom.
-184
+# Covers only this PR's net test growth; no inherited debt or added headroom.
+114
