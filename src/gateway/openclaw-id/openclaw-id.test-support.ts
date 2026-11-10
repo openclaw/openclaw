@@ -1,10 +1,14 @@
 // Shared fixtures for Gateway OpenClaw ID tests: an in-memory claw record and a
 // linked claw with root R pinned and owner device D1 (tunnel key W1) admitted.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expect, vi } from "vitest";
 import {
   computeRedemptionProof,
   deriveInviteProofKey,
   deriveRootSigner,
+  ed25519SignerFromSeed,
   formatEd25519PublicKey,
   formatIrohEndpointKey,
   generateEd25519Signer,
@@ -28,6 +32,9 @@ import type { OpenClawIdMemberProfiles } from "./member-profiles.js";
 import { createOpenClawIdService, type OpenClawIdEffects } from "./service.js";
 
 export const TEST_K_SRV = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
+
+// The state directory holding each linked claw's Gateway key, for serviceFor.
+const clawStateDirs = new WeakMap<object, string>();
 export const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 /** A claw record store kept in memory. */
@@ -77,7 +84,15 @@ export async function linkedClaw(
   } = memoryStore(),
 ) {
   const authority = createOpenClawIdAuthority(store);
-  const kGw = formatEd25519PublicKey((await generateEd25519Signer()).publicKey);
+  // The binding names K_gw, so a service over this claw needs the key file in its state dir.
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-id-claw-"));
+  const gatewayKeySeed = Buffer.from(randomBytes(32));
+  fs.mkdirSync(path.join(stateDir, "openclaw-id"), { mode: 0o700 });
+  fs.writeFileSync(path.join(stateDir, "openclaw-id", "gateway.key"), gatewayKeySeed, {
+    mode: 0o600,
+  });
+  clawStateDirs.set(authority, stateDir);
+  const kGw = formatEd25519PublicKey((await ed25519SignerFromSeed(gatewayKeySeed)).publicKey);
   const prep = await authority.prepareLink({
     kSrv: TEST_K_SRV,
     kGw,
@@ -128,7 +143,18 @@ export async function linkedClaw(
       { claw_id: prep.claw_id, seq: (await seq()) + 1, target, issued_at: nowSeconds() },
       signer,
     );
-  return { authority, store, cert, device, root, w1, prep, sign, clawId: prep.claw_id };
+  return {
+    authority,
+    store,
+    cert,
+    device,
+    root,
+    w1,
+    prep,
+    sign,
+    clawId: prep.claw_id,
+    stateDir,
+  };
 }
 
 export type LinkedClaw = Awaited<ReturnType<typeof linkedClaw>>;
@@ -137,6 +163,7 @@ export type LinkedClaw = Awaited<ReturnType<typeof linkedClaw>>;
 export function serviceFor(
   authority: LinkedClaw["authority"],
   config: GatewayOpenClawIdConfig = { enabled: true },
+  stateDir = clawStateDirs.get(authority) ?? "/nonexistent/openclaw-id-test",
 ) {
   const effects: OpenClawIdEffects = {
     captureConnections: vi.fn((keys: readonly string[]) =>
@@ -163,7 +190,7 @@ export function serviceFor(
   const log = { info: vi.fn(), warn: vi.fn() };
   const service = createOpenClawIdService({
     getConfig: () => config,
-    getStateDir: () => "/nonexistent/openclaw-id-test",
+    getStateDir: () => stateDir,
     getGatewayServer: () => undefined,
     log,
     createAuthority: async () => authority,
