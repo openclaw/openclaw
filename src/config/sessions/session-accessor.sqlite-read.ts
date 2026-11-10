@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -527,9 +528,20 @@ export function readTranscriptEventRows(
   sessionId: string,
   options: { afterSeq?: number } = {},
 ): SqliteTranscriptSnapshotRow[] {
-  return readHotSessionTranscriptSnapshot(database, sessionId, "raw rows", () => {
+  const rows: SqliteTranscriptSnapshotRow[] = [];
+  visitTranscriptEventRows(database, sessionId, (row) => rows.push(row), options);
+  return rows;
+}
+
+function visitTranscriptEventRows(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  visit: (row: SqliteTranscriptSnapshotRow) => void,
+  options: { afterSeq?: number } = {},
+): void {
+  readHotSessionTranscriptSnapshot(database, sessionId, "raw rows", () => {
     const db = getSessionKysely(database.db);
-    const rows = executeSqliteQuerySync(
+    const rows = iterateSqliteQuerySync(
       database.db,
       db
         .selectFrom("transcript_events")
@@ -537,12 +549,40 @@ export function readTranscriptEventRows(
         .where("session_id", "=", sessionId)
         .$if(options.afterSeq !== undefined, (query) => query.where("seq", ">", options.afterSeq!))
         .orderBy("seq", "asc"),
-    ).rows;
-    return rows.map((row) => ({
-      eventJson: row.event_json,
-      seq: sqliteNumber(row.seq),
-    }));
+    );
+    for (const row of rows) {
+      visit({ eventJson: row.event_json, seq: sqliteNumber(row.seq) });
+    }
   });
+}
+
+export type SqliteTranscriptSnapshotDigest = { count: number; sha256: string };
+
+/** Keep byte/sequence stale-write checks without retaining the discarded transcript. */
+export function readTranscriptEventRowsDigest(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  visit?: (row: SqliteTranscriptSnapshotRow) => void,
+): SqliteTranscriptSnapshotDigest {
+  const hash = createHash("sha256");
+  let count = 0;
+  visitTranscriptEventRows(database, sessionId, (row) => {
+    hash.update(JSON.stringify([row.seq, row.eventJson]));
+    count++;
+    visit?.(row);
+  });
+  return { count, sha256: hash.digest("hex") };
+}
+
+export function assertSqliteTranscriptDigestUnchanged(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  expected: SqliteTranscriptSnapshotDigest,
+): void {
+  const current = readTranscriptEventRowsDigest(database, sessionId);
+  if (current.count !== expected.count || current.sha256 !== expected.sha256) {
+    throw new SqliteTranscriptMutationConflictError(sessionId);
+  }
 }
 
 /** Reads exact transcript storage rows for guarded doctor rewrites. */

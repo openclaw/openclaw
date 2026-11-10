@@ -373,7 +373,10 @@ async function trimPreparedSessionTranscriptForManualCompact(
   const trimmed = await trimTranscriptForManualCompact(
     scope,
     (lines) => {
-      const selected = selectManualCompactTranscriptLines(lines, params.maxLines);
+      const selected = selectManualCompactTranscriptLines(
+        (visit) => lines.forEach(visit),
+        params.maxLines,
+      );
       declined = selected.result;
       return selected.result.compacted ? selected.lines : null;
     },

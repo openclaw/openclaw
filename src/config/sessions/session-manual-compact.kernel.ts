@@ -10,6 +10,8 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import {
   assertSqliteTranscriptSnapshotUnchanged,
+  assertSqliteTranscriptDigestUnchanged,
+  type SqliteTranscriptSnapshotDigest,
   type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
@@ -20,15 +22,21 @@ import { projectManuallyCompactedSessionEntry } from "./session-manual-compact-e
 export function applyManualCompactInTransaction(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
-  input: {
-    rows: readonly SqliteTranscriptSnapshotRow[];
+  input: (
+    | { rows: readonly SqliteTranscriptSnapshotRow[] }
+    | { snapshot: SqliteTranscriptSnapshotDigest }
+  ) & {
     entries: SqliteLifecycleTargetSnapshot;
     events: TranscriptEvent[];
     nowMs?: number;
   },
   projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded?: () => void },
 ) {
-  assertSqliteTranscriptSnapshotUnchanged(database, scope.sessionId, input.rows);
+  if ("snapshot" in input) {
+    assertSqliteTranscriptDigestUnchanged(database, scope.sessionId, input.snapshot);
+  } else {
+    assertSqliteTranscriptSnapshotUnchanged(database, scope.sessionId, input.rows);
+  }
   const current = readSessionEntrySelectionSnapshot(database, scope.sessionKey, true);
   assertLifecycleTargetSnapshotUnchanged(
     input.entries,

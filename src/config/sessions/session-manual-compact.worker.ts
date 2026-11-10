@@ -3,7 +3,7 @@ import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import { readSessionEntrySelectionSnapshot } from "./session-accessor.sqlite-entry-store.js";
-import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import { readTranscriptEventRowsDigest } from "./session-accessor.sqlite-read.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptManualTrimResult } from "./session-accessor.types.js";
@@ -61,12 +61,12 @@ export function compactManualTranscript(
   );
   using source = prepareSessionColdSourceGuard(context.options, input.sources, sourceMatches);
   const database = context.open();
-  const rows = readTranscriptEventRows(database, input.scope.sessionId);
   const entries =
     input.entries ?? readSessionEntrySelectionSnapshot(database, input.scope.sessionKey, true);
   // Decode and normalize before acquiring the write transaction; commit compares the original bytes.
   const selected = selectManualCompactTranscriptLines(
-    rows.map((row) => row.eventJson),
+    (visit) =>
+      readTranscriptEventRowsDigest(database, input.scope.sessionId, (row) => visit(row.eventJson)),
     input.maxLines,
   );
   const events = selected.result.compacted
@@ -92,7 +92,7 @@ export function compactManualTranscript(
           current,
           input.scope,
           {
-            rows,
+            snapshot: selected.snapshot,
             entries,
             events,
             nowMs: input.nowMs,
