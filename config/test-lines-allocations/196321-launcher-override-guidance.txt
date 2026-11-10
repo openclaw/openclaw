@@ -1,0 +1,3 @@
+# Two regressions: overridden-launcher status advice and redirected-update shell/plugin warning.
+# Exact net test LF growth against 1e09ded27e36; the shared scalar is unchanged.
+25

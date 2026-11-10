@@ -86,6 +86,16 @@ Older Git runs the same inspection commands without that option; partial clones
 may fetch promised objects. This fix must be present in the installed updater;
 a downloaded candidate cannot repair an older updater's preflight.
 
+When a managed service uses another package root and its launcher is operator-owned,
+updates preserve that launcher and upgrade the service installation only. The
+invoking shell installation stays unchanged and can be too old for upgraded shared
+plugins. Use the service installation's CLI, or update the shell installation
+separately with its package manager. To rebind the service, inspect its effective
+definition and update or remove the launcher override first; Doctor and forced
+service installation cannot replace it. The installed updater must contain the
+pre-update warning, and the CLI displaying status or Doctor findings must contain
+the override-aware guidance. No service definition is changed by this guidance.
+
 Interactive failed-update triage preserves the invoking operator's `PATH`, home,
 and authentication environment before candidate admission enters the managed
 Gateway environment. Repair agents still receive the latest target installation's

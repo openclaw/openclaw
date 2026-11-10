@@ -9,7 +9,10 @@ import {
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
 import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceInstallationDrift } from "../../daemon/service-layout.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import {
+  hasGatewayServiceLauncherOverride,
+  type GatewayServiceCommandConfig,
+} from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
 import { formatGatewayCrash, type GatewayCrashRecord } from "../../infra/gateway-crash.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
@@ -78,16 +81,26 @@ export function formatDaemonServiceInstallCommand(env: NodeJS.ProcessEnv, port?:
   );
 }
 
+type DaemonServiceInstallContext = {
+  targetRole?: "target" | "diagnostic-only";
+  stopped?: boolean;
+  port?: number;
+  command?: GatewayServiceCommandConfig | null;
+};
+
 export function resolveDaemonServiceInstallGuidance(
-  targetRole?: "target" | "diagnostic-only",
+  service?: DaemonServiceInstallContext,
   env: NodeJS.ProcessEnv = process.env,
-  service?: { stopped?: boolean; port?: number },
 ): string | undefined {
-  if (targetRole === "diagnostic-only") {
+  if (service?.targetRole === "diagnostic-only") {
     return undefined;
   }
+  const blockMessage = resolveDaemonInstallBlockMessage("gateway", env);
+  if (!blockMessage && hasGatewayServiceLauncherOverride(service?.command)) {
+    return "An operator-owned launcher override selects the service installation; rewriting the managed unit cannot change it. Inspect the effective service definition, then update or remove the launcher override before rebinding the service.";
+  }
   return (
-    resolveDaemonInstallBlockMessage("gateway", env) ??
+    blockMessage ??
     (service?.stopped
       ? `Stopped service definitions are preserved; run \`${formatDaemonServiceInstallCommand(env, service.port)}\` from the active CLI. Installation may start the service.`
       : `Run \`${formatCliCommand("openclaw doctor --fix", env)}\` or \`${formatDaemonServiceInstallCommand(env, service?.port)}\` from the active CLI.`)
@@ -97,11 +110,14 @@ export function resolveDaemonServiceInstallGuidance(
 export function formatGatewayServiceInstallationDrift(
   drift: GatewayServiceInstallationDrift,
   env: NodeJS.ProcessEnv = process.env,
-  service?: { stopped?: boolean; port?: number },
+  service?: DaemonServiceInstallContext,
 ): string {
   const { serviceRoot, serviceVersion, activeRoot, activeVersion } = drift;
-  const facts = `CLI ${activeVersion ?? "version unknown"} at ${activeRoot} differs from the Gateway service's ${serviceVersion ?? "version unknown"} at ${serviceRoot}. Run \`${formatCliCommand("openclaw update", env)}\` or use the CLI from ${serviceRoot}.`;
-  const guidance = resolveDaemonServiceInstallGuidance(undefined, env, service);
+  const nextStep = hasGatewayServiceLauncherOverride(service?.command)
+    ? `Use the CLI from ${serviceRoot}; update the invoking installation separately before using it with upgraded shared plugins.`
+    : `Run \`${formatCliCommand("openclaw update", env)}\` or use the CLI from ${serviceRoot}.`;
+  const facts = `CLI ${activeVersion ?? "version unknown"} at ${activeRoot} differs from the Gateway service's ${serviceVersion ?? "version unknown"} at ${serviceRoot}. ${nextStep}`;
+  const guidance = resolveDaemonServiceInstallGuidance(service, env);
   return guidance ? `${facts} ${guidance}` : facts;
 }
 

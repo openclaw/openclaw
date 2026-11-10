@@ -348,7 +348,7 @@ export async function resolveUpdateCommandTarget(
             );
             defaultRuntime.log(
               theme.muted(
-                `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
+                `Only the managed service installation is updated; the invoking shell installation is unchanged and may no longer load upgraded shared plugins. Use \`${CLI_NAME}\` from ${rootRedirect.root}, or update the shell installation separately with its package manager. To rebind the service, update or remove any operator-owned launcher override first.`,
               ),
             );
             if (nodeRunner) {

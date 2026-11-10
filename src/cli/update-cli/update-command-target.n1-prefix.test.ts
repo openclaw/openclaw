@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveBunRuntimeInfo, resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
+import { defaultRuntime } from "../../runtime.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { activationFixture, runtimeFixture } from "./update-command-fixtures.test-support.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
@@ -96,11 +97,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 const rootB = path.resolve(".n1-fixture/B/node_modules/openclaw");
 const rootA = path.resolve(".n1-fixture/A/lib/node_modules/openclaw");
-async function resolve(servicePlan: {
-  rootRedirect: { root: string; previousRoot: string } | null;
-  serviceRoot?: string;
-  nodeRunner?: string;
-}) {
+async function resolve(
+  servicePlan: {
+    rootRedirect: { root: string; previousRoot: string } | null;
+    serviceRoot?: string;
+    nodeRunner?: string;
+  },
+  json = true,
+) {
   const prepared = {
     discoveredRoot: rootB,
     installKind: "package",
@@ -115,7 +119,7 @@ async function resolve(servicePlan: {
   const executor = { enter: vi.fn(async () => ({ assertCurrent: vi.fn() })) };
   const target = await withMockedPlatform("linux", () =>
     resolveUpdateCommandTarget(
-      { json: true, dryRun: true },
+      { json, dryRun: true },
       recovery,
       undefined,
       prepared,
@@ -146,6 +150,15 @@ it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
     }
   },
 );
+it("warns that a redirected update leaves the shell install unchanged", async () => {
+  using log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  await resolve({ rootRedirect: { root: rootA, previousRoot: rootB } }, false);
+  const output = log.mock.calls.flat().join("\n");
+  expect(output).toContain("invoking shell installation is unchanged");
+  expect(output).toContain("shared plugins");
+  expect(output).toContain("launcher override");
+  expect(output).not.toContain("or reinstall the gateway service from the shell install");
+});
 it.each([
   { service: "Node", node: "24.22.1", sqliteText: true, admitted: false },
   { service: "Bun", node: "24.22.1", sqliteText: true, admitted: false },
