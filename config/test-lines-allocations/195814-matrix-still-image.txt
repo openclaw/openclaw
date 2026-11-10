@@ -1,2 +1,0 @@
-22
-# #195814: Matrix still-vs-APNG regression through the real send path, so MSC4230 is_animated is only claimed for proven still images.

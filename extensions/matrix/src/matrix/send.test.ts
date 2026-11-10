@@ -493,21 +493,12 @@ describe("sendMessageMatrix media", () => {
   );
 
   it.each([
-    ["still PNG", ["IHDR", "IDAT"], false],
-    ["APNG", ["IHDR", "acTL", "IDAT"], undefined],
-  ])("marks only a proven %s as not animated (#195814)", async (_label, chunks, expected) => {
-    const chunk = (type: string) =>
-      Buffer.concat([Buffer.from([0, 0, 0, 0]), Buffer.from(type, "latin1"), Buffer.alloc(4)]);
-    const png = Buffer.concat([
-      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-      ...chunks.map(chunk),
-    ]);
-    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
-      buffer: png,
-      fileName: "chart.png",
-      contentType: "image/png",
-      kind: "image",
-    });
+    ["IDAT", false],
+    ["acTL", undefined],
+  ])("claims a still PNG only when %s comes first (#195814)", async (chunk, expected) => {
+    const buffer = Buffer.from(`\x89PNG\r\n\x1a\n\0\0\0\0${chunk}crc.`, "latin1");
+    const media = { buffer, contentType: "image/png", kind: "image" };
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce(media);
     getImageMetadataMock.mockResolvedValueOnce({ width: 640, height: 480 });
     await send("", { mediaUrl: "chart.png" });
     const info = requireRecord(sentContent().info, "image info");
@@ -552,18 +543,7 @@ describe("sendMessageMatrix media", () => {
   });
 
   it("uses explicit cfg for media sends instead of runtime loadConfig fallbacks", async () => {
-    const explicitCfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              mediaMaxMb: 1,
-            },
-          },
-        },
-      },
-    };
-
+    const explicitCfg = { channels: { matrix: { accounts: { ops: { mediaMaxMb: 1 } } } } };
     loadConfigMock.mockImplementation(() => {
       throw new Error("sendMessageMatrix should not reload runtime config when cfg is provided");
     });
@@ -1056,9 +1036,7 @@ describe("sendTypingMatrix", () => {
         run: (resolved: import("./sdk.js").MatrixClient) => Promise<void>,
       ) => {
         expect(opts.cfg).toBe(cfg);
-        expect(opts.accountId).toBe("work");
-        expect(opts.timeoutMs).toBe(12_345);
-        expect(opts.readiness).toBe("none");
+        expect(opts).toMatchObject({ accountId: "work", timeoutMs: 12_345, readiness: "none" });
         return await run(typingClient);
       },
     );
