@@ -136,8 +136,10 @@ export async function applyStagedWorkerWorkspace(params: {
       preparedPaths && params.additionalPaths?.size
         ? new Set([...preparedPaths, ...params.additionalPaths])
         : preparedPaths;
-    const inspectPaths = () => preflightWorkspaceApply({ root, ...preflightInput });
-    params.onPhase?.("preflight");
+    const inspectPaths = () => {
+      params.onPhase?.("preflight");
+      return preflightWorkspaceApply({ root, ...preflightInput });
+    };
     const preflight = await inspectPaths();
     const acceptReconciled = async (
       reconcile: Extract<typeof acceptance, { kind: "reconcile" }>,
@@ -212,7 +214,6 @@ export async function applyStagedWorkerWorkspace(params: {
     });
     // Preparation may run beside guest writes; fence them before confirming the plan.
     await params.freezeTarget?.();
-    params.onPhase?.("preflight");
     const confirmedPreflight = await inspectPaths();
     if (!isDeepStrictEqual(confirmedPreflight, preflight)) {
       throw new ConcurrentWorkspacePathError(

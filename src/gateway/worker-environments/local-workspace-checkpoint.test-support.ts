@@ -30,6 +30,24 @@ async function proveReconcilePauseWindow(owner: LocalWorkspaceOwner) {
   const engine = await import("../../agents/sandbox/container-engine.js");
   const worker = await import("./workspace-manifest-worker.js");
   const recovery = await import("./workspace-reconcile-recovery.js");
+  const reconciliation = await import("./workspace-reconcile.js");
+  const core = await import("./workspace-reconcile-core.js");
+  let measuredPhase: string | undefined;
+  const reconcile = reconciliation.applyStagedWorkerWorkspace;
+  vi.spyOn(reconciliation, "applyStagedWorkerWorkspace").mockImplementation((params) =>
+    reconcile({
+      ...params,
+      onPhase: (phase) => {
+        measuredPhase = phase;
+        params.onPhase?.(phase);
+      },
+    }),
+  );
+  const preflight = core.preflightWorkspaceApply;
+  vi.spyOn(core, "preflightWorkspaceApply").mockImplementation((params) => {
+    expect(measuredPhase, "Every preflight must have truthful pause attribution").toBe("preflight");
+    return preflight(params);
+  });
   vi.stubEnv("DOCKER_HOST", "unix:///synthetic/reconcile-docker.sock");
   vi.stubEnv("DOCKER_CONTEXT", undefined);
   let paused = false;
