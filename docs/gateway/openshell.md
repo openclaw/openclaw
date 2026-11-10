@@ -430,12 +430,15 @@ into an untrusted sandbox. A repository created inside a mirrored sandbox loses
 its `.git` metadata before the next command; use `remote` mode for Git workflows
 that must persist inside the sandbox. Remote-mode seeding also omits `.git` at
 every depth, so initialize or clone repositories inside that sandbox.
+If a sandbox file would replace a host directory containing repository metadata,
+synchronization reports the conflict; copy the sandbox file elsewhere before the
+next mirrored command.
 
 Mirror synchronization never copies entries it cannot represent, such as
 symlinks, FIFOs, or Unix sockets, into either workspace. Existing host entries
 of those types remain intact at every depth, along with their parent directories,
 even if the sandbox deletes those directories or replaces them with files.
-Remote replacements that conflict with these preserved host paths are ignored.
+Direct remote replacements that conflict with these preserved host paths are ignored.
 Ordinary files and directories still receive remote changes and deletions.
 
 Local filesystem inspection errors, such as permission or I/O failures, stop the

@@ -7,6 +7,7 @@ import pLimit from "p-limit";
 export const DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS = ["hooks", "git-hooks", ".git"] as const;
 const NESTED_GIT_EXCLUDE_DIRS = [".git"] as const;
 const COPY_TREE_FS_CONCURRENCY = 16;
+type PreservedEntry = "none" | "other" | "metadata";
 
 function createExcludeMatcher(excludeDirs?: readonly string[], literalNames = false) {
   const excluded = new Set((excludeDirs ?? []).map((d) => normalizeLowercaseStringOrEmpty(d)));
@@ -21,18 +22,18 @@ async function reconcileMirrorPath(params: {
   targetPath: string;
   replace: boolean;
   excludeDirs?: readonly string[];
-}): Promise<boolean> {
+}): Promise<PreservedEntry> {
   const targetStats = await runLimitedFs(lstatIfExists, params.targetPath, "ENOENT");
   // Preserve host entries mirror transport cannot represent and their ancestor directories.
   if (targetStats && !targetStats.isDirectory() && !targetStats.isFile()) {
-    return true;
+    return "other";
   }
   const sourceStats = params.sourcePath ? await runLimitedFs(fs.lstat, params.sourcePath) : null;
   // Source symlinks and special files never cross the sandbox boundary.
   const sourceDir = sourceStats?.isDirectory() ? params.sourcePath : undefined;
   const sourceFile = sourceStats?.isFile() ? params.sourcePath : undefined;
   if (!params.replace && !sourceDir && !sourceFile) {
-    return false;
+    return "none";
   }
   if (sourceDir || targetStats?.isDirectory()) {
     if (targetStats && !targetStats.isDirectory()) {
@@ -45,7 +46,12 @@ async function reconcileMirrorPath(params: {
       excludeDirs: params.excludeDirs,
     });
     // A remote file cannot replace a directory containing preserved host entries.
-    if (sourceDir || preservedEntries) {
+    if (sourceFile && preservedEntries === "metadata") {
+      throw new Error(
+        `OpenShell mirror cannot replace ${JSON.stringify(path.basename(params.targetPath))}: the host directory contains repository metadata; copy the sandbox file elsewhere before another mirrored command.`,
+      );
+    }
+    if (sourceDir || preservedEntries !== "none") {
       return preservedEntries;
     }
     await runLimitedFs(fs.rmdir, params.targetPath);
@@ -57,7 +63,7 @@ async function reconcileMirrorPath(params: {
   if (sourceFile) {
     await runLimitedFs(fs.copyFile, sourceFile, params.targetPath);
   }
-  return false;
+  return "none";
 }
 
 async function reconcileMirrorDirectory(params: {
@@ -65,7 +71,7 @@ async function reconcileMirrorDirectory(params: {
   targetDir: string;
   replace: boolean;
   excludeDirs?: readonly string[];
-}): Promise<boolean> {
+}): Promise<PreservedEntry> {
   const { sourceDir } = params;
   const isExcluded = createExcludeMatcher(
     params.excludeDirs,
@@ -91,12 +97,14 @@ async function reconcileMirrorDirectory(params: {
         }),
       ),
   );
-  let preservedEntries = targetEntries.some(isExcluded);
+  let preservedEntries: PreservedEntry = targetEntries.some(isExcluded) ? "metadata" : "none";
   for (const result of results) {
     if (result.status === "rejected") {
       throw result.reason;
     }
-    preservedEntries ||= result.value;
+    if (result.value === "metadata" || preservedEntries === "none") {
+      preservedEntries = result.value;
+    }
   }
   return preservedEntries;
 }

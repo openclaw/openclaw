@@ -543,6 +543,12 @@ it
       ).rejects.toMatchObject({
         code: "ENOENT",
       });
+      await exec(mirrorBackend, "rm -rf nested-repo");
+      await expectFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
+      await expect(
+        exec(mirrorBackend, "rm -rf nested-repo && printf collision > nested-repo"),
+      ).rejects.toThrow(/copy the sandbox file elsewhere before another mirrored command/u);
+      await expectFile(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt", "private\n");
       expect((await fs.lstat(mirrorFifoPath)).isFIFO()).toBe(true);
       expect((await fs.lstat(mirrorSocketPath)).isSocket()).toBe(true);
       if (stressMode === "mirror") {

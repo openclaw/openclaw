@@ -161,16 +161,23 @@ describe("replaceDirectoryContents", () => {
     },
   );
 
-  it.each(["deleted", "replaced by a file"] as const)(
-    "preserves nested host metadata when its remote parent is %s",
-    async (mode) => {
-      await writeFiles(target, { "repo/.git/config": "host", "repo/old.txt": "old" });
-      if (mode === "replaced by a file") {
-        await writeFiles(source, { repo: "remote file" });
-      }
-      await replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS);
-      await expectFiles(target, { "repo/.git/config": "host" });
-      await expectPathMissing(path.join(target, "repo/old.txt"));
+  it("preserves nested host metadata when its remote parent is deleted", async () => {
+    await writeFiles(target, { "repo/.git/config": "host", "repo/old.txt": "old" });
+    await replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS);
+    await expectFiles(target, { "repo/.git/config": "host" });
+    await expectPathMissing(path.join(target, "repo/old.txt"));
+  });
+
+  it.each(["repo/.git/config", "repo/sub/.git/config"])(
+    "reports a sandbox file that conflicts with preserved host metadata at %s",
+    async (metadataFile) => {
+      await writeFiles(target, { [metadataFile]: "host" });
+      await writeFiles(source, { repo: "sandbox file" });
+
+      await expect(replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS)).rejects.toThrow(
+        /copy the sandbox file elsewhere before another mirrored command/u,
+      );
+      await expectFiles(target, { [metadataFile]: "host" });
     },
   );
 
