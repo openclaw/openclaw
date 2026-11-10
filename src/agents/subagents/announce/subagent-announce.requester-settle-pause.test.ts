@@ -113,8 +113,8 @@ describe("requester pause notices", () => {
     await expectWake(true, 1);
     expect(deliveredCallArg().triggerMessage).toContain("Final interruption result");
     expect(deliveredCallArg().triggerMessage).not.toContain("OBSOLETE-PAUSE-INTENT");
-    expect(String(deliveredCallArg().pausedGoalVisibleText)).toContain("Final interruption result");
-    expect(String(deliveredCallArg().pausedGoalVisibleText)).not.toContain("OBSOLETE-PAUSE-INTENT");
+    // An errored child keeps the ordinary path, which reports its outcome.
+    expect(deliveredCallArg().pausedGoalVisibleText).toBeUndefined();
     expect(deliveredCallArg().triggerMessage).not.toContain('"state":"paused"');
     expect(child.requesterSettleWake).toBeUndefined();
   });

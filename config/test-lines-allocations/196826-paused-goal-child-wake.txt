@@ -1,2 +1,2 @@
-# Covers recording pre-pause child results in the requester transcript without a model turn (announce, settle findings, media, custody revocation, failure, private, channel and pass-through cases) behind one shared delivery fixture.
-363
+# Covers recording pre-pause child results without a model turn: announce, settle findings, mixed batches, media, custody revocation (mocked and real storage), failure, private, channel and pass-through cases.
+399
