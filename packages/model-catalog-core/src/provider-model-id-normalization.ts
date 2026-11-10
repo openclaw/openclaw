@@ -119,7 +119,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
   if (normalizedProvider === "anthropic") {
     // Mirror the Anthropic manifest aliases for callers that skip manifest normalization.
     const anthropicAliases: Record<string, string> = {
-      fable: "claude-fable-5-1",
+      fable: "claude-fable-5-2",
       "fable-5": "claude-fable-5",
       "fable-5.2": "claude-fable-5-2",
       "fable-5-2": "claude-fable-5-2",

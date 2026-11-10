@@ -52,8 +52,9 @@ it("resolves Anthropic aliases while keeping version pins", () => {
     "claude-opus-5": "claude-opus-5",
     "opus-5": "claude-opus-5",
     sonnet: "claude-sonnet-5-5",
-    fable: "claude-fable-5-1",
+    fable: "claude-fable-5-2",
     "fable-5.2": "claude-fable-5-2",
+    "fable-5.1": "claude-fable-5-1",
     haiku: "claude-haiku-5-5",
     "opus-4.7": "claude-opus-4-7",
   })) {

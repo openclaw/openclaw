@@ -450,8 +450,10 @@ and [migration guide](https://platform.claude.com/docs/en/models/fable-5-2/migra
 
 Claude CLI authentication needs Claude Code 2.1.290 or newer for this model.
 
-Select it with `fable-5.2` or the full ref. The bare `fable` alias still
-selects `anthropic/claude-fable-5-1`.
+The bare `fable` alias selects `anthropic/claude-fable-5-2`. Explicit
+`fable-5.1`, `fable-5`, and full `anthropic/claude-fable-5-1` or
+`anthropic/claude-fable-5` selections keep their model; OpenClaw does not
+rewrite them to Fable 5.2.
 
 ## Use Claude Fable 5.1
 
@@ -485,9 +487,8 @@ For API-key billing, input and output remain `$10/$50` per million tokens;
 cache reads cost `$0.25` per million tokens, one quarter of Fable 5's rate.
 See Anthropic's [Fable 5.1 specifications](https://platform.claude.com/docs/en/models/fable-5-1/overview).
 
-The bare `fable` alias now selects `anthropic/claude-fable-5-1`. Explicit
-`fable-5` and `anthropic/claude-fable-5` selections still use Fable 5; OpenClaw
-does not rewrite them to Fable 5.1.
+Explicit `fable-5` and `anthropic/claude-fable-5` selections still use Fable 5;
+OpenClaw does not rewrite them to Fable 5.1.
 
 ### Tool calls and retained thinking
 
