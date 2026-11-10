@@ -286,7 +286,8 @@ describe("command CI ownership and parallel timing", () => {
       ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
       fullSuiteVitestShards: fixtureShards,
     }));
-    vi.doMock("../vitest/vitest.unit-fast-paths.mjs", () => ({
+    vi.doMock("../vitest/vitest.unit-fast-paths.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../vitest/vitest.unit-fast-paths.mjs")>()),
       getUnitFastTestFiles: () => [],
       getUnitFastIsolatedTestFiles: () => [],
       getUnitFastTimerTestFiles: () => [],
