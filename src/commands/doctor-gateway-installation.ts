@@ -227,6 +227,17 @@ export function resolveSystemdUnitNameFromServicePath(sourcePath: string | undef
   return base.endsWith(".service") ? base : "openclaw-gateway.service";
 }
 
+/** Points the operator at their own drop-in instead of a repair Doctor cannot make. */
+export function noteOperatorOwnedSystemdDropIn(command: GatewayServiceCommandConfig): void {
+  const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
+  const scope = resolveSystemdScopeFromServicePath(command.sourcePath);
+  const inspectCommand = `systemctl${scope === "user" ? " --user" : ""} cat ${unitName}`;
+  note(
+    `Gateway service command, working directory, or environment comes from an operator-owned systemd drop-in; rewriting the managed unit cannot repair it. Inspect with \`${inspectCommand}\`, then update or remove the drop-in and rerun doctor.`,
+    "Gateway service config",
+  );
+}
+
 export async function resolveSystemdServiceRewriteBlock(
   command: GatewayServiceCommandConfig,
   issues: { code: string; message?: string }[],

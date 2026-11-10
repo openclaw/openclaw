@@ -30,6 +30,15 @@ import { formatServiceRepairDeferredNote } from "./doctor-service-repair-policy.
 
 await vi.hoisted(() => import("./doctor-gateway-services.native.test-support.js"));
 
+const assertInstallationRepairAllowedMock = vi.hoisted(() => vi.fn());
+vi.mock("./doctor-gateway-installation.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-gateway-installation.js")>();
+  return {
+    ...actual,
+    assertGatewayServiceInstallationRepairAllowed: assertInstallationRepairAllowedMock,
+  };
+});
+
 const originalStdinIsTTY = process.stdin.isTTY;
 const originalPlatform = process.platform;
 const savedEnv = captureEnv([
@@ -135,6 +144,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
     vi.clearAllMocks();
+    assertInstallationRepairAllowedMock.mockResolvedValue(undefined);
     mocks.writeConfig.mockReset().mockImplementation(async (nextConfig) => nextConfig);
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     fsMocks.realpath.mockImplementation(async (value: string) => value);
@@ -633,6 +643,52 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expectNoServiceWrite("writeConfig", "install", "stage");
     },
   );
+
+  it("reports the operator-owned drop-in instead of the ownership refusal when drift is locked by a drop-in", async () => {
+    mockProcessPlatform("linux");
+    await withTempDir("openclaw-doctor-dropin-drift-", async (root) => {
+      const serviceRoot = path.join(root, "service-install");
+      const activeRoot = path.join(root, "active-install");
+      for (const installRoot of [serviceRoot, activeRoot]) {
+        await fs.mkdir(path.join(installRoot, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(installRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.11.2" }),
+          "utf8",
+        );
+        await fs.writeFile(path.join(installRoot, "dist", "index.js"), "export {};\n", "utf8");
+      }
+      const serviceEntry = path.join(serviceRoot, "dist", "index.js");
+      const activeEntry = path.join(activeRoot, "dist", "index.js");
+      const nodePath = "/usr/bin/node";
+      mocks.readCommand.mockResolvedValue({
+        ...createGatewayCommand(serviceEntry, nodePath),
+        sourcePath: path.join(root, ".config/systemd/user/openclaw-gateway.service"),
+        managedDefinition: createGatewayCommand(activeEntry, nodePath),
+        managedOverrides: { launcher: "command" as const },
+      });
+      mocks.auditGatewayServiceConfig.mockResolvedValue(
+        createRecommendedServiceAudit(
+          "gateway-entrypoint-mismatch",
+          "Gateway service entrypoint does not match the current install.",
+        ),
+      );
+      mocks.buildGatewayInstallPlan.mockResolvedValue({
+        ...createGatewayCommand(activeEntry, nodePath),
+        workingDirectory: "/tmp",
+      });
+      assertInstallationRepairAllowedMock.mockRejectedValue(
+        new Error(
+          "Gateway service installation is controlled by another owner; automatic installation repair was skipped. Inspect it with `openclaw gateway status --deep`.",
+        ),
+      );
+      await runRepair();
+      configNote("operator-owned systemd drop-in");
+      configNote("systemctl --user cat openclaw-gateway.service");
+      expectNoNoteContaining("controlled by another owner", "Gateway service installation");
+      expectNoServiceWrite("writeConfig", "install", "stage");
+    });
+  });
 
   it("leaves service metadata unchanged when the activity query fails alongside command drift", async () => {
     mockProcessPlatform("linux");
