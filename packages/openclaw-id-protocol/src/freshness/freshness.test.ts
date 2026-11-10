@@ -127,6 +127,7 @@ describe("assessFreshness", () => {
       issued_at: now - 60,
       binding_seq: 5,
       k_gw: w.k_gw,
+      k_gw_binding_seq: 5,
     });
   });
 
@@ -213,6 +214,7 @@ describe("assessFreshness", () => {
       issued_at: now - 60,
       binding_seq: 5,
       k_gw: w.k_gw,
+      k_gw_binding_seq: 4,
     });
     const replay = await gate(
       w,
@@ -251,6 +253,7 @@ describe("assessFreshness", () => {
       issued_at: now - 60,
       binding_seq: 5,
       k_gw: formatEd25519PublicKey(kgw2.publicKey),
+      k_gw_binding_seq: 5,
     });
     // Ordered among the new K_gw's snapshots from here.
     const replay = await gate(
@@ -269,6 +272,41 @@ describe("assessFreshness", () => {
     );
     expect(retired).toMatchObject({ ok: false, code: "stale_binding" });
     expect(retired.state?.snapshot?.k_gw).toBe(formatEd25519PublicKey(kgw2.publicKey));
+  });
+
+  it("a retired key's snapshot claiming the next binding cannot hold the new key's order", async () => {
+    const w = await world();
+    const old = await w.binding(4, w.oldSrv);
+    // The old K_gw claims binding 5 before the owner re-binds: refused, but the high-water is kept.
+    const claim = await gate(w, old, { snapshot: await w.snapshot(1_000, 5) });
+    expect(claim).toMatchObject({ ok: false, code: "stale_binding" });
+    const kgw2 = await generateEd25519Signer();
+    const rebound = await w.binding(5, w.newSrv, now - 10, kgw2);
+    const first = await gate(
+      w,
+      rebound,
+      { snapshot: await w.snapshot(9, 5, { signer: kgw2, issued_at: now - 120 }) },
+      { stored: claim.state },
+    );
+    const newer = await gate(
+      w,
+      rebound,
+      { snapshot: await w.snapshot(10, 5, { signer: kgw2 }) },
+      { stored: first.state },
+    );
+    expect(newer).toMatchObject({ ok: true, fresh: true });
+    expect(newer.state?.snapshot).toMatchObject({
+      seq: 10,
+      k_gw: formatEd25519PublicKey(kgw2.publicKey),
+    });
+    // Discovery replays the new key's older snapshot.
+    const replay = await gate(
+      w,
+      rebound,
+      { snapshot: await w.snapshot(9, 5, { signer: kgw2, issued_at: now - 120 }) },
+      { stored: newer.state, policy: "report" },
+    );
+    expect(replay.gap).toBe("snapshot_replayed");
   });
 
   it("never stores a snapshot from the future", async () => {
