@@ -107,10 +107,18 @@ target agent's `thinkingDefault` is not part of it. In order:
    inherited from an automatic parent tier.
 
 The first value that resolves is saved on the child session as its initial
-`thinkingLevel`, so it also outranks the child's own `thinkingDefault` on every
-subsequent turn. When none of the five applies, the child uses its own model default
-like any other turn. ACP runtime spawns go one step further and also apply the target
-agent's `thinkingDefault`, then its per-model `params.thinking`.
+`thinkingLevel`. That value stays the session's override until something changes or
+clears it: a later session preference edit replaces it, `/think default` clears it, and a
+one-shot directive overrides it for that turn. Until then it outranks the child's own
+`thinkingDefault`. When none of the five applies, the child uses its own model default
+like any other turn.
+
+ACP runtime spawns resolve separately and **do not** walk the native ladder above: their
+caller passes neither the requester agent config nor the caller's level, so the order is
+the explicit `sessions_spawn.thinking` argument, the target agent's
+`agents.entries.*.subagents.thinking`, then `agents.defaults.subagents.thinking`, then the
+target's own configured resolution (its `thinkingDefault` and per-model
+`params.thinking`).
 
 To make a native child run at a level regardless of the caller, set
 `agents.entries.<target>.subagents.thinking` on the target; a requester-side
