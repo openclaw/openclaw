@@ -565,6 +565,13 @@ export function readSqliteAgentCatalog(hash: string): SqliteSchemaCatalog | unde
   data ??= JSON.parse(
     readFileSync(new URL("./sqlite-agent-catalogs.json", import.meta.url), "utf8"),
   ) as CatalogData; // SAFETY: Emitted with this loader from typed native catalog facts.
-  const catalog = data.catalogs[hash]!;
+  const catalog = data.catalogs[hash];
+  if (!catalog) {
+    // Cross-generation reads can pair this build's fingerprints with a newer build's asset:
+    // during in-place activation the running process resolves the asset path after the
+    // build swap, and a schema edit retires every derived hash it does not pin. Native
+    // schema discovery owns the unknown-hash case, so fall through instead of crashing.
+    return undefined;
+  }
   return { tables: catalog.tables.map((index) => data!.tables[index]!), views: catalog.views };
 }
