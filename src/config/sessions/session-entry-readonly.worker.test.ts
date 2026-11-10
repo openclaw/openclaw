@@ -45,7 +45,7 @@ import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "./session-entry-read-runtime.js";
-import { readSessionEntryWorkerRequest } from "./session-entry-read.worker.js";
+import { readSessionRuntimeTargetWorkerRequest } from "./session-runtime-target-read.worker.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
@@ -189,7 +189,7 @@ it("resolves runtime targets through an admitted reader without freshness probes
     const sessionKey = "agent:main:persisted-target";
     replaceSessionEntrySync({ agentId: "main", env, sessionKey }, { sessionId, updatedAt: 1 });
     const read = () =>
-      readSessionEntryWorkerRequest({
+      readSessionRuntimeTargetWorkerRequest({
         kind: "session-runtime-target",
         database: { agentId: database.agentId, path: database.path },
         scope: {

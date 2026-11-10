@@ -376,9 +376,14 @@ serveOwnedWorkerTasks(
             );
         return { kind: "session-identity-evidence" as const, evidence };
       }
-      if (request.kind === "session-entry-read" || request.kind === "session-runtime-target") {
-        const { readSessionEntryWorkerRequest } = await import("./session-entry-read.worker.js");
-        return readSessionEntryWorkerRequest(request);
+      if (request.kind === "session-entry-read") {
+        const { readSessionEntryResult } = await import("./session-entry-read-result.worker.js");
+        return readSessionEntryResult(request);
+      }
+      if (request.kind === "session-runtime-target") {
+        const { readSessionRuntimeTargetWorkerRequest } =
+          await import("./session-runtime-target-read.worker.js");
+        return readSessionRuntimeTargetWorkerRequest(request);
       }
       if (request.kind === "session-entry-list") {
         const { readSessionEntryList } = await import("./session-entry-list.worker.js");

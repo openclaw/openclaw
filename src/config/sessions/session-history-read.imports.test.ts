@@ -74,6 +74,7 @@ const prewarm = vi.hoisted(() => ({
   historyPage: vi.fn(),
   responsePage: vi.fn(),
   historySnapshot: vi.fn(),
+  broadEntryReader: vi.fn(),
 }));
 
 // mock-isolation: Observe lazy evaluation without loading the presentation graph being excluded.
@@ -95,6 +96,11 @@ vi.mock("../../gateway/server-methods/chat-history-response-page.js", () => {
 vi.mock("../../gateway/session-history-snapshot.js", () => {
   prewarm.historySnapshot();
   return {};
+});
+// mock-isolation: Observe broad reader evaluation while preserving its real operations.
+vi.mock("./session-entry-read.worker.js", async (importOriginal) => {
+  prewarm.broadEntryReader();
+  return await importOriginal<typeof import("./session-entry-read.worker.js")>();
 });
 // mock-isolation: Capture dispatch without installing native worker ports in the test process.
 vi.mock("../../infra/worker-task-server.js", () => ({
@@ -131,4 +137,44 @@ it("prewarms maintenance without evaluating the foreground history presentation 
   for (const loaded of modules) {
     expect(loaded).toHaveBeenCalledOnce();
   }
+});
+
+it("dispatches private entry and runtime target reads without loading broad row hydration", async () => {
+  await import("./session-transcript.worker.js");
+  const database = { agentId: "main", path: "/synthetic/missing/openclaw-agent.sqlite" };
+  const scope = {
+    agentId: "main",
+    databaseAgentId: "main",
+    sessionKey: "agent:main:missing",
+    storePath: database.path,
+    env: {},
+  };
+  await expect(
+    prewarm.read({ kind: "session-entry-read", database, scope }),
+  ).resolves.toMatchObject({
+    ok: true,
+    value: { kind: "session-entry-read", entry: undefined },
+  });
+  await expect(
+    prewarm.read({
+      kind: "session-runtime-target",
+      database,
+      scope: { ...scope, sessionId: "missing" },
+      keyFormat: "agent-qualified",
+    }),
+  ).resolves.toMatchObject({
+    ok: true,
+    value: {
+      kind: "session-runtime-target",
+      target: {
+        agentId: "main",
+        sessionKey: scope.sessionKey,
+        sessionId: "missing",
+        storePath: database.path,
+        selectedSessionId: null,
+        selectedLifecycleRevision: null,
+      },
+    },
+  });
+  expect(prewarm.broadEntryReader).not.toHaveBeenCalled();
 });
