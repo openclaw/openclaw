@@ -243,7 +243,7 @@ async function run(argv) {
   const byId = new Map(rows.map((row) => [row.id, row]));
   const days = new Map();
   for (const row of rows) {
-    if (!row.occurred_at?.endsWith("Z")) {
+    if (!row.occurred_at?.endsWith("Z") || !Number.isFinite(Date.parse(row.occurred_at))) {
       throw new Error("Row " + row.id + " needs a UTC occurred_at");
     }
     const day = row.occurred_at.slice(0, 10);
