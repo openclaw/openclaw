@@ -133,6 +133,65 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
     });
   });
 
+  it.each([
+    [
+      "rate-limited without retry time",
+      -5,
+      {
+        response: {
+          results: [{ type: "RATE_LIMIT_FAILURE", account: "+15550000001" }],
+        },
+      },
+      "Signal RPC -5: remote error",
+    ],
+    [
+      "rate-limited with retry time",
+      -5,
+      {
+        response: {
+          results: [
+            { type: "RATE_LIMIT_FAILURE", retryAfterSeconds: 7, account: "+15550000001" },
+            { type: "RATE_LIMIT_FAILURE", retryAfterSeconds: 12, account: "+15550000002" },
+          ],
+        },
+      },
+      "Signal RPC -5: remote error (wait 12s to retry)",
+    ],
+    [
+      "captcha challenge required",
+      -5,
+      {
+        response: {
+          results: [
+            {
+              type: "RATE_LIMIT_FAILURE",
+              retryAfterSeconds: 60,
+              token: "proof-token",
+              account: "+15550000001",
+            },
+          ],
+        },
+      },
+      "Signal RPC -5: remote error (wait 60s to retry; captcha challenge required; solve one at https://signalcaptchas.org/challenge/generate.html and run `signal-cli submitRateLimitChallenge --challenge <token> --captcha <result>` to recover)",
+    ],
+    [
+      "other error codes do not surface recovery facts",
+      -32000,
+      {
+        response: { results: [{ type: "RATE_LIMIT_FAILURE", retryAfterSeconds: 5 }] },
+      },
+      "Signal RPC -32000: remote error",
+    ],
+  ] as const)(
+    "surfaces rate-limit/captcha recovery facts for %s (UNIX)",
+    async (_name, code, data, message) => {
+      const { baseUrl } = await serve((request, socket) =>
+        socket.end(frame({ id: request.id, error: { code, message: "unused", data } })),
+      );
+      await expect(send(baseUrl)).rejects.toMatchObject({ message });
+    },
+  );
+
   it.each(["request", "subscription"] as const)(
     "bounds an unanswered %s and closes its socket",
     async (mode) => {

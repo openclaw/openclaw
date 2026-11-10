@@ -236,3 +236,33 @@ it.each([
   ]);
   expect(rpc.requests[0]?.params).not.toHaveProperty(group ? "recipient" : "groupId");
 });
+
+it("surfaces rate-limit recovery facts from a native send through the shipped entry point", async () => {
+  await using rpc = await realRpc("external-native", (payload, _index, response) => {
+    response.end(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: payload.id,
+        error: {
+          code: -5,
+          message: "Failed to send message due to rate limiting",
+          data: {
+            response: {
+              results: [
+                {
+                  type: "RATE_LIMIT_FAILURE",
+                  retryAfterSeconds: 60,
+                  token: "proof-token",
+                  account: "+15550000001",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    );
+  });
+  await expect(rpc.send()).rejects.toThrow(
+    "Signal RPC -5: Failed to send message due to rate limiting (wait 60s to retry; captcha challenge required; solve one at https://signalcaptchas.org/challenge/generate.html and run `signal-cli submitRateLimitChallenge --challenge <token> --captcha <result>` to recover)",
+  );
+});

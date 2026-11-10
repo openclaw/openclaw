@@ -32,6 +32,66 @@ type SignalRpcResponse<T> = {
   id?: string | number | null;
 };
 
+/**
+ * Structured, non-personal recovery facts signal-cli returns for rate-limited
+ * sends. signal-cli raises `RateLimitErrorException` for -5 errors and attaches
+ * `data: { response: { results: [ { type: "RATE_LIMIT_FAILURE",
+ * retryAfterSeconds?, token? }, ... ] } }`; each result belongs to one
+ * recipient. We surface only the facts operators need to recover: the longest
+ * wait and whether a captcha challenge (token present) must be solved. The
+ * token itself and any recipient identifiers stay out of diagnostics.
+ */
+type SignalRateLimitRecoveryFacts = {
+  retryAfterSeconds?: number;
+  captchaRequired: boolean;
+};
+
+function describeSignalRateLimitRecovery(
+  error: SignalRpcError,
+): SignalRateLimitRecoveryFacts | null {
+  if (error.code !== -5) {
+    return null;
+  }
+  const response = isRecord(error.data) ? error.data.response : undefined;
+  const results = isRecord(response) && Array.isArray(response.results) ? response.results : [];
+  let retryAfterSeconds: number | undefined;
+  let captchaRequired = false;
+  for (const failure of results) {
+    if (!isRecord(failure) || failure.type !== "RATE_LIMIT_FAILURE") {
+      continue;
+    }
+    if (typeof failure.token === "string" && failure.token.length > 0) {
+      captchaRequired = true;
+    }
+    if (
+      typeof failure.retryAfterSeconds === "number" &&
+      Number.isFinite(failure.retryAfterSeconds)
+    ) {
+      retryAfterSeconds = Math.max(retryAfterSeconds ?? 0, failure.retryAfterSeconds);
+    }
+  }
+  if (retryAfterSeconds === undefined && !captchaRequired) {
+    return null;
+  }
+  return { retryAfterSeconds, captchaRequired };
+}
+
+/** Human-readable, token-free suffix describing rate-limit/captcha recovery, or null. */
+function signalRateLimitRecoverySuffix(error: SignalRpcError): string | null {
+  const facts = describeSignalRateLimitRecovery(error);
+  if (!facts) {
+    return null;
+  }
+  const parts: string[] = [];
+  if (facts.retryAfterSeconds !== undefined) {
+    parts.push(`wait ${Math.max(1, Math.ceil(facts.retryAfterSeconds))}s to retry`);
+  }
+  if (facts.captchaRequired) {
+    parts.push("captcha challenge required; solve one at https://signalcaptchas.org/challenge/generate.html and run `signal-cli submitRateLimitChallenge --challenge <token> --captcha <result>` to recover");
+  }
+  return parts.length > 0 ? ` (${parts.join("; ")})` : null;
+}
+
 /** Thrown when the native SSE endpoint rejects the request with a non-2xx HTTP status. */
 export class SignalSseRejectionError extends Error {
   constructor(
@@ -293,7 +353,10 @@ function result(message: RpcMessage): unknown {
     ) {
       throw new Error(`Signal RPC ${code}: quote metadata rejected (redacted)`);
     }
-    throw new Error(`Signal RPC ${code}: remote error`);
+    // Rate-limit and captcha failures carry safe, structured recovery facts in
+    // error.data; surface them without echoing remote text (which can carry PII).
+    const recoverySuffix = signalRateLimitRecoverySuffix(error);
+    throw new Error(`Signal RPC ${code}: remote error${recoverySuffix ?? ""}`);
   }
   return message.result;
 }
@@ -363,7 +426,8 @@ export async function signalRpcRequest<T = unknown>(
   if (parsed.error) {
     const code = parsed.error.code ?? "unknown";
     const msg = parsed.error.message ?? "Signal RPC error";
-    throw new Error(`Signal RPC ${code}: ${msg}`);
+    const recoverySuffix = signalRateLimitRecoverySuffix(parsed.error);
+    throw new Error(`Signal RPC ${code}: ${msg}${recoverySuffix ?? ""}`);
   }
   return parsed.result as T;
 }
