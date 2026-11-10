@@ -1599,3 +1599,31 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop)
     visibility: hidden;
   }
 }
+
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed)
+  .chat-split-view__column
+  > .chat-split-view__cell:first-child
+  .sidebar-region {
+  > .sidebar-region__header,
+  &:not(.sidebar-region--bottom, .sidebar-region--narrow) [data-region-header="side"] {
+    background: var(--sidebar-rail-surface);
+  }
+}
+
+/* The divider keeps its hit target; only its titlebar segment joins the chrome. */
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed)
+  .chat-split-view__column
+  > .chat-split-view__cell:first-child
+  .sidebar-region--desktop:not(
+    .sidebar-region--bottom,
+    .sidebar-region--narrow,
+    .sidebar-region--expanded-side
+  )
+  .sidebar-column__divider {
+  background-image: linear-gradient(
+    var(--sidebar-rail-surface) var(--desktop-header-height),
+    transparent var(--desktop-header-height)
+  );
+}

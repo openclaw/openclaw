@@ -33,6 +33,7 @@ import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
 import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
 import { readShellView, type ShellView, type ShellViewHost } from "./app-shell-view-state.ts";
+import { isNativeMacWebChromeHost } from "./native-web-chrome.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
@@ -188,6 +189,21 @@ export function ApplicationShell(props: {
             <MacosTitlebarControls
               inert={view().navDrawerOpen}
               historyOnly={view().settingsTakeover}
+              macNavigation={isNativeMacWebChromeHost() && !view().mobileNavLayout}
+              navigationExpanded={!view().navCollapsed}
+              onToggleSidebar={() => props.host.viewCallbacks.toggleSidebar()}
+              newSessionAction={() => (
+                <NewSessionLink
+                  basePath={view().context.basePath}
+                  agentId={view().selectedAgentId}
+                  class="topbar-icon-btn macos-titlebar-controls__button"
+                  icon="sessionNew"
+                  label={t("chat.runControls.newSession")}
+                  showShortcut
+                  disabledReason={view().newSessionDisabledReason}
+                  onOpen={props.host.viewCallbacks.requestOpenNewSession}
+                />
+              )}
               canGoBack={props.host.nativeHistoryState().canGoBack}
               canGoForward={props.host.nativeHistoryState().canGoForward}
             />
@@ -311,6 +327,7 @@ export function ApplicationShell(props: {
               props.host.navDrawerElement = element;
             }}
             class={["shell-nav", { "nav-drawer": view().mobileNavLayout }]}
+            onMouseDown={beginNativeWindowDragFromTopInset}
             role={view().mobileNavLayout ? "dialog" : undefined}
             aria-modal={view().mobileNavLayout && view().navDrawerOpen ? "true" : undefined}
             aria-label={view().mobileNavLayout ? t("palette.categories.navigation") : undefined}

@@ -312,6 +312,94 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   height: var(--openclaw-native-titlebar-height, 52px);
 }
 
+/* The standard macOS window keeps navigation in its continuous titlebar.
+   The existing sidebar and route outlet retain their state beneath it. */
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed, .shell--settings) {
+  --shell-native-titlebar-controls-left: var(--shell-native-titlebar-controls-inset);
+  --shell-native-titlebar-controls-width: 92px;
+  --shell-titlebar-inset: max(
+    12px,
+    calc(
+      var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
+        20px - var(--shell-nav-width)
+    )
+  );
+
+  &.shell--nav-collapsed {
+    --shell-native-titlebar-controls-width: 124px;
+  }
+
+  .shell-nav {
+    min-height: 0;
+    padding-top: var(--openclaw-native-titlebar-height, 52px);
+    background-color: var(--sidebar-rail-surface);
+    border-image: linear-gradient(
+        transparent var(--openclaw-native-titlebar-height, 52px),
+        var(--resize-handle-rest-color) 0
+      )
+      1;
+  }
+
+  .sidebar-resizer {
+    margin-top: var(--openclaw-native-titlebar-height, 52px);
+  }
+
+  .chat,
+  .chat-main__conversation-frame {
+    border-radius: 0;
+  }
+
+  .macos-titlebar-controls__button svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .shell-chrome-controls {
+    display: none;
+  }
+
+  .content:not(.content--chat) {
+    background-image: linear-gradient(
+      var(--sidebar-rail-surface) var(--openclaw-native-titlebar-height, 52px),
+      transparent var(--openclaw-native-titlebar-height, 52px)
+    );
+  }
+
+  /* Explicit personal backgrounds keep their existing pane renderer. Only the
+     default theme artwork follows the inset conversation surface. */
+  &:not([data-background-managed]) {
+    .sidebar-region > [data-region="main"] {
+      background-color: var(--sidebar-rail-surface);
+    }
+
+    .chat-main__conversation-frame {
+      background-color: var(--bg-content, var(--bg));
+      background-image: var(--app-background-image);
+      background-position: center;
+      background-size: cover;
+      background-repeat: no-repeat;
+    }
+  }
+
+  .macos-titlebar-controls::after {
+    position: fixed;
+    top: calc((var(--openclaw-native-titlebar-height, 52px) - 18px) / 2);
+    left: max(
+      var(--shell-nav-width),
+      calc(
+        var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
+          8px
+      )
+    );
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    content: "";
+    pointer-events: none;
+  }
+}
+
 .macos-titlebar-controls--history-only {
   min-width: 156px;
 }

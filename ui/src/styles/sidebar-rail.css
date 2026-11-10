@@ -848,3 +848,62 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome) {
     display: none;
   }
 }
+
+.macos-sidebar-new-session {
+  display: none;
+}
+
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed, .shell--settings) {
+  .sidebar {
+    background: transparent;
+  }
+
+  .sidebar-rail {
+    padding-top: 8px;
+    border-inline-end: 0;
+    border-image: none;
+  }
+
+  .sidebar-shell {
+    border-start-start-radius: var(--radius-lg);
+    background: var(--sidebar-bg);
+  }
+
+  .sidebar-panel-header {
+    min-height: 48px;
+    padding-left: 12px;
+  }
+
+  .sidebar-session-toolbar__collapse,
+  .sidebar-rail__create {
+    display: none;
+  }
+
+  .macos-sidebar-new-session {
+    display: block;
+    margin-bottom: 12px;
+  }
+}
+
+.macos-sidebar-new-session__link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-size: var(--control-ui-text-md);
+  text-decoration: none;
+}
+
+.macos-sidebar-new-session__link > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+
+.macos-sidebar-new-session__link:hover {
+  background: var(--bg-hover);
+}
