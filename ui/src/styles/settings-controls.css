@@ -3,7 +3,8 @@
   --segmented-surface: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   --segmented-selected: var(--bg-elevated);
   --segmented-border: color-mix(in srgb, var(--border) 50%, transparent);
-  --segmented-item-radius: calc(var(--radius-md) - 3px);
+  /* Segments sit 3px (2px pad + 1px border) inside the field-radius track. */
+  --segmented-item-radius: calc(var(--field-radius) - 3px);
 }
 
 /* Settings controls also appear outside the settings workspace: the login
@@ -14,6 +15,7 @@
    Multi-select list boxes and textareas keep their natural height. */
 .settings-row__control .btn,
 .settings-section__actions .btn,
+.agents-toolbar-actions .btn,
 .settings-section__actions .agent-select__trigger,
 .settings-group .data-table-search input,
 input.settings-input,
@@ -46,10 +48,11 @@ select.settings-select:not([multiple]) {
 }
 
 /* One segmented control. Its height is the surrounding control height, so it
-   always matches the inputs and buttons beside it; --compact is the only other
-   size, for dense menu rows. The surface keeps its 2px inset. Many-option enums
-   move whole segments to a new row, and labels only break between words. Segments
-   share any spare width, so a stretched or wrapped track never shows an empty run. */
+   always matches the inputs and buttons beside it, and so is its radius; --compact
+   is the only other size, for dense menu rows. The surface keeps its 2px inset.
+   Many-option enums move whole segments to a new row, and labels only break between
+   words. Segments share any spare width, so a stretched or wrapped track never shows
+   an empty run. */
 .settings-segmented {
   min-height: var(--settings-control-height);
   align-items: stretch;
@@ -59,7 +62,7 @@ select.settings-select:not([multiple]) {
   max-width: 100%;
   background: var(--segmented-surface);
   border: 1px solid var(--segmented-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--field-radius);
   padding: 2px;
 }
 
@@ -94,7 +97,7 @@ select.settings-select:not([multiple]) {
 
 .settings-segmented--compact > .settings-segmented__btn {
   padding: 0 6px;
-  font-size: 10px;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
 .settings-segmented > .settings-segmented__btn--active,
@@ -129,7 +132,7 @@ select.settings-select:not([multiple]) {
   gap: 2px;
   padding: 2px;
   border: 1px solid var(--segmented-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--field-radius);
   background: var(--segmented-surface);
   box-shadow: none;
 }
@@ -292,12 +295,9 @@ select.settings-select {
     --row-action-size: 32px;
   }
 
-  :root
-    :is(
-      .transcripts-filters__search,
-      .transcripts-filters__trigger,
-      .transcripts-page-menu__trigger
-    ) {
+  :root .transcripts-filters__search,
+  :root .transcripts-filters__trigger,
+  :root .transcripts-page-menu__trigger {
     --settings-control-height: var(--settings-touch-control-height);
   }
 
@@ -313,11 +313,6 @@ select.settings-select {
 
   :root .settings-segmented > .settings-segmented__btn {
     min-height: calc(var(--settings-control-height) - 6px);
-  }
-
-  :root .btn.agents-page-menu__trigger {
-    width: var(--settings-control-height);
-    height: var(--settings-control-height);
   }
 
   :root .plugin-catalog-search input {
@@ -339,18 +334,23 @@ select.settings-select {
     min-block-size: var(--settings-control-height);
   }
 
-  :root .btn.refresh-button,
+  :root .oc-icon-button.refresh-button,
+  :root .settings-section__actions .sessions-toolbar__icon.oc-icon-button {
+    --oc-icon-button-size: var(--settings-control-height);
+  }
+
   :root .settings-section .settings-section__actions .btn.btn--xs.btn--icon.channels-refresh,
-  :root .settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs {
+  :root .settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs {
     width: var(--settings-control-height);
     min-width: var(--settings-control-height);
     height: var(--settings-control-height);
     min-height: var(--settings-control-height);
   }
 
-  :root .btn:is(.cron-job-menu__trigger, .secrets-store__menu-trigger),
-  :root .plugin-editor__menu .btn.btn--icon,
-  :root openclaw-sessions-page td .icon-btn[aria-haspopup="menu"] {
+  :root .cron-job-menu__trigger,
+  :root .btn.secrets-store__menu-trigger,
+  :root .plugin-editor__menu .oc-icon-button,
+  :root openclaw-sessions-page td .session-row-menu-trigger {
     width: var(--row-action-size);
     min-width: var(--row-action-size);
     height: var(--row-action-size);

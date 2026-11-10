@@ -986,6 +986,24 @@ and differing selections are both supported configurations. This notice proposes
 no repair and does not rewrite the config; ACP turns keep their configured harness
 selection.
 
+## Saved model output caps
+
+OpenClaw's default output cap for a model with no authored, provider, or catalog
+`maxTokens` is 32768 tokens, or half the context window when that window is below
+65,536 tokens (never below 8192 unless the window is smaller). Earlier releases used
+8192, and onboarding saved 4096 (custom-provider wizard) or 8192 (self-hosted setup)
+into model rows.
+
+Doctor reports model rows under `models.providers.*.models` that still pin
+`maxTokens` to 4096 or 8192 as information (`core/doctor/legacy-output-cap`), grouped
+per provider, when the context-sized default is higher than the saved value. This
+is not a prediction that removing the value will increase the cap: a provider
+catalog limit may keep it unchanged or lower it. Doctor skips providers with a
+provider-level `maxTokens` and Mistral, whose 8192 cap is intentional. A saved cap may
+be deliberate, so Doctor proposes no repair and never rewrites it. Remove
+`maxTokens` only if you want the catalog limit or default instead; keep the saved
+value if your server needs it.
+
 ## Missing plugins during migration
 
 Doctor owns deferred plugin migrations. Normal CLI commands, Gateway startup,
@@ -1322,7 +1340,7 @@ against the current SQLite owners before the import can rename profiles.
 
     Doctor preserves model choices that a provider still serves. A model's name, age, or absence from the bundled catalog is not evidence of retirement. Retirement repairs require an explicit provider catalog retirement declaration, with any declared route conditions satisfied. Missing retirement or required route evidence leaves the choice unchanged. Canonical spelling and provider-identity migrations still apply.
 
-    When model migrations change a configured consumer between subscription/OAuth and metered API-key billing, Doctor reports the consumer, model, and old and new routes after saving the config. The warning also appears in the diagnostic log and update run record. A later Doctor run does not repeat it when the resolved billing route is unchanged. Missing credentials are not treated as proof of a billing change.
+    When model migrations change a configured consumer between subscription/OAuth, metered API-key, and a CLI runtime's own credentials, for any provider, Doctor reports the consumer, model, and old and new routes after saving the config. The warning also appears in the diagnostic log and update run record. A later Doctor run does not repeat it when the resolved billing route is unchanged. Missing credentials are not treated as proof of a billing change.
 
     During an update, Doctor records model-retirement repairs that must wait until plugin installation finishes. The updated OpenClaw completes those repairs after plugin convergence, even when no plugin version changed. `openclaw update status` records their completion so retired subscription models do not fall through to metered API credentials.
 

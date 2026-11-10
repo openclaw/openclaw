@@ -767,7 +767,7 @@ it("reuses raw compiler symbols across graph phases without freezing forwarded b
         return observed;
       },
     });
-    const scan = (body: string) =>
+    const scan = (body: string, observer?: InspectOptions[5]) =>
       inspectDatabaseWorkerBoundaries(
         process.cwd(),
         new Map(
@@ -786,8 +786,26 @@ export function ${first}() { return read(); }`,
         undefined,
         undefined,
         false,
+        observer,
       );
-    expectClosed(scan("readKernel(); return readKernel();"));
+    const phases: string[] = [];
+    expectClosed(
+      scan("readKernel(); return readKernel();", (phase) => {
+        phases.push(phase);
+        throw new Error("observer failed");
+      }),
+    );
+    expect(phases).toEqual([
+      "inputs",
+      "project",
+      "sources-registration",
+      "closure-expansion",
+      "binding-forwarding",
+      "reference-prefetch",
+      "caller-classification",
+      "graph-classification",
+      "close",
+    ]);
     expect(scan("readKernel(); missing(() => readKernel());").operations.has(kernelFile)).toBe(
       false,
     );
@@ -810,6 +828,16 @@ export function ${first}() { return read(); }`,
       false,
     );
     expect(result.violations).toHaveLength(consumers.length);
+    const credentialResult = inspectSources({
+      "src/state/user-model-accounts.ts": "export function connectUserModelAccount() {}",
+      "src/credential-consumer.ts": `
+        const accounts = await import('./state/user-model-accounts.js');
+        accounts.connectUserModelAccount();
+      `,
+    });
+    expect(credentialResult.violations).toEqual([
+      expect.stringContaining("unreviewed personal credential writer reference"),
+    ]);
     expect(batches.every((nodes) => nodes.length <= 256)).toBe(true);
     expect(
       batches.some((nodes) => new Set(nodes.map((node) => node.getSourceFile().fileName)).size > 1),

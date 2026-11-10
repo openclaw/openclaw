@@ -49,19 +49,22 @@ public struct OpenClawReminderPayload: Codable, Sendable, Equatable {
     public var dueISO: String?
     public var completed: Bool
     public var listName: String?
+    public var notes: String?
 
     public init(
         identifier: String,
         title: String,
         dueISO: String? = nil,
         completed: Bool,
-        listName: String? = nil)
+        listName: String? = nil,
+        notes: String? = nil)
     {
         self.identifier = identifier
         self.title = title
         self.dueISO = dueISO
         self.completed = completed
         self.listName = listName
+        self.notes = notes
     }
 }
 

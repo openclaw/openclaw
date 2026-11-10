@@ -13,9 +13,15 @@ const roster = vi.hoisted(() => ({
   agents: [{ id: "ops" }, { id: "research" }],
 }));
 
-// Roster enrichment reads workspaces and model state; authorization remains real.
+// mock-isolation: Roster enrichment reads workspaces and model state; authorization remains real.
 vi.mock("../session-utils.js", () => ({
-  listAgentsForGateway: async () => roster,
+  listAgentsForGateway: async (cfg: OpenClawConfig) => ({
+    ...roster,
+    agents: roster.agents.map((agent) => {
+      const mode = cfg.agents?.entries?.[agent.id]?.newSessionPermissionMode;
+      return mode ? { ...agent, newSessionPermissionMode: mode } : agent;
+    }),
+  }),
 }));
 
 function roleConfig(agents: GatewayOperatorRoleDefinition["agents"]): OpenClawConfig {
@@ -107,4 +113,29 @@ test("agents.list applies role changes made while catalog preparation is pending
   cfg = roleConfig(["research"]);
   released.resolve();
   await response;
+});
+
+test.each([
+  ["operator.write", "workspace"],
+  ["operator.admin", "full"],
+] as const)("agents.list presents the attended default for %s", async (scope, mode) => {
+  const cfg = roleConfig("*");
+  cfg.agents!.entries!.ops!.newSessionPermissionMode = "full";
+  cfg.gateway!.roles!.definitions!.reader!.scopes = ["operator.read", scope];
+  const client = readerClient();
+  client.connect.scopes = ["operator.read", scope];
+  const respond = await callAgentHandler(
+    expectDefined(agentsHandlers["agents.list"], "agents.list handler"),
+    "agents.list",
+    {},
+    { client, context: { getRuntimeConfig: () => cfg } as GatewayRequestContext },
+  );
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({
+      agents: [{ id: "ops", newSessionPermissionMode: mode }, { id: "research" }],
+    }),
+    undefined,
+  );
+  expect(roster.agents[0]).not.toHaveProperty("newSessionPermissionMode");
 });

@@ -62,9 +62,24 @@ An outcome the yield already recorded stays: a collector an earlier version left
 `ok` settles as done with the reply its yielded turn ended on, the same result a
 collector that yields now gets. Only a run with no recorded outcome settles as an
 `error` that says why, and its collector completion carries
-`reason: "yielded_without_result"`. Every other paused run stays continuable however long it has been
-paused: a declared message wait, a leaf that an earlier version left paused, and an
-orchestrator waiting on descendants are not bounded by this settlement. A kill
+`reason: "yielded_without_result"`. A declared message wait belongs to its
+requester session across turns until a watched continuation claims it. A claimed
+wait closes with a recorded error when its requester task finishes. Completion
+follows an adopted execution of that task and retains its committed end when a
+later turn replaces the session row. Unrelated pause notices and tool-handoff
+turns do not abandon the waiting child. Missing or archived requester sessions
+close both claimed and unclaimed waits, including restored waits. The sweeper
+also reconciles claims whose requester finished before the child parked.
+Waiting for a live requester or owned descendants has no elapsed-time limit.
+The yielded batch retains the original requester run ID after releasing its
+execution binding. If completion delivery permanently fails without admitting a
+successor, settlement closes that exact parked lifecycle with a recorded error.
+A newer turn, Stop, or reset rejects the stale terminal write.
+Older batches without that run ID record the same delivery-failure notice without
+changing the current lifecycle: a replacement turn may already own it. Their
+failure notice identifies the batch, rather than guessing its original writer.
+A leaf that an earlier version left paused without a recorded wait keeps its
+existing continuation behavior. A kill
 claim on a paused run is never settled over; cancellation stays with the kill path.
 
 Session rows show a continuable paused run as `subagentRunState: "paused"`

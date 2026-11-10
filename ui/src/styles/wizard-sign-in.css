@@ -27,18 +27,17 @@
 }
 
 .wizard-sign-in__ring {
+  --spinner-art: var(--spinner-mask-large);
   position: absolute;
   inset: 0;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask-large);
   border-radius: 50%;
   animation: btn-spinner-spin 1.2s linear infinite;
 }
 
 .wizard-sign-in__title {
   margin: 0;
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
   line-height: 1.3;
 }
 
@@ -47,7 +46,7 @@
   white-space: pre-line;
   overflow-wrap: anywhere;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.5;
 }
 
@@ -68,7 +67,7 @@
   border-style: solid;
   background: var(--bg);
   font-family: var(--mono);
-  font-size: 28px;
+  font-size: calc(28px * var(--control-ui-text-scale));
 }
 
 .wizard-sign-in__actions {
@@ -82,7 +81,7 @@
 .wizard-sign-in__note {
   max-width: 340px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
 }
 

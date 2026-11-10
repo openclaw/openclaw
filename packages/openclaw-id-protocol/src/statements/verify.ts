@@ -1,5 +1,5 @@
 // Signature and authority verification for signed statements.
-import type { Ed25519PublicKey } from "../keys.js";
+import { formatEd25519PublicKey, rawPublicKey, type Ed25519PublicKey } from "../keys.js";
 import { hasValidSignature } from "./envelope.js";
 import type {
   OwnerCapability,
@@ -47,6 +47,13 @@ export type VerifyErrorCode =
   | "caps_escalation"
   | "not_yet_valid"
   | "root_mismatch"
+  /**
+   * The pinned root was replaced by an owner reset that the claw's K_gw vouched for. Not an
+   * attack: the client dials nothing, keeps no pin and asks the user to set the browser up again.
+   */
+  | "owner_reset"
+  /** A root reset whose new binding does not keep K_srv, K_gw and the reset's binding_seq. */
+  | "reset_mismatch"
   | "wrong_claw"
   | "host_mismatch"
   | "rollback"
@@ -72,6 +79,7 @@ export type OwnerSignedType =
   | "OwnerDeviceCert"
   | "ServerBinding"
   | "InviteCap"
+  | "NodeInviteCap"
   | "MembershipChange"
   | "Revocation";
 
@@ -83,6 +91,7 @@ const REQUIRED_CAPABILITY: Record<
 > = {
   OwnerDeviceCert: "approve_device",
   InviteCap: "invite",
+  NodeInviteCap: "invite",
   MembershipChange: "manage_members",
   Revocation: null,
 };
@@ -161,12 +170,45 @@ export async function verifyMembershipSnapshot(
   return { ok: true, statement, authority: { kind: "gateway" } };
 }
 
+/**
+ * Verifies a RootReset's signature against a verified ServerBinding: signed by that binding's
+ * K_gw, for the same claw. `verifyRootReset` (reset.ts) checks the rest of the succession.
+ */
+export async function verifyRootResetSignature(
+  statement: SignedStatement<"RootReset">,
+  binding: ServerBindingBody,
+): Promise<VerifyResult<"RootReset">> {
+  if (statement.signer !== binding.k_gw) {
+    return failure("wrong_signer", "root reset is not signed by the binding's K_gw");
+  }
+  if (!(await hasValidSignature(statement))) {
+    return failure("bad_signature", "envelope signature does not verify");
+  }
+  if (statement.body.claw_id !== binding.claw_id) {
+    return failure("wrong_claw", "root reset is for another claw");
+  }
+  return { ok: true, statement, authority: { kind: "gateway" } };
+}
+
 /** Verifies that an InviteRedemption is self-signed by the device key it names. The proof is checked in invites.ts. */
 export async function verifyInviteRedemptionSignature(
   statement: SignedStatement<"InviteRedemption">,
 ): Promise<VerifyResult<"InviteRedemption">> {
   if (statement.signer !== statement.body.device_pub) {
     return failure("wrong_signer", "redemption must be signed by its own device key");
+  }
+  if (!(await hasValidSignature(statement))) {
+    return failure("bad_signature", "envelope signature does not verify");
+  }
+  return { ok: true, statement, authority: { kind: "self" } };
+}
+
+/** A node redemption proves possession of the exact W it asks to admit. */
+export async function verifyNodeRedemptionSignature(
+  statement: SignedStatement<"NodeRedemption">,
+): Promise<VerifyResult<"NodeRedemption">> {
+  if (statement.signer !== formatEd25519PublicKey(rawPublicKey(statement.body.peer_key))) {
+    return failure("wrong_signer", "node redemption must be signed by its own peer key");
   }
   if (!(await hasValidSignature(statement))) {
     return failure("bad_signature", "envelope signature does not verify");

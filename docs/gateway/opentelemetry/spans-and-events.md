@@ -74,11 +74,24 @@ Omitting the option preserves prompt statistics for interested subscribers.
 - `openclaw.session.stuck`
   - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`
 - `openclaw.context.assembled`
-  - `openclaw.prompt.size`, `openclaw.history.size`, `openclaw.context.tokens`, `openclaw.errorCategory` (no prompt, history, response, or session-key content)
+  - `openclaw.prompt.size`, `openclaw.history.size`, `openclaw.context.tokens`, `openclaw.errorCategory` (no prompt, history, or response content; session identity only with `captureContent: true`, see [Session identity](/gateway/opentelemetry/privacy-and-trace-context#session-identity))
 - `openclaw.tool.loop`
   - `openclaw.toolName`, `openclaw.loop.level`, `openclaw.loop.action`, `openclaw.loop.detector`, `openclaw.loop.count`, optional `openclaw.loop.paired_tool`, optional `openclaw.agent` (no loop messages, params, or tool output)
 - `openclaw.memory.pressure`
   - `openclaw.memory.level`, `openclaw.memory.reason`, `openclaw.memory.rss_bytes`, `openclaw.memory.heap_used_bytes`, `openclaw.memory.heap_total_bytes`, `openclaw.memory.external_bytes`, `openclaw.memory.array_buffers_bytes`, optional `openclaw.memory.threshold_bytes`/`openclaw.memory.rss_growth_bytes`/`openclaw.memory.window_ms`
+
+Run-scoped spans (run, message and prompt processing, model call, model usage,
+harness, tool execution, and skill use) additionally carry
+`gen_ai.conversation.id` and `openclaw.session.id` — the session id, so trace
+backends group every turn of a session into one conversation — but only
+while `diagnostics.otel.captureContent` is `true`; the attributes are absent
+by default and never label metrics. The value is the session id, not the
+session key: a `/new` reset clears history but preserves the durable session
+id, so reset continuations stay grouped in the same backend conversation, and
+a fresh id arises when a session is first created. The raw key (which can
+embed channel peer ids) is
+never exported. See
+[privacy and trace context](/gateway/opentelemetry/privacy-and-trace-context#session-identity).
 
 When content capture is explicitly enabled, model and tool spans can also
 include bounded, redacted `openclaw.content.*` attributes for the specific
@@ -113,7 +126,9 @@ payloads.
 **Upgrade note:** if you already run with `diagnostics.otel.captureContent:
 true`, these message and run span attributes are new — your existing setting
 now also exports this prompt and reply content with no further configuration
-change. Nothing new is exported while `captureContent` is unset or `false`.
+change, and stamps `gen_ai.conversation.id` / `openclaw.session.id` (the session
+id) on run-scoped spans. Nothing new is exported while `captureContent` is
+unset or `false`.
 
 ## Diagnostic event catalog
 
@@ -201,7 +216,9 @@ The Gateway's `/tmp/openclaw/openclaw-YYYY-MM-DD.log` JSONL file and
 `diagnostics.stability` do not expose trusted core usage events. The
 diagnostics-otel plugin converts them to metrics such as `openclaw.tokens` and
 `openclaw.cost.usd` and to `openclaw.model.usage` spans; those usage metrics
-and spans intentionally omit session identifiers.
+intentionally omit session identifiers, and the spans omit them unless
+`diagnostics.otel.captureContent` is `true` (see
+[Session identity](/gateway/opentelemetry/privacy-and-trace-context#session-identity)).
 
 Completed memory-flush and Skill Workshop review inference records its own usage
 and available cost estimate. These internal runs do not add their usage to the

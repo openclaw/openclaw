@@ -388,6 +388,9 @@ export class CommandPaletteState {
       this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
       this.mentionMenu.update(element, "trigger");
     }
+    if (input.attachments?.length) {
+      this.draft.adoptAttachments(input.attachments);
+    }
     if (input.attachmentFiles?.length) {
       this.draft.adoptAttachmentFiles(input.attachmentFiles, input.submitRequested);
     } else if (input.submitRequested) {

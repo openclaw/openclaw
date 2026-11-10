@@ -25,6 +25,54 @@ follow [trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-r
 for plugin source inputs and the matching core evidence handoff. It does not use
 the shared publish parent or authorize ClawHub publication.
 
+### Audit, bind, or revoke a plugin npm trusted publisher
+
+Use npm 11.15.0 or newer; `pnpm exec npm` selects this checkout's pinned npm.
+The operator needs package write access, account-level 2FA, and supported npm
+authentication. The package must already exist, so a first-package bootstrap
+still follows the approved token route before adding its trusted publisher.
+Bypass-2FA granular tokens and legacy basic authentication cannot manage trust.
+
+List the package's current binding and retain its ID for any revocation:
+
+```bash
+pnpm exec npm trust list <package-name> --json
+```
+
+Do not infer a binding from package metadata or a previously successful release.
+The same state is visible at npmjs.com → the package → **Settings** → **Trusted
+publishing**.
+
+Create the exact, case-sensitive OpenClaw plugin publication binding:
+
+```bash
+pnpm exec npm trust github <package-name> \
+  --repo=openclaw/openclaw \
+  --file=plugin-npm-release.yml \
+  --env=npm-publish \
+  --allow-publish
+```
+
+The workflow filename is the filename only, without `.github/workflows/`.
+`--allow-publish` is required because this workflow uses direct `npm publish`;
+it does not require staged publishing or separate `npm dist-tag` permission.
+npm does not validate the OIDC fields when the binding is created. A new binding
+expires unless its first successful publish occurs within two days, so create it
+only when the package is ready for its approved first OIDC publication.
+
+A binding cannot be edited. To replace or revoke one, first copy `<trust-id>`
+from `npm trust list`, then run:
+
+```bash
+pnpm exec npm trust revoke <package-name> --id=<trust-id>
+```
+
+List the package again to verify revocation. For replacement, create the exact
+binding above and run the read-only trusted-publisher exchange below before
+publication is dispatched or redispatched. Revocation alone does not authorize
+a token fallback or publication retry. Repeat these operations for every package
+in the selected release roster because npm stores trust per package.
+
 Publication promotes previously qualified bytes. Bind the successful Full
 Release Validation manifest, exact target SHA, successful attempt, and npm
 preflight artifact identities. Current manifests contain npm qualification, so
@@ -157,6 +205,30 @@ packages; its success confirms authentication only, not publication. Keep
 packages recorded as `npm-token-bootstrap` on the approved
 [first-package route](first-package.md); their recovery does not wait on this
 exchange. If no recovered package uses `npm-oidc`, skip this check.
+
+A regular release parent with core npm publication enabled may continue when one or more
+`npm-oidc` matrix entries return the exact npm `ENEEDAUTH` code. Each deferred
+entry uploads a `plugin-npm-deferred-auth-*` checkpoint. Treat every checkpoint
+as an unpublished package, not a successful plugin publication. After the npm
+trusted-publisher binding is repaired, run the read-only exchange above for all
+deferred package names, then publish only that selected set:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref release-publish/<tooling-sha12>-<epoch> \
+  -f preflight_only=false \
+  -f publish_scope=selected \
+  -f plugins=<comma-separated-deferred-package-names> \
+  -f ref=<exact-40-character-release-sha> \
+  -f npm_dist_tag=default
+```
+
+Use the checkpoint's exact protected workflow ref, source SHA, package identity,
+and version. Omit parent publication inputs: this direct recovery has its own
+`npm-release` approval and remains valid after core publication completes.
+Reconcile every checkpoint independently when several packages were deferred.
+An error other than exact `ENEEDAUTH`, a direct recovery failure, or any
+extended-stable failure remains blocking and must not use this route.
 
 For extended-stable recovery, use the same read-only exchange from protected
 tooling, but preserve that track's full-roster and frozen-source boundaries:

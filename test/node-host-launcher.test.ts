@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -239,11 +240,13 @@ it.each(["commit", "disconnect"])(
     child.stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString();
     });
-    const closed = once(child, "close");
+    // Locally disconnecting IPC need not emit the aggregate child "close" event.
+    const exited = once(child, "exit");
+    const joined = Promise.all([exited, finished(child.stdout), finished(child.stderr)]);
     try {
       const ready = await Promise.race([
         once(child, "message").then(([message]) => message),
-        closed.then(([code]) => ({ exitedBeforeHandoff: code })),
+        exited.then(([code]) => ({ exitedBeforeHandoff: code })),
       ]);
       expect(ready, stderr).toEqual({
         type: "openclaw.node.resume-ready",
@@ -255,14 +258,14 @@ it.each(["commit", "disconnect"])(
       } else {
         child.disconnect();
       }
-      const [code] = await closed;
+      const [[code]] = await joined;
       expect(code).toBe(handoff === "commit" ? 0 : 1);
       expect(output).toBe(handoff === "commit" ? '{"entered":true}\n' : "");
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
       }
-      await closed;
+      await joined;
     }
   },
 );
@@ -376,12 +379,14 @@ process.exit(0);
     expect(result.stderr).toContain("requires a supervisor connection");
   });
 
-  it("restarts with paired arguments and revokes managed state when the healthy candidate disconnects", async () => {
-    const f = await fixture(`
+  it.each([[["connect"]], [["node", "join"]]])(
+    "%j restarts with paired arguments and revokes managed state when the healthy candidate disconnects",
+    async (command) => {
+      const f = await fixture(`
 await setNodeHostLauncherRestartArguments(['node', 'run', '--display-name', 'paired']);
 ${requestUpdate}
 `);
-    const candidate = await f.release(`
+      const candidate = await f.release(`
 if (!process.env.TEST_CANDIDATE_BOOTSTRAPPED) {
   await requestNodeHostLauncherBootstrap({ execArgv: [...process.execArgv, '--disable-warning=ExperimentalWarning'], env: {...process.env, TEST_CANDIDATE_BOOTSTRAPPED:'1'} });
   process.exit(0);
@@ -398,22 +403,23 @@ setTimeout(async () => {
   }, 30);
 }, 30);
 `);
-    const result = await completed(
-      f.update(candidate, {}, ["connect", "one-use-code", "--profile", "work", "--no-color"]),
-    );
-    const lines = jsonLines(result.stdout);
-    expect(lines[0]).toMatchObject({ ok: true });
-    expect(lines[1]).toMatchObject({
-      argv: ["--profile", "work", "--no-color", "node", "run", "--display-name", "paired"],
-      cwd: f.base,
-      state: f.state,
-      disconnectedState: null,
-      execArgv: ["--disable-warning=ExperimentalWarning"],
-    });
-    expect(lines[1].first).toBe(lines[1].second);
-    await expectSelection(f.current, candidate.prefix);
-    await expectMissing(f.lock);
-  });
+      const result = await completed(
+        f.update(candidate, {}, [...command, "one-use-code", "--profile", "work", "--no-color"]),
+      );
+      const lines = jsonLines(result.stdout);
+      expect(lines[0]).toMatchObject({ ok: true });
+      expect(lines[1]).toMatchObject({
+        argv: ["--profile", "work", "--no-color", "node", "run", "--display-name", "paired"],
+        cwd: f.base,
+        state: f.state,
+        disconnectedState: null,
+        execArgv: ["--disable-warning=ExperimentalWarning"],
+      });
+      expect(lines[1].first).toBe(lines[1].second);
+      await expectSelection(f.current, candidate.prefix);
+      await expectMissing(f.lock);
+    },
+  );
 
   it("keeps an authenticated candidate serving when its selector cannot be persisted", async () => {
     const f = await fixture();

@@ -2,10 +2,11 @@
  * Real isolated Gateway RPC/cron proof with a loopback model and a scheduling
  * barrier at native transcript preparation. No production seam or Team data.
  * node --import ./scripts/tsx.mjs scripts/perf/session-event-config-reload-gateway.ts
- *   --output <new-directory> [--expect revoked]
+ *   --output <new-directory> [--expect revoked] [--change mcp|plugin]
  * Run from each pinned checkout; child workers use that same source tree.
  * The model first establishes next_check, then the next attempt is held while
- * config.patch changes an unrelated MCP server. Capture the failed baseline too.
+ * config.patch changes an unrelated MCP server, or enables the bundled Advisor plugin
+ * as the Labs switch does. Capture the failed baseline too.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -30,9 +31,15 @@ const { values } = parseArgs({
   options: {
     output: { type: "string" },
     expect: { type: "string", default: "retained" },
+    change: { type: "string", default: "mcp" },
   },
 });
 assert(values.output);
+assert(values.change === "mcp" || values.change === "plugin");
+const change =
+  values.change === "plugin"
+    ? { plugins: { entries: { advisor: { enabled: true } } } }
+    : { mcp: { servers: { unrelated: { enabled: false, command: "true" } } } };
 const output = path.resolve(values.output);
 await mkdir(output);
 const source = fileURLToPath(new URL("../../", import.meta.url));
@@ -103,6 +110,7 @@ const instance = await createOpenClawTestInstance({
   env: {
     ...Object.fromEntries(listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined])),
     OPENCLAW_CONFIG_RELOAD_FIXTURE_GATE: `${baseUrl}/gate`,
+    OPENCLAW_CONFIG_RELOAD_FIXTURE_CHANGE: values.change,
     OPENCLAW_SKIP_CRON: "0",
     OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
     OPENCLAW_AGENT_RUNTIME: undefined,
@@ -139,7 +147,12 @@ try {
       entries: { main: { workspace: instance.state.workspaceDir } },
     },
     models: { providers: { [provider.providerId]: provider.config } },
-    plugins: { enabled: false },
+    // The plugin scenario starts with the subsystem on and Advisor off, so the patch
+    // performs the same activation as the Labs switch.
+    plugins:
+      values.change === "plugin"
+        ? { enabled: true, allow: ["advisor"], entries: { advisor: { enabled: false } } }
+        : { enabled: false },
     skills: { load: { watch: false } },
     tools: { allow: ["automations"], codeMode: { enabled: false }, toolSearch: false },
     cron: { enabled: true },
@@ -192,17 +205,30 @@ try {
     jobs.map((job) => client!.request<CronJob>("cron.get", { id: job.id })),
   );
   console.log("Two preparation gates held");
+  const advisorState = async () =>
+    (
+      await client!.request<{ plugins: Array<{ id: string; runtime?: { state?: string } }> }>(
+        "plugins.list",
+        {},
+      )
+    ).plugins.find((plugin) => plugin.id === "advisor")?.runtime?.state;
+  const advisorBefore = values.change === "plugin" ? await advisorState() : undefined;
+  assert.notEqual(advisorBefore, "active", "Advisor must start inactive");
   const config = await client.request<{ hash: string }>("config.get", {});
   const patchStarted = performance.now();
   const patch = await client.request(
     "config.patch",
     {
       baseHash: config.hash,
-      raw: JSON.stringify({ mcp: { servers: { unrelated: { enabled: false, command: "true" } } } }),
+      raw: JSON.stringify(change),
     },
     { timeoutMs: 90_000 },
   );
   const patchMs = performance.now() - patchStarted;
+  if (values.change === "plugin") {
+    await wait(async () => (await advisorState()) === "active", "Advisor activation");
+  }
+  const advisorAfter = values.change === "plugin" ? await advisorState() : undefined;
   hold = false;
   for (const response of held.splice(0)) {
     response.end("patched");
@@ -230,6 +256,8 @@ try {
     before,
     patch,
     patchMs,
+    advisorBefore,
+    advisorAfter,
     outcomes,
     after,
     requests,
@@ -257,13 +285,7 @@ try {
         "Unrelated reload must preserve schedule pacing",
       );
     } else {
-      assert(
-        instance
-          .logs()
-          .includes(
-            "Session target preparation outlived its attempt: Error: admitted run authority is no longer active | Session event configuration changed",
-          ),
-      );
+      assert(instance.logs().includes("Session event configuration changed; inspect the run"));
     }
   }
 } finally {

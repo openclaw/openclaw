@@ -105,14 +105,14 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.speak", "talk", "operator.talk", "<=2026.7"],
   ["talk.mode", "talk-mode", "operator.talk", "<=2026.7"],
   ["commands.list", "commands", "operator.read", "<=2026.7"],
-  // Wait for identity hydration before caching the caller's personal model catalog.
+  // Profile authorization and catalog publication own readiness for this read.
   [
     "models.list",
     "models",
     "operator.read",
     "<=2026.7",
     {
-      ...PROFILE_STARTUP,
+      ...PROFILE_DEPENDENT,
       shareKey: modelsListShareKey,
       shareMaxAgeMs: 1_000,
       shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
@@ -161,7 +161,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["taskSuggestions.dismiss", "task-suggestions", "operator.write", "<=2026.7"],
   ["environments.list", "environments", "dynamic", "2026.7"],
   ["environments.status", "environments", "operator.read", "2026.7"],
-  ["worktrees.list", "worktrees", "operator.read", "2026.7"],
+  // Lists every managed worktree's host path, repo root and branch across sessions.
+  ["worktrees.list", "worktrees", "operator.write", "2026.7"],
   // Read-only git probe, but it accepts arbitrary host paths; keep it at the
   // same bar as starting worktree sessions instead of plain read scope.
   ["worktrees.branches", "worktrees", "operator.write", "2026.7"],
@@ -280,6 +281,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["device.token.revoke", "devices", "operator.pairing", "<=2026.7"],
   ["device.pair.setupCode", "device-pair-setup", "operator.admin", "<=2026.7", UNADVERTISED],
   ["device.pair.setupStatus", "device-pair-setup", "operator.admin", "2026.8", UNADVERTISED],
+  ["device.pair.code", "device-pair-code", "operator.admin", "2026.11", UNADVERTISED],
   ["node.rename", "nodes", "operator.pairing", "<=2026.7"],
   ["node.list", "nodes", "operator.read", "<=2026.7"],
   ["node.describe", "nodes", "operator.read", "<=2026.7"],
@@ -313,11 +315,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "cron",
     "operator.read",
     "<=2026.7",
-    {
-      shareKey: operatorReadShareKey,
-      shareMaxAgeMs: 1_000,
-      shareInvalidationEvents: ["cron"],
-    },
+    { shareKey: operatorReadShareKey, shareMaxAgeMs: 1_000, shareInvalidationEvents: ["cron"] },
   ],
   ["cron.scratch.get", "cron", "operator.admin", "2026.7"],
   ["cron.scratch.set", "cron", "operator.admin", "2026.7"],
@@ -509,7 +507,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   [
     "projects.searchRemote",
     "projects",
-    "operator.read",
+    // Results open through projectGitUrl with the Gateway's GitHub identity.
+    "operator.write",
     "2026.8",
     { description: "Search GitHub repositories that can be cloned as managed projects." },
   ],
@@ -565,7 +564,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     SIDECAR_CONTROL_PLANE_WRITE,
   ],
   ["users.github.disconnect", "users", "operator.read", "2026.8", SIDECAR_CONTROL_PLANE_WRITE],
-  ["sessions.github.options", "sessions-github", "operator.read", "2026.8", { startup: true }],
+  ["sessions.github.options", "sessions-github", "operator.read", "2026.8"],
   ["sessions.github.status", "sessions-github", "operator.read", "2026.8", { startup: true }],
   [
     "sessions.github.confirm",
@@ -576,7 +575,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ],
   ["sessions.title.prepare", "sessions-title", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
   ["users.mentionable", "users-mentionable", "operator.read", "2026.8", PROFILE_STARTUP],
-  ["mentions.list", "mentions", "operator.read", "2026.8", { startup: true }],
+  ["mentions.list", "mentions", "operator.read", "2026.8"],
   // Dismissal only changes the caller's temporary Inbox, not session or shared state.
   ["mentions.dismiss", "mentions", "operator.read", "2026.8", { startup: true }],
   // Meeting notes share the trusted operator domain, like workspace/session reads.
@@ -749,5 +748,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
   ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
   ["sessions.catalog.resolve", "session-catalog", "operator.read", "2026.10"],
+  ["openclawId.status", "openclaw-id", "operator.read", "2026.11"],
+  ["openclawId.people", "openclaw-id", "operator.admin", "2026.11"],
+  ["openclawId.authority", "openclaw-id", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
   ["chat.steerNow", "chat", "operator.write", "2026.11", OWN_SESSION_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

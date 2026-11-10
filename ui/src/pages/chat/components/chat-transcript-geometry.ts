@@ -129,11 +129,9 @@ export function isTranscriptRangeCommitted(
     return (
       node !== undefined &&
       inner?.contains(node) === true &&
-      // CSSOM rounds fractional lengths; a subpixel serialization difference is committed.
+      // This records the committed size without feeding it back into the row's styles.
       (node.dataset.streamingRow === "true" ||
-        Math.abs(
-          Number.parseFloat(node.style.getPropertyValue("contain-intrinsic-block-size")) - row.size,
-        ) < 1)
+        Math.abs(Number.parseFloat(node.dataset.rowSize ?? "") - row.size) < 1)
     );
   });
 }
@@ -193,11 +191,16 @@ export function measureTranscriptRow(
     const size = box?.blockSize ?? measureElement(element, entry, virtualizer);
     // A deferred zero can describe a hidden pane or an earlier parked row.
     // Preserve that geometry even if the pane or row is visible again.
-    if (size !== 0 || (box?.inlineSize !== 0 && virtualizer.scrollElement?.clientHeight !== 0)) {
+    if (
+      size !== 0 ||
+      (box?.inlineSize !== 0 &&
+        virtualizer.scrollElement?.clientHeight !== 0 &&
+        element.offsetHeight === 0)
+    ) {
       return size;
     }
   }
-  // Parked rows have no layout box. Retain their geometry until preparation or
+  // Parked rows have no visible extent. Retain their geometry until preparation or
   // presentation resumes, also while a whole pane is hidden or awaiting layout.
   const index = virtualizer.indexFromElement(element);
   return (

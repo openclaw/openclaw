@@ -57,7 +57,9 @@ export function resolveUiTypeScriptPath(file, cwd = repoRoot) {
   if (!/\.tsx?$/u.test(file)) {
     return file;
   }
-  const inventory = getRepositoryFileInventory(cwd, [dirname(file)]);
+  // UI ownership imports resolve many directories from the same source tree.
+  const scope = file.startsWith("ui/src/") ? "ui/src" : dirname(file);
+  const inventory = getRepositoryFileInventory(cwd, [scope]);
   const exists = (candidate) =>
     inventory ? inventory.has(candidate) : existsSync(resolve(cwd, candidate));
   if (exists(file)) {
@@ -80,6 +82,7 @@ export const uiTimingTestFiles = ["ui/src/components/markdown.progress.node.test
 // These files launch Playwright from Node; all other .browser tests run in Chromium.
 export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/pages/chat/chat-responsive.browser.test.ts",
+  "ui/src/pages/chat/chat-rhythm-alignment.browser.test.ts",
   "ui/src/pages/chat/chat-search-layout.browser.test.ts",
   "ui/src/pages/chat/chat-footer-layout.browser.test.ts",
   "ui/src/pages/chat/chat-message-footer-actions.browser.test.ts",
@@ -88,9 +91,12 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/components/form-controls.browser.test.ts",
   "ui/src/components/sidebar-footer-layout.browser.test.ts",
   "ui/src/styles/corner-shape.browser.test.ts",
+  "ui/src/styles/settings-rhythm.browser.test.ts",
+  "ui/src/styles/page-toolbar-rhythm.browser.test.ts",
   "ui/src/styles/cursor-policy.browser.test.ts",
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
+  "ui/src/styles/reduced-motion.browser.test.ts",
   "ui/src/styles/incognito-shade.browser.test.ts",
   "ui/src/styles/forced-colors-indicators.browser.test.ts",
   "ui/src/styles/sr-only.browser.test.ts",
@@ -139,8 +145,11 @@ export function isUiTestTarget(relative) {
 }
 
 export const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/browser-pair-code.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
+  "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+  "ui/src/e2e/guest-typing.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
   "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
@@ -158,6 +167,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
+  "ui/src/e2e/model-add-provider-to-chat.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-connection-check.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-key-save-check.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
@@ -172,6 +182,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-html-csp.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-provider-failure-cause.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-long-turn.real-gateway.e2e.test.ts",
@@ -250,6 +261,7 @@ export const uiE2ePrebuiltParallelTestFiles = [
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
+  "ui/src/e2e/model-add-provider-to-chat.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-connection-check.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-key-save-check.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-provider-remove-in-use.real-gateway.e2e.test.ts",

@@ -234,7 +234,7 @@ suite.define(() => {
           onTestFinished(sharingModule.release);
         } else {
           await page.route(new URL("index.html", suite.server.baseUrl).href, async (route) => {
-            if (route.request().method() === "HEAD") {
+            if (route.request().headers()["x-openclaw-reachability-probe"] === "1") {
               documentProbes += 1;
               if (!documentAvailable) {
                 await route.fulfill({ status: 503 });

@@ -209,9 +209,9 @@ export type ReplyToolAuthorityPreparation = {
 export type ReplyBackendMessageInjectionV2 = {
   readonly version: 2;
   isAvailable(): boolean;
-  /** Tool-only interruption for an exact message still owned by the steering queue. */
+  /** Tool-only interruption for a captured input; the controller owns queued followup custody. */
   steerNow?: {
-    read(queueIdentity: string): ReplySteerNowState | undefined;
+    read(queueIdentity: string, queuedFollowup?: boolean): ReplySteerNowState | undefined;
     send(queueIdentity: string): ReplySteerNowResult;
   };
   /** @deprecated Use queueMessageAsync with fresh policy preparation. Supported through 2026-12-31. Removal in the first January 2027 stable release. */

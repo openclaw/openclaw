@@ -174,6 +174,7 @@ export type {
 } from "../config/types.models.js";
 export {
   bindsClaudeThinkingPrefix,
+  isReleasedAdaptiveClaudeGeneration,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
@@ -209,7 +210,11 @@ export type {
   UnifiedModelCatalogProviderPlugin,
 } from "../plugins/types.js";
 
-export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+export {
+  DEFAULT_CONTEXT_TOKENS,
+  DEFAULT_MODEL_MAX_TOKENS,
+  resolveDefaultModelMaxTokens,
+} from "../agents/defaults.js";
 export {
   GPT5_BEHAVIOR_CONTRACT,
   GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,

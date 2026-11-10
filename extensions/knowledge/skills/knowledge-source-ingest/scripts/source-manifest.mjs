@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Transform } from "node:stream";
-import { finished } from "node:stream/promises";
+import { pipeline } from "node:stream/promises";
 import { createGunzip, createGzip } from "node:zlib";
 
 const HASH = /^[a-f0-9]{64}$/;
@@ -40,9 +40,9 @@ const canonical = (value) => {
   if (value && typeof value === "object") {
     return (
       "{" +
-      Object.entries(value)
-        .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([key, child]) => JSON.stringify(key) + ":" + canonical(child))
+      Object.keys(value)
+        .toSorted()
+        .map((key) => JSON.stringify(key) + ":" + canonical(value[key]))
         .join(",") +
       "}"
     );
@@ -50,6 +50,8 @@ const canonical = (value) => {
   return JSON.stringify(value);
 };
 const digest = (value) => createHash("sha256").update(value).digest("hex");
+const fraction = (value) =>
+  (value.match(/\.(\d+)(?:Z|[+-]\d\d:\d\d)$/)?.[1] ?? "").replace(/0+$/, "");
 const instant = (value, name) => {
   if (
     typeof value !== "string" ||
@@ -58,15 +60,29 @@ const instant = (value, name) => {
   ) {
     throw new Error(name + " must be an RFC3339 timestamp with an explicit offset");
   }
-  return new Date(value).toISOString();
+  return new Date(value)
+    .toISOString()
+    .replace(/\.\d{3}Z$/, "." + fraction(value).padEnd(3, "0") + "Z");
 };
+// Date handles offsets and whole milliseconds; the fractional key retains finer precision.
+const compareInstants = (left, right) => {
+  const milliseconds = Date.parse(left) - Date.parse(right);
+  if (milliseconds) {
+    return milliseconds;
+  }
+  const a = fraction(left),
+    b = fraction(right);
+  return a < b ? -1 : a > b ? 1 : 0;
+};
+const later = (a, b) => (compareInstants(a, b) >= 0 ? a : b);
+const earlier = (a, b) => (compareInstants(a, b) <= 0 ? a : b);
 const inputStream = (filename) => {
   const raw = filename === "-" ? process.stdin : createReadStream(filename);
-  return filename.endsWith(".gz") ? raw.pipe(createGunzip()) : raw;
+  return filename.endsWith(".gz") ? raw.compose(createGunzip()) : raw;
 };
 // Yields JSONL lines split on \n only; readline would also split on U+2028 inside JSON strings.
 async function* lines(filename) {
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let pending = "";
   for await (const chunk of inputStream(filename)) {
     const parts = (pending + decoder.decode(chunk, { stream: true })).split("\n");
@@ -101,36 +117,24 @@ async function writeManifest(filename, header, database) {
       callback(null, chunk);
     },
   });
-  if (gzip) {
-    gzip.pipe(meter).pipe(destination);
-  } else {
-    meter.pipe(destination);
-  }
-  const sink = gzip ?? meter;
-  const write = (text) =>
-    new Promise((resolve, reject) => {
-      sink.write(text, (/** @type {Error | null | undefined} */ error) =>
-        error ? reject(error) : resolve(),
+  function* rows() {
+    yield JSON.stringify(header) + "\n";
+    for (const row of database
+      .prepare("SELECT id,sha256,occurred_at FROM items ORDER BY id")
+      .iterate()) {
+      yield (
+        JSON.stringify({
+          kind: "item",
+          id: row.id,
+          sha256: row.sha256,
+          ...(row.occurred_at ? { occurred_at: row.occurred_at } : {}),
+        }) + "\n"
       );
-    });
-  await write(JSON.stringify(header) + "\n");
-  for (const row of database
-    .prepare("SELECT id,sha256,occurred_at FROM items ORDER BY id")
-    .iterate()) {
-    await write(
-      JSON.stringify({
-        kind: "item",
-        id: row.id,
-        sha256: row.sha256,
-        ...(row.occurred_at ? { occurred_at: row.occurred_at } : {}),
-      }) + "\n",
-    );
+    }
   }
-  sink.end();
-  await finished(meter);
-  if (destination !== process.stdout) {
-    await finished(destination);
-  }
+  await pipeline(rows(), ...(gzip ? [gzip] : []), meter, destination, {
+    end: destination !== process.stdout,
+  });
   return hash.digest("hex");
 }
 async function snapshot() {
@@ -140,7 +144,7 @@ async function snapshot() {
   const output = need("output");
   const start = instant(need("coverage-start"), "coverage-start");
   const end = instant(need("coverage-end"), "coverage-end");
-  if (Date.parse(start) >= Date.parse(end)) {
+  if (compareInstants(start, end) >= 0) {
     throw new Error("coverage-start must precede coverage-end");
   }
   const observedAt = instant(options.get("observed-at") ?? new Date().toISOString(), "observed-at");
@@ -206,7 +210,7 @@ async function loadManifest(filename, database, manifestIndex, role) {
   let header = null;
   let count = 0;
   const insert = database.prepare(
-    "INSERT INTO manifest_items(role,manifest_index,manifest_observed,id,sha256,occurred_at) VALUES(?,?,?,?,?,?)",
+    "INSERT INTO manifest_items(role,manifest_index,manifest_observed,manifest_fraction,id,sha256,occurred_at) VALUES(?,?,?,?,?,?,?)",
   );
   database.exec("BEGIN");
   for await (const line of lines(filename)) {
@@ -240,7 +244,15 @@ async function loadManifest(filename, database, manifestIndex, role) {
       row.occurred_at === undefined
         ? null
         : instant(row.occurred_at, "item " + row.id + " occurred_at");
-    insert.run(role, manifestIndex, Date.parse(header.observed_at), row.id, row.sha256, occurredAt);
+    insert.run(
+      role,
+      manifestIndex,
+      Date.parse(header.observed_at),
+      fraction(header.observed_at),
+      row.id,
+      row.sha256,
+      occurredAt,
+    );
     count++;
   }
   database.exec("COMMIT");
@@ -253,21 +265,18 @@ async function loadManifest(filename, database, manifestIndex, role) {
   return header;
 }
 function coveragePlan(current, previous) {
-  const start = Date.parse(current.coverage.start);
-  const end = Date.parse(current.coverage.end);
+  const start = current.coverage.start;
+  const end = current.coverage.end;
   const intervals = previous
     .filter((item) => item.coverage.completeness === "complete")
-    .map((item) => [
-      Math.max(start, Date.parse(item.coverage.start)),
-      Math.min(end, Date.parse(item.coverage.end)),
-    ])
-    .filter(([a, b]) => a < b)
-    .toSorted((a, b) => a[0] - b[0]);
+    .map((item) => [later(start, item.coverage.start), earlier(end, item.coverage.end)])
+    .filter(([a, b]) => compareInstants(a, b) < 0)
+    .toSorted((a, b) => compareInstants(a[0], b[0]));
   const merged = [];
   for (const interval of intervals) {
     const last = merged.at(-1);
-    if (last && interval[0] <= last[1]) {
-      last[1] = Math.max(last[1], interval[1]);
+    if (last && compareInstants(interval[0], last[1]) <= 0) {
+      last[1] = later(last[1], interval[1]);
     } else {
       merged.push([...interval]);
     }
@@ -275,16 +284,19 @@ function coveragePlan(current, previous) {
   const uncovered = [];
   let cursor = start;
   for (const [a, b] of merged) {
-    if (cursor < a) {
+    if (compareInstants(cursor, a) < 0) {
       uncovered.push([cursor, a]);
     }
-    cursor = Math.max(cursor, b);
+    cursor = later(cursor, b);
   }
-  if (cursor < end) {
+  if (compareInstants(cursor, end) < 0) {
     uncovered.push([cursor, end]);
   }
   const render = (ranges) =>
-    ranges.map(([a, b]) => ({ start: new Date(a).toISOString(), end: new Date(b).toISOString() }));
+    ranges.map(([a, b]) => ({
+      start: instant(a, "coverage start"),
+      end: instant(b, "coverage end"),
+    }));
   return { covered: render(merged), uncovered: render(uncovered) };
 }
 async function plan() {
@@ -295,7 +307,7 @@ async function plan() {
   const database = new DatabaseSync(path.join(directory, "plan.sqlite"));
   try {
     database.exec(
-      "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; CREATE TABLE manifest_items(role TEXT,manifest_index INTEGER,manifest_observed INTEGER,id TEXT,sha256 TEXT,occurred_at TEXT,PRIMARY KEY(role,manifest_index,id)) WITHOUT ROWID;",
+      "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; CREATE TABLE manifest_items(role TEXT,manifest_index INTEGER,manifest_observed INTEGER,manifest_fraction TEXT,id TEXT,sha256 TEXT,occurred_at TEXT,PRIMARY KEY(role,manifest_index,id)) WITHOUT ROWID;",
     );
     const current = await loadManifest(currentFile, database, 0, "current");
     const previous = [];
@@ -312,7 +324,7 @@ async function plan() {
     }
     database.exec("CREATE INDEX manifest_items_id ON manifest_items(id,role,manifest_index);");
     const latest =
-      "WITH ranked AS (SELECT id,sha256,occurred_at,ROW_NUMBER() OVER(PARTITION BY id ORDER BY manifest_observed DESC,manifest_index DESC) AS n FROM manifest_items WHERE role='previous') SELECT id,sha256,occurred_at FROM ranked WHERE n=1";
+      "WITH ranked AS (SELECT id,sha256,occurred_at,ROW_NUMBER() OVER(PARTITION BY id ORDER BY manifest_observed DESC,manifest_fraction DESC,manifest_index DESC) AS n FROM manifest_items WHERE role='previous') SELECT id,sha256,occurred_at FROM ranked WHERE n=1";
     const added = [],
       changed = [],
       unchanged = [],
@@ -336,12 +348,16 @@ async function plan() {
       latest +
       ") p LEFT JOIN manifest_items c ON c.role='current' AND c.id=p.id WHERE c.id IS NULL ORDER BY p.id";
     for (const row of database.prepare(missing).iterate()) {
+      if (
+        row.occurred_at &&
+        (compareInstants(row.occurred_at, current.coverage.start) < 0 ||
+          compareInstants(row.occurred_at, current.coverage.end) >= 0)
+      ) {
+        continue;
+      }
       if (!row.occurred_at || current.coverage.completeness !== "complete") {
         unresolvedMissing.push(row.id);
-      } else if (
-        Date.parse(row.occurred_at) >= Date.parse(current.coverage.start) &&
-        Date.parse(row.occurred_at) < Date.parse(current.coverage.end)
-      ) {
+      } else {
         deleted.push(row.id);
       }
     }

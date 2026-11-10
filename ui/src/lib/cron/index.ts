@@ -161,19 +161,17 @@ function buildFailureAlert(
   const accountId = form.failureAlertAccountId.trim();
   const to = form.failureAlertTo.trim();
   return {
+    ...sourceConfig,
     after: after > 0 ? Math.floor(after) : existingConfig?.after !== undefined ? null : undefined,
     channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
       preserveLast: Boolean(sourceConfig?.channel),
     }),
     to: to || (existingConfig?.to ? null : undefined),
-    ...(cooldownMs !== undefined
-      ? { cooldownMs }
-      : existingConfig?.cooldownMs !== undefined
-        ? { cooldownMs: null }
-        : {}),
+    cooldownMs: cooldownMs ?? (existingConfig?.cooldownMs !== undefined ? null : undefined),
     mode: form.failureAlertDeliveryMode || (existingConfig?.mode !== undefined ? null : undefined),
     accountId: accountId || (existingConfig?.accountId ? null : undefined),
-    includeSkipped: sourceConfig?.includeSkipped,
+    threadId:
+      form.failureAlertThreadId ?? (existingConfig?.threadId !== undefined ? null : undefined),
   };
 }
 
