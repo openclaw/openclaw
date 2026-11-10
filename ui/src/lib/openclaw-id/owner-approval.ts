@@ -30,6 +30,7 @@ type Attempt = {
   commitment: string;
   sender: string;
   expires: number;
+  expiryTimer?: ReturnType<typeof setTimeout>;
   ephemeral: EphemeralKey;
   secret?: Uint8Array;
   transcript?: Uint8Array;
@@ -46,6 +47,8 @@ export type OwnerApprovalRequest = {
   code?: string;
   busy: boolean;
   error?: string;
+  expired?: boolean;
+  uncertain?: boolean;
 };
 /** Browser lifetime state for owner approval. */
 export type OwnerApprovalState = {
@@ -55,11 +58,13 @@ export type OwnerApprovalState = {
 };
 
 const now = () => Math.floor(Date.now() / 1000);
+const expiredRequest = "This device request expired or was cancelled.";
 
 /** Owns one cancellable mailbox reader and bounded SAS attempts for this original browser D. */
 export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () => void) {
   const abort = new AbortController();
   const attempts = new Map<string, Attempt>();
+  const expiredRequests = new Map<string, OwnerApprovalRequest>();
   const listeners = new Set<() => void>();
   let mail: DeviceMail | undefined;
   let error: string | null = null;
@@ -68,15 +73,43 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
   let ownsLock = false;
   const lifetime = Promise.withResolvers<void>();
   const publish = () => listeners.forEach((listener) => listener());
+  const projectRequest = (id: string, a: Attempt): OwnerApprovalRequest => ({
+    id,
+    label: a.start.label,
+    code: a.code,
+    busy: a.busy,
+    error: a.error ?? (a.expires <= now() ? expiredRequest : undefined),
+    expired: a.expires <= now(),
+    uncertain: Boolean(a.submissionStarted && a.error),
+  });
   const drop = (id: string, force = false) => {
     const attempt = attempts.get(id);
     if (attempt?.busy && !force) {
       attempt.cancelled = true;
+      publish();
       return;
     }
+    clearTimeout(attempt?.expiryTimer);
     attempt?.secret?.fill(0);
     attempts.delete(id);
     publish();
+  };
+  const expire = (id: string) => {
+    const attempt = attempts.get(id);
+    if (!attempt) {
+      return;
+    }
+    clearTimeout(attempt.expiryTimer);
+    const remaining = attempt.expires * 1000 - Date.now();
+    if (remaining > 0) {
+      attempt.expiryTimer = setTimeout(() => expire(id), remaining);
+      return;
+    }
+    // Keep only display facts after expiry; pending/uncertain admissions still own their result.
+    if (!attempt.busy) {
+      expiredRequests.set(id, projectRequest(id, attempt));
+    }
+    drop(id);
   };
   const send = async (
     attempt: Attempt,
@@ -142,7 +175,10 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
         drop(id);
       }
     }
+    // A fresh request replaces the prior expired display, keeping retained facts bounded.
+    expiredRequests.clear();
     attempts.set(payload.request_id, attempt);
+    expire(payload.request_id);
     try {
       await send(attempt, "accept", {
         eph_pub: bytesToHex(attempt.ephemeral.publicKey),
@@ -208,7 +244,7 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
       const received = await mail.call<ReceiveMailResponse>("receive", undefined, cursor);
       for (const [id, a] of attempts) {
         if (a.expires <= now()) {
-          drop(id);
+          expire(id);
         }
       }
       for (const message of received.messages) {
@@ -253,13 +289,10 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
       return {
         ready: Boolean(mail),
         error,
-        requests: [...attempts].map(([id, a]) => ({
-          id,
-          label: a.start.label,
-          code: a.code,
-          busy: a.busy,
-          error: a.error,
-        })),
+        requests: [
+          ...expiredRequests.values(),
+          ...[...attempts].map(([id, a]) => projectRequest(id, a)),
+        ],
       };
     },
     subscribe(listener: () => void) {
@@ -289,6 +322,7 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
     stop() {
       abort.abort();
       lifetime.resolve();
+      expiredRequests.clear();
       for (const id of attempts.keys()) {
         drop(id, true);
       }
@@ -301,13 +335,13 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
         return;
       }
       if (a.expires <= now()) {
-        drop(id);
+        expire(id);
         return;
       }
       const requireLive = () => {
         abort.signal.throwIfAborted();
         if (attempts.get(id) !== a || a.cancelled || a.expires <= now()) {
-          throw new Error("This device request expired or was cancelled.");
+          throw new Error(expiredRequest);
         }
       };
       a.busy = true;

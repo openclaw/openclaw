@@ -45,6 +45,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   owner?.stop();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -288,5 +289,25 @@ describe("local original-D SAS approval", () => {
     expect(f.operations).toEqual(["accept", "submit"]);
     expect(f.read().handoff).toBeUndefined();
     expect(owner.read().requests[0]?.error).toContain("seq conflict");
+    expect(owner.read().requests[0]?.uncertain).toBe(true);
+  });
+  it("publishes expiry while mailbox receive is pending and keeps only an inactive number", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(new Date("2026-11-01T00:00:00.000Z"));
+    const expires = Date.now() + 300_000;
+    const f = await setup();
+    const code = owner.read().requests[0]?.code;
+    const changed = vi.fn();
+    owner.subscribe(changed);
+    await vi.advanceTimersByTimeAsync(expires - Date.now());
+    expect(changed).toHaveBeenCalled();
+    expect(owner.read().requests).toEqual([
+      expect.objectContaining({ id: f.id, label: "New browser", code, expired: true }),
+    ]);
+    await owner.decide(f.id, true);
+    await owner.decide(f.id, false);
+    expect(f.operations).toEqual(["accept"]);
+    owner.stop();
+    expect(owner.read().requests).toEqual([]);
   });
 });

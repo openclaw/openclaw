@@ -3,7 +3,7 @@
 // others. Revoking also removes the devices the revoked one approved; the dialog
 // names them first. Device keys are per claw, so a removal applies to this claw.
 import "./owner-devices-dialog.css";
-import { createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import {
   displayFingerprint,
   fingerprint,
@@ -26,6 +26,7 @@ import type {
 import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
+import { IconButton } from "../solid/icon-button.tsx";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { showOwnerApprovalDialog } from "./owner-approval-dialog.tsx";
 
@@ -57,14 +58,24 @@ function DeviceRow(props: {
   approved: OpenClawIdOwnerDevice[];
   canRevoke: boolean;
   busy: boolean;
+  confirming: boolean;
+  onConfirm: (confirming: boolean) => void;
   onRevoke: () => void;
 }) {
-  const [confirming, setConfirming] = createSignal(false);
   return (
-    <div role="listitem" class="row openclaw-id-devices__row">
+    <div
+      role="listitem"
+      data-device-pub={props.device.devicePub}
+      class={[
+        "row openclaw-id-devices__row",
+        { "openclaw-id-devices__row--confirming": props.confirming },
+      ]}
+    >
       <div class="stack openclaw-id-devices__text">
         <strong class="openclaw-id-devices__label">
-          {props.device.label}
+          <span class="openclaw-id-devices__name" title={props.device.label}>
+            {props.device.label}
+          </span>
           <Show when={props.isThisBrowser}>
             <span class="chip">{t("openclawId.thisBrowser")}</span>
           </Show>
@@ -73,50 +84,56 @@ function DeviceRow(props: {
           {props.device.peerKeys.length > 0
             ? t("openclawId.deviceRemote")
             : t("openclawId.deviceLocal")}
-        </div>
-        <div class="muted openclaw-id-devices__hint">
+          {" · "}
           {props.approver.kind === "kit"
             ? t("openclawId.approvedByKit")
             : props.approver.kind === "device"
               ? t("openclawId.approvedByDevice", { device: props.approver.label })
               : t("openclawId.approvedByRemoved")}
         </div>
-        <Show when={confirming()}>
-          <p class="muted openclaw-id-devices__hint" role="note">
-            {props.approved.length > 0
-              ? t("openclawId.revokeCascade", {
-                  device: props.device.label,
-                  devices: props.approved.map((device) => device.label).join(", "),
-                })
-              : t("openclawId.revokeOne", { device: props.device.label })}
-          </p>
-        </Show>
       </div>
       <Show when={props.canRevoke && !props.isThisBrowser}>
         <Show
-          when={confirming()}
+          when={props.confirming}
           fallback={
             <button
               type="button"
-              class="btn btn--sm"
+              class="btn btn--sm openclaw-id-devices__revoke"
               disabled={props.busy}
-              onClick={() => setConfirming(true)}
+              onClick={() => props.onConfirm(true)}
             >
               {t("openclawId.revoke")}
             </button>
           }
         >
-          <button type="button" class="btn btn--sm" onClick={() => setConfirming(false)}>
-            {t("common.cancel")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm danger"
-            disabled={props.busy}
-            onClick={() => props.onRevoke()}
-          >
-            {t("openclawId.revokeConfirm", { device: props.device.label })}
-          </button>
+          <div class="openclaw-id-devices__confirmation">
+            <p role="note">
+              {props.approved.length > 0
+                ? t("openclawId.revokeCascade", {
+                    device: props.device.label,
+                    devices: props.approved.map((device) => device.label).join(", "),
+                  })
+                : t("openclawId.revokeOne", { device: props.device.label })}
+            </p>
+            <openclaw-modal-actions>
+              <button
+                type="button"
+                class="btn btn--sm"
+                disabled={props.busy}
+                onClick={() => props.onConfirm(false)}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                type="button"
+                class="btn btn--sm danger openclaw-id-devices__confirm-revoke"
+                disabled={props.busy}
+                onClick={() => props.onRevoke()}
+              >
+                {t("openclawId.revokeConfirm", { device: props.device.label })}
+              </button>
+            </openclaw-modal-actions>
+          </div>
         </Show>
       </Show>
     </div>
@@ -137,7 +154,10 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
       const [ownerFp, setOwnerFp] = createSignal<string | null>(null);
       const [localOperator, setLocalOperator] = createSignal(false);
       const [busy, setBusy] = createSignal(false);
+      const [confirming, setConfirming] = createSignal<string | null>(null);
       const [error, setError] = createSignal<OpenClawIdUiError | null>(null);
+      let listElement: HTMLDivElement | undefined;
+      let revocationPending = false;
       const refresh = async () => {
         try {
           const [next, status] = await Promise.all([
@@ -147,16 +167,37 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
           setLocalOperator(status.channel === "local_operator" && next.linked);
           setOwnPub((await thisOwnerDevice(next).catch(() => undefined))?.devicePub ?? null);
           setOwnerFp(await ownerFingerprint(next));
+          // Only a fresh Gateway listing can start removal, including cascade removals.
+          if (
+            revocationPending &&
+            !modal.settled &&
+            !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ) {
+            const remaining = new Set(next.ownerDevices?.map((device) => device.devicePub));
+            await Promise.all(
+              Array.from(listElement?.querySelectorAll<HTMLElement>("[data-device-pub]") ?? [])
+                .filter((row) => !remaining.has(row.dataset.devicePub!))
+                .map((row) =>
+                  row
+                    .animate([{ opacity: 1 }, { opacity: 0 }], { duration: 180, fill: "forwards" })
+                    .finished.catch(() => {}),
+                ),
+            );
+          }
           setLink(next);
+          if (!next.ownerDevices?.some((device) => device.devicePub === confirming())) {
+            setConfirming(null);
+          }
         } catch (failure) {
           setError(openClawIdUiError(failure, "devices"));
         }
       };
       const revoke = async (device: OpenClawIdOwnerDevice) => {
         const current = link();
-        if (!current || busy()) {
+        if (!current || revocationPending) {
           return;
         }
+        revocationPending = true;
         setBusy(true);
         setError(null);
         try {
@@ -165,24 +206,42 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
         } catch (failure) {
           setError(openClawIdUiError(failure, "remove"));
         } finally {
-          setBusy(false);
           await refresh();
+          revocationPending = false;
+          setBusy(false);
         }
       };
-      void refresh();
-      const devices = () => link()?.ownerDevices ?? [];
+      onSettled(() => {
+        void refresh();
+      });
+      const devices = createMemo(() => {
+        const current = ownPub();
+        return (link()?.ownerDevices ?? []).toSorted(
+          (a, b) => Number(b.devicePub === current) - Number(a.devicePub === current),
+        );
+      });
       return (
         <openclaw-modal-dialog
+          class="openclaw-id-owner-dialog"
           label={t("openclawId.yourDevices")}
           description={t("openclawId.yourDevicesBody")}
           onModal-cancel={() => modal.finish(undefined)}
         >
           <div class="exec-approval-card openclaw-id-devices">
-            <div class="exec-approval-title">{t("openclawId.yourDevices")}</div>
-            <p class="muted openclaw-id-devices__hint">{t("openclawId.yourDevicesBody")}</p>
+            <h2 class="exec-approval-title openclaw-id-devices__title">
+              {t("openclawId.yourDevices")}
+            </h2>
+            <IconButton
+              class="openclaw-id-devices__close"
+              icon="x"
+              label={t("common.close")}
+              tooltip={false}
+              onClick={() => modal.finish(undefined)}
+            />
+            <p class="openclaw-id-devices__description">{t("openclawId.yourDevicesBody")}</p>
             <Show when={error()}>
               {(message) => (
-                <div class="callout danger" role="alert">
+                <div class="openclaw-id-devices__error" role="alert">
                   <OpenClawIdErrorMessage error={message()} />
                 </div>
               )}
@@ -195,57 +254,61 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
               </div>
             </Show>
             <div
+              ref={(element) => {
+                listElement = element;
+              }}
               class="list openclaw-id-devices__list"
               role="list"
-              style={{ "max-height": "50vh", "overflow-y": "auto" }}
             >
-              <For each={devices()}>
+              <For each={devices()} keyed={(device) => device.devicePub}>
                 {(device) => (
                   <DeviceRow
-                    device={device}
-                    isThisBrowser={device.devicePub === ownPub()}
-                    approver={approverOf(devices(), device)}
-                    approved={devicesApprovedBy(devices(), device)}
+                    device={device()}
+                    isThisBrowser={device().devicePub === ownPub()}
+                    approver={approverOf(devices(), device())}
+                    approved={
+                      confirming() === device().devicePub
+                        ? devicesApprovedBy(devices(), device())
+                        : []
+                    }
                     canRevoke={Boolean(ownPub())}
                     busy={busy()}
-                    onRevoke={() => void revoke(device)}
+                    confirming={confirming() === device().devicePub}
+                    onConfirm={(value) => setConfirming(value ? device().devicePub : null)}
+                    onRevoke={() => void revoke(device())}
                   />
                 )}
               </For>
             </div>
-            <Show when={localOperator() && ownPub()}>
-              <button
-                type="button"
-                class="btn"
-                onClick={() => {
-                  modal.finish(undefined);
-                  void showOwnerApprovalDialog({ client: params.client });
-                }}
-              >
-                {t("openclawId.approveNewDevice")}
-              </button>
-            </Show>
-            <Show when={ownerFp()}>
-              {(fp) => (
-                <div class="muted openclaw-id-devices__hint">
-                  <p>{t("openclawId.recoveryKitLine")}</p>
-                  <details>
-                    <summary>{t("openclawId.securityDetails")}</summary>
-                    {t("openclawId.kitOwnerFingerprint")}: {fp()}
-                  </details>
-                </div>
-              )}
-            </Show>
-            <openclaw-modal-actions class="exec-approval-actions">
-              <button
-                type="button"
-                class="btn primary"
-                autofocus
-                onClick={() => modal.finish(undefined)}
-              >
-                {t("common.close")}
-              </button>
-            </openclaw-modal-actions>
+            <div class="openclaw-id-devices__footer">
+              <Show when={ownerFp()}>
+                {(fp) => (
+                  <div class="muted openclaw-id-devices__kit">
+                    <p>{t("openclawId.recoveryKitLine")}</p>
+                    <details>
+                      <summary>{t("openclawId.securityDetails")}</summary>
+                      <div>
+                        {t("openclawId.kitOwnerFingerprint")}: {fp()}
+                      </div>
+                    </details>
+                  </div>
+                )}
+              </Show>
+              <Show when={localOperator() && ownPub()}>
+                <openclaw-modal-actions>
+                  <button
+                    type="button"
+                    class="btn primary"
+                    onClick={() => {
+                      modal.finish(undefined);
+                      void showOwnerApprovalDialog({ client: params.client });
+                    }}
+                  >
+                    {t("openclawId.approveNewDevice")}
+                  </button>
+                </openclaw-modal-actions>
+              </Show>
+            </div>
           </div>
         </openclaw-modal-dialog>
       );

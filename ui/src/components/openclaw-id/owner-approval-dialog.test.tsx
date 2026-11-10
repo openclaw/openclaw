@@ -14,6 +14,8 @@ afterEach(() => endFeature());
 
 const fixture = vi.hoisted(() => ({
   code: undefined as string | undefined,
+  expired: false,
+  uncertain: false,
   listeners: new Set<() => void>(),
   decide: vi.fn(),
 }));
@@ -23,7 +25,21 @@ vi.mock("../../lib/openclaw-id/owner-approval-lifetime.ts", () => ({
     read: () => ({
       ready: true,
       error: null,
-      requests: [{ id: "request", label: "Firefox on Linux", code: fixture.code, busy: false }],
+      requests: [
+        {
+          id: "request",
+          label: "Firefox on Linux",
+          code: fixture.code,
+          busy: fixture.uncertain,
+          expired: fixture.expired,
+          error: fixture.uncertain
+            ? "Request timed out. Check Your devices before starting a new request."
+            : fixture.expired
+              ? "This device request expired or was cancelled."
+              : undefined,
+          uncertain: fixture.uncertain,
+        },
+      ],
     }),
     subscribe: (listener: () => void) => {
       fixture.listeners.add(listener);
@@ -37,6 +53,8 @@ afterEach(async () => {
   document.body.innerHTML = "";
   fixture.listeners.clear();
   fixture.code = undefined;
+  fixture.expired = false;
+  fixture.uncertain = false;
   fixture.decide.mockReset();
 });
 
@@ -53,15 +71,52 @@ describe("local owner matching-number dialog", () => {
     fixture.code = "004210";
     fixture.listeners.forEach((listener) => listener());
     await vi.waitFor(() => {
-      expect(document.body.textContent).toContain("004210");
+      expect(document.body.textContent).toContain("004 210");
       expect(approve().disabled).toBe(false);
     });
     expect(document.querySelector<HTMLInputElement>('input[type="number"]')!.value).toBe("");
     approve().click();
     expect(fixture.decide).toHaveBeenCalledWith("request", true, null);
     [...document.querySelectorAll("button")]
-      .find((button) => button.textContent === "Close")!
+      .find((button) => button.getAttribute("aria-label") === "Close")!
       .click();
     await done;
+  });
+  it("removes confirmation for expired or uncertain requests and opens Your devices", async () => {
+    fixture.code = "482917";
+    const request = vi.fn(async (method: string) =>
+      method === "openclawId.people"
+        ? { link: { linked: true, ownerDevices: [] } }
+        : { channel: "local_operator" },
+    );
+    // SAFETY: these dialogs consume only request from the Gateway client.
+    const done = showOwnerApprovalDialog({
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    await vi.waitFor(() => expect(document.body.textContent).toContain("482 917"));
+    fixture.expired = true;
+    fixture.listeners.forEach((listener) => listener());
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain("The numbers match"));
+    expect(document.body.textContent).toContain("expired or was cancelled");
+    expect(document.querySelector("input")).toBeNull();
+    expect(fixture.decide).not.toHaveBeenCalled();
+    fixture.code = undefined;
+    fixture.listeners.forEach((listener) => listener());
+    await vi.waitFor(() =>
+      expect(document.body.textContent).not.toContain("Waiting for the other browser"),
+    );
+    fixture.code = "482917";
+    fixture.uncertain = true;
+    fixture.listeners.forEach((listener) => listener());
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Your devices"));
+    expect(
+      [...document.querySelectorAll("button")].some((button) => button.textContent === "Retry"),
+    ).toBe(false);
+    [...document.querySelectorAll("button")]
+      .find((button) => button.textContent === "Your devices")!
+      .click();
+    await done;
+    await vi.waitFor(() => expect(document.querySelector("h2")?.textContent).toBe("Your devices"));
+    document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click();
   });
 });
