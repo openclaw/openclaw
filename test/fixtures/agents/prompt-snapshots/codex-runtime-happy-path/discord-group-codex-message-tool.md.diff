@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=c66ec6a29564b4ff9c7cf060839c9c1cffbaa953f1c26e26cdd4103fdfc847fd
-+++ discord-group-codex-message-tool.md	sha256=dc2292cba07dcef26942f7ba124f375d9308c21793ba3db0453e9cce6a9fd823
+--- telegram-direct-codex-message-tool.md	sha256=25efb16afca498f9d20f1cf2aaabeeb2a799e03c1b584c24cecf56492c45492a
++++ discord-group-codex-message-tool.md	sha256=e81aae7595972993ee8e4a175fdd9fea1f3b76b9e7b3dcc84f8b6cf28d4affe8
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Discord Group Codex Message Tool Turn
@@ -39,26 +39,26 @@
 +    "chars": 86424,
 +    "roughTokens": 21606
 @@ -256,2 +256,2 @@
--    "chars": 3012,
--    "roughTokens": 753
-+    "chars": 4248,
-+    "roughTokens": 1062
+-    "chars": 3045,
+-    "roughTokens": 762
++    "chars": 4281,
++    "roughTokens": 1071
 @@ -264,2 +264,2 @@
--    "chars": 13622,
--    "roughTokens": 3406
-+    "chars": 15227,
-+    "roughTokens": 3807
+-    "chars": 13655,
+-    "roughTokens": 3414
++    "chars": 15260,
++    "roughTokens": 3815
 @@ -268,2 +268,2 @@
--    "chars": 99414,
--    "roughTokens": 24854
-+    "chars": 101653,
-+    "roughTokens": 25414
+-    "chars": 99447,
+-    "roughTokens": 24862
++    "chars": 101686,
++    "roughTokens": 25422
 @@ -272,2 +272,2 @@
 -    "chars": 879,
 -    "roughTokens": 220
 +    "chars": 1249,
 +    "roughTokens": 313
-@@ -410,4 +410,4 @@
+@@ -411,4 +411,4 @@
 -  "channel": "telegram",
 -  "provider": "telegram",
 -  "surface": "telegram",
@@ -67,33 +67,33 @@
 +  "provider": "discord",
 +  "surface": "discord",
 +  "chat_type": "group"
-@@ -418,1 +418,3 @@
+@@ -419,1 +419,3 @@
 -You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
 +You are in a Discord group chat. Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat. Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \n sequences; use real line breaks sparingly. If addressed to someone else, stay silent unless invited or correcting key facts. Discord: wrap bare URLs like <https://example.com> to suppress embeds. When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value. If no visible group response is needed, do not call message(action=send). If no text reply is needed, including after a reaction or other action, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.
 +
 +Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.
-@@ -434,1 +436,1 @@
+@@ -436,1 +438,1 @@
 -<external_openclaw_current_sender>{"sender":{"id":"1000001","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
 +<external_openclaw_current_sender>{"sender":{"id":"424242","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
-@@ -460,1 +462,1 @@
+@@ -462,1 +464,1 @@
 -[OpenClaw conversation info: sender={"id":"1000001","name":"Pash","username":"pash"}]
 +[OpenClaw conversation info: sender={"id":"424242","name":"Pash","username":"pash"}]
-@@ -479,1 +481,1 @@
+@@ -481,1 +483,1 @@
 -{"chat_id":"user:1000001","message_id":"tg-msg-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
 +{"chat_id":"channel:987654321","message_id":"discord-msg-0001","conversation_label":"OpenClaw/#agent-sandbox","sender":{"id":"424242","name":"Pash","username":"pash"},"group_subject":"OpenClaw maintainers","group_channel":"#agent-sandbox","group_space":"OpenClaw","is_group_chat":true,"was_mentioned":true,"history_count":2}
-@@ -482,1 +484,5 @@
+@@ -484,1 +486,5 @@
 -Can you check whether the nightly build finished and tell me what happened?
 +Chat history since last reply: ⟦openclaw:ctx⟧
 +Peter: I pushed the Discord-side message-tool bridge.
 +Pash: @OpenClaw please verify the Codex happy path too.
 +
 +can you audit whether this prompt path has conflicting silence instructions?
-@@ -487,1 +493,1 @@
+@@ -489,1 +495,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dynamic-tools.telegram-direct.json`)
-@@ -517,1 +523,1 @@
+@@ -519,1 +525,1 @@
 -    "description": "Send/manage channel messages. Supports actions: react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
 +    "description": "Send/manage channel messages. Supports actions: broadcast, react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
-@@ -525,1 +531,1 @@
+@@ -527,1 +533,1 @@
 -          "enum": ["react", "send"],
 +          "enum": ["broadcast", "react", "send"],

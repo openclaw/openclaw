@@ -2196,10 +2196,6 @@ button.chat-reply-attribution__target:disabled {
   margin-block-start: 8px;
 }
 
-.chat-activity-group--bubble > .chat-work-group__separator {
-  display: none;
-}
-
 .chat-bubble-dots {
   display: inline-flex;
   align-items: center;

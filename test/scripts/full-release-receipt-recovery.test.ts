@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
+import * as publicationArtifacts from "../../scripts/full-release-artifacts.mjs";
 import {
   createPublicationAdmission,
   createPublicationSourceFact,
@@ -19,6 +20,7 @@ import * as candidateReuse from "../../scripts/lib/full-release-candidate-reuse.
 import * as childReuse from "../../scripts/lib/full-release-child-reuse.mjs";
 import { retainedPublicationArtifactSource } from "../../scripts/lib/release-evidence-identity.mjs";
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
+import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 
 const roles = [
@@ -46,17 +48,14 @@ function fixture() {
     repository: old.repository,
     qualificationAdmission: old.admission.descriptor,
     originalParent: { runId: old.runId, runAttempt: 1 },
-    candidateBinding: {
-      request: {
-        targetSha: old.q,
-        toolingSha: old.q,
-        ...baselines,
-        releaseProfile: "beta",
-        releaseSoak: false,
-      },
-      package: { version: old.admission.receipt.baselinePolicy.candidateVersion },
-      producer: { runId: "901", runAttempt: 1 },
-    },
+    candidateBinding: fullReleaseCandidateBindingFixture({
+      targetSha: old.q,
+      toolingSha: old.q,
+      releaseProfile: "beta",
+      releaseSoak: false,
+      upgradeSurvivorBaseline: baselines.upgradeBaseline,
+      upgradeSurvivorBaselines: baselines.upgradeSurvivorBaselines.join(" "),
+    }),
     children: Object.fromEntries(
       roles.map((role, index) => [
         role,
@@ -110,6 +109,80 @@ describe("receipt-backed aggregate recovery", () => {
     ).rejects.toThrow("child verification reached");
     expect(verifyChild).toHaveBeenCalledOnce();
     expect(verifyChild.mock.calls[0]?.[2]?.deadlineMs).toBe(now + 600_000);
+  });
+
+  it("gives only recovery Docker payloads the four-minute archive budget", async () => {
+    const { old, recovery } = fixture();
+    vi.spyOn(candidateReuse, "verifySealedFullReleaseCandidate").mockImplementation(vi.fn());
+    vi.spyOn(childReuse, "validateReusableReleaseChild").mockImplementation(async (_, request) => {
+      const coverage = expectDefined(
+        old.admission.receipt.coverage.children.find((child) => child.key === request.role),
+        "child coverage",
+      );
+      const selection = {
+        ...request,
+        runId: expectDefined(recovery.children[request.role], "recovery child").runId,
+        runAttempt: 1,
+        workflowRef: old.branch,
+        displayTitle: "fixture",
+        sourceParentRunId: old.runId,
+        sourceParentAttempt: 1,
+        url: "https://github.com/openclaw/openclaw/actions/runs/910",
+        artifact: {
+          id: "1",
+          name: "fixture",
+          digest: "a".repeat(64),
+          expiresAt: "2030-01-01",
+          sizeInBytes: 1,
+        },
+        receiptSha256: "a".repeat(64),
+        inputs: {},
+      };
+      return {
+        selection,
+        run: {},
+        jobs: [],
+        receipt: {
+          jobs: coverage.requiredJobs.map((name) => ({
+            name,
+            status: "completed",
+            conclusion: "success",
+          })),
+        },
+      };
+    });
+    const verifyPayloads = vi
+      .spyOn(publicationArtifacts, "verifyRetainedPublicationArtifacts")
+      .mockRejectedValue(new Error("publication verification reached"));
+    const dispatches = old.admission.receipt.coverage.children.map((child, index) => ({
+      id: 10_000 + index,
+      name: child.parentJobName,
+      status: "completed",
+      conclusion: "success",
+      runId: expectDefined(recovery.children[child.key], "recovery child").runId,
+    }));
+    const parentJobs = [...(await old.client.getRunAttemptJobs(old.runId)), ...dispatches];
+    await expect(
+      verifyOriginalReceiptQualification(recovery, {
+        client: {
+          ...old.client,
+          getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
+          getRunAttemptJobs: async () => parentJobs,
+          getJobLog: async (id: number) => {
+            const child = expectDefined(
+              dispatches.find((entry) => entry.id === id),
+              "dispatch job",
+            );
+            return `TARGET_SHA: ${old.q}\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
+          },
+        },
+      }),
+    ).rejects.toThrow("publication verification reached");
+    expect(verifyPayloads).toHaveBeenCalledOnce();
+    expect(verifyPayloads.mock.calls[0]?.[2]).toMatchObject({
+      verifyPayloads: true,
+      dockerArchiveTimeoutMs: 240_000,
+    });
   });
 
   it("retains original selection, baselines and Q artifacts under a distinct P admission", () => {

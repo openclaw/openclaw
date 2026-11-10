@@ -155,7 +155,7 @@ candidate and its package bytes, and all recorded npm, SDK, plugin, and Docker
 producer receipts and payload digests. Missing payloads, incomplete job history,
 changed attempts, or lost authority fail closed. Each recovery child verification
 has a ten-minute budget to read its complete rerun history; ordinary child reuse
-keeps its two-minute default, and per-request timeouts and retry limits are unchanged.
+keeps its two-minute default, and job-inventory request timeouts and retry limits are unchanged.
 It never dispatches test or preparation workflows and has only Actions/content
 read permissions. Runtime setup installs only trusted P dependencies with lifecycle
 scripts disabled; it does not build or execute candidate code.
@@ -174,8 +174,12 @@ Parsed payloads retain the archive owner's existing size and integrity limits.
 Opaque Docker and candidate image/registry archives use its streaming digest
 verification: the authenticated metadata size is the exact transfer bound, and
 every byte contributes to SHA-256 without retaining or expanding the archive.
-Metadata binding, expiry, deadlines, retries, and digest checks remain unchanged;
-missing or mismatched bytes never authorize omission or rebuilding.
+Recovery Docker archive requests may use the existing four-minute transfer budget
+to finish large bodies instead of aborting each attempt after sixty seconds.
+Metadata requests and other archive callers keep their sixty-second request cap;
+Docker transfers still share four minutes across at most three attempts. Metadata
+binding, expiry, exact size, and full-byte digest checks remain unchanged; missing
+or mismatched bytes never authorize omission or rebuilding.
 
 ## Workflow files
 
