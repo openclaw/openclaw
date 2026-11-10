@@ -3,7 +3,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
-import { validateNetworkMode, validateSandboxSecurity } from "./validate-sandbox-security.js";
+import {
+  getBlockedBindReason,
+  validateNetworkMode,
+  validateSandboxSecurity,
+} from "./validate-sandbox-security.js";
 
 type SandboxSecurityConfig = Parameters<typeof validateSandboxSecurity>[0];
 
