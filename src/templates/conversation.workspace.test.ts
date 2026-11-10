@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import * as runtimeConfig from "../agents/agent-runtime-config.js";
@@ -10,6 +12,7 @@ import { loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import { prepareReplyWorkspace } from "../auto-reply/reply/reply-workspace.js";
 import { createThrowingTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   applyTemplateAddPlanStateless,
@@ -251,3 +254,99 @@ it.each([
     });
   },
 );
+
+it("retains package bootstrap custody through a fresh process after setup fails", async () => {
+  await withOpenClawTestState({ label: "template-bootstrap-restart" }, async (state) => {
+    const root = state.path("template");
+    await fs.mkdir(root);
+    const soul = "The retained Template personality.\n";
+    const bootstrap = "Connect the calendar only after setup is ready.\n";
+    await fs.writeFile(path.join(root, "SOUL.md"), soul);
+    await fs.writeFile(path.join(root, "BOOTSTRAP.md"), bootstrap);
+    await fs.writeFile(
+      path.join(root, "CLAW.md"),
+      "---\n" +
+        JSON.stringify({
+          schemaVersion: 1,
+          agent: { id: "restart-scout", name: "Scout" },
+          workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
+        }) +
+        "\n---\n",
+    );
+    const source = await readTemplateManifestFile(root);
+    if (!source.ok) {
+      throw new Error("Invalid fixture Template");
+    }
+    let config: OpenClawConfig = {
+      agents: { entries: { main: { workspace: state.path("main") } } },
+    };
+    await state.writeConfig(config);
+    const plan = await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} });
+    using _ = vi
+      .spyOn(packageInstall, "installTemplatePackages")
+      .mockRejectedValueOnce(new Error("Fixture dependency failure"));
+    plan.actions.push({
+      kind: "package",
+      action: "install",
+      blocked: false,
+      id: "calendar",
+      target: "calendar",
+      details: { kind: "plugin" },
+    });
+    const result = await applyTemplateAddPlanStateless(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      getCurrentConfig: () => config,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+      prepareAgentSession: async () => async () => {},
+      waitForAgentRuntime: async () => "applied",
+      onAgentReady: async () => {},
+    });
+    expect(result).toMatchObject({
+      status: "partial",
+      agentRetained: true,
+      error: { message: expect.stringContaining("Fixture dependency failure") },
+    });
+    await closeOpenClawStateDatabaseAsync();
+    const script = [
+      'import { ensureAgentWorkspace } from "./src/agents/workspace.ts";',
+      'import { closeOpenClawStateDatabaseAsync } from "./src/state/openclaw-state-db.ts";',
+      "await ensureAgentWorkspace({ dir: process.argv[1], ensureBootstrapFiles: true });",
+      "await closeOpenClawStateDatabaseAsync();",
+    ].join("\n");
+    await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "--eval",
+        script,
+        plan.agent.workspace,
+      ],
+      {
+        env: {
+          ...process.env,
+          NODE_OPTIONS: undefined,
+          VITEST: undefined,
+          VITEST_POOL_ID: undefined,
+          VITEST_WORKER_ID: undefined,
+        },
+        timeout: 60_000,
+      },
+    );
+    expect(await fs.readdir(plan.agent.workspace)).toEqual(["SOUL.md"]);
+    expect(await fs.readFile(path.join(plan.agent.workspace, "SOUL.md"), "utf8")).toBe(soul);
+    expect(
+      (await readCanonicalWorkspaceStateSnapshot(plan.agent.workspace)).setup,
+    ).not.toHaveProperty("setupCompletedAt");
+    await expect(seedTemplatePackageBootstrap(plan)).resolves.toBe("seeded");
+    expect(
+      (await readWorkspaceStateSnapshot(plan.agent.workspace, { readOnly: true })).setup,
+    ).not.toHaveProperty("bootstrapDeferred");
+    expect(await fs.readFile(path.join(plan.agent.workspace, "BOOTSTRAP.md"), "utf8")).toBe(
+      bootstrap,
+    );
+  });
+});

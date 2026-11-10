@@ -188,7 +188,7 @@ export async function applyTemplateAddPlanStateless(
   const checkpointPlanDigest = configuredPlanDigest(plan);
   let configuredCheckpoint: TemplateConfiguredAgentCheckpoint | undefined;
   let initialSourceIntegrity: string | undefined;
-  let releaseBootstrapDeferral: (() => void) | undefined;
+  let releaseBootstrapDeferral: (() => Promise<void>) | undefined;
   let workspaceCreated = false;
   let workspaceExposed = false;
   let workspaceBeforeExposure: string | undefined;
@@ -411,7 +411,7 @@ export async function applyTemplateAddPlanStateless(
       );
     }
     if (!configCommitted && !workspaceCreated) {
-      releaseBootstrapDeferral?.();
+      await releaseBootstrapDeferral?.();
     }
     const message = coerceErrorMessage(error);
     const sharedRetained =
@@ -452,7 +452,9 @@ export async function applyTemplateAddPlanStateless(
       );
     }
     if (plan.actions.some((action) => action.kind === "bootstrap")) {
-      releaseBootstrapDeferral = deferWorkspaceBootstrap(workspace);
+      await options.prepareEffect?.();
+      assertForwardCurrent();
+      releaseBootstrapDeferral = await deferWorkspaceBootstrap(workspace, options);
     }
     if (configuredRetry) {
       const admitted = options.admittedAgent!;

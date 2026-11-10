@@ -57,7 +57,16 @@ export async function seedWorkspaceBootstrap(
   }
   return runWorkspacePreparation(captured.dir, async (assertCurrent) => {
     const result = await seedWorkspaceBootstrapOwned(captured, assertCurrent);
-    settleWorkspaceBootstrapDeferral(captured.dir);
+    await captured.beforePersistentEffect?.();
+    assertCurrent();
+    captured.beforePersistentApply?.();
+    await settleWorkspaceBootstrapDeferral(captured.dir, {
+      ...captured.stateOptions,
+      assertCurrent: () => {
+        assertCurrent();
+        captured.beforePersistentApply?.();
+      },
+    });
     return result;
   });
 }
