@@ -152,6 +152,14 @@ exports and restore them into fresh namespaces for disaster recovery.
 - Config files are pinned before database capture. SQLite snapshots retain their existing per-database consistency and sanitization; the archive is not one atomic snapshot across config and all databases. Later writes remain live and may not appear in the archive.
 - Existing FIFOs and other unsupported special files are skipped. If a regular source becomes a FIFO during capture, backup fails rather than waiting for a writer; rerun after the workspace stops changing.
 
+Verification rejects distinct archive member paths that become identical after
+Unicode NFC normalization and lowercasing, even on a case-sensitive host. For
+example, `notes/A.txt` and `notes/a.txt` produce
+`Archive contains a portable path collision: ... and ...`. The error names both
+archive members; preserve both source files while investigating the reported pair.
+`backup restore` uses the same validation, so omitting `--verify` when creating
+an archive does not make that archive restorable.
+
 Verification normally reads and decompresses the archive once, retaining database
 candidates in private temporary storage for the same integrity and ownership
 checks. A trailing manifest or a database discovered through the archived agent
