@@ -29,6 +29,8 @@ contributions, and transcript persistence. Part of the [Plugin hooks](/plugins/h
   example, with malformed or partial inputs)
 - optional `event.runId`
 - optional `event.toolCallId`
+- optional `event.toolBatch`, host-provided original assistant-response membership
+  for direct calls in the embedded agent loop; see [Batch membership](#batch-membership)
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.runId`, `ctx.toolKind`, `ctx.toolInputKind`, and diagnostic `ctx.trace`
 - optional `ctx.abortSignal`, which aborts when the owning tool call is
@@ -108,6 +110,43 @@ api.on(
   { matcher: ["exec"], priority: 50 },
 );
 ```
+
+### Batch membership
+
+`event.toolBatch` contains:
+
+- `id`: an opaque host-generated identifier shared by calls from one original
+  model response, including its streamed fragments and scheduler partitions.
+  A later response receives a new identifier, even if it reuses tool-call IDs.
+- `membership`: `"complete"` after the response finishes generating, or
+  `"streaming"` for tools admitted while the model is still generating.
+- `calls`: an ordered, read-only list of `{ toolCallId, toolName }` entries.
+  Names come from the original tool-call blocks. Arguments, results, and
+  conversation text are not included.
+
+A complete list includes every tool-call block from the original response,
+including unknown tools, argument-validation failures, blocked calls, and calls
+in earlier streamed fragments. It describes what the model generated, not what
+was executable or what successfully ran. Sequential or parallel scheduling does
+not narrow that list.
+
+A streaming list contains only the completed tool-call blocks known at that
+snapshot. Later calls may still be generated: a streaming list with one entry
+does **not** establish that the call is standalone. Earlier snapshots stay
+unchanged when the model adds calls. A plugin requiring a standalone submission
+can block unless membership is complete and the only entry matches the current
+`event.toolCallId`. It can return the existing `block` and `blockReason` fields
+to reject that call while unrelated siblings proceed.
+
+Membership does not change scheduling, validation, approvals, cancellation, or
+tool-loop protection. The host supplies facts; plugins choose cross-tool policy.
+Rejecting a call gives the model feedback and an opportunity to retry, without
+guaranteeing compliance.
+
+The field is absent for invocations without this host context, including direct
+HTTP tool invocation, native tool relays, and internally dispatched child calls.
+Absence means membership is unknown, not that a call is standalone. The batch
+identifier is for correlation, not authorization or durable restart identity.
 
 ### Sender-aware policy in one file
 

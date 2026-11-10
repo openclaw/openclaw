@@ -8,10 +8,21 @@ export type AgentToolPendingInput = {
   subscribe: (listener: () => void) => () => void;
 };
 
+/** Host-owned membership of one original model response, before execution filtering. */
+export type AgentToolBatchContext = {
+  readonly id: string;
+  readonly membership: "complete" | "streaming";
+  readonly calls: readonly {
+    readonly toolCallId: string;
+    readonly toolName: string;
+  }[];
+};
+
 /** Internal assistant-turn context for one concrete tool invocation. */
 export interface AgentToolExecutionContext {
   assistantMessage: AssistantMessage;
   toolCall: AgentToolCall;
+  toolBatch?: AgentToolBatchContext;
   pendingInput?: AgentToolPendingInput;
   /** Earlier async calls in this response have not reached a subsequent model request. */
   hasUnobservedAsyncToolResults?: boolean;

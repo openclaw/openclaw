@@ -1,3 +1,4 @@
+import type { ToolBatchContext } from "./agent-loop.js";
 import type { AgentEventSink, ExecutedToolCallBatch } from "./agent-stream-response.js";
 import {
   getInternalToolExecutionPreparer,
@@ -15,6 +16,7 @@ import {
   createToolExecutionErrorResult,
   type FinalizedToolCallOutcome,
   type ImmediateToolCallOutcome,
+  type ResolvedToolCallOutcome,
 } from "./tool-call-outcome.js";
 import {
   type AgentToolExecutionContext,
@@ -30,6 +32,49 @@ export type PreparedToolCall = {
   tool: AgentTool;
   args: unknown;
 };
+
+export async function resolveToolCallTool(
+  batch: ToolBatchContext,
+  toolCall: AgentToolCall,
+): Promise<ResolvedToolCallOutcome> {
+  const cached = batch.resolved.get(toolCall);
+  if (cached) {
+    return cached;
+  }
+  let resolution: ResolvedToolCallOutcome;
+  try {
+    let tool = batch.currentContext.tools?.find((t) => t.name === toolCall.name);
+    if (!tool) {
+      const resolvedTool = await batch.config.resolveDeferredTool?.(
+        {
+          assistantMessage: batch.assistantMessage,
+          toolCall,
+          context: batch.currentContext,
+        },
+        batch.signal,
+      );
+      // Keep execution and lifecycle/audit identity aligned with the original model call.
+      if (resolvedTool && resolvedTool.name !== toolCall.name) {
+        throw new Error(
+          `Deferred tool resolver returned "${resolvedTool.name}" for requested "${toolCall.name}"`,
+        );
+      }
+      tool = resolvedTool;
+      if (tool) {
+        // Make the recovered tool visible to later provider continuations in this run.
+        batch.currentContext.tools = [...(batch.currentContext.tools ?? []), tool];
+      }
+    }
+    resolution = { kind: "resolved", ...(tool ? { tool } : {}) };
+  } catch (error) {
+    if (batch.isLocalError?.(error)) {
+      throw error;
+    }
+    resolution = { kind: "error", error };
+  }
+  batch.resolved.set(toolCall, resolution);
+  return resolution;
+}
 
 export function prepareResolvedToolCall(
   tool: AgentTool,
