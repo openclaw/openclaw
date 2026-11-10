@@ -292,7 +292,35 @@ function buildRoutedModel(
             offer.url.endsWith("/chat/completions"),
         )
       : undefined;
-  if (cohereChat) {
+  if (
+    provider.id === "vercel-ai-gateway" &&
+    id === "vercel-ai-gateway/anthropic/claude-sonnet-4.6"
+  ) {
+    // Frozen Vercel row uses the native Anthropic SDK, even when Chat is also
+    // offered. The SDK appends /v1/messages; the older /messages route cannot
+    // serve it. Require the key's exact mapped native offer, without Chat fallback.
+    const messages =
+      upstream === "anthropic/claude-sonnet-4.6" &&
+      capabilities.includes("llm.messages") &&
+      provider.httpOffers.find(
+        (offer) =>
+          offer.routeKind === "native" &&
+          offer.endpoint === "messages" &&
+          offer.model?.id === id &&
+          offer.model.upstream === upstream &&
+          offer.requestFormat === "anthropic.messages" &&
+          offer.responseFormat === "anthropic.messages" &&
+          offer.methods.includes("POST") &&
+          offer.url === `${rootUrl}/v1/native/vercel-ai-gateway/v1/messages`,
+      );
+    if (!messages) {
+      return undefined;
+    }
+    api = "anthropic-messages";
+    endpoint = messages.endpoint;
+    baseUrl = messages.url.slice(0, -"/v1/messages".length);
+    upstreamModel = upstream;
+  } else if (cohereChat) {
     api = "openai-completions";
     baseUrl = cohereChat.url.slice(0, -"/chat/completions".length);
     upstreamModel = upstream;
@@ -544,13 +572,22 @@ export function normalizeClawRouterResolvedModel(
 }
 
 export function prepareClawRouterRequestModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  const route = readRouteMetadata(model.params);
+  // OpenAI Responses treats omitted tool strictness as strict, so every optional tool input
+  // becomes required. Configured and catalog rows both dispatch here; declaring support makes
+  // the compatible-route policy send explicit strict=false.
+  const prepared =
+    model.api === "openai-responses" &&
+    model.id.startsWith("openai/") &&
+    model.compat?.supportsStrictMode === undefined
+      ? { ...model, compat: { ...model.compat, supportsStrictMode: true } }
+      : model;
+  const route = readRouteMetadata(prepared.params);
   if (!route) {
-    return model;
+    return prepared;
   }
   return {
-    ...model,
-    params: stripRouteMetadata(model.params),
+    ...prepared,
+    params: stripRouteMetadata(prepared.params),
     ...(route.upstreamModel && route.upstreamModel !== model.id ? { id: route.upstreamModel } : {}),
   };
 }

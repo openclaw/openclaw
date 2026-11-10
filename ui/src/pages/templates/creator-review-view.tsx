@@ -9,7 +9,9 @@ import {
   Show,
   type Accessor,
 } from "solid-js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import "../../components/modal-dialog.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
@@ -49,8 +51,7 @@ function OptionalSection(props: {
           {(item) => (
             <div class="template-creator__row">
               <label class="template-creator__row-choice">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={included(item())}
                   disabled={props.publishing}
                   onChange={(event) => {
@@ -98,7 +99,7 @@ function TemplateReviewDialog(props: {
       // Closing or leaving releases presentation; the owner still records the write outcome.
       yield Promise.race([pending, retired]);
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     }
   });
   async function publish() {
@@ -192,9 +193,9 @@ function TemplateReviewDialog(props: {
         </section>
         <Show when={state().error}>
           {(error) => (
-            <p class="callout danger" role="alert">
+            <InlineAlert tone="danger" role="alert">
               {error()}
-            </p>
+            </InlineAlert>
           )}
         </Show>
         <Show when={!state().reviewCurrent}>
@@ -221,9 +222,6 @@ function TemplateReviewDialog(props: {
           </Loading>
         </Show>
         <openclaw-modal-actions>
-          <button type="button" class="btn" onClick={() => props.flow.close()}>
-            {t("templatesDraft.askChanges")}
-          </button>
           <Show when={!state().reviewCurrent && state().busy === null}>
             <button type="button" class="btn" onClick={() => props.flow.retryReview()}>
               {t("templatesDraft.refreshReview")}

@@ -120,7 +120,7 @@ const loaders = {
   // Workshop changes and generic skill usage share the `skills.` operation domain.
   skills: async () => {
     const [workshop, usage] = await Promise.all([
-      import("../skills/workshop/changes.worker.js").then((m) => m.skillWorkshopOperations),
+      import("../skills/workshop-changes/changes.worker.js").then((m) => m.skillWorkshopOperations),
       import("../skills/runtime/skill-usage.worker.js").then((m) => m.skillUsageOperations),
     ]);
     return { ...workshop, ...usage };

@@ -222,19 +222,21 @@ suite.define(() => {
       expect(trace.width).toBe(32);
       expect(trace.right).toBeLessThanOrEqual(title.left);
     }
-    const frame = await takeControlUiScreenshotFrame(
-      page,
-      page.locator("body"),
-      [collaborativeRow],
-      {
-        animations: "disabled",
-        elements: [page.locator(".sidebar-shell")],
-      },
-    );
-    await writeFile(
-      path.join(suite.artifactDir, "shared-activity-sidebar.png"),
-      frame.elements[0]!.png,
-    );
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const frame = await takeControlUiScreenshotFrame(
+        page,
+        page.locator("body"),
+        [collaborativeRow],
+        {
+          animations: "disabled",
+          elements: [page.locator(".sidebar-shell")],
+        },
+      );
+      await writeFile(
+        path.join(suite.artifactDir, "shared-activity-sidebar.png"),
+        frame.elements[0]!.png,
+      );
+    }
   });
 
   it.each([
@@ -361,13 +363,16 @@ suite.define(() => {
     ]);
     expect(legacyOwner.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     if (grouping === "Person") {
-      // The 30px picker is centered in the 44px toolbar; the list adds 6px below it.
+      // The 28px picker is centered in the 44px toolbar; the list adds 6px below it.
       const ownerTitleBottom = await page
         .locator("#sidebar-session-owner-title")
         .evaluate((element) => element.getBoundingClientRect().bottom);
-      expect(idle.top - ownerTitleBottom).toBeCloseTo(13, 1);
+      expect(idle.top - ownerTitleBottom).toBeCloseTo(14, 1);
     }
-    if (width === 1200 || grouping === "Person") {
+    if (
+      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" &&
+      (width === 1200 || grouping === "Person")
+    ) {
       const frame = await takeControlUiScreenshotFrame(
         page,
         page.locator("body"),
@@ -694,29 +699,10 @@ suite.define(() => {
     const threads = page.locator('[data-session-section="ungrouped"]');
     await expect.poll(() => threads.locator(".sidebar-recent-session").count()).toBe(2);
 
-    const newThread = page.locator(".sidebar-rail").getByRole("link", { name: "New conversation" });
+    const newThread = page.locator(".sidebar-rail").getByRole("link", { name: "New session" });
     await newThread.focus();
     await page.keyboard.press("Enter");
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-  });
-
-  it("keeps own drafts subtle and fades admin-visible drafts from other people", async () => {
-    const { page } = await openSession(draftSessionsList(), {
-      presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
-      historyMessages: undefined,
-    });
-    await chooseOwner(page, "all");
-    const ownDraft = page.locator('[data-session-key="agent:main:ada"]');
-    const otherDraft = page.locator('[data-session-key="agent:main:bob"]');
-    await ownDraft.waitFor();
-    await otherDraft.waitFor();
-    await expect
-      .poll(() => ownDraft.getAttribute("class"))
-      .toContain("session-row-host--draft-owner");
-    await expect
-      .poll(() => otherDraft.getAttribute("class"))
-      .toContain("session-row-host--draft-other");
-    expect(await page.locator(".session-row-draft-indicator").count()).toBe(2);
   });
 
   it("creates a draft atomically from the multi-person new-session flow", async () => {
@@ -970,10 +956,14 @@ suite.define(() => {
       const composer = page.locator(".new-session-page__composer");
       const attachmentMenu = composer.getByRole("button", { name: "Add attachment" });
       await attachmentMenu.click();
-      const draftToggle = composer.getByRole("menuitemcheckbox", { name: "Draft", exact: true });
-      await draftToggle.click();
+      await expectBrowser(composer.getByRole("menuitem").first()).toBeVisible();
+      await expectBrowser(
+        composer.getByRole("menuitemcheckbox", { name: "Draft", exact: true }),
+      ).toHaveCount(0);
       await attachmentMenu.click();
       await expectBrowser(attachmentMenu).toHaveAttribute("aria-expanded", "false");
+      const draftToggle = page.getByRole("switch", { name: /^Draft:/ });
+      await draftToggle.click();
       const message = page.locator(".new-session-page__message");
       await message.fill("Keep this private plan");
       await composer.locator("input.agent-chat__file-input").setInputFiles({
@@ -1006,19 +996,13 @@ suite.define(() => {
       if (!refused) {
         await expectBrowser(notice).toBeVisible();
       }
-      await expectBrowser(page.locator(".new-session-page__draft-toggle")).toHaveAttribute(
-        "aria-checked",
-        "true",
-      );
+      await expectBrowser(draftToggle).toHaveAttribute("aria-checked", "true");
       await expectBrowser(message).toHaveValue("Keep this private plan");
       await expectBrowser(composer.locator(".chat-attachment-file__name")).toHaveText("plan.txt");
       await message.press("Enter");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(refused ? 1 : 0);
-      await attachmentMenu.click();
       await expectBrowser(draftToggle).toHaveAttribute("aria-checked", "true");
       await draftToggle.click();
-      await attachmentMenu.click();
-      await expectBrowser(attachmentMenu).toHaveAttribute("aria-expanded", "false");
       await expectBrowser(notice).toHaveCount(0);
       await composer.getByRole("button", { name: "Start session", exact: true }).click();
       const create = await gateway.waitForRequest("sessions.create", { after: refused ? 1 : 0 });

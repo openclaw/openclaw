@@ -2,7 +2,7 @@ import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import type { readChatTranscriptAttachmentSource } from "../chat-history-state.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
-import { buildMessageItems } from "../chat-thread-items.ts";
+import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { imageTitle } from "./chat-image-presentation.ts";
 import {
   createMessageMediaOptions,
@@ -30,6 +30,7 @@ export function projectTranscriptAttachments(
       normalized.content.some((item) => item.type === "omitted_media") ||
       Boolean(resolveCappedMessageId(row.message, normalized.role));
     const media = projectMessageMedia(row.message, normalized.content);
+    const timestamp = rawMessageTimestamp(row.message) ?? undefined;
     if (media.nextPairingQrExpiresAt !== undefined) {
       pairingQrExpirations.push({
         messageKey: row.key,
@@ -69,6 +70,7 @@ export function projectTranscriptAttachments(
         ]),
         label: imageTitle(image),
         mimeType: image.mimeType,
+        timestamp,
       });
     }
     for (const [index, item] of media.attachments.entries()) {
@@ -86,6 +88,7 @@ export function projectTranscriptAttachments(
         ]),
         label: item.attachment.label,
         mimeType: item.attachment.mimeType,
+        timestamp,
       });
     }
   }

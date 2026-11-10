@@ -2,11 +2,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  resolveGatewayProgramArguments,
+  resolveNodeProgramArguments,
+} from "../daemon/program-args.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
+  resolveDaemonInstallPlanInputs,
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
 } from "./daemon-install-plan.shared.js";
+import { buildExpectedGatewayServicePlan } from "./doctor-gateway-runtime-plan.js";
 
 let root: string;
 let originalArgv: string[];
@@ -41,7 +48,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
         runtime: "node",
         devMode: false,
       }),
-    ).resolves.toEqual({ devMode: false, runtime: "node", runtimePath: pinned });
+    ).resolves.toMatchObject({ devMode: false, runtime: "node", runtimePath: pinned });
   });
 
   it.each([
@@ -60,7 +67,92 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
   });
 });
 
+describe("durable CLI for an npx copy", () => {
+  const plan = () =>
+    resolveDaemonInstallPlanInputs({
+      service: "gateway",
+      env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+      runtime: "node",
+      runtimePath: "/custom/node",
+      devMode: false,
+    });
+  beforeEach(() => {
+    const npx = entrypoint(path.join(".npm", "_npx", "abc", "node_modules", "openclaw"));
+    fs.writeFileSync(path.join(npx, "..", "package.json"), '{"name":"openclaw","version":"1.2.3"}');
+    fs.mkdirSync(path.join(npx, "..", "dist"));
+    fs.writeFileSync(path.join(npx, "..", "dist", "index.js"), "");
+    process.argv = ["node", npx];
+  });
+
+  it("names the explicit install instead of planning a missing durable copy", async () => {
+    // Doctor keeps the service's CLI instead of planning the npx entry.
+    const retained = path.join(root, "global", "dist", "index.js");
+    fs.mkdirSync(path.dirname(retained), { recursive: true });
+    fs.writeFileSync(retained, "");
+    const doctorPlan = await buildExpectedGatewayServicePlan({
+      cfg: {},
+      command: { programArguments: [process.execPath, retained, "gateway"] },
+      serviceInstallEnv: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+      port: 18789,
+      runtime: "node",
+      runtimePath: process.execPath,
+    });
+    expect(doctorPlan.programArguments).toContain(retained);
+    await expect(plan()).rejects.toThrow(/missing.*npx openclaw@1\.2\.3 gateway install --force/u);
+    expect(fs.existsSync(path.join(root, "state", "npm"))).toBe(false);
+  });
+
+  it.each([
+    ["gateway", ["dist", "index.js"]],
+    ["node", ["openclaw.mjs"]],
+  ] as const)(
+    "plans a first %s install with the real argument builder before the copy exists",
+    async (service, entry) => {
+      const inputs = await resolveDaemonInstallPlanInputs({
+        service,
+        env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+        runtime: "node",
+        runtimePath: "/custom/node",
+        devMode: false,
+        installDurableCli: true,
+      });
+      const { programArguments } =
+        service === "gateway"
+          ? await resolveGatewayProgramArguments({ ...inputs, port: 18789 })
+          : await resolveNodeProgramArguments({ ...inputs, host: "127.0.0.1", port: 18789 });
+
+      const durableRoot = path.join(
+        resolveNpmGlobalPrefixLayoutFromPrefix(path.join(root, "state", "npm")).globalRoot,
+        "openclaw",
+      );
+      expect(programArguments).toContain(path.join(durableRoot, ...entry));
+      expect(inputs.durableCliReplacement?.entrypoint).toBe(path.join(durableRoot, ...entry));
+      expect(fs.existsSync(durableRoot)).toBe(false);
+    },
+  );
+});
+
 describe("resolveDaemonServicePathDirs", () => {
+  it.each([
+    ["npx", [".npm", "_npx", "abc", "node_modules", ".bin"]],
+    ["pnpm dlx", [".cache", "pnpm", "dlx", "abc", "node_modules", ".bin"]],
+    ["yarn dlx", ["tmp", "xfs-1a2b3c4d", "dlx-4242", "node_modules", ".bin"]],
+    ["bunx", ["tmp", ".bunx-501", "openclaw@latest", "node_modules", ".bin"]],
+    ["bunx on Windows", ["tmp", "bunx-501-openclaw", "bin"]],
+  ])("leaves %s off the service PATH", (_name, segments) => {
+    const shim = entrypoint(path.join(...segments));
+    const binDir = path.dirname(shim);
+    fs.renameSync(shim, path.join(binDir, "openclaw"));
+    expect(
+      resolveDaemonServicePathDirs({
+        runtimePath: path.resolve("/opt/node/bin/node"),
+        argv: ["node", path.join(binDir, "openclaw"), "gateway", "install"],
+        env: { PATH: binDir },
+        platform: "linux",
+      }),
+    ).toEqual([path.resolve("/opt/node/bin")]);
+  });
+
   it.skipIf(process.platform === "win32").each([true, false])(
     "accepts only the active installation's PATH shim (same=%s)",
     (same) => {
@@ -76,6 +168,24 @@ describe("resolveDaemonServicePathDirs", () => {
           platform: "darwin",
         }),
       ).toEqual(same ? [binDir] : undefined);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "puts the durable copy's launcher folder on the PATH of a service planned from npx",
+    () => {
+      const npxCli = entrypoint(path.join(".npm", "_npx", "abc", "node_modules", "openclaw"));
+      const { binDir } = resolveNpmGlobalPrefixLayoutFromPrefix(path.join(root, "state", "npm"));
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.writeFileSync(path.join(binDir, "openclaw"), "");
+      expect(
+        resolveDaemonServicePathDirs({
+          runtimePath: path.resolve("/opt/node/bin/node"),
+          argv: ["node", npxCli, "gateway", "install"],
+          env: { OPENCLAW_STATE_DIR: path.join(root, "state"), PATH: "" },
+          platform: "linux",
+        }),
+      ).toEqual([path.resolve("/opt/node/bin"), binDir]);
     },
   );
 

@@ -28,6 +28,7 @@ description: "Review, triage, repair, or land OpenClaw issues and pull requests 
 ## Inspect the actual item
 
 - Start `git status -sb`; preserve unrelated work. Local `gitcrawl` → PATH `ghx`, narrow live JSON. Stale/missing archive → `ghx`, no broad sync. PR source: `ghx pr view/diff` + checkout, not web search.
+- Reuse the existing base/task worktree. Missing history does not require another clone: use the [filtered history and workspace route](references/landing.md#checkout-and-source).
 
 ```bash
 ghx pr view <pr> --repo openclaw/openclaw \
@@ -41,7 +42,7 @@ ghx issue view <issue> --repo openclaw/openclaw \
 ## Establish the outcome
 
 - Read owner, entry points, callers, siblings, tests, docs, history, current main; inspect determining dependency contracts. Codex: root's personal source inspection. Contrary evidence → investigate before defending. No invented matrix/alternative.
-- **Already fixed:** prove current-main repair; canonical commit/PR + matching source/runnable proof. Closure authority → comment evidence + close; otherwise report.
+- **Already fixed:** prove current-main repair; canonical commit/PR + matching source/runnable proof. For released/candidate status, use [fix-inclusion tracing](../release-openclaw-maintainer/references/fix-inclusion.md). Closure authority → comment evidence + close; otherwise report.
 - **Real defect:** reproduce → repair owning invariant → prove path/siblings. Simplification over symptom guard; size/LOC ≠ correctness gate.
 - **Useful PR:** improve editable branch; unsafe → authorized credited replacement before closure. Replaced ancestry → maintainer-owned replacement, never squash contributor PR.
 - **Uncertain/product decision:** state gap; no speculative merge/automatic out-of-scope close.

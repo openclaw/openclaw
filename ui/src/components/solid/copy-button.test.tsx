@@ -52,7 +52,7 @@ it.each(["resolve", "reject", "dispose"] as const)("retires copy: %s", async (se
   expect(fallback).not.toHaveBeenCalled();
   if (settlement !== "dispose") {
     expect(writeText.mock.calls).toEqual([["first"], ["second"]]);
-    expect(view.getByRole("status").textContent).toBe("Copied!");
+    expect(view.getByRole("status").textContent).toBe("Copied");
     setText("third");
     flush();
     const fresh = view.getByRole<HTMLButtonElement>("button", { name: "Copy third" });
@@ -68,6 +68,8 @@ it("keeps focus and pending copy across an idle-label update, then resets to the
   const [label, setLabel] = createSignal("Copy value");
   const view = render(() => <CopyButton text="same" idleLabel={label()} />);
   const button = view.getByRole<HTMLButtonElement>("button", { name: "Copy value" });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(button.getAttribute("aria-describedby")).toBeNull();
   button.focus();
   fireEvent.click(button);
   setLabel("Copier la valeur");
@@ -77,7 +79,7 @@ it("keeps focus and pending copy across an idle-label update, then resets to the
   expect(button.disabled).toBe(true);
   pending.reject(new Error("Synthetic clipboard rejection"));
   await vi.advanceTimersByTimeAsync(0);
-  expect(button.getAttribute("aria-label")).toBe("Copied!");
+  expect(button.getAttribute("aria-label")).toBe("Copied");
   await vi.advanceTimersByTimeAsync(1_500);
   expect(button.getAttribute("aria-label")).toBe("Copier la valeur");
   expect(view.getByRole("status", { hidden: true }).hidden).toBe(true);
@@ -112,7 +114,7 @@ it.each(["newer focus", "unfocused", "dispose"] as const)(
     expect(fallback).not.toHaveBeenCalled();
     if (scenario !== "dispose") {
       expect(button.disabled).toBe(false);
-      expect(button.getAttribute("aria-label")).toBe("Copied!");
+      expect(button.getAttribute("aria-label")).toBe("Copied");
     }
   },
 );

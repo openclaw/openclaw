@@ -81,6 +81,8 @@ Multiple devices/channels can map to the same session, but history is not fully 
 
 If publishing a live transcript update fails after an agent message is saved, OpenClaw keeps the saved message and logs a warning. Reload the session to refresh its transcript; the failed notification is not replayed automatically.
 
+If an accepted chat message never starts its own turn, a later turn can still read it from history. Recovering that input keeps the original message visible without rewriting it into the next message or rebuilding history just to replace it. Provider retries preserve that input alongside the current message. Providers that require alternating roles receive the combined text only when the request is sent; the stored messages remain separate. Deliberately sending the same text again creates another user turn.
+
 If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
 Failure notices remain in chat history without becoming user instructions in later model requests. This also applies to notices saved by earlier versions; stored transcript bytes remain unchanged.

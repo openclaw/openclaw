@@ -58,7 +58,7 @@
   flex: none;
   text-decoration: none;
 }
-.bp-icon svg,
+.bp-icon:not(.oc-icon-button) svg,
 .lr-external svg {
   width: 15px;
   height: 15px;

@@ -236,7 +236,7 @@ suite.define(() => {
             await expect.poll(pendingCount, { timeout: 15000 }).toBe(1);
             expect(launched).toEqual([]);
             await expect.poll(() => setupWaiters.length, { timeout: 30000 }).toBe(1);
-            await page.getByText("Received · waiting for worker setup", { exact: true }).waitFor();
+            await page.getByText("Received · setting up device", { exact: true }).waitFor();
             const sent = await createSessionsSendTool({
               agentSessionKey: "agent:main:main",
               expectedTargetSessionId: sessionId,

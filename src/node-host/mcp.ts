@@ -35,12 +35,13 @@ import {
 import { VERSION } from "../version.js";
 import type { NodeHostClient } from "./client.js";
 import { bindNodeMcpElicitation } from "./mcp-elicitation.js";
+import { listEnabledNodeHostMcpServers } from "./mcp-server-config.js";
 
 const NODE_MCP_PLUGIN_ID = "node-mcp";
 const NODE_MCP_DESCRIPTION_MAX_CHARS = 1_024;
 const NODE_MCP_NAME_MAX_CHARS = 64;
 const NODE_MCP_SERVER_FRAGMENT_MAX_CHARS = 31;
-const NODE_MCP_ERROR_MAX_CHARS = 1_024;
+export const NODE_MCP_ERROR_MAX_CHARS = 1_024;
 const NODE_MCP_MAX_DESCRIPTORS = 128;
 const NODE_MCP_MAX_DESCRIPTOR_BYTES = 1024 * 1024;
 const NODE_MCP_MAX_CATALOG_BYTES = 10 * 1024 * 1024;
@@ -501,14 +502,17 @@ export async function startNodeHostMcpManager(
 
   return {
     descriptors,
-    async callMcpTool(params: {
-      server: string;
-      tool: string;
-      arguments?: Record<string, unknown>;
-      elicitationId?: string;
-      timeoutMs?: number;
-      signal?: AbortSignal;
-    }) {
+    async callMcpTool(
+      this: void,
+      params: {
+        server: string;
+        tool: string;
+        arguments?: Record<string, unknown>;
+        elicitationId?: string;
+        timeoutMs?: number;
+        signal?: AbortSignal;
+      },
+    ) {
       const state = states.get(params.server);
       const session = state?.current;
       if (!state || !session?.connected) {
@@ -615,15 +619,4 @@ export async function startNodeHostMcpManager(
       await Promise.allSettled(closing);
     },
   };
-}
-
-function listEnabledNodeHostMcpServers(
-  servers: Record<string, McpServerConfig> | undefined,
-): ReadonlyArray<readonly [string, McpServerConfig]> {
-  return Object.entries(servers ?? {})
-    .filter(
-      ([serverName, config]) =>
-        serverName.length > 0 && serverName === serverName.trim() && config.enabled !== false,
-    )
-    .toSorted(([left], [right]) => left.localeCompare(right));
 }

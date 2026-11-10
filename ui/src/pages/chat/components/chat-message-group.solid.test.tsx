@@ -19,16 +19,38 @@ import { buildLocalUserMessage } from "../user-message-content.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
-import { prepareGroupMessage } from "./chat-message-group-frame.ts";
+import { prepareGroupMessage, prepareMessageGroupFrame } from "./chat-message-group-frame.ts";
 import {
   ActivityGroup,
   MessageGroup,
   type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
-import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
+import { ChatTimestamp, MessageMeta } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
 
-it("shares the mobile layout query while preserving initial and updated message actions", () => {
+it("adds and removes usage details on a retained plain timestamp", () => {
+  const [meta, setMeta] = createSignal<Parameters<typeof MessageMeta>[0]["meta"]>(null);
+  const view = mountSolid(() => <MessageMeta timestamp={1000} meta={meta()} />);
+  const tooltip = view.container.querySelector("openclaw-tooltip");
+  expect(view.container.querySelector(".msg-meta__details")).toBeNull();
+  setMeta({
+    input: 21,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    model: null,
+    contextPercent: null,
+  });
+  flush();
+  expect(view.container.querySelector(".msg-meta__details")?.textContent).toContain("↑21");
+  setMeta(null);
+  flush();
+  expect(view.container.querySelector(".msg-meta__details")).toBeNull();
+  expect(view.container.querySelector("openclaw-tooltip")).toBe(tooltip);
+});
+
+it("shares mobile layout only for earlier-message actions and preserves updates", () => {
   const query =
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
   const media = Object.assign(new EventTarget(), { matches: true });
@@ -39,12 +61,31 @@ it("shares the mobile layout query while preserving initial and updated message 
   const subscribe = vi.spyOn(media, "addEventListener");
   const unsubscribe = vi.spyOn(media, "removeEventListener");
   const message = { role: "user", content: "First message", timestamp: 1000 };
+  const singleGroup = createMessageGroup(message, "user");
+  const single = mountSolid(() => (
+    <MessageGroup group={singleGroup} options={{ showReasoning: false, onReply: vi.fn() }} />
+  ));
+  flush();
+  expect(single.container.querySelector(".chat-message-actions-row")).toBeNull();
+  expect(matchMedia.mock.calls.filter(([value]) => value === query)).toHaveLength(0);
+  expect(subscribe).not.toHaveBeenCalled();
+  single.unmount();
   const group = createMessageGroup(message, "user", {
     messages: [
       { key: "first", message },
       { key: "second", message: { ...message, content: "Second message", timestamp: 1001 } },
     ],
   });
+  // AgentRunFrame always owns assistant chrome around its representative messages.
+  const frame = mountSolid(() => (
+    <MessageGroup
+      group={{ ...group, role: "assistant" }}
+      options={{ showReasoning: false, frameContent: [<span>Completed fragment</span>] }}
+    />
+  ));
+  flush();
+  expect(matchMedia.mock.calls.filter(([value]) => value === query)).toHaveLength(0);
+  frame.unmount();
   const view = mountSolid(() => (
     <>
       <MessageGroup group={group} options={{ showReasoning: false, onReply: vi.fn() }} />
@@ -64,6 +105,8 @@ it("shares the mobile layout query while preserving initial and updated message 
     media.dispatchEvent(new Event("change"));
     flush();
     expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(2);
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(unsubscribe).not.toHaveBeenCalled();
     view.unmount();
     expect(unsubscribe).toHaveBeenCalledOnce();
   } finally {
@@ -204,6 +247,7 @@ it.each([false, true])(
         frame={frame}
         options={{
           streamOptions: { bubbleMode },
+          workPreviews: new Map(),
           renderGroupOptions: () => ({
             bubbleMode,
             showReasoning: false,
@@ -247,6 +291,21 @@ it("does not give provider speech unframed answer actions", () => {
   expect(prepared.ownsActions).toBe(false);
   expect(prepared.actions?.replyTarget).toBeUndefined();
   expect(prepared.source.displayMarkdown).toBe(speech.content);
+});
+
+it("paints every right-side user turn with the viewer accent and only peers with identity hues", () => {
+  const profile = (id: string) => ({ id, name: id, identity: { type: "profile" as const, id } });
+  // [sender, viewer profile, peer]; without a viewer profile every user turn is the viewer's.
+  for (const [sender, userId, peer] of [
+    [profile("viewer"), "viewer", false],
+    [profile("peer"), "viewer", true],
+    [{ id: "pat@example.com" }, undefined, false],
+    [profile("viewer"), undefined, false],
+  ] as const) {
+    const group = createMessageGroup({ role: "user", content: "Hi" }, "user", { sender });
+    const frame = prepareMessageGroupFrame(group, { showReasoning: false, userId });
+    expect([frame.isPeerGroup, frame.senderHue !== null]).toEqual([peer, peer]);
+  }
 });
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
@@ -586,7 +645,7 @@ describe("owned message controls", () => {
       />
     ));
     const disclosure = view.container.querySelector<HTMLDetailsElement>(
-      ".chat-context-attachment",
+      "details.chat-context-attachment",
     )!;
     expect(disclosure).not.toBeNull();
     disclosure.open = true;
@@ -660,7 +719,8 @@ it("prepares the detailed timestamp only when metadata exposes its label", () =>
     second: "2-digit",
     timeZoneName: "short",
   });
-  const calendarFormat = vi.spyOn(Date.prototype, "toLocaleString");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(9_000_000_000_000);
+  const calendarFormat = vi.spyOn(Intl, "DateTimeFormat");
   const [metadata, setMetadata] = createSignal(false);
   const view = mountSolid(() => (
     <ChatTimestamp timestamp={1000} metadata={metadata() ? [<span>Usage</span>] : undefined} />
@@ -674,6 +734,58 @@ it("prepares the detailed timestamp only when metadata exposes its label", () =>
   } finally {
     view.unmount();
     calendarFormat.mockRestore();
+    clock.mockRestore();
+  }
+});
+
+it("shares timestamp formatting across scroll tasks and refreshes it the next minute", async () => {
+  const timestamp = 8_000_000_000_000;
+  const older = timestamp - 10 * 24 * 60 * 60 * 1000;
+  const previousYear = new Date(older);
+  previousYear.setFullYear(previousYear.getFullYear() - 1);
+  const dateLabels = [new Date(older), previousYear].map((date) =>
+    date.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      ...(date.getFullYear() === new Date(timestamp).getFullYear() ? {} : { year: "numeric" }),
+    }),
+  );
+  const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
+  const formatter = vi.spyOn(Intl, "DateTimeFormat");
+  const nativeDate = vi.spyOn(Date.prototype, "toLocaleDateString");
+  const nativeTime = vi.spyOn(Date.prototype, "toLocaleString");
+  const views: ReturnType<typeof mountSolid>[] = [];
+  try {
+    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp} />));
+    await Promise.resolve();
+    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp + 1000} />));
+    expect(formatter).toHaveBeenCalledTimes(1);
+    expect(views[0]!.container.querySelector("time")?.dateTime).toBe(
+      new Date(timestamp).toISOString(),
+    );
+    views.push(
+      mountSolid(() => <ChatTimestamp timestamp={older} metadata={[<span>Usage</span>]} />),
+    );
+    views.push(
+      mountSolid(() => (
+        <ChatTimestamp timestamp={previousYear.getTime()} metadata={[<span>Usage</span>]} />
+      )),
+    );
+    expect(formatter).toHaveBeenCalledTimes(4);
+    expect(views.slice(2).map((view) => view.container.querySelector("time")?.textContent)).toEqual(
+      dateLabels,
+    );
+    expect(nativeDate).not.toHaveBeenCalled();
+    expect(nativeTime).not.toHaveBeenCalled();
+    clock.mockReturnValue(timestamp + 60_000);
+    views.push(mountSolid(() => <ChatTimestamp timestamp={timestamp + 2000} />));
+    expect(formatter).toHaveBeenCalledTimes(5);
+  } finally {
+    views.forEach((view) => view.unmount());
+    formatter.mockRestore();
+    nativeDate.mockRestore();
+    nativeTime.mockRestore();
+    clock.mockRestore();
   }
 });
 
@@ -713,7 +825,7 @@ it("leaves timestamp attributes untouched when only message usage changes", () =
   flush();
   expect(view.container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑200");
   expect(time.dateTime).toBe("1970-01-01T00:00:01.000Z");
-  expect(time.textContent).toBe("6m ago");
+  expect(time.textContent).toBe("5m ago");
   expect(observer.takeRecords()).toEqual([]);
   observer.disconnect();
   clock.mockRestore();

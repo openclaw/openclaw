@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Command } from "commander";
 import { assert, describe, expect, it, vi } from "vitest";
+import * as configureShared from "../../commands/configure.shared.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import * as doctorContributions from "../../flows/doctor-health-contributions.js";
@@ -645,6 +646,84 @@ it.each([
       expect(warning).not.toContain("retry");
       expect(defaultRuntime.error).toHaveBeenCalledWith(`Warning: ${warning}`);
     } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32").each([true, false])(
+  "uses the operator's agent after candidate admission fails (repair consent=%s)",
+  async (consent) => {
+    prepareCurrentUpdate();
+    const operatorHome = process.env.HOME!;
+    const operatorBin = path.join(operatorHome, "bin");
+    const operatorCodexHome = path.join(operatorHome, ".codex");
+    const receiptPath = path.join(operatorHome, "agent-receipt.json");
+    fs.mkdirSync(operatorBin);
+    fs.writeFileSync(
+      path.join(operatorBin, "codex"),
+      `#!${process.execPath}\n` +
+        `require("node:fs").writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({\n` +
+        `  home: process.env.HOME, path: process.env.PATH, codexHome: process.env.CODEX_HOME,\n` +
+        `  stateDir: process.env.OPENCLAW_STATE_DIR, configPath: process.env.OPENCLAW_CONFIG_PATH,\n` +
+        `  workspaceDir: process.env.OPENCLAW_WORKSPACE_DIR,\n` +
+        `  updateInProgress: process.env.OPENCLAW_UPDATE_IN_PROGRESS,\n` +
+        `  runId: process.env.OPENCLAW_UPDATE_RUN_ID, prompt: process.argv.at(-1),\n` +
+        `}));\n`,
+      { mode: 0o700 },
+    );
+    const serviceHome = dirs.make("openclaw-triage-service-");
+    vi.stubEnv("OPENCLAW_WORKSPACE_DIR", path.join(serviceHome, "workspace"));
+    const serviceEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: serviceHome,
+      PATH: serviceHome,
+      CODEX_HOME: path.join(serviceHome, ".codex"),
+    };
+    vi.stubEnv("PATH", operatorBin);
+    vi.stubEnv("CODEX_HOME", operatorCodexHome);
+    vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv").mockResolvedValue(serviceEnv);
+    const admit = commandRun.admitUpdateCommandRun;
+    vi.spyOn(commandRun, "admitUpdateCommandRun").mockImplementation(async (params) => {
+      await admit(params);
+      // Keep initialization, run registration, triage preparation, and unwind real.
+      expect(process.env.PATH).toBe(serviceEnv.PATH);
+      throw new Error("fixture candidate validation failed");
+    });
+    vi.spyOn(configureShared, "select").mockResolvedValue("triage");
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new ExitError(code);
+    });
+    promptConfirm.mockClear();
+    promptConfirm.mockImplementation(async () => {
+      expect(createManagedHandoffLeaseStore().read(fixture.root).kind).toBe("absent");
+      return consent;
+    });
+    try {
+      await withTriageTerminal(true, async () => {
+        await expect(updateCommand({ restart: false })).rejects.toMatchObject({ code: 1 });
+      });
+      expect(defaultRuntime.log).toHaveBeenCalledWith(
+        "Agent: codex. This will use your own account/tokens.",
+      );
+      expect(promptConfirm).toHaveBeenCalledOnce();
+      expect(fs.existsSync(receiptPath)).toBe(consent);
+      if (consent) {
+        expect(JSON.parse(fs.readFileSync(receiptPath, "utf8"))).toEqual({
+          home: operatorHome,
+          path: operatorBin,
+          codexHome: operatorCodexHome,
+          stateDir: serviceEnv.OPENCLAW_STATE_DIR,
+          configPath: serviceEnv.OPENCLAW_CONFIG_PATH,
+          workspaceDir: serviceEnv.OPENCLAW_WORKSPACE_DIR,
+          prompt: expect.stringContaining("fixture candidate validation failed"),
+        });
+      }
+      expect(process.env.PATH).toBe(operatorBin);
+      expect(process.env.HOME).toBe(operatorHome);
+    } finally {
+      promptConfirm.mockResolvedValue(false);
       await closeOpenClawStateDatabaseAsync();
     }
   },

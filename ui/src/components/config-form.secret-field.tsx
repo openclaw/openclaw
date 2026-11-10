@@ -6,6 +6,8 @@ import type {
   ConfigSecretFields,
   StoredSecretSources,
 } from "../lib/config/config-secret-fields.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import { isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 
@@ -104,7 +106,7 @@ export function createSecretFieldHold(read: () => SecretFieldSource) {
       setSaving(true);
       const result = await secretFields
         .save(path, value)
-        .catch((cause: unknown) => ({ ok: false as const, error: String(cause) }));
+        .catch((cause: unknown) => ({ ok: false as const, error: formatUiError(cause) }));
       setSaving(false);
       if (!result.ok) {
         error = result.error;
@@ -258,6 +260,8 @@ export function secretInputProps(isSecret: () => boolean) {
     get "data-form-type"() {
       return when("other");
     },
+    // handleHeldSecretKey reads this to skip the Enter that commits an IME candidate.
+    onCompositionEnd: recordCompositionEnd,
   };
 }
 
@@ -268,6 +272,9 @@ export function handleHeldSecretKey(
   options: { multiline: boolean; onSave: () => void; onCancel: () => void },
 ): boolean {
   if (hold.text() === undefined || (event.key !== "Enter" && event.key !== "Escape")) {
+    return false;
+  }
+  if (isComposingKeyboardEvent(event)) {
     return false;
   }
   if (event.key === "Escape") {

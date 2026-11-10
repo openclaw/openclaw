@@ -6,6 +6,7 @@ import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createPointerDrag } from "../../lib/reactive/pointer-drag.ts";
@@ -23,18 +24,28 @@ registerEnglishCatalog(registerSettingsEnglish);
 
 export function showProfileActionError(error: unknown): void {
   showToast({
-    placement: "bottom",
     message: modelProviderErrorMessage(error),
-    icon: "alertTriangle",
+    severity: "error",
+    durationMs: 12_000,
+  });
+}
+
+export function showProfileActionWarning(warning: string): void {
+  showToast({
+    message: formatUiExternalText(warning),
+    severity: "warning",
     durationMs: 12_000,
   });
 }
 
 export function showProfileLogoutSuccess(warning?: string): void {
+  // The account disappearing already confirms success; warnings still need attention.
+  if (!warning) {
+    return;
+  }
   showToast({
-    placement: "bottom",
-    message: [t("modelProviders.logout.done"), warning].filter(Boolean).join(" "),
-    icon: "check",
+    message: warning,
+    severity: "warning",
   });
 }
 
