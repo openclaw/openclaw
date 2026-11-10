@@ -34,6 +34,7 @@ export async function cancelGatewayWorkerSessionWork(
     includeProtectedRuns: true,
     abortOrigin: "rpc",
     stopReason: "rpc",
+    assertCurrent: request.assertCurrent,
     onCancellationStarted: request.onCancellationStarted,
     onControllerTargets: (targets) => {
       controllerDrain = waitForChatAbortControllerRemoval({
