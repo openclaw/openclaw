@@ -17,20 +17,12 @@ import type {
 import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 
-export function catalogSessionRowsByKey<Row extends { key: string }>(rows: readonly Row[]) {
-  const byKey = new Map<string, Row>();
-  for (const row of rows) {
-    if (!byKey.has(row.key)) {
-      byKey.set(row.key, row);
-    }
-  }
-  return byKey;
-}
-
-export function catalogSessionActivity(
+export function catalogSessionActivity<
+  Row extends Pick<GatewaySessionRow, "unread" | "backgroundProcessCount">,
+>(
   sessions: readonly SessionCatalogSession[],
-  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
-  isRunVisuallyActive: (row: GatewaySessionRow) => boolean,
+  liveRowsByKey: ReadonlyMap<string, Row>,
+  isRunVisuallyActive: (row: Row) => boolean,
 ) {
   let running = false;
   let unread = false;

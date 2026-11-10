@@ -43,8 +43,13 @@ suite.define(() => {
         childSessions: children.map((child) => child.key),
       };
       const unrelated = session("unrelated", "Another person's coding", 1);
+      const excludedOwner = sessionPerson("profile-carol", "Carol");
+      const excluded = session("excluded", "Cached external owner", 1, excludedOwner);
       const response = {
-        ...ownerRoster([native, involved, unrelated, ...children], [viewer, other]),
+        ...ownerRoster(
+          [native, involved, unrelated, excluded, ...children],
+          [viewer, other, excludedOwner],
+        ),
         hasMore: false,
         nextOffset: null,
       };
@@ -73,6 +78,7 @@ suite.define(() => {
                 entry("unlinked", "Unlinked conversation"),
                 entry("involved", involved.label, involved.key),
                 entry("unrelated", unrelated.label, unrelated.key),
+                entry("excluded", excluded.label, excluded.key),
               ],
             },
           ],
@@ -81,7 +87,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         sessionKey: native.key,
         presenceUsers: [{ self: true, id: viewer.id, name: viewer.label }],
-        sessions: [native, involved, unrelated, ...children],
+        sessions: [native, involved, unrelated, excluded, ...children],
         featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
         historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
         methodResponses: {
@@ -160,11 +166,15 @@ suite.define(() => {
       await selectAllSidebarSessions(page);
       await expectVisible("Unlinked conversation", unrelated.label);
       await chooseSidebarOwner(page, `owner:${other.id}`);
+      await expectBrowser(text(excluded.label)).toHaveCount(0);
+      await expectBrowser(disclosure).toHaveText("5");
       await disclosure.click();
       await expectBrowser(catalog.getByText(children[0]!.label, { exact: true })).toBeVisible();
       await catalog.locator(`[data-show-more-children="${involved.key}"]`).click();
       await expectBrowser(catalog.getByText(children[4]!.label, { exact: true })).toBeVisible();
       await expectBrowser(catalog.getByText(children[5]!.label, { exact: true })).toHaveCount(0);
+      await chooseSidebarOwner(page, `owner:${viewer.id}`);
+      await expectBrowser(text(children[5]!.label)).toBeVisible();
       await selectAllSidebarSessions(page);
       if ((await disclosure.getAttribute("aria-expanded")) !== "true") {
         await disclosure.click();

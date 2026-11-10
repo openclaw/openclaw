@@ -1,4 +1,3 @@
-import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
@@ -15,7 +14,6 @@ import {
   resolveUiSessionRowAgentId,
 } from "../lib/sessions/session-key.ts";
 import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
-import { adoptedCatalogSessionKeys } from "./app-sidebar-session-catalogs.ts";
 import {
   collectCategorizedChildRootRows,
   collectSidebarSessionRowsByKey,
@@ -41,7 +39,6 @@ type AgentSessionRowsHost = {
     | Pick<ApplicationContext, "agents" | "gateway" | "sessions">
     | undefined;
   readonly sessionData: SessionDataOwner;
-  visibleSessionCatalogs(): readonly SessionCatalog[];
   selectedAgentMainSessionKey(agentId: string): string;
   readonly sessionsShowCron: boolean;
   readonly sessionsShowSystem: boolean;
@@ -82,9 +79,6 @@ export function projectSidebarAgentSessionRows({
         childRowsByParent: host.sessionData.childSessionRowsByParent,
       })
     : null;
-  const adopted = grouped
-    ? new Set<string>()
-    : adoptedCatalogSessionKeys(host.visibleSessionCatalogs());
   const loadedAgentId = normalizeAgentId(host.sessionData.sessionsAgentId ?? "");
   const routeAgentId = normalizeAgentId(navigationState.selectedAgentId);
   const visibilityOptions = {
@@ -130,15 +124,14 @@ export function projectSidebarAgentSessionRows({
   const lineageAgentId = normalizeAgentId(
     parseAgentSessionKey(lineageRoot?.key ?? "")?.agentId ?? "",
   );
-  // Selection can supplement pagination, not Gateway-owned involvement membership.
-  // Adopted catalog keys already render in Coding, so do not duplicate them here.
+  // Selection supplements pagination, never Gateway-owned involvement membership.
+  // Owner filtering and catalog placement run after the complete tree is built.
   const selectedFallback = navigationState.visibleSessionRows.find(
     (session) =>
       (grouped ? inScope(session) : selected === routeAgentId || lineageAgentId === selected) &&
       session.key === navigationState.activeRowKey &&
       (!host.sessionInvolvingMeFilterActive || rowsByKey.has(session.key)) &&
       !isSessionHidden(session) &&
-      !adopted.has(session.key) &&
       !isMainSession(session.key),
   );
   const mainSessionKeys = new Set(canonicalMainKeys);
@@ -155,7 +148,6 @@ export function projectSidebarAgentSessionRows({
     (grouped
       ? inScope(lineageRoot)
       : lineageAgentId === selected || lineageRouteAgentId === selected) &&
-    !adopted.has(lineageRoot.key) &&
     !isMainSession(lineageRoot.key) &&
     !scopedRootRows.some((row) => row.key === lineageRoot.key)
   ) {
@@ -251,8 +243,8 @@ export function projectSidebarAgentSessionRows({
     promotedRows.length > 0 || categorizedChildRows.length > 0
       ? scopedRootRows.toSorted(compareSessions)
       : scopedRootRows;
-  // Build the complete tree before placing adopted roots in their catalog;
-  // dropping a parent first would promote its children into duplicate roots.
+  // Owner filtering and catalog placement consume the complete tree;
+  // dropping a parent first would orphan or lose matching descendants.
   const projected = projectSessionTree({
     mainSessionKeys,
     roots: orderedRootRows.filter((row) => !grouped || visibleRowsByKey.has(row.key)),
@@ -271,7 +263,7 @@ export function projectSidebarAgentSessionRows({
   ) {
     projected.unshift(navigationState.toSidebarSession(selectedFallback));
   }
-  return projected.filter((row) => !adopted.has(row.key));
+  return projected;
 }
 
 export type SidebarHomeSession = SidebarRecentSession & {

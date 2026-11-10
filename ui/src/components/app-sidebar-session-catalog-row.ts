@@ -1,6 +1,14 @@
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
-import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
+import { projectSidebarSessionReference } from "./app-sidebar-agent-session-rows.ts";
+import type {
+  CatalogBackingSessionDisplay,
+  SidebarSessionCatalog,
+} from "./app-sidebar-session-catalogs.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
+import { sidebarCatalogLiveRows } from "./app-sidebar-session-snooze-visibility.ts";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import type { SidebarProjectionMemo } from "./sidebar-projection-cache.ts";
+import type { SidebarProjectionHost } from "./sidebar-projection-memo.ts";
 
 const CATALOG_CONTROLS = [
   ["link", ".sidebar-recent-session__link"],
@@ -70,4 +78,51 @@ export function createCatalogSessionRowRef(
       }
     };
   };
+}
+
+/** Converted entries share one prepared tree map across disclosure, rendering and activity. */
+export function memoizedSidebarCatalogRows(
+  memo: SidebarProjectionMemo<ReadonlyMap<string, SidebarRecentSession>>,
+  host: SidebarProjectionHost,
+  catalogs: readonly SidebarSessionCatalog[],
+): ReadonlyMap<string, SidebarRecentSession> {
+  const navigationState = host.getSessionNavigationState();
+  return memo.read(
+    () => [
+      navigationState,
+      catalogs,
+      host.sessionData.loadedChildSessionKeys,
+      host.sessionData.childSessionErrorsByParent,
+    ],
+    () => {
+      const adopted = new Set<string>();
+      for (const catalog of catalogs) {
+        for (const source of catalog.visibleHosts) {
+          for (const entry of source.sessions) {
+            if (entry.sessionKey) {
+              adopted.add(entry.sessionKey);
+            }
+          }
+        }
+      }
+      const projected = new Map<string, SidebarRecentSession>();
+      for (const row of sidebarCatalogLiveRows(host.sessionData)) {
+        if (adopted.has(row.key) && !projected.has(row.key)) {
+          projected.set(
+            row.key,
+            projectSidebarSessionReference({
+              host,
+              row,
+              agentId: host.sessionNavigationAgentId(row),
+              navigationState,
+              resolveAttention: host.resolveSessionAttention,
+              involvingMe: host.sessionInvolvingMeFilterActive,
+              ownerId: host.sessionOwnerFilterId,
+            }).session,
+          );
+        }
+      }
+      return projected;
+    },
+  );
 }

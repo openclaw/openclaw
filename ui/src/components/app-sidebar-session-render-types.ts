@@ -157,7 +157,6 @@ export type SessionCatalogRenderSnapshot = {
   mainKey: string;
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
-  liveRows: readonly GatewaySessionRow[];
   projectedRows: ReadonlyMap<string, SidebarRecentSession>;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;

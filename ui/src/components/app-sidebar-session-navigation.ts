@@ -41,14 +41,12 @@ import {
   sidebarVisibleRowsInOrder,
 } from "./app-sidebar-personal-navigation.ts";
 import { sidebarPresenceScope } from "./app-sidebar-presence.ts";
+import type { memoizedSidebarCatalogRows } from "./app-sidebar-session-catalog-row.ts";
 import {
   adoptedCatalogSessionKeys,
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
-import {
-  findSidebarHovercardRow,
-  mergeAdoptedSessionPullRequestRows,
-} from "./app-sidebar-session-lookup.ts";
+import { findSidebarHovercardRow } from "./app-sidebar-session-lookup.ts";
 import {
   createSidebarSessionRowsComparator,
   createSidebarSessionSelection,
@@ -70,7 +68,6 @@ import {
 } from "./app-sidebar-session-projection.ts";
 import {
   visibleSidebarSessionCatalogs,
-  sidebarCatalogLiveRows,
   sidebarSessionSnoozeWakeRows,
 } from "./app-sidebar-session-snooze-visibility.ts";
 import {
@@ -100,7 +97,6 @@ import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { SidebarProjectionMemo, SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
 import {
   memoizedSidebarCatalogs,
-  memoizedSidebarCatalogRows,
   memoizedSidebarHome,
   memoizedSidebarSections,
   projectSidebarNavigation,
@@ -110,6 +106,9 @@ import {
 } from "./sidebar-projection-memo.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { mountedViewerSessionKeys } from "./solid/viewer-facepile.tsx";
+
+// This immutable empty projection has no connection or session-specific facts.
+const EMPTY_CATALOG_ROWS: ReadonlyMap<string, SidebarRecentSession> = new Map();
 
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
   readonly personCardTriggers = new WeakMap<HTMLElement, HTMLElement>();
@@ -173,7 +172,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   private readonly navigationMemo = new SidebarProjectionMemo<SidebarSessionNavigationState>();
   private readonly rowsMemo = new SidebarProjectionMemo<SidebarRecentSession[]>();
   private readonly catalogsMemo = new SidebarProjectionMemo<SidebarSessionCatalog[]>();
-  private readonly catalogRowsMemo = new SidebarProjectionMemo<SidebarRecentSession[]>();
+  private readonly catalogRowsMemo = new SidebarProjectionMemo<
+    ReadonlyMap<string, SidebarRecentSession>
+  >();
   private readonly sectionsMemo = new SidebarProjectionMemo<SidebarVisibleSections>();
   private readonly homeMemos = new Map<string, SidebarProjectionMemo<SidebarHomeSession>>();
   readonly sessionOwnerFilter = new SessionOwnerFilter(
@@ -194,19 +195,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   sessionPullRequests!: SessionPullRequestIndicators;
 
   readSessionPullRequestRows(): readonly SidebarRecentSession[] {
-    return mergeAdoptedSessionPullRequestRows({
-      rows: [
-        ...this.visibleSessionRowsInOrder(),
-        ...(this.rosterSessionSource?.agentIds.flatMap((agentId) => {
-          const home = this.visibleHomeSession(agentId);
-          return home ? [home] : [];
-        }) ?? []),
-      ],
-      adopted: adoptedCatalogSessionKeys(this.visibleSessionCatalogs()),
-      sessionsResult: this.rosterSessionSource?.result ?? this.sessionData.sessionsResult,
-      sessionResultsByAgent: this.sessionData.sessionResultsByAgent,
-      navigationState: this.getSessionNavigationState(),
-    });
+    return distinctSidebarSessionRows([
+      ...this.visibleSessionRowsInOrder(),
+      ...this.catalogSessionRows().values(),
+      ...(this.rosterSessionSource?.agentIds.flatMap((agentId) => {
+        const home = this.visibleHomeSession(agentId);
+        return home ? [home] : [];
+      }) ?? []),
+    ]);
   }
 
   private readonly readSidebarSessionSortOptions = () => ({
@@ -287,10 +283,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   // never remove their adopted rows from the regular session list.
   visibleSessionCatalogs = () => visibleSidebarSessionCatalogs(this);
 
-  protected catalogLiveRows = () => sidebarCatalogLiveRows(this.sessionData);
+  protected catalogRowProjector?: typeof memoizedSidebarCatalogRows;
 
-  catalogSessionRows = (): SidebarRecentSession[] =>
-    memoizedSidebarCatalogRows(this.catalogRowsMemo, this, this.sidebarSessionCatalogs());
+  catalogSessionRows = (): ReadonlyMap<string, SidebarRecentSession> =>
+    this.catalogRowProjector?.(this.catalogRowsMemo, this, this.sidebarSessionCatalogs()) ??
+    EMPTY_CATALOG_ROWS;
 
   protected sidebarSessionCatalogs = () => {
     // Catalogs consume the rows stage's resolved owner.
@@ -367,7 +364,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   childSessionParents(): Set<string> {
     return this.sessionProjection.childSessionParents(
-      [...this.visibleSessionRowsInOrder(), ...this.catalogSessionRows()],
+      [...this.visibleSessionRowsInOrder(), ...this.catalogSessionRows().values()],
       this,
     );
   }
@@ -714,7 +711,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
             navigationState,
           ),
         );
-        return rows;
+        if (roster) {
+          return rows;
+        }
+        const adopted = adoptedCatalogSessionKeys(this.visibleSessionCatalogs());
+        return rows.filter((row) => !adopted.has(row.key));
       },
     );
   }

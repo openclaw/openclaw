@@ -17,7 +17,6 @@ import { sidebarPresencePresentation, type SidebarPresenceScope } from "./app-si
 import {
   catalogErrorMessages,
   catalogSessionActivity,
-  catalogSessionRowsByKey,
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
 import {
@@ -114,7 +113,7 @@ type SidebarPresentationHost = Pick<
   };
   pluginNavigation(): readonly ControlUiRegistration<ControlUiNavigationItem>[];
   reconciledSidebarZone(): SidebarPinZone;
-  catalogSessionRows(): SidebarRecentSession[];
+  catalogSessionRows(): ReadonlyMap<string, SidebarRecentSession>;
   mainSessionRow(agentId: string): GatewaySessionRow | null;
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
   sessionNavigationAgentId(session: Pick<SidebarRecentSession, "key" | "agentId">): string;
@@ -127,7 +126,6 @@ type SidebarPresentationReaders = {
   sections(): SidebarVisibleSections["sections"];
   tree(): SidebarRecentSession[];
   catalogs(): SidebarSessionCatalog[];
-  catalogRows(): GatewaySessionRow[];
   ownerOptions(): readonly SessionOwnerOption[];
 };
 
@@ -269,10 +267,7 @@ export class SidebarSessionProjection {
             data.visibleSessionLimits,
           ],
           () => {
-            const catalogRowsByKey = catalogSessionRowsByKey(
-              catalogs.length ? readers.catalogRows() : [],
-            );
-            const projectedRowsByKey = catalogSessionRowsByKey(host.catalogSessionRows());
+            const projectedRowsByKey = host.catalogSessionRows();
             return [
               catalogs.map(({ hosts, ...visible }) => [
                 visible,
@@ -282,8 +277,8 @@ export class SidebarSessionProjection {
               catalogs.map((catalog) =>
                 catalogSessionActivity(
                   catalog.visibleHosts.flatMap((catalogHost) => catalogHost.sessions),
-                  catalogRowsByKey,
-                  (row) => context?.sessions.isRunVisuallyActive(row) ?? false,
+                  projectedRowsByKey,
+                  (row) => row.isRunVisuallyActive === true,
                 ),
               ),
               Array.from(this.mountedCatalogRows, ({ key }) => {

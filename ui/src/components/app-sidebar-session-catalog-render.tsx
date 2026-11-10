@@ -6,7 +6,6 @@ import type {
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import type { GatewaySessionRow } from "../api/types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
@@ -27,12 +26,12 @@ import {
   type CatalogSessionMenuRequest,
   type CatalogRowControls,
   catalogSessionActivity,
-  catalogSessionRowsByKey,
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
 import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
 import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { hasProviderBrandIcon } from "./provider-icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
@@ -42,18 +41,22 @@ import {
   SessionRowBadges,
   sessionRunVisibility,
 } from "./solid/session-presentation.tsx";
+export { memoizedSidebarCatalogRows } from "./app-sidebar-session-catalog-row.ts";
 const CATALOG_SESSION_GROUP_LIMIT = 5;
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows use canonical local labels and title snapshots; native catalog
   // refreshes must not rename them or replace the regular session presentation.
-  const liveRowsByKey = createMemo(() => catalogSessionRowsByKey(params.snapshot.liveRows));
-  return renderCatalogGroup(() => params.catalog, liveRowsByKey, params);
+  return renderCatalogGroup(
+    () => params.catalog,
+    () => params.snapshot.projectedRows,
+    params,
+  );
 }
 export type SessionCatalogGroupsRenderer = typeof renderSessionCatalogGroups;
 function renderCatalogHostGroup(
   readCatalog: () => SessionCatalog,
   readHost: () => SessionCatalogHost,
-  readLiveRowsByKey: () => ReadonlyMap<string, GatewaySessionRow>,
+  readLiveRowsByKey: () => ReadonlyMap<string, SidebarRecentSession>,
   params: SessionCatalogGroupsParams,
 ) {
   const identity = createMemo(() => ({ catalogId: readCatalog().id, hostId: readHost().hostId }));
@@ -124,13 +127,7 @@ function renderCatalogHostGroup(
     const menuOpen = createMemo(() =>
       params.host.sidebarMenus.catalogMenuView.isOpenFor(catalogKey()),
     );
-    const adoptedRow = createMemo(() => {
-      const readSessionValue = readSession();
-      const readLiveRowsByKeyValue = readLiveRowsByKey();
-      return readSessionValue.sessionKey
-        ? readLiveRowsByKeyValue.get(readSessionValue.sessionKey)
-        : undefined;
-    });
+    const adoptedRow = createMemo(() => params.snapshot.projectedRows.get(key()));
     const rowRef = createCatalogSessionRowRef(params.host, () => ({
       key: key(),
       identityKey: identityKey(),
@@ -142,7 +139,7 @@ function renderCatalogHostGroup(
     const ownRunActive = () => {
       const row = adoptedRow();
       return row
-        ? params.host.sessionDataContext?.sessions.isRunVisuallyActive(row) === true
+        ? row.isRunVisuallyActive === true
         : readSession().status === "active" || readSession().status === "running";
     };
     const background = () => !ownRunActive() && (adoptedRow()?.backgroundProcessCount ?? 0) > 0;
@@ -260,7 +257,7 @@ function renderCatalogHostGroup(
       );
     };
     return (
-      <Show when={params.snapshot.projectedRows.get(key())} fallback={<CatalogRow />}>
+      <Show when={adoptedRow()} fallback={<CatalogRow />}>
         {(liveRow) => (
           <SessionTree
             host={params.host}
@@ -392,8 +389,7 @@ function renderCatalogHostGroup(
                 catalogSessionActivity(
                   group().sessions,
                   readLiveRowsByKey(),
-                  (row) =>
-                    params.host.sessionDataContext?.sessions.isRunVisuallyActive(row) ?? false,
+                  (row) => row.isRunVisuallyActive === true,
                 ),
               );
               return (
@@ -450,7 +446,7 @@ function renderCatalogHostGroup(
 }
 function renderCatalogGroup(
   readCatalog: () => SidebarSessionCatalog,
-  readLiveRowsByKey: () => ReadonlyMap<string, GatewaySessionRow>,
+  readLiveRowsByKey: () => ReadonlyMap<string, SidebarRecentSession>,
   params: SessionCatalogGroupsParams,
 ) {
   const newSessionAccess = createMemo(() => params.host.readNewSessionAccess());
@@ -468,11 +464,7 @@ function renderCatalogGroup(
   const collapsed = createMemo(() => params.host.collapsedSessionSections.has(sectionId()));
   const rows = createMemo(() => readCatalog().visibleHosts.flatMap((host) => host.sessions));
   const activity = createMemo(() =>
-    catalogSessionActivity(
-      rows(),
-      readLiveRowsByKey(),
-      (row) => params.host.sessionDataContext?.sessions.isRunVisuallyActive(row) ?? false,
-    ),
+    catalogSessionActivity(rows(), readLiveRowsByKey(), (row) => row.isRunVisuallyActive === true),
   );
   let viewMenuTrigger: HTMLButtonElement | undefined;
   const hasActiveRun = createMemo(() => activity().running);

@@ -118,7 +118,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             .sections,
         tree: () => this.visibleSessionTreeInOrder(),
         catalogs: () => this.sidebarSessionCatalogs(),
-        catalogRows: this.catalogLiveRows,
         ownerOptions: () => this.ownerOptions,
       })
     );
@@ -236,9 +235,15 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   // Catalog rows load when their keyed section needs them.
-  private readonly Catalog = lazy(() => import("./app-sidebar-session-catalog-render.tsx"), {
-    export: "renderSessionCatalogGroups",
-  });
+  private readonly Catalog = lazy(
+    async () => {
+      const renderer = await import("./app-sidebar-session-catalog-render.tsx");
+      this.catalogRowProjector = renderer.memoizedSidebarCatalogRows;
+      this.invalidate();
+      return renderer;
+    },
+    { export: "renderSessionCatalogGroups" },
+  );
   readonly catalogRendererImport = createSidebarRendererLoader(this.Catalog.preload);
   catalogProjectGrouping: CatalogProjectGrouping = loadStoredSidebarCatalogGrouping();
 
@@ -448,14 +453,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const sections = createMemo(() => host().zonedVisibleSections(visibleSessions()).sections);
     const expandedAgentId = createMemo(() => host().expandedAgentId());
     const catalogs = createMemo(() => host().sidebarSessionCatalogs());
-    const catalogRows = createMemo(
-      () =>
-        new Map(
-          host()
-            .catalogSessionRows()
-            .map((row) => [row.key, row]),
-        ),
-    );
     const catalogRouteSessionKey = createMemo(() => {
       const terminalCatalog =
         host().activeRouteId === "terminal"
@@ -500,8 +497,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             mainKey: host().sessionMainKey(),
             loadingMoreCatalogIds: host().sessionData.loadingMoreSessionCatalogIds,
             projectGrouping: host().catalogProjectGrouping,
-            liveRows: host().catalogLiveRows(),
-            projectedRows: catalogRows(),
+            projectedRows: host().catalogSessionRows(),
             catalogOpenTarget: host().catalogOpenTarget,
             terminalAvailable: host().terminalAvailable,
           }}
