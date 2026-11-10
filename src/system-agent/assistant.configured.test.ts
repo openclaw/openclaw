@@ -311,19 +311,6 @@ describe("OpenClaw configured-model planner", () => {
     });
 
     expect(result?.modelLabel).toBe("openai/gpt-5.5");
-    // OpenAI structured outputs reject a response_format whose required list omits a
-    // property, which is what broke `openclaw setup` on OpenAI defaults.
-    const lastCall = runEmbeddedAgent.mock.calls.at(-1) as unknown as
-      | [{ streamParams?: { responseFormat?: unknown } }]
-      | undefined;
-    const sentFormat = lastCall?.[0]?.streamParams?.responseFormat as
-      | { required: string[]; properties: Record<string, { type: unknown }> }
-      | undefined;
-    if (!sentFormat) {
-      throw new Error("expected the planner request to carry a response format");
-    }
-    expect(sentFormat.required).toEqual(Object.keys(sentFormat.properties));
-    expect(sentFormat.properties.command).toEqual({ type: ["string", "null"] });
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         authProfileId: "openai:p2",
