@@ -317,6 +317,105 @@ Until the background download finishes, unvisited views may still need a
 connection. Excluded optional assets and uncached external resources may also
 need a connection.
 
+## Fresh visits during Gateway downtime
+
+A stopped Gateway cannot serve a page or answer health requests. A prepared
+browser can still use the [cached shell](#offline-page-reload), including after
+an HTTP `503`. A first visit, cleared cache, or unavailable browser storage needs
+a response from a server that remains running.
+
+If your deployment already uses a reverse proxy, it can serve a small holding
+page while the Gateway is unavailable. A proxy on the same host covers Gateway
+process restarts, but not a host reboot. Covering a host reboot requires ingress
+on another host. Direct Gateway connections still fail while its listener is down.
+
+### Example: an existing Caddy proxy
+
+Merge this example into your existing Caddy site. Keep authentication before
+`vars` in the same `route`, and retain your upstream address, identity headers,
+and other `reverse_proxy` options. Do not replace your authentication configuration.
+See [trusted proxy auth](/gateway/trusted-proxy-auth) for that boundary.
+
+```caddy
+route {
+    # Keep your existing authentication directives here.
+    vars openclaw_gateway_proxy true
+    reverse_proxy 127.0.0.1:18789 {
+        # Keep your existing proxy options and identity headers here.
+    }
+}
+
+handle_errors 502 503 504 {
+    @gatewayProxy vars openclaw_gateway_proxy true
+    handle @gatewayProxy {
+        header {
+            Cache-Control "no-store"
+            Retry-After "5"
+        }
+        @uiNavigation {
+            method GET HEAD
+            path / /dashboard /dashboard/* /chat /chat/*
+            header Sec-Fetch-Mode navigate
+            header Sec-Fetch-Dest document
+        }
+        handle @uiNavigation {
+            header Content-Type "text/html; charset=utf-8"
+            respond `<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenClaw temporarily unavailable</title>
+<h1>OpenClaw is temporarily unavailable</h1>
+<p>The Gateway is not responding. It may be restarting or offline.</p>
+<p><a href="">Try again</a> in a few seconds.</p>
+</html>` 503
+        }
+        handle {
+            header Content-Type "application/json"
+            respond `{"error":{"type":"service_unavailable","message":"Gateway temporarily unavailable"}}` 503
+        }
+    }
+    respond "{err.status_text}" {err.status_code}
+}
+```
+
+The request marker limits this response to failures after authentication.
+Authentication failures keep their status. Caddy's
+[`handle_errors`](https://caddyserver.com/docs/caddyfile/directives/handle_errors)
+handles proxy transport failures, not responses received from the Gateway.
+Gateway `401`, `403`, and `503` responses therefore retain their bodies and headers.
+The proxy reports unavailability, not an inferred upgrade or successful operation.
+
+The HTML matcher covers only the listed Control UI routes and browser document
+requests. Other requests receive JSON with HTTP `503`, `Retry-After: 5`, and
+`Cache-Control: no-store`. If you use `gateway.controlUi.basePath`, prefix each
+listed UI path with that value. For `/openclaw`, include both `/openclaw` and
+`/openclaw/` for the root page. Add other UI paths explicitly, without matching
+API, health, download, or plugin endpoints. Keep existing proxy path rewrites.
+
+Validate the merged configuration before reloading your existing proxy:
+
+```bash
+caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+Test with a disposable Gateway and your existing proxy authentication. With its
+Gateway stopped, an authenticated request can exercise the document matcher:
+
+```bash
+curl -i https://openclaw.example.com/ \
+  -H 'Sec-Fetch-Mode: navigate' -H 'Sec-Fetch-Dest: document'
+curl -i https://openclaw.example.com/healthz
+curl -I https://openclaw.example.com/ \
+  -H 'Sec-Fetch-Mode: navigate' -H 'Sec-Fetch-Dest: document'
+```
+
+Expect HTML `503`, JSON `503`, and a bodyless `503`, respectively. Check the retry
+and cache headers on each response. Unauthenticated requests must still follow
+your proxy's sign-in policy. After starting the test Gateway, check that its
+normal responses pass through. A retry hint does not authorize replaying writes
+whose outcome is unknown.
+
 ## Gateway updates and suspended tabs
 
 An open tab checks the active UI build when it returns to the foreground, comes back online,
