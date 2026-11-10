@@ -105,17 +105,25 @@ suite.define(() => {
               wizard.evaluate((panel) => {
                 const box = panel.getBoundingClientRect();
                 const form = panel.querySelector("form")!;
+                const label = form.querySelector("label")!;
+                const textStart = document.createRange();
+                textStart.setStart(label.firstChild!, 0);
+                textStart.setEnd(label.firstChild!, 1);
+                const inputBounds = form.querySelector("input")!.getBoundingClientRect();
                 const action = form
                   .querySelector<HTMLButtonElement>('button[type="submit"]')!
                   .getBoundingClientRect();
                 return {
                   height: Math.round(box.height),
+                  labelOffset: Math.round(
+                    textStart.getBoundingClientRect().left - inputBounds.left,
+                  ),
                   bottom: Math.round(box.bottom - action.bottom),
                   trailing: Math.round(box.right - action.right),
                 };
               }),
             )
-            .toEqual({ height: 420, bottom: 20, trailing: 20 });
+            .toEqual({ height: 420, labelOffset: 0, bottom: 20, trailing: 20 });
         }
         await input.fill("first-code");
         await submit.click();

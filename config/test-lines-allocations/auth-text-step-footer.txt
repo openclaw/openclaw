@@ -1,2 +1,2 @@
-111
-# One provider-picker-to-text-wizard browser regression covers desktop/phone footer placement, fixed dialog height, short-viewport validation scrolling, and native form submission.
+122
+# One provider-flow regression covers footer and label alignment, stable height, validation scrolling and submission; the existing channel case preserves meaningful message newlines.
