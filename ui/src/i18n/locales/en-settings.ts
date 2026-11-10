@@ -762,10 +762,12 @@ const enSettings = {
       p99Hint: "99% of measured pings completed in this time or less.",
       unit: "ms",
       failed: "Last ping failed. Retrying…",
+      unavailable: "Ping isn’t available for this connection.",
     },
     activity: {
       title: "Gateway activity",
       failed: "Couldn’t refresh activity. Retrying…",
+      unavailable: "Host activity isn’t available for this connection.",
       offline: "Reconnect to see activity.",
     },
     access: {

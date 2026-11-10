@@ -129,8 +129,15 @@ function Ping(props: ConnectionProps) {
         <PingMetric name="p95" value={props.ping?.p95Ms} />
         <PingMetric name="p99" value={props.ping?.p99Ms} />
       </dl>
-      <p class="connection-ping__error" role="status">
-        {props.pingFailed ? t("connection.ping.failed") : undefined}
+      <p
+        class={["connection-ping__error", { "connection-ping__error--failed": props.pingFailed }]}
+        role="status"
+      >
+        {props.pingUnavailable
+          ? t("connection.ping.unavailable")
+          : props.pingFailed
+            ? t("connection.ping.failed")
+            : undefined}
       </p>
     </div>
   );
@@ -150,10 +157,10 @@ function ActivitySection(props: ConnectionProps) {
   const status = () => props.statusHistory.at(-1)?.status ?? {};
   // Rows hold their place until the first read answers; a metric the Gateway never reports has no row.
   const reported = (read: (sample: GatewayStatusSnapshot) => number | undefined) =>
-    (props.statusHistory.length === 0 && !props.statusFailed) ||
+    (!props.systemInfoUnavailable && props.statusHistory.length === 0 && !props.statusFailed) ||
     props.statusHistory.some((sample) => read(sample.status) !== undefined);
   const systemInfoFeedback = () => {
-    if (latest(props.systemInfoReady)) {
+    if (!props.systemInfoUnavailable && latest(props.systemInfoReady)) {
       throw new Error(t("connection.activity.failed"));
     }
     return null;
@@ -182,6 +189,11 @@ function ActivitySection(props: ConnectionProps) {
         >
           <Loading>{systemInfoFeedback()}</Loading>
         </Errored>
+        <Show when={connected() && props.systemInfoUnavailable}>
+          <p class="settings-row__desc connection-activity__note" role="status">
+            {t("connection.activity.unavailable")}
+          </p>
+        </Show>
         <Show when={!connected() && !props.statusFailed}>
           <p class="settings-row__desc connection-activity__note">
             {t("connection.activity.offline")}
