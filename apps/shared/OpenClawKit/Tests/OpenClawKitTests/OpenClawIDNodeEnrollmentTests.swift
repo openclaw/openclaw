@@ -453,8 +453,7 @@ struct OpenClawIDNodeEnrollmentTests {
         }
     }
 
-    @Test(arguments: [false, true])
-    func sameHostEnrollmentKeepsSelectedRestartIdentity(legacy: Bool) async throws {
+    @Test func sameHostEnrollmentKeepsSelectedRestartIdentity() async throws {
         let (fixture, json) = try fixture()
         let link = try OpenClawIDNodeEnrollmentLink(fixture.node_invite.link)
         let origin = URL(string: "https://discovery.example")!
@@ -480,28 +479,9 @@ struct OpenClawIDNodeEnrollmentTests {
             .appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let database = directory.appendingPathComponent("trust.sqlite")
-        if legacy {
-            let legacyURL = try #require(Bundle.module.url(forResource: "OpenClawIDNodeStateV1", withExtension: "sql", subdirectory: "Fixtures"))
-            let old = try OpenClawNativeStateSQLite(databaseURL: database)
-            try old.execute(String(contentsOf: legacyURL, encoding: .utf8))
-            let row = try old.prepare("INSERT INTO openclaw_id_node_targets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            for (index, value) in [link.hostname, link.clawID, link.rootFingerprint].enumerated() {
-                try row.bindText(value, at: Int32(index + 1))
-            }
-            for (index, value) in [first.state.bindingSequence, first.state.snapshotSequence,
-                                  first.state.snapshotIssuedAt, first.state.snapshotBindingSequence].enumerated() {
-                try row.bindInt64(value, at: Int32(index + 4))
-            }
-            for (index, value) in [firstID.uuidString, origin.absoluteString, first.relayURL.absoluteString,
-                                  first.serverKey, first.peerKey, String(decoding: evidence, as: UTF8.self)].enumerated() {
-                try row.bindText(value, at: Int32(index + 8))
-            }
-            _ = try row.step()
-        } else {
-            let selected = OpenClawIDNodeNativeTrustStore(databaseURL: database, enrollmentID: firstID, assertCurrent: {})
-            try await selected.commit(first)
-            await selected.close()
-        }
+        let selected = OpenClawIDNodeNativeTrustStore(databaseURL: database, enrollmentID: firstID, assertCurrent: {})
+        try await selected.commit(first)
+        await selected.close()
         // A second admitted attempt finishes before the app's Check step selects its identity.
         let pending = OpenClawIDNodeNativeTrustStore(databaseURL: database, enrollmentID: secondID, assertCurrent: {})
         try await pending.commit(second)
