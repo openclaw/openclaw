@@ -30,6 +30,10 @@ import {
   configuredSourceIntegrity,
   workspaceIdentity,
 } from "./add-checkpoint.js";
+import {
+  prepareTemplateInitializationIntent,
+  type TemplateInitializationIntent,
+} from "./add-initialization-intent.js";
 import { TemplateAddMutationError } from "./add-mutation-error.js";
 import { sameCommittedAgent } from "./add-plan-helpers.js";
 import { rollbackWorkspaceBootstrapSeedForAdd } from "./add-state-write.js";
@@ -80,6 +84,7 @@ export type StatelessTemplateAddOptions = TemplateMutationStateOptions & {
     config: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
     workspaceIdentity: string;
     phase?: "admitted" | "configured";
+    preparing?: TemplateInitializationIntent;
     planDigest?: string;
     sourceIntegrity?: string;
     assertCurrent: () => Promise<void>;
@@ -99,6 +104,8 @@ export type StatelessTemplateAddOptions = TemplateMutationStateOptions & {
   commitConfig?: ConfigCommit;
   /** Save ordinary session state before publishing its new agent; returns exact owned cleanup. */
   prepareAgentSession?: (config: OpenClawConfig) => Promise<() => Promise<void>>;
+  /** Write-ahead ownership through the canonical pending session. */
+  onAgentConfiguring?: (intent: TemplateInitializationIntent) => Promise<void>;
   /** Persist verified configuration before runtime wait. Uncertain acknowledgement retains custody. */
   onAgentConfigured?: (checkpoint: TemplateConfiguredAgentCheckpoint) => Promise<void>;
   /** Confirm active runtime publication before transferring rollback custody. */
@@ -470,6 +477,19 @@ export async function applyTemplateAddPlanStateless(
       if (options.onAgentConfigured) {
         initialSourceIntegrity = await configuredSourceIntegrity(plan);
       }
+      const preparing = options.admittedAgent?.preparing;
+      if (preparing) {
+        if (
+          preparing.planDigest !== checkpointPlanDigest ||
+          preparing.sourceIntegrity !== initialSourceIntegrity
+        ) {
+          throw new Error("The interrupted Template plan or source changed");
+        }
+      } else if (options.onAgentConfiguring) {
+        const intent = await prepareTemplateInitializationIntent(plan);
+        await options.onAgentConfiguring(intent);
+        await options.admittedAgent?.assertCurrent();
+      }
       await options.prepareEffect?.();
       assertForwardCurrent();
       await mkdir(dirname(workspace), { recursive: true });
@@ -480,7 +500,10 @@ export async function applyTemplateAddPlanStateless(
         await mkdir(workspace);
         workspaceCreated = true;
       }
-      const instructions = await createTemplateWorkspaceFiles(plan, stageOptions());
+      const instructions = await createTemplateWorkspaceFiles(plan, {
+        ...stageOptions(),
+        resume: preparing?.workspaceAdditions,
+      });
       workspaceFiles = instructions.files;
       rollbackWorkspaceFiles = instructions.rollback;
       workspaceBeforeExposure = await workspaceIdentity(workspace);

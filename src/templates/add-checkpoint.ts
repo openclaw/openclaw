@@ -13,34 +13,46 @@ import { readTemplateManifestFile } from "./reader.js";
 import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 import type { TemplateAddPlan } from "./types.js";
 
-export async function workspaceIdentity(workspace: string): Promise<string> {
+export async function workspaceIdentity(
+  workspace: string,
+  additions: Readonly<Record<string, string | null>> = {},
+): Promise<string> {
   const entries: string[] = [];
   const source = await fsSafeRoot(workspace);
   const inspect = async (relative: string): Promise<void> => {
-    const target = resolve(workspace, relative);
-    const stat = await lstat(target);
+    const stat = await lstat(resolve(workspace, relative));
     if (stat.isSymbolicLink()) {
-      throw new Error(`Workspace path ${JSON.stringify(relative)} became a symlink.`);
+      throw new Error("Workspace path became a symlink: " + relative);
     }
-    // Owned writes and their rollback change directory clocks, not its incarnation.
-    // Child membership and file bytes below still detect actual workspace edits.
-    entries.push(`${relative}:${stat.dev}:${stat.ino}:${stat.mode}`);
+    const planned = Object.hasOwn(additions, relative);
+    const addition = additions[relative];
+    // Directory clocks change during owned writes/rollback, not its incarnation.
+    if (!planned) {
+      entries.push(relative + ":" + stat.dev + ":" + stat.ino + ":" + stat.mode);
+    }
     if (stat.isFile()) {
-      entries.push(`${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`);
       const read = await source.read(relative, {
         hardlinks: "reject",
         maxBytes: MAX_MANAGED_FILE_BYTES,
         symlinks: "reject",
       });
-      entries.push(digestTemplateBytes(read.buffer));
+      const digest = digestTemplateBytes(read.buffer);
+      if (planned) {
+        if (typeof addition !== "string" || digest !== addition) {
+          throw new Error("Pending Template instruction changed: " + relative);
+        }
+      } else {
+        entries.push(stat.size + ":" + stat.mtimeMs + ":" + stat.ctimeMs, digest);
+      }
     } else if (stat.isDirectory()) {
-      for (const name of (await readdir(target)).toSorted()) {
-        await inspect(relative ? `${relative}/${name}` : name);
+      if (planned && addition !== null) {
+        throw new Error("Pending Template instruction became a directory: " + relative);
+      }
+      for (const name of (await readdir(resolve(workspace, relative))).toSorted()) {
+        await inspect(relative ? relative + "/" + name : name);
       }
     } else {
-      throw new Error(
-        `Workspace path ${JSON.stringify(relative)} is not a regular file or directory.`,
-      );
+      throw new Error("Workspace path is not a regular file or directory: " + relative);
     }
   };
   await inspect("");
@@ -123,16 +135,38 @@ export async function readRetainedTemplateInitialization(
     assertCurrent,
   );
   const continuation = pending?.templateInitialization;
+  const actualConfig = config.agents?.entries?.[agentId];
+  const preparing = continuation?.preparing;
+  const admissionMatches = isDeepStrictEqual(continuation?.agentConfig, actualConfig);
+  const intentMatches = preparing && isDeepStrictEqual(preparing.agentConfig, actualConfig);
   if (
     !pending?.initializationPending ||
     !continuation ||
     !isDeepStrictEqual(continuation.source, source) ||
-    !isDeepStrictEqual(continuation.agentConfig, config.agents?.entries?.[agentId]) ||
-    (await workspaceIdentity(workspace)) !== continuation.workspaceIdentity
+    (!admissionMatches && !intentMatches) ||
+    (await workspaceIdentity(workspace, preparing?.workspaceAdditions)) !==
+      continuation.workspaceIdentity
   ) {
     throw new Error(
       "The requested agent already exists and has no matching retained Template initialization",
     );
   }
-  return { sessionKey, continuation };
+  let configured = continuation.configured;
+  if (intentMatches) {
+    const root = await fsSafeRoot(workspace);
+    const complete = (
+      await Promise.all(Object.keys(preparing.workspaceAdditions).map((path) => root.exists(path)))
+    ).every(Boolean);
+    if (complete) {
+      configured = { planDigest: preparing.planDigest, sourceIntegrity: preparing.sourceIntegrity };
+    } else if (!admissionMatches) {
+      throw new Error("Configured Template instructions disappeared before recovery");
+    }
+  }
+  return {
+    sessionKey,
+    continuation,
+    configured,
+    workspaceIdentity: await workspaceIdentity(workspace),
+  };
 }

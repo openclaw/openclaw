@@ -1,5 +1,5 @@
-# Exact net growth: durable admission/retry, configured source integrity, bootstrap custody,
+# Exact net growth (including write-ahead interruption recovery): durable admission/retry, configured source integrity, bootstrap custody,
 # secondary-session blocking, real requester revocation and persisted-session compatibility.
 # Includes the existing real Gateway fixture with a local synthetic greeting provider.
 # The separate 85-line template-bootstrap-first-turn allocation is not counted twice.
-2534
+2628

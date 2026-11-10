@@ -25,6 +25,11 @@ import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-sou
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
 import { digestTemplateValue } from "./digest.js";
 import {
+  templateInitializationCheckpoints,
+  type AdmittedTemplateAgent,
+  type PreparedAgentChat,
+} from "./gateway-add-continuation.js";
+import {
   buildGatewayTemplateAddPlan,
   projectGatewayTemplateAddPlan,
   selectTemplateAgentWorkspace,
@@ -37,14 +42,6 @@ import { bindTemplateSkillWarningConsent } from "./gateway-skill-consent.js";
 import { assertTemplatesLabsEnabled } from "./labs-gate.js";
 import { assertTemplatePluginRequirementsEnabled } from "./plugin-runtime.js";
 import type { TemplateAddPlan } from "./types.js";
-
-type PreparedAgentChat = (() => Promise<void>) & {
-  assertCurrent?: () => Promise<void>;
-  complete?: () => Promise<void>;
-  checkpoint?: (
-    initialization: NonNullable<SessionEntry["templateInitialization"]>,
-  ) => Promise<void>;
-};
 
 export class TemplateGatewayPlanChangedError extends Error {
   constructor() {
@@ -113,16 +110,7 @@ export async function applyTemplateAddForGateway(
   const stateContext = captureOpenClawStateWorkerContext({ env: input.policyConfig.env });
   let settledResult: GatewayTemplateAddApplyResult | undefined;
   let readySessionKey: string | undefined;
-  let admitted:
-    | {
-        agentId: string;
-        workspace: string;
-        config: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
-        chat: PreparedAgentChat;
-        workspaceIdentity: string;
-        configured?: { planDigest: string; sourceIntegrity: string };
-      }
-    | undefined;
+  let admitted: AdmittedTemplateAgent | undefined;
   let initialized = false;
   const withoutAdmission = (config: OpenClawConfig): OpenClawConfig => {
     if (!admitted) {
@@ -185,7 +173,12 @@ export async function applyTemplateAddForGateway(
 
             const existingConfig = config.agents?.entries?.[agentId];
             if (existingConfig) {
-              const { sessionKey, continuation } = await readRetainedTemplateInitialization(
+              const {
+                sessionKey,
+                continuation,
+                configured,
+                workspaceIdentity: recoveredIdentity,
+              } = await readRetainedTemplateInitialization(
                 config,
                 agentId,
                 workspace,
@@ -203,8 +196,9 @@ export async function applyTemplateAddForGateway(
                 workspace,
                 config: structuredClone(existingConfig),
                 chat,
-                workspaceIdentity: continuation.workspaceIdentity,
-                ...(continuation.configured ? { configured: continuation.configured } : {}),
+                workspaceIdentity: recoveredIdentity,
+                preparing: continuation.preparing,
+                ...(configured ? { configured } : {}),
               };
               readySessionKey = sessionKey;
             } else {
@@ -580,6 +574,7 @@ export async function applyTemplateAddForGateway(
                                 admittedAgent: {
                                   config: admitted.config,
                                   workspaceIdentity: admitted.workspaceIdentity,
+                                  preparing: admitted.preparing,
                                   ...(admitted.configured
                                     ? { phase: "configured" as const, ...admitted.configured }
                                     : {}),
@@ -591,29 +586,7 @@ export async function applyTemplateAddForGateway(
                               }
                             : {}),
                           ...(admitted
-                            ? {
-                                onAgentConfigured: async (checkpoint) => {
-                                  const pending = admitted!;
-                                  if (!pending.chat.checkpoint) {
-                                    throw new Error(
-                                      "Template initialization checkpoint owner is unavailable",
-                                    );
-                                  }
-                                  const configured = {
-                                    planDigest: checkpoint.planDigest,
-                                    sourceIntegrity: checkpoint.sourceIntegrity,
-                                  };
-                                  await pending.chat.checkpoint({
-                                    source: input.source,
-                                    agentConfig: checkpoint.config,
-                                    workspaceIdentity: checkpoint.workspaceIdentity,
-                                    configured,
-                                  });
-                                  pending.config = structuredClone(checkpoint.config);
-                                  pending.workspaceIdentity = checkpoint.workspaceIdentity;
-                                  pending.configured = configured;
-                                },
-                              }
+                            ? templateInitializationCheckpoints(admitted, input.source)
                             : {}),
                           ...(input.prepareAgentChat && input.waitForAgentRuntime
                             ? {

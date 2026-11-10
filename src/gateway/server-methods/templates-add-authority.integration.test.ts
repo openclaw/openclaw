@@ -30,11 +30,32 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { templatesAddHandlers } from "./templates-add.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
-const { resolveSource, greeting, instructionFailure } = vi.hoisted(() => ({
-  instructionFailure: { pending: false, edited: false, soulWritten: false },
+const { resolveSource, greeting, instructionFailure, checkpointFailure } = vi.hoisted(() => ({
+  checkpointFailure: { pending: false, intent: false },
+  instructionFailure: { pending: false, edited: false, interrupted: false, soulWritten: false },
   resolveSource: vi.fn(),
   greeting: vi.fn(async () => {}),
 }));
+// mock-isolation: Fail the configured session write before commit; admission,
+// config publication, disk instructions and the fresh retry use their real owners.
+vi.mock("../session-create-target.js", async (original) => {
+  const owner = await original<typeof import("../session-create-target.js")>();
+  return {
+    ...owner,
+    checkpointSessionCreateTarget: (
+      ...args: Parameters<typeof owner.checkpointSessionCreateTarget>
+    ) => {
+      if (
+        checkpointFailure.pending &&
+        (checkpointFailure.intent ? args[2].preparing : args[2].configured)
+      ) {
+        checkpointFailure.pending = false;
+        throw new Error("Fixture configured checkpoint failed before commit");
+      }
+      return owner.checkpointSessionCreateTarget(...args);
+    },
+  };
+});
 const pluginIo = vi.hoisted(() => ({
   detail: vi.fn(),
   artifact: vi.fn(),
@@ -52,6 +73,11 @@ vi.mock("../../infra/fs-safe.js", async (original) => {
       const root = await filesystem.root(...args);
       return new Proxy(root, {
         get(target, key, receiver) {
+          if (key === "remove" && instructionFailure.interrupted) {
+            return async () => {
+              throw new Error("Fixture interrupted before instruction rollback");
+            };
+          }
           if (key !== "write") {
             return Reflect.get(target, key, receiver);
           }
@@ -158,6 +184,11 @@ it.each([
   "initialization-retry",
   "instruction-retry",
   "instruction-edited",
+  "checkpoint-retry",
+  "checkpoint-workspace-edited",
+  "checkpoint-config-edited",
+  "intent-retry",
+  "instruction-interrupted",
 ] as const)(
   "retains original templates.add.apply administrator through final owners: %s",
   async (boundary) => {
@@ -186,6 +217,9 @@ it.each([
       instructionFailure.pending = boundary.startsWith("instruction-");
       instructionFailure.edited = boundary === "instruction-edited";
       instructionFailure.soulWritten = false;
+      instructionFailure.interrupted = boundary === "instruction-interrupted";
+      checkpointFailure.pending = boundary.startsWith("checkpoint-") || boundary === "intent-retry";
+      checkpointFailure.intent = boundary === "intent-retry";
       const manifestPath = path.join(root, "CLAW.md");
       await fs.writeFile(
         manifestPath,
@@ -309,7 +343,10 @@ it.each([
         if (
           boundary === "source-retry" ||
           boundary === "initialization-retry" ||
-          boundary === "instruction-retry"
+          boundary === "instruction-retry" ||
+          boundary.startsWith("checkpoint-") ||
+          boundary === "intent-retry" ||
+          boundary === "instruction-interrupted"
         ) {
           await request;
           expect(respond.mock.calls[0]?.[1]).toMatchObject({
@@ -321,17 +358,74 @@ it.each([
             ?.sessionId;
           expect(retainedSessionId).toBeTruthy();
           expect(greeting).not.toHaveBeenCalled();
+          const workspace = config.agents!.entries![agentId]!.workspace!;
+          if (boundary === "intent-retry") {
+            expect(writes).toBe(1);
+            expect(await fs.readdir(workspace)).not.toContain("SOUL.md");
+          }
+          if (boundary === "instruction-interrupted") {
+            expect(writes).toBe(1);
+            expect(await fs.readFile(path.join(workspace, "SOUL.md"), "utf8")).toBe(
+              "Only verified Template instructions.\n",
+            );
+            instructionFailure.interrupted = false;
+          }
+          if (boundary === "checkpoint-workspace-edited") {
+            await fs.writeFile(
+              path.join(workspace, "SOUL.md"),
+              "User edited after interruption.\n",
+            );
+          } else if (boundary === "checkpoint-config-edited") {
+            config = {
+              ...config,
+              agents: {
+                ...config.agents,
+                entries: {
+                  ...config.agents!.entries,
+                  [agentId]: { ...config.agents!.entries![agentId], name: "User edited agent" },
+                },
+              },
+            };
+            await state.writeConfig(config);
+            setRuntimeConfigSnapshot(config);
+          }
+          await closeOpenClawStateDatabaseAsync();
           respond.mockClear();
           await templatesAddHandlers["templates.add.apply"]!({
             ...options,
             req: { ...options.req, id: "retained-admin-retry" },
           });
+          if (
+            boundary === "checkpoint-workspace-edited" ||
+            boundary === "checkpoint-config-edited"
+          ) {
+            expect(respond.mock.calls[0]?.[0]).toBe(false);
+            expect(writes).toBe(2);
+            expect(greeting).not.toHaveBeenCalled();
+            expect((await readConfigFileSnapshot()).config.agents?.entries?.[agentId]?.name).toBe(
+              boundary === "checkpoint-config-edited"
+                ? "User edited agent"
+                : "Verified Authority Fixture",
+            );
+            expect(await fs.readFile(path.join(workspace, "SOUL.md"), "utf8")).toBe(
+              boundary === "checkpoint-workspace-edited"
+                ? "User edited after interruption.\n"
+                : "Only verified Template instructions.\n",
+            );
+            expect(
+              (await readSessionEntryReadOnlyInWorker({ agentId, sessionKey }))?.sessionId,
+            ).toBe(retainedSessionId);
+            return;
+          }
         }
         const successful =
           boundary === "allowed" ||
           boundary === "source-retry" ||
           boundary === "initialization-retry" ||
-          boundary === "instruction-retry";
+          boundary === "instruction-retry" ||
+          boundary === "checkpoint-retry" ||
+          boundary === "intent-retry" ||
+          boundary === "instruction-interrupted";
         if (!successful) {
           expect(
             await Promise.race([reached.promise.then(() => "held" as const), settled]),

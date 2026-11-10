@@ -58,6 +58,7 @@ export async function createTemplateWorkspaceFiles(
   plan: TemplateAddPlan,
   options: TemplateAddStateOptions & {
     nowMs?: number;
+    resume?: Readonly<Record<string, string | null>>;
     assertForwardCurrent?: () => void;
   } = {},
 ): Promise<{ files: PersistedTemplateWorkspaceFile[]; rollback: () => Promise<void> }> {
@@ -155,7 +156,14 @@ export async function createTemplateWorkspaceFiles(
           updatedAtMs: nowMs,
         };
         if (await workspace.exists(targetRelative)) {
-          throw new TemplateWorkspaceWriteError();
+          const retained = options.resume?.[expectedRecord.path];
+          if (
+            retained !== digest ||
+            digestTemplateBytes((await workspace.read(targetRelative)).buffer) !== retained
+          ) {
+            throw new TemplateWorkspaceWriteError();
+          }
+          continue;
         }
         await options.prepareEffect?.();
         assertForwardCurrent();
