@@ -1,2 +1,2 @@
 # Covers holding pre-pause child completions in the requester transcript without a model turn (announce, retry, settle, failure and pass-through cases) behind one shared delivery fixture.
-298
+310

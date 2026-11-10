@@ -140,7 +140,7 @@ function deliver(options: {
               childSessionKey: spawns[0]?.sessionKey ?? childSessionKey,
               result: options.noOutput ? "(no output)" : (options.result ?? childResult),
               ...(options.noOutput
-                ? { status: "error" as const, noVisibleResult: true }
+                ? { status: options.status ?? ("error" as const), noVisibleResult: true }
                 : options.status
                   ? { status: options.status }
                   : {}),
@@ -234,6 +234,13 @@ it.each([
     goal: goal("paused", pausedAt),
     createdAt: 100,
     completionTarget: "parent" as const,
+  },
+  {
+    name: "a successful child with no output",
+    goal: goal("paused", pausedAt),
+    createdAt: 100,
+    noOutput: true,
+    status: "ok" as const,
   },
   {
     name: "a child with no visible text",

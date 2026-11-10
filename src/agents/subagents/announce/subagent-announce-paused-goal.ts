@@ -41,8 +41,8 @@ function recordedChildSpawnTimestamp(record: ChildSpawnRecord): number | undefin
 function visiblePausedGoalText(params: {
   internalEvents?: readonly AgentInternalEvent[];
   pausedGoalVisibleText?: string;
-  hasFailedTrustedSubagentCompletion: boolean;
-  hasRequiredSubagentNoOutputCompletion: boolean;
+  /** A failed child, or a required result that never arrived; not a successful empty one. */
+  hasFailedOrMissingChildResult: boolean;
 }): string | undefined {
   // Completed event text wins. Settle findings supply text when those events
   // are absent. The failed notice is reserved for a failed or no-output child.
@@ -57,7 +57,7 @@ function visiblePausedGoalText(params: {
   if (visible) {
     return visible;
   }
-  if (params.hasFailedTrustedSubagentCompletion || params.hasRequiredSubagentNoOutputCompletion) {
+  if (params.hasFailedOrMissingChildResult) {
     return resolveDirectCompletionInjectionText({
       events: params.internalEvents,
       contentKind: "failed_notice",
@@ -79,8 +79,8 @@ export function resolvePausedGoalChildInjection(params: {
   goal?: Pick<SessionGoal, "status" | "pausedAt">;
   internalEvents?: readonly AgentInternalEvent[];
   pausedGoalVisibleText?: string;
-  hasFailedTrustedSubagentCompletion: boolean;
-  hasRequiredSubagentNoOutputCompletion: boolean;
+  /** A failed child, or a required result that never arrived; not a successful empty one. */
+  hasFailedOrMissingChildResult: boolean;
 }): string | undefined {
   const pausedAt = params.goal?.status === "paused" ? params.goal.pausedAt : undefined;
   // Parent-only output must stay off the visible transcript. There is no hold

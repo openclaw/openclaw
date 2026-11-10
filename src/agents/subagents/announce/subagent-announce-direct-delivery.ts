@@ -454,8 +454,11 @@ async function sendSubagentAnnounceDirectlyBound(
         goal: requesterEntry?.goal,
         internalEvents: params.internalEvents,
         pausedGoalVisibleText: params.pausedGoalVisibleText,
-        hasFailedTrustedSubagentCompletion,
-        hasRequiredSubagentNoOutputCompletion,
+        // A successful child with no output keeps the ordinary path, as direct delivery does.
+        hasFailedOrMissingChildResult:
+          hasFailedTrustedSubagentCompletion ||
+          (hasRequiredSubagentNoOutputCompletion &&
+            !hasSuccessfulTrustedSubagentNoOutputCompletion),
       });
       // Without a resolved requester generation the ordinary turn path still owns it.
       if (pausedGoalMessage && requesterAgentId && requesterSessionId) {
