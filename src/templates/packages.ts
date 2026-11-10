@@ -71,11 +71,14 @@ export async function installTemplatePackages(
   const pluginIds = plan.actions
     .filter((action) => action.kind === "package" && action.details?.kind === "plugin")
     .map((action) => {
-      const pkg = packageFromAction(action);
-      if (!pkg.installId) {
+      const pluginId =
+        action.details?.source === "bundled"
+          ? bundledDependencyFromAction(action).installId
+          : packageFromAction(action).installId;
+      if (!pluginId) {
         throw new Error("Template plugin requirement has no install owner");
       }
-      return pkg.installId;
+      return pluginId;
     });
   if (pluginIds.length === 0) {
     return await installTemplatePackagesUnlocked(plan, options);
@@ -212,6 +215,15 @@ async function installTemplatePackagesUnlocked(
       if (action.details?.source === "bundled") {
         const dependency = bundledDependencyFromAction(action);
         if (dependency.kind === "plugin") {
+          if (dependency.ownerAction === "install") {
+            pluginNotice = {
+              type: "template_plugin_install",
+              pluginId: dependency.installId,
+              packageName: dependency.name,
+              displayName: dependency.name,
+              status: "error",
+            };
+          }
           try {
             installedPackages.push(
               await installBundledTemplatePlugin({ plan, dependency, options }),
@@ -221,6 +233,14 @@ async function installTemplatePackagesUnlocked(
               installedPackages.push(error.receipt);
             }
             throw error;
+          }
+          if (pluginNotice) {
+            pluginCompleted = true;
+            await options.onSetupOutcome?.({
+              kind: "plugin-install",
+              plugin: { ...pluginNotice, status: "installed" },
+            });
+            options.assertCurrent?.();
           }
           continue;
         }

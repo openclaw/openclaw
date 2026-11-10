@@ -1,7 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { assert, expect, it } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { applyTemplateAddPlanStateless } from "../templates/add-stateless.js";
 import { buildGatewayTemplateAddPlan } from "../templates/gateway-add-plan.js";
@@ -122,7 +122,16 @@ process.stdin.on("end", () => {
     );
     expect((await loadInstalledPluginIndexInstallRecords())[pluginId]).toBeUndefined();
     await writeFile(stagedPlugin, pluginCode);
-    const introduced = await installTemplatePackages(plan, { config, pluginConsent });
+    const onSetupOutcome = vi.fn();
+    const introduced = await installTemplatePackages(plan, {
+      config,
+      pluginConsent,
+      onSetupOutcome,
+    });
+    expect(onSetupOutcome).toHaveBeenCalledExactlyOnceWith({
+      kind: "plugin-install",
+      plugin: expect.objectContaining({ pluginId, status: "installed" }),
+    });
     expect(introduced[0]).toMatchObject({ source: "bundled", origin: "template-introduced" });
     expect(await rollbackStatelessTemplatePackages(introduced)).toEqual([]);
     expect((await loadInstalledPluginIndexInstallRecords())[pluginId]).toBeUndefined();
@@ -151,7 +160,9 @@ process.stdin.on("end", () => {
     });
     expect(reused.blockers).toEqual([]);
     expect(projectTemplatePluginCapabilityReviews(reused)[0]?.ownerAction).toBe("reuse");
-    const receipts = await installTemplatePackages(reused, { config });
+    onSetupOutcome.mockClear();
+    const receipts = await installTemplatePackages(reused, { config, onSetupOutcome });
+    expect(onSetupOutcome).not.toHaveBeenCalled();
     expect(receipts[0]).toMatchObject({ origin: "pre-existing", independentOwner: true });
     expect(await rollbackStatelessTemplatePackages(receipts)).toEqual([]);
     expect((await loadInstalledPluginIndexInstallRecords())[pluginId]).toEqual(record);

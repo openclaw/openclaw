@@ -1,2 +1,3 @@
-194
+171
 # Native artifact-to-Add plugin proof, consent/policy, unchanged reuse, conflict preservation and cleanup; plus source-discriminated Gateway review fixture.
+# Twenty lines moved to the owning skill layer; three unused lines are retired.
