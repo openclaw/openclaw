@@ -1,0 +1,4 @@
+# Regression for session-event replies (session-targeted cron jobs, system-event wakes):
+# delivery after the finished turn's plugin invocation scope closed must still reach the channel.
+# Exact net growth for this fix.
+31
