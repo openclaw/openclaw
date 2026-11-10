@@ -253,20 +253,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 1912
   },
   "openClawDeveloperInstructions": {
-    "chars": 3063,
-    "roughTokens": 766
+    "chars": 3045,
+    "roughTokens": 762
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 13384,
-    "roughTokens": 3346
+    "chars": 13366,
+    "roughTokens": 3342
   },
   "totalWithDynamicToolsJson": {
-    "chars": 99176,
-    "roughTokens": 24794
+    "chars": 99158,
+    "roughTokens": 24790
   },
   "userInputText": {
     "chars": 879,
@@ -385,7 +385,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ### Developer: OpenClaw Runtime Instructions
 
 ````text
-<openclaw_thread_policy>
+<thread_policy>
 OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
 Deferred searchable OpenClaw dynamic tools available: openclaw.automations, openclaw.gateway, openclaw.nodes, openclaw.session_status, openclaw.sessions_history, openclaw.sessions_list, openclaw.sessions_search, openclaw.sessions_send, openclaw.subagents, openclaw.tts, openclaw.web_fetch, openclaw.web_search.
@@ -416,7 +416,7 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 
 
 You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
-</openclaw_thread_policy>
+</thread_policy>
 ````
 
 ### Developer: Codex Collaboration Mode Instructions

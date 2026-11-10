@@ -609,7 +609,7 @@ describe("canonical descendant lifecycle through real owners", () => {
           calls.find((call) => call.method === "thread/resume"),
           "cold configuration",
         );
-        const policy = `<openclaw_thread_policy>\n${body}\n</openclaw_thread_policy>`;
+        const policy = `<thread_policy>\n${body}\n</thread_policy>`;
         expect(resume.params.developerInstructions).toBe(policy);
         expectPolicyHandoff(calls, binding.threadId, policy);
         expect(calls.findIndex((call) => call.method === "thread/inject_items")).toBeLessThan(

@@ -29,15 +29,13 @@ describe("native thread policy refresh", () => {
         dynamicTools: [],
       });
       const resume = await buildThreadResumeParams(params, { ...options, threadId: "root" });
-      const expected = `<openclaw_thread_policy>\n${[policy, refreshable].filter(Boolean).join("\n\n")}\n</openclaw_thread_policy>`;
+      const expected = `<thread_policy>\n${[policy, refreshable].filter(Boolean).join("\n\n")}\n</thread_policy>`;
       if ("nativeBase" in scenario) {
         expect(start.baseInstructions).toBeUndefined();
-        expect(start.developerInstructions).toMatch(/^<openclaw_thread_policy>\nYou are/);
+        expect(start.developerInstructions).toMatch(/^<thread_policy>\nYou are/);
         expect(start.developerInstructions).not.toContain("Independent operator policy");
-        expect(start.developerInstructions?.match(/<openclaw_thread_policy>/g)).toHaveLength(1);
-        expect(start.developerInstructions).toMatch(
-          /shared runtime policy\n<\/openclaw_thread_policy>$/,
-        );
+        expect(start.developerInstructions?.match(/<thread_policy>/g)).toHaveLength(1);
+        expect(start.developerInstructions).toMatch(/shared runtime policy\n<\/thread_policy>$/);
       } else {
         expect(start.developerInstructions).toBe(expected);
       }

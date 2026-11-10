@@ -258,8 +258,7 @@ export function registerThreadPolicyRefreshTests({
           }
           expect(requests.find(({ method }) => method === "thread/resume")?.params).toMatchObject({
             threadId,
-            developerInstructions:
-              "<openclaw_thread_policy>\nreplacement policy\n</openclaw_thread_policy>",
+            developerInstructions: "<thread_policy>\nreplacement policy\n</thread_policy>",
           });
           expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
         } else {
@@ -284,8 +283,7 @@ export function registerThreadPolicyRefreshTests({
   it.each([
     { developerInstructions: "", fault: "none", transport: "stdio" as const },
     {
-      developerInstructions:
-        "<openclaw_thread_policy>\nreplacement policy\n</openclaw_thread_policy>",
+      developerInstructions: "<thread_policy>\nreplacement policy\n</thread_policy>",
       fault: "retirement failure",
       transport: "stdio" as const,
     },

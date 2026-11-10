@@ -22,7 +22,7 @@ complete superseding policy message before admitting the turn. Earlier delimited
 policy blocks can remain in the transcript; the later block explicitly supersedes
 them.
 
-The complete native-thread carrier is delimited by `<openclaw_thread_policy>` on
+The complete native-thread carrier is delimited by `<thread_policy>` on
 initial creation and refresh. The replacement notice targets earlier OpenClaw policy blocks
 with the same delimiters and legacy unframed OpenClaw generic policy. It does not
 replace independent instructions or the enclosing native developer message. Separately supplied parent-request persona, skills, memory and conversation

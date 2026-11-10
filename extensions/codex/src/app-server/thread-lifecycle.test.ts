@@ -1580,7 +1580,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(startParams).toMatchObject({
       model: "native-effective",
       modelProvider: "native-provider",
-      developerInstructions: `<openclaw_thread_policy>\n${agentWorkspaceDeveloperInstructions}\n</openclaw_thread_policy>`,
+      developerInstructions: `<thread_policy>\n${agentWorkspaceDeveloperInstructions}\n</thread_policy>`,
       dynamicTools,
       environments: [{ environmentId: "local", cwd: workspaceDir }],
     });
@@ -1668,7 +1668,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(request.mock.calls[4]?.[1]).not.toHaveProperty("modelProvider");
     const resumedParams = request.mock.calls[4]?.[1];
     expect(resumedParams).toMatchObject({
-      developerInstructions: `<openclaw_thread_policy>\n${agentWorkspaceDeveloperInstructions}\n</openclaw_thread_policy>`,
+      developerInstructions: `<thread_policy>\n${agentWorkspaceDeveloperInstructions}\n</thread_policy>`,
       config: expect.any(Object),
     });
     const resumedConfig = (resumedParams as { config: Record<string, unknown> }).config;

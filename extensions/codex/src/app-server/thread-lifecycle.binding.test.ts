@@ -1463,7 +1463,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const started = await startOrResumeThread({ ...common, refreshableInstructions: firstSkills });
     // Without an inference relay, current context and skills use the native developer carrier.
     expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
-      developerInstructions: `<openclaw_thread_policy>\ngeneric policy\n\n${firstTurnContext}\n\n${firstSkills}\n</openclaw_thread_policy>`,
+      developerInstructions: `<thread_policy>\ngeneric policy\n\n${firstTurnContext}\n\n${firstSkills}\n</thread_policy>`,
     });
     await retainThread(client, started);
 
@@ -1482,7 +1482,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(WARM_RESUME_METHODS);
     const resumeParams = request.mock.calls.find(([method]) => method === "thread/resume")?.[1];
     expect(resumeParams).toMatchObject({
-      developerInstructions: `<openclaw_thread_policy>\ngeneric policy\n\n${secondTurnContext}\n\n${secondSkills}\n</openclaw_thread_policy>`,
+      developerInstructions: `<thread_policy>\ngeneric policy\n\n${secondTurnContext}\n\n${secondSkills}\n</thread_policy>`,
     });
     // The complete native carrier also replaces stale nonrelay conversation context and skills.
     const injected = request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1];
@@ -1496,7 +1496,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
             {
               type: "input_text",
               text: expect.stringContaining(
-                `<openclaw_thread_policy>\ngeneric policy\n\n${secondTurnContext}\n\n${secondSkills}\n</openclaw_thread_policy>`,
+                `<thread_policy>\ngeneric policy\n\n${secondTurnContext}\n\n${secondSkills}\n</thread_policy>`,
               ),
             },
           ],
@@ -1863,7 +1863,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toEqual(
         expect.objectContaining({
           ephemeral: true,
-          developerInstructions: `<openclaw_thread_policy>\ngeneric policy\n\n${firstSkills}\n</openclaw_thread_policy>`,
+          developerInstructions: `<thread_policy>\ngeneric policy\n\n${firstSkills}\n</thread_policy>`,
         }),
       );
       await retainCodexAppServerLiveThread(

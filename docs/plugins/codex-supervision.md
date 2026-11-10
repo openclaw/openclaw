@@ -445,7 +445,7 @@ available, then create new OpenClaw turns. OpenClaw does not backfill old rows.
 
 OpenClaw message forks use the shipping Codex App Server's developer-message
 API. OpenClaw keeps its complete current policy in native thread configuration,
-delimited by `<openclaw_thread_policy>`, and appends one developer message that
+delimited by `<thread_policy>`, and appends one developer message that
 replaces earlier OpenClaw policy blocks with the same delimiters and legacy
 unframed OpenClaw generic policy. Omitted rules are withdrawn, and an empty block
 withdraws that policy. Independent instructions outside the policy are preserved. Separately supplied parent-request

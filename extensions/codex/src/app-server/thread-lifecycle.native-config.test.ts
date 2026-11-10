@@ -320,7 +320,7 @@ describe("Codex native configuration lifecycle", () => {
         const carrier = isJsonObject(request.params) ? request.params[carrierKey] : undefined;
         expect(
           typeof carrier === "string" &&
-            carrier.startsWith(nativeBaseKey ? `<openclaw_thread_policy>\n${placed}` : `${placed}`),
+            carrier.startsWith(nativeBaseKey ? `<thread_policy>\n${placed}` : `${placed}`),
         ).toBe(true);
         expect(request.params).toMatchObject({
           config: {
@@ -392,7 +392,7 @@ describe("Codex native configuration lifecycle", () => {
           : "",
     );
     expect(frames.at(-1)?.[1]).toMatchObject({
-      developerInstructions: "<openclaw_thread_policy>\n\n</openclaw_thread_policy>",
+      developerInstructions: "<thread_policy>\n\n</thread_policy>",
     });
     expect(frames.at(-1)?.[1].baseInstructions).toBe(key ? undefined : "");
     expect(resumed.preparedOpenClawBaseInstructions).toBeUndefined();
