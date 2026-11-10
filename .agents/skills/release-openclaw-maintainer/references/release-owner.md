@@ -90,16 +90,19 @@ Use local evidence if access is unavailable; ledger synchronization does not
 hold up the release. A hotfix opportunity is not inclusion approval. Follow
 the approved selection scope; obtain the categorized-set approval required by
 backport discovery unless that decision was already explicitly delegated.
-Fix a shared defect once on main through the maintainer workflow, then backport
-with provenance; reuse an already-merged fix. Respect each track's mutation
-route, including extended-stable staging PRs. Preserve the documented exception
-for a blocker that must be fixed/proven on the release branch, and track its
-forward-port for closeout.
+Follow [backports and new fixes](../SKILL.md#backports-and-new-fixes) on every
+track: reuse merged main fixes through individual direct backports, never
+release-branch PRs. Prefer individual main PRs for new fixes; urgent release-first
+fixes go directly to the branch with an owned post-release forward-port.
 
 Make intake explicit:
 
-- **Open preparation:** batch approved changes before freezing C/Q. If the
-  operator requests early diagnostic validation while more backports arrive,
+- **Open preparation:** integrate each approved, dependency-closed group as it
+  becomes ready while independent discovery continues; do not wait for unrelated
+  audit lanes. Serialize changes to the canonical branch and record source and
+  destination commits plus focused proof before taking the next group. Finish
+  the complete inventory and resolve the final selection before freezing C/Q.
+  If the operator requests early diagnostic validation while more backports arrive,
   record that it is provisional; it qualifies publication only if the final
   candidate and all required inputs remain exactly unchanged and eligible.
 - **Frozen/validating:** new opportunities normally queue for the next release;
@@ -165,7 +168,8 @@ track's scope: extended-stable excludes native apps and ClawHub. Native
 publication does not hold the priority npm/GitHub/main-closeout path; pending
 platform work still needs an owner and an accurate status.
 
-Finish `$verify-release`, required platform work, applicable
+Finish the [hotfix ledger integrity check](hotfix-ledger-management.md#final-closeout-integrity-check),
+`$verify-release`, required platform work, applicable
 [main closeout](stable-main-closeout.md), and
 [retrospective](retrospective.md), including its shared issue ledger. Keep
 findings and operator corrections from the start, not only the final context

@@ -39,6 +39,7 @@ import type {
   CliBackendLiveSessionHandle,
 } from "../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookBeforeAgentRunEvent } from "../plugins/hook-types.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -65,7 +66,10 @@ import {
   wrapPreparedCliRunWithTestAdmission,
 } from "./cli-runner/execute.test-support.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
-import { createPreparedCliContext } from "./cli-runner/prepared-context.test-support.js";
+import {
+  buildPreparedContext,
+  type PreparedContextOverrides,
+} from "./cli-runner/prepared-context.test-support.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
 import { persistCliSessionBindingResult } from "./cli-session-store.js";
@@ -111,66 +115,6 @@ function createSessionFixture(params?: {
     manager.appendMessage({ ...entry, timestamp: index + 1 });
   }
   return { dir, sessionFile: sessionTarget.sessionKey, sessionTarget, storePath };
-}
-
-type PreparedContextOverrides = Partial<{
-  sessionKey: string;
-  cliSessionId: string;
-  runId: string;
-  lane: string;
-  openClawHistoryPrompt: string;
-  provider: string;
-  model: string;
-  executionMode: PreparedCliRunContext["params"]["executionMode"];
-  allowEmptyAssistantReplyAsSilent: boolean;
-}>;
-
-function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCliRunContext {
-  const provider = params?.provider ?? "codex-cli";
-  const model = params?.model ?? "gpt-5.4";
-  const backend = {
-    command: "codex",
-    args: ["exec", "--json"],
-    output: "text" as const,
-    input: "arg" as const,
-    modelArg: "--model",
-    sessionMode: "existing" as const,
-    serialize: true,
-  };
-  const runId = params?.runId ?? "run-2";
-  return createPreparedCliContext(
-    {
-      provider,
-      model,
-      runId,
-      sessionId: "s1",
-      sessionKey: params?.sessionKey,
-      thinkLevel: "low",
-      lane: params?.lane,
-      executionMode: params?.executionMode,
-      allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
-    },
-    {
-      id: provider,
-      config: backend,
-      bundleMcp: false,
-      pluginId: provider === "claude-cli" ? "anthropic" : "openai",
-    },
-    {
-      reusableCliSession: params?.cliSessionId
-        ? { mode: "reuse", sessionId: params.cliSessionId }
-        : { mode: "none" },
-      contextWindowInfo: {
-        tokens: 150_000,
-        referenceTokens: 200_000,
-        source: "modelsConfig",
-      },
-      systemPrompt: "You are a helpful assistant.",
-      ...(params?.openClawHistoryPrompt
-        ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
-        : {}),
-    },
-  );
 }
 
 function withParams(
@@ -646,8 +590,22 @@ describe("runCliAgent reliability", () => {
       media: [{ url: `media://inbound/${mediaId}`, contentType: "image/png" }],
     };
 
+    const runBeforeAgentRun = vi.fn(async (event: PluginHookBeforeAgentRunEvent) => {
+      expect(event.images).toEqual([
+        { type: "image", data: offloadedImage.toString("base64"), mimeType: "image/png" },
+        { type: "image", data: inlineImage.toString("base64"), mimeType: "image/png" },
+      ]);
+      fs.unlinkSync(path.join(inboundDir, mediaId));
+      event.images![0]!.data = "hook mutation";
+      return { pluginId: "policy-plugin", decision: { outcome: "pass" as const } };
+    });
+    setHookRunnerForTest({
+      hasHooks: vi.fn((name: string) => name === "before_agent_run"),
+      runBeforeAgentRun,
+    });
     const result = await runPreparedCliAgent(context);
 
+    expect(runBeforeAgentRun).toHaveBeenCalledOnce();
     expect(result.payloads).toEqual([{ text: "hello from fresh cli" }]);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
     for (const [index, label] of ["resumed", "fresh"].entries()) {
@@ -1504,13 +1462,28 @@ describe("runCliAgent reliability", () => {
   });
 
   it("blocks CLI runs before llm_input and model execution when before_agent_run blocks", async () => {
+    const image = {
+      type: "image" as const,
+      data: createSolidPngBuffer(1, 1, { r: 1, g: 2, b: 3 }).toString("base64"),
+      mimeType: "image/png",
+    };
     const agentEndStarted = createDeferred();
     const { resolve: releaseAgentEnd, promise: agentEndSettled } = createDeferred();
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) =>
         ["before_agent_run", "llm_input", "agent_end"].includes(hookName),
       ),
-      runBeforeAgentRun: blockBeforeAgentRun(),
+      runBeforeAgentRun: vi.fn(async (event: PluginHookBeforeAgentRunEvent) => {
+        expect(event.images).toEqual([image]);
+        return {
+          pluginId: "policy-plugin",
+          decision: {
+            outcome: "block" as const,
+            reason: "image policy",
+            message: "The agent cannot read this message.",
+          },
+        };
+      }),
       runLlmInput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(() => {
         agentEndStarted.resolve();
@@ -1533,6 +1506,7 @@ describe("runCliAgent reliability", () => {
         ...sessionParams(sessionTarget, dir),
         storePath,
         prompt: "secret prompt",
+        images: [image],
       }),
     ).then((result) => {
       resolved = true;

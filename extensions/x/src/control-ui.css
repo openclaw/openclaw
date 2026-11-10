@@ -16,7 +16,7 @@
 .x-replies h1 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 24px;
+  font-size: calc(24px * var(--control-ui-text-scale));
 }
 
 .x-replies p {
@@ -54,7 +54,7 @@
 .x-replies__hint,
 .x-replies small {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .x-replies__error {
@@ -81,7 +81,7 @@
 
 .x-replies__spend dt {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .x-replies__spend dd {
@@ -90,7 +90,7 @@
 
 .x-replies__spend strong {
   color: var(--text-strong);
-  font-size: 22px;
+  font-size: calc(22px * var(--control-ui-text-scale));
 }
 
 .x-replies__spend dd span {
@@ -130,7 +130,7 @@
 .x-replies h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 18px;
+  font-size: calc(18px * var(--control-ui-text-scale));
 }
 
 .x-replies__github {
@@ -192,7 +192,7 @@
 
 .x-replies__guest-counts dt {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .x-replies__guest-counts dd {
@@ -216,7 +216,7 @@
 
 .x-replies th {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
 }
 

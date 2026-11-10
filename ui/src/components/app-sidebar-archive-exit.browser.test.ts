@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFailed, onTestFinished, vi } from "vitest";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
   createGatewayHarness,
@@ -9,6 +9,7 @@ import {
 import { closeArchiveUndoToast } from "../test-helpers/archive-undo-window.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { emulateOverlayMedia } from "../test-helpers/overlay-browser-media.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../test-helpers/load-styles.ts";
 
@@ -17,14 +18,8 @@ setupSidebarTest();
 it.each([false, true])(
   "hides an archived row immediately with a presentation-only exit (reduced motion: %s)",
   async (reducedMotion) => {
-    const media = window.matchMedia.bind(window);
-    vi.spyOn(window, "matchMedia").mockImplementation((query) => {
-      const result = media(query);
-      if (query === "(prefers-reduced-motion: reduce)") {
-        Object.defineProperty(result, "matches", { value: reducedMotion });
-      }
-      return result;
-    });
+    await emulateOverlayMedia({ reducedMotion: reducedMotion ? "reduce" : "no-preference" });
+    onTestFinished(() => emulateOverlayMedia({ reducedMotion: "no-preference" }));
     const sessions = createSessionsHarness("main", ["agent:main:b", "agent:main:a"]);
     let finishPatch!: (value: ReturnType<typeof successfulSessionPatch>) => void;
     sessions.patch.mockImplementation(
@@ -52,6 +47,29 @@ it.each([false, true])(
     const next = rows[1]!;
     expect(next.getBoundingClientRect().top).toBeGreaterThan(row.getBoundingClientRect().top);
     const beforeTop = next.getBoundingClientRect().top;
+    const tree = next.closest<HTMLElement>(".sidebar-session-tree")!;
+    let observedTransform = false;
+    const observeTransform = (event: TransitionEvent) => {
+      if (event.target === tree && event.propertyName === "transform") {
+        observedTransform = true;
+      }
+    };
+    tree.addEventListener("transitionrun", observeTransform);
+    onTestFinished(() => tree.removeEventListener("transitionrun", observeTransform));
+    onTestFailed(() => {
+      console.error("[sidebar-archive-motion]", {
+        reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+        observedTransform,
+        retainedTree:
+          sidebar
+            .querySelector(`[data-session-key="${next.dataset.sessionKey}"]`)
+            ?.closest(".sidebar-session-tree") === tree,
+        transform: getComputedStyle(tree).transform,
+        transition: getComputedStyle(tree).transition,
+        exitPresent: Boolean(sidebar.querySelector("[data-sidebar-archive-exit]")),
+        exitHeld: tree.parentElement?.hasAttribute("data-sidebar-archive-exiting"),
+      });
+    });
     const archive = row.querySelector<HTMLButtonElement>("[data-sidebar-session-archive]")!;
     expect(archive.disabled, archive.outerHTML).toBe(false);
     archive.click();
@@ -77,15 +95,13 @@ it.each([false, true])(
       expect(list.hasAttribute("data-sidebar-archive-exiting")).toBe(true);
       const [fade] = exit!.getAnimations();
       expect(fade!.effect!.getTiming().duration).toBe(240);
-      // The neighbor glides into the vacated slot instead of jumping.
-      await waitForSolid(() =>
-        expect(
-          next
-            .closest(".sidebar-session-tree")!
-            .getAnimations()
-            .some((animation) => animation instanceof CSSTransition),
-        ).toBe(true),
-      );
+      // Record the transition even if its event precedes import settlement.
+      await waitForSolid(() => expect(observedTransform).toBe(true));
+      expect(
+        sidebar
+          .querySelector(`[data-session-key="${next.dataset.sessionKey}"]`)
+          ?.closest(".sidebar-session-tree"),
+      ).toBe(tree);
       for (const animation of sidebar.getAnimations({ subtree: true })) {
         animation.finish();
       }

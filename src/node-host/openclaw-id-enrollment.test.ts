@@ -177,6 +177,7 @@ test("signs accountless mail, waits for approval, and returns only verified pinn
     claw_id: world.binding.body.claw_id,
     root_fp: await fingerprint(world.rootPub),
     binding_seq: world.binding.body.binding_seq,
+    k_gw: world.gateway.pub,
   });
 });
 test("refuses a Discovery root substitution", async () => {
@@ -250,11 +251,81 @@ test("preserves the highest verified binding sequence when rejoining the same cl
       signer: world.invitee.signer,
       description,
       log: vi.fn(),
-      previousPin: {
-        claw_id: link.claw_id,
-        root_fp: link.root_fp,
-        binding_seq: world.binding.body.binding_seq + 1,
+      previous: {
+        persist: vi.fn(),
+        target: {
+          hostname: link.hostname,
+          pin: {
+            claw_id: link.claw_id,
+            root_fp: link.root_fp,
+            binding_seq: world.binding.body.binding_seq + 1,
+          },
+          evidence: {
+            root_pub: world.rootPub,
+            binding: await signStatement(
+              "ServerBinding",
+              {
+                ...world.binding.body,
+                binding_seq: world.binding.body.binding_seq + 1,
+              },
+              world.root,
+            ),
+          },
+          relayUrl: "https://relay.example/",
+          discoveryUrl: origin,
+        },
       },
     }),
   ).rejects.toThrow("rollback");
+});
+
+test("retains stronger verified authority before refusing a rejoin", async () => {
+  let saved = await join();
+  // The owner removed W, so the pre-mail admission check sees it unlisted again.
+  receipt = undefined;
+  reads = 0;
+  descriptor.descriptor.binding = await signStatement(
+    "ServerBinding",
+    {
+      ...world.binding.body,
+      binding_seq: 2,
+      k_srv: world.mallory.peer,
+    },
+    world.root,
+  );
+  descriptor.snapshot = await signStatement(
+    "MembershipSnapshot",
+    {
+      ...descriptor.snapshot.body,
+      seq: 2,
+      binding_seq: 2,
+      node_peer_keys: [],
+    },
+    world.gateway.signer,
+  );
+  const options = {
+    link: parseNodeJoinLink(
+      buildNodeJoinLink({
+        invite_id: "34".repeat(16),
+        secret: new Uint8Array(32).fill(43),
+        claw_id: saved.pin.claw_id,
+        root_fp: saved.pin.root_fp,
+        hostname: saved.hostname,
+        relay_url: saved.relayUrl,
+      }),
+    )!,
+    discoveryUrl: origin,
+    signer: world.invitee.signer,
+    description,
+    log: vi.fn(),
+    previous: {
+      target: saved,
+      persist: async (next: typeof saved) => {
+        saved = next;
+      },
+    },
+  };
+  await expect(enrollNode(options)).rejects.toThrow("not admitted");
+  expect(saved.pin.binding_seq).toBe(2);
+  expect(saved.freshness?.snapshot).toMatchObject({ seq: 2, binding_seq: 2 });
 });

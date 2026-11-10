@@ -25,7 +25,7 @@
   gap: 12px;
   padding: 11px 14px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .link-hovercard__identity {
@@ -96,7 +96,7 @@ a.link-hovercard__open {
 }
 
 .link-hovercard__title {
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 600;
   line-height: 1.4;
 }
@@ -104,6 +104,6 @@ a.link-hovercard__open {
 .link-hovercard__description {
   margin: 7px 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.5;
 }

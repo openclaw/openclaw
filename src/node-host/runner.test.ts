@@ -537,7 +537,9 @@ describe("runNodeHost", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     await withReadyNodeHost(
       async ({ options }) => {
+        const writesBeforeHello = mocks.configureNodeHost.mock.calls.length;
         receiveHello(options);
+        expect(mocks.configureNodeHost).toHaveBeenCalledTimes(writesBeforeHello);
         options.onConnectError?.(new Error(`socket failed ${url}`));
         expect(stderr).toHaveBeenCalledWith(`node host gateway connected: ${label}\n`);
         expect(stderr).toHaveBeenCalledWith(
@@ -550,6 +552,7 @@ describe("runNodeHost", () => {
           openclawId: {
             hostname: world.binding.body.hostname,
             relayUrl: "https://relay.example/",
+            discoveryUrl: "https://discovery.example",
             pin: {
               claw_id: world.binding.body.claw_id,
               root_fp: await fingerprint(world.rootPub),

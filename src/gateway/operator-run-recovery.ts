@@ -150,6 +150,9 @@ async function restoreGatewayOperatorSnapshot(params: {
             snapshot.scopes,
           )
         : undefined;
+    if (ingress) {
+      subscriptions.push(ingress.release);
+    }
     assertLifetime();
     if (ingress) {
       ingress.signal.addEventListener("abort", revoke, { once: true });
@@ -294,6 +297,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       }
       if (
         snapshot.sourceIngress === "principal" &&
+        !principal &&
         snapshot.profileId !== GATEWAY_OWNER_PROFILE_ID
       ) {
         // The transport owns effective auth overrides; headless contexts resolve their config.
