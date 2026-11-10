@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
@@ -7,9 +8,12 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { setLoggerOverride } from "../logging/logger.js";
+import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   buildGuardedModelFetch,
   buildProviderRequestDispatcherPolicyMock,
@@ -303,36 +307,40 @@ describe("buildGuardedModelFetch", () => {
     await expect(response.json()).resolves.toEqual({ error: { message: "API key expired" } });
   });
 
-  it("logs bounded provider request errors without reflected credentials or unrelated body fields", async () => {
-    const capture = createDiagnosticLogRecordCapture();
-    setLoggerOverride({ level: "info", consoleLevel: "silent" });
-    const credential = "synthetic-provider-credential";
-    const payload = {
-      error: {
-        type: "invalid_request_error",
-        message: `Unsupported thinking field; credential=${credential}\n${"x".repeat(800)}`,
-      },
-      request: { messages: [{ content: "unrelated prompt content" }] },
-    };
-    mockResponse(Response.json(payload, { status: 400 }));
-    try {
-      const response = await request({ headers: { Authorization: `Bearer ${credential}` } });
-      await expect(response.json()).resolves.toEqual(payload);
-      await capture.flush();
-      const message = capture.records.find((record) =>
-        record.message.includes("[model-fetch] response"),
-      )?.message;
-      expect(message).toContain("status=400");
-      expect(message).toContain("Unsupported thinking field");
-      expect(message).toContain("invalid_request_error");
-      expect(message).not.toContain(credential);
-      expect(message).not.toContain("unrelated prompt content");
-      expect(message).not.toContain("x".repeat(500));
-    } finally {
-      capture.cleanup();
-      setLoggerOverride(null);
-    }
-  });
+  it.each(["opaque/credential", "opaque\\/credential", "\\u006fpaque/credential"])(
+    "redacts reflected JSON credential %s before formatting raw provider logs",
+    async (encodedCredential) =>
+      withTestDir({ prefix: "provider-error-log-" }, async (dir) => {
+        const logFile = `${dir}/provider.log`;
+        setLoggerOverride({ level: "info", consoleLevel: "silent", file: logFile });
+        const credential = "opaque/credential";
+        const payload = {
+          error: {
+            type: `invalid_request_error: ${credential}`,
+            code: credential,
+            // The credential straddles the formatter's message cutoff.
+            message: `Unsupported thinking field; ${"x".repeat(180)}${credential}\n${"x".repeat(800)}`,
+          },
+          request: { messages: [{ content: "unrelated prompt content" }] },
+        };
+        const body = JSON.stringify(payload).replaceAll(credential, encodedCredential);
+        mockResponse(new Response(body, { status: 400 }));
+        try {
+          const response = await request({ headers: { "X-Proxy-Auth": credential } });
+          await expect(response.json()).resolves.toEqual(payload);
+          await loggerTestApi.flushFileLogQueueForTests();
+          const message = await readFile(logFile, "utf8");
+          expect(message).toContain("status=400");
+          expect(message).toContain("Unsupported thinking field");
+          expect(message).toContain("invalid_request_error");
+          expect(message).not.toContain("opaque");
+          expect(message).not.toContain("unrelated prompt content");
+          expect(message).not.toContain("x".repeat(500));
+        } finally {
+          setLoggerOverride(null);
+        }
+      }),
+  );
 
   it.each(["stalled", "oversized", "HTML"])(
     "preserves HTTP errors when their diagnostic body is %s",
@@ -537,11 +545,31 @@ describe("buildGuardedModelFetch headers", () => {
     },
   );
 
-  it("escapes resolved query credentials without changing URL structure", async () => {
-    const sentinel = mintSecretSentinel("gemini&scope=two+#%", { label: "gemini-query" });
-    await (await buildGuardedModelFetch(headerModel)(`${url}?key=${sentinel}`)).text();
-    expect(latestGuardedFetchParams().url).toBe(`${url}?key=gemini%26scope%3Dtwo%2B%23%25`);
-  });
+  it("escapes query credentials and redacts reflected values from raw HTTP error logs", async () =>
+    withTestDir({ prefix: "provider-query-error-log-" }, async (dir) => {
+      const logFile = `${dir}/provider.log`;
+      setLoggerOverride({ level: "info", consoleLevel: "silent", file: logFile });
+      const credential = "gemini&scope=two+#%";
+      const encoded = "gemini%26scope%3Dtwo%2B%23%25";
+      const sentinel = mintSecretSentinel(credential, { label: "gemini-query" });
+      // Egress must refresh registry membership even after the mint-time entry disappears.
+      resetSecretRedactionRegistryForTest();
+      const payload = { error: { message: `Upstream rejected ${credential}; encoded ${encoded}` } };
+      mockResponse(Response.json(payload, { status: 400 }));
+      try {
+        const response = await buildGuardedModelFetch(headerModel)(`${url}?key=${sentinel}`);
+        await expect(response.json()).resolves.toEqual(payload);
+        expect(latestGuardedFetchParams().url).toBe(`${url}?key=${encoded}`);
+        await loggerTestApi.flushFileLogQueueForTests();
+        const message = await readFile(logFile, "utf8");
+        expect(message).toContain("Upstream rejected");
+        expect(message).not.toContain(credential);
+        expect(message).not.toContain(encoded);
+      } finally {
+        setLoggerOverride(null);
+        resetSecretRedactionRegistryForTest();
+      }
+    }));
 
   it("rejects unregistered sentinels before guarded fetch", async () => {
     const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";

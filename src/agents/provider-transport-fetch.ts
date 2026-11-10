@@ -43,7 +43,7 @@ import {
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
-import { readProviderResponseErrorText } from "./provider-request-header-redaction.js";
+import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
 import { fetchWithProviderHttpGuard } from "./provider-transport-dispatcher-pool.js";
 import { requestBodyHasStreamTrue } from "./provider-transport-request-body.js";
 import { swapSecretSentinelsForEgress } from "./provider-transport-secret-egress.js";
@@ -413,15 +413,24 @@ export function buildGuardedModelFetch(
       // Diagnose rejected payloads without consuming the SDK body or logging echoed requests.
       const errorDetail =
         response.status === 400
-          ? await readProviderResponseErrorText(
-              response.clone(),
-              16 * 1024,
-              swappedEgress.headers ?? rawHeaders ?? {},
-              localServiceSignal
+          ? await readResponseTextLimited(response.clone(), 16 * 1024, {
+              signal: localServiceSignal
                 ? AbortSignal.any([localServiceSignal, AbortSignal.timeout(1_000)])
                 : AbortSignal.timeout(1_000),
-            )
-              .then((body) => formatProviderErrorPayload(JSON.parse(body)))
+            })
+              .then((body) =>
+                formatProviderErrorPayload(
+                  // Decode JSON escapes before redaction; formatting may split a credential.
+                  JSON.parse(body, (_key, value: unknown) =>
+                    typeof value === "string"
+                      ? redactProviderResponseErrorText(
+                          value,
+                          swappedEgress.headers ?? rawHeaders ?? {},
+                        )
+                      : value,
+                  ),
+                ),
+              )
               .catch(() => undefined)
           : undefined;
       log.info(
