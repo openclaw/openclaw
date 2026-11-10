@@ -260,8 +260,13 @@ it("sends no request for another operator's session but lets its owner reach the
                       text: "The conversation history before this point was compacted into the following summary:\n\n<summary>\nEarlier request summarized for review\n</summary>",
                     },
                   ]),
-                  user(expect.stringContaining("[Thu 1970-01-01 00:00 UTC] Parent question")),
-                  user("Review the parent"),
+                  user([
+                    {
+                      type: "text",
+                      text: expect.stringContaining("[Thu 1970-01-01 00:00 UTC] Parent question"),
+                    },
+                    { type: "text", text: "Review the parent" },
+                  ]),
                 ],
               },
             });

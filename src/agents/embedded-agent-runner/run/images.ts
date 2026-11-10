@@ -25,6 +25,7 @@ import { getMediaDir } from "../../../media/store.js";
 import { loadWebMediaRaw, type WebMediaResult } from "../../../media/web-media.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { resolveUserPath } from "../../../utils.js";
+import { mergeConsecutiveUserMessages } from "../../embedded-agent-helpers/turns.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   createSandboxBridgeReadFile,
@@ -623,6 +624,9 @@ async function materializePromptMediaMessages(
         role: "user",
         content: projectedContent,
         timestamp: message.timestamp,
+        ...(message.runtimeContext ? { runtimeContext: message.runtimeContext } : {}),
+        ...(message.operatorMessage ? { operatorMessage: message.operatorMessage } : {}),
+        ...(message.synthetic ? { synthetic: true } : {}),
         ...(message.runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
         ...(message.runtimeContextCarrierRetained !== undefined
           ? { runtimeContextCarrierRetained: message.runtimeContextCarrierRetained }
@@ -662,14 +666,22 @@ export async function hydratePromptMediaMessages(
 export async function materializeProviderContext(
   params: Omit<PromptMediaOptions, "provider" | "model" | "maxBytes" | "maxDimensionPx"> & {
     context: Context;
+    mergeUserTurns?: Parameters<typeof mergeConsecutiveUserMessages>[1];
   },
 ): Promise<ProviderContext> {
-  const messages = await materializePromptMediaMessages(params.context.messages as AgentMessage[], {
-    ...params,
-    model: { input: ["text", "image"] },
-    provider: true,
-  });
+  const materialized = await materializePromptMediaMessages(
+    params.context.messages as AgentMessage[],
+    {
+      ...params,
+      model: { input: ["text", "image"] },
+      provider: true,
+    },
+  );
   params.signal?.throwIfAborted();
+  // Resolve each row's facts and pinned inclusion before discarding its envelope.
+  const messages = params.mergeUserTurns
+    ? mergeConsecutiveUserMessages(materialized, params.mergeUserTurns)
+    : materialized;
   return messages === params.context.messages
     ? (params.context as ProviderContext)
     : ({ ...params.context, messages } as ProviderContext);

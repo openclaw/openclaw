@@ -1,3 +1,4 @@
+import { resolveProviderContext, type ProviderContext } from "@openclaw/ai/provider-types";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { AssistantMessageEvent } from "../llm/types.js";
@@ -277,9 +278,13 @@ export function expectPreparedAuthSupport(
 }
 
 export async function runMathSideQuestionAndCaptureContext() {
-  mockDoneAnswer(MATH_ANSWER);
+  let providerContext: ProviderContext | undefined;
+  mocks.streamSimpleMock.mockImplementation(async (_model, context, options) => {
+    providerContext = await resolveProviderContext(context, options);
+    return makeAsyncEvents([createDoneEvent(MATH_ANSWER)]);
+  });
   await runMathSideQuestion();
-  return mockArg(mocks.streamSimpleMock, 0, 1);
+  return providerContext;
 }
 
 export { expectRecordFields };

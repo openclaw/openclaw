@@ -8,6 +8,7 @@ import { buildBtwQuestionPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
 import type { RunBtwSideQuestionParams } from "./btw-runtime.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { resolveUserTurnMergeOptions } from "./embedded-agent-helpers/turns.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt-tool-call-replay-sanitization.js";
 import { materializeProviderContext } from "./embedded-agent-runner/run/images.js";
@@ -75,9 +76,15 @@ function resolveSideQuestionStream(input: SideQuestionStreamInput) {
     authProfileId: resolvedAuthProfileId,
   });
 
-  if (params.toolCalls !== "deny") {
-    return streamFn;
-  }
+  const transcriptPolicy = resolveTranscriptPolicy({
+    provider: runtimeModel.provider,
+    modelId: runtimeModel.id,
+    modelApi: runtimeModel.api,
+    model: runtimeModel,
+    config: params.cfg,
+    workspaceDir,
+    directApiKey: Boolean(apiKey) && !isAnthropicOAuthApiKey(apiKey),
+  });
   const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -90,6 +97,7 @@ function resolveSideQuestionStream(input: SideQuestionStreamInput) {
         materializeProviderContext({
           context,
           signal,
+          mergeUserTurns: resolveUserTurnMergeOptions(transcriptPolicy, runtimeModel.api),
           workspaceDir,
           agentWorkspaceDir: workspaceDir,
           workspaceOnly,
@@ -99,6 +107,9 @@ function resolveSideQuestionStream(input: SideQuestionStreamInput) {
         }),
     ),
   };
+  if (params.toolCalls !== "deny") {
+    return { streamFn: agent.streamFn, transcriptPolicy };
+  }
   const thinkingLevel = mapThinkingLevelForProvider(params.resolvedThinkLevel, runtimeModel);
   applyExtraParamsToAgent(
     agent,
@@ -115,11 +126,14 @@ function resolveSideQuestionStream(input: SideQuestionStreamInput) {
     { auth },
   );
   const preparedStream = agent.streamFn;
-  return (
-    model: Model,
-    context: Parameters<typeof streamFn>[1],
-    options: Parameters<typeof streamFn>[2],
-  ) => preparedStream(model, context, { reasoning: mapThinkingLevel(thinkingLevel), ...options });
+  return {
+    transcriptPolicy,
+    streamFn: (
+      model: Model,
+      context: Parameters<typeof streamFn>[1],
+      options: Parameters<typeof streamFn>[2],
+    ) => preparedStream(model, context, { reasoning: mapThinkingLevel(thinkingLevel), ...options }),
+  };
 }
 
 export async function runBtwSessionFork(
@@ -154,7 +168,7 @@ export async function runBtwSessionFork(
   assertCurrent();
   return runEmbeddedSessionFork({
     context,
-    streamFn: resolveSideQuestionStream(input),
+    streamFn: resolveSideQuestionStream(input).streamFn,
     question: params.question,
     model: runtimeModel,
     apiKey,
@@ -174,18 +188,11 @@ export async function runLightweightBtwStream(
 ): Promise<ReplyPayload | undefined> {
   const { params, runtimeModel, apiKey, imageLimits, messages, inFlightPrompt, recordBtwUsage } =
     input;
+  const provider = resolveSideQuestionStream(input);
   const streamFn = wrapStreamFnSanitizeMalformedToolCalls(
-    resolveSideQuestionStream(input),
+    provider.streamFn,
     undefined,
-    resolveTranscriptPolicy({
-      provider: runtimeModel.provider,
-      modelId: runtimeModel.id,
-      modelApi: runtimeModel.api,
-      model: runtimeModel,
-      config: params.cfg,
-      workspaceDir: input.workspaceDir,
-      directApiKey: Boolean(apiKey) && !isAnthropicOAuthApiKey(apiKey),
-    }),
+    provider.transcriptPolicy,
     runtimeModel.provider,
   );
 

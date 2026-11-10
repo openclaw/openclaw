@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveProviderContext } from "@openclaw/ai/provider-types";
 import { afterEach, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { Context } from "../../../llm/types.js";
@@ -6,6 +7,7 @@ import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-tr
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { resolveUserTurnMergeOptions } from "../../embedded-agent-helpers/turns.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
@@ -26,6 +28,8 @@ import { createBaseInput, sessionId } from "./attempt-prompt-submit.test-support
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./attempt-tool-call-replay-sanitization.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
+import { materializeProviderContext } from "./images.js";
+import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -66,16 +70,22 @@ it.each([
         appendOnlyRuntimeContext: false,
         inHistorySystemUpdates: false,
       };
-      const requests: Context["messages"][] = [];
-      streamMocks.streamSimple.mockImplementation((activeModel, context) => {
-        requests.push(structuredClone(context.messages));
+      const pendingRequests: Promise<
+        Awaited<ReturnType<typeof resolveProviderContext>>["messages"]
+      >[] = [];
+      streamMocks.streamSimple.mockImplementation((activeModel, context, options) => {
+        pendingRequests.push(
+          resolveProviderContext(context, options).then(({ messages }) =>
+            structuredClone(messages),
+          ),
+        );
         return createAssistantResultStream({
           ...createAssistant(
             activeModel,
-            requests.length === 1 ? [] : "done",
-            requests.length === 1 ? "error" : "stop",
+            pendingRequests.length === 1 ? [] : "done",
+            pendingRequests.length === 1 ? "error" : "stop",
           ),
-          ...(requests.length === 1 ? { errorMessage: "429 synthetic rate limit" } : {}),
+          ...(pendingRequests.length === 1 ? { errorMessage: "429 synthetic rate limit" } : {}),
         });
       });
       const recorderFor = (text: string, timestamp: number, idempotencyKey: string) =>
@@ -163,7 +173,17 @@ it.each([
           () => {},
         );
         session.agent.streamFn = wrapStreamFnSanitizeMalformedToolCalls(
-          session.agent.streamFn,
+          wrapStreamFnWithMessageTransform(
+            session.agent.streamFn,
+            (messages) => messages,
+            ({ context, signal }) =>
+              materializeProviderContext({
+                context,
+                signal,
+                workspaceDir: state.workspaceDir,
+                mergeUserTurns: resolveUserTurnMergeOptions(policy, api),
+              }),
+          ),
           undefined,
           policy,
         );
@@ -188,6 +208,7 @@ it.each([
         }
         session.dispose();
       }
+      const requests = await Promise.all(pendingRequests);
       expect(requests).toHaveLength(3);
       expect(JSON.stringify(requests[1]).match(/ORPHAN: remember CEDAR/g)).toHaveLength(1);
       for (const request of requests) {
@@ -202,7 +223,7 @@ it.each([
           );
         }
       }
-      const prefix = (messages: Context["messages"]) =>
+      const prefix = (messages: (typeof requests)[number]) =>
         messages.map(({ role, content }) => ({ role, content }));
       expect(prefix(requests[1]!)).toEqual(prefix(requests[0]!));
       expect(prefix(requests[2]!.slice(0, requests[0]!.length))).toEqual(prefix(requests[0]!));

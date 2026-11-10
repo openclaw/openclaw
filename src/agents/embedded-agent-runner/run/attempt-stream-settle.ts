@@ -387,6 +387,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   assertCronRootCurrent?: () => void;
   attempt: EmbeddedRunAttemptParams;
   contextEngineInfo?: ContextEngineInfo;
+  mergeUserTurns?: Parameters<typeof materializeProviderContext>[0]["mergeUserTurns"];
   session: AgentSession;
   settingsManager: SettingsManager;
   providerThinkingLevel: ProviderThinkLevel | undefined;
@@ -540,6 +541,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       const prepared = await materializeProviderContext({
         ...provider,
         context,
+        mergeUserTurns: input.mergeUserTurns,
         imageSessionKey: promptImageSessionKey(attempt),
         workspaceDir: input.workspaceDir,
         agentWorkspaceDir: attempt.workspaceDir,

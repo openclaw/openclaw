@@ -5,7 +5,6 @@ import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/s
 import { classifyToolUseResultPairing } from "../../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { normalizeOpenAIResponsesToolCallIds } from "../../embedded-agent-helpers/openai.js";
 import {
-  mergeConsecutiveUserMessages,
   shouldAllowProviderOwnedThinkingReplay,
   shouldMergeConsecutiveTurns,
   validateAnthropicTurns,
@@ -372,16 +371,8 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
         });
       }
     }
-    // Merge after prompt replacement and projection, without rewriting stored rows
-    // or revalidating unchanged signed tools.
-    if (
-      transcriptPolicy?.validateAnthropicTurns &&
-      shouldMergeConsecutiveTurns(transcriptPolicy, modelApi)
-    ) {
-      nextMessages = mergeConsecutiveUserMessages(nextMessages, {
-        preserveContextBoundaries: modelApi !== "bedrock-converse-stream",
-      });
-    }
+    // User rows retain their individual media and image-decision identities until
+    // the provider boundary materializes them, then applies role alternation.
     if (isOpenAIResponsesApi) {
       nextMessages = normalizeOpenAIResponsesToolCallIds(nextMessages);
     }

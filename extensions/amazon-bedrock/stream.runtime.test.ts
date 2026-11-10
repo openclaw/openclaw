@@ -9,8 +9,14 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "@openclaw/ai/internal/shared";
+import { PROVIDER_CONTEXT_HANDOFF } from "@openclaw/ai/provider-types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { AssistantMessage, AssistantMessageEvent, Context } from "openclaw/plugin-sdk/llm";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  ProviderContext,
+} from "openclaw/plugin-sdk/llm";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
@@ -66,6 +72,44 @@ const opaqueProfile =
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+it("materializes provider context before converting the Bedrock request", async () => {
+  const send = mockStream();
+  const canonical = userContext("before media materialization");
+  const prepared: ProviderContext = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "earlier" },
+          { type: "image", data: png, mimeType: "image/png" },
+          { type: "text", text: "current" },
+          { type: "video", data: "c3ludGhldGljIHZpZGVv", mimeType: "video/mp4" },
+        ],
+        timestamp: 0,
+      },
+    ],
+  };
+  const handoff = vi.fn(async () => prepared);
+  const options = {
+    cacheRetention: "none" as const,
+    [PROVIDER_CONTEXT_HANDOFF]: handoff,
+  };
+  await streamSimpleBedrock(
+    bedrockModel({ input: ["text", "image"] }),
+    canonical,
+    options,
+  ).result();
+  expect(handoff).toHaveBeenCalledOnce();
+  expect(send.mock.calls[0]?.[0]).toHaveProperty("input.messages", [
+    wireUser(
+      { text: "earlier" },
+      { image: { format: "png", source: { bytes: Uint8Array.from(Buffer.from(png, "base64")) } } },
+      { text: "current" },
+      { text: "(video omitted: provider does not support native video)" },
+    ),
+  ]);
+  expect(canonical).toEqual(userContext("before media materialization"));
 });
 it("destroys the client after an aborted Bedrock request", async () => {
   const controller = new AbortController();
