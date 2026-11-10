@@ -4,6 +4,7 @@ import { clearCommittedSessionResetRuntimeState } from "../auto-reply/reply/sess
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
+import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -76,7 +77,8 @@ async function agentCommandInternal(
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
   return await withSessionTurn(
     {
-      sessionKey: prepared.sessionKey,
+      // The runner admits its turn under the stored key; claim that exact key so it inherits this turn.
+      sessionKey: prepared.sessionKey && normalizeStoreSessionKey(prepared.sessionKey),
       sessionId: prepared.sessionId,
       agentId: prepared.sessionAgentId,
       storePath: prepared.storePath,

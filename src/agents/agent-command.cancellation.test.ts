@@ -5,6 +5,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { getCurrentSessionControllerOwner as currentOwner } from "../sessions/session-controller.context.js";
 import {
@@ -60,6 +61,23 @@ it.each(["owned", "detached"] as const)("scopes %s command identity", async (own
     expect(outer.hasOwnedSessionId(reportedId)).toBe(ownership === "owned");
     expect(outer).toMatchObject({ abortSignal: { aborted: false }, result: null });
   });
+});
+
+it("lets the runner inherit a turn claimed with a mixed-case session key", async () => {
+  const sessionKey = "agent:main:explicit:C3TT2OEIAJ7";
+  state.runAgentAttemptMock.mockImplementationOnce(async ({ sessionId }) => {
+    // The embedded runner admits under the stored key; a mismatch queues behind this claim forever.
+    const runnerTarget = { sessionKey: normalizeStoreSessionKey(sessionKey), sessionId };
+    const storePath = requireCompactionStorePath();
+    expect(await withSessionTurn({ ...runnerTarget, storePath }, async (owner) => owner)).toBe(
+      expectDefined(currentOwner(), "command owner"),
+    );
+    return result(sessionId);
+  });
+
+  await agentCommand({ sessionKey, message: "test" });
+
+  expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
 });
 
 it("cancels a nested command without aborting its outer turn", async () => {
