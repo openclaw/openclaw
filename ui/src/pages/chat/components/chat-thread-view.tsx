@@ -36,7 +36,7 @@ import {
   subscribeExpansionState,
 } from "../chat-thread.ts";
 import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
-import { yieldChatTask } from "../yield-chat-task.ts";
+import { splitChatConstruction, yieldChatTask } from "../yield-chat-task.ts";
 import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
@@ -237,6 +237,8 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
       return typeof visible === "object" ? visible.isPresented() : visible;
     },
   );
+  const splitColdRows = !input.props.restoring && splitChatConstruction;
+  const started = splitColdRows ? performance.now() : 0;
   const current = createMemo(() => {
     const searchState = search().read();
     const { session } = presentation();
@@ -250,6 +252,18 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
       );
     }
     return { session, projection };
+  });
+  // Sample once before choosing the first row frame; cheap preparations need no placeholder.
+  if (splitColdRows) {
+    current();
+  }
+  const [renderReady, setRenderReady] = createSignal(
+    !splitColdRows || performance.now() - started <= 15,
+  );
+  onSettled(() => {
+    if (!renderReady()) {
+      void yieldChatTask().then(() => setRenderReady(true));
+    }
   });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
   const isEmpty = createMemo(() => current().projection.isEmpty);
@@ -281,6 +295,9 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   );
   const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
+    if (!renderReady()) {
+      return <ChatConversationLoading route />;
+    }
     // Native range changes redraw this island without preparing the whole pane.
     geometry().read();
     if (routeLoading() && mobile()) {

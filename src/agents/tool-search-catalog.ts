@@ -525,7 +525,11 @@ export function compactToolSearchCatalogEntry(
     name: entry.name,
     label: entry.label,
     description: entry.description,
-    input: entry.source === "openclaw" ? compactToolInputHint(entry.parameters) : "unknown",
+    // tool_describe already returns MCP input schemas whole, so search summarizes them
+    // with the same bounded, structure-only renderer. Client tools stay "unknown":
+    // Code Mode renders their compact entries into its system-prompt index, and
+    // caller-supplied schema text stays out of the prompt.
+    input: entry.source === "client" ? "unknown" : compactToolInputHint(entry.parameters),
     ...(instructionsHint ? { instructionsHint } : {}),
     ...(output ? { output } : {}),
   };

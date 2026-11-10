@@ -1044,10 +1044,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 /* These rows keep their control at the row's end on phones. */
 @media (max-width: 640px) {
   :is(.shell--settings, .shell--embed-settings)
-    :is(
-      .settings-row:has(> .settings-row__text .settings-row__meta),
-      .settings-disclosure > .settings-row
-    ) {
+    .settings-row:has(> .settings-row__text .settings-row__meta) {
     flex-wrap: nowrap;
 
     > .settings-row__control {
@@ -1673,7 +1670,7 @@ textarea.settings-input {
     }
 
     .content .content-header .page-title {
-      font-size: 26px;
+      font-size: calc(26px * var(--control-ui-text-scale));
     }
   }
 }
@@ -1683,15 +1680,7 @@ textarea.settings-input {
     padding-inline: var(--space-3);
   }
 
-  .shell--settings .content:not(.content--custodian) {
-    --content-inline-padding: var(--space-3);
-    --settings-header-inline-padding: 0;
-    padding: var(--space-3) var(--space-3) var(--space-4);
-  }
-
   .shell--settings .content.content--settings-workspace .content-header,
-  .shell--settings .settings-page,
-  .content.content--hub-header .settings-page,
   .shell--settings .config-lead,
   .shell--settings .config-content-callout {
     padding-inline: 0;
@@ -2201,7 +2190,7 @@ openclaw-approvals-page .data-table-pagination__info {
   padding: 0 9px;
   border-color: transparent;
   background: transparent;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 
 :root[data-theme-mode="light"] .settings-sidebar__agent .agent-select__trigger {
@@ -2570,7 +2559,7 @@ openclaw-settings-save-indicator:empty {
 }
 
 .cfg-field__error {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--danger);
 }
 

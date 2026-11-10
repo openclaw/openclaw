@@ -593,7 +593,7 @@ openclaw-chat-detail-panel,
   corner-shape: superellipse(1.5);
   font-family: var(--font-body);
   font-size: calc(14px * var(--control-ui-text-scale));
-  line-height: 20px;
+  line-height: calc(20px * var(--control-ui-text-scale));
 }
 
 .side-panel-position-menu__label {

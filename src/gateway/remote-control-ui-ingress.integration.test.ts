@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -31,7 +32,10 @@ import {
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
+import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import * as operatorRunAuthority from "./operator-run-authority.js";
+import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import {
   connect,
   request,
@@ -50,6 +54,7 @@ import {
   createIngressPerson,
   setIngressRole,
 } from "./remote-control-ui-mcp-relay.test-support.js";
+import { captureGatewayIngressPersonPrincipal } from "./remote-ingress-principal-admission.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { getControlUiModule } from "./server-http-modules.js";
@@ -58,6 +63,7 @@ import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
 import { usersHandlers } from "./server-methods/users.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
@@ -765,6 +771,146 @@ describe("remote Control UI ingress production composition", () => {
       } finally {
         await binding.close();
       }
+    }
+  });
+
+  it("uses the original ID membership for roleless app RPC, browser access, and recovery", async () => {
+    await configureAuth(TOKEN_AUTH);
+    const claw = await linkedClaw();
+    const profile = await ensureCanonicalUserProfileForEmail("id-member@ingress.example.test");
+    const peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(172));
+    const accountId = "ingress-id-member";
+    try {
+      for (const role of ["operator", "viewer"] as const) {
+        expect(
+          await claw.authority.submit(
+            await claw.sign({
+              op: "add",
+              account_id: accountId,
+              role,
+              peer_keys: [peerKey],
+              invite_id: null,
+            }),
+            "tunnel",
+          ),
+        ).toMatchObject({ ok: true });
+        setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
+        const source = await claw.authority.resolvePeer(peerKey);
+        assert(source, "Missing signed ID member");
+        const principal = captureGatewayIngressPersonPrincipal({
+          connect: gatewayConnect(["operator.read"]),
+          authenticatedUserProfile: gatewayProfile(profile.id),
+          internal: { authenticatedOperator: true, openclawIdPrincipal: source },
+        });
+        const options = {
+          ...personOptions(profile.id),
+          audienceId: `id-app-${role}`,
+          principal,
+          operatorScopeCeiling: ["operator.read", "operator.write", "operator.admin"],
+        };
+        let resumable = false;
+        await factory.registerPrincipalRecovery?.(async (audienceId) =>
+          resumable && audienceId === options.audienceId
+            ? { ...options, recoveryId: `original-${role}-app` }
+            : undefined,
+        );
+        const capture = vi.spyOn(operatorRunAuthority, "captureGatewayOperatorRunAuthority");
+        const ephemeral = await factory.bindPrincipal(options);
+        try {
+          await ephemeral.request("users.self", {});
+          const captured = await capture.mock.results.at(-1)?.value;
+          expect(captured?.authority.recoverySnapshot).toBeUndefined();
+        } finally {
+          await ephemeral.close();
+          capture.mockRestore();
+        }
+        resumable = true;
+        const binding = await factory.bindPrincipal(options);
+        let recovered: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
+        try {
+          const durableCapture = vi.spyOn(
+            operatorRunAuthority,
+            "captureGatewayOperatorRunAuthority",
+          );
+          let snapshot;
+          try {
+            expect(await binding.request("users.self", {})).toHaveProperty(
+              "profile.id",
+              profile.id,
+            );
+            snapshot = (await durableCapture.mock.results.at(-1)?.value)?.authority
+              .recoverySnapshot;
+          } finally {
+            durableCapture.mockRestore();
+          }
+          assert(snapshot, "Missing original app recovery source");
+          const persisted = JSON.stringify(snapshot);
+          const restore = () =>
+            restoreGatewayOperatorSource({
+              snapshot: JSON.parse(persisted),
+              context: gatewayContext,
+              assertCurrent() {},
+            });
+          recovered = await restore();
+          expect(recovered.authority.readCurrentRoleFacts?.()?.policy?.sessions.others).toBe(
+            role === "operator" ? "write" : "view",
+          );
+          expect(recovered.authority.scopes).not.toContain("operator.admin");
+          resumable = false;
+          await expect(restore()).rejects.toThrow("original ingress grant");
+          resumable = true;
+          await expect(binding.request("config.set", { raw: "{}" })).rejects.toThrow(
+            "operator.admin",
+          );
+          const ui = await binding.openControlUi(presentationOptions);
+          await usePeer(await openRemote(ui), async (peer) => {
+            const identity = loadOrCreateDeviceIdentity({ identityKey: `id-member-${role}` });
+            expectHello(
+              await connect(peer, { identity, profileId: profile.id }),
+              "remote-ingress",
+              role === "operator"
+                ? [
+                    "operator.read",
+                    "operator.write",
+                    "operator.approvals",
+                    "operator.questions",
+                    "operator.talk",
+                  ]
+                : ["operator.read"],
+            );
+            if (role === "operator") {
+              await expectReadWriteWithoutAdmin(peer, "id-member-app");
+              await binding.request("voicewake.set", { triggers: ["id-member-rpc"] });
+            } else {
+              expect(await request(peer, "voicewake.set", { triggers: ["denied"] })).toMatchObject({
+                ok: false,
+              });
+              await expect(
+                binding.request("voicewake.set", { triggers: ["denied"] }),
+              ).rejects.toThrow("operator.write");
+            }
+            expect(
+              await claw.authority.submit(
+                await claw.sign({ op: "remove", account_id: accountId }),
+                "tunnel",
+              ),
+            ).toMatchObject({ ok: true });
+            setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
+            await expect(binding.request("voicewake.get", {})).rejects.toThrow();
+            expect(recovered?.authority.assertCurrent).toThrow();
+            await expect(restore()).rejects.toThrow();
+            await expect(readRemote("/claw/control-ui-config.json", ui)).rejects.toThrow();
+          });
+          await expect(
+            factory.bindPrincipal({ ...personOptions(profile.id), principal }),
+          ).rejects.toMatchObject({ code: "forbidden" });
+        } finally {
+          recovered?.release();
+          await binding.close();
+        }
+      }
+    } finally {
+      setOpenClawIdTunnelPrincipalLookup(undefined);
     }
   });
 

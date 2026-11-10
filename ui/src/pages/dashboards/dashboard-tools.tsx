@@ -22,7 +22,7 @@ const AUTHOR_SEARCH_MIN = 8;
 
 const fold = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase();
 
-export function authorDisplayName(author: { id: string; label: string }, selfId?: string) {
+function authorDisplayName(author: { id: string; label: string }, selfId?: string) {
   return author.id === selfId ? t("dashboardsPage.you") : author.label;
 }
 

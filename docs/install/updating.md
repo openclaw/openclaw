@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+After candidate Doctor migrates runtime-pin metadata, activation reads that
+completed intent before rebinding the managed Gateway. Missing metadata at the
+start of an update no longer forces a restart of the old installation against
+newly migrated state. Existing native definition and runtime-intent checks still
+protect operator changes. This requires the installed updater to contain the fix.
+
 Private plugin projection materializes eligible external data-suffixed file links
 at their logical in-package filenames before recording the final code-link
 inventory. Both the alias and its inventoried canonical target must have one of
@@ -800,6 +806,15 @@ again and refuses a version newer than the running updater supports.
 Before Doctor admits the installed updater's database capture, plugin rollback
 journal discovery preserves the original SQLite WAL/SHM family. Older updaters
 can then verify their physical fingerprints without a false source-change refusal.
+
+Plugin rollback reservation acquires its lease against the existing shared-state
+schema, then database capture records the settled reservation writes. Credential
+migration remains owned by candidate Doctor's backed-up maintenance.
+Starting or restarting an unchanged service does not require migrating runtime-pin
+metadata; definition rewrites still preserve existing runtime intent.
+Failed split-install activation also keeps recovery results valid when restoring
+the original service is unverified. These fixes must be in the installed updater;
+downloading a candidate cannot change the older driver's reservation or reporting.
 
 After Doctor backs up and admits shared-state maintenance reads, native Codex
 assignment detection reads one database transaction snapshot. Lease renewals and
