@@ -164,7 +164,9 @@ export async function runPluginReleasePretagPackCheck(
           cwd: sourceRoot,
           env: {
             ...packEnv,
-            TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json"),
+            ...(options.toolingRoot
+              ? { TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json") }
+              : {}),
           },
           stage: `plugin runtime build for ${target.packageName}`,
           timeoutMs,

@@ -180,7 +180,7 @@ for (const [stage, timeoutMs, testTimeout] of [
               : {
                   code: "ETIMEDOUT",
                   message: build
-                    ? "plugin runtime build for @openclaw/demo-plugin timed out after 100ms: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package extensions/demo-plugin"
+                    ? `plugin runtime build for @openclaw/demo-plugin timed out after 100ms: node --import tsx ${join(repoDir, "scripts/check-plugin-npm-runtime-builds.mts")} --package extensions/demo-plugin`
                     : expect.stringContaining(`${stage} pack for @openclaw/demo-plugin timed out`),
                 };
           await expect(withinTest(releaseAndWait(), signal)).rejects.toMatchObject(expected);
@@ -309,3 +309,41 @@ await delay(350);
   },
   20_000,
 );
+
+posixIt("uses trusted tooling and tsconfig while packing shipped source", async () => {
+  const source = createProofRepo();
+  const tooling = createProofRepo();
+  writePublishablePluginFixture(source.repoDir, { version: "2026.8.26", publishTo: "both" });
+  writeJsonFile(join(source.repoDir, "tsconfig.json"), {
+    extends: "./missing-shipped-config.json",
+  });
+  writeJsonFile(join(tooling.repoDir, "tsconfig.json"), {
+    compilerOptions: { paths: { "fixture-proof": ["./scripts/proof.mts"] } },
+  });
+  tooling.writeScript("proof.mts", 'export const marker = "trusted";');
+  tooling.writeScript(
+    "check-plugin-npm-runtime-builds.mts",
+    `
+import { marker } from "fixture-proof";
+import { writeFileSync } from "node:fs";
+writeFileSync("build-proof", marker + ":" + process.argv.slice(2).join(" "));
+`,
+  );
+  tooling.writeScript(
+    "plugin-clawhub-publish.sh",
+    '#!/bin/bash\nprintf "%s\\n" "$@" > pack-proof\n',
+  );
+  await runPluginReleasePretagPackCheck(source.repoDir, {
+    toolingRoot: tooling.repoDir,
+    clawHubOnly: true,
+  });
+  expect(readFileSync(join(source.repoDir, "build-proof"), "utf8")).toBe(
+    "trusted:--package extensions/demo-plugin",
+  );
+  expect(readFileSync(join(source.repoDir, "pack-proof"), "utf8").trim().split("\n")).toEqual([
+    "--pack",
+    "extensions/demo-plugin",
+    "--metadata-root",
+    tooling.repoDir,
+  ]);
+});
