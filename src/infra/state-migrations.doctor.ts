@@ -1623,8 +1623,10 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     env: params.env,
     snapshot: requestedSnapshot,
   });
-  if (callerOAuthDir && !oauthDirOutsideSnapshot) {
-    env.OPENCLAW_OAUTH_DIR = callerOAuthDir;
+  if (callerOAuthDirIdentity && !oauthDirOutsideSnapshot) {
+    // Use the checked canonical path for later discovery so retargeting the
+    // alias after admission cannot redirect directory I/O outside the snapshot.
+    env.OPENCLAW_OAUTH_DIR = callerOAuthDirIdentity;
   }
   const configBefore = await readLegacyStateMigrationPlanConfig({
     configPath: requestedSnapshot.configPath,

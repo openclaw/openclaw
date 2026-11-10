@@ -297,9 +297,13 @@ describe("legacy state migration read-only refusals", () => {
     const aliasStateDir = path.join(fixture.root, "alias-state");
     fs.symlinkSync(fixture.stateDir, aliasStateDir, "dir");
     const oauthDir = path.join(aliasStateDir, "operator-credentials");
-    const pairingPath = path.join(oauthDir, "telegram-pairing.json");
+    const canonicalPairingPath = path.join(
+      fixture.stateDir,
+      "operator-credentials",
+      "telegram-pairing.json",
+    );
     fs.mkdirSync(oauthDir);
-    fs.writeFileSync(pairingPath, '{"version":1,"requests":[]}\n');
+    fs.writeFileSync(canonicalPairingPath, '{"version":1,"requests":[]}\n');
 
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
@@ -309,8 +313,10 @@ describe("legacy state migration read-only refusals", () => {
     });
 
     expect(plan.refusal?.code).not.toBe("oauth-dir-outside-snapshot");
+    // Discovery reads the canonical location, not the alias spelling, so retargeting
+    // the alias cannot point later directory I/O outside the admitted snapshot.
     expect(plan.steps.find((step) => step.id === "channel-pairing")?.source).toEqual([
-      { kind: "path", path: pairingPath },
+      { kind: "path", path: canonicalPairingPath },
     ]);
   });
 
