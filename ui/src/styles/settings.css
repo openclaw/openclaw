@@ -2480,32 +2480,9 @@ openclaw-settings-save-indicator:empty {
   margin-block-start: 8px;
 }
 
-/* Failed saves occupy an intrinsic shell row, including on pages with their own
-   scroller. Transient pills still overlay content without changing its geometry. */
-.shell.shell--settings {
-  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr) auto;
-  grid-template-areas:
-    "nav topbar"
-    "nav notice"
-    "nav content"
-    "nav save-status";
-}
-
-.shell--settings.shell--mobile-nav {
-  grid-template-areas:
-    "topbar"
-    "notice"
-    "content"
-    "save-status";
-}
-
-.shell--settings.shell--floating-header {
-  grid-template-rows: 0 auto minmax(0, 1fr) auto;
-}
-
-/* Compact feedback shares the page's grid cell and lets clicks through. */
+/* Grid-item z-index stacks feedback without a positioned wrapper. Compact
+   feedback shares the content cell and lets clicks through. */
 .settings-save-status {
-  position: relative;
   z-index: 1;
   grid-area: content;
   align-self: end;
@@ -2515,6 +2492,7 @@ openclaw-settings-save-indicator:empty {
   pointer-events: none;
 }
 
+/* Only failures occupy the shell’s intrinsic status row; the reason stays interactive. */
 .settings-save-status:has(.settings-save-indicator--failure) {
   grid-area: save-status;
   margin-block-start: 16px;
