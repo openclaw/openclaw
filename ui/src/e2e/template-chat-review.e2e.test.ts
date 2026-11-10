@@ -38,6 +38,7 @@ const reviewed = {
     {
       id: "skill:release",
       kind: "skill",
+      requirement: { source: "clawhub", ref: "@maker/release-notes", version: "1.2.3" },
       label: "Release notes",
       detail: "Read releases and prepare a concise summary.",
       included: true,
@@ -45,6 +46,7 @@ const reviewed = {
     {
       id: "plugin:github",
       kind: "plugin",
+      requirement: { source: "clawhub", ref: "@maker/github", version: "2.0.0" },
       label: "GitHub",
       detail: "github@1.0.0",
       included: true,
@@ -53,12 +55,22 @@ const reviewed = {
       id: "mcp:docs",
       kind: "mcp",
       label: "Docs",
-      detail: "https://example.test/mcp — no credentials included",
+      detail: JSON.stringify({
+        transport: "streamable-http",
+        url: "https://example.test/mcp",
+        auth: "oauth",
+      }),
       included: true,
     },
     {
       id: "automation:brief",
       kind: "automation",
+      automation: {
+        message:
+          "Read the latest repository releases, cite their sources, and prepare a concise morning brief. Never publish without human review.",
+        schedule: { cron: "0 9 * * 1-5", timezone: "America/Los_Angeles" },
+        session: "isolated",
+      },
       label: "Morning brief",
       detail: "0 9 * * * — disabled when installed",
       included: true,
@@ -163,6 +175,24 @@ it.skipIf(!available).each([true, false])(
             revision: reviewed.revision,
             content: JSON.stringify({ scope }),
           },
+          "plugins.catalog.get": {
+            plugin: {
+              catalog: { summary: "Connect to GitHub issues, pull requests, and checks." },
+            },
+            detail: {
+              origin: "clawhub",
+              packageName: "@maker/github",
+              selectedRelease: { version: "2.0.0" },
+            },
+          },
+          "skills.detail": {
+            skill: { summary: "Summarize release changes with source links." },
+            card: {
+              status: "available",
+              content:
+                "# Release notes\nRead the release history and cite the source for each finding.",
+            },
+          },
           "templates.drafts.review": reviewed,
           "templates.drafts.publish": publication,
         },
@@ -188,9 +218,14 @@ it.skipIf(!available).each([true, false])(
         if (!proof) {
           return;
         }
-        const frame = await takeControlUiScreenshotFrame(page, card, [card.getByRole("heading")], {
-          animations: "disabled",
-        });
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          card,
+          [card.getByRole("heading", { level: 2 })],
+          {
+            animations: "disabled",
+          },
+        );
         await writeFile(path.join(proof, stage + ".png"), frame.png);
         await page.waitForTimeout(600);
       };
@@ -209,6 +244,9 @@ it.skipIf(!available).each([true, false])(
         await card.getByRole("button", { name: new RegExp(label) }).click();
         await card.getByRole("heading", { name: label, exact: true }).waitFor();
         expect((await card.boundingBox())?.height).toBe(565);
+        expect((await card.locator(".template-creator__header").boundingBox())?.height).toBe(60);
+        await card.locator(".template-creator__category-icon").waitFor();
+        await capture(label.toLowerCase().replaceAll(" ", "-") + "-list");
         if (label === "Workspace files") {
           await card.getByRole("button", { name: "AGENTS.md", exact: true }).click();
           await card.getByRole("heading", { name: "AGENTS.md", exact: true }).waitFor();
@@ -219,11 +257,25 @@ it.skipIf(!available).each([true, false])(
           expect(
             await card.locator(".template-creator__body").evaluate((body) => body.scrollTop),
           ).toBeGreaterThan(0);
+          await card.getByRole("button", { name: "Back to contents", exact: true }).click();
+          await card.getByRole("button", { name: "View all", exact: true }).click();
           await card.getByRole("button", { name: "CLAW.md", exact: true }).click();
           await card.getByRole("heading", { name: "CLAW.md", exact: true }).waitFor();
           await card.getByRole("button", { name: "Back to contents", exact: true }).click();
+          await card.getByRole("button", { name: "Back to contents", exact: true }).click();
         } else {
           await card.locator(".template-creator__body button").first().click();
+          const expected = {
+            Skills: "Read the release history and cite the source for each finding.",
+            Plugins: "Required when this template is added",
+            "MCP servers": "OAuth · Sign-in required",
+            Automations: reviewed.items.at(-1)!.automation!.message,
+          }[label]!;
+          await card.getByText(expected, { exact: true }).waitFor();
+          if (label !== "Skills" && label !== "Plugins") {
+            expect(await card.getByText("Description", { exact: true }).count()).toBe(0);
+          }
+          expect(await card.getByText("Read-only preview", { exact: true }).count()).toBe(0);
           await capture(label.toLowerCase().replaceAll(" ", "-"));
           await card.getByRole("button", { name: "Back to contents", exact: true }).click();
         }

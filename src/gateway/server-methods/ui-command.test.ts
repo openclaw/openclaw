@@ -155,7 +155,7 @@ describe("ui.command gateway method", () => {
     expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
   });
 
-  it("routes chat-created Template review only to its requester with the source conversation intact", async () => {
+  it("returns invocation-bound Template review in the requester conversation without dispatching a command", async () => {
     const requester = client("creator-tab", undefined, undefined, "creator");
     const results = captureScreenRequests([
       requester,
@@ -168,18 +168,23 @@ describe("ui.command gateway method", () => {
       agentSessionKey: sessionKey,
       gatewayUiCommandTarget: { connId: requester.connId!, profileId: "creator" },
     })(createScreenTool({ agentSessionKey: sessionKey, agentId: "main" }));
-    await screen.execute("review", { action: "template_review", draftId });
-    expect(results).toHaveLength(1);
-    expect(results[0]!.respond).toHaveBeenCalledWith(true, { ok: true });
-    expect(results[0]!.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-      "ui.command",
-      {
-        command: { kind: "template-review", draftId },
-        agentId: "main",
-        sessionKey,
+    const result = await screen.execute("review", { action: "template_review", draftId });
+    expect(results).toEqual([]);
+    expect(gateway.callInProcessGatewayTool).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      ok: true,
+      pluginInlineView: {
+        pluginId: "openclaw",
+        viewId: "template-review",
+        version: 1,
+        payload: { agentId: "main", sessionKey, draftId },
       },
-      new Set(["creator-tab"]),
-    );
+      pluginInlineViewInvocation: {
+        pluginId: "openclaw",
+        toolName: "screen",
+        toolCallId: "review",
+      },
+    });
   });
 
   it("keeps the agent screen tool bound to its requesting browser across async execution", async () => {

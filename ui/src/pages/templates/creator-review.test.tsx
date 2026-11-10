@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import type { TemplatesDraftsReviewResult } from "@openclaw/gateway-protocol";
 import { fireEvent } from "@solidjs/testing-library";
+import { createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -12,6 +13,7 @@ import {
   createRuntimeConfigStub,
 } from "../skill-workshop/skill-workshop-page.test-support.ts";
 import { templateCreatorFlow } from "./creator-flow.ts";
+import { TemplateCreatorInlineReview } from "./creator-inline-review.tsx";
 import { TemplateCreatorReview } from "./creator-review.tsx";
 
 const reviewed: TemplatesDraftsReviewResult = {
@@ -34,6 +36,7 @@ const reviewed: TemplatesDraftsReviewResult = {
     {
       id: "skill:release",
       kind: "skill",
+      requirement: { source: "clawhub", ref: "@maker/release-notes", version: "1.2.3" },
       label: "Release notes",
       detail: "Read releases",
       included: true,
@@ -41,6 +44,7 @@ const reviewed: TemplatesDraftsReviewResult = {
     {
       id: "plugin:github",
       kind: "plugin",
+      requirement: { source: "clawhub", ref: "@maker/github", version: "2.0.0" },
       label: "GitHub",
       detail: "github@1.0.0",
       included: true,
@@ -49,12 +53,22 @@ const reviewed: TemplatesDraftsReviewResult = {
       id: "mcp:docs",
       kind: "mcp",
       label: "Docs",
-      detail: "https://example.test/mcp",
+      detail: JSON.stringify({
+        transport: "streamable-http",
+        url: "https://example.test/mcp",
+        auth: "oauth",
+      }),
       included: true,
     },
     {
       id: "automation:brief",
       kind: "automation",
+      automation: {
+        message:
+          "Read the latest repository releases, cite their sources, and prepare a concise morning brief. Never publish without human review.",
+        schedule: { cron: "0 9 * * 1-5", timezone: "America/Los_Angeles" },
+        session: "isolated",
+      },
       label: "Morning brief",
       detail: "0 9 * * *",
       included: true,
@@ -68,6 +82,25 @@ const reviewed: TemplatesDraftsReviewResult = {
 function fixture() {
   const request = vi.fn(
     async (method: string, _params?: Record<string, unknown>): Promise<unknown> => {
+      if (method === "plugins.catalog.get") {
+        return {
+          plugin: { catalog: { summary: "Connect to GitHub issues, pull requests, and checks." } },
+          detail: {
+            origin: "clawhub",
+            packageName: "@maker/github",
+            selectedRelease: { version: "2.0.0" },
+          },
+        };
+      }
+      if (method === "skills.detail") {
+        return {
+          card: {
+            status: "available",
+            content:
+              "# Release notes\nRead the release history and cite the source for each finding.",
+          },
+        };
+      }
       if (method === "templates.drafts.read") {
         return { revision: reviewed.revision, content: JSON.stringify({ scope: reviewed.scope }) };
       }
@@ -83,11 +116,11 @@ function fixture() {
       sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
     }),
   });
-  context.router.subscribe = () => () => {};
+  context.router.subscribe = () => () => false;
   const flow = templateCreatorFlow(context);
   flow.open("research", "ec8f46b0-4ca3-4991-8a73-dfdcc8764087");
   const page = mountSolid(() => <TemplateCreatorReview context={context} />);
-  return { page, request, flow };
+  return { page, request, flow, context };
 }
 beforeEach(async () => {
   await i18n.setLocale("en");
@@ -113,6 +146,45 @@ it("reviews the exact assembled package inline without editable fields or model 
       expect(page.getByRole("button", { name: "Back to Template" })).toBeTruthy(),
     );
     expect(page.container.querySelector("input, textarea")).toBeNull();
+    expect(page.container.querySelector(".template-creator__category-icon")).not.toBeNull();
+    const entry = page.container.querySelector<HTMLButtonElement>(
+      ".template-creator__body button",
+    )!;
+    fireEvent.click(entry);
+    const expected = {
+      "Workspace files": "Read only instructions",
+      Skills: "Read the release history and cite the source for each finding.",
+      Plugins: "Required when this template is added",
+      "MCP servers": "OAuth · Sign-in required",
+      Automations: reviewed.items.at(-1)!.automation!.message,
+    }[label]!;
+    await waitForSolid(() => expect(page.getByText(expected, { exact: true })).toBeTruthy());
+    if (label !== "Skills" && label !== "Plugins") {
+      expect(page.queryByText("Description", { exact: true })).toBeNull();
+    }
+    expect(page.queryByText("Read-only preview", { exact: true })).toBeNull();
+    if (label === "Skills") {
+      expect(request).toHaveBeenCalledWith("skills.detail", {
+        slug: "@maker/release-notes",
+        version: "1.2.3",
+      });
+    }
+    if (label === "Plugins") {
+      await waitForSolid(() =>
+        expect(page.getByText("Connect to GitHub issues, pull requests, and checks.")).toBeTruthy(),
+      );
+      expect(request).toHaveBeenCalledWith("plugins.catalog.get", {
+        id: "ch_QG1ha2VyL2dpdGh1Yg",
+        version: "2.0.0",
+      });
+    }
+    if (label === "Automations") {
+      await waitForSolid(() =>
+        expect(page.getByText("Weekdays at 9:00 AM · America/Los_Angeles")).toBeTruthy(),
+      );
+    }
+    fireEvent.click(page.getByRole("button", { name: "Back to contents" }));
+    await waitForSolid(() => expect(page.getByRole("heading", { name: label })).toBeTruthy());
     fireEvent.click(page.getByRole("button", { name: "Back to Template" }));
     await waitForSolid(() =>
       expect(page.getByRole("heading", { name: "Release Brief" })).toBeTruthy(),
@@ -176,8 +248,8 @@ it.each(["none", "unconfirmed", "transport"])(
     expect(page.container.querySelector(".template-creator")).toBe(card);
     expect(page.queryByText("Published")).toBeNull();
     if (effect !== "none") {
-      expect(page.queryByRole("button", { name: "Retry", exact: true })).toBeNull();
-      fireEvent.click(page.getByRole("button", { name: "Check status", exact: true }));
+      expect(page.queryByRole("button", { name: /^Retry$/ })).toBeNull();
+      fireEvent.click(page.getByRole("button", { name: /^Check status$/ }));
       await waitForSolid(() =>
         expect(
           request.mock.calls.some(
@@ -186,7 +258,7 @@ it.each(["none", "unconfirmed", "transport"])(
         ).toBe(true),
       );
     } else {
-      fireEvent.click(page.getByRole("button", { name: "Retry", exact: true }));
+      fireEvent.click(page.getByRole("button", { name: /^Retry$/ }));
       await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
     }
     expect(request.mock.calls.filter(([m]) => m === "templates.drafts.publish")).toHaveLength(1);
@@ -194,7 +266,7 @@ it.each(["none", "unconfirmed", "transport"])(
 );
 
 it("retains pending receipt across remount and promotes only a matching registry confirmation", async () => {
-  const { page, request, flow } = fixture();
+  const { page, request, flow, context } = fixture();
   await vi.advanceTimersByTimeAsync(0);
   const publication = {
     name: reviewed.name,
@@ -215,9 +287,22 @@ it("retains pending receipt across remount and promotes only a matching registry
         },
   );
   await flow.publish();
+  page.unmount();
   flow.retirePresentation();
-  flow.hydrate("research", "ec8f46b0-4ca3-4991-8a73-dfdcc8764087", flow.sessionKey!);
-  await waitForSolid(() => expect(page.getByText("Published", { exact: true })).toBeTruthy());
+  const target = {
+    agentId: "research",
+    draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
+    sessionKey: flow.sessionKey!,
+  };
+  const remounted = mountSolid(() => (
+    <TemplateCreatorInlineReview
+      context={context}
+      payload={target}
+      sessionKey={target.sessionKey}
+      agentId={target.agentId}
+    />
+  ));
+  await waitForSolid(() => expect(remounted.getByText("Published", { exact: true })).toBeTruthy());
   expect(request.mock.calls.findLast(([m]) => m === "templates.drafts.review")?.[1]).toMatchObject({
     checkPublication: true,
     attemptId: "attempt-1",
@@ -232,4 +317,85 @@ it("will not publish when review is stale or operator authority is revoked", asy
   flow.reviewCurrent = false;
   await flow.publish();
   expect(request.mock.calls.some(([m]) => m === "templates.drafts.publish")).toBe(false);
+});
+
+it("shares one draft owner and renders only the native card after the sidebar handoff", async () => {
+  const { page, flow, context, request } = fixture();
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
+  const target = {
+    agentId: "research",
+    draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
+    sessionKey: flow.sessionKey!,
+  };
+  expect(templateCreatorFlow(context, target)).toBe(flow);
+  const inline = mountSolid(() => (
+    <TemplateCreatorInlineReview
+      context={context}
+      payload={target}
+      sessionKey={target.sessionKey}
+      agentId={target.agentId}
+    />
+  ));
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() => expect(inline.getByRole("button", { name: "Publish" })).toBeTruthy());
+  expect(page.queryByRole("region")).toBeNull();
+  expect(templateCreatorFlow(context)).not.toBe(flow);
+  expect(templateCreatorFlow(context, target)).toBe(flow);
+  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+});
+
+it("observes the mutable session before deciding whether to show the review", async () => {
+  const { page, flow, context } = fixture();
+  page.unmount();
+  const targetSession = "agent:research:dashboard:destination";
+  const destination = mountSolid(() => (
+    <TemplateCreatorReview context={context} sessionKey={targetSession} />
+  ));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(destination.queryByRole("region")).toBeNull();
+  flow.open("research", "next-draft", targetSession);
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() =>
+    expect(destination.getByRole("button", { name: "Publish" })).toBeTruthy(),
+  );
+  flow.open("research", "other-draft", "agent:research:main");
+  await waitForSolid(() => expect(destination.queryByRole("region")).toBeNull());
+});
+
+it("releases a removed review during publication while its owner records the eventual result", async () => {
+  const { page, flow, context, request } = fixture();
+  page.unmount();
+  const [shown, setShown] = createSignal(true);
+  const presentation = mountSolid(() => (
+    <Show when={shown()}>
+      <TemplateCreatorReview context={context} />
+    </Show>
+  ));
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() =>
+    expect(presentation.getByRole("button", { name: "Publish" })).toBeTruthy(),
+  );
+  const pending = createDeferred<unknown>();
+  request.mockImplementation(async (method) =>
+    method === "templates.drafts.publish" ? pending.promise : reviewed,
+  );
+  fireEvent.click(presentation.getByRole("button", { name: "Publish" }));
+  await waitForSolid(() => expect(presentation.getByText("Publishing…")).toBeTruthy());
+  try {
+    setShown(false);
+    await waitForSolid(() => expect(presentation.queryByRole("region")).toBeNull());
+    expect(flow.busy).toBe("publishing");
+  } finally {
+    pending.resolve({
+      name: reviewed.name,
+      version: reviewed.version,
+      url: "https://example.test/template",
+      publicationStatus: "pending",
+    });
+  }
+  await waitForSolid(() => expect(flow.publication?.publicationStatus).toBe("pending"));
+  expect(
+    request.mock.calls.filter(([method]) => method === "templates.drafts.publish"),
+  ).toHaveLength(1);
 });

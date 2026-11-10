@@ -1,7 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, For, onSettled, Show } from "solid-js";
-import { Value } from "typebox/value";
-import { TemplatesDraftsReadParamsSchema } from "../../../../packages/gateway-protocol/src/schema/template-drafts.js";
+import { isTemplatesDraftsReadParams } from "../../../../packages/gateway-protocol/src/compiled/protocol.generated/validators-workspaces.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { registerTemplateCreatorEnglish } from "../../i18n/locales/en-template-creator.ts";
@@ -27,7 +26,7 @@ export function TemplateCreatorInlineReview(props: {
       !payload ||
       payload.sessionKey !== props.sessionKey ||
       (props.agentId && payload.agentId !== props.agentId) ||
-      !Value.Check(TemplatesDraftsReadParamsSchema, {
+      !isTemplatesDraftsReadParams({
         agentId: payload.agentId,
         draftId: payload.draftId,
       })

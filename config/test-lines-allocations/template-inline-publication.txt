@@ -2,6 +2,7 @@
 # Covers immutable archive drilldowns, requester-bound descriptor migration,
 # registry-confirmed status and uncertain writes, shared sidebar/inline ownership,
 # reactive session filtering, and presentation retirement during publication.
+# Adds pinned package/skill previews and complete automation prompt regressions.
 # Existing owner suites are extended; browser proof retains the distinct shipped
 # transport/navigation boundary. Shared scalar and asset budgets stay unchanged.
-592
+717

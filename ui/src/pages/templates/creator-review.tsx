@@ -17,9 +17,11 @@ export function TemplateCreatorReview(props: { context: ApplicationContext; sess
   return (
     <Show when={current().read()} keyed>
       {(flow) => (
-        <Show when={!props.sessionKey || flow.sessionKey === props.sessionKey}>
-          <ActiveTemplateCreatorReview context={props.context} flow={flow} />
-        </Show>
+        <ActiveTemplateCreatorReview
+          context={props.context}
+          flow={flow}
+          sessionKey={props.sessionKey}
+        />
       )}
     </Show>
   );
@@ -28,13 +30,9 @@ export function TemplateCreatorReview(props: { context: ApplicationContext; sess
 function ActiveTemplateCreatorReview(props: {
   context: ApplicationContext;
   flow: TemplateCreator;
+  sessionKey?: string;
 }) {
-  const current = createMemo(() => {
-    const flow = props.flow;
-    return { flow, view: projectOwner(flow, (owner) => owner) };
-  });
-  const flow = () => current().flow;
-  const view = () => current().view;
+  const view = createMemo(() => projectOwner(props.flow, (owner) => owner));
   onSettled(() => {
     const context = props.context;
     const owner = props.flow;
@@ -47,7 +45,11 @@ function ActiveTemplateCreatorReview(props: {
   });
   const visible = () => {
     const state = view().read();
-    return Boolean(state.review || (state.hasActiveDraft && state.error));
+    return (
+      !state.inlineReview &&
+      (!props.sessionKey || state.sessionKey === props.sessionKey) &&
+      Boolean(state.review || (state.hasActiveDraft && state.error))
+    );
   };
   return (
     <Show when={visible()}>
@@ -62,7 +64,7 @@ function ActiveTemplateCreatorReview(props: {
         )}
       >
         <Loading fallback={<p role="status">{t("common.loading")}</p>}>
-          <CreatorReviewView flow={flow()} view={view()} />
+          <CreatorReviewView flow={props.flow} view={view()} />
         </Loading>
       </Errored>
     </Show>

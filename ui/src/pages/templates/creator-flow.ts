@@ -1,4 +1,5 @@
 import type {
+  TemplateDraftReviewItem,
   TemplateDraftReviewChoices,
   TemplatesDraftsCreateResult,
   TemplatesDraftsPublishResult,
@@ -12,6 +13,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { registerTemplateCreatorEnglish } from "../../i18n/locales/en-template-creator.ts";
+import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -25,6 +27,7 @@ import { generateUUID } from "../../lib/uuid.ts";
 import {
   templateCreatorOwner,
   type TemplateCreator,
+  type TemplatePackagePreview,
   type TemplateReviewTarget,
 } from "./creator-publication.ts";
 import { canCreateTemplateDraft } from "./draft-navigation.ts";
@@ -70,6 +73,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
   reviewCurrent = false;
   choices: TemplateDraftReviewChoices | null = null;
   modalOpen = false;
+  inlineReview = false;
   publication: TemplatesDraftsPublishResult | null = null;
   publicationIssue: "failed" | "unconfirmed" | null = null;
   private publicationAttemptId: string | undefined;
@@ -153,6 +157,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
     this.choices = null;
     this.modalOpen = false;
     this.publication = null;
+    this.inlineReview = false;
     this.publicationIssue = null;
     this.publicationAttemptId = undefined;
     this.publicationReviewToken = undefined;
@@ -239,6 +244,15 @@ export class TemplateCreatorFlow implements TemplateCreator {
     this.schedulePoll(target, generation, 0);
   }
 
+  matches(target: TemplateReviewTarget) {
+    return (
+      this.target?.client === this.context.gateway.snapshot.client &&
+      this.target.agentId === target.agentId &&
+      this.target.draftId === target.draftId &&
+      this.target.sessionKey === target.sessionKey
+    );
+  }
+
   get sessionKey() {
     return this.target?.sessionKey;
   }
@@ -248,23 +262,25 @@ export class TemplateCreatorFlow implements TemplateCreator {
     if (!client) {
       return;
     }
-    if (
-      this.target?.client === client &&
-      this.target.agentId === agentId &&
-      this.target.draftId === draftId &&
-      this.target.sessionKey === sessionKey
-    ) {
+    if (this.matches({ agentId, draftId, sessionKey })) {
+      this.inlineReview = true;
+      this.changed();
+      if (this.busy === "publishing") {
+        return;
+      }
       if (this.publication || this.publicationIssue) {
         void this.checkPublication();
       } else {
         this.seenRevision = null;
-        this.schedulePoll(this.target, this.generation, 0);
+        this.schedulePoll(this.target!, this.generation, 0);
       }
       return;
     }
     this.busy = null;
     const target = { agentId, draftId, sessionKey, client };
     const generation = this.reset(target);
+    this.inlineReview = true;
+    this.changed();
     this.schedulePoll(target, generation, 0);
   }
 
@@ -523,6 +539,54 @@ export class TemplateCreatorFlow implements TemplateCreator {
     }
   }
 
+  async readPackagePreview(item: TemplateDraftReviewItem): Promise<TemplatePackagePreview | null> {
+    const target = this.target;
+    const review = this.review;
+    const generation = this.generation;
+    if (!target || !review?.items.includes(item) || !item.requirement) {
+      return null;
+    }
+    const { ref, version } = item.requirement;
+    let preview: TemplatePackagePreview;
+    if (item.kind === "skill") {
+      const result = await target.client.request<{
+        skill?: { summary?: string | null } | null;
+        card?: { status: "available"; content: string } | { status: "unavailable" };
+      }>("skills.detail", { slug: ref, version });
+      preview = {
+        description: result.skill?.summary,
+        content: result.card?.status === "available" ? result.card.content : undefined,
+      };
+    } else if (item.kind === "plugin") {
+      // Catalog IDs are the Gateway's ch_ + base64url encoding of the validated package ref.
+      const id =
+        "ch_" +
+        bytesToBase64(new TextEncoder().encode(ref))
+          .replaceAll("+", "-")
+          .replaceAll("/", "_")
+          .replace(/=+$/u, "");
+      const result = await target.client.request<{
+        plugin: { catalog: { summary?: string } };
+        detail: {
+          origin: string;
+          packageName?: string;
+          selectedRelease?: { version: string } | null;
+          remoteError?: string;
+        };
+      }>("plugins.catalog.get", { id, version });
+      preview =
+        result.detail.origin === "clawhub" &&
+        result.detail.packageName === ref &&
+        result.detail.selectedRelease?.version === version &&
+        !result.detail.remoteError
+          ? { description: result.plugin.catalog.summary }
+          : {};
+    } else {
+      return null;
+    }
+    return this.current(target, generation) && this.review === review ? preview : null;
+  }
+
   private retirePendingStart() {
     const owner = templateCreatorOwner(this.context);
     if (owner.flow === this) {
@@ -535,14 +599,14 @@ export function templateCreatorFlow(context: ApplicationContext, target?: Templa
   const owner = templateCreatorOwner(context);
   if (target) {
     const key = JSON.stringify([target.agentId, target.draftId, target.sessionKey]);
-    let flow = owner.inlineFlows.get(key);
+    let flow = owner.inlineFlows.get(key) ?? (owner.flow?.matches(target) ? owner.flow : undefined);
     if (!flow) {
       flow = new TemplateCreatorFlow(context);
-      owner.inlineFlows.set(key, flow);
     }
+    owner.inlineFlows.set(key, flow);
     return flow;
   }
-  if (!owner.flow) {
+  if (!owner.flow || owner.flow.inlineReview) {
     owner.flow = new TemplateCreatorFlow(context);
     owner.publish();
   }

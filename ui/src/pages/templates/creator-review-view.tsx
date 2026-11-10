@@ -1,5 +1,5 @@
 import type { TemplateDraftReviewItem } from "@openclaw/gateway-protocol";
-import { action, createMemo, createOptimistic, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -7,8 +7,10 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
 import { TemplateArtwork } from "../agents-home/template-artwork.tsx";
-import type { TemplateCreator } from "./creator-publication.ts";
+import { agentDocuments, fileRole } from "../agents-home/template-workspace-file-roles.ts";
 import "../../styles/template-creator.css";
+import { TemplateItemDetails } from "./creator-item-details.tsx";
+import type { TemplateCreator } from "./creator-publication.ts";
 
 type CreatorView = SourceProjection<TemplateCreator, TemplateCreator>;
 type Kind = TemplateDraftReviewItem["kind"];
@@ -25,41 +27,83 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
   const state = () => props.view.read();
   const review = () => state().review!;
   const [category, setCategory] = createSignal<Kind | null>(null);
+  const [allFiles, setAllFiles] = createSignal(false);
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
-  const [publishing, setPublishing] = createOptimistic(false);
-  const busy = () => publishing() || state().busy === "publishing";
-  const entries = (kind: Kind) =>
+  const busy = () => state().busy === "publishing";
+  const entries = (kind: Kind): TemplateDraftReviewItem[] =>
     kind === "file"
-      ? review().files.map((file) => ({ id: file.path, label: file.path, detail: file.content }))
+      ? review().files.map((file) => ({
+          id: file.path,
+          kind: "file",
+          included: true,
+          label: file.path,
+          detail: file.content,
+        }))
       : review().items.filter((item) => item.kind === kind && item.included);
   const selected = createMemo(() =>
     category() ? entries(category()!).find((item) => item.id === selectedId()) : undefined,
   );
   const label = () =>
     t("templatesDraft." + sections.find((section) => section.kind === category())?.key);
-  const title = () => selected()?.label ?? (category() ? label() : review().displayName);
+  const currentSection = () => sections.find((entry) => entry.kind === category())!;
+  const hint = () => t("templatesDraft." + currentSection().key + "Hint");
+  const summary = (detail: string) => {
+    if (category() === "mcp") {
+      const server: { url?: string; command?: string } = JSON.parse(detail);
+      return server.url ?? server.command;
+    }
+    return detail
+      .trim()
+      .split("\n")
+      .find((line) => line && line !== "---")
+      ?.replace(/^#+\s*/, "");
+  };
+  const categoryEntries = createMemo(() => {
+    const items = entries(category()!);
+    return category() === "file" && !allFiles()
+      ? [
+          "SOUL.md",
+          "AGENTS.md",
+          ...items
+            .map((item) => item.label)
+            .filter((name) => name !== "SOUL.md" && name !== "AGENTS.md"),
+        ].flatMap((name) => items.filter((item) => item.label === name && agentDocuments.has(name)))
+      : items;
+  });
+  const title = () =>
+    selected()?.label ??
+    (category()
+      ? allFiles()
+        ? t("templatesDraft.fileNavigation")
+        : label()
+      : review().displayName);
   let heading: HTMLHeadingElement | undefined;
   let body: HTMLDivElement | undefined;
-  createPendingFocus(() => [category(), selectedId()], {
+  createPendingFocus(() => [category(), selectedId(), allFiles()], {
     requested: (_next, previous) => Boolean(previous),
     focus: () => {
       body?.scrollTo?.(0, 0);
       heading?.focus({ preventScroll: true });
     },
   });
-  const publish = action(function* () {
-    setPublishing(true);
-    yield props.flow.publish();
-  });
+  // Native transcript roots can retire independently of an issued write. The plain
+  // owner admits synchronously and presents busy/error/receipt facts; an action
+  // here would hold row removal or navigation until the network settles.
+  const publish = () => props.flow.publish();
   function back() {
     if (selectedId()) {
       setSelectedId(null);
+    } else if (allFiles()) {
+      setAllFiles(false);
     } else {
       setCategory(null);
     }
   }
   return (
-    <section class="template-creator" aria-label={t("templatesDraft.reviewTitle")}>
+    <section
+      class={["template-creator", { "template-creator--detail": Boolean(category()) }]}
+      aria-label={t("templatesDraft.reviewTitle")}
+    >
       <header
         class={[
           "template-creator__header",
@@ -78,7 +122,9 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
             type="button"
             class="btn btn--icon"
             aria-label={
-              selectedId() ? t("templatesDraft.backToContents") : t("templatesDraft.backToTemplate")
+              selectedId() || allFiles()
+                ? t("templatesDraft.backToContents")
+                : t("templatesDraft.backToTemplate")
             }
             onClick={back}
           >
@@ -146,44 +192,61 @@ function TemplateReviewCard(props: { flow: TemplateCreator; view: CreatorView })
           <Show
             when={selected()}
             fallback={
-              <div class="template-creator__contents">
-                <For each={entries(category()!)} keyed={(item) => item.id}>
-                  {(item) => (
+              <div class="template-creator__category">
+                <span class="template-creator__category-icon">
+                  <Icon name={currentSection().icon} />
+                </span>
+                <p class="template-creator__hint">{hint()}</p>
+                <div class="template-creator__contents">
+                  <For each={categoryEntries()} keyed={(item) => item.id}>
+                    {(item) => (
+                      <button
+                        type="button"
+                        class="template-creator__row"
+                        aria-label={item().label}
+                        onClick={() => setSelectedId(item().id)}
+                      >
+                        <Show when={category() === "file"}>
+                          <span class="template-creator__row-icon">
+                            <Icon name={fileRole(item().label)[0]} />
+                          </span>
+                        </Show>
+                        <span>
+                          <strong>{item().label}</strong>
+                          <small>{summary(item().detail)}</small>
+                        </span>
+                        <Icon name="chevronRight" />
+                      </button>
+                    )}
+                  </For>
+                  <Show
+                    when={
+                      category() === "file" &&
+                      !allFiles() &&
+                      categoryEntries().length < entries("file").length
+                    }
+                  >
                     <button
                       type="button"
                       class="template-creator__row"
-                      onClick={() => setSelectedId(item().id)}
+                      onClick={() => setAllFiles(true)}
                     >
-                      <Icon name={sections.find((section) => section.kind === category())!.icon} />
+                      <span class="template-creator__row-icon">
+                        <Icon name="folder" />
+                      </span>
                       <span>
-                        <strong>{item().label}</strong>
+                        <strong>{t("templatesDraft.viewAll")}</strong>
                       </span>
                       <Icon name="chevronRight" />
                     </button>
-                  )}
-                </For>
+                  </Show>
+                </div>
               </div>
             }
           >
             {(item) => (
               <div class="template-creator__preview">
-                <Show when={category() === "file"}>
-                  <nav aria-label={t("templatesDraft.fileNavigation")}>
-                    <For each={entries("file")} keyed={(file) => file.id}>
-                      {(file) => (
-                        <button
-                          type="button"
-                          class="btn btn--sm"
-                          aria-current={file().id === selectedId() ? "true" : undefined}
-                          onClick={() => setSelectedId(file().id)}
-                        >
-                          {file().label}
-                        </button>
-                      )}
-                    </For>
-                  </nav>
-                </Show>
-                <pre>{item().detail}</pre>
+                <TemplateItemDetails flow={props.flow} item={item()} />
               </div>
             )}
           </Show>

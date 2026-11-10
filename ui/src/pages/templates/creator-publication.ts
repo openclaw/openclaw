@@ -1,4 +1,5 @@
 import type {
+  TemplateDraftReviewItem,
   TemplateDraftReviewChoices,
   TemplatesDraftsPublishResult,
   TemplatesDraftsReviewResult,
@@ -9,6 +10,8 @@ import type { ApplicationContext } from "../../app/context.ts";
 
 // Dormant presentation and the cold implementation share a contract without
 // importing each other's modules or constructing the flow during chat boot.
+export type TemplatePackagePreview = { description?: string | null; content?: string };
+
 export interface TemplateCreator {
   busy: "starting" | "reviewing" | "publishing" | null;
   review: TemplatesDraftsReviewResult | null;
@@ -23,6 +26,8 @@ export interface TemplateCreator {
   readonly hasActiveDraft: boolean;
   readonly subscribe: (listener: () => void) => () => void;
   readonly sessionKey: string | undefined;
+  inlineReview: boolean;
+  matches(target: TemplateReviewTarget): boolean;
   hydrate(agentId: string, draftId: string, sessionKey: string): void;
   retirePresentation(): void;
   start(agentId: string): Promise<void>;
@@ -33,6 +38,7 @@ export interface TemplateCreator {
   close(): void;
   reopen(): void;
   retryReview(): void;
+  readPackagePreview(item: TemplateDraftReviewItem): Promise<TemplatePackagePreview | null>;
 }
 
 export type TemplateReviewTarget = { agentId: string; draftId: string; sessionKey: string };
