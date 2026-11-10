@@ -38,7 +38,7 @@ export async function withSessionCompactionSource(
       signal,
       async (raw, activeSignal) => {
         activeSignal.throwIfAborted();
-        // Paired worker and reader own this internal transport contract.
+        // SAFETY: runSessionCompactionSource alone emits these replies, checked against this union.
         const reply = raw as SessionCompactionSourceReply;
         if (reply.kind === "skipped") {
           skipped = reply.reason;

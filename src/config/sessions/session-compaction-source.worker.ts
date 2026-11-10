@@ -301,7 +301,7 @@ export async function runSessionCompactionSource(
       for (;;) {
         control.throwIfCancelled();
         const response = await channel.request(reply);
-        // The paired host constructs this closed command union.
+        // SAFETY: Only withSessionCompactionSource answers, using its command-typed deferred.
         const command = response.input as SessionCompactionSourceCommand;
         response.consumed();
         control.throwIfCancelled();

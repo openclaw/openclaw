@@ -792,10 +792,7 @@ it.each(["SQLite writer fault injection", "public lifecycle predecessor"] as con
       expect(await mutation.error).toMatchObject({
         error: {
           details: {
-            code:
-              revocation === "public lifecycle predecessor"
-                ? "SESSION_MUTATION_AUTHORIZATION_CHANGED"
-                : "SESSION_PARTICIPATION_REQUIRED",
+            code: "SESSION_PARTICIPATION_REQUIRED",
           },
         },
       });

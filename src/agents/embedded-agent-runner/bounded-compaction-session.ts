@@ -4,7 +4,7 @@ import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/sessi
 import { readRestoredSessionTranscriptInWorker } from "../../config/sessions/session-cold-storage-read.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { compactionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { createStandaloneCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import type { PreparedCompaction } from "../sessions/prepared-compaction.types.js";
 import { sessionManagerFromCompactionSource } from "../sessions/session-manager-view-types.js";
@@ -134,7 +134,7 @@ export async function withBoundedCompactionSession(
       }
     },
     params.abortSignal,
-    projectionLane,
+    compactionLane,
   );
   if (!result) {
     throw new Error("Compaction source did not execute its prepared plan");

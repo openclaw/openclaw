@@ -201,7 +201,9 @@ export function splitPreservedRecentTurns(params: {
   };
 }
 
-function formatNonTextPlaceholder(content: unknown): string | null {
+function formatNonTextPlaceholder(
+  content: Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>["content"],
+): string | null {
   if (content == null || typeof content === "string") {
     return null;
   }
@@ -213,7 +215,7 @@ function formatNonTextPlaceholder(content: unknown): string | null {
     if (!block || typeof block !== "object") {
       continue;
     }
-    const typeRaw = (block as { type?: unknown }).type;
+    const typeRaw = block.type;
     const type = typeof typeRaw === "string" && typeRaw.trim().length > 0 ? typeRaw : "unknown";
     if (type === "text") {
       continue;
@@ -234,16 +236,13 @@ function formatContextMessage(message: AgentMessage): string | null {
   } else if (message.role === "user") {
     roleLabel = formatCompactionUserLabel(message);
   } else if (message.role === "toolResult") {
-    const toolName = (message as { toolName?: unknown }).toolName;
+    const toolName = message.toolName;
     const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
     roleLabel = `Tool result (${safeToolName})`;
   } else {
     return null;
   }
-  const rendered = [
-    extractMessageText(message),
-    formatNonTextPlaceholder((message as { content?: unknown }).content),
-  ]
+  const rendered = [extractMessageText(message), formatNonTextPlaceholder(message.content)]
     .filter(Boolean)
     .join("\n");
   if (!rendered) {
