@@ -1,2 +1,3 @@
-186
-# test lines for picker visibility (PR 194280)
+257
+# test lines for picker visibility (PR 194280): +186 own growth, +71 inherited main debt
+# absorbed per the ratchet message (CI merges current main, whose tree is over ceiling).
