@@ -10,6 +10,7 @@ import type { CronDeliveryPreview, CronJob } from "../../cron/types.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
+import { CronCliError } from "./cron-cli-error.js";
 import { createCronAmbiguousNameError } from "./shared.js";
 
 const CRON_LIST_PAGE_SIZE = 200;
@@ -247,4 +248,31 @@ export async function findCronJobByIdOrName(
     job = matches[0];
   }
   return { job, deliveryPreview: job ? inventory.deliveryPreviews?.[job.id] : undefined };
+}
+
+export async function readCronJobForEdit(
+  opts: GatewayRpcOpts,
+  id: string,
+): Promise<CronJob & { configRevision?: string }> {
+  try {
+    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJob & {
+      configRevision?: string;
+    };
+  } catch (error) {
+    if (!isUnknownCronGetMethodError(error)) {
+      throw error;
+    }
+    // Protocol-v4 gateways shipped before cron.get; keep remote edits working
+    // without paying the paginated lookup cost on current gateways.
+    const inventory = await listCronJobsFromGateway(
+      opts,
+      { includeDisabled: true },
+      { allowLegacyUnversionedPagination: true },
+    );
+    const existing = inventory.jobs.find((job) => job.id === id);
+    if (!existing) {
+      throw new CronCliError(`unknown automation id: ${id}`, { cause: error });
+    }
+    return existing;
+  }
 }

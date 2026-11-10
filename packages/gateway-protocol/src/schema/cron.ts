@@ -682,6 +682,10 @@ const CronJobPatchSchema = closedObject({
 /** Updates a cron job by id or legacy jobId alias. */
 export const CronUpdateParamsSchema = cronIdOrJobIdParams({
   patch: CronJobPatchSchema,
+  /** Deliberate same-value policy review; never persisted as part of the job. */
+  reviewModelPolicy: Type.Optional(Type.Boolean()),
+  /** Preview an explicit policy review without changing the job. Requires an empty patch. */
+  dryRun: Type.Optional(Type.Boolean()),
   /** Rejects the patch when the current definition does not match the caller's token. */
   expectedConfigRevision: Type.Optional(CronConfigRevisionSchema),
 });

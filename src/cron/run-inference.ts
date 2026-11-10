@@ -1,9 +1,13 @@
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
+import { recordModelFallbackStop } from "../agents/model-fallback-stop.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { modelKey } from "../shared/model-key.js";
 import {
   type CronInferenceBinding,
+  type CronInferenceGrants,
   describeCronInferenceBinding,
+  resolveCronCandidateInferenceBinding,
   resolveCronRuntimeSessionEntry,
 } from "./inference-binding.js";
 
@@ -72,7 +76,23 @@ export async function prepareCronRunInference(params: {
     return undefined;
   }
   const { acquireCronInferenceAuthorization } = await import("./inference-binding.runtime.js");
-  const authorization = await acquireCronInferenceAuthorization({ ...params, binding });
+  const authorization = await acquireCronInferenceAuthorization({ ...params, binding }).catch(
+    stopInferenceFallback,
+  );
+  const assertCurrent = () => {
+    try {
+      authorization.assertCurrent();
+    } catch (error) {
+      stopInferenceFallback(error);
+    }
+  };
+  const revalidate = async () => {
+    try {
+      await authorization.revalidate();
+    } catch (error) {
+      stopInferenceFallback(error);
+    }
+  };
   // The last admitted candidate's runtime, named when its CLI backend refuses the account.
   let candidateRuntime: string | undefined;
   return {
@@ -81,13 +101,15 @@ export async function prepareCronRunInference(params: {
       authProfileBinding: {
         profileId: binding.profileId,
         authRequirement: binding.authRequirement,
-        assertCurrent: authorization.assertCurrent,
-        revalidate: authorization.revalidate,
+        assertCurrent,
+        revalidate,
       },
       allowAuthProfileFallback: false,
       onSuccessfulAuthProfile: (profileId) => {
         if (profileId !== binding.profileId) {
-          throw new Error("Automation inference account changed during execution.");
+          stopInferenceFallback(
+            new Error("Automation inference account changed during execution."),
+          );
         }
       },
       authProfileIdSource: binding.source,
@@ -95,15 +117,18 @@ export async function prepareCronRunInference(params: {
     runtimeSessionEntry: (entry) => resolveCronRuntimeSessionEntry(binding, entry),
     assertCandidate(provider, cliExecution, runtime) {
       // A binding without a captured runtime keeps the runtime its run derives.
-      if (
-        provider !== binding.provider ||
-        (binding.runtime && runtime && runtime !== binding.runtime)
-      ) {
+      if (provider !== binding.provider) {
+        // An unapproved provider is skippable; it does not revoke the stored account.
         throw incompatibleCandidateError({ binding, provider, runtime, cliExecution });
+      }
+      if (binding.runtime && runtime && runtime !== binding.runtime) {
+        stopInferenceFallback(
+          incompatibleCandidateError({ binding, provider, runtime, cliExecution }),
+        );
       }
       candidateRuntime = runtime ?? candidateRuntime;
       // CLI candidates finish this check in resolveCliAuthProfile, before the process starts.
-      authorization.assertCurrent();
+      assertCurrent();
     },
     async resolveCliAuthProfile(resolve) {
       let profileId: string | undefined;
@@ -117,25 +142,90 @@ export async function prepareCronRunInference(params: {
         if (!(error instanceof CliExecutionAuthProfileError)) {
           throw error;
         }
-        throw incompatibleCandidateError({
-          binding,
-          provider: binding.provider,
-          runtime: candidateRuntime,
-          cliExecution: true,
-          cause: error,
-        });
+        stopInferenceFallback(
+          incompatibleCandidateError({
+            binding,
+            provider: binding.provider,
+            runtime: candidateRuntime,
+            cliExecution: true,
+            cause: error,
+          }),
+        );
       }
       if (profileId !== binding.profileId) {
-        throw incompatibleCandidateError({
-          binding,
-          provider: binding.provider,
-          runtime: candidateRuntime,
-          cliExecution: true,
-        });
+        stopInferenceFallback(
+          incompatibleCandidateError({
+            binding,
+            provider: binding.provider,
+            runtime: candidateRuntime,
+            cliExecution: true,
+          }),
+        );
       }
-      authorization.assertCurrent();
+      assertCurrent();
       return profileId;
     },
     dispose: authorization.dispose,
+  };
+}
+
+function stopInferenceFallback(error: unknown): never {
+  const failure = error instanceof Error ? error : new Error(String(error));
+  recordModelFallbackStop(failure);
+  throw failure;
+}
+
+/** One run owns its captured candidate leases; missing grants never enter auth preparation. */
+export function createCronRunInferenceCandidates(params: {
+  binding?: CronInferenceBinding;
+  grants?: CronInferenceGrants;
+  primary: { provider: string; model: string };
+  cfg: OpenClawConfig;
+  agentDir: string;
+}) {
+  const leases = new Map<string, CronRunInference | undefined>();
+  const primaryKey = modelKey(params.primary.provider, params.primary.model);
+  const bindingFor = (provider: string, model: string) =>
+    resolveCronCandidateInferenceBinding(params, provider, model);
+  // Losing any admitted account ends the run; another grant cannot replace that authority.
+  const assertCurrent = () => {
+    for (const lease of leases.values()) {
+      lease?.runParams.authProfileBinding?.assertCurrent();
+    }
+  };
+  const admit = async (provider: string, model: string): Promise<string | undefined> => {
+    assertCurrent();
+    const key = modelKey(provider, model);
+    if (params.grants !== undefined && key !== primaryKey && !Object.hasOwn(params.grants, key)) {
+      return `Automation candidate ${key} has no recorded account authorization; review its model policy to enable failover.`;
+    }
+    const binding = bindingFor(provider, model);
+    if (binding && binding.provider !== provider) {
+      return incompatibleCandidateError({ binding, provider, cliExecution: false }).message;
+    }
+    if (!leases.has(key)) {
+      leases.set(key, await prepareCronRunInference({ ...params, binding }));
+    }
+    await leases.get(key)?.runParams.authProfileBinding?.revalidate();
+    assertCurrent();
+    return undefined;
+  };
+  return {
+    bindingFor,
+    admit,
+    async prepare(provider: string, model: string) {
+      // Dispatch enforces admission too: bypassing eager preparation cannot run unbound.
+      const reason = await admit(provider, model);
+      if (reason) {
+        throw new Error(reason);
+      }
+      return leases.get(modelKey(provider, model));
+    },
+    dispose: () => {
+      for (const lease of leases.values()) {
+        lease?.dispose();
+      }
+      leases.clear();
+    },
   };
 }

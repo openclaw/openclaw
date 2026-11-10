@@ -41,7 +41,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { resolveCronJobToolPolicyContext } from "../execution-context-admission.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
-import { prepareCronRunInference } from "../run-inference.js";
+import { createCronRunInferenceCandidates } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
@@ -163,15 +163,14 @@ export function createCronPromptExecutor(
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
     let currentContextSnapshot: CronCompletedPromptRun["currentContextSnapshot"];
     using inferenceLease = new DisposableStack();
-    const binding = params.job.inferenceBinding;
-    const inference = await prepareCronRunInference({
-      binding,
+    const inferenceCandidates = createCronRunInferenceCandidates({
+      binding: params.job.inferenceBinding,
+      grants: params.job.inferenceGrants,
+      primary: params.inferencePrimary,
       cfg: params.cfgWithAgentDefaults,
       agentDir: params.agentDir,
     });
-    if (inference) {
-      inferenceLease.defer(inference.dispose);
-    }
+    inferenceLease.defer(inferenceCandidates.dispose);
     let canReusePreparedSession = preparedSessionAvailable;
     preparedSessionAvailable = false;
     // A retry can fail during preparation, before any backend start callback.
@@ -265,6 +264,11 @@ export function createCronPromptExecutor(
             ? params.liveSelection.authProfileId
             : undefined,
         fallbacksOverride: cronFallbacksOverride,
+        admitCandidate: inferenceCandidates.admit,
+        resolveCandidateAuthProfileId:
+          params.job.inferenceGrants === undefined
+            ? undefined
+            : (provider, model) => inferenceCandidates.bindingFor(provider, model)?.profileId,
       },
       identity: {
         runId,
@@ -303,6 +307,8 @@ export function createCronPromptExecutor(
       sessionOverride: { kind: "preserve" },
       abortSignal: params.abortSignal,
       runCandidate: async (providerOverride, modelOverride, runOptions) => {
+        const inference = await inferenceCandidates.prepare(providerOverride, modelOverride);
+        const binding = inferenceCandidates.bindingFor(providerOverride, modelOverride);
         currentContextSnapshot = undefined;
         const preparedSessionPersisted = canReusePreparedSession;
         canReusePreparedSession = false;
@@ -337,6 +343,7 @@ export function createCronPromptExecutor(
           modelOverride,
           runOptions.agentHarnessRuntimeOverride,
         );
+        inference?.assertCandidate(providerOverride, cliExecution, candidateRuntime);
         const candidateConfiguredThinkLevel =
           params.immutableThinkLevel ??
           resolveConfiguredThinkingDefault({

@@ -35,6 +35,7 @@ export type CronRunExecutionParams = Pick<
   | "inheritDefaultFallbacksForAgentStringModel"
   | "sessionModelOverrideSource"
   | "modelFallbacksOverride"
+  | "inferencePrimary"
   | "liveSelection"
   | "cronSession"
   | "commandBody"

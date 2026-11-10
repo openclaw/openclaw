@@ -288,6 +288,13 @@ export function planCronJobMutation(
     } else if (mutation.kind === "update" && options.inferenceBinding === null) {
       delete nextJob.inferenceBinding;
     }
+    if (options.inferenceGrants !== undefined && (!previousJob || mutation.kind === "update")) {
+      if (options.inferenceGrants === null) {
+        delete nextJob.inferenceGrants;
+      } else {
+        nextJob.inferenceGrants = options.inferenceGrants;
+      }
+    }
     const explicitlyMutatesToolsAllow =
       mutation.kind === "add"
         ? mutation.input.payload.toolsAllow !== undefined
@@ -310,6 +317,7 @@ export function planCronJobMutation(
     if (nextJob.runtimeAuthority) {
       // Native inference authority replaces, rather than supplements, host credentials.
       delete nextJob.inferenceBinding;
+      delete nextJob.inferenceGrants;
     }
     reconcileCronChannelRequesterAuthority({
       job: nextJob,

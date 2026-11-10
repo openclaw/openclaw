@@ -20,6 +20,7 @@ export type CronAddOptions = {
   operatorSourceExecutionRevision?: string;
   /** Null authorizes a native CLI account transition on explicit updates only. */
   inferenceBinding?: CronStoredJob["inferenceBinding"] | null;
+  inferenceGrants?: CronStoredJob["inferenceGrants"] | null;
   sourceConversation?: CronStoredJob["sourceConversation"];
   /** Logical sandbox target captured from the admitted creator, never public input. */
   streamSandbox?: CronStoredJob["streamSandbox"];

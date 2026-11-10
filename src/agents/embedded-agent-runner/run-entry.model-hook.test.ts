@@ -225,3 +225,67 @@ it.each([undefined, [] as string[]])(
     });
   },
 );
+
+// Single-account admission retains the pre-opt-in fallback order after a hook reroute.
+it.each([
+  { mode: "legacy", empty: false, expected: ["rerouted", "rerouted", "backup"] },
+  { mode: "legacy", empty: true, expected: ["rerouted"] },
+  { mode: "candidate accounts", empty: false, expected: ["backup"] },
+])(
+  "preserves hook routing for $mode admission (empty=$empty)",
+  async ({ mode, empty, expected }) => {
+    await withOpenClawTestState({ label: "hook-account-policy" }, async (state) => {
+      const cfg = createModelFallbackConfig("fixture/primary", [
+        "fixture/rerouted",
+        "fixture/backup",
+      ]);
+      setRuntimeConfigSnapshot(cfg);
+      const registry = createEmptyPluginRegistry();
+      registry.typedHooks.push({
+        pluginId: "local-routing",
+        hookName: "before_model_resolve",
+        source: "test",
+        handler: () => ({ providerOverride: "fixture", modelOverride: "rerouted" }),
+      });
+      setActivePluginRegistry(registry);
+      initializeGlobalHookRunner(registry);
+      const exactAccounts = mode === "candidate accounts";
+      const attempted: string[] = [];
+      const pending = runEmbeddedAgentEntry({
+        selection: {
+          cfg,
+          provider: "fixture",
+          model: "primary",
+          agentDir: state.agentDir(),
+          ...(empty ? { fallbacksOverride: [] } : {}),
+          admitCandidate: async (_provider, model) =>
+            exactAccounts && model === "rerouted" ? "No recorded account authorization" : undefined,
+          ...(exactAccounts ? { resolveCandidateAuthProfileId: () => undefined } : {}),
+        },
+        modelResolve: { prompt: "Synthetic legacy scheduled request" },
+        identity: {
+          runId: "hook-account-policy",
+          agentId: "main",
+          sessionId: "hook-account-policy",
+        },
+        harness: createDirectHarness(state.workspaceDir, "openclaw"),
+        behavior: { kind: "maintenance" },
+        sessionOverride: { kind: "preserve" },
+        runCandidate: async (provider, model, options) => {
+          const physicalModel = options.resolvedModelSelection?.modelId ?? model;
+          attempted.push(physicalModel);
+          if (physicalModel === "rerouted") {
+            throw new FailoverError("Synthetic primary outage", { reason: "timeout" });
+          }
+          return makeResult({ provider, model: physicalModel });
+        },
+      });
+      if (empty) {
+        await expect(pending).rejects.toThrow("Synthetic primary outage");
+      } else {
+        expect((await pending).result.payloads).toEqual([{ text: "recovered" }]);
+      }
+      expect(attempted).toEqual(expected);
+    });
+  },
+);

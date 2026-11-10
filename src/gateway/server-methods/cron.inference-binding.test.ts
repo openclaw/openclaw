@@ -1,5 +1,12 @@
-import { describe, expect, test } from "vitest";
+import path from "node:path";
+import { describe, expect, test, vi } from "vitest";
+import { installPrivateUpdateHandoffStore } from "../../../test/helpers/private-update-handoff-store.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
+import { captureCronInferenceBinding } from "../../cron/inference-binding.runtime.js";
+import { createCronRunInferenceCandidates } from "../../cron/run-inference.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { saveCronJobsStore } from "../../cron/store.js";
 import { recordCronRun } from "../../cron/store/run-history.js";
@@ -63,6 +70,152 @@ function captureAuthority(
 }
 
 describe("cron handler inference binding persistence", () => {
+  it("adopts newly configured fallbacks only on deliberate policy review and keeps the primary", async ({
+    fixture,
+  }) => {
+    await fixture.invoke("cron.add", createParams());
+    const created = await fixture.reload();
+    expect(created.inferenceGrants).toEqual({});
+    fixture.setDefaultFallbacks(["openai/gpt-4o@" + subscriptionId]);
+    await fixture.invoke("cron.update", {
+      id: created.id,
+      patch: { name: "Unrelated edit", payload: createParams().payload },
+    });
+    const unrelated = await fixture.reload();
+    expect(unrelated.inferenceGrants).toEqual({});
+    const preview = await fixture.invoke("cron.update", {
+      id: created.id,
+      patch: {},
+      reviewModelPolicy: true,
+      dryRun: true,
+    });
+    expect(preview).toMatchObject({ modelPolicyReview: { changed: true, dryRun: true } });
+    expect(await fixture.reload()).toEqual(unrelated);
+    await fixture.invoke("cron.update", { id: created.id, patch: {}, reviewModelPolicy: true });
+    const reviewed = await fixture.reload();
+    expect(reviewed.inferenceBinding).toEqual(created.inferenceBinding);
+    expect(reviewed.inferenceGrants).toMatchObject({
+      "openai/gpt-4o": { profileId: subscriptionId, authRequirement: "subscription" },
+    });
+    expect(reviewed.schedule).toEqual(created.schedule);
+    await fixture.invoke("cron.update", { id: created.id, patch: {}, reviewModelPolicy: true });
+    expect(await fixture.reload()).toEqual(reviewed);
+    await fixture.invoke(
+      "cron.update",
+      { id: created.id, patch: {}, reviewModelPolicy: true, expectedConfigRevision: "stale" },
+      null,
+      { expectedSuccess: false },
+    );
+    expect(await fixture.reload()).toEqual(reviewed);
+    await fixture.invoke("cron.get", { id: created.id });
+    await fixture.invoke("cron.update", {
+      id: created.id,
+      patch: { payload: { kind: "agentTurn", fallbacks: [] } },
+    });
+    expect((await fixture.reload()).inferenceGrants).toEqual({});
+  });
+
+  it.for(["user", undefined] as const)(
+    "reviews persistent session provenance %s without shadowing its primary account",
+    async (modelOverrideSource, { fixture }) => {
+      using mocks = new DisposableStack();
+      mocks.defer(() => vi.restoreAllMocks());
+      installPrivateUpdateHandoffStore(path.dirname(path.dirname(fixture.storePath)));
+      fixture.setDefaultFallbacks([
+        "openai/gpt-4o@" + subscriptionId,
+        "openai/gpt-4.1@" + subscriptionId,
+      ]);
+      await upsertSessionEntryCore(
+        { sessionKey, agentId: "main" },
+        {
+          sessionId: "synthetic-review-target",
+          updatedAt: 1,
+          providerOverride: "openai",
+          modelOverride: "gpt-4o",
+          modelOverrideSource,
+        },
+      );
+      await fixture.invoke("cron.add", {
+        ...createParams(),
+        sessionTarget: "session:" + sessionKey,
+      });
+      const original = await fixture.reload();
+      expect(original.inferenceBinding?.profileId).toBe(platformId);
+      expect(original.inferenceGrants).toEqual({});
+      await fixture.invoke("cron.update", { id: original.id, patch: {}, reviewModelPolicy: true });
+      const reviewed = await fixture.reload();
+      expect(reviewed.inferenceBinding).toEqual(original.inferenceBinding);
+      expect(reviewed.inferenceGrants).toEqual({});
+      const cfg = getRuntimeConfigSnapshot()!;
+      const alternate = await captureCronInferenceBinding({
+        cfg,
+        agentId: "main",
+        model: "openai/gpt-4o@" + subscriptionId,
+      });
+      expect(alternate?.profileId).toBe(subscriptionId);
+      if (!alternate) {
+        throw new Error("Expected alternate account");
+      }
+      // A formerly optional model can become primary after a later session/default edit.
+      for (const grants of [reviewed.inferenceGrants, { "openai/gpt-4o": alternate }]) {
+        const admission = createCronRunInferenceCandidates({
+          cfg,
+          agentDir: resolveAgentDir(cfg, "main"),
+          primary: { provider: "openai", model: "gpt-4o" },
+          binding: reviewed.inferenceBinding,
+          grants,
+        });
+        try {
+          expect(await admission.admit("openai", "gpt-4o")).toBeUndefined();
+          expect((await admission.prepare("openai", "gpt-4o"))?.runParams.authProfileId).toBe(
+            platformId,
+          );
+        } finally {
+          admission.dispose();
+        }
+      }
+    },
+  );
+
+  it("recaptures a replaced account on a deliberate same-value model save, not a routine save", async ({
+    fixture,
+  }) => {
+    const model = "openai/gpt-4.1@" + platformId;
+    await fixture.invoke("cron.add", modelParams(model));
+    const original = await fixture.reload();
+    await persistAuthProfileBatch({
+      profiles: [
+        {
+          profileId: platformId,
+          credential: { type: "api_key", provider: "openai", key: "synthetic-reconnected-key" },
+        },
+      ],
+    });
+    const patch = { payload: { kind: "agentTurn", model } };
+    await fixture.invoke("cron.update", { id: original.id, patch });
+    expect((await fixture.reload()).inferenceBinding).toEqual(original.inferenceBinding);
+    await fixture.invoke("cron.update", { id: original.id, patch, reviewModelPolicy: true });
+    const reviewed = await fixture.reload();
+    expect(reviewed.inferenceBinding?.authorizationId).not.toBe(
+      original.inferenceBinding?.authorizationId,
+    );
+    expect(await fixture.resolveAuth(reviewed.inferenceBinding!)).toMatchObject({
+      profileId: platformId,
+      apiKey: "synthetic-reconnected-key",
+    });
+  });
+
+  it("saves a healthy primary with one warning for unavailable optional accounts", async ({
+    fixture,
+  }) => {
+    fixture.setDefaultFallbacks(["anthropic/claude-opus-4-6@anthropic:missing"]);
+    const response = await fixture.invoke("cron.add", createParams());
+    expect(response).toMatchObject({ warning: expect.stringContaining("Fallback unavailable") });
+    const created = await fixture.reload();
+    expect(created.inferenceBinding).toMatchObject({ profileId: platformId });
+    expect(created.inferenceGrants).toEqual({});
+  });
+
   it("replaces a stored account with an explicit native CLI login without replacing the job", async ({
     fixture,
   }) => {
@@ -368,6 +521,7 @@ describe("cron handler inference binding persistence", () => {
   it("rejects an agent move that changes credential ownership unless an account is adopted", async ({
     fixture,
   }) => {
+    fixture.setDefaultFallbacks(["openai/gpt-4o@" + subscriptionId]);
     await fixture.invoke("cron.add", createParams());
     const created = await fixture.reload();
     fixture.addAgent("secondary");
@@ -391,6 +545,10 @@ describe("cron handler inference binding persistence", () => {
     expect(moved.inferenceBinding).toMatchObject({ profileId: platformId, source: "user" });
     expect(moved.inferenceBinding?.authorizationId).not.toBe(
       created.inferenceBinding?.authorizationId,
+    );
+    expect(moved.inferenceGrants?.["openai/gpt-4o"]).toMatchObject({ profileId: subscriptionId });
+    expect(moved.inferenceGrants?.["openai/gpt-4o"]?.authorizationId).not.toBe(
+      created.inferenceGrants?.["openai/gpt-4o"]?.authorizationId,
     );
   });
 

@@ -32,6 +32,7 @@ type RateLimitContext = {
   sessionId?: string;
   sessionKey?: string;
   userLockedAuthProfileId?: string;
+  resolveCandidateAuthProfileId?: (provider: string, model: string) => string | undefined;
   authStore: AuthProfileStore | null;
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
 };
@@ -82,7 +83,13 @@ export function prepareModelFallbackRateLimit(
     candidates.length > 1
       ? candidates.map((candidate) => [
           candidate,
-          readFallbackCandidateRateLimit({ ...context, candidate }),
+          readFallbackCandidateRateLimit({
+            ...context,
+            candidate,
+            userLockedAuthProfileId:
+              context.resolveCandidateAuthProfileId?.(candidate.provider, candidate.model) ??
+              context.userLockedAuthProfileId,
+          }),
         ])
       : [],
   );

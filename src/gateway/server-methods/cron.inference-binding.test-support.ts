@@ -180,7 +180,9 @@ async function createFixture(stateDir: string, agentDir: string) {
       return response?.[2];
     }
     const serialized = JSON.stringify(response?.[1]);
-    expect(serialized).not.toMatch(/inferenceBinding|authorizationId|runtimeAuthority/);
+    expect(serialized).not.toMatch(
+      /inferenceBinding|inferenceGrants|authorizationId|runtimeAuthority/,
+    );
     expect(serialized).not.toMatch(
       /synthetic-(?:platform-key|subscription-access|subscription-refresh)/,
     );
@@ -418,6 +420,14 @@ async function createFixture(stateDir: string, agentDir: string) {
             ...cfg.agents?.defaults,
             models: { "openai/gpt-4o": { alias: "synthetic-alias" } },
           },
+        },
+      });
+    },
+    setDefaultFallbacks(fallbacks: string[]) {
+      publish({
+        agents: {
+          ...cfg.agents,
+          defaults: { ...cfg.agents?.defaults, model: { primary: "openai/gpt-4.1", fallbacks } },
         },
       });
     },

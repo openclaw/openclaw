@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import {
   asOptionalObjectRecord,
@@ -21,10 +22,7 @@ import {
 import { resolveCronDeliveryDefaultsScope } from "../../cron/delivery-defaults.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
-import {
-  acquireCronInferenceAuthorization,
-  captureCronInferenceBinding,
-} from "../../cron/inference-binding.runtime.js";
+import { acquireCronInferenceAuthorization } from "../../cron/inference-binding.runtime.js";
 import {
   requiresExternalCronDelivery,
   resolveDeliveryTarget,
@@ -51,19 +49,15 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
-import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
-import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
-
-type InferenceCaller = Pick<
-  GatewayRequestHandlerOptions,
-  "client" | "context" | "signal" | "hasCurrentClientAuthority"
->;
+import {
+  captureCronInferenceForCaller,
+  captureCronInferencePolicyForCaller,
+  type InferenceCaller,
+} from "./cron-inference-policy.js";
 
 /**
  * The entry a job's cron session takes its runtime override from: the target row of a
@@ -95,37 +89,6 @@ async function loadCronRuntimeSessionEntry(params: {
           })
         )?.entry;
   return source ? resolveCarriedCronModelSelection(source) : undefined;
-}
-
-async function captureCronInferenceForCaller(
-  params: Parameters<typeof captureCronInferenceBinding>[0],
-  caller: InferenceCaller,
-) {
-  let selection: UserModelAccountSelection | undefined;
-  let authority: AuthProfileAuthorization | undefined;
-  const inferenceBinding = await captureCronInferenceBinding({
-    ...params,
-    retainAuthorization: (captured) => {
-      authority = captured;
-    },
-    authorizeProfile: async (profileId, inherited) => {
-      // Trusted creator selections already carry their owner's permission. New
-      // personal selections require the same live human authority as chat.
-      if (isUserModelAuthProfileId(profileId) && !inherited) {
-        selection = await preparePersonalModelAccountSelection(caller, profileId);
-        return selection.assertCurrent;
-      }
-      return undefined;
-    },
-  });
-  return {
-    inferenceBinding,
-    assertInferenceSelectionCurrent: () => {
-      selection?.assertCurrent();
-      authority?.assertCurrent();
-    },
-    disposeInferenceAuthorization: () => authority?.dispose(),
-  };
 }
 
 export function requiresExplicitAgentRuntimeToolsAllow(params: {
@@ -367,25 +330,27 @@ export async function captureCronCreatorSession(
           loaded: sessionKey ? { key: sessionKey, entry: loaded?.entry } : undefined,
         })
       : undefined;
+  const payload = job.payload;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
-    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
-      ? await captureCronInferenceForCaller(
-          {
+    !hasRuntimeAuthority && payload.kind === "agentTurn" && job.sessionTarget !== "main"
+      ? await (async () => {
+          const params = {
             cfg,
             agentId: agentId ?? resolveDefaultAgentId(cfg),
-            model: job.payload.model,
+            model: payload.model,
             isGmailHook:
-              (job.payload.externalContentSource ??
+              (payload.externalContentSource ??
                 resolveHookExternalContentSource(
                   parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
                 )) === "gmail",
             sessionEntry: callerScope ? creatorSession : undefined,
             executionSessionEntry: executionSession?.entry,
             runtimeSessionEntry,
-          },
-          caller,
-        )
+          };
+          const primary = await captureCronInferenceForCaller(params, caller);
+          return await captureCronInferencePolicyForCaller(params, caller, job, primary);
+        })()
       : undefined;
   const independent = Boolean(
     inheritedAuthority?.openclawIdPrincipal ||
@@ -472,17 +437,89 @@ export async function captureCronCreatorSession(
   }
 }
 
-/** Only an explicitly selected account changes an existing job’s inference ownership. */
+/** Retain custody checks through capture and the existing synchronous mutation commit guard. */
 export async function captureCronUpdatedInferenceBinding(
+  ...args: Parameters<typeof captureCronUpdatedInferenceBindingInternal>
+) {
+  const [nextJob, patch, cfg] = args;
+  const authorities: AuthProfileAuthorization[] = [];
+  const captured = await captureCronUpdatedInferenceBindingInternal(...args);
+  try {
+    if (patch.agentId !== undefined && nextJob.runtimeAuthority === undefined) {
+      for (const binding of [
+        captured?.inferenceBinding === undefined ? nextJob.inferenceBinding : undefined,
+        ...Object.values(
+          captured?.inferenceGrants === undefined ? (nextJob.inferenceGrants ?? {}) : {},
+        ),
+      ]) {
+        if (binding) {
+          authorities.push(
+            await acquireCronInferenceAuthorization({
+              binding,
+              cfg,
+              agentDir: resolveAgentDir(cfg, nextJob.agentId ?? resolveDefaultAgentId(cfg)),
+            }),
+          );
+        }
+      }
+    }
+    if (!captured && authorities.length === 0) {
+      return undefined;
+    }
+    return {
+      inferenceBinding: captured?.inferenceBinding,
+      inferenceGrants: captured?.inferenceGrants,
+      inferenceWarning: captured?.inferenceWarning,
+      assertInferenceSelectionCurrent: () => {
+        for (const authority of authorities) {
+          authority.assertCurrent();
+        }
+        captured?.assertInferenceSelectionCurrent();
+      },
+      disposeInferenceAuthorization: () => {
+        captured?.disposeInferenceAuthorization();
+        for (const authority of authorities) {
+          authority.dispose();
+        }
+      },
+    };
+  } catch (error) {
+    captured?.disposeInferenceAuthorization();
+    for (const authority of authorities) {
+      authority.dispose();
+    }
+    throw error;
+  }
+}
+
+/** Only an actual policy change or deliberate review adopts optional inference accounts. */
+async function captureCronUpdatedInferenceBindingInternal(
   nextJob: CronStoredJob,
   patch: CronJobPatch,
   cfg: OpenClawConfig,
   caller: InferenceCaller,
+  review?: { currentJob: CronStoredJob; explicit: boolean },
 ) {
   if (nextJob.runtimeAuthority !== undefined || nextJob.payload.kind !== "agentTurn") {
     return undefined;
   }
-  const model = patch.payload && "model" in patch.payload ? patch.payload.model : undefined;
+  const previousPayload = review?.currentJob.payload;
+  const modelChanged =
+    previousPayload?.kind === "agentTurn" &&
+    !isDeepStrictEqual(previousPayload.model, nextJob.payload.model);
+  const policyChanged =
+    modelChanged ||
+    (previousPayload?.kind === "agentTurn" &&
+      !isDeepStrictEqual(previousPayload.fallbacks, nextJob.payload.fallbacks));
+  const reviewPolicy = review?.explicit === true || policyChanged;
+  if (review && !reviewPolicy) {
+    return undefined;
+  }
+  const model = reviewPolicy
+    ? nextJob.payload.model
+    : patch.payload && "model" in patch.payload
+      ? patch.payload.model
+      : undefined;
   const agentId = nextJob.agentId ?? resolveDefaultAgentId(cfg);
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
@@ -498,35 +535,39 @@ export async function captureCronUpdatedInferenceBinding(
         authProfileId: selection.profileId,
       })
     : undefined;
-  if (!model || !selection?.profileId) {
-    if (patch.agentId !== undefined && nextJob.inferenceBinding) {
-      // A move may keep the account only when the new agent sees the same credential owner.
-      const authority = await acquireCronInferenceAuthorization({
-        binding: nextJob.inferenceBinding,
-        cfg,
-        agentDir: resolveAgentDir(cfg, agentId),
-      });
-      return {
-        inferenceBinding: undefined,
-        assertInferenceSelectionCurrent: () => authority.assertCurrent(),
-        disposeInferenceAuthorization: () => authority.dispose(),
-      };
-    }
-    return undefined;
-  }
-  // An account edit keeps the runtime the job records; otherwise it resolves the way create does.
-  const recordedRuntime = nextJob.inferenceBinding?.runtime;
+  const explicitModelSave =
+    review?.explicit === true && patch.payload !== undefined && "model" in patch.payload;
   const executionKey = resolveCronSessionTargetSessionKey(nextJob.sessionTarget);
+  const executionSessionEntry = executionKey
+    ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))?.entry
+    : undefined;
   const runtimeSessionEntry = await loadCronRuntimeSessionEntry({
     cfg,
     job: nextJob,
     agentId,
-    executionEntry: executionKey
-      ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionKey, agentId }))?.entry
-      : undefined,
+    executionEntry: executionSessionEntry,
   });
+  const captureParams = {
+    cfg,
+    agentId,
+    model: nextJob.payload.model,
+    executionSessionEntry,
+    runtimeSessionEntry,
+    isGmailHook:
+      (nextJob.payload.externalContentSource ??
+        resolveHookExternalContentSource(
+          parseAgentSessionKey(executionKey ?? "")?.rest ?? executionKey ?? "",
+        )) === "gmail",
+  };
+  if ((review && !modelChanged && !explicitModelSave) || !model || !selection?.profileId) {
+    return reviewPolicy
+      ? await captureCronInferencePolicyForCaller(captureParams, caller, nextJob)
+      : undefined;
+  }
+  // An account edit keeps the runtime the job records; otherwise it resolves the way create does.
+  const recordedRuntime = nextJob.inferenceBinding?.runtime;
   const inference = await captureCronInferenceForCaller(
-    { cfg, agentId, model, runtimeSessionEntry, recordedRuntime },
+    { ...captureParams, model, recordedRuntime },
     caller,
   );
   if (inference.inferenceBinding === undefined) {
@@ -542,7 +583,7 @@ export async function captureCronUpdatedInferenceBinding(
   if (
     recordedRuntime &&
     capturedRuntime !== recordedRuntime &&
-    (inference.inferenceBinding?.provider ?? selection.provider) ===
+    (inference.inferenceBinding?.provider ?? selection?.provider) ===
       nextJob.inferenceBinding?.provider
   ) {
     inference.disposeInferenceAuthorization();
@@ -550,7 +591,9 @@ export async function captureCronUpdatedInferenceBinding(
       `The automation runs on runtime ${recordedRuntime}, which is unavailable for this account; the edit would move it to runtime ${capturedRuntime ?? "unknown"}.`,
     );
   }
-  return inference;
+  return reviewPolicy
+    ? await captureCronInferencePolicyForCaller(captureParams, caller, nextJob, inference)
+    : { ...inference, inferenceGrants: undefined, inferenceWarning: undefined };
 }
 
 /** Waiting cannot finish while the caller owns the execution or result conversation lane. */

@@ -1,4 +1,5 @@
 /** Resolves model fallback chains for isolated cron runs and preflight. */
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { RunEntryModelResolve } from "../../agents/embedded-agent-runner/run-entry.types.js";
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
 import type { ModelCandidate } from "../../agents/model-fallback.types.js";
@@ -8,7 +9,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { CronJob } from "../types.js";
+import { createCronRunInferenceCandidates } from "../run-inference.js";
+import type { CronJob, CronStoredJob } from "../types.js";
 import { resolveCurrentChannelTarget } from "./channel-output-policy.js";
 import {
   resolveEffectiveModelFallbacks,
@@ -60,7 +62,7 @@ export async function prepareCronModelResolveInput(
 /** Resolves cron model fallbacks, giving explicit payload fallbacks precedence over subagent/default policy. */
 export function resolveCronFallbacksOverride(params: {
   cfg: OpenClawConfig;
-  job: CronJob;
+  job: Pick<CronJob, "payload">;
   agentId: string;
   selectedModel?: ModelRef;
   useSubagentFallbacks?: boolean;
@@ -139,10 +141,30 @@ export function resolveCronPreflightCandidates(params: {
 export async function resolveCronPreflight(
   params: Parameters<typeof resolveCronPreflightCandidates>[0],
 ) {
-  const modelPreflightRuntime = await cronModelPreflightRuntimeLoader.load();
   const preflightCandidates = resolveCronPreflightCandidates(params);
+  const job: CronStoredJob = params.job;
+  const inference = createCronRunInferenceCandidates({
+    binding: job.inferenceBinding,
+    grants: job.inferenceGrants,
+    primary: { provider: params.provider, model: params.model },
+    cfg: params.cfg,
+    agentDir: resolveAgentDir(params.cfg, params.agentId),
+  });
+  using inferenceLease = new DisposableStack();
+  inferenceLease.defer(inference.dispose);
+  const approved = [];
+  for (const candidate of preflightCandidates) {
+    const reason = await inference.admit(candidate.provider, candidate.model);
+    if (reason) {
+      logWarn(`[cron:${job.id}] ${reason}`);
+    } else {
+      approved.push(candidate);
+    }
+  }
+  const modelPreflightRuntime = await cronModelPreflightRuntimeLoader.load();
   let firstUnavailableReason: string | undefined;
-  for (const [index, candidate] of preflightCandidates.entries()) {
+  for (const [index, candidate] of approved.entries()) {
+    await inference.admit(candidate.provider, candidate.model);
     const candidatePreflight = await modelPreflightRuntime.preflightCronModelProvider({
       cfg: params.cfg,
       provider: candidate.provider,
@@ -152,12 +174,9 @@ export async function resolveCronPreflight(
       firstUnavailableReason ??= candidatePreflight.reason;
       continue;
     }
-    const modelFallbacksOverride =
-      candidate.provider !== params.provider || candidate.model !== params.model
-        ? preflightCandidates
-            .slice(index + 1)
-            .map((remaining) => `${remaining.provider}/${remaining.model}`)
-        : undefined;
+    const modelFallbacksOverride = approved
+      .slice(index + 1)
+      .map((remaining) => `${remaining.provider}/${remaining.model}`);
     if (modelFallbacksOverride && firstUnavailableReason !== undefined) {
       logWarn(
         `[cron:${params.job.id}] ${firstUnavailableReason}; continuing with fallback ${candidate.provider}/${candidate.model}.`,
@@ -168,7 +187,7 @@ export async function resolveCronPreflight(
       provider: candidate.provider,
       model: candidate.model,
       modelFallbacksOverride,
-      runtimePluginCandidates: preflightCandidates.slice(index),
+      runtimePluginCandidates: approved.slice(index),
     };
   }
   if (firstUnavailableReason !== undefined) {
@@ -179,6 +198,6 @@ export async function resolveCronPreflight(
     provider: params.provider,
     model: params.model,
     modelFallbacksOverride: undefined,
-    runtimePluginCandidates: preflightCandidates,
+    runtimePluginCandidates: approved,
   };
 }

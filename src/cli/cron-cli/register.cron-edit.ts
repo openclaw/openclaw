@@ -12,7 +12,7 @@ import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { CronCliError } from "./cron-cli-error.js";
-import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
+import { readCronJobForEdit } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
   parseCronDeliveryPolicyOptions,
@@ -60,28 +60,6 @@ type CronEditOptions = GatewayRpcOpts &
   Parameters<typeof resolveCronEditScheduleRequest>[0] &
   Record<string, unknown>;
 
-async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJobForEdit> {
-  try {
-    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJobForEdit;
-  } catch (error) {
-    if (!isUnknownCronGetMethodError(error)) {
-      throw error;
-    }
-    // Protocol-v4 gateways shipped before cron.get; keep remote edits working
-    // without paying the paginated lookup cost on current gateways.
-    const inventory = await listCronJobsFromGateway(
-      opts,
-      { includeDisabled: true },
-      { allowLegacyUnversionedPagination: true },
-    );
-    const existing = inventory.jobs.find((job) => job.id === id);
-    if (!existing) {
-      throw new CronCliError(`unknown automation id: ${id}`, { cause: error });
-    }
-    return existing;
-  }
-}
-
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
     registerCronMutationOptions(
@@ -105,6 +83,12 @@ export function registerCronEditCommand(cron: Command) {
         false,
       )
       .option("--clear-fallbacks", "Remove per-job fallback override", false)
+      .option(
+        "--review-model-policy",
+        "Review configured fallback accounts without pinning models",
+        false,
+      )
+      .option("--dry-run", "Preview --review-model-policy without changing the automation", false)
       .option(
         "--clear-model",
         "Remove the per-job model override (restore normal cron model precedence)",
@@ -703,9 +687,23 @@ export function registerCronEditCommand(cron: Command) {
             patch.failureAlert = failureAlert;
           }
 
+          const reviewModelPolicy =
+            opts.reviewModelPolicy === true ||
+            hasModel ||
+            opts.clearModel === true ||
+            typeof opts.fallbacks === "string" ||
+            opts.clearFallbacks === true;
+          if (opts.dryRun && (!opts.reviewModelPolicy || Object.keys(patch).length > 0)) {
+            throw new CronCliError("--dry-run requires --review-model-policy without other edits");
+          }
+          if (opts.reviewModelPolicy || opts.dryRun) {
+            await readExistingCronJob();
+          }
           const res = await callGatewayFromCli("cron.update", opts, {
             id,
             patch,
+            ...(reviewModelPolicy ? { reviewModelPolicy: true } : {}),
+            ...(opts.dryRun ? { dryRun: true } : {}),
             ...(expectedConfigRevision !== undefined ? { expectedConfigRevision } : {}),
           });
           defaultRuntime.writeJson(res);

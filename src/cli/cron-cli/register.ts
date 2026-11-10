@@ -12,6 +12,7 @@ import {
   registerCronStatusCommand,
 } from "./register.cron-add.js";
 import { registerCronEditCommand } from "./register.cron-edit.js";
+import { registerCronReviewModelPolicyCommand } from "./register.cron-review-model-policy.js";
 import { registerCronScratchCommand } from "./register.cron-scratch.js";
 import { registerCronSimpleCommands } from "./register.cron-simple.js";
 
@@ -45,6 +46,7 @@ export function registerCronCli(program: Command) {
   registerCronSimpleCommands(cron);
   registerCronScratchCommand(cron);
   registerCronEditCommand(cron);
+  registerCronReviewModelPolicyCommand(cron);
   setCommandJsonMode(cron, "output", ({ argv }) => isCronMachineOutput(argv));
 
   applyParentDefaultHelpAction(cron);

@@ -76,6 +76,9 @@ export type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     fallbacksOverride?: string[];
     agentDir?: string;
     userLockedAuthProfileId?: string;
+    /** Owner admission precedes harness, discovery and cooldown preparation; a message skips it. */
+    admitCandidate?: (provider: string, model: string) => Promise<string | undefined>;
+    resolveCandidateAuthProfileId?: (provider: string, model: string) => string | undefined;
     cyberAccessProgram?: CyberAccessProgram;
   } & ModelManifestNormalizationContext;
   identity: {

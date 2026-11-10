@@ -43,6 +43,7 @@ export function retireTransferredCronAuthority(job: CronStoredJob): void {
   delete job.state.nextRunAtMs;
   delete job.operatorSource;
   delete job.inferenceBinding;
+  delete job.inferenceGrants;
   delete job.runtimeAuthority;
   job.runtimeAuthorityRecoveryRequired = true;
   delete job.toolsAllowProvenance;

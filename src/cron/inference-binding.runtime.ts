@@ -4,6 +4,10 @@ import {
   type AuthProfileAuthorization,
 } from "../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
+import {
+  resolveAuthProfileEligibility,
+  resolveExplicitAuthOrderSelection,
+} from "../agents/auth-profiles/order.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import {
@@ -14,9 +18,11 @@ import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selectio
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -35,7 +41,14 @@ export async function captureCronInferenceBinding(params: {
   model?: string;
   isGmailHook?: boolean;
   sessionEntry?: SessionEntry;
-  executionSessionEntry?: Pick<SessionEntry, "modelOverride" | "providerOverride">;
+  executionSessionEntry?: Pick<
+    SessionEntry,
+    | "modelOverride"
+    | "providerOverride"
+    | "modelOverrideSource"
+    | "modelOverrideFallbackOriginProvider"
+    | "modelOverrideFallbackOriginModel"
+  >;
   /**
    * The entry the cron session takes its runtime override from: the target row of a
    * `session:` job, or what a `current` job carries from its creating conversation.
@@ -188,6 +201,7 @@ export async function captureCronInferenceBinding(params: {
   }
   const store = await ensureAuthProfileStoreAsync(agentDir, {
     profileId: selection?.profileId,
+    externalCli: { mode: "none" },
     allowKeychainPrompt: false,
     config: cfg,
   });
@@ -319,4 +333,65 @@ export async function acquireCronInferenceAuthorization(params: {
     }
     throw error;
   }
+}
+
+/** Resolve an optional alternate without choosing an ambient or round-robin billing account. */
+export async function captureCronAlternateInferenceBinding(
+  params: Parameters<typeof captureCronInferenceBinding>[0] & { model: string },
+): Promise<CronInferenceBinding> {
+  const selected = resolveSimpleCompletionSelectionForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    modelRef: params.model,
+  });
+  if (!selected) {
+    throw new Error("The fallback model could not be resolved.");
+  }
+  const owner = await resolveCronModelSelectionOwner({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    requiredAgentId: params.agentId,
+  });
+  let profileId = selected.profileId;
+  if (!profileId) {
+    const store = await ensureAuthProfileStoreAsync(owner.agentDir, {
+      config: params.cfg,
+      externalCli: { mode: "none" },
+      allowKeychainPrompt: false,
+    });
+    const { order } = resolveExplicitAuthOrderSelection({
+      storeOrder: store.order,
+      configuredOrder: params.cfg.auth?.order,
+      providerKey: selected.provider,
+      providerAuthKey: resolveProviderIdForAuth(selected.provider, { config: params.cfg }),
+    });
+    const eligible = (id: string) =>
+      resolveAuthProfileEligibility({
+        cfg: params.cfg,
+        store,
+        provider: selected.provider,
+        profileId: id,
+        includePendingOAuthRefresh: true,
+      }).eligible;
+    const choices =
+      order === undefined ? Object.keys(store.profiles).filter(eligible) : order.filter(eligible);
+    if (!choices.length || (order === undefined && choices.length !== 1)) {
+      throw new Error(
+        choices.length
+          ? "multiple eligible accounts; select model@profile"
+          : "no eligible stored account",
+      );
+    }
+    profileId = choices[0];
+  }
+  const binding = await captureCronInferenceBinding({
+    ...params,
+    sessionEntry: undefined,
+    recordedRuntime: undefined,
+    model: `${selected.provider}/${selected.modelId}@${profileId}`,
+  });
+  if (!binding) {
+    throw new Error("runtime does not forward a supported stored account");
+  }
+  return binding;
 }

@@ -12,7 +12,10 @@ import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
-import { normalizeCronInferenceBinding } from "./inference-binding.js";
+import {
+  normalizeCronInferenceBinding,
+  normalizeCronInferenceGrants,
+} from "./inference-binding.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
 import { snapshotOwnCronRecord } from "./own-record.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -334,6 +337,7 @@ export function normalizeCronJobInput(
     ["toolsAllowExecTargetRequirement", normalizeCronToolsAllowExecTargetRequirement],
     ["runtimeAuthority", normalizeCronRuntimeAuthority],
     ["inferenceBinding", normalizeCronInferenceBinding],
+    ["inferenceGrants", normalizeCronInferenceGrants],
   ] as const) {
     if (!(field in base)) {
       continue;

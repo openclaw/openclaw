@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { readAgentTerminalSnapshot } from "../../agents/agent-terminal-snapshot.js";
 import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
+import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   createAgentRunRestartAbortError,
@@ -134,6 +135,14 @@ async function runCronIsolatedAgentTurnInTrace(
         status: "error",
         error: err.message,
         admissionDisposition: err.admissionDisposition,
+      };
+    }
+    if (isRecordedModelFallbackStop(err)) {
+      return {
+        status: "error",
+        error: normalizeCronRunErrorText(err),
+        admissionDisposition: "rejected",
+        diagnostics: createCronRunDiagnosticsFromError("cron-preflight", err),
       };
     }
     throw err;
@@ -441,7 +450,7 @@ async function runCronIsolatedAgentTurnInTrace(
                 occurrence: params.occurrence,
                 runId,
                 cfg: params.cfg,
-                job: params.job,
+                job: prepared.context.input.job,
                 trigger: params.trigger,
                 deliveryAttemptFence: params.deliveryAttemptFence,
                 lane: params.lane,

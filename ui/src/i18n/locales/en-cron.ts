@@ -311,6 +311,9 @@ const enCron = {
       modelPlaceholder: "openai/gpt-5.2",
       modelHelp:
         "Start typing to pick a known model, or enter a custom one. Routine jobs (summaries, triage, classification) run well on a lighter model — cheaper and faster than your default.",
+      reviewModelPolicy: "Review fallback accounts on save",
+      reviewModelPolicyHelp:
+        "Authorize available accounts in the current fallback policy for future runs. Keeps the primary account and schedule; unavailable fallbacks produce a warning. Other edits do not authorize new accounts.",
       thinking: "Reasoning",
       thinkingPlaceholder: "low",
       thinkingHelp: "Use a suggested level or enter a provider-specific value.",

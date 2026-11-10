@@ -127,14 +127,16 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     assertCurrent,
   });
   const hookOwnsFallbacks = hookSelection?.fallbacksOverride !== undefined;
+  // Per-candidate accounts need the hook target admitted as the search root.
+  // Legacy single-account admission retains the original fallback order.
   const runSelection = params.modelResolve?.modelSelectionLocked
     ? { ...params.selection, fallbacksOverride: [] }
-    : hookOwnsFallbacks && hookSelection
+    : (hookOwnsFallbacks || params.selection.resolveCandidateAuthProfileId) && hookSelection
       ? {
           ...params.selection,
           provider: hookSelection.provider,
           model: hookSelection.modelId,
-          fallbacksOverride: hookSelection.fallbacksOverride,
+          fallbacksOverride: hookSelection.fallbacksOverride ?? params.selection.fallbacksOverride,
           requestedRouteResolution:
             hookSelection.provider !== params.selection.provider ||
             hookSelection.modelId !== params.selection.model

@@ -676,6 +676,114 @@ it("creates stream schedules from exact argv flags", async () => {
   });
 });
 
+it.each([
+  ["--model", "openai/test"],
+  ["--fallbacks", "openai/test"],
+  ["--clear-model"],
+  ["--clear-fallbacks"],
+])("marks explicit model-policy edits for review: %s", async (...args) => {
+  await runCronCommand([...EDIT, ...args]);
+  expect(rpcParams("cron.update")).toHaveProperty("reviewModelPolicy", true);
+});
+
+it("does not adopt model-policy accounts on an unrelated edit", async () => {
+  await runCronCommand([...EDIT, "--name", "renamed"]);
+  expect(rpcParams("cron.update")).not.toHaveProperty("reviewModelPolicy");
+});
+
+it("previews a revision-pinned model-policy review without other edits", async () => {
+  resetGatewayMock();
+  callGatewayFromCli.mockImplementation(async (method) =>
+    method === "cron.get"
+      ? { ...cronTestJob({ id: "job-1" }), configRevision: "observed" }
+      : { ok: true },
+  );
+  await parse([...EDIT, "--review-model-policy", "--dry-run"]);
+  expect(rpcParams("cron.update")).toEqual({
+    id: "job-1",
+    patch: {},
+    reviewModelPolicy: true,
+    dryRun: true,
+    expectedConfigRevision: "observed",
+  });
+  await expect(
+    runCronCommand([...EDIT, "--review-model-policy", "--dry-run", "--name", "unsafe"]),
+  ).rejects.toThrow();
+  expect(rpcParams("cron.update")).toBeUndefined();
+});
+
+it.each([false, true])(
+  "reviews exact IDs or all jobs with partial failures and no replay: all=%s",
+  async (all) => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(async (method, _opts, params) => {
+      // SAFETY: this fixture receives the CLI's exact-ID cron RPC parameters.
+      const id = (params as { id?: string })?.id ?? "unused";
+      if (method === "cron.list") {
+        return cronPage([
+          cronTestJob({ id: "one" }),
+          cronTestJob({ id: "two" }),
+          cronTestJob({ id: "three" }),
+        ]);
+      }
+      if (method === "cron.get") {
+        return { ...cronTestJob({ id }), configRevision: id === "three" ? undefined : id };
+      }
+      if (method === "cron.update" && id === "one") {
+        throw new Error("Write outcome uncertain");
+      }
+      return { id, modelPolicyReview: { changed: true, dryRun: true } };
+    });
+    await parse([
+      "cron",
+      "review-model-policy",
+      ...(all ? ["--all"] : ["one", "two", "one", "three"]),
+      "--dry-run",
+    ]);
+    const updates = callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.update");
+    expect(updates.map((call) => call[2])).toEqual(
+      ["one", "two"].map((id) => ({
+        id,
+        patch: {},
+        reviewModelPolicy: true,
+        dryRun: true,
+        expectedConfigRevision: id,
+      })),
+    );
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        results: [
+          { id: "one", error: "Write outcome uncertain" },
+          { id: "two", result: expect.anything() },
+          { id: "three", error: expect.stringContaining("no change was attempted") },
+        ],
+      }),
+    );
+  },
+);
+
+it.each([{ args: [] }, { args: ["one", "--all"] }])(
+  "requires exact IDs or all, never both: $args",
+  async ({ args }) => {
+    await expect(runCronCommand(["cron", "review-model-policy", ...args])).rejects.toThrow();
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  },
+);
+
+it("stops bulk review when cancelled during the read, without submitting a write", async () => {
+  resetGatewayMock();
+  const scope = new AsyncWorkScope();
+  callGatewayFromCli.mockImplementation(async () => {
+    scope.beginClose();
+    return { ...cronTestJob({ id: "one" }), configRevision: "observed" };
+  });
+  await scope.run(() => parse(["cron", "review-model-policy", "one", "two"]));
+  expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual(["cron.get"]);
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({ cancelled: true }),
+  );
+});
+
 it("updates configured agent payload fields", async () => {
   const patch = await editOptions({
     "--message": "hello",

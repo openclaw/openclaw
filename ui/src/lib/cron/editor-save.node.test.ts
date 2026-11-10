@@ -81,6 +81,52 @@ async function saveAndReopen(state: CronState, readJob: () => CronJob) {
 }
 
 describe("automation save editor ownership", () => {
+  it.each([
+    { reviewModelPolicy: false, model: "openai/test" },
+    { reviewModelPolicy: true, model: "openai/test" },
+    { reviewModelPolicy: true, model: "openai/changed" },
+  ])(
+    "sends model-policy review with explicit intent=$reviewModelPolicy and model=$model",
+    async ({ reviewModelPolicy, model }) => {
+      const stored = storedJob({
+        payload: { kind: "agentTurn", message: "run", model: "openai/test" },
+      });
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "cron.update") {
+          applyWirePatch(stored, params);
+          return { ...readPublicJob(stored), warning: "Fallback unavailable" };
+        }
+        if (method === "cron.list") {
+          return cronJobsListResponse([readPublicJob(stored)]);
+        }
+        if (method === "cron.get") {
+          return readPublicJob(stored);
+        }
+        return { enabled: false, jobs: 1 };
+      });
+      const state = createStateWithRequest(request);
+      startCronEdit(state, readPublicJob(stored));
+      state.cronForm.name = "Unrelated edit";
+      state.cronForm.reviewModelPolicy = reviewModelPolicy;
+      state.cronForm.payloadModel = model;
+      await expect(addCronJob(state)).resolves.toEqual({ saved: true, jobId: stored.id });
+      const submitted = request.mock.calls.find(([method]) => method === "cron.update")?.[1];
+      if (reviewModelPolicy) {
+        expect(submitted).toHaveProperty("reviewModelPolicy", true);
+      } else {
+        expect(submitted).not.toHaveProperty("reviewModelPolicy");
+      }
+      if (reviewModelPolicy && model === "openai/test") {
+        expect(submitted).not.toHaveProperty("patch.payload.model");
+      } else {
+        expect(submitted).toHaveProperty("patch.payload.model", model);
+      }
+      expect(state.cronNotice).toBe("Fallback unavailable");
+      expect(state.cronForm.reviewModelPolicy).toBe(false);
+      expect(stored.payload).toMatchObject({ model });
+    },
+  );
+
   it.each([true, false])("saves ordinary job policies enabled=%s", async (enabled) => {
     const stored = storedJob({
       sessionTarget: enabled ? "main" : "session:agent:main:main",

@@ -109,6 +109,26 @@ it("retains valid envelopes without mutating or freezing the input", () => {
   }
 });
 
+it("retains private exact grants, rejects malformed grants, and leaves legacy jobs unreviewed", () => {
+  const binding = {
+    version: 1,
+    provider: "openai",
+    profileId: "openai:approved",
+    authorizationId: "a".repeat(64),
+    authRequirement: "api-key",
+    source: "user",
+  };
+  const inferenceGrants = { "openai/gpt-4o": binding };
+  expect(createAgent({ inferenceGrants }).inferenceGrants).toEqual(inferenceGrants);
+  expect(createAgent()).not.toHaveProperty("inferenceGrants");
+  expect(createAgent({ inferenceGrants: {} }).inferenceGrants).toEqual({});
+  expect(validateCronAddParams({ ...AGENT_JOB, inferenceGrants })).toBe(false);
+  expect(validateCronUpdateParams({ id: "job", patch: { inferenceGrants } })).toBe(false);
+  for (const invalid of [null, [], { "anthropic/claude": binding }, { "openai/gpt-4o": {} }]) {
+    expect(() => createAgent({ inferenceGrants: invalid })).toThrow(/inference (grant|binding)/);
+  }
+});
+
 it("retains a recovery marker while dropping invalid peer envelopes", () => {
   const normalized = normalizeCreate({
     scheduledToolPolicy: { version: 2, mode: "trusted" },

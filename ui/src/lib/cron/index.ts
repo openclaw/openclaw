@@ -206,6 +206,15 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     const payload = preserveLockedPayload
       ? undefined
       : buildCronPayload(form, sourcePayload, Boolean(editingJob));
+    // The review toggle adopts optional accounts, not an unchanged primary account.
+    if (
+      form.reviewModelPolicy &&
+      editingJob?.payload.kind === "agentTurn" &&
+      payload?.kind === "agentTurn" &&
+      payload.model === editingJob.payload.model
+    ) {
+      delete payload.model;
+    }
     const selectedDeliveryMode = form.deliveryMode;
     const normalizedDeliveryAccountId = form.deliveryAccountId.trim();
     // Update patches need null to clear stored routing; create payloads must
@@ -377,10 +386,13 @@ async function updateCronJobDefinition(
   const selectedJob = state.cronEditingJob;
   const ownsEditor = () => state.cronEditingJob === job && state.cronForm === form;
   try {
-    const updatedJob = await client.request<CronJob>("cron.update", {
+    const updatedJob = await client.request<CronJob & { warning?: string }>("cron.update", {
       id: job.id,
       expectedConfigRevision: requireCronConfigRevision(job.configRevision),
       patch,
+      ...(operation === "save" && form.payloadKind === "agentTurn" && form.reviewModelPolicy
+        ? { reviewModelPolicy: true }
+        : {}),
     });
     if (!isCurrent()) {
       return false;
@@ -393,6 +405,9 @@ async function updateCronJobDefinition(
         setCronEditState(state, updatedJob, { ...form, enabled: updatedJob.enabled });
       } else {
         startCronEdit(state, updatedJob);
+        if (updatedJob.warning) {
+          state.cronNotice = updatedJob.warning;
+        }
       }
     }
     return true;

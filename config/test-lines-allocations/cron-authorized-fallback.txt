@@ -1,0 +1,4 @@
+# Exact net regression growth: Gateway intent/custody, CLI conversion, UI intent/warnings,
+# malformed grants, primary continuity/loss, alternate revocation, frozen admission, native FD,
+# legacy hook order with exact-account admission controls, and legacy session provenance.
+861

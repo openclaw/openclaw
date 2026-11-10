@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-model-types.js";
+import { modelKey } from "../shared/model-key.js";
 
 /** Scheduler-owned identity, not a user model pin or a copy of credential material. */
 export type CronInferenceBinding = {
@@ -15,6 +16,47 @@ export type CronInferenceBinding = {
    */
   runtime?: string;
 };
+
+/** Unordered authorizations. The payload/default policy alone owns candidate ordering. */
+export type CronInferenceGrants = Record<string, CronInferenceBinding>;
+
+/** The original primary keeps its account/runtime even when an old optional grant matches it. */
+export function resolveCronCandidateInferenceBinding(
+  params: {
+    binding?: CronInferenceBinding;
+    grants?: CronInferenceGrants;
+    primary: { provider: string; model: string };
+  },
+  provider: string,
+  model: string,
+): CronInferenceBinding | undefined {
+  return params.grants === undefined ||
+    modelKey(provider, model) === modelKey(params.primary.provider, params.primary.model)
+    ? params.binding
+    : params.grants[modelKey(provider, model)];
+}
+
+export function normalizeCronInferenceGrants(value: unknown): CronInferenceGrants | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error("Invalid automation inference grants.");
+  }
+  const grants: CronInferenceGrants = Object.create(null);
+  for (const [key, raw] of Object.entries(value)) {
+    const binding = normalizeCronInferenceBinding(raw);
+    if (
+      !binding ||
+      !key.startsWith(binding.provider + "/") ||
+      key.length <= binding.provider.length + 1
+    ) {
+      throw new Error("Invalid automation inference grant; review the model policy again.");
+    }
+    grants[key] = binding;
+  }
+  return grants;
+}
 
 /** Stored bindings are private scheduler state, never accepted from public job input. */
 export function normalizeCronInferenceBinding(value: unknown): CronInferenceBinding | undefined {

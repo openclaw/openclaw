@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -6,7 +5,6 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   assertAdmittedRunOperatorAuthority,
   assertOperatorModelAllowed,
-  type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
 import { externalCliDiscoveryScoped } from "./auth-profiles/external-cli-discovery.js";
 import { resolveSubscriptionAuthModeForProfiles } from "./auth-profiles/profile-list.js";
@@ -39,13 +37,9 @@ import {
   isTranscriptNotContinuableError,
   type ModelFallbackAuthRuntime,
   type ModelFallbackClassifiedResult,
-  type ModelFallbackErrorHandler,
   type ModelFallbackExhaustionResult,
-  type ModelFallbackResultClassifier,
-  type ModelFallbackRunFn,
   type ModelFallbackRunOptions,
   type ModelFallbackRunResult,
-  type ModelFallbackRuntimeContext,
   type ModelFallbackStepHandler,
   recordFailedCandidateAttempt,
   resolveFallbackAuthScope,
@@ -79,9 +73,8 @@ import {
   MODEL_FALLBACK_SKIPPED_CODE,
   type FallbackAttempt,
   type ModelFallbackCandidate,
-  type ModelFallbackRouteResolution,
+  type RunWithModelFallbackParams,
 } from "./model-fallback.types.js";
-import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import {
   resolveSessionSuspensionReason,
   suspendSession,
@@ -92,36 +85,6 @@ const log = createSubsystemLogger("model-fallback");
 const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
   () => import("./auth-profiles.runtime.js"),
 );
-
-type RunWithModelFallbackParams<T> = ModelFallbackRuntimeContext & {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  model: string;
-  runId?: string;
-  sessionId?: string;
-  /** Keeps a rate-limit fallback first for this session's next turns so the provider prompt cache stays warm. */
-  stickyRateLimitFallback?: boolean;
-  userLockedAuthProfileId?: string;
-  prepareCandidateChain?: (candidates: readonly ModelFallbackCandidate[]) => Promise<void> | void;
-  lane?: string;
-  agentDir?: string;
-  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
-  fallbacksOverride?: string[];
-  requestedRouteResolution?: ModelFallbackRouteResolution;
-  run: ModelFallbackRunFn<T>;
-  onError?: ModelFallbackErrorHandler;
-  onFallbackStep?: ModelFallbackStepHandler;
-  classifyResult?: ModelFallbackResultClassifier<T>;
-  /** Return false when a thrown attempt committed work that must not be replayed. */
-  canFallbackAfterError?: (
-    attempt: Parameters<ModelFallbackErrorHandler>[0],
-  ) => boolean | Promise<boolean>;
-  mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
-  /** The attempt owner admits its runtime and selects credentials. */
-  skipAuthProfileRuntime?: boolean;
-  abortSignal?: AbortSignal;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-} & ModelManifestNormalizationContext;
 
 type DeferredSessionSuspensionState = {
   pending?: SessionSuspensionParams;
@@ -179,6 +142,20 @@ async function runWithModelFallbackInternal<T>(
   if (operatorModelPolicy && candidates.length === 0) {
     assertOperatorModelAllowed(operatorAuthority, undefined);
   }
+  const admissionAttempts: FallbackAttempt[] = [];
+  if (params.admitCandidate) {
+    const admitted: ModelFallbackCandidate[] = [];
+    for (const candidate of candidates) {
+      const reason = await params.admitCandidate(candidate.provider, candidate.model);
+      if (reason) {
+        admissionAttempts.push({ ...candidate, error: reason, code: MODEL_FALLBACK_SKIPPED_CODE });
+        log.warn(reason);
+      } else {
+        admitted.push(candidate);
+      }
+    }
+    candidates = admitted;
+  }
   const stickyFallback = takeStickyRateLimitFallback(params, candidates);
   candidates = stickyFallback?.candidates ?? candidates;
   await params.prepareCandidateChain?.(candidates);
@@ -192,17 +169,23 @@ async function runWithModelFallbackInternal<T>(
   const authStore = authRuntime
     ? await authRuntime.ensureAuthProfileStoreAsync(params.agentDir, {
         profileId: userLockedAuthProfileId,
-        externalCli: externalCliDiscoveryScoped({
-          config: params.cfg,
-          allowKeychainPrompt: false,
-          providerIds: candidates.map((candidate) => candidate.provider),
-          ...(userLockedAuthProfileId ? { profileIds: [userLockedAuthProfileId] } : {}),
-        }),
+        externalCli: params.resolveCandidateAuthProfileId
+          ? { mode: "none" }
+          : externalCliDiscoveryScoped({
+              config: params.cfg,
+              allowKeychainPrompt: false,
+              providerIds: candidates.map((candidate) => candidate.provider),
+              ...(userLockedAuthProfileId ? { profileIds: [userLockedAuthProfileId] } : {}),
+            }),
       })
     : null;
   const rateLimit = prepareModelFallbackRateLimit(candidates, { ...params, authStore });
   candidates = rateLimit.candidates;
-  const attempts: FallbackAttempt[] = [...(stickyFallback?.attempts ?? []), ...rateLimit.attempts];
+  const attempts: FallbackAttempt[] = [
+    ...admissionAttempts,
+    ...(stickyFallback?.attempts ?? []),
+    ...rateLimit.attempts,
+  ];
   const profileIdsByCandidate = new Map<ModelFallbackCandidate, string[]>();
   let lastError: unknown;
   let selectionChanged = false;
@@ -277,6 +260,16 @@ async function runWithModelFallbackInternal<T>(
       continue;
     }
     const candidateRef = { provider: candidate.provider, model: candidate.model };
+    const admissionReason = await params.admitCandidate?.(candidate.provider, candidate.model);
+    if (admissionReason) {
+      attempts.push({ ...candidateRef, error: admissionReason, code: MODEL_FALLBACK_SKIPPED_CODE });
+      continue;
+    }
+    const candidateProfileId = params.resolveCandidateAuthProfileId?.(
+      candidate.provider,
+      candidate.model,
+    );
+    const candidateAuthProfileId = candidateProfileId ?? params.userLockedAuthProfileId?.trim();
     operatorAuthority?.assertCurrent();
     if (operatorAuthority?.modelPolicy?.allows(candidateRef) === false) {
       continue;
@@ -333,23 +326,25 @@ async function runWithModelFallbackInternal<T>(
     let userLockedAuthProfileEligible = false;
     if (authRuntime && authStore) {
       userLockedAuthProfileEligible =
-        userLockedAuthProfileId !== undefined &&
+        candidateAuthProfileId !== undefined &&
         authRuntime.resolveAuthProfileEligibility({
           cfg: params.cfg,
           store: authStore,
           provider: candidate.provider,
-          profileId: userLockedAuthProfileId,
+          profileId: candidateAuthProfileId,
           includePendingOAuthRefresh: true,
         }).eligible;
-      let profileIds = authRuntime.resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store: authStore,
-        provider: candidate.provider,
-        forModel: candidate.model,
-        includePendingOAuthRefresh: true,
-      });
-      if (userLockedAuthProfileEligible && userLockedAuthProfileId) {
-        profileIds = [...new Set([userLockedAuthProfileId, ...profileIds])];
+      let profileIds = candidateProfileId
+        ? [candidateProfileId]
+        : authRuntime.resolveAuthProfileOrder({
+            cfg: params.cfg,
+            store: authStore,
+            provider: candidate.provider,
+            forModel: candidate.model,
+            includePendingOAuthRefresh: true,
+          });
+      if (!candidateProfileId && userLockedAuthProfileEligible && candidateAuthProfileId) {
+        profileIds = [...new Set([candidateAuthProfileId, ...profileIds])];
       }
       const quota = await authRuntime.maybeReprobeWhamBlockedProfiles({
         store: authStore,
@@ -366,7 +361,7 @@ async function runWithModelFallbackInternal<T>(
       }
     }
     const candidateAuthScope = resolveFallbackAuthScope({
-      userLockedAuthProfileId: userLockedAuthProfileEligible ? userLockedAuthProfileId : undefined,
+      userLockedAuthProfileId: userLockedAuthProfileEligible ? candidateAuthProfileId : undefined,
       profileIds: candidateAuthProfileIds,
     });
 
