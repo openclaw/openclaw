@@ -104,7 +104,7 @@ function setup(sourceTool = "subagent_settle") {
     sourceTool,
     requesterIsSubagent: false,
     expectsCompletionMessage: sourceTool !== "subagent_settle",
-    requireVisibleReply: true,
+    requireVisibleReply: sourceTool !== "agent_harness_completion",
     directIdempotencyKey: sourceRunId,
     isSourceSessionEffectsAllowed: () => state.allowed,
     signal: controller.signal,
@@ -160,26 +160,10 @@ function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.send).not.toHaveBeenCalled();
 }
 
-it.each([false, true])(
-  "dispatches native completion fallback with requireVisibleReply=%s",
-  async (requireVisibleReply) => {
-    const fixture = setup("agent_harness_completion");
-    fixture.params.requireVisibleReply = requireVisibleReply;
-    fixture.dispatchDone.resolve(response());
-    await fixture.startDelivery();
-    expect(fixture.dispatch.mock.calls[0]?.[2]?.replyExpectation).toBe(
-      requireVisibleReply ? "required" : "optional",
-    );
-    expectNoReplay(fixture);
-  },
-);
-
 it("preserves the direct completion phase without replacing controller custody", async () => {
-  const fixture = setup("subagent_announce");
+  const fixture = setup("agent_harness_completion");
   const expected = { delivered: true, path: "direct" };
-  const { queueMessage, input } = steering(fixture, async () => {
-    throw new Error("Required direct delivery must not steer");
-  });
+  const { queueMessage, input } = steering(fixture, vi.fn());
   fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
   const result = await deliverSubagentAnnouncement({
     ...fixture.params,
@@ -197,7 +181,8 @@ it("preserves the direct completion phase without replacing controller custody",
     },
   ]);
   expect(queueMessage).not.toHaveBeenCalled();
-  expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
+  const options = fixture.dispatch.mock.calls[0]?.[2];
+  expect(options).toMatchObject({ controllerInput: input, replyExpectation: "optional" });
 });
 
 it("keeps the same completion input queued when timeout recovery cannot accept steering", async ({

@@ -26,7 +26,6 @@ import {
   makeTerminalInput,
 } from "./embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
-import { resolveCompletionInputReplyExpectation } from "./reply-completion.js";
 import {
   createMockUsage,
   makeEmbeddedRunnerAttempt,
@@ -128,28 +127,11 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     ["result-required", "empty", 3, 6],
     ["result-required", "reasoning-only", 3, 9],
     ["required", "empty", 3, 6],
-    ["optional", "empty", 1, 1, false],
-    ["required", "empty", 3, 6, true],
   ] as const)(
     "settles an empty stop for %s replies with harness classification %s",
-    async (
-      expectation,
-      classification,
-      expectedModels,
-      expectedRequests,
-      requireVisibleReply?: boolean,
-    ) => {
+    async (expectation, classification, expectedModels, expectedRequests) => {
       const prompt = "The result is already incorporated. No new update.";
-      const sourceTool =
-        requireVisibleReply === undefined ? "sessions_send" : "agent_harness_completion";
-      const terminalReplyExpectation =
-        requireVisibleReply === undefined
-          ? expectation
-          : resolveCompletionInputReplyExpectation(sourceTool, {
-              expectsCompletionMessage: true,
-              requireVisibleReply,
-            });
-      const provenance = { kind: "inter_session" as const, sourceTool };
+      const provenance = { kind: "inter_session" as const, sourceTool: "sessions_send" };
       const inputProvenance = expectation === "required" ? undefined : provenance;
       const optional = expectation === "optional";
       const user = { role: "user" as const, content: prompt, timestamp: 0 };
@@ -178,13 +160,14 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           runParams: {
             prompt,
             inputProvenance,
-            terminalReplyExpectation,
+            terminalReplyExpectation: expectation,
           },
         });
         for (;;) {
           modelRequests += 1;
           const terminal = await resolveEmbeddedRunTerminal(input);
           if (terminal.action === "complete") {
+            expectEmptyFinal(terminal.result, optional);
             return terminal.result;
           }
         }
@@ -211,7 +194,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
         result: result.result,
         run: {
           messageChannel: "telegram",
-          terminalReplyExpectation,
+          terminalReplyExpectation: expectation,
           inputProvenance,
         },
         visibleReplyDelivered: async () => false,
