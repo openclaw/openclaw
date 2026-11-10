@@ -4,14 +4,21 @@
  * that Gateway with --gateway-preload scripts/perf/diagnostic-cpu-profile-measure-preload.mjs.
  * node --import ./scripts/tsx.mjs scripts/perf/diagnostic-cpu-profile-measure.mts \
  *   --url ws://127.0.0.1:42358 --output .local/cpu-batch.jsonl --pairs 5 --aa-sets 2
+ * Large graph regression: --large-graph --mode refusal --pairs 1 on the old build;
+ * use --mode batch --artifact-root <synthetic-state> on the fixed build, with
+ * --windows 12 or 30. The workload imports real bundled provider code, then runs
+ * bounded synthetic stacks; its CPU is reported separately from profiler work.
  * The Gateway must use synthetic state and loopback auth=none; never target a live Gateway.
  */
 import assert from "node:assert/strict";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import { parseNativeCpuProfile } from "../../src/logging/diagnostic-profile.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -23,6 +30,9 @@ const { values } = parseArgs({
     windows: { type: "string", default: "12" },
     "aa-sets": { type: "string", default: "2" },
     "settle-ms": { type: "string", default: "30000" },
+    mode: { type: "string", default: "compare" },
+    "large-graph": { type: "boolean", default: false },
+    "artifact-root": { type: "string" },
   },
 });
 const integer = (raw: string, label: string, min = 1) =>
@@ -31,6 +41,7 @@ const pairs = integer(values.pairs, "--pairs");
 const windows = integer(values.windows, "--windows");
 const aaSets = integer(values["aa-sets"], "--aa-sets", 0);
 const settleMs = integer(values["settle-ms"], "--settle-ms", 0);
+assert.ok(["compare", "batch", "refusal"].includes(values.mode));
 const url = new URL(values.url);
 assert.equal(url.protocol, "ws:");
 assert.equal(url.hostname, "127.0.0.1", "Only the isolated loopback fixture is supported");
@@ -43,7 +54,7 @@ const record = (row: unknown) => {
   appendFileSync(output, `${json}\n`);
   console.log(json);
 };
-const telemetry = async (action: "start" | "stop") => {
+const telemetry = async (action: "start" | "stop" | "workload") => {
   const response = await fetch(`http://127.0.0.1:42360/${action}`, { method: "POST" });
   assert.ok(response.ok, "Benchmark telemetry listener unavailable");
   const result: unknown = await response.json();
@@ -73,16 +84,45 @@ async function capture(batch: boolean, checkBusy: boolean) {
     assert.equal(concurrent.error.details.reason, "busy");
   }
   const response = await pending;
+  if (values.mode === "refusal") {
+    assert.equal(response.ok, false);
+    assert.ok(isRecord(response.error) && isRecord(response.error.details));
+    assert.equal(response.error.details.reason, "profile-too-large");
+    return {
+      status: "unavailable",
+      reason: "profile-too-large",
+      startBlockedMs: 0,
+      concurrentBusy: concurrent !== undefined,
+    };
+  }
   assert.ok(response.ok, JSON.stringify(response.error));
   const result = response.payload;
-  assert.ok(
-    isRecord(result) && isRecord(result.profile),
-    "A full profile is required for this proof",
-  );
+  assert.ok(isRecord(result));
   const responseBytes = Buffer.byteLength(JSON.stringify(result));
   assert.ok(responseBytes <= 1024 * 1024, "Profile response exceeds the 1 MiB contract");
   assert.equal(result.requestedDurationMs, (batch ? windows : 1) * 5_000);
-  const profile = result.profile;
+  let profile = result.profile;
+  let artifact;
+  if (batch && typeof result.path === "string") {
+    assert.ok(values["artifact-root"], "--artifact-root is required for file responses");
+    const filename = realpathSync(result.path);
+    const root = realpathSync(values["artifact-root"]);
+    assert.ok(filename.startsWith(`${root}${path.sep}`));
+    assert.ok(filename.endsWith(".cpuprofile"));
+    const stat = lstatSync(result.path);
+    assert.ok(stat.isFile() && !stat.isSymbolicLink());
+    assert.equal(stat.mode & 0o777, 0o600);
+    assert.equal(stat.size, result.sizeBytes);
+    assert.ok(stat.size <= 64 * 1024 * 1024);
+    const contents = readFileSync(filename);
+    profile = JSON.parse(contents.toString("utf8"));
+    artifact = {
+      path: filename,
+      sizeBytes: stat.size,
+      sha256: createHash("sha256").update(contents).digest("hex"),
+    };
+  }
+  assert.ok(isRecord(profile), "A full profile is required for this proof");
   assert.ok(
     Array.isArray(profile.nodes) &&
       Array.isArray(profile.samples) &&
@@ -90,6 +130,15 @@ async function capture(batch: boolean, checkBusy: boolean) {
   );
   assert.equal(profile.samples.length, profile.timeDeltas.length);
   assert.ok(profile.samples.length > 0);
+  if (artifact) {
+    assert.ok(isRecord(result.summary));
+    assert.equal(result.summary.nodeCount, profile.nodes.length);
+    assert.equal(result.summary.sampleCount, profile.samples.length);
+    if (values["large-graph"]) {
+      assert.ok(profile.nodes.length > 16_384, "Large graph must exceed the old node limit");
+      assert.ok(artifact.sizeBytes > 1024 * 1024, "Large graph must exceed the old byte limit");
+    }
+  }
   assert.ok(typeof profile.startTime === "number" && typeof profile.endTime === "number");
   assert.ok(profile.endTime > profile.startTime);
   const boundaries = batch ? result.windowBoundariesMicros : [profile.startTime, profile.endTime];
@@ -141,7 +190,11 @@ async function capture(batch: boolean, checkBusy: boolean) {
     lastSampleTimestamp: lastTimestamp,
     samples: profile.samples.length,
     nodes: profile.nodes.length,
+    timelineSha256: createHash("sha256")
+      .update(JSON.stringify({ samples: profile.samples, timeDeltas: profile.timeDeltas }))
+      .digest("hex"),
     responseBytes,
+    artifact,
     windowBoundariesMicros: boundaries,
     windowSamples,
     concurrentBusy: concurrent !== undefined,
@@ -152,26 +205,65 @@ async function measure(arm: "single" | "batch", pair: number, control = false) {
   const before = await telemetry("start");
   const captures = [];
   const started = performance.now();
-  for (let index = 0; index < (arm === "batch" ? 1 : windows); index++) {
-    captures.push(await capture(arm === "batch", index === 0));
+  let after;
+  try {
+    for (let index = 0; index < (arm === "batch" ? 1 : windows); index++) {
+      captures.push(await capture(arm === "batch", index === 0));
+    }
+    // Let the heartbeat observe the final synchronous stop/serialization.
+    await delay(20);
+  } finally {
+    after = await telemetry("stop");
   }
-  // Let the heartbeat observe the final synchronous stop/serialization before ending telemetry.
-  await delay(20);
-  const after = await telemetry("stop");
   assert.ok(Array.isArray(after.starts));
   assert.equal(after.starts.length, arm === "batch" ? 1 : windows);
   assert.equal(after.stops, arm === "batch" ? 1 : windows);
+  const wallMs = performance.now() - started;
+  const measuredStartMs = after.starts.reduce((sum: number, start: unknown) => {
+    assert.ok(isRecord(start) && typeof start.elapsedMs === "number");
+    return sum + start.elapsedMs;
+  }, 0);
+  let rawProfile;
+  if (arm === "batch" && values["large-graph"]) {
+    const response = await fetch("http://127.0.0.1:42360/profile", { method: "POST" });
+    assert.ok(response.ok);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    const recorded: unknown = JSON.parse(bytes.toString("utf8"));
+    // Native V8 JSON needs the production parser; decode only after telemetry stops.
+    const raw = typeof recorded === "string" ? parseNativeCpuProfile(recorded) : recorded;
+    const rawBytes = typeof recorded === "string" ? Buffer.byteLength(recorded) : bytes.length;
+    assert.ok(isRecord(raw) && Array.isArray(raw.nodes) && Array.isArray(raw.samples));
+    assert.ok(raw.nodes.length > 16_384);
+    assert.ok(rawBytes > 1024 * 1024);
+    if (values.mode !== "refusal") {
+      const captured = captures[0];
+      assert.ok(captured && "nodes" in captured);
+      assert.equal(captured.nodes, raw.nodes.length);
+      assert.equal(captured.samples, raw.samples.length);
+      assert.equal(
+        captured.timelineSha256,
+        createHash("sha256")
+          .update(JSON.stringify({ samples: raw.samples, timeDeltas: raw.timeDeltas }))
+          .digest("hex"),
+      );
+    }
+    rawProfile = { nodes: raw.nodes.length, samples: raw.samples.length, sizeBytes: rawBytes };
+  }
   record({
     kind: control ? "aa" : "comparison",
     pair,
     arm,
     windows,
     windowMs: 5_000,
-    wallMs: performance.now() - started,
-    startBlockedMs: captures.reduce((sum, result) => sum + result.startBlockedMs, 0),
+    wallMs,
+    startBlockedMs:
+      values.mode === "refusal"
+        ? measuredStartMs
+        : captures.reduce((sum, result) => sum + result.startBlockedMs, 0),
     before,
     after,
     captures,
+    rawProfile,
   });
 }
 
@@ -196,14 +288,21 @@ try {
     60_000,
   );
   assert.ok(hello.ok, JSON.stringify(hello.error));
+  if (values["large-graph"]) {
+    await telemetry("workload");
+  }
   await delay(settleMs);
   for (let pair = 0; pair < pairs; pair++) {
+    if (values.mode !== "compare") {
+      await measure("batch", pair);
+      continue;
+    }
     const arms: ("single" | "batch")[] = pair % 2 ? ["batch", "single"] : ["single", "batch"];
     for (const arm of arms) {
       await measure(arm, pair);
     }
   }
-  for (let pair = 0; pair < aaSets; pair++) {
+  for (let pair = 0; values.mode === "compare" && pair < aaSets; pair++) {
     await measure("single", pair, true);
   }
 } finally {
