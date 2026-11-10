@@ -386,7 +386,7 @@ describe("independent release child reuse", () => {
     },
   );
 
-  it("keeps job fallback and retry backoff within the shared deadline", async () => {
+  it("keeps job fallback and retry backoff within the default two-minute deadline", async () => {
     const data = await fixture("normalCi", undefined, TOOLING, 261);
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
     vi.useFakeTimers();
@@ -406,7 +406,6 @@ describe("independent release child reuse", () => {
       validateReusableReleaseChild(selection, data.request, {
         ...data.deps,
         github,
-        deadlineMs: started + 120_000,
       }),
     ).rejects.toThrow(/API GET .*per_page=30&page=1 exceeded its time budget/);
     expect(jobReads).toEqual([
