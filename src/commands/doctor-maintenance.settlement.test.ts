@@ -79,6 +79,9 @@ it("refuses rollback attribution for writes preceding Doctor admission", async (
 });
 
 it("refuses automatic restore after a NOCOW physical replacement during Doctor maintenance", async () => {
+  vi.spyOn(attribution, "readUpdateDoctorGeneration").mockImplementation(
+    readUpdateDatabaseGenerationObservation,
+  );
   vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
     readUpdateDatabaseGenerations(paths),
   );
