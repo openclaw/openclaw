@@ -274,15 +274,15 @@ it("treats git-backed workspaces as existing even when template files are missin
   await expectCompletedWithoutBootstrap(tempDir);
 });
 
-it.each(["current", "v2026.9.2"])(
+it.each(["current", "v2026.9.2", "v2026.7.1"])(
   "keeps %s stock bootstrap pending across restart until profiles are edited",
   async (version) => {
     await ensureWorkspace();
-    if (version === "v2026.9.2") {
+    if (version !== "current") {
       await writeWorkspaceFile(
         BOOTSTRAP,
         await fs.readFile(
-          new URL("../../test/fixtures/bootstrap-template-v2026.9.2.md", import.meta.url),
+          new URL(`../../test/fixtures/bootstrap-template-${version}.md`, import.meta.url),
           "utf8",
         ),
       );
