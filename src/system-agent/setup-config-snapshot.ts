@@ -1,4 +1,5 @@
 import { listAgentEntries } from "../agents/agent-roster.js";
+import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { shortenHomePath } from "../utils.js";
@@ -6,7 +7,11 @@ import { isReservedSystemAgentId } from "./agent-id.js";
 
 /** Config-only diagnostic shared by setup admission and agent capability guidance. */
 export function describeSystemAgentConfigConflict(config: OpenClawConfig): string | undefined {
-  const reservedAgent = listAgentEntries(config).find((entry) => isReservedSystemAgentId(entry.id));
+  // The managed execution roster is not an authored user-agent collision.
+  const sourceConfig = getRuntimeConfigCapture(config)?.source ?? config;
+  const reservedAgent = listAgentEntries(sourceConfig).find((entry) =>
+    isReservedSystemAgentId(entry.id),
+  );
   if (!reservedAgent) {
     return undefined;
   }
