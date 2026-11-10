@@ -8,28 +8,43 @@ private struct BridgeWebSocketUnusedEndpoint: OpenClawIDNodeEndpoint {
     func connect(serverKey _: String, relayURL _: URL, alpn _: Data) async throws -> any OpenClawIDNodeConnection {
         throw MacNodeOpenClawIDBridgeError.unavailable
     }
-    func relayStatus() async -> [OpenClawIDNodeRelayStatus] { [] }
+
+    func relayStatus() async -> [OpenClawIDNodeRelayStatus] {
+        []
+    }
+
     func shutdown() async {}
 }
 
 /// Echoes the shared adapter's message contract, without dialing or using app state.
 private final class BridgeWebSocketEcho: WebSocketTasking, Sendable {
     let messages = AsyncThrowingStream<URLSessionWebSocketTask.Message, Error>.makeStream()
-    var state: URLSessionTask.State { .running }
+    var state: URLSessionTask.State {
+        .running
+    }
+
     func resume() {}
     func cancel(with _: URLSessionWebSocketTask.CloseCode, reason _: Data?) {
         self.messages.continuation.finish(throwing: CancellationError())
     }
-    func send(_ message: URLSessionWebSocketTask.Message) async throws { self.messages.continuation.yield(message) }
-    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) { pongReceiveHandler(nil) }
+
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+        self.messages.continuation.yield(message)
+    }
+
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
+        pongReceiveHandler(nil)
+    }
+
     func receive() async throws -> URLSessionWebSocketTask.Message {
         var iterator = self.messages.stream.makeAsyncIterator()
         guard let message = try await iterator.next() else { throw CancellationError() }
         return message
     }
+
     func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void) {
         Task {
-            do { completionHandler(.success(try await self.receive())) } catch { completionHandler(.failure(error)) }
+            do { try await completionHandler(.success(self.receive())) } catch { completionHandler(.failure(error)) }
         }
     }
 }
@@ -37,10 +52,10 @@ private final class BridgeWebSocketEcho: WebSocketTasking, Sendable {
 struct MacNodeOpenClawIDBridgeWebSocketTests {
     private typealias Codec = MacNodeOpenClawIDBridgeWebSocketCodec
     private let upgrade = Data(("GET /__openclaw__/worker HTTP/1.1\r\nHost: localhost\r\n" +
-        "Connection: keep-alive, Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n" +
-        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").utf8)
+            "Connection: keep-alive, Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n" +
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").utf8)
 
-    @Test func rfcUpgradeVectorAndInvalidHandshakes() throws {
+    @Test func `rfc upgrade vector and invalid handshakes`() throws {
         let request = try MacNodeOpenClawIDBridgeRequest.parse(self.upgrade)
         let response = try #require(String(bytes: Codec.upgrade(request), encoding: .utf8))
         #expect(response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"))
@@ -59,7 +74,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         }
     }
 
-    @Test func rejectsInvalidHeadersBeforePayloadAllocation() throws {
+    @Test func `rejects invalid headers before payload allocation`() throws {
         let invalidHeaders: [[UInt8]] = [
             [0x81, 0x00], // Missing client mask.
             [0xC1, 0x80], // Unnegotiated RSV1.
@@ -77,14 +92,16 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         }
         #expect(try Codec.Header.parse(Data([0x82, 0xFE, 0x01, 0x00])).length == 256)
         #expect(try Codec.Header.parse(Data([0x82, 0xFF, 0, 0, 0, 0, 0, 1, 0, 0])).length == 65536)
-        #expect(try Codec.unmask(Data([0x7F, 0x9F, 0x4D, 0x51, 0x58]), key: Data([0x37, 0xFA, 0x21, 0x3D])) == Data("Hello".utf8))
+        #expect(try Codec
+            .unmask(Data([0x7F, 0x9F, 0x4D, 0x51, 0x58]), key: Data([0x37, 0xFA, 0x21, 0x3D])) == Data("Hello".utf8))
     }
 
-    @Test func fragmentedUTF8AndInterleavedControlPreserveMessage() throws {
+    @Test func `fragmented UTF 8 and interleaved control preserve message`() throws {
         var messages = Codec.Messages()
         #expect(try messages.consume(.init(final: false, opcode: 1, length: 2), payload: Data([0xF0, 0x9F])) == nil)
         #expect(try messages.consume(.init(final: true, opcode: 9, length: 1), payload: Data([7])) == .ping(Data([7])))
-        #expect(try messages.consume(.init(final: true, opcode: 0, length: 2), payload: Data([0x98, 0x80])) == .text("😀"))
+        #expect(try messages
+            .consume(.init(final: true, opcode: 0, length: 2), payload: Data([0x98, 0x80])) == .text("😀"))
         #expect(throws: (any Error).self) { try messages.validate(.init(final: true, opcode: 0, length: 0)) }
         #expect(try messages.consume(.init(final: false, opcode: 2, length: 1), payload: Data([1])) == nil)
         #expect(throws: (any Error).self) { try messages.validate(.init(final: true, opcode: 1, length: 0)) }
@@ -97,7 +114,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         }
     }
 
-    @Test func closeValidationAndUnmaskedServerEncoding() throws {
+    @Test func `close validation and unmasked server encoding`() throws {
         for bytes in [Data([0]), Data([3, 237]), Data([3, 232, 255]), Data(repeating: 0, count: 126)] {
             #expect(throws: (any Error).self) { try Codec.validateClose(bytes) }
         }
@@ -105,12 +122,17 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         try Codec.validateClose(Data([3, 232]) + Data("bye".utf8))
         try Codec.validateClose(Data([0x0F, 0xA0])) // Application-defined 4000.
         #expect(try Codec.frame(opcode: 8, payload: Data([3, 232])) == Data([0x88, 2, 3, 232]))
-        #expect(try Codec.frame(opcode: 2, payload: Data(repeating: 0, count: 126)).prefix(4) == Data([0x82, 126, 0, 126]))
+        #expect(try Codec.frame(opcode: 2, payload: Data(repeating: 0, count: 126)).prefix(4) == Data([
+            0x82,
+            126,
+            0,
+            126,
+        ]))
         #expect(try Codec.frame(opcode: 2, payload: Data(repeating: 0, count: 65536)).prefix(10) ==
             Data([0x82, 127, 0, 0, 0, 0, 0, 1, 0, 0]))
     }
 
-    @Test func unixUpgradeWaitsForUpstreamAndProxiesFragmentsPingAndClose() async throws {
+    @Test func `unix upgrade waits for upstream and proxies fragments ping and close`() async throws {
         let entered = AsyncStream<Void>.makeStream()
         let release = AsyncStream<Void>.makeStream()
         let echo = BridgeWebSocketEcho()
@@ -154,7 +176,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         await tunnel.shutdown()
     }
 
-    @Test func malformedWireFramesCloseWithProtocolStatus() async throws {
+    @Test func `malformed wire frames close with protocol status`() async throws {
         let (bridge, tunnel) = try await self.bridge { WebSocketTaskBox(task: BridgeWebSocketEcho()) }
         do {
             for (frame, status) in [
@@ -182,7 +204,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         await tunnel.shutdown()
     }
 
-    @Test func preservesRemoteCloseCodeAndWorkerAdmissionReason() async throws {
+    @Test func `preserves remote close code and worker admission reason`() async throws {
         for (code, reason) in [(UInt16(4001), "owner-epoch-stale"), (UInt16(1001), "gateway-shutdown"), (nil, "")] {
             let echo = BridgeWebSocketEcho()
             let (bridge, tunnel) = try await self.bridge { WebSocketTaskBox(task: echo) }
@@ -210,7 +232,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         }
     }
 
-    @Test func invalidRemoteCloseAndTransportFailureTerminateWithoutCloseFrame() async throws {
+    @Test func `invalid remote close and transport failure terminate without close frame`() async throws {
         let failures: [OpenClawIDNodeTransportError] = [
             .webSocketClosed(1005, "reserved"), .webSocketClosed(nil, "reason-without-code"),
             .webSocketClosed(1000, String(repeating: "😀", count: 31)), .closed,
@@ -242,7 +264,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         }
     }
 
-    @Test func upstreamFailureNeverAcknowledgesLocalUpgrade() async throws {
+    @Test func `upstream failure never acknowledges local upgrade`() async throws {
         let (bridge, tunnel) = try await self.bridge { throw MacNodeOpenClawIDBridgeError.unavailable }
         do {
             let handle = try self.connect(bridge.socketPath)
@@ -270,12 +292,18 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         -> (MacNodeOpenClawIDBridge, OpenClawIDNodeTunnel)
     {
         let tunnel = OpenClawIDNodeTunnel(
-            endpoint: BridgeWebSocketUnusedEndpoint(), verifiedServerKey: { "synthetic" },
+            endpoint: BridgeWebSocketUnusedEndpoint(),
+            verifiedServerKey: { "synthetic" },
             relayURL: URL(string: "https://relay.invalid")!)
         let bridge = try await MacNodeOpenClawIDBridge.start(
-            tunnel: tunnel, logicalOrigin: URL(string: "wss://claw.invalid")!,
+            tunnel: tunnel,
+            logicalOrigin: URL(string: "wss://claw.invalid")!,
             workerWebSocket: { request, reader, io in
-                try await MacNodeOpenClawIDBridgeWebSocket.serve(request: request, reader: reader, io: io, prepare: prepare)
+                try await MacNodeOpenClawIDBridgeWebSocket.serve(
+                    request: request,
+                    reader: reader,
+                    io: io,
+                    prepare: prepare)
             }, onUnexpectedStop: {})
         return (bridge, tunnel)
     }
@@ -296,7 +324,9 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
                 Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard result == 0 else { Darwin.close(fd); throw MacNodeOpenClawIDBridgeError.unavailable }
+        guard result == 0 else { Darwin.close(fd)
+            throw MacNodeOpenClawIDBridgeError.unavailable
+        }
         var enabled: Int32 = 1
         _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))
         return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
