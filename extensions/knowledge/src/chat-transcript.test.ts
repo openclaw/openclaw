@@ -58,4 +58,11 @@ it.each([false, true])("exports chat chunks (deleted=%s)", async (deleted) => {
     const label = `part ${chunk.part} of ${chunk.parts}`;
     expect(texts[i].includes(label)).toBe(chunk.parts > 1);
   }
+  const corrupt = Buffer.from(jsonl(rows));
+  corrupt[corrupt.indexOf("plan")] = 0xff;
+  await writeFile(path.join(out, "in.jsonl"), corrupt);
+  expect(() => execFileSync(process.execPath, [...args, "--channel", "#dev"])).toThrow(
+    /encoded data was not valid/,
+  );
+  expect(await readFile(path.join(out, "2026-10-02.jsonl"), "utf8")).toBe(raw);
 });
