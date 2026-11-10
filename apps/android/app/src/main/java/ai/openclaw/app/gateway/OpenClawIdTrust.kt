@@ -18,17 +18,35 @@ data class OpenClawIdTrustPin(
   }
 }
 
-/** Persist atomically before dialing, including state returned with a refused assessment. */
+/**
+ * Persist atomically before dialing, including state returned with a refused assessment.
+ * [bindingSeq] is the pin: the highest R-signed binding verified. The snapshot marker orders
+ * snapshots signed by [snapshotGatewayKey]; [snapshotBindingSeq] is only ever a verified
+ * binding's seq. A marker without a key was stored before per-key order; load it through
+ * [clampLegacy].
+ */
 data class OpenClawIdTrustState(
   val pin: OpenClawIdTrustPin,
   val bindingSeq: Long,
   val snapshotSeq: Long,
   val snapshotIssuedAt: Long,
   val snapshotBindingSeq: Long,
+  val snapshotGatewayKey: String? = null,
 ) {
   init {
     require(listOf(bindingSeq, snapshotSeq, snapshotIssuedAt, snapshotBindingSeq).all { it in 0..OpenClawIdCanonical.MAX_SAFE_INTEGER }) { "invalid_trust_state" }
+    require(snapshotGatewayKey == null || Regex("ed25519:[0-9a-f]{64}").matches(snapshotGatewayKey)) { "invalid_trust_state" }
   }
+
+  /**
+   * A legacy marker's binding_seq may be a K_gw-signed snapshot's claim, so it is capped at the
+   * pin, and its order cannot be attributed to a key, so it is dropped (J5). Kept, an inflated
+   * order from a retired key would refuse the replacement key's snapshots for good. Accepted
+   * edge case: right after the upgrade, older snapshots of the current key are not refused as
+   * replays until a newer one is stored.
+   */
+  fun clampLegacy(): OpenClawIdTrustState =
+    if (snapshotGatewayKey != null) this else copy(snapshotSeq = 0, snapshotIssuedAt = 0, snapshotBindingSeq = minOf(snapshotBindingSeq, bindingSeq))
 }
 
 /** Dial facts exist only on an admitted, fresh, cryptographically verified assessment. */
@@ -80,7 +98,7 @@ object OpenClawIdTrust {
       val bindingSeq = OpenClawIdCanonical.integer(binding.getValue("binding_seq"), 1)
       require(bindingSeq >= (state?.bindingSeq ?: 0)) { "binding_rollback" }
       // A verified binding advances its pin even if freshness is unavailable, as in verifyBindingForPin.
-      state = OpenClawIdTrustState(expectedPin, bindingSeq, state?.snapshotSeq ?: 0, state?.snapshotIssuedAt ?: 0, state?.snapshotBindingSeq ?: 0)
+      state = state?.copy(bindingSeq = bindingSeq) ?: OpenClawIdTrustState(expectedPin, bindingSeq, 0, 0, 0)
       val snapshotEnvelope = OpenClawIdTrustSchema.envelope(root.getValue("snapshot"), "MembershipSnapshot")
       val gatewayKey = OpenClawIdCanonical.text(binding.getValue("k_gw"))
       OpenClawIdTrustSchema.signature(snapshotEnvelope, gatewayKey)
@@ -90,12 +108,24 @@ object OpenClawIdTrust {
       val seq = OpenClawIdCanonical.integer(snapshot.getValue("seq"))
       val issuedAt = OpenClawIdCanonical.integer(snapshot.getValue("issued_at"))
       val snapshotBinding = OpenClawIdCanonical.integer(snapshot.getValue("binding_seq"), 1)
-      val replayed = seq < state.snapshotSeq || (seq == state.snapshotSeq && issuedAt < state.snapshotIssuedAt)
+      // A binding_seq beyond the verified binding is K_gw's claim alone: refused, none of it kept (J5).
+      require(snapshotBinding <= bindingSeq) { "snapshot_ahead" }
+      // Order is per K_gw; a legacy marker (no key) counts as the current key's.
+      val sameKey = (state.snapshotGatewayKey ?: gatewayKey) == gatewayKey
+      val replayed = sameKey && (seq < state.snapshotSeq || (seq == state.snapshotSeq && issuedAt < state.snapshotIssuedAt))
       // Future snapshots cannot poison the high-water mark. Valid stale/newer evidence is retained.
-      if (issuedAt <= now + 300 && (seq > state.snapshotSeq || (seq == state.snapshotSeq && issuedAt > state.snapshotIssuedAt))) {
-        state = state.copy(snapshotSeq = seq, snapshotIssuedAt = issuedAt, snapshotBindingSeq = maxOf(previouslySeenBinding, snapshotBinding))
+      if (issuedAt <= now + 300) {
+        val newer = seq > state.snapshotSeq || (seq == state.snapshotSeq && issuedAt > state.snapshotIssuedAt)
+        state =
+          when {
+            sameKey && newer -> state.copy(snapshotSeq = seq, snapshotIssuedAt = issuedAt, snapshotBindingSeq = maxOf(previouslySeenBinding, bindingSeq), snapshotGatewayKey = gatewayKey)
+            sameKey -> state.copy(snapshotBindingSeq = maxOf(previouslySeenBinding, bindingSeq), snapshotGatewayKey = gatewayKey)
+            // A new K_gw restarts the order only under a newer verified binding (a re-bind).
+            bindingSeq > previouslySeenBinding -> state.copy(snapshotSeq = seq, snapshotIssuedAt = issuedAt, snapshotBindingSeq = bindingSeq, snapshotGatewayKey = gatewayKey)
+            else -> state
+          }
       }
-      require(maxOf(snapshotBinding, previouslySeenBinding) <= bindingSeq) { "stale_binding" }
+      require(previouslySeenBinding <= bindingSeq) { "stale_binding" }
       require(issuedAt <= now + 300) { "snapshot_future" }
       require(issuedAt >= now - 10800) { "snapshot_stale" }
       require(!replayed) { "snapshot_replayed" }

@@ -99,8 +99,10 @@ internal class OpenClawIdNodeStore(
       if (trustValue == kotlinx.serialization.json.JsonNull) {
         null
       } else {
-        val state = OpenClawIdCanonical.obj(trustValue, "binding", "seq", "issued", "snapshotBinding")
-        OpenClawIdTrustState(pin, number(state, "binding"), number(state, "seq"), number(state, "issued"), number(state, "snapshotBinding"))
+        val keyed = trustValue is JsonObject && "gateway" in trustValue
+        val fields = listOf("binding", "seq", "issued", "snapshotBinding") + if (keyed) listOf("gateway") else emptyList()
+        val state = OpenClawIdCanonical.obj(trustValue, *fields.toTypedArray())
+        OpenClawIdTrustState(pin, number(state, "binding"), number(state, "seq"), number(state, "issued"), number(state, "snapshotBinding"), if (keyed) text(state, "gateway") else null).clampLegacy()
       }
     val admitted = value.getValue("admitted")
     require(admitted == kotlinx.serialization.json.JsonPrimitive(true) || admitted == kotlinx.serialization.json.JsonPrimitive(false)) { "invalid_node_target" }
@@ -128,6 +130,7 @@ internal class OpenClawIdNodeStore(
               put("seq", trust.snapshotSeq)
               put("issued", trust.snapshotIssuedAt)
               put("snapshotBinding", trust.snapshotBindingSeq)
+              trust.snapshotGatewayKey?.let { put("gateway", it) }
             }
           } ?: kotlinx.serialization.json.JsonNull,
         )

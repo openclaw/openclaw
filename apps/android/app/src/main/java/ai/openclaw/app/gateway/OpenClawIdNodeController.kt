@@ -136,13 +136,9 @@ internal class OpenClawIdNodeController(
         seed.fill(0)
       }
     signer.use {
-      val response =
-        try {
-          discovery.call(target.discoveryOrigin, target.descriptorPath, signer)
-        } catch (error: OpenClawIdDiscoveryFailure) {
-          if (error.status == 403) throw OpenClawIdRemovedException()
-          throw error
-        }
+      // Discovery's 403 is unsigned, so it stays a retryable failure; only a verified snapshot
+      // that no longer lists this node is removal.
+      val response = discovery.call(target.discoveryOrigin, target.descriptorPath, signer)
       coroutineContext.ensureActive()
       val (_, assessment) = store.assess(stableId, response, System.currentTimeMillis() / 1_000)
       return assessment.target ?: if (assessment.failure == "node_not_admitted") throw OpenClawIdRemovedException() else error("node_evidence_refused")
