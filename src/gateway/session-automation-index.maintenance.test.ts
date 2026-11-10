@@ -8,6 +8,7 @@ import {
   expectSessionAutomationSource,
   registerSessionAutomationSource,
   reportSessionAutomationSourceLoadFailed,
+  createSessionAutomationSource,
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
 
@@ -153,4 +154,15 @@ it("keeps archiving deferred while a hot-reloaded cron service replaces a regist
   const replaced = await maintain(jobs, { archiveDashboardAfterMs: 7 * DAY_MS });
   expect(replaced[chatKey]?.archivedAt).toBeUndefined();
   expect(replaced[otherKey]).toMatchObject({ archiveReason: "stale-dashboard" });
+});
+
+it("a hot reload to disabled cron releases the deferral left by an unloaded enabled service", async () => {
+  const cron = { getLoadedJobs: () => undefined, getDefaultAgentId: () => "main" };
+  createSessionAutomationSource(cron, true);
+  const deferred = await maintain("not-loaded", { archiveDashboardAfterMs: 7 * DAY_MS });
+  expect(deferred[otherKey]?.archivedAt).toBeUndefined();
+
+  createSessionAutomationSource(cron, false);
+  const released = await maintain("not-loaded", { archiveDashboardAfterMs: 7 * DAY_MS });
+  expect(released[otherKey]).toMatchObject({ archiveReason: "stale-dashboard" });
 });

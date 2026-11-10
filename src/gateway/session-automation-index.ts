@@ -49,7 +49,8 @@ export function expectSessionAutomationSource(): void {
 
 /**
  * Builds a cron service's automation source. Hot reloads construct the service
- * directly, so an enabled one keeps archiving deferred until it registers.
+ * directly, so an enabled one keeps archiving deferred until it registers, and a
+ * disabled replacement releases any deferral left by the service it replaces.
  */
 export function createSessionAutomationSource(
   cron: {
@@ -58,9 +59,7 @@ export function createSessionAutomationSource(
   },
   loadsJobs: boolean,
 ): SessionAutomationSource {
-  if (loadsJobs) {
-    expectSessionAutomationSource();
-  }
+  awaitingSource = loadsJobs;
   return { getJobs: () => cron.getLoadedJobs(), getDefaultAgentId: () => cron.getDefaultAgentId() };
 }
 
