@@ -478,7 +478,9 @@ function maybeRedactPathString(value: string, redaction: TrajectoryExportRedacti
     (redaction.env.USERPROFILE ? workspaceRedacted.includes(redaction.env.USERPROFILE) : false)
   ) {
     // Trajectory inputs are already bounded; path masking must not shorten retained text.
-    return redactSupportString(workspaceRedacted, redaction, { maxLength: Number.MAX_SAFE_INTEGER });
+    return redactSupportString(workspaceRedacted, redaction, {
+      maxLength: Number.MAX_SAFE_INTEGER,
+    });
   }
   return workspaceRedacted;
 }
