@@ -26,7 +26,7 @@ import { gatewayKeyPath, loadStagedGatewaySigner, stageGatewayKey } from "./gate
 import type { RebindPreparation } from "./rebind-operations.js";
 import { reconcileRegistration } from "./registration-recovery.js";
 import type { createServiceGatewayKey } from "./service-gateway-key.js";
-import type { OpenClawIdStatus } from "./service.js";
+import type { OpenClawIdStatus } from "./service-status.js";
 import { ed25519PublicKeyHex, loadKeyFile, stagedKeyPath } from "./tunnel-child/keyfile.js";
 import { discardStagedEndpointKey, stageEndpointKey } from "./tunnel-runtime.js";
 
