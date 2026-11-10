@@ -503,7 +503,32 @@ dispatch as well as excluding parent reuse. The existing local-build fixture
 now runs real workspace pinning and checks its plugin root at bootstrap;
 the mock-only ordering case is consolidated into that keeper.
 The candidate has 23 declarations / 55 expanded cases and 12 fewer test lines.
-Runtime and mutation qualification remain pending in this source checkpoint.
+Qualification at `ac87d3b362f43d24e25aebbb241dfb7dd692e14a` used an independently
+installed native PR checkout. The baseline passed all 56 cases (140.94 seconds
+wall time); the candidate passed all 55 (108.38 seconds). These single runs do
+not establish a speedup. A separate changed-suite run passed 43 cases in 23.52
+seconds wall time: gates reported 6.495 seconds and Testbox 15.010 seconds.
+
+Selected original tests passed with first-success stamp selection, skipped
+exact-head verification and no-op real pinning. Their repaired keepers failed
+under those same mutations. Reversing pin/bootstrap order failed both the old
+ordering test and its keeper. The pinning mutations stopped before commands
+were recorded and surfaced as a missing fixture commands file; the other two
+failed their stamp and verifier assertions. All production and test bytes were
+restored exactly after qualification.
+
+Targeted tooling typecheck, lint, formatting and diff checks passed. The
+production and full-tree unused-file scans passed with zero entries. Both
+`deadcode:dependencies` (its export phase) and `deadcode:exports` reported exports
+in four untouched files: `src/daemon/launchd.ts`,
+`src/plugins/provider-external-auth.ts`, `src/plugins/provider-runtime.ts` and
+`ui/src/pages/dashboards/dashboard-tools.tsx`. Script unused exports passed with
+zero entries. The four files and both Knip configurations match the frozen base;
+these unrelated findings remain recorded rather than expanding this patch.
+
+Independent preservation review and full local ClawSweeper review found no
+lost contract or actionable source finding. Hosted CI and landing remain
+pending; local proof does not establish either.
 
 ## Pending qualification and proof repairs
 
