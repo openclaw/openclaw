@@ -10,6 +10,7 @@ describe("flattenMarkdownToPlainText", () => {
       "Rename to ``a`b`` and match ``**/*.ts``.",
       "Rename to a`b and match **/*.ts.",
     ],
+    ["unmatched wider run before a valid span", "`` prefix `__init__`", "`` prefix __init__"],
     [
       "links and escaped image markers",
       String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,

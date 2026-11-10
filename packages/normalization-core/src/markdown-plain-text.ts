@@ -80,7 +80,9 @@ function holdInlineCodeSpans(text: string, code: string[]): string {
       j += runLength;
     }
     if (close === -1) {
-      index += 1;
+      // Consume the whole unmatched run so its tail backticks cannot reopen as a
+      // narrower span and steal delimiters from a later valid code span.
+      index += openLength;
       continue;
     }
     output += text.slice(cursor, index) + `\0${code.length}\0`;
