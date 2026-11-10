@@ -108,7 +108,7 @@ function makeReachableBlocker(status: OpenClawIdStatusResult): string | undefine
   return status.services.loaderDomain ? undefined : t("openclawId.needsLoaderDomain");
 }
 
-/** Status and actions for the single OpenClaw ID section; Access lives in Pages. */
+/** One claw card, followed by the devices that can reach it. */
 export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
   if (!status || status.status.state === "off") {
     return [];
@@ -141,13 +141,7 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
       },
     ];
   }
-  const entries: MenuEntry[] = [
-    {
-      kind: "content",
-      id: "openclaw-id-title",
-      content: <div class="sidebar-customize-menu__title">{t("openclawId.menuTitle")}</div>,
-    },
-  ];
+  const card: MenuEntry[] = [];
   if (status.channel === "tunnel") {
     const connection = status.connection;
     const detail =
@@ -163,29 +157,45 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
                 t("openclawId.accountFallback"),
             })
           : null;
-    entries.push(statusRow("encrypted", t("openclawId.encryptedConnection"), "lock", detail));
+    card.push(statusRow("encrypted", t("openclawId.encryptedConnection"), "lock", detail));
   } else if (status.link.linked && status.link.hostname && openClawIdAccount()) {
-    entries.push(
+    card.push(
       statusRow(
         "reachable",
         t("openclawId.remoteAccessOn"),
         "radio",
-        status.link.hostname,
+        status.channel === "local_operator" ? null : status.link.hostname,
         status.status.tunnel?.relayOnline === true,
       ),
     );
     if (status.channel === "local_operator") {
-      entries.push(renderSidebarMenuAction(COPY_LINK, t("openclawId.copyRemoteLink"), "link"));
+      card.push({
+        id: COPY_LINK,
+        label: t("openclawId.copyRemoteLink"),
+        class: "sidebar-openclaw-id__address",
+        attributes: { "aria-description": status.link.hostname },
+        content: <span class="sidebar-openclaw-id__detail">{status.link.hostname}</span>,
+        details: <Icon name="copy" />,
+      });
     }
   } else {
     const blocker = makeReachableBlocker(status);
-    entries.push(
+    card.push(
       renderSidebarMenuAction(MAKE_REACHABLE, t("openclawId.makeReachable"), "radio", {
         disabled: Boolean(blocker),
         title: blocker,
+        details: <Icon name="arrowRight" />,
       }),
     );
   }
+  const entries: MenuEntry[] = [
+    {
+      kind: "group",
+      id: "openclaw-id-card",
+      class: "sidebar-openclaw-id__card",
+      items: card,
+    },
+  ];
   if (status.owner && status.link.linked && (status.channel === "tunnel" || openClawIdAccount())) {
     entries.push(
       renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor", {
@@ -196,7 +206,7 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
   return entries;
 }
 
-/** Sign-out follows Settings; remote sessions use the loader's actual mechanism. */
+/** Sign-out is the final account action; remote sessions use the loader's actual mechanism. */
 export function openClawIdSignOutEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
   if (!status || status.status.state === "off") {
     return [];

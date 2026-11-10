@@ -1079,7 +1079,9 @@
 }
 
 .oc-menu.sidebar-identity-menu {
-  min-width: max(220px, var(--sidebar-identity-menu-min-width, 220px));
+  width: max(304px, var(--sidebar-identity-menu-min-width, 304px));
+  min-width: 0;
+  max-width: calc(100dvw - 16px);
   max-height: calc(100dvh - 16px);
 }
 
@@ -1140,22 +1142,44 @@
   justify-content: center;
 }
 
+.sidebar-identity-menu__space {
+  height: 8px;
+}
+
 .sidebar-identity-menu__footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
-  padding: 2px 8px;
+  padding: 4px 8px 0;
+  border-top: 1px solid var(--border);
 }
 
-.sidebar-identity-menu__update-badge {
-  color: var(--inbox-attention);
+.sidebar-identity-menu__footer .sidebar-footer-build {
+  flex: 1;
 }
 
 .sidebar-identity-menu .theme-mode-toggle {
   justify-content: center;
   border: 0;
+}
+
+.sidebar-identity-menu__busyness {
+  margin-inline-start: auto;
+}
+
+.sidebar-identity-menu__updates {
+  position: relative;
+}
+
+.sidebar-identity-menu__update-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--inbox-attention);
 }
 
 .sidebar-agent-menu__settings {
@@ -1576,12 +1600,29 @@
   font-weight: 600;
 }
 
+.sidebar-openclaw-id__card {
+  margin-block: 4px;
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+  overflow: hidden;
+}
+
+.sidebar-openclaw-id__card .sidebar-customize-menu__item {
+  min-height: 36px;
+  font-weight: 500;
+}
+
+.sidebar-openclaw-id__card .oc-menu-item__details svg {
+  width: 15px;
+  height: 15px;
+}
+
 .sidebar-openclaw-id__status {
   display: flex;
   flex-shrink: 0;
   align-items: flex-start;
   gap: 8px;
-  padding: 6px 4px;
+  padding: 8px;
   font-size: calc(13px * var(--control-ui-text-scale));
 }
 
@@ -1610,13 +1651,28 @@
 }
 
 .sidebar-openclaw-id__pill {
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-block: 2px;
 }
 
-.sidebar-openclaw-id__pill[data-online="true"] {
-  color: var(--ok);
+.sidebar-openclaw-id__pill::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  content: "";
+}
+
+.sidebar-openclaw-id__pill[data-online="true"]::before {
+  background: var(--ok);
+}
+
+.sidebar-openclaw-id__address {
+  min-height: 0;
+  margin-top: -6px;
+  padding: 2px 12px 8px 42px;
 }
 
 .sidebar-openclaw-id__sign-in {

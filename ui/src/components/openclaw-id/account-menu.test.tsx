@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
-import { createRoot, flush } from "solid-js";
+import { createMemo, createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { signOutOfOpenClawId } from "../../lib/openclaw-id/account.ts";
 import { OPENCLAW_ID_CALLBACK_KEY_PREFIX } from "../../lib/openclaw-id/callback-contract.ts";
 import type { OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { showConfirmDialog } from "../confirm-dialog.ts";
-import type { MenuItem } from "../solid/menu.tsx";
+import { Menu, type MenuEntry, type MenuItem } from "../solid/menu.tsx";
 import {
   openClawIdMenuEntries,
   openClawIdMenuIdentity,
@@ -38,7 +40,12 @@ function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStat
 // Read the exact rendered content in the same owned scope as the sidebar memo.
 function menu(current: OpenClawIdStatusResult | null) {
   return createRoot((dispose) => {
-    const entries = [...openClawIdMenuEntries(current), ...openClawIdSignOutEntries(current)];
+    const flatten = (items: readonly MenuEntry[]): MenuEntry[] =>
+      items.flatMap((item) => (item.kind === "group" ? flatten(item.items) : [item]));
+    const entries = flatten([
+      ...openClawIdMenuEntries(current),
+      ...openClawIdSignOutEntries(current),
+    ]);
     const rows = entries.filter((entry): entry is MenuItem => !("kind" in entry));
     const text = entries
       .map((entry) => ("content" in entry ? (entry.content as HTMLElement)?.textContent : ""))
@@ -221,9 +228,7 @@ describe("approved OpenClaw ID account menu", () => {
         "Your devices",
         "Sign out of OpenClaw ID",
       ]);
-      expect(menu(current).text).toContain(
-        `Remote access onstudio-e61zr.crabd.xyz${relayOnline ? "Online" : "Offline"}`,
-      );
+      expect(menu(current).text).toContain(`Remote access on${relayOnline ? "Online" : "Offline"}`);
       expect(menu(current).text).not.toMatch(/People|\bAccess\b|Regenerate|Turn off remote|Unlink/);
     },
   );
@@ -266,14 +271,38 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(current).labels).toContain("Sign out of OpenClaw ID");
   });
 
-  it("copies the canonical HTTPS remote link", async () => {
+  it("copies the canonical HTTPS remote link from the address in the claw card", async () => {
+    const current = status({ link: linked });
+    await signIn(current);
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
-    selectOpenClawIdMenuValue("openclaw-id:copy-link", {
-      status: status({ link: linked }),
-      client: null,
-      basePath: "",
+    const { container } = mountSolid(() => {
+      const entries = createMemo(() => openClawIdMenuEntries(current));
+      return (
+        <Menu
+          id="account-copy"
+          label="Account"
+          open
+          items={entries()}
+          onSelect={(item) =>
+            selectOpenClawIdMenuValue(item.id, {
+              status: current,
+              client: null,
+              basePath: "",
+            })
+          }
+        />
+      );
     });
+    const address = () =>
+      container.querySelector<HTMLButtonElement>('[data-value="openclaw-id:copy-link"]');
+    await waitForSolid(() => expect(address()).not.toBeNull());
+    expect(address()?.closest(".sidebar-openclaw-id__card")?.textContent).toContain(
+      "Remote access on",
+    );
+    expect(address()?.textContent).toContain("studio-e61zr.crabd.xyz");
+    expect(address()?.getAttribute("aria-description")).toBe("studio-e61zr.crabd.xyz");
+    address()!.click();
     await vi.waitFor(() =>
       expect(writeText).toHaveBeenCalledWith("https://studio-e61zr.crabd.xyz"),
     );

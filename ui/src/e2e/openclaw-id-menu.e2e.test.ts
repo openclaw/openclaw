@@ -309,7 +309,9 @@ suite.define(() => {
                   .toBe(0);
                 if (await button.count()) {
                   // The menu owns arrow navigation; Enter activates the native button once.
-                  await menu.getByRole("menuitem", { name: "Settings", exact: true }).focus();
+                  await menu
+                    .getByRole("menuitem", { name: "Connect a device", exact: true })
+                    .focus();
                   await page.keyboard.press("ArrowUp");
                   expect
                     .soft(await button.evaluate((node) => node === document.activeElement))
