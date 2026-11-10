@@ -274,18 +274,18 @@ it("treats git-backed workspaces as existing even when template files are missin
   await expectCompletedWithoutBootstrap(tempDir);
 });
 
-it.each(["current", "v2026.9.2", "v2026.7.1"])(
+it.each(["current", "6.1", "7.1", "8.2", "9.2", "9.3", "9.4", "9.6"])(
   "keeps %s stock bootstrap pending across restart until profiles are edited",
   async (version) => {
     await ensureWorkspace();
-    if (version !== "current") {
-      await writeWorkspaceFile(
-        BOOTSTRAP,
-        await fs.readFile(
-          new URL(`../../test/fixtures/bootstrap-template-${version}.md`, import.meta.url),
-          "utf8",
-        ),
+    if (version === "current") {
+      const bootstrap = await readWorkspaceFile(BOOTSTRAP);
+      expect(createHash("sha256").update(bootstrap).digest("hex")).toBe(
+        "0bcb8c9187e32c87bc31dc3e2fa83c4569bfd13267c0bf9766a635dac3df33a3",
       );
+    } else {
+      const fixture = new URL(`../../test/fixtures/bootstrap/2026.${version}.md`, import.meta.url);
+      await writeWorkspaceFile(BOOTSTRAP, await fs.readFile(fixture, "utf8"));
     }
     closeOpenClawStateDatabaseForTest();
     await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: true });
