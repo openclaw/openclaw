@@ -244,20 +244,21 @@ export function prepareSqliteDatabaseDirectory(databasePath: string): void {
 function combineMountEntryJournalPolicies(
   targetPaths: readonly [string, string],
 ): SqliteFilesystemJournalPolicy {
+  const [originalPath, canonicalPath] = targetPaths;
+  if (process.platform === "darwin" && originalPath === canonicalPath) {
+    try {
+      // This read-only probe identifies APFS by its native name, not a numeric type,
+      // so local stores skip forking `mount` on every connection open.
+      // Aliased paths still require mount metadata for both original and real locations.
+      if (probeTreeClone(canonicalPath) === "apfs") {
+        return "wal";
+      }
+    } catch {
+      // Failed native inspection falls through to mount metadata.
+    }
+  }
   const mountResult = readMountEntries();
   if (!mountResult.ok) {
-    const [originalPath, canonicalPath] = targetPaths;
-    if (process.platform === "darwin" && originalPath === canonicalPath) {
-      try {
-        // This read-only probe identifies APFS by its native name, not a numeric type.
-        // Aliased paths still require mount metadata for both original and real locations.
-        if (probeTreeClone(canonicalPath) === "apfs") {
-          return "wal";
-        }
-      } catch {
-        // Failed native inspection cannot override the unknown-filesystem policy.
-      }
-    }
     return "rollback";
   }
   const policies = new Set(

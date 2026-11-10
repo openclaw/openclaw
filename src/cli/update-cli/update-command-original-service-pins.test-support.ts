@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   commitDaemonRuntimePin,
   readDaemonRuntimePinForInstall,
@@ -7,6 +8,7 @@ import * as runtimePins from "../../daemon/runtime-pin-state.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { OriginalServiceFixture } from "./update-command-original-service-fixture.test-support.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
+import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import { maybeRestartService } from "./update-command-service.js";
 
 export function registerRuntimePinPreservationTest(
@@ -15,8 +17,8 @@ export function registerRuntimePinPreservationTest(
     operation: (run: NonNullable<UpdateCommandOptions["run"]>) => Promise<void>,
   ) => Promise<void>,
 ) {
-  it("preserves the observed runtime on a successful update while pin migration is pending", async () => {
-    const { state, rootA, rootB, before, serviceNodeRunner, serviceState, mocks } = fixture();
+  it("converges onto the candidate after Doctor completes runtime pin migration", async () => {
+    const { state, rootB, before, serviceNodeRunner, serviceState, mocks } = fixture();
     const scope = { kind: "gateway" as const, env: state.env };
     const pin = { runtime: "node" as const, path: serviceNodeRunner };
     commitDaemonRuntimePin(
@@ -38,50 +40,70 @@ export function registerRuntimePinPreservationTest(
       if (!original) {
         throw new Error("missing original observation");
       }
-      mocks.restart.mockResolvedValue("accepted");
+      expect(original.definition.runtimePin).toBeUndefined();
+      pending.mockRestore();
+      read.mockRestore();
+      const result = {
+        status: "ok" as const,
+        mode: "npm" as const,
+        root: rootB,
+        before: { version: "2026.9.4" },
+        after: { version: "2026.9.5" },
+        steps: [],
+        durationMs: 1,
+      };
+      const prepared = await prepareUpdateRestart(
+        {
+          originalManagedServiceRuntime: original,
+          preManagedServiceStop: before,
+          root: rootB,
+          result,
+          shouldRestart: true,
+          updateStepTimeoutMs: 30_000,
+          assertCurrent: () => run.executorFence!.assertCurrent(),
+        },
+        await readConfigFileSnapshot({ observe: false }),
+      );
+      expect(prepared.serviceUpdateVerdict).toMatchObject({
+        kind: "owned",
+        refreshDefinition: true,
+        requiresInstallRootRefresh: true,
+      });
+      expect(original.definition.runtimePin?.pin).toEqual(pin);
+      mocks.restart.mockImplementation(async (_params, action) => {
+        if (action === "install") {
+          serviceState.command!.programArguments = [
+            serviceNodeRunner,
+            `${rootB}/dist/index.js`,
+            "gateway",
+          ];
+        }
+        return "accepted";
+      });
       expect(
         await maybeRestartService({
           originalManagedServiceRuntime: original,
           shouldRestart: true,
-          result: {
-            status: "ok",
-            mode: "npm",
-            root: rootB,
-            before: { version: "2026.9.4" },
-            after: { version: "2026.9.5" },
-            steps: [],
-            durationMs: 1,
-          },
+          result,
           opts: { json: true, run },
-          refreshServiceEnv: true,
-          serviceInstallEnv: state.env,
-          serviceEnv: state.env,
-          serviceUpdateVerdict: before.serviceUpdateVerdict,
-          gatewayPort: 18789,
+          refreshServiceEnv: prepared.refreshGatewayServiceEnv,
+          serviceInstallEnv: prepared.gatewayServiceInstallEnv,
+          serviceEnv: prepared.gatewayServiceEnv,
+          serviceUpdateVerdict: prepared.serviceUpdateVerdict,
+          gatewayPort: prepared.gatewayPort,
           timeoutMs: 30_000,
         }),
       ).toBe("ok");
       expect(mocks.restart).toHaveBeenCalledWith(
         expect.objectContaining({
-          nodeRunner: serviceNodeRunner,
-          refreshServiceEnv: false,
-          serviceUpdateVerdict: expect.objectContaining({
-            root: rootA,
-            refreshDefinition: false,
-            requiresInstallRootRefresh: false,
-          }),
-          expectedGatewayIdentity: { version: original.version, buildId: original.buildId },
+          refreshServiceEnv: true,
+          result: expect.objectContaining({ root: rootB }),
         }),
-        "restart",
+        "install",
       );
-      expect(mocks.nativeInstall).not.toHaveBeenCalled();
-      pending.mockRestore();
-      read.mockRestore();
-      const next = await observeOriginalManagedServiceRuntime(
-        { root: rootB, opts: { run } },
-        before,
+      expect(mocks.health).toHaveBeenLastCalledWith(
+        expect.objectContaining({ expectedVersion: "2026.9.5" }),
       );
-      expect(next?.definition.runtimePin?.pin).toEqual(pin);
     });
   });
 }

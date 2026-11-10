@@ -1,3 +1,7 @@
+import {
+  captureGatewayIngressPersonPrincipal,
+  type GatewayIngressPrincipal,
+} from "openclaw/plugin-sdk/gateway-ingress";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { RelayError } from "./protocol.js";
@@ -22,7 +26,12 @@ export function relayCaller(
   const ceiling = [
     ...new Set([...scopes, ...(canWrite ? ["operator.read", "operator.write"] : [])]),
   ];
-  if (config.gateway?.roles || config.gateway?.auth?.mode === "trusted-proxy") {
+  if (
+    config.gateway?.roles ||
+    config.gateway?.auth?.mode === "trusted-proxy" ||
+    client.internal?.openclawIdPrincipal?.kind === "member" ||
+    client.internal?.operatorRoleActor?.kind === "operator"
+  ) {
     const profile = client.authenticatedUserProfile;
     const actor = client.internal?.operatorRoleActor;
     if (
@@ -36,7 +45,7 @@ export function relayCaller(
       );
     }
     return {
-      principal: { kind: "person", profileId: profile.profileId },
+      principal: captureGatewayIngressPersonPrincipal(client),
       principalLabel: profile.displayName ?? "Gateway user",
       ceiling,
       canAdmin,
@@ -53,12 +62,9 @@ export function relayCaller(
 }
 
 export function ownsGrant(caller: RelayCaller, grant: RelayGrant): boolean {
-  return (
-    grant.principal.kind === caller.principal.kind &&
-    (grant.principal.kind === "owner" ||
-      (caller.principal.kind === "person" &&
-        grant.principal.profileId === caller.principal.profileId))
-  );
+  return grant.principal.kind === "owner"
+    ? caller.principal.kind === "owner"
+    : caller.principal.kind !== "owner" && grant.principal.profileId === caller.principal.profileId;
 }
 
 export function consentAuthority(caller: RelayCaller, value: unknown): RelayGrantAuthority {
@@ -85,4 +91,13 @@ export function consentAuthority(caller: RelayCaller, value: unknown): RelayGran
     principalLabel: caller.principalLabel,
     ceiling: [...new Set(ceiling)],
   };
+}
+
+/** Consent source metadata stays in the local grant store, outside display replies. */
+export function relayPrincipalForDisplay(
+  principal: GatewayIngressPrincipal,
+): Exclude<GatewayIngressPrincipal, { kind: "delegated-person" }> {
+  return principal.kind === "delegated-person"
+    ? { kind: "person", profileId: principal.profileId }
+    : principal;
 }

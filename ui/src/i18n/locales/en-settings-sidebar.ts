@@ -8,6 +8,7 @@ const enSettingsSidebar = {
     applying: "Applying…",
     autoSaveSaving: "Saving…",
     autoSaveSaved: "Saved",
+    autoSaveDeferred: "Saved; waiting to apply",
     autoSavePaused: "Autosave paused after reconnect",
     saveNow: "Save",
     autoSaveFailed: "Couldn’t save settings. Try again.",

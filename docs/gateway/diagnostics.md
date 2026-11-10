@@ -445,36 +445,67 @@ starts, so do not add them to the AOT launch configuration.
 
 ## CPU profile
 
-An operator with `operator.admin` can request one in-memory profile of the Gateway's
+An operator with `operator.admin` can request a CPU profile of the Gateway's
 main JavaScript isolate:
 
 ```bash
 openclaw gateway call diagnostics.cpuProfile --params '{}' --timeout 30000 --json
 ```
 
-The RPC supports Node and OpenClaw's Bun runtime. It requests five seconds of sampling at a 10 ms interval and opens
-no debugger port and sends no process signal. A disconnected caller or Gateway
-shutdown cancels the capture and runs profiler cleanup. Overlapping requests fail
-instead of queuing. No profile is written to disk or included in diagnostics exports.
+To collect consecutive windows with one profiler start and stop, request a batch:
 
-The result contains `profile` in V8 CPU-profile format, `requestedDurationMs`,
+```bash
+openclaw gateway call diagnostics.cpuProfile --params '{"windows":12,"windowMs":5000}' --timeout 90000 --json
+```
+
+The optional integer `windows` is 1–30 (default 1); `windowMs` is 100–5000
+(default 5000), so the maximum requested duration is 150 seconds. Empty params
+keep the existing five-second capture and inline response for small profiles. A batch returns only after
+all windows finish; set the RPC timeout above the total duration plus startup and
+cleanup overhead. The same busy refusal, disconnect cancellation, and shutdown
+cleanup apply to the whole batch. No profiler stays warm between requests.
+
+A batch writes the full, redacted V8 profile to
+`<state>/diagnostics/cpu-<timestamp>.cpuprofile` and returns `path`, `sizeBytes`,
+`summary` (`nodeCount` and `sampleCount`), and `windowBoundariesMicros`, an array of
+`windows + 1` timestamps in the profile's monotonic microsecond clock. The first
+boundary is `profile.startTime`; interior boundaries are spaced by `windowMs`;
+the final boundary is `profile.endTime`, including any startup, stop, or timer
+overrun. Windows are start-inclusive/end-exclusive, except the last includes its
+end. Reconstruct each sample timestamp by accumulating `timeDeltas` from
+`profile.startTime`, then assign it to its window. Preserve signed deltas:
+timestamps can move backward across a boundary. The node graph and its hit
+counts describe the entire capture; count selected samples for per-window work.
+The file preserves the timeline intact, without duplicated graphs or rebased samples.
+
+Artifacts are limited to 64 MiB; the RPC response remains within 1 MiB. Batch
+admission checks the requested duration, writable destination, and 64 MiB of
+available disk space before starting the profiler. Invalid duration or a failed
+file preflight therefore costs no profiler-start pause. Disk space can change
+during capture, and the future call graph cannot be sized before sampling:
+an artifact exceeding 64 MiB still returns `profile-too-large` after capture.
+Encoding and writes yield in chunks instead of serializing the whole file at once.
+Node 24 batches use the inspector's 10 ms
+interval because its native profiling API ignores interval options. This
+amortizes the initial heap scan over the batch; it does not remove that first
+main-thread pause. Node 26 retains its shared native profiler.
+
+The RPC supports Node and OpenClaw's Bun runtime. With empty params it requests
+five seconds of sampling at a 10 ms interval. It opens no debugger port and sends
+no process signal. A disconnected caller or Gateway
+shutdown cancels the capture and runs profiler cleanup. Overlapping requests fail
+instead of queuing. Profiles are not included in diagnostics exports.
+
+Small inline results contain `profile` in V8 CPU-profile format, `requestedDurationMs`,
 `actualDurationMs`, `startBlockedMs`, `samplingIntervalMicros`, `redactedNodeCount`, and
 `sampleLossCount: null` because the native profilers do not expose an explicit lost-sample count.
 Node samples V8; Bun samples JavaScriptCore and returns the same profile format.
-The complete result is limited to 1 MiB. When the full graph exceeds that limit,
-the result contains `summary` instead of `profile`, with `truncated: true`,
-`originalNodeCount`, `sampleCount`, and `omittedSampleCount`. Each summary row
-contains a leaf-first `stack` of up to eight frames and its recorded `sampleCount`.
-If those frames contain no OpenClaw code, the nearest `openclaw:` caller toward
-the root is appended when available, for at most nine frames. `elidedFrameCount`
-counts frames skipped between the first eight frames and that appended caller;
-it is zero when there is no gap. Stacks with identical frames and elision counts
-are combined; the most sampled stacks come first, with at most
-128 rows within the same byte limit. These counts are samples, not exact CPU time.
-This preserves useful attribution during busy startup windows, when deep stacks
-and V8 deoptimization samples can enlarge the graph despite the sampling interval.
-The input limits of 16,384 nodes and 65,536 samples still apply; captures exceeding
-either limit remain unavailable to bound processing work.
+Single profiles exceeding 1 MiB, 16,384 nodes, or 65,536 samples use the same file
+response as batches, including two window boundaries, instead of losing the full
+timeline to a summary or refusal. File responses retain the capture measurements
+listed above. Files have owner-only permissions and share heap snapshots' manual
+retention: successful files remain until deleted after analysis. Failed captures
+remove partial files when possible; `cleanupFailed` reports cleanup failures.
 Code locations inside the OpenClaw package use `openclaw:` paths;
 Node builtin locations use `node:` paths. External paths, eval labels, and other
 unrecognized names are redacted. Bounded code-symbol names at recognized locations

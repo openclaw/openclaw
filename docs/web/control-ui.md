@@ -83,6 +83,18 @@ text replaces the instructions after the read-only heading. End the notice with
 a space and an absolute HTTP or HTTPS URL to add a **Learn more** link. For
 example, `Edit the deployment manifest and redeploy. https://example.org/gateway`.
 
+## Feedback and bug reports
+
+Open **Help** from the sidebar account menu to **Report a bug** or **Suggest a feature**.
+Connection and chat error notices also offer **Report a bug**. These links open the
+matching public GitHub issue form; they do not submit an issue.
+
+Only the issue template and a fixed **Control UI** title are prefilled. OpenClaw does
+not attach error text, diagnostics, logs, conversations, configuration, identifiers,
+credentials, or private URLs, and the links suppress the browser referrer. Review
+anything you add before submitting publicly. Use [official support](https://community.openclaw.ai/)
+for setup help and [private security reporting](https://github.com/openclaw/openclaw/security/policy) for security concerns.
+
 ## Edit a failed message
 
 If a model rejects a message (for example, because it contains too many images),
@@ -126,7 +138,11 @@ while you scroll.
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
 name, so repositories from different organizations are easier to distinguish.
-Selecting a repository also shows its identity in the workspace control.
+The **Local projects** section filters the Gateway’s saved project catalog immediately;
+it does not scan the filesystem. GitHub search results appear separately, without
+repeating repositories already shown as local matches. If no local project matches,
+the picker says so explicitly. Selecting a repository also shows its identity in
+the workspace control.
 Session-only connections receive the same read-safe repository identity for
 projects they can already discover, without repository URLs, credentials, or host
 checkout paths. This label does not grant access to private repository content.
@@ -150,7 +166,8 @@ child.
 
 Imported conversations can remain grouped under their original session source,
 such as Beam. After conversion, they use the normal session controls, including
-rename, pin, and archive; the source group does not require another import.
+rename, pin, and archive. Their child-session disclosure opens the normal nested
+conversation tree; the source group does not require another import.
 
 ## Automatic session names
 
@@ -220,6 +237,8 @@ Reloading a previously visited chat restores the last settled sidebar while the 
 
 On a warm chat reload, browsers that retain the previous page during navigation can reveal the cached sidebar and conversation together. If that cached page is slow to prepare, the usual loading layout appears instead. Missing cached content, sign-in, and route errors release the loading view immediately.
 
+After the connection and saved conversation are ready, chat fetches updates while the rest of the page loads. A slow or unavailable cache keeps the normal loading path.
+
 The saved sidebar also retains the session rows for its initial viewport, along with unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Reload starts at the top of the sidebar. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
 
 The Online sidebar loads people's open and running session counts when you open it. Switching to Sessions or Pages stops those count refreshes; opening Online again loads current counts. Restoring a Sessions sidebar does not wait for Online counts.
@@ -262,7 +281,7 @@ Transcript history loads in parallel with the browser cache. An unchanged histor
 
 When saved row sizes match the current content, appearance, and pane width, the initial viewport and its nearby rows mount together. Rows without matching saved sizes are measured incrementally.
 
-Consecutive informational system and model-fallback events appear as a collapsed **system events** row in chat. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
+Informational model-fallback events appear as a collapsed **system event** row in chat, even when only one occurs. Consecutive informational system and model-fallback events share a collapsed **system events** row. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
 
 During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
 
@@ -592,6 +611,17 @@ ask the sender to share it again.
 Opening a file collapses the file tree to make room for its preview. Use **Toggle
 file tree** to browse another file, or **Show in Files** to reveal the current file
 in its folder with the **All** filter.
+
+The **Session files** group lists files the agent produced outside the project
+tree together with the images and attachments in the loaded transcript. Use the
+control beside its heading to switch between **List** and **Grid** and to sort by
+**Default**, **Date**, **Name**, or **Type**. Default keeps the Gateway's file
+order followed by attachments in transcript order. Date puts the most recently
+modified files and most recently sent attachments first; entries without a
+recorded time, such as artifacts, follow in default order. The grid shows image
+previews once they load and large file icons for other files; untitled images
+show their picture without a caption. The choice is remembered in this browser
+for every session's Files panel. The project tree keeps its folder structure.
 
 The **Review** file menu offers **Edit file** when the file reader confirms editing
 is available. Readable files keep **Open file** and their supported Markdown and
