@@ -8,8 +8,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import {
   decodeGitHubPublicationRequester,
+  deriveGitHubPublicationTaskId,
   encodeGitHubPublicationRequester,
   matchesGitHubPublicationRequester,
+  type GitHubPublicationOrigin,
 } from "../state/github-publication-requester.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { PersonalGitHubAction } from "./github-personal-oauth.js";
@@ -113,6 +115,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     generation?: string;
     claim?: WorkerSessionTurnClaim;
     requesterAuthorityJson: string | null;
+    origin?: GitHubPublicationOrigin;
   }): Promise<RepositoryGitHubPublicationRow> => {
     const { head: previous } = await readRepositoryGitHubPublicationBranchAsync({
       workspaceId: input.workspace.workspaceId,
@@ -121,7 +124,9 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     });
     const now = Date.now();
     const row: RepositoryGitHubPublicationRow = {
-      request_id: randomUUID(),
+      request_id: input.origin
+        ? deriveGitHubPublicationTaskId(input.origin, input.request.idempotencyKey)
+        : randomUUID(),
       idempotency_key: input.request.idempotencyKey,
       request_digest: "",
       session_id: input.session.sessionId,
@@ -275,6 +280,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       target,
       claim,
       requesterAuthorityJson,
+      origin: requester.snapshot.origin,
     });
     const source = await prepareSource(requester, {
       ...session,
