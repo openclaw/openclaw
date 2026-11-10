@@ -32,6 +32,8 @@ import { captureCronInferenceBinding } from "../../cron/inference-binding.runtim
 import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "../../cron/session-run.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { createOwnedTestInstance } from "../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -47,6 +49,7 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as routedReplies from "./route-reply.js";
+import { prepareSessionEventDelivery } from "./session-event-delivery.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -64,6 +67,36 @@ await Promise.all([
     runtime.prewarmConfigDrivenReplyRuntime(),
   ),
 ]);
+
+it.each(["final", "block"] as const)(
+  "delivers a %s event reply after the producer plugin scope closes",
+  async (replyKind) => {
+    const plugin = createOwnedTestInstance("event-delivery");
+    const invocations = new PluginInvocationScope(plugin.owner!.registry!, [plugin], {
+      retained: true,
+    });
+    const callback = invocations.wrap(plugin.wrap(() => undefined));
+    using routed = vi
+      .spyOn(routedReplies, replyKind === "final" ? "routePreparedReply" : "routeReply")
+      .mockImplementation(plugin.wrap(async () => ({ ok: true, delivered: true }) as const));
+    try {
+      const reply = invocations.run(async () =>
+        (await prepareSessionEventDelivery({ channel: "telegram", to: "-100001" }, () => {}))({
+          cfg: {},
+          sessionKey: "agent:main:event-delivery",
+          payload: { text: "Process completed" },
+          replyKind,
+        }),
+      );
+      invocations.release();
+      expect(() => callback()).toThrow("Plugin event-delivery consumer is closed");
+      await expect(reply).resolves.toMatchObject({ delivered: true });
+      expect(routed).toHaveBeenCalledOnce();
+    } finally {
+      invocations.release();
+    }
+  },
+);
 
 /** Uses the real managed write tool; the model decision alone is mocked. */
 async function attemptRealWrite(

@@ -1,0 +1,2 @@
+33
+# Covers final and block event delivery after the producer plugin scope closes.
