@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
@@ -53,7 +54,16 @@ function seedLegacyEntry() {
       "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES (?, ?, 'conversation', 42, 42)",
     )
     .run(entry.sessionId, "agent:main:legacy");
+  // Unapplied WAL frames need a private snapshot; a drained family is read in place.
+  const sidecars = ["-wal", "-shm"].map((suffix) => {
+    const file = `${database.path}${suffix}`;
+    return { file, bytes: fs.readFileSync(file) };
+  });
+  expect(sidecars[0]!.bytes.length).toBeGreaterThan(0);
   closeOpenClawAgentDatabasesForTest();
+  for (const { file, bytes } of sidecars) {
+    fs.writeFileSync(file, bytes);
+  }
   return database.path;
 }
 
@@ -174,7 +184,13 @@ it("records the deferred inspection and continues the activation migration", asy
     ].includes(id),
   );
 
-  const outcome = await runDuringCapture(databasePath, () => runLegacyStateMigrationSteps(steps));
+  // An open read transaction keeps WAL frames in place, so the scan still needs a private snapshot.
+  const reader = new DatabaseSync(databasePath, { readOnly: true });
+  reader.exec("BEGIN");
+  reader.prepare("SELECT count(*) FROM session_nodes").get();
+  const outcome = await runDuringCapture(databasePath, () =>
+    runLegacyStateMigrationSteps(steps),
+  ).finally(() => reader.close());
 
   expect(outcome.error).toBeUndefined();
   expect(outcome.report?.receipts.map((step) => [step.id, step.outcome])).toEqual([
