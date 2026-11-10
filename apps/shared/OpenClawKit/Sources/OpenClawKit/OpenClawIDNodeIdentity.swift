@@ -77,7 +77,8 @@ public struct OpenClawIDNodeIdentity: Sendable {
 
     // Module-only native adapter handoff. Never expose this to JSONL, configuration or diagnostics.
     func withNativeSeed<T>(_ body: (Data) async throws -> T) async rethrows -> T {
-        var seed = key.rawRepresentation
+        // CryptoKit can share its key storage with rawRepresentation; wipe only an owned copy.
+        var seed = key.rawRepresentation.withUnsafeBytes { Data(bytes: $0.baseAddress!, count: $0.count) }
         defer { seed.resetBytes(in: 0..<seed.count) }
         return try await body(seed)
     }
