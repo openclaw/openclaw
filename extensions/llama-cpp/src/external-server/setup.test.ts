@@ -285,7 +285,7 @@ it("validates the server URL before discovery and accepts a corrected host short
 });
 
 it.each([
-  [undefined, undefined, "http://127.0.0.1:8080/v1"],
+  [undefined, undefined, "http://127.0.0.1:9931/v1"],
   ["http://gpu-box:8080/v1", "http://gpu-box:8080", "http://gpu-box:8080/v1"],
 ])(
   "blank input with saved URL %s uses the default or prefilled origin",
@@ -294,7 +294,7 @@ it.each([
     await runSetup(prompter, saved ? configWithProvider({ baseUrl: saved }) : {});
     expect(prompter.text.mock.calls[0]?.[0]).toMatchObject({
       initialValue,
-      placeholder: "http://127.0.0.1:8080",
+      placeholder: "http://127.0.0.1:9931",
     });
     expectDiscovery({ baseUrl });
   },

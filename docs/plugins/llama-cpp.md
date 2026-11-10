@@ -341,6 +341,9 @@ timeout still applies.
 Choose **Existing llama-server** when another terminal, container, service
 manager, or machine owns the process.
 
+Setup and guided detection look for a server at `http://127.0.0.1:9931`,
+llama-server's default port.
+
 <Steps>
   <Step title="Start llama-server">
     Give the model a stable alias:
@@ -350,7 +353,7 @@ manager, or machine owns the process.
       --model /path/to/model.gguf \
       --alias my-model \
       --host 127.0.0.1 \
-      --port 8080
+      --port 9931
     ```
 
   </Step>
@@ -360,8 +363,10 @@ manager, or machine owns the process.
     requires it.
 
     The URL prompt accepts HTTP or HTTPS endpoints and host shorthand such as
-    `localhost:8080`. Invalid URLs and embedded credentials are rejected inline
-    so you can correct the endpoint without restarting setup.
+    `localhost:9931`. Invalid URLs and embedded credentials are rejected inline
+    so you can correct the endpoint without restarting setup. llama.cpp builds
+    before `b11521` listen on port 8080 by default; enter `localhost:8080` for
+    those.
 
   </Step>
   <Step title="Select the model">
@@ -441,7 +446,7 @@ openclaw onboard \
   --non-interactive \
   --accept-risk \
   --auth-choice llama-cpp-existing-server \
-  --custom-base-url http://127.0.0.1:8080/v1 \
+  --custom-base-url http://127.0.0.1:9931/v1 \
   --custom-model-id my-model
 ```
 
@@ -460,7 +465,7 @@ shape is:
     mode: "merge",
     providers: {
       "llama-cpp": {
-        baseUrl: "http://127.0.0.1:8080/v1",
+        baseUrl: "http://127.0.0.1:9931/v1",
         api: "openai-completions",
         request: { allowPrivateNetwork: true },
         models: [],
