@@ -169,6 +169,13 @@ such as Beam. After conversion, they use the normal session controls, including
 rename, pin, and archive. Their child-session disclosure opens the normal nested
 conversation tree; the source group does not require another import.
 
+## Rename a session
+
+On desktop, double-click a session name in the sidebar to edit it in place, or
+click its name in the session header. The name is prefilled and selected. Press
+**Enter** or move focus away to save, or **Escape** to cancel. Read-only sessions
+cannot be renamed. The sidebar menu’s **Rename…** action still opens its dialog.
+
 ## Automatic session names
 
 New Dashboard conversations receive a title from their opening task. Later messages

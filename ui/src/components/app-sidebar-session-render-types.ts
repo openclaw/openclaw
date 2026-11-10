@@ -96,7 +96,6 @@ export interface SessionListHost {
     | "startSidebarSectionDrag"
     | "archiveSessionWithUndo"
     | "patchSession"
-    | "renameSession"
     | "isPersonalSessionPin"
     | "sectionHeaders"
   >;

@@ -1,6 +1,17 @@
-import type { JSX } from "@solidjs/web";
-import { createMemo, createProjection, For, onSettled, Show } from "solid-js";
+import { dynamic, type JSX } from "@solidjs/web";
+import {
+  createMemo,
+  createProjection,
+  createSignal,
+  Errored,
+  lazy,
+  Loading,
+  For,
+  onSettled,
+  Show,
+} from "solid-js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import { formatUiError } from "../lib/format-error.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -25,6 +36,10 @@ import { Icon } from "./solid/icon.tsx";
 import { InlineAlert } from "./solid/inline-alert.tsx";
 import "./tooltip.ts";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
+
+const SidebarSessionRename = lazy(() => import("./sidebar-session-rename.tsx"), {
+  export: "SidebarSessionRename",
+});
 
 /** Compose independently owned session state and context indicators. */
 
@@ -178,6 +193,9 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       marqueeLabelTemplate()
     ),
   );
+  const [rename, setRename] = createSignal<SidebarRecentSession | null>(null);
+  const Link = dynamic(() => (rename() ? "div" : "a"));
+  const cancelRename = () => setRename(null);
   // Always reserve the lead so every title shares the section-label text line.
   let rowElement: HTMLDivElement;
   let previousFocus: Element | null;
@@ -221,9 +239,9 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       data-session-key={session().key}
       data-catalog-session-key={display()?.catalogIdentityKey ?? undefined}
       role={listItem() ? "listitem" : undefined}
-      draggable={rowDraggable() ? "true" : "false"}
+      draggable={rowDraggable() && !rename() ? "true" : "false"}
       onDragStart={(event: DragEvent) => {
-        if (!rowDraggable()) {
+        if (!rowDraggable() || rename()) {
           event.preventDefault();
           return;
         }
@@ -251,15 +269,19 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       onContextMenu={openMenuFromEvent}
       onKeyDown={openMenuFromEvent}
     >
-      <a
-        ref={(element) => (controls.link = element)}
-        href={host().sidebarSessionHref(session())}
+      <Link
+        ref={(element: HTMLElement) => (controls.link = element)}
+        href={rename() ? undefined : host().sidebarSessionHref(session())}
         class="sidebar-recent-session__link"
         draggable="false"
         aria-current={session().visuallyActive ? "page" : undefined}
         aria-describedby={[stateId(), metaId()].filter(Boolean).join(" ") || undefined}
         aria-busy={session().titlePending ? "true" : undefined}
-        onClick={(event: MouseEvent) => host().handleSessionRowClick(event, actionSession())}
+        onClick={(event: MouseEvent) => {
+          if (!rename()) {
+            host().handleSessionRowClick(event, actionSession());
+          }
+        }}
       >
         {indicators.persistentIndicator}
         <span class="sidebar-recent-session__text">
@@ -267,16 +289,36 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             class="sidebar-recent-session__title-row"
             onDblClick={(event: MouseEvent) => {
               if (
+                !rename() &&
                 !host().sidebarSnapshot &&
                 !session().snapshot &&
                 shouldHandleNavigationClick(event)
               ) {
                 event.preventDefault();
-                void host().sessionOrganizer.renameSession(actionSession());
+                setRename({ ...actionSession() });
               }
             }}
           >
-            {marqueeLabel()}
+            <Show when={rename()} fallback={marqueeLabel()}>
+              {(target) => (
+                <Loading>
+                  <Errored
+                    fallback={(error) => (
+                      <InlineAlert tone="danger" onDismiss={cancelRename}>
+                        {formatUiError(error())}
+                      </InlineAlert>
+                    )}
+                  >
+                    <SidebarSessionRename
+                      host={host()}
+                      session={target()}
+                      currentSession={actionSession()}
+                      onClose={cancelRename}
+                    />
+                  </Errored>
+                </Loading>
+              )}
+            </Show>
           </span>
           <span class="sidebar-recent-session__details">
             <Show when={session().channelPresentation}>
@@ -301,7 +343,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             {indicators.content}
           </span>
         </span>
-      </a>
+      </Link>
       <Show when={childCount() > 0}>
         <button
           class="sidebar-child-session-toggle"

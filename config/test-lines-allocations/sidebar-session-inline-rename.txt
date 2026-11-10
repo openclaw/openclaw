@@ -1,0 +1,2 @@
+70
+# Replace dialog-gesture acceptance with in-place selected/unselected editing, Enter/blur/Escape, identity rejection, and live permission retirement.

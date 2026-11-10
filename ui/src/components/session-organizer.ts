@@ -112,13 +112,6 @@ export class SessionOrganizer {
     );
   }
 
-  renameSession(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation(
-      (operations, scope) => operations.renameSession(this.deps, session, scope),
-      true,
-    );
-  }
-
   promoteSession(session: SidebarRecentSession): Promise<void> {
     return this.runOperation((operations, scope) =>
       operations.promoteSession(this.deps, session, scope),

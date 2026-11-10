@@ -239,13 +239,39 @@ suite.define(() => {
           await row.locator(".sidebar-recent-session__name").dblclick();
         }
 
-        await page.getByRole("dialog", { name: "Rename session" }).waitFor({ state: "visible" });
-        const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
-        const name = dialog.getByRole("textbox", { name: "Rename session" });
+        const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
+        const name =
+          surface === "menu"
+            ? dialog.getByRole("textbox", { name: "Rename session" })
+            : row.getByRole("textbox", { name: "Session title" });
         await name.waitFor({ state: "visible" });
         await expect.poll(() => name.inputValue()).toBe("Original name");
+        if (surface !== "menu") {
+          expect(
+            await name.evaluate((element) => ({
+              focused: element === document.activeElement,
+              selection: [element.selectionStart, element.selectionEnd],
+              insideLink: Boolean(element.closest("a")),
+            })),
+          ).toEqual({ focused: true, selection: [0, 13], insideLink: false });
+        }
+        if (surface !== "menu") {
+          expect(await dialog.count()).toBe(0);
+          await name.fill("Discarded draft");
+          await name.press("Escape");
+          await name.waitFor({ state: "detached" });
+          expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+          await row.locator(".sidebar-recent-session__name").dblclick();
+          await expect.poll(() => name.inputValue()).toBe("Original name");
+        }
         await name.fill("Renamed session");
-        await dialog.getByRole("button", { name: "Save" }).click();
+        if (surface === "menu") {
+          await dialog.getByRole("button", { name: "Save" }).click();
+        } else if (surface === "unselected name") {
+          await name.press("Tab");
+        } else {
+          await name.press("Enter");
+        }
 
         const patch = await waitForPatch(
           gateway,
@@ -266,6 +292,40 @@ suite.define(() => {
           .toContain("Renamed session");
         await expect.poll(() => row.textContent()).toContain("Renamed session");
       }),
+  );
+
+  it.each(["scope", "ownership"] as const)("retires an inline draft after losing %s", (cause) =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        sessionKey: renameKey,
+        operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
+        sessions: [sessionRow(renameKey, "Original name", 1, { sharingRole: "owner" })],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, renameKey));
+      const row = page.locator(`[data-session-key="${renameKey}"]`);
+      await row.locator(".sidebar-recent-session__name").dblclick();
+      const input = row.locator("input");
+      await input.fill("Unsent draft");
+      if (cause === "scope") {
+        const connects = (await gateway.getRequests("connect")).length;
+        await gateway.setOperatorScopes(["operator.sessions.read"]);
+        await gateway.closeLatest(1001, "session permission changed");
+        await gateway.waitForRequest("connect", { after: connects });
+      } else {
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...sessionRow(renameKey, "Original name", 2, {
+            sharingRole: "viewer",
+            visibility: "read-only",
+          }),
+          sessionKey: renameKey,
+          reason: "update",
+        });
+      }
+      await input.waitFor({ state: "detached" });
+      await expect.poll(() => row.locator("a[href]").count()).toBe(1);
+      expect(await row.textContent()).toContain("Original name");
+      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+    }),
   );
 
   it("keeps navigation and modifier links without enabling read-only rename", () =>
@@ -292,6 +352,8 @@ suite.define(() => {
       expect(await page.getByRole("dialog", { name: "Rename session", exact: true }).count()).toBe(
         0,
       );
+      await expect.poll(() => name.locator("xpath=ancestor::a").count()).toBe(1);
+      expect(await page.locator(".sidebar-recent-session input").count()).toBe(0);
       const opened = context.waitForEvent("page");
       await name.click({ modifiers: ["Control"] });
       const linked = await opened;

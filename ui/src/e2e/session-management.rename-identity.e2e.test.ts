@@ -10,18 +10,20 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
-  it.each(["sessions", "sidebar", "header"] as const)(
+  it.each(["sessions", "sidebar", "header", "inline"] as const)(
     "keeps a replacement session unchanged after a stale %s rename",
     async (surface) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const { original, replacement, gateway, row, replace } = await identityFixture(
           page,
           suite.server.baseUrl,
-          surface,
+          surface === "inline" ? "sidebar" : surface,
           "rename",
         );
         const openRename = async () => {
-          if (surface === "header") {
+          if (surface === "inline") {
+            await row.locator(".sidebar-recent-session__name").dblclick();
+          } else if (surface === "header") {
             await page.locator(".chat-pane__session-title-button").click();
           } else {
             await row.hover();
@@ -31,14 +33,20 @@ suite.define(() => {
         };
         await openRename();
         const input = page.locator(
-          surface === "header"
-            ? ".chat-pane__session-title-input"
-            : 'openclaw-modal-dialog[label="Rename session"] input',
+          surface === "inline"
+            ? ".sidebar-recent-session__rename-input"
+            : surface === "header"
+              ? ".chat-pane__session-title-input"
+              : 'openclaw-modal-dialog[label="Rename session"] input',
         );
         await expect.poll(() => input.inputValue()).toBe(original.label);
         await input.fill("Stale rename");
 
-        await replace();
+        await replace(
+          surface === "inline"
+            ? page.locator(".chat-pane-cache__pane--active .chat-pane__session-title-text")
+            : row,
+        );
         await input.press("Enter");
         const request = await waitForPatch(gateway, (params) => params.label === "Stale rename");
         const params = requireRecord(request.params);
@@ -53,7 +61,7 @@ suite.define(() => {
         } else {
           await gateway.resolveDeferred("sessions.patch");
         }
-        if (surface !== "header") {
+        if (surface !== "header" && surface !== "inline") {
           const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
           await expect
             .poll(() => dialog.locator(".callout[role=alert]").textContent())
