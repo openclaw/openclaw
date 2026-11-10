@@ -897,7 +897,7 @@ export async function main(argv) {
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   // Let this module finish evaluating before a lazy import cycles back to it.
-  void main(process.argv.slice(2)).catch((error) => {
+  void main(process.argv.slice(2)).catch((/** @type {unknown} */ error) => {
     console.error(error instanceof Error ? error.message : String(error));
     console.error("[plugin-npm-prepared-release] FAILED (exit 1)");
     process.exitCode = 1;

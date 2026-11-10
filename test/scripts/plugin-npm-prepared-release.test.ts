@@ -208,7 +208,7 @@ it("authenticates Q != P and reads the exact Q policy through the FRV admission 
     throw new Error("Missing live candidate authority");
   }
   const revalidate = admitted.revalidateAuthority;
-  revalidate();
+  await revalidate();
   qualification.admission.authority.permission = "read";
   expect(() => revalidate()).toThrow();
 });
@@ -398,7 +398,7 @@ it("loads and consumes the original Q bytes using authenticated Q expectations a
   if (!authenticated.revalidateAuthority) {
     throw new Error("Missing live candidate authority");
   }
-  authenticated.revalidateAuthority();
+  await authenticated.revalidateAuthority();
 });
 
 it("seals regular stable bootstrap without granting publication authority", () => {
