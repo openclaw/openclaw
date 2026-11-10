@@ -158,6 +158,15 @@ suite.define(() => {
             await menu.getByRole("menuitem", { name: entry.action, exact: true }).count(),
           ).toBe(1);
           await capture(page, `menu-${entry.name}`);
+          if (entry.name !== "needs-link-code") {
+            await page.keyboard.press("Escape");
+            await page.locator("openclaw-sidebar-attention:visible .sidebar-issues-button").click();
+            const warning = page.locator('[data-attention-kind="openClawIdKeys"]');
+            await warning.getByText(entry.text, { exact: true }).waitFor();
+            await warning.locator("summary").click();
+            await warning.getByRole("button", { name: "Move to new keys", exact: true }).waitFor();
+            await capture(page, `inbox-${entry.name}`);
+          }
         },
       );
     }
@@ -168,12 +177,16 @@ suite.define(() => {
     await suite.withPage(
       { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 844 } },
       async ({ page }) => {
-        const { menu, gateway } = await openMenu(
+        const { gateway } = await openMenu(
           page,
           { status: { state: "keys_refused", key: "endpoint", reason: "keys_missing" } },
           fixture.response,
         );
-        await menu.getByRole("menuitem", { name: "Move to new keys", exact: true }).click();
+        await page.keyboard.press("Escape");
+        await page.locator("openclaw-sidebar-attention:visible .sidebar-issues-button").click();
+        const warning = page.locator('[data-attention-kind="openClawIdKeys"]');
+        await warning.locator("summary").click();
+        await warning.getByRole("button", { name: "Move to new keys", exact: true }).click();
         const dialog = page.locator("openclaw-modal-dialog .openclaw-id-move-keys");
         await dialog.waitFor();
         await dialog.getByLabel("Recovery code").fill(fixture.kit);
@@ -184,8 +197,35 @@ suite.define(() => {
           .poll(() => dialog.getByText("matches your recovery kit", { exact: true }).count())
           .toBe(1);
         await capture(page, "dialog-confirm");
+        await gateway.setMethodResponse("openclawId.status", {
+          status: { state: "on" },
+          channel: "local_operator",
+          owner: true,
+          link: { linked: true, hostname },
+          services: {},
+        });
+        await gateway.setMethodResponse("openclawId.people", {
+          link: {
+            linked: true,
+            hostname,
+            publication: { state: "failed", code: "binding_superseded", message: "newer binding" },
+          },
+        });
         await dialog.getByRole("button", { name: "Move to new keys", exact: true }).click();
         await dialog.waitFor({ state: "detached" });
+        await page.locator("openclaw-sidebar-attention:visible .sidebar-issues-button").click();
+        await expect.poll(() => warning.textContent()).toContain("Newer keys are in use");
+        await gateway.setMethodResponse("openclawId.people", {
+          link: {
+            linked: true,
+            hostname,
+            publication: { state: "published", ownerAccountId: "fixture", snapshotSeq: 1 },
+          },
+        });
+        await gateway.emitGatewayEvent("openclawId.people.changed", {});
+        await expect
+          .poll(() => page.locator('[data-attention-kind="openClawIdKeys"]').count())
+          .toBe(0);
         const actions = (await gateway.getRequests())
           .filter((request) => request.method === "openclawId.authority")
           .map((request) => (request.params as { action: string }).action);

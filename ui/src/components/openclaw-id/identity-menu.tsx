@@ -58,6 +58,7 @@ export function OpenClawIdIdentityMenu(props: SidebarIdentityMenuParams) {
           status: status(),
           client: context.gateway.snapshot.client,
           basePath: props.basePath,
+          onKeysChanged: () => context.sidebarAttention.refreshOpenClawId(),
         }),
     };
   });
