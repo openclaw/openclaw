@@ -12,6 +12,7 @@ import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { countSidebarSessionFilters } from "./app-sidebar-session-filter-summary.tsx";
 import {
+  DEFAULT_SIDEBAR_SESSION_SORT_MODE,
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
 } from "./app-sidebar-session-types.ts";
@@ -289,7 +290,7 @@ export function renderSidebarSessionSortMenuForMenus(
       host.sessionsShowCron ||
       host.sessionsShowSystem ||
       host.sessionsShowPreview ||
-      host.effectiveSessionSortMode() !== "created" ||
+      host.effectiveSessionSortMode() !== DEFAULT_SIDEBAR_SESSION_SORT_MODE ||
       (!rosterMode() &&
         (grouping() !== "category" || host.sessionsEmptyGroupsMode !== "filtering")),
   );
@@ -349,7 +350,7 @@ export function renderSidebarSessionSortMenuForMenus(
                       setSessionsShowCron(host.sessionOrganizer, false);
                       setSessionsShowSystem(host.sessionOrganizer, false);
                       setSessionsShowPreview(host.sessionOrganizer, false);
-                      host.setSessionSortMode("created");
+                      host.setSessionSortMode(DEFAULT_SIDEBAR_SESSION_SORT_MODE);
                       if (!rosterMode()) {
                         // A displayed default can hide a saved Person choice until owners return.
                         if (grouping() !== "category") {

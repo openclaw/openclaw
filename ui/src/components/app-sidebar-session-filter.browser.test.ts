@@ -217,9 +217,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expect.element(role("button", "Group by: Custom groups")).toHaveFocus();
       await userEvent.keyboard("{Enter}{ArrowDown}{Enter}");
       await expect.poll(loadStoredSidebarSessionsGrouping).toBe("project");
-      await tabTo("button", "Sort by: Created");
-      await userEvent.keyboard("{Enter}{ArrowDown}{Enter}");
-      await expect.poll(loadStoredSidebarSessionSortMode).toBe("updated");
+      await tabTo("button", "Sort by: Last updated");
+      await userEvent.keyboard("{Enter}{ArrowUp}{Enter}");
+      await expect.poll(loadStoredSidebarSessionSortMode).toBe("created");
       await tabTo("button", "Hide empty groups: When filtering");
       await tabTo("switch", "Show message preview");
       await tabTo("link", "Session sources");
@@ -283,7 +283,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await role("button", /^Filter & sort · /).click();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const settle = () => vi.advanceTimersByTimeAsync(300);
-    const sort = role("button", "Sort by: Created");
+    const sort = role("button", "Sort by: Last updated");
     const sortRow = query("#sidebar-sessions-sort")!.parentElement!;
     sortRow.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "touch" }));
     await settle();
@@ -341,7 +341,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     // A closed Solid picker must not shrink the outer sheet's Tab boundary to itself.
     const grouping = query("#sidebar-sessions-group")!;
     grouping.focus();
-    await tabTo("button", "Sort by: Created");
+    await tabTo("button", "Sort by: Last updated");
     await userEvent.tab({ shift: true });
     await expect.element(grouping).toHaveFocus();
     await role("heading", "Filters").click();
@@ -386,6 +386,25 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     expect(list.hasAttribute("data-fade-end")).toBe(false);
   });
 
+  it.each([
+    ["created", "Created"],
+    ["updated", "Last updated"],
+    ["people", "Owners"],
+  ])("retains saved %s sort when the sidebar remounts", async (mode, label) => {
+    localStorage.setItem("openclaw:sidebar:sessions:sort-mode", mode);
+    for (let mount = 0; mount < 2; mount++) {
+      const { provider, sidebar, role, query } = await mountFilters(1440);
+      await role("button", /^Filter & sort · /).click();
+      await expect.element(role("button", "Sort by: " + label)).toBeVisible();
+      expect(query("#sidebar-sessions-reset") !== null).toBe(mode !== "updated");
+      expect(
+        query(".sidebar-session-sort").classList.contains("sidebar-session-sort--filtered"),
+      ).toBe(false);
+      sidebar.dismissTransientMenus();
+      provider.remove();
+    }
+  });
+
   it.each([390])("resets each Display choice without a filter dot at %i px", async (width) => {
     const { sidebar, role, query, choose } = await mountFilters(width);
     await role("button", /^Filter & sort · /).click();
@@ -396,7 +415,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       .toHaveAttribute("data-phase", "open");
     for (const [label, choice, defaultValue] of [
       ["Group by", "Person", "Custom groups"],
-      ["Sort by", "Last updated", "Created"],
+      ["Sort by", "Created", "Last updated"],
       ["Hide empty groups", "Always", "When filtering"],
       ["Show message preview", null, null],
     ] as const) {
@@ -412,7 +431,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       expect(query("#sidebar-sessions-reset"), label).not.toBeNull();
       await role("button", "Reset").click();
       expect(loadStoredSidebarSessionsGrouping()).toBe("category");
-      expect(loadStoredSidebarSessionSortMode()).toBe("created");
+      expect(loadStoredSidebarSessionSortMode()).toBe("updated");
       expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
       if (choice) {
         await expect.element(role("button", label + ": " + defaultValue)).toBeVisible();
@@ -541,7 +560,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     expect(loadStoredSidebarSessionsShowCron()).toBe(false);
     expect(loadStoredSidebarSessionsShowSystem()).toBe(false);
     expect(loadStoredSidebarSessionsGrouping()).toBe("category");
-    expect(loadStoredSidebarSessionSortMode()).toBe("created");
+    expect(loadStoredSidebarSessionSortMode()).toBe("updated");
     expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
     await expect.element(role("button", "Hide empty groups: When filtering")).toBeVisible();
     await expectFilterCount(0);
