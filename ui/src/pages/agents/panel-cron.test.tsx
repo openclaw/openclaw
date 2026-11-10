@@ -101,6 +101,30 @@ function jobRow(container: HTMLElement, name: string) {
 }
 
 describe("Agent Cron native reads and actions", () => {
+  it("shows initial loading while status and inventory settle independently", async () => {
+    const jobs = createDeferred<CronJobsListResult>();
+    const status = createDeferred<CronStatus>();
+    const { container } = mount((method) =>
+      method === "cron.status" ? status.promise : jobs.promise,
+    );
+    await waitForSolid(() => expect(button(container, "Refresh").disabled).toBe(true));
+    const sections = () => [...container.querySelectorAll(".settings-section")];
+    const loading = (title: string) =>
+      sections()
+        .find((section) => section.querySelector("h2")?.textContent === title)
+        ?.querySelector('.settings-group [aria-busy="true"]');
+    expect(loading("Scheduler")).toBeTruthy();
+    expect(loading("Agent automations")).toBeTruthy();
+    status.resolve({ enabled: false, jobs: 0, nextWakeAtMs: null });
+    await waitForSolid(() => expect(jobRow(container, "Enabled").textContent).toContain("No"));
+    expect(loading("Scheduler")).toBeTruthy();
+    expect(loading("Agent automations")).toBeTruthy();
+    jobs.resolve(pageOf([]));
+    await waitForSolid(() => expect(container.textContent).toContain("No automations yet."));
+    expect(loading("Scheduler")).toBeNull();
+    expect(loading("Agent automations")).toBeNull();
+  });
+
   it("shows ready jobs independently, retries failed reads without replacing job rows", async () => {
     const status = createDeferred();
     let first = true;
@@ -116,6 +140,7 @@ describe("Agent Cron native reads and actions", () => {
     });
     await waitForSolid(() => expect(container.textContent).toContain("Job ready"));
     const row = jobRow(container, "Job ready");
+    expect(jobRow(container, "Automations").textContent).toContain("1");
     expect(button(container, "Refresh").disabled).toBe(true);
     status.reject(new Error("Synthetic status unavailable"));
     await waitForSolid(() =>
@@ -155,10 +180,16 @@ describe("Agent Cron native reads and actions", () => {
     jobs.reject(new Error("Synthetic jobs unavailable"));
     await waitForSolid(() => expect(container.textContent).toContain("Synthetic jobs unavailable"));
     expect(button(container, "Refresh").disabled).toBe(true);
-    status.resolve({ enabled: true, triggersEnabled: true, jobs: 0, nextWakeAtMs: null });
+    await waitForSolid(() =>
+      expect(jobRow(container, "Automations").textContent).toContain("Failed"),
+    );
+    expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
+    status.resolve({ enabled: false, triggersEnabled: true, jobs: 0, nextWakeAtMs: null });
     await waitForSolid(() => expect(button(container, "Refresh").disabled).toBe(false));
     expect(container.textContent).not.toContain("No automations yet.");
     expect(container.textContent).not.toContain("0 of");
+    expect(jobRow(container, "Enabled").textContent).toContain("No");
+    expect(jobRow(container, "Next wake").textContent).toContain("n/a");
     result = Promise.resolve(pageOf([]));
     button(container, "Refresh").click();
     await waitForSolid(() => expect(container.textContent).toContain("No automations yet."));
