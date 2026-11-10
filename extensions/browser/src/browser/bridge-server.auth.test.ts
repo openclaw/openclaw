@@ -1,3 +1,5 @@
+import { runInNewContext } from "node:vm";
+import { parseHTML } from "linkedom";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
@@ -98,10 +100,9 @@ describe("startBrowserBridgeServer auth", () => {
     await Promise.all([stopping, startRequest.catch(() => undefined)]);
   });
 
-  it("serves noVNC bootstrap html without leaking password in Location header", async () => {
-    const resolveToken = vi.fn(
-      (token: string) =>
-        token === "valid-token" ? { noVncPort: 45678, password: "Abc123xy" } : null, // pragma: allowlist secret
+  it("serves a branded noVNC handoff with a safe manual fallback", async () => {
+    const resolveToken = vi.fn((token: string) =>
+      token === "valid-token" ? { noVncPort: 45678, password: "</script>&\"'" } : null,
     );
     const bridge = await startBridge({
       ...tokenAuth,
@@ -121,10 +122,21 @@ describe("startBrowserBridgeServer auth", () => {
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
 
     const body = await res.text();
-    expect(body).toContain("window.location.replace");
-    expect(body).toContain(
-      "http://127.0.0.1:45678/vnc.html#autoconnect=1&resize=remote&password=Abc123xy",
-    );
+    const { document } = parseHTML(body);
+    expect(document.querySelector("h1")?.textContent).toBe("Opening sandbox observer…");
+    expect(document.querySelector('svg[role="img"]')?.getAttribute("aria-label")).toBe("OpenClaw");
+    expect(document.querySelector('.mascot[aria-hidden="true"] svg')).not.toBeNull();
+    const target =
+      "http://127.0.0.1:45678/vnc.html#autoconnect=1&resize=remote&password=%3C%2Fscript%3E%26%22%27";
+    const link = document.querySelector("a");
+    expect(link?.getAttribute("href")).toBe(target);
+    expect(link?.textContent).toBe("continue to the observer");
+    const replace = vi.fn();
+    expect(document.querySelectorAll("script")).toHaveLength(1);
+    runInNewContext(document.querySelector("script")!.textContent!, {
+      window: { location: { replace } },
+    });
+    expect(replace).toHaveBeenCalledExactlyOnceWith(target);
     expect(body).not.toContain("?password=");
   });
 });
