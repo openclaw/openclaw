@@ -1,5 +1,6 @@
 import { ComponentType } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findCodeRegions } from "openclaw/plugin-sdk/text-chunking";
 import type { Message } from "../internal/discord.js";
 import {
   formatDiscordSnapshotAuthor,
@@ -86,12 +87,22 @@ function resolveDiscordMentions(text: string, message: Message): string {
   if (!Array.isArray(mentions) || mentions.length === 0) {
     return text;
   }
-  let out = text;
-  for (const user of mentions) {
-    const label = user.globalName || user.username || user.id;
-    out = out.replace(new RegExp(`<@!?${user.id}>`, "g"), () => `@${label}`);
+  const rewriteProse = (prose: string) => {
+    let rewritten = prose;
+    for (const user of mentions) {
+      const label = user.globalName || user.username || user.id;
+      rewritten = rewritten.replace(new RegExp(`<@!?${user.id}>`, "g"), () => `@${label}`);
+    }
+    return rewritten;
+  };
+  let out = "";
+  let offset = 0;
+  // Partition the original text before display names can introduce Markdown delimiters.
+  for (const { start, end } of findCodeRegions(text)) {
+    out += rewriteProse(text.slice(offset, start)) + text.slice(start, end);
+    offset = end;
   }
-  return out;
+  return out + rewriteProse(text.slice(offset));
 }
 
 function resolveDiscordForwardedMessagesText(message: Message): string {

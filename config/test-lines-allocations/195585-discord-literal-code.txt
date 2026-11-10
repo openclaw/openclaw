@@ -1,0 +1,3 @@
+# Discord inbound mention normalization preserves literal Markdown code ranges.
+# Exact net test growth for PR #195585.
+18

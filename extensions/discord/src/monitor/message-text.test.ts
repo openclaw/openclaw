@@ -70,6 +70,24 @@ describe("resolveDiscordMessageText", () => {
       `Hello @${label} and @${label}, meet @${label}!`,
     ],
     ["user IDs when names are absent", "Hello <@1> and <@!1>!", [{ id: "1" }], "Hello @1 and @1!"],
+    [
+      "literal inline code",
+      "Hello <@1>; `<@!1>` and ``<@2> `literal` ``; bye <@2>!",
+      [
+        { id: "1", globalName: label },
+        { id: "2", username: label },
+      ],
+      `Hello @${label}; \`<@!1>\` and \`\`<@2> \`literal\` \`\`; bye @${label}!`,
+    ],
+    [
+      "literal fenced code",
+      "Hello <@1>!\n```js\nconst user = '<@!1>';\n```\n<@2>\n~~~text\n<@2>\n~~~",
+      [
+        { id: "1", globalName: label },
+        { id: "2", username: label },
+      ],
+      `Hello @${label}!\n\`\`\`js\nconst user = '<@!1>';\n\`\`\`\n@${label}\n~~~text\n<@2>\n~~~`,
+    ],
   ] as const)("resolves mentions with %s", (_name, content, mentionedUsers, expected) => {
     expect(renderText({ content, mentionedUsers })).toBe(expected);
   });
