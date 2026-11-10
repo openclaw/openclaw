@@ -291,9 +291,9 @@ Behavior and limits:
 - Advisor needs conversation access and prompt injection permission through
   `plugins.entries.advisor.hooks`, which trusted plugins have by default.
 - Gateway info logs record review token usage (uncached input, cache reads,
-  cache writes and output) and whether a correction steered the run. A review
-  that misses the provider cache reports its context as cache writes, not
-  input. Reviews do not share the conversation's prompt-cache key, so on
+  cache writes and output) and whether a correction steered the run. When a review
+  misses the provider cache and the provider reports cache-write tokens, its
+  context appears under cache writes rather than input. Reviews do not share the conversation's prompt-cache key, so on
   OpenAI routes some reviews miss the cache.
 
 ## OpenClaw ID remote access
