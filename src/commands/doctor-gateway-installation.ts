@@ -152,6 +152,14 @@ export async function installDoctorGatewayService(
   }
 }
 
+/** Thrown only when installation repair is refused because another owner controls the service. */
+export class GatewayServiceInstallationOwnershipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayServiceInstallationOwnershipError";
+  }
+}
+
 /** Doctor consumes the updater's verified ownership; a recorded path alone grants no repair. */
 export async function assertGatewayServiceInstallationRepairAllowed(
   params: GatewayServiceInstallationRepair,
@@ -195,7 +203,7 @@ export async function assertGatewayServiceInstallationRepairAllowed(
     );
   }
   if (verdict.kind !== "owned" || !verdict.requiresInstallRootRefresh) {
-    throw new Error(
+    throw new GatewayServiceInstallationOwnershipError(
       `Gateway service installation is controlled by another owner; automatic installation repair was skipped. Inspect it with \`${formatCliCommand("openclaw gateway status --deep", state.env)}\`.`,
     );
   }
