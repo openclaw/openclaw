@@ -206,6 +206,21 @@ describe("chat composer suggestion accessibility", () => {
     await waitForSolid(() => expect(optionNames(container)).toEqual(["default", "low", "ultra"]));
   });
 
+  it("keeps the highlighted thinking argument when selecting the command separator", async () => {
+    const { container } = createReactiveDraftHarness(thinkingSession(["off", "ultra"]));
+    inputDraftAtEnd(container, "/think");
+    keydownComposer(container, "Tab");
+    await waitForSolid(() => expect(optionNames(container)).toEqual(["default", "off", "ultra"]));
+    keydownComposer(container, "ArrowUp");
+
+    const textarea = getComposerTextarea(container);
+    textarea.setSelectionRange("/think".length, "/think ".length, "backward");
+    textarea.dispatchEvent(new Event("select", { bubbles: true }));
+    flush();
+    keydownComposer(container, "Tab");
+    expect(textarea.value).toBe("/think ultra");
+  });
+
   it("keeps the keyboard-selected command when a pending catalog refresh settles", async () => {
     replaceSlashCommands([
       { key: "pair", name: "pair", description: "Generate setup codes." },

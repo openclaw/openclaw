@@ -209,9 +209,13 @@ export function createSlashMenu() {
 
     const caret = host.getTextarea()?.selectionStart ?? value.length;
     const completion = findInlineSlashCompletion(value, caret);
-    // The caret-local token owns completion before a leading command's argument tail.
     const argMatch = value.match(/^\/(\S+)\s(.*)$/);
-    if (argMatch && !completion) {
+    // Selecting the leading command in an unchanged argument draft keeps its active argument.
+    if (
+      argMatch &&
+      (!completion ||
+        (!completion.inline && state.slashMenuMode === "args" && state.slashMenuArgDraft === value))
+    ) {
       if (!opts.skipSlashIntent) {
         requestSlashCommandRefresh(host);
       }

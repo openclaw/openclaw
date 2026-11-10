@@ -1,0 +1,2 @@
+# Rendered composer regression: selecting the command separator retains the chosen argument.
+15
