@@ -132,7 +132,11 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
       (file === "extensions/knowledge/src/retrieval.ts" &&
         (match.construct === "fts5" ||
           match.construct === "temp-schema" ||
-          match.construct === "rowid"));
+          match.construct === "rowid")) ||
+      // Only the SQLite publication backend builds this stage; PostgreSQL publication spools
+      // through manager-publication-postgres.ts. Its overflow table lives on that worker's connection.
+      (file === "extensions/memory-core/src/memory/manager-publication-stage.ts" &&
+        match.construct === "temp-schema");
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({
       ...match,

@@ -230,6 +230,23 @@ it("distinguishes PostgreSQL staging from SQLite temporary schemas", () => {
   });
 });
 
+it("owns only the SQLite publication stage's TEMP overflow table", () => {
+  const { root, write } = fixture();
+  const stage = "extensions/memory-core/src/memory/manager-publication-stage.ts";
+  write(stage, 'db.exec("CREATE TEMP TABLE overflow (json TEXT)"); db.exec("SELECT rowid FROM t");');
+  write("src/sqlite.ts", 'db.exec("CREATE TEMP TABLE overflow (json TEXT)");');
+  expect(inventory(root)).toMatchObject([
+    {
+      file: stage,
+      matches: [
+        { construct: "temp-schema", group: "engine-maintenance", owner: true },
+        { construct: "rowid", owner: false },
+      ],
+    },
+    { file: "src/sqlite.ts", matches: [{ construct: "temp-schema", owner: false }] },
+  ]);
+});
+
 it("excludes generated PostgreSQL SQL and captured catalogs while retaining SQLite JSON debt", () => {
   const { root, write, git } = fixture();
   write("src/sqlite.ts", "export {};\n");

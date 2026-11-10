@@ -1,2 +1,2 @@
-136
-# Memory rebuild: a heap-limited read and SQLite worker red/green for reusing and publishing more vectors than either heap holds, plus the TEMP overflow stage.
+153
+# Memory rebuild: a heap-limited read and SQLite worker red/green for reusing and publishing more vectors than either heap holds, the TEMP overflow stage, and its scoped dialect-ratchet classification.
