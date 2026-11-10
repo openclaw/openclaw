@@ -85,10 +85,15 @@ function holdInlineCodeSpans(text: string, code: string[]): string {
       index += openLength;
       continue;
     }
-    // A backtick run at the start of a line opens a fenced block, which fence
-    // stripping removes whole; inline code may span lines, so only line-start
-    // runs are left for the fence pass.
-    const atLineStart = index === 0 || text.charAt(index - 1) === "\n";
+    // A backtick run at the start of a line (CommonMark allows up to three
+    // spaces of indentation) opens a fenced block, which fence stripping
+    // removes whole; inline code may span lines, so only line-start runs are
+    // left for the fence pass.
+    let lineStart = index;
+    while (lineStart > 0 && text.charAt(lineStart - 1) === " ") {
+      lineStart -= 1;
+    }
+    const atLineStart = lineStart === 0 || text.charAt(lineStart - 1) === "\n";
     if (atLineStart && openLength >= 3) {
       index += openLength;
       continue;

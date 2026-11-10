@@ -28,6 +28,11 @@ describe("flattenMarkdownToPlainText", () => {
       "Use a b now",
     ],
     [
+      "indented fenced blocks are fences, not inline code",
+      "Before\n  ```ts\nx\n  ```\nAfter",
+      "Before After",
+    ],
+    [
       "links and escaped image markers",
       String.raw`Read the [deployment guide](https://example.com/deploy), \![important](note.md), \\![diagram](image.png)`,
       String.raw`Read the deployment guide, \!important, \\diagram`,
