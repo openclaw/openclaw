@@ -493,6 +493,11 @@ describe("original publication admission reader", () => {
 
   it.for([
     "workflow-restore",
+    "workflow-restore-pinned-p",
+    "workflow-restore-pinned-p-digest",
+    "workflow-restore-pinned-p-identity",
+    "workflow-restore-pinned-p-extra",
+    "workflow-restore-pinned-p-rehashed",
     "workflow-restore-failed-resolution",
     "workflow-plan-restore",
     "workflow-plan-mutated",
@@ -528,10 +533,49 @@ describe("original publication admission reader", () => {
     "changed-selection",
   ])("authenticates retained attempt one before any new observations: %s", async (fault, t) => {
     const fixture = publicationRestoreFixture();
+    const pinnedProducer = fault.startsWith("workflow-restore-pinned-p");
+    if (pinnedProducer) {
+      // Intact synthetic output of P=26ad45c77d4b96c55271850ab583d0f17b473ea3,
+      // not the expired release artifact. Keep its producer digest, never re-seal it with Q.
+      const plan = JSON.parse(
+        readFileSync("test/fixtures/release/pinned-p-execution-plan.json", "utf8"),
+      );
+      Object.assign(fixture, {
+        plan,
+        source: plan.sourceAdmission,
+        admission: plan.publicationAdmission,
+        request: { ...plan.sourceAdmission, runAttempt: 2 },
+        runId: plan.parentRunId,
+        workflowSha: plan.workflowSha,
+        targetSha: plan.targetSha,
+      });
+      expect(plan.sha256).toBe("482aa1512bb388378790ec2e391b425f34842c59fb813a63257d96176c03375d");
+      expect(plan).not.toHaveProperty("coveragePolicy");
+      expect(plan).not.toHaveProperty("telegramWaiver");
+      expect(plan.evidenceReuse.requested).toBe(false);
+    }
+    const branch = fixture.source.workflow.ref.replace(/^refs\/(?:heads|tags)\//u, "");
     const cachedRestore = fault.includes("cached");
     const witnessContract =
-      (cachedRestore && fault !== "cached-plan-historical") || fault.startsWith("reuploaded-plan");
-    const originalPlanDigest = releaseExecutionPlanSha256(fixture.plan);
+      pinnedProducer ||
+      (cachedRestore && fault !== "cached-plan-historical") ||
+      fault.startsWith("reuploaded-plan");
+    const originalPlanDigest = fixture.plan.sha256;
+    if (
+      fault === "workflow-restore-pinned-p-digest" ||
+      fault === "workflow-restore-pinned-p-rehashed"
+    ) {
+      fixture.plan.targetVersion = "2026.8.28-beta.2";
+      if (fault.endsWith("rehashed")) {
+        fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
+      }
+    }
+    if (fault === "workflow-restore-pinned-p-identity") {
+      fixture.request.candidateSha = "f".repeat(40);
+    }
+    if (fault === "workflow-restore-pinned-p-extra") {
+      Object.assign(fixture.plan, { unexpected: true });
+    }
     if (fault === "cached-plan-mutated") {
       const row = expectDefined(fixture.admission.observations.npm[0], "root observation");
       if (row.outcome !== "observed") {
@@ -758,7 +802,7 @@ try {
           : "2026-08-28T12:01:02.000Z",
       workflow_run: {
         id: Number(fixture.runId),
-        head_branch: "main",
+        head_branch: branch,
         head_sha: fixture.workflowSha,
       },
     };
@@ -779,7 +823,7 @@ try {
         event: "workflow_dispatch",
         run_attempt: fault === "wrong-attempt" ? 2 : 1,
         head_sha: fault === "wrong-sha" ? "f".repeat(40) : fixture.workflowSha,
-        head_branch: "main",
+        head_branch: branch,
       },
       workflow: {
         type: "file",
@@ -999,6 +1043,7 @@ process.stdout.write(JSON.stringify(restored));
       }
     } else if (
       fault === "workflow-restore" ||
+      fault === "workflow-restore-pinned-p" ||
       fault === "workflow-restore-cached" ||
       fault === "reuploaded-plan" ||
       fault === "interrupted-sealer"
@@ -1017,6 +1062,9 @@ process.stdout.write(JSON.stringify(restored));
       expect(restored.source).toEqual(fixture.source);
       expect(restored.admission).toEqual(fixture.admission);
       expect(restored.plan.sha256).toBe(fixture.plan.sha256);
+      if (pinnedProducer) {
+        expect(JSON.parse(readFileSync(cachedPlanPath, "utf8"))).toEqual(fixture.plan);
+      }
       if (cachedRestore) {
         expect(calls).not.toContain("/artifacts");
       }
@@ -1025,8 +1073,17 @@ process.stdout.write(JSON.stringify(restored));
       expect(result.status, result.stderr).not.toBe(0);
       expect(result.stdout).toBe("");
       expect(existsSync(join(root, "publication-admission.json"))).toBe(false);
-      if (fault === "workflow-plan-mutated") {
+      if (fault === "workflow-plan-mutated" || fault === "workflow-restore-pinned-p-rehashed") {
         expect(result.stderr).toContain("differs from its authenticated original");
+      }
+      if (fault === "workflow-restore-pinned-p-digest") {
+        expect(result.stderr).toContain("artifact digest is invalid");
+      }
+      if (fault === "workflow-restore-pinned-p-extra") {
+        expect(result.stderr).toContain("artifact schema is invalid");
+      }
+      if (fault === "workflow-restore-pinned-p-identity") {
+        expect(result.stderr).toContain("source admission targetSha mismatch");
       }
     }
     if (planRestore && !cachedRestore) {

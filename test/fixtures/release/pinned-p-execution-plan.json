@@ -1,0 +1,410 @@
+{
+  "qualificationCoverage": {
+    "schema": "openclaw.release-qualification-coverage/v1",
+    "profile": "beta",
+    "children": [
+      {
+        "key": "normalCi",
+        "workflow": "ci.yml",
+        "name": "CI",
+        "parentJobName": "Run normal full CI",
+        "dispatchName": "Dispatch CI",
+        "suffix": "-ci",
+        "requiredJobs": [
+          "openclaw/ci-gate"
+        ]
+      },
+      {
+        "key": "pluginPrereleaseIndependent",
+        "workflow": "plugin-prerelease.yml",
+        "name": "Plugin Prerelease",
+        "parentJobName": "Run plugin prerelease independent validation",
+        "dispatchName": "Dispatch plugin prerelease independent phase",
+        "suffix": "-plugin-prerelease-independent",
+        "requiredJobs": [
+          "Resolve target ref",
+          "Build plugin prerelease plan",
+          "plugin-prerelease-suite"
+        ]
+      },
+      {
+        "key": "pluginPrereleaseCandidate",
+        "workflow": "plugin-prerelease.yml",
+        "name": "Plugin Prerelease",
+        "parentJobName": "Run plugin prerelease candidate validation",
+        "dispatchName": "Dispatch plugin prerelease candidate phase",
+        "suffix": "-plugin-prerelease-candidate",
+        "requiredJobs": [
+          "Resolve target ref",
+          "Build plugin prerelease plan",
+          "plugin-prerelease-suite"
+        ]
+      },
+      {
+        "key": "releaseChecksIndependent",
+        "workflow": "openclaw-release-checks.yml",
+        "name": "OpenClaw Release Checks",
+        "parentJobName": "Run release checks independent validation",
+        "dispatchName": "Dispatch release checks independent phase",
+        "suffix": "-release-checks-independent",
+        "requiredJobs": [
+          "Verify release checks"
+        ]
+      },
+      {
+        "key": "releaseChecksCandidate",
+        "workflow": "openclaw-release-checks.yml",
+        "name": "OpenClaw Release Checks",
+        "parentJobName": "Run release checks candidate validation",
+        "dispatchName": "Dispatch release checks candidate phase",
+        "suffix": "-release-checks-candidate",
+        "requiredJobs": [
+          "Verify release checks"
+        ]
+      }
+    ],
+    "requiredParentJobs": [
+      "Resolve target ref",
+      "Acquire full release candidate"
+    ]
+  },
+  "qualificationInputs": {
+    "ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "trusted_workflow_json": "{\"laneInputs\":{\"qualification_baselines_json\":\"{\\\"upgradeBaseline\\\":\\\"openclaw@2026.7.9\\\",\\\"upgradeSurvivorBaselines\\\":[\\\"openclaw@2026.6.34\\\",\\\"openclaw@2026.7.8\\\",\\\"openclaw@2026.7.9\\\"]}\"},\"publicationSelection\":{\"npmDistTag\":\"beta\",\"pluginPublishScope\":\"all-publishable\",\"plugins\":[],\"publishOpenclawNpm\":true,\"route\":\"normal\"},\"qualificationAdmission\":{\"artifactDigest\":\"sha256:851ee8fed26e3da087133c576a73067c82060f3dc6b43ec6adc9da56682d177e\",\"artifactId\":70,\"artifactName\":\"release-qualification-admission-40-1\",\"artifactSizeBytes\":4670,\"repository\":\"openclaw/openclaw\",\"runAttempt\":1,\"runId\":40,\"workflowEvent\":\"workflow_dispatch\",\"workflowFullRef\":\"refs/tags/release-publish/bbbbbbbbbbbb-10\",\"workflowHeadBranch\":\"release-publish/bbbbbbbbbbbb-10\",\"workflowPath\":\".github/workflows/openclaw-release-prepare.yml\",\"workflowSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"trustedWorkflow\":{\"fullRef\":\"refs/heads/release-ci/aaaaaaaaaaaa-123\",\"ref\":\"release-ci/aaaaaaaaaaaa-123\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"validationPurpose\":\"publish\"}",
+    "target_context_ref": "release/2026.8.28",
+    "allow_unreleased_changelog": "false",
+    "skip_package_telegram_e2e": "false",
+    "telegram_waiver": "",
+    "provider": "openai",
+    "mode": "both",
+    "release_profile": "beta",
+    "run_release_soak": "false",
+    "fail_fast": "false",
+    "rerun_group": "all",
+    "plugin_prerelease_node_exclude_patterns_json": "[]",
+    "reuse_evidence": "true",
+    "live_suite_filter": "",
+    "cross_os_suite_filter": "",
+    "npm_telegram_package_spec": "",
+    "release_package_spec": "",
+    "evidence_package_spec": "",
+    "dispatch_release_evidence": "false",
+    "package_acceptance_package_spec": "",
+    "codex_plugin_spec": "",
+    "npm_telegram_provider_mode": "mock-openai",
+    "npm_telegram_scenario": ""
+  },
+  "sourceAdmissionContract": "1",
+  "sourceAdmission": {
+    "kind": "openclaw.full-release-source-admission/v1",
+    "contract": "1",
+    "qualificationAdmission": {
+      "artifactDigest": "sha256:851ee8fed26e3da087133c576a73067c82060f3dc6b43ec6adc9da56682d177e",
+      "artifactId": 70,
+      "artifactName": "release-qualification-admission-40-1",
+      "artifactSizeBytes": 4670,
+      "repository": "openclaw/openclaw",
+      "runAttempt": 1,
+      "runId": 40,
+      "workflowEvent": "workflow_dispatch",
+      "workflowFullRef": "refs/tags/release-publish/bbbbbbbbbbbb-10",
+      "workflowHeadBranch": "release-publish/bbbbbbbbbbbb-10",
+      "workflowPath": ".github/workflows/openclaw-release-prepare.yml",
+      "workflowSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "qualificationInputs": {
+      "ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "trusted_workflow_json": "{\"laneInputs\":{\"qualification_baselines_json\":\"{\\\"upgradeBaseline\\\":\\\"openclaw@2026.7.9\\\",\\\"upgradeSurvivorBaselines\\\":[\\\"openclaw@2026.6.34\\\",\\\"openclaw@2026.7.8\\\",\\\"openclaw@2026.7.9\\\"]}\"},\"publicationSelection\":{\"npmDistTag\":\"beta\",\"pluginPublishScope\":\"all-publishable\",\"plugins\":[],\"publishOpenclawNpm\":true,\"route\":\"normal\"},\"qualificationAdmission\":{\"artifactDigest\":\"sha256:851ee8fed26e3da087133c576a73067c82060f3dc6b43ec6adc9da56682d177e\",\"artifactId\":70,\"artifactName\":\"release-qualification-admission-40-1\",\"artifactSizeBytes\":4670,\"repository\":\"openclaw/openclaw\",\"runAttempt\":1,\"runId\":40,\"workflowEvent\":\"workflow_dispatch\",\"workflowFullRef\":\"refs/tags/release-publish/bbbbbbbbbbbb-10\",\"workflowHeadBranch\":\"release-publish/bbbbbbbbbbbb-10\",\"workflowPath\":\".github/workflows/openclaw-release-prepare.yml\",\"workflowSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"trustedWorkflow\":{\"fullRef\":\"refs/heads/release-ci/aaaaaaaaaaaa-123\",\"ref\":\"release-ci/aaaaaaaaaaaa-123\",\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"validationPurpose\":\"publish\"}",
+      "target_context_ref": "release/2026.8.28",
+      "allow_unreleased_changelog": "false",
+      "skip_package_telegram_e2e": "false",
+      "telegram_waiver": "",
+      "provider": "openai",
+      "mode": "both",
+      "release_profile": "beta",
+      "run_release_soak": "false",
+      "fail_fast": "false",
+      "rerun_group": "all",
+      "plugin_prerelease_node_exclude_patterns_json": "[]",
+      "reuse_evidence": "true",
+      "live_suite_filter": "",
+      "cross_os_suite_filter": "",
+      "npm_telegram_package_spec": "",
+      "release_package_spec": "",
+      "evidence_package_spec": "",
+      "dispatch_release_evidence": "false",
+      "package_acceptance_package_spec": "",
+      "codex_plugin_spec": "",
+      "npm_telegram_provider_mode": "mock-openai",
+      "npm_telegram_scenario": ""
+    },
+    "repository": "openclaw/openclaw",
+    "candidateSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "targetContextRef": "release/2026.8.28",
+    "tooling": {
+      "ref": "refs/heads/release-ci/aaaaaaaaaaaa-123",
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "workflow": {
+      "ref": "refs/heads/release-ci/aaaaaaaaaaaa-123",
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "runId": "29071366025",
+    "runAttempt": 1,
+    "validationPurpose": "publish",
+    "publicationSelection": {
+      "route": "normal",
+      "npmDistTag": "beta",
+      "publishOpenclawNpm": true,
+      "pluginPublishScope": "all-publishable",
+      "plugins": []
+    },
+    "coverage": {
+      "provider": "openai",
+      "mode": "both",
+      "live_suite_filter": "",
+      "cross_os_suite_filter": "",
+      "release_package_spec": "",
+      "package_acceptance_package_spec": "",
+      "codex_plugin_spec": "",
+      "npm_telegram_package_spec": "",
+      "npm_telegram_provider_mode": "mock-openai",
+      "npm_telegram_scenario": "",
+      "plugin_prerelease_node_exclude_patterns_json": "[]",
+      "extension_test_exclude_patterns_json": "[]",
+      "qualification_baselines_json": "{\"upgradeBaseline\":\"openclaw@2026.7.9\",\"upgradeSurvivorBaselines\":[\"openclaw@2026.6.34\",\"openclaw@2026.7.8\",\"openclaw@2026.7.9\"]}",
+      "skip_package_telegram_e2e": "true",
+      "telegram_waiver": "",
+      "allow_unreleased_changelog": "false",
+      "release_profile": "beta",
+      "rerun_group": "all",
+      "evidence_package_spec": "",
+      "fail_fast": "false",
+      "dispatch_release_evidence": "false",
+      "run_release_soak": "false",
+      "coverage_policy": "npm-beta-v1"
+    },
+    "status": "source-admitted",
+    "inventoryDigest": "a13ad5efad9aac9e22075f5699d71f3507e2f1392401475ca9b03d8c8a56d8c9",
+    "projection": {
+      "version": "2026.8.28-beta.1",
+      "packages": [
+        {
+          "name": "openclaw",
+          "version": "2026.8.28-beta.1",
+          "targets": [
+            "npm"
+          ]
+        }
+      ],
+      "platforms": []
+    },
+    "digest": "0491ab1a7c802ae4cd269041d9124d310fa7f4ad972decc9c9055d89abfa600e"
+  },
+  "publicationAdmissionContract": "1",
+  "publicationAdmission": {
+    "observations": {
+      "kind": "openclaw.full-release-publication-observations/v1",
+      "contract": "1",
+      "sourceDigest": "0491ab1a7c802ae4cd269041d9124d310fa7f4ad972decc9c9055d89abfa600e",
+      "prerequisitesCompletedAt": "2026-08-28T12:00:00.000Z",
+      "collectionStartedAt": "2026-08-28T12:00:00.000Z",
+      "collectionCompletedAt": "2026-08-28T12:00:00.000Z",
+      "npm": [
+        {
+          "name": "openclaw",
+          "version": "2026.8.28-beta.1",
+          "required": true,
+          "observedAt": "2026-08-28T12:00:00.000Z",
+          "outcome": "observed",
+          "state": {
+            "packageExists": true,
+            "hasVersionHistory": true,
+            "selectedVersionExists": false,
+            "latestVersion": null
+          }
+        }
+      ],
+      "clawhub": [],
+      "pendingAuthority": [],
+      "plans": {
+        "npm": {
+          "all": [],
+          "candidates": [],
+          "skippedPublished": [],
+          "warnings": []
+        },
+        "clawhub": {
+          "all": [],
+          "candidates": [],
+          "skippedPublished": [],
+          "bootstrapCandidates": [],
+          "missingTrustedPublisher": [],
+          "warnings": []
+        }
+      }
+    },
+    "binding": {
+      "kind": "openclaw.full-release-publication-admission/v1",
+      "contract": "1",
+      "repository": "openclaw/openclaw",
+      "parentRunId": "29071366025",
+      "parentRunAttempt": 1,
+      "workflow": {
+        "path": ".github/workflows/full-release-validation.yml",
+        "event": "workflow_dispatch",
+        "ref": "refs/heads/release-ci/aaaaaaaaaaaa-123",
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "sourceDigest": "0491ab1a7c802ae4cd269041d9124d310fa7f4ad972decc9c9055d89abfa600e",
+      "observationsDigest": "sha256:405f7b0377a37709615f15b14d9f38eca938824d90e48b64f0f7c349e5e05cad",
+      "artifact": {
+        "id": "444",
+        "name": "full-release-publication-observations-29071366025-1",
+        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "sizeInBytes": 4096
+      },
+      "admittedAt": "2026-08-28T12:00:00.000Z",
+      "status": "admitted-for-validation"
+    }
+  },
+  "version": 1,
+  "kind": "openclaw.full-release-execution-plan",
+  "parentRunId": "29071366025",
+  "parentRunAttempt": 1,
+  "workflowRef": "release-ci/aaaaaaaaaaaa-123",
+  "workflowSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "targetSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "targetVersion": "2026.8.28-beta.1",
+  "trustedWorkflow": {
+    "fullRef": "refs/heads/release-ci/aaaaaaaaaaaa-123",
+    "ref": "release-ci/aaaaaaaaaaaa-123",
+    "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "releaseProfile": "beta",
+  "rerunGroup": "all",
+  "evidenceReuse": {
+    "requested": false
+  },
+  "gates": [
+    {
+      "name": "Resolve target ref",
+      "required": true,
+      "result": "success"
+    }
+  ],
+  "children": [
+    {
+      "dispatchName": "Dispatch CI",
+      "displayTitle": "CI full-release-validation-29071366025-1-ci",
+      "key": "normalCi",
+      "required": true,
+      "result": "success",
+      "runAttempt": 1,
+      "runId": "101",
+      "selected": true,
+      "source": "fresh",
+      "url": "https://github.com/openclaw/openclaw/actions/runs/29071382629",
+      "workflow": "ci.yml",
+      "workflowRef": "release-ci/aaaaaaaaaaaa-123",
+      "workflowSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sourceParentAttempt": null
+    },
+    {
+      "dispatchName": "Dispatch plugin prerelease independent phase",
+      "displayTitle": "Plugin Prerelease full-release-validation-29071366025-1-plugin-prerelease-independent",
+      "key": "pluginPrereleaseIndependent",
+      "required": true,
+      "result": "success",
+      "runAttempt": 1,
+      "runId": "102",
+      "selected": true,
+      "source": "fresh",
+      "url": "https://github.com/openclaw/openclaw/actions/runs/29071382629",
+      "workflow": "plugin-prerelease.yml",
+      "workflowRef": "release-ci/aaaaaaaaaaaa-123",
+      "workflowSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sourceParentAttempt": null
+    },
+    {
+      "dispatchName": "Dispatch plugin prerelease candidate phase",
+      "displayTitle": "Plugin Prerelease full-release-validation-29071366025-1-plugin-prerelease-candidate",
+      "key": "pluginPrereleaseCandidate",
+      "required": true,
+      "result": "success",
+      "runAttempt": 1,
+      "runId": "103",
+      "selected": true,
+      "source": "fresh",
+      "url": "https://github.com/openclaw/openclaw/actions/runs/29071382629",
+      "workflow": "plugin-prerelease.yml",
+      "workflowRef": "release-ci/aaaaaaaaaaaa-123",
+      "workflowSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sourceParentAttempt": null
+    },
+    {
+      "dispatchName": "Dispatch release checks independent phase",
+      "displayTitle": "OpenClaw Release Checks full-release-validation-29071366025-1-release-checks-independent",
+      "key": "releaseChecksIndependent",
+      "required": true,
+      "result": "success",
+      "runAttempt": 1,
+      "runId": "104",
+      "selected": true,
+      "source": "fresh",
+      "url": "https://github.com/openclaw/openclaw/actions/runs/29071382629",
+      "workflow": "openclaw-release-checks.yml",
+      "workflowRef": "release-ci/aaaaaaaaaaaa-123",
+      "workflowSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sourceParentAttempt": null
+    },
+    {
+      "dispatchName": "Dispatch release checks candidate phase",
+      "displayTitle": "OpenClaw Release Checks full-release-validation-29071366025-1-release-checks-candidate",
+      "key": "releaseChecksCandidate",
+      "required": true,
+      "result": "success",
+      "runAttempt": 1,
+      "runId": "105",
+      "selected": true,
+      "source": "fresh",
+      "url": "https://github.com/openclaw/openclaw/actions/runs/29071382629",
+      "workflow": "openclaw-release-checks.yml",
+      "workflowRef": "release-ci/aaaaaaaaaaaa-123",
+      "workflowSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sourceParentAttempt": null
+    }
+  ],
+  "blockers": [],
+  "errors": [],
+  "attemptEvidenceVersion": 3,
+  "repository": "openclaw/openclaw",
+  "candidateRequest": {
+    "schema": "openclaw.full-release-candidate-request/v3",
+    "repository": "openclaw/openclaw",
+    "targetSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "toolingSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "releaseProfile": "beta",
+    "releaseSoak": false,
+    "packagePublished": false,
+    "upgradeBaseline": "openclaw@2026.7.9",
+    "upgradeSurvivorBaselines": [
+      "openclaw@2026.6.34",
+      "openclaw@2026.7.8",
+      "openclaw@2026.7.9"
+    ],
+    "upgradeSurvivorScenarios": [],
+    "allowFrozenTargetScenarioOmissions": false,
+    "allowUnreleasedChangelog": false,
+    "sharedImagePolicy": "no-push-artifact",
+    "contractVersions": {
+      "package": 1,
+      "prepublishPluginRegistry": 1,
+      "sharedImage": 1
+    }
+  },
+  "candidate": null,
+  "sha256": "482aa1512bb388378790ec2e391b425f34842c59fb813a63257d96176c03375d"
+}
