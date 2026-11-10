@@ -83,10 +83,14 @@ claim completion of excluded packages. Before core publication, a full-scope
 parent waits for recovery of the complete original roster. Manual recovery without
 parent inputs retains the existing full-roster behavior.
 
-The existing preview/load reports allowlisted response quota headers using its
-own workflow token. Select a batch from observed remaining capacity and measured
-costs, including parent and ClawHub work; static request estimates alone do not
-justify a retry. Resume after the observed reset with fresh parent authorization.
+The existing parent prefetch and child preview/load report the first and last
+allowlisted response quota headers using their own workflow token, without an
+extra request. The `fetch-metadata-only` counts separate fixed from per-package
+metadata reads; they exclude `gh` authority/evidence calls, archive redirects, and
+registry traffic. They are not a complete dispatch budget. Select a batch only
+from observed remaining capacity and measured total costs, including parent and
+ClawHub work; static request estimates alone do not justify a retry. Resume after
+the observed reset with fresh parent authorization.
 
 <a id="publication-waivers" />
 

@@ -136,10 +136,8 @@ function fixture(
   parentRunAttempt = 1,
   { version = "2026.8.2", candidateSha = "b".repeat(40), toolingSha = sha, toolingRef = ref } = {},
 ) {
-  const sha = toolingSha;
-  const ref = toolingRef;
-  const parentRef = parentOnMain ? "main" : ref;
-  const parentFullRef = parentOnMain ? "refs/heads/main" : `refs/tags/${ref}`;
+  const parentRef = parentOnMain ? "main" : toolingRef;
+  const parentFullRef = parentOnMain ? "refs/heads/main" : `refs/tags/${toolingRef}`;
   const directory = mkdtempSync(join(tmpdir(), "clawhub-postpublish-"));
   directories.push(directory);
   const packageDir = join(directory, "package");
@@ -177,14 +175,14 @@ function fixture(
     workflow: childWorkflow,
     runId: "20",
     runAttempt: "1",
-    ref,
-    fullRef: `refs/tags/${ref}`,
-    sha,
+    ref: toolingRef,
+    fullRef: `refs/tags/${toolingRef}`,
+    sha: toolingSha,
     candidateRepository: repository,
     candidateSha,
     toolingRef: parentRef,
     toolingFullRef: parentFullRef,
-    toolingSha: sha,
+    toolingSha,
     parentRepository: repository,
     parentWorkflow,
     parentRunId: "10",
@@ -195,9 +193,9 @@ function fixture(
   const run = (id: number, path: string) => ({
     id,
     run_attempt: id === 10 ? parentRunAttempt : 1,
-    path: `${path}@${id === 10 ? parentFullRef : `refs/tags/${ref}`}`,
-    head_sha: sha,
-    head_branch: id === 10 ? parentRef : ref,
+    path: `${path}@${id === 10 ? parentFullRef : `refs/tags/${toolingRef}`}`,
+    head_sha: toolingSha,
+    head_branch: id === 10 ? parentRef : toolingRef,
     event: "workflow_dispatch",
     status: "completed",
     conclusion: "success",
@@ -217,7 +215,7 @@ function fixture(
       digest: `sha256:${digest(archive)}`,
       expired: false,
       expires_at: "2099-01-01T00:00:00Z",
-      workflow_run: { id: runId, head_sha: sha },
+      workflow_run: { id: runId, head_sha: toolingSha },
     };
   };
   const receiptArtifact = artifact(
@@ -256,7 +254,7 @@ function fixture(
     parentWorkflow,
     toolingRef: parentRef,
     toolingFullRef: parentFullRef,
-    toolingSha: sha,
+    toolingSha,
     candidateSha: identity.candidateSha,
     normalClawHubRunId: "20",
     normalClawHubRunAttempt: "1",
@@ -288,14 +286,17 @@ function fixture(
           job("Seal exact ClawHub recovery manifest", 20, 1, ["Upload sealed recovery manifest"]),
           job("Seal ClawHub package transactions"),
           job(`Pack ClawHub package (${entry.name})`, 20, 1, ["Upload ClawHub package artifact"]),
-        ].map((entry) => ({ ...entry, head_sha: sha })),
+        ].map((producerJob) => Object.assign({}, producerJob, { head_sha: toolingSha })),
       ),
     ],
-    [`git/ref/tags/${ref}`, { ref: `refs/tags/${ref}`, object: { type: "commit", sha } }],
-    [`git/matching-refs/heads/${ref}`, []],
-    [`compare/${sha}...main`, { status: "identical" }],
-    [`compare/${sha}...${verifierSha}`, { status: "identical" }],
-    [`compare/${sha}...${verifierSha}?per_page=1&page=2`, { status: "identical" }],
+    [
+      `git/ref/tags/${toolingRef}`,
+      { ref: `refs/tags/${toolingRef}`, object: { type: "commit", sha: toolingSha } },
+    ],
+    [`git/matching-refs/heads/${toolingRef}`, []],
+    [`compare/${toolingSha}...main`, { status: "identical" }],
+    [`compare/${toolingSha}...${verifierSha}`, { status: "identical" }],
+    [`compare/${toolingSha}...${verifierSha}?per_page=1&page=2`, { status: "identical" }],
     ...[
       receiptArtifact,
       transactionsArtifact,
@@ -420,8 +421,8 @@ function fixture(
 }
 
 function parentRecoveryFixture(f = fixture()) {
-  const sha = f.parent.head_sha;
-  const ref = f.parent.head_branch;
+  const parentSha = f.parent.head_sha;
+  const parentRef = f.parent.head_branch;
   sealParent(f);
   f.child.conclusion = "failure";
   const current = { ...f.parent, id: 30, status: "in_progress", conclusion: null };
@@ -435,7 +436,7 @@ function parentRecoveryFixture(f = fixture()) {
     full_release_validation_run_id: "40",
     full_release_validation_run_attempt: "1",
   };
-  const request = { ref, inputs: { ...inputs } };
+  const request = { ref: parentRef, inputs: { ...inputs } };
   const addArtifact = (id: number, name: string, fileName: string, value: unknown) => {
     const archive = zip(fileName, Buffer.from(JSON.stringify(value)));
     f.archives.set(id, archive);
@@ -445,7 +446,7 @@ function parentRecoveryFixture(f = fixture()) {
       name,
       size_in_bytes: archive.length,
       digest: `sha256:${digest(archive)}`,
-      workflow_run: { id: 30, head_sha: sha, repository_id: 1, head_repository_id: 1 },
+      workflow_run: { id: 30, head_sha: parentSha, repository_id: 1, head_repository_id: 1 },
     };
     f.metadata.set(`actions/artifacts/${id}`, artifact);
     return artifact;
@@ -457,9 +458,9 @@ function parentRecoveryFixture(f = fixture()) {
     parentWorkflow,
     parentRunId: "30",
     parentRunAttempt: "1",
-    toolingRef: ref,
-    toolingFullRef: `refs/tags/${ref}`,
-    toolingSha: sha,
+    toolingRef: parentRef,
+    toolingFullRef: `refs/tags/${parentRef}`,
+    toolingSha: parentSha,
     releaseTag: `v${f.entry.version}`,
     targetSha: f.transactions.identity.candidateSha,
     npmDistTag: f.entry.version.includes("-beta.") ? "beta" : "latest",
@@ -481,7 +482,7 @@ function parentRecoveryFixture(f = fixture()) {
       "Write release approval receipt",
       "Upload ClawHub recovery request",
     ]),
-    head_sha: sha,
+    head_sha: parentSha,
     status: "in_progress",
     conclusion: null,
   };
@@ -503,10 +504,10 @@ function parentRecoveryFixture(f = fixture()) {
     env: {
       GITHUB_REPOSITORY: repository,
       GITHUB_EVENT_NAME: "workflow_dispatch",
-      GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/plugin-clawhub-recovery.yml@refs/tags/${ref}`,
-      GITHUB_WORKFLOW_SHA: sha,
-      GITHUB_REF: `refs/tags/${ref}`,
-      GITHUB_REF_NAME: ref,
+      GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/plugin-clawhub-recovery.yml@refs/tags/${parentRef}`,
+      GITHUB_WORKFLOW_SHA: parentSha,
+      GITHUB_REF: `refs/tags/${parentRef}`,
+      GITHUB_REF_NAME: parentRef,
       GH_TOKEN: "fixture-token",
       CLAWHUB_TOKEN: "publisher-token",
       RUNNER_TEMP: f.directory,
@@ -576,7 +577,7 @@ function authenticatedParentRecoveryFixture(mode: "full" | "selected" | "omitted
         ...f.transactions.packages.map((entry) =>
           job(`Pack ClawHub package (${entry.name})`, 20, 1, ["Upload ClawHub package artifact"]),
         ),
-      ].map((entry) => ({ ...entry, head_sha: qualification.p })),
+      ].map((producerJob) => Object.assign({}, producerJob, { head_sha: qualification.p })),
     );
     const fetchImpl = f.options.fetchImpl;
     f.options.fetchImpl = async (input, init) => {
@@ -615,9 +616,9 @@ function authenticatedParentRecoveryFixture(mode: "full" | "selected" | "omitted
   const observations = {
     ...originalAdmission.observations,
     sourceDigest: qualification.source.digest,
-    clawhub: packages.map(({ name, version }) => ({
+    clawhub: packages.map(({ name, version: packageVersion }) => ({
       name,
-      version,
+      version: packageVersion,
       observedAt: originalAdmission.observations.collectionCompletedAt,
       state: {
         packageExists: true,
@@ -634,7 +635,11 @@ function authenticatedParentRecoveryFixture(mode: "full" | "selected" | "omitted
     plans: {
       ...originalAdmission.observations.plans,
       clawhub: {
-        all: packages.map(({ name, version }) => ({ name, version, alreadyPublished: false })),
+        all: packages.map(({ name, version: packageVersion }) => ({
+          name,
+          version: packageVersion,
+          alreadyPublished: false,
+        })),
         candidates: packages.map(({ name }) => name),
         skippedPublished: [],
         bootstrapCandidates: [],
@@ -659,7 +664,51 @@ function authenticatedParentRecoveryFixture(mode: "full" | "selected" | "omitted
     publicationAdmission,
     executionPlanSha256: qualification.plan.sha256,
   });
-  return { ...f, qualification };
+  const recoveryWrites: string[] = [];
+  const fetchImpl = f.options.fetchImpl;
+  f.options.fetchImpl = async (input, init) => {
+    const url = new URL(requestUrl(input));
+    const entryIndex = f.transactions.packages.findIndex(
+      (entry, index) =>
+        url.pathname ===
+          `/api/v1/packages/${encodeURIComponent(entry.name)}/versions/${entry.version}/publication` ||
+        url.pathname === `/api/v1/publish/attempts/attempt-${index + 1}/recover`,
+    );
+    if (url.origin === "https://clawhub.ai" && entryIndex >= 0) {
+      const entry = f.transactions.packages[entryIndex]!;
+      const authorization = new Headers(init?.headers).get("authorization");
+      if (url.pathname.endsWith("/recover")) {
+        expect(init?.method).toBe("POST");
+        expect(authorization).toBe("Bearer publisher-token");
+        expect(qualification.admission.calls).toContain(`repos/${repository}/actions/artifacts/70`);
+        recoveryWrites.push(entry.name);
+        return Response.json({
+          name: entry.name,
+          version: entry.version,
+          recoveredFromAttemptId: `attempt-${entryIndex + 1}`,
+          attemptId: `successor-${entryIndex + 1}`,
+          publicationStatus: "published",
+        });
+      }
+      expect(init?.method ?? "GET").toBe("GET");
+      // Recovery polling uses its ClawHub credential; public byte readback does not.
+      expect(authorization === null || authorization === "Bearer publisher-token").toBe(true);
+      f.registryReads.push(url.pathname);
+      return Response.json(
+        recoveryWrites.includes(entry.name)
+          ? { name: entry.name, version: entry.version, state: "published" }
+          : {
+              name: entry.name,
+              version: entry.version,
+              state: "failed",
+              recoverable: true,
+              attemptId: `attempt-${entryIndex + 1}`,
+            },
+      );
+    }
+    return fetchImpl(input, init);
+  };
+  return { ...f, qualification, recoveryWrites };
 }
 
 function retryFixture({
@@ -1113,10 +1162,15 @@ describe("ClawHub parent-requested recovery", () => {
       expect(
         evidence.packages
           .map((entry: { package: { packageName: string } }) => entry.package.packageName)
-          .sort(),
+          .toSorted(),
       ).toEqual(mode === "full" ? [f.entry.name, "@openclaw/sibling"] : [f.entry.name]);
       expect(evidence.complete).toBe(mode === "full");
-      expect(evidence.publicationAttempts).toHaveLength(2);
+      expect(f.recoveryWrites).toEqual(
+        mode === "full" ? [f.entry.name, "@openclaw/sibling"] : [f.entry.name],
+      );
+      expect(evidence).toMatchObject({
+        publicationAttempts: [{ name: f.entry.name }, { name: "@openclaw/sibling" }],
+      });
       expect(f.qualification.admission.calls).toContain(`repos/${repository}/actions/artifacts/70`);
       if (mode === "selected") {
         expect(f.registryReads.some((path) => path.includes("sibling"))).toBe(false);
@@ -1133,7 +1187,8 @@ describe("ClawHub parent-requested recovery", () => {
       }),
     ).rejects.toThrow("outside the original admitted name/version roster");
     expect(f.qualification.admission.calls).toContain(`repos/${repository}/actions/artifacts/70`);
-    expect(f.registryReads).toEqual([]);
+    // Read-only observations may precede admission, but no recovery write may.
+    expect(f.recoveryWrites).toEqual([]);
   });
 
   it.each([
@@ -1146,20 +1201,24 @@ describe("ClawHub parent-requested recovery", () => {
     { change: "missing original seal", error: /original ClawHub seal/u },
   ])("rejects $change before registry access", async ({ change, error }) => {
     const f = parentRecoveryFixture();
-    if (change === "partial inputs")
+    if (change === "partial inputs") {
       delete f.options.event.inputs.full_release_validation_run_attempt;
-    else if (change === "other tooling") f.current.head_sha = "f".repeat(40);
-    else if (change === "cancelled parent")
+    } else if (change === "other tooling") {
+      f.current.head_sha = "f".repeat(40);
+    } else if (change === "cancelled parent") {
       Object.assign(f.current, { status: "completed", conclusion: "cancelled" });
-    else if (change === "unfinished upload") f.producer.steps![1]!.status = "in_progress";
-    else if (change === "changed request") {
+    } else if (change === "unfinished upload") {
+      f.producer.steps![1]!.status = "in_progress";
+    } else if (change === "changed request") {
       f.request.inputs.plugins = "@openclaw/outside";
       replaceJsonArtifact(f.original, f.requestArtifact, "dispatch.json", f.request);
     } else if (change === "changed archive") {
       const bytes = Buffer.from(f.archives.get(8)!);
       bytes[0] = bytes[0]! ^ 1;
       f.archives.set(8, bytes);
-    } else f.setArtifacts(20, [f.transactionsArtifact, f.packageArtifact]);
+    } else {
+      f.setArtifacts(20, [f.transactionsArtifact, f.packageArtifact]);
+    }
     await expect(recoverClawHubFromParent(f.options)).rejects.toThrow(error);
     expect(f.registryReads).toEqual([]);
   });
@@ -1190,7 +1249,9 @@ describe("ClawHub detached postpublish verification", () => {
       f.child.conclusion = "failure";
       const effects: string[] = [];
       const revalidateAuthority = vi.fn(async () => {
-        if (revoked) throw new Error("Current parent authority revoked");
+        if (revoked) {
+          throw new Error("Current parent authority revoked");
+        }
         effects.push("authority");
       });
       const result = verifyClawHubPostpublish({
@@ -1242,7 +1303,9 @@ describe("ClawHub detached postpublish verification", () => {
         ).toEqual([f.entry.name]);
         expect(effects).toEqual(["authority", "recover", "authority"]);
         expect(f.registryReads.some((path) => path.includes("sibling"))).toBe(false);
-        expect(evidence.publicationAttempts).toHaveLength(2);
+        expect(evidence).toMatchObject({
+          publicationAttempts: [{ name: f.entry.name }, { name: "@openclaw/sibling" }],
+        });
         expect(evidence.complete).toBe(false);
       }
     },

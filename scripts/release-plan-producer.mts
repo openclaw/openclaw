@@ -356,15 +356,30 @@ function captureQualificationIdentity(params: ReleaseInventorySource, runGh: Run
       throw new Error("Invalid admission run");
     }
     const runFields = new Map<string, unknown>(Object.entries(run));
+    const capturedOperators = new Set<string>();
     for (const actor of [runFields.get("actor"), runFields.get("triggering_actor")]) {
       if (actor === null || typeof actor !== "object" || Array.isArray(actor)) {
         throw new Error("Invalid admission actor");
       }
-      const login = new Map<string, unknown>(Object.entries(actor)).get("login");
-      if (typeof login !== "string" || !/^[A-Za-z0-9-]{1,39}$/u.test(login)) {
+      const fields = new Map<string, unknown>(Object.entries(actor));
+      const login = fields.get("login");
+      const id = fields.get("id");
+      if (
+        typeof login !== "string" ||
+        !/^[A-Za-z0-9-]{1,39}$/u.test(login) ||
+        typeof id !== "number" ||
+        !Number.isSafeInteger(id) ||
+        id <= 0
+      ) {
         throw new Error("Invalid admission actor");
       }
-      api("collaborators/" + login + "/permission");
+      // The verified child consumes one live grant for matching ID/login roles.
+      // Keep the sealed replay exact without sharing grants across observations.
+      const identity = `${id}:${login}`;
+      if (!capturedOperators.has(identity)) {
+        api("collaborators/" + login + "/permission");
+        capturedOperators.add(identity);
+      }
     }
   };
   api("contents/.github/workflows/openclaw-release-prepare.yml?ref=" + workflowSha);

@@ -366,8 +366,8 @@ export async function verifyClawHubPostpublish({
   runGh,
   verifyPublication = true,
   recoveryManifest = event?.recovery_manifest,
-  plugins,
-  recover,
+  plugins = undefined,
+  recover = undefined,
 }) {
   if (recover && (!verifyPublication || typeof recover.revalidateAuthority !== "function")) {
     throw new Error("ClawHub recovery requires public readback and current parent authority.");
@@ -825,7 +825,7 @@ export async function recoverClawHubFromParent({
   env = process.env,
   fetchImpl = fetch,
   runGh,
-  evidenceClient,
+  evidenceClient = undefined,
 }) {
   const inputs = event?.inputs;
   const fields = [
@@ -841,7 +841,7 @@ export async function recoverClawHubFromParent({
   if (!inputs || fields.some((key) => typeof inputs[key] !== "string")) {
     throw new Error("Parent ClawHub recovery requires every internal dispatch input.");
   }
-  for (const key of fields.filter((key) => key.endsWith("_id") || key.endsWith("_attempt"))) {
+  for (const key of fields.filter((field) => field.endsWith("_id") || field.endsWith("_attempt"))) {
     positiveId(inputs[key], key);
   }
   if (
@@ -906,8 +906,9 @@ export async function recoverClawHubFromParent({
   const artifacts = (await listRunArtifacts(current.id, context)).filter(
     (item) => item.name === name,
   );
-  if (artifacts.length !== 1)
+  if (artifacts.length !== 1) {
     throw new Error("Missing or ambiguous exact ClawHub recovery request.");
+  }
   const [artifact] = artifacts;
   validateActionsArtifactBinding({
     artifactMetadata: artifact,
@@ -994,7 +995,9 @@ export async function recoverClawHubFromParent({
   const seals = (await listRunArtifacts(child.id, context)).filter(
     (item) => item.name === sealName,
   );
-  if (seals.length !== 1) throw new Error("Missing or ambiguous original ClawHub seal.");
+  if (seals.length !== 1) {
+    throw new Error("Missing or ambiguous original ClawHub seal.");
+  }
   const { archiveBytes: sealArchive } = await downloadArtifact(
     seals[0],
     child,

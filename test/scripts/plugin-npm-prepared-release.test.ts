@@ -3,10 +3,12 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createReleaseEvidenceReplay } from "../../scripts/lib/release-evidence-replay.mjs";
 import {
   authenticatePreparedNpmArtifact,
   consumePreparedNpmPackage,
   createPreparedNpmRelease,
+  createPreparedNpmCapacityObserver,
   downloadPreparedNpmRelease,
   PREPARED_NPM_MANIFEST,
   preparedNpmArtifactName,
@@ -15,6 +17,7 @@ import {
   verifyPreparedNpmRegistry,
 } from "../../scripts/plugin-npm-prepared-release.mjs";
 import { createPluginPublicationArtifact } from "../../scripts/plugin-publication-artifact.mjs";
+import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
@@ -460,52 +463,91 @@ it("rejects another prepared sourceSha", () => {
   ).toThrow();
 });
 
-it("admits only the exact successful preparation artifact and source inventory", async () => {
-  const { sourceRoot, manifest } = sourcePreparation();
-  const bytes = await archive({ [PREPARED_NPM_MANIFEST]: manifest });
-  const artifact = metadata(10, preparedNpmArtifactName(sourceSha, producer), bytes);
-  const approvedArtifact = descriptor(artifact);
-  const download = {
-    ...expected,
-    sourceRoot,
-    artifact: approvedArtifact,
-    token: "synthetic-token",
-    fetchImpl: artifactFetch(artifact, bytes),
-  };
-  const capacity = vi.spyOn(console, "error").mockImplementation(() => {});
-  const admitted = await downloadPreparedNpmRelease({
-    ...download,
-    reportCapacity: true,
-    fetchImpl: async (url: string) => {
+it.each([false, true])(
+  "observes prepared metadata without adding reads (evidence replay: %s)",
+  async (replay) => {
+    const { sourceRoot, manifest } = sourcePreparation();
+    const bytes = await archive({ [PREPARED_NPM_MANIFEST]: manifest });
+    const artifact = {
+      ...metadata(10, preparedNpmArtifactName(sourceSha, producer), bytes),
+      expires_at: "2099-01-01T00:00:00Z",
+    };
+    const approvedArtifact = descriptor(artifact);
+    const download = {
+      ...expected,
+      sourceRoot,
+      artifact: approvedArtifact,
+      token: "synthetic-token",
+      fetchImpl: artifactFetch(artifact, bytes),
+    };
+    const capacity = vi.spyOn(console, "error").mockImplementation(() => {});
+    const requests: string[] = [];
+    const observation = createPreparedNpmCapacityObserver(async (url: string) => {
+      requests.push(url);
       const response = await download.fetchImpl(url);
       response.headers.set("x-ratelimit-limit", "1000");
-      response.headers.set("x-ratelimit-remaining", "700");
+      response.headers.set("x-ratelimit-remaining", String(701 - requests.length));
       response.headers.set("x-ratelimit-reset", "1794310000");
       response.headers.set("x-ratelimit-resource", "core");
       response.headers.set("authorization", "must-not-log");
       return response;
-    },
-    archivePath: join(sourceRoot, "prepared.zip"),
-  });
-  expect(capacity).toHaveBeenCalledExactlyOnceWith(
-    JSON.stringify({
-      githubCapacity: {
-        "x-ratelimit-limit": "1000",
-        "x-ratelimit-remaining": "700",
-        "x-ratelimit-reset": "1794310000",
-        "x-ratelimit-resource": "core",
-      },
-    }),
-  );
-  capacity.mockRestore();
-  expect(admitted.packages).toEqual(manifest.packages);
-  await expect(
-    downloadPreparedNpmRelease({
+    });
+    const admitted = await downloadPreparedNpmRelease({
       ...download,
-      artifact: { ...approvedArtifact, runAttempt: 1 },
-    }),
-  ).rejects.toThrow("approved producer");
-});
+      fetchImpl: observation.fetchImpl,
+      evidenceClient: replay
+        ? {
+            ...createReleaseEvidenceClient(producer.repository, {
+              immutableReads: createReleaseEvidenceReplay({}),
+            }),
+            getArtifact: () => artifact,
+          }
+        : undefined,
+      archivePath: join(sourceRoot, "prepared.zip"),
+    });
+    observation.report(0);
+    expect(requests).toHaveLength(replay ? 2 : 3);
+    expect(capacity).toHaveBeenNthCalledWith(
+      1,
+      JSON.stringify({
+        githubCapacity: {
+          phase: "before",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": "700",
+          "x-ratelimit-reset": "1794310000",
+          "x-ratelimit-resource": "core",
+        },
+      }),
+    );
+    expect(capacity).toHaveBeenNthCalledWith(
+      2,
+      JSON.stringify({
+        githubCapacity: {
+          phase: "after",
+          "x-ratelimit-limit": "1000",
+          "x-ratelimit-remaining": replay ? "700" : "699",
+          "x-ratelimit-reset": "1794310000",
+          "x-ratelimit-resource": "core",
+        },
+        githubRequestAccounting: {
+          scope: "fetch-metadata-only",
+          fixed: replay ? 1 : 2,
+          perPackage: 0,
+          packages: 0,
+        },
+      }),
+    );
+    expect(capacity).toHaveBeenCalledTimes(2);
+    capacity.mockRestore();
+    expect(admitted.packages).toEqual(manifest.packages);
+    await expect(
+      downloadPreparedNpmRelease({
+        ...download,
+        artifact: { ...approvedArtifact, runAttempt: 1 },
+      }),
+    ).rejects.toThrow("approved producer");
+  },
+);
 
 it("consumes the original qualified package in another run without a source install or pack", async () => {
   const { root, entry, source, evidence, tarballName, tarballPath } = await packedPluginFixture();

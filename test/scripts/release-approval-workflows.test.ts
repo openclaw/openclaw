@@ -73,7 +73,7 @@ it("attests and uploads the gated parent receipt before dispatching children", (
   expect(verifyIndex).toBeGreaterThan(names.indexOf("Upload release approval receipt"));
   expect(verifyIndex).toBeLessThan(names.indexOf("Dispatch publish workflows"));
   const coreStart = requireStep(publish, "Start core npm publication");
-  const coreScript = expectDefined(coreStart.run);
+  const coreScript = expectDefined(coreStart.run, "core publication script");
   const rosterCheck = coreScript.indexOf("'--require-published', 'true'");
   expect(rosterCheck).toBeGreaterThan(coreScript.indexOf("wait_for_run plugin-npm-release.yml"));
   expect(rosterCheck).toBeLessThan(
@@ -125,7 +125,10 @@ it("binds sealed ClawHub recovery to the current parent before core publication"
     "clawhub-recovery-request/dispatch.json",
     "dispatch_workflow plugin-clawhub-recovery.yml",
   ]);
-  const coreScript = expectDefined(requireStep(publish, "Start core npm publication").run);
+  const coreScript = expectDefined(
+    requireStep(publish, "Start core npm publication").run,
+    "core publication script",
+  );
   const recoveryWait = coreScript.indexOf("wait_for_run plugin-clawhub-recovery.yml");
   expect(recoveryWait).toBeGreaterThan(coreScript.indexOf("wait_for_run plugin-npm-release.yml"));
   expect(recoveryWait).toBeLessThan(coreScript.indexOf('if [[ "${PUBLISH_OPENCLAW_NPM}"'));

@@ -1577,7 +1577,7 @@ jobs:
               full_release_validation_run_attempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
             },
             sourceSha: env.TARGET_SHA, toolingSha: env.GITHUB_WORKFLOW_SHA, toolingFullRef: env.GITHUB_REF, sourceRoot: process.cwd(),
-            outputDir: `${env.RUNNER_TEMP}/prepared-release-packages`, token: env.GH_TOKEN,
+            outputDir: `${env.RUNNER_TEMP}/prepared-release-packages`, token: env.GH_TOKEN, reportCapacity: true,
           });
           NODE
 
@@ -2058,7 +2058,7 @@ jobs:
             node --input-type=module <<'NODE'
           import { main } from './.release-harness/scripts/plugin-npm-prepared-release.mjs';
           const env = process.env;
-          await main(['load', '--source-sha', env.TARGET_SHA, '--selection-mode', 'all-publishable',
+          await main(['load', '--report-capacity', 'true', '--source-sha', env.TARGET_SHA, '--selection-mode', 'all-publishable',
             '--npm-dist-tag', env.RELEASE_NPM_DIST_TAG === 'extended-stable' ? 'extended-stable' : 'default',
             '--require-published', 'true',
             '--cache-dir', env.RUNNER_TEMP + '/core-roster-downloads',

@@ -272,6 +272,7 @@ jobs:
             EVIDENCE_ARGS=(--evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json")
           fi
           node .release-tooling/scripts/plugin-npm-prepared-release.mjs load \
+            --report-capacity true \
             --artifact "$PREPARED_ARTIFACT" \
             --source-sha "$SOURCE_SHA" \
             --selection-mode "$PUBLISH_SCOPE" \

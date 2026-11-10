@@ -174,7 +174,7 @@ function validatePublicationOperation(source, operation) {
   }
   if (
     original.pluginPublishScope !== "all-publishable" ||
-    operation.publishOpenclawNpm !== false ||
+    operation.publishOpenclawNpm ||
     operation.pluginPublishScope !== "selected" ||
     !Array.isArray(operation.plugins) ||
     operation.plugins.length === 0 ||

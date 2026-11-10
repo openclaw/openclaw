@@ -490,6 +490,59 @@ export function createPreparedNpmRelease(params) {
   );
 }
 
+// First/last existing metadata responses, not extra quota probes. gh-backed
+// evidence/authority reads are outside this boundary; these partial counts
+// cannot establish a dispatch budget.
+export function createPreparedNpmCapacityObserver(fetchImpl = fetch) {
+  let before;
+  let after;
+  const requests = { fixed: 0, perPackage: 0 };
+  const observe = (phase) => async (url, options) => {
+    const response = await fetchImpl(url, options);
+    const endpoint = new URL(url);
+    // ZIP fetches follow storage redirects, whose headers are not GitHub quota.
+    if (endpoint.hostname !== "api.github.com" || endpoint.pathname.endsWith("/zip")) {
+      return response;
+    }
+    requests[phase] += 1;
+    const capacity = {};
+    for (const name of [
+      "x-ratelimit-limit",
+      "x-ratelimit-remaining",
+      "x-ratelimit-used",
+      "x-ratelimit-reset",
+      "retry-after",
+    ]) {
+      const value = response.headers.get(name);
+      if (value && /^[0-9]{1,16}$/u.test(value)) {
+        capacity[name] = value;
+      }
+    }
+    const resource = response.headers.get("x-ratelimit-resource");
+    if (resource && /^[a-z_]{1,32}$/u.test(resource)) {
+      capacity["x-ratelimit-resource"] = resource;
+    }
+    after = capacity;
+    if (!before) {
+      before = capacity;
+      console.error(JSON.stringify({ githubCapacity: { phase: "before", ...before } }));
+    }
+    return response;
+  };
+  return {
+    fetchImpl: observe("fixed"),
+    packageFetchImpl: observe("perPackage"),
+    report(packages) {
+      console.error(
+        JSON.stringify({
+          githubCapacity: { phase: "after", ...(after ?? {}) },
+          githubRequestAccounting: { scope: "fetch-metadata-only", ...requests, packages },
+        }),
+      );
+    },
+  };
+}
+
 export async function downloadPreparedNpmRelease(params) {
   // Load verifies the full source roster; package consumers authenticate this
   // same sealed manifest and check their source package without a full checkout.
@@ -500,37 +553,9 @@ export async function downloadPreparedNpmRelease(params) {
       params.artifact.artifactName === preparedNpmArtifactName(params.sourceSha, producer),
     "Prepared npm manifest artifact differs from the approved producer.",
   );
-  let capacityReported = false;
   const download = {
     token: params.token,
-    fetchImpl: async (url, options) => {
-      const response = await (params.fetchImpl ?? fetch)(url, options);
-      // Observe the existing authenticated metadata request, never its body,
-      // credentials, redirect URL, or arbitrary response headers.
-      if (
-        params.reportCapacity &&
-        !capacityReported &&
-        new URL(url).hostname === "api.github.com"
-      ) {
-        capacityReported = true;
-        const capacity = {};
-        for (const name of [
-          "x-ratelimit-limit",
-          "x-ratelimit-remaining",
-          "x-ratelimit-used",
-          "x-ratelimit-reset",
-          "retry-after",
-        ]) {
-          const value = response.headers.get(name);
-          if (value && /^[0-9]{1,16}$/u.test(value)) capacity[name] = value;
-        }
-        const resource = response.headers.get("x-ratelimit-resource");
-        if (resource && /^[a-z_]{1,32}$/u.test(resource))
-          capacity["x-ratelimit-resource"] = resource;
-        console.error(JSON.stringify({ githubCapacity: capacity }));
-      }
-      return response;
-    },
+    fetchImpl: params.fetchImpl,
     expected: { ...params.artifact, runStatePolicy: "completed-success" },
     archivePath: params.archivePath,
     maxArchiveBytes: MAX_MANIFEST_BYTES,
@@ -826,6 +851,13 @@ export async function main(argv) {
       : undefined,
     token: process.env.GH_TOKEN,
   };
+  const capacity =
+    command === "load" && options["--report-capacity"] === "true"
+      ? createPreparedNpmCapacityObserver()
+      : undefined;
+  if (capacity) {
+    common.fetchImpl = capacity.fetchImpl;
+  }
   let adoption;
   let prepared;
   let selectedPackages;
@@ -876,7 +908,6 @@ export async function main(argv) {
         // Preview checks the complete frozen source. Sparse publisher jobs instead
         // authenticate that sealed manifest and verify their exact source package.
         sourceRoot: options["--source-root"] ?? (command === "load" ? process.cwd() : undefined),
-        reportCapacity: command === "load",
         artifact: adoption.artifact,
         evidenceClient: adoption.evidenceClient,
         archivePath: options["--archive-path"],
@@ -936,6 +967,7 @@ export async function main(argv) {
       options["--prune-published"] === "true" || requirePublished
         ? await selectUnpublishedPreparedNpmPackages({
             ...common,
+            fetchImpl: capacity?.packageFetchImpl ?? common.fetchImpl,
             packages: selectedPackages,
             sourceRoot: options["--source-root"] ?? process.cwd(),
             cacheDir: options["--cache-dir"],
@@ -944,6 +976,7 @@ export async function main(argv) {
           })
         : selectedPackages;
     await adoption.revalidateAuthority?.();
+    capacity?.report(selectedPackages.length);
     writeEvidenceOutput?.();
     writeFileSync(options["--output"], JSON.stringify(prepared));
     outputValues(options["--github-output"], {

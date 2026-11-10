@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPublicationAdmission,
   createPublicationObservations,
@@ -169,12 +170,24 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
       },
     });
   }
-  const request = Object.fromEntries(
-    Object.entries(f.source).filter(
-      ([key]) =>
-        !["kind", "contract", "status", "inventoryDigest", "projection", "digest"].includes(key),
-    ),
-  );
+  const request = {
+    repository: f.source.repository,
+    candidateSha: f.source.candidateSha,
+    targetContextRef: f.source.targetContextRef,
+    tooling: f.source.tooling,
+    workflow: f.source.workflow,
+    runId: f.source.runId,
+    runAttempt: f.source.runAttempt,
+    coverage: f.source.coverage,
+    validationPurpose: f.source.validationPurpose,
+    publicationSelection: f.source.publicationSelection,
+    ...(f.source.qualificationAdmission === undefined
+      ? {}
+      : { qualificationAdmission: f.source.qualificationAdmission }),
+    ...(f.source.qualificationInputs === undefined
+      ? {}
+      : { qualificationInputs: f.source.qualificationInputs }),
+  };
   Object.assign(
     f.source,
     createPublicationSourceFact(
@@ -189,22 +202,23 @@ export async function createNpmCliProcessFixture(root: string, plugins = "") {
             version: entry.version,
             targets: ["npm"],
           })),
-        ].sort((a, b) => a.name.localeCompare(b.name)),
+        ].toSorted((a, b) => a.name.localeCompare(b.name)),
       },
     ),
   );
   const admission = f.manifest.publicationAdmission!;
+  const npmObservation = expectDefined(admission.observations.npm[0], "original npm observation");
   const observations = createPublicationObservations(f.source, {
     ...admission.observations,
     sourceDigest: f.source.digest,
     npm: [
       ...admission.observations.npm,
       ...packages.map((entry) => ({
-        ...admission.observations.npm[0],
+        ...npmObservation,
         name: entry.packageName,
         version: entry.version,
       })),
-    ].sort((a, b) => a.name.localeCompare(b.name)),
+    ].toSorted((a, b) => a.name.localeCompare(b.name)),
   });
   Object.assign(
     admission,

@@ -1,3 +1,4 @@
 # Bounded original-roster authentication, sparse npm consumption, exact-byte pruning,
-# current-authority recovery, and full-roster core ordering regressions.
-714
+# current-authority recovery, full-roster core ordering, and credential-scoped
+# capacity observation regressions, including hosted CI fixture corrections.
+836
