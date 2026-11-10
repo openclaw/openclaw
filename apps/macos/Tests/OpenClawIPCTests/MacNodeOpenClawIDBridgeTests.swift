@@ -321,6 +321,38 @@ struct MacNodeOpenClawIDBridgeTests {
         #expect(!FileManager.default.fileExists(atPath: bridge.socketPath))
     }
 
+    @Test func `rejects BOM prefixed chunk size before forwarding body`() async throws {
+        var descriptors: [Int32] = [0, 0]
+        guard socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors) == 0 else {
+            throw MacNodeOpenClawIDBridgeError.unavailable
+        }
+        let server = FileHandle(fileDescriptor: descriptors[0], closeOnDealloc: true)
+        let client = FileHandle(fileDescriptor: descriptors[1], closeOnDealloc: true)
+        defer {
+            try? server.close()
+            try? client.close()
+        }
+        let io = try MacNodeOpenClawIDBridgeIO(handle: server)
+        let sender = try MacNodeOpenClawIDBridgeIO(handle: client)
+        let request = try MacNodeOpenClawIDBridgeRequest.parse(self.request("Transfer-Encoding: chunked\r\n"))
+        let head = try OpenClawIDNodeTunnelCodec
+            .frame(Data("{\"status\":200,\"headers\":[[\"Content-Length\",\"0\"]]}".utf8))
+        let stream = BridgeTestStream(response: head)
+        let tunnel = self.tunnel(stream)
+        try await sender.write(Data([0xEF, 0xBB, 0xBF]) + Data("1\r\nx\r\n0\r\n\r\n".utf8))
+        await #expect(throws: MacNodeOpenClawIDBridgeError.self) {
+            try await MacNodeOpenClawIDBridgeHTTP.serve(
+                request: request,
+                reader: MacNodeOpenClawIDBridgeReader(io: io),
+                io: io,
+                tunnel: tunnel)
+        }
+        let (written, _) = await stream.snapshot()
+        let headLength = written.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
+        #expect(written.count == headLength + 4)
+        await tunnel.shutdown()
+    }
+
     @Test func `streams chunked upload and response over unix socket`() async throws {
         let head = try OpenClawIDNodeTunnelCodec.frame(Data("{\"status\":200,\"headers\":[]}".utf8))
         let download = Data(repeating: 121, count: 2 * 1024 * 1024 + 17)

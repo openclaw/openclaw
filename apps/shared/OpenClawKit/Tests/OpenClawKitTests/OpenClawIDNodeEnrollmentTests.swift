@@ -135,6 +135,9 @@ struct OpenClawIDNodeEnrollmentTests {
         ] {
             #expect(throws: (any Error).self) { try OpenClawIDCanonicalJSON.parse(Data(bad.utf8)) }
         }
+        #expect(throws: OpenClawIDNodeEnrollmentError.malformed) {
+            try OpenClawIDCanonicalJSON.parse(Data([0x22, 0x5C, 0x75, 0xEF, 0xBB, 0xBF, 0x61, 0x22]))
+        }
         let json = try OpenClawIDCanonicalJSON.parse(Data("{\"z\":1,\"a\":\"\\u000f/\\n😀\"}".utf8))
         #expect(json.canonical == "{\"a\":\"\\u000f/\\n😀\",\"z\":1}")
         let ordering = OpenClawIDCanonicalJSON.object(["\u{E000}": .integer(1), "😀": .integer(2)])
