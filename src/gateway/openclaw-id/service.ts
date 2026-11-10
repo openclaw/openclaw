@@ -33,7 +33,7 @@ import type { PublishOutcome } from "./publisher.js";
 import { createRebindPublication } from "./rebind-publication.js";
 import { signOutTunnelPeer } from "./remote-signout.js";
 import { createServiceGatewayKey } from "./service-gateway-key.js";
-import type { RebindAction, RebindInput, ServiceRebind } from "./service-rebind.js";
+import { createServiceRebindOwner } from "./service-rebind-owner.js";
 import { appliedConfigKey, resolveSettings, sameSettings } from "./service-settings.js";
 import { createTokenBindingPublisher } from "./service-token-bindings.js";
 import { createTunnelPrincipalPublisher } from "./service-tunnel-principals.js";
@@ -121,7 +121,6 @@ export function createOpenClawIdService(params: {
   // withdraws authority, so a child restart cannot create another endpoint identity.
   let lastBoundEndpointKey: string | undefined;
   const rebindPublication = createRebindPublication();
-  let rebindSteps: ServiceRebind | undefined;
   let loadEffects: (() => Promise<OpenClawIdEffects>) | undefined;
   let effectsPromise: Promise<OpenClawIdEffects> | undefined;
   let mailbox: { stop(): void } | undefined;
@@ -518,6 +517,7 @@ export function createOpenClawIdService(params: {
 
   // Only disabling the feature or closing this Gateway ends its local membership source.
   const stopLocalAuthority = () => {
+    rebindOwner.stop();
     ownerExpiry.stop();
     peopleExpiry.stop();
     stopAuthorityChanges?.();
@@ -655,6 +655,16 @@ export function createOpenClawIdService(params: {
     getAuthority,
   });
 
+  const restartForRebind = () => stopRuntime().then(reconcile);
+  const rebindOwner = createServiceRebindOwner({
+    ...params,
+    getAuthority,
+    gatewayKey,
+    enabled: () => !closed && isOpenClawIdEnabled(params.getConfig()),
+    holdCode: rebindPublication.hold,
+    restartRemoteAccess: () => (queue = queue.then(restartForRebind, restartForRebind)),
+  });
+
   localPrincipals.publish();
 
   return {
@@ -777,19 +787,7 @@ export function createOpenClawIdService(params: {
       return { ...result, ...(publication ? { publication } : {}) };
     },
 
-    /** "Move to new keys" (`openclaw id rebind`) on this machine; see service-rebind.ts. */
-    async rebind(action: RebindAction, channel?: Channel, input: RebindInput = {}) {
-      const { createServiceRebind } = await import("./service-rebind.js");
-      const restart = () => stopRuntime().then(reconcile);
-      rebindSteps ??= createServiceRebind({
-        ...params,
-        getAuthority,
-        gatewayKey,
-        holdCode: rebindPublication.hold,
-        restartRemoteAccess: () => (queue = queue.then(restart, restart)),
-      });
-      return await rebindSteps.run(action, channel, input);
-    },
+    rebind: rebindOwner.run,
 
     /** Retries publication with a code (after linking, or `needs_link_code`) held until success. */
     async publish(enrollmentCode?: string): Promise<PublishOutcome | undefined> {
