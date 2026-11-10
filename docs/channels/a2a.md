@@ -49,6 +49,7 @@ Send an authenticated `SendMessage` JSON-RPC request to `/a2a/v1`:
 ```bash
 curl http://127.0.0.1:18789/a2a/v1 \
   -H "Authorization: Bearer $A2A_HERMES_TOKEN" \
+  -H "A2A-Version: 1.0" \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -109,6 +110,7 @@ Poll a task by sending its ID to `GetTask`:
 ```bash
 curl http://127.0.0.1:18789/a2a/v1 \
   -H "Authorization: Bearer $A2A_HERMES_TOKEN" \
+  -H "A2A-Version: 1.0" \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",

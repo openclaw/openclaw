@@ -98,6 +98,14 @@ describe("A2A outbound channel delivery", () => {
     expect(handoff).toHaveBeenCalledOnce();
   });
 
+  it("declares the advertised A2A 1.0 version on outbound requests", async () => {
+    fetchMock.mockResolvedValue(rpcTask("task-1"));
+
+    await send();
+
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("A2A-Version")).toBe("1.0");
+  });
+
   it("retries the legacy dotted method exactly once when canonical dispatch is unavailable", async () => {
     fetchMock.mockResolvedValueOnce(rpcError()).mockImplementationOnce(async () => {
       expect(completedReleases).toBe(1);
@@ -110,6 +118,10 @@ describe("A2A outbound channel delivery", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const methods = fetchMock.mock.calls.map(([, init]) => parseA2aRequestBody(init?.body).method);
     expect(methods).toEqual(["SendMessage", "message/send"]);
+    const versions = fetchMock.mock.calls.map(([, init]) =>
+      new Headers(init?.headers).get("A2A-Version"),
+    );
+    expect(versions).toEqual(["1.0", "1.0"]);
     expect(handoff).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty("authorization");
   });

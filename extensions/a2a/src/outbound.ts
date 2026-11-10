@@ -64,6 +64,7 @@ export async function sendA2aChannelText(params: {
   const requestId = randomUUID();
   const headers: Record<string, string> = {
     "content-type": "application/json",
+    "A2A-Version": "1.0",
   };
   if (peer.outboundToken) {
     headers.authorization = `Bearer ${peer.outboundToken}`;
