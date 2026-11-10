@@ -229,10 +229,12 @@ export async function prepareTemplateDraft(params: {
     );
   }
   const draftName = choices?.name ?? authored.name;
+  // Only the slug-derived default is title-cased; a CLAW.md agent name is the author's text.
   const displayName =
-    choices?.displayName ?? titleCaseTemplateName(draftManifest.agent.name ?? draftName);
+    choices?.displayName ?? draftManifest.agent.name ?? titleCaseTemplateName(draftName);
+  // New drafts start with `description: ""`; that must not erase the CLAW.md description.
   const description =
-    choices?.description ?? authored.description ?? draftManifest.agent.description ?? "";
+    choices?.description ?? (authored.description || draftManifest.agent.description) ?? "";
   draftManifest.agent.id = draftName;
   draftManifest.agent.name = displayName;
   draftManifest.agent.description = description || undefined;
