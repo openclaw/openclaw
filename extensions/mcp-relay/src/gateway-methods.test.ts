@@ -42,6 +42,7 @@ function caller(scopes = ["operator.read", "operator.write"], profileId?: string
     },
     ...(profileId
       ? {
+          internal: { authenticatedOperator: true },
           authenticatedUserProfile: {
             profileId,
             displayName: "Synthetic person",
@@ -278,38 +279,50 @@ describe("MCP relay Gateway consent and grant ownership", () => {
     });
   });
 
-  it("lists and revokes only the caller's grants while admins can manage other people", async () => {
-    const h = await harness();
-    await h.addGrant("gr_alice", { kind: "person", profileId: "person-alice" });
-    await h.addGrant("gr_bob", { kind: "person", profileId: "person-bob" });
-    await h.addGrant("gr_owner", { kind: "owner" });
-    expect(await h.request("grants", {})).toMatchObject([
-      true,
-      {
-        grants: [{ grantId: "gr_alice" }],
-        caller: { canAdmin: false },
-      },
-    ]);
-    expect(await h.request("revoke", { grantId: "gr_bob" })).toEqual(denied("not_found"));
-    expect(h.state.getGrant("gr_bob")).toBeDefined();
-    expect(await h.request("revoke", { grantId: "gr_alice" })).toEqual([
-      true,
-      { revoked: true, relayNotified: false },
-    ]);
-    expect(h.state.getGrant("gr_alice")).toBeUndefined();
-    const admin = caller(["operator.admin"], "person-alice");
-    expect(await h.request("grants", {}, admin)).toMatchObject([
-      true,
-      {
-        grants: [{ grantId: "gr_bob" }, { grantId: "gr_owner" }],
-      },
-    ]);
-    expect(await h.request("revoke", { grantId: "gr_bob" }, admin)).toMatchObject([
-      true,
-      { revoked: true },
-    ]);
-    expect(h.state.getGrant("gr_bob")).toBeUndefined();
-  });
+  it.each(["person", "delegated-person"] as const)(
+    "lists and revokes the caller's %s grants while admins can manage other people",
+    async (kind) => {
+      const h = await harness();
+      await h.addGrant(
+        "gr_alice",
+        kind === "person"
+          ? { kind, profileId: "person-alice" }
+          : { kind, profileId: "person-alice", admission: "opaque-local-admission" },
+      );
+      await h.addGrant("gr_bob", { kind: "person", profileId: "person-bob" });
+      await h.addGrant("gr_owner", { kind: "owner" });
+      const listed = await h.request("grants", {});
+      expect(JSON.stringify(listed)).not.toContain("opaque-local-admission");
+      expect(listed).toMatchObject([
+        true,
+        {
+          grants: [
+            { grantId: "gr_alice", principal: { kind: "person", profileId: "person-alice" } },
+          ],
+          caller: { canAdmin: false },
+        },
+      ]);
+      expect(await h.request("revoke", { grantId: "gr_bob" })).toEqual(denied("not_found"));
+      expect(h.state.getGrant("gr_bob")).toBeDefined();
+      expect(await h.request("revoke", { grantId: "gr_alice" })).toEqual([
+        true,
+        { revoked: true, relayNotified: false },
+      ]);
+      expect(h.state.getGrant("gr_alice")).toBeUndefined();
+      const admin = caller(["operator.admin"], "person-alice");
+      expect(await h.request("grants", {}, admin)).toMatchObject([
+        true,
+        {
+          grants: [{ grantId: "gr_bob" }, { grantId: "gr_owner" }],
+        },
+      ]);
+      expect(await h.request("revoke", { grantId: "gr_bob" }, admin)).toMatchObject([
+        true,
+        { revoked: true },
+      ]);
+      expect(h.state.getGrant("gr_bob")).toBeUndefined();
+    },
+  );
 
   it("rechecks caller authority after loading grants before revocation", async () => {
     const h = await harness();

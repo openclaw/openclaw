@@ -1,2 +1,4 @@
-# Native registration/HTTP protocols, provider limits, GLiDE expected scores, manifest picker projection and search-key isolation.
-329
+# Registered native HTTP contracts, scalar JSON, picker projection and credential isolation.
+# Reduced from the original 329-line grant after extracting literal response fixtures.
+# 308 source test lines plus the pinned main snapshot’s existing 11-line debt; zero headroom, no new grant.
+319

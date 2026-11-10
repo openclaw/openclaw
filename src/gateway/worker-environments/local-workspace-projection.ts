@@ -29,20 +29,9 @@ import { finishLocalWorkspaceHandoff } from "./local-workspace-handoff.js";
 import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import { projectionOperations } from "./local-workspace-state.js";
 import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
-import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import type { LocalWorkspaceCustody, LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { workspaceSizeRecoveryPaths } from "./workspace-manifest-comparison.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
-
-type LocalWorkspaceCustody = {
-  worktreeId: string;
-  projectionPath?: string;
-  projectionRevision?: number;
-  prepareArchive?: (snapshot: string) => Promise<void>;
-  canonicalPaths?: () => Promise<Set<string>>;
-  synchronizeProjection?: () => Promise<void>;
-  assertCurrent: () => void;
-  workerAuthority: WorktreeWorkerAuthority;
-};
 
 type PendingWorkspaceOperation<T> = { result: Promise<T>; signal?: AbortSignal };
 const pendingCheckpoints = new Map<string, PendingWorkspaceOperation<void>>();
@@ -73,7 +62,12 @@ async function joinLocalWorkspaceOperation<T>(
   },
   session: readonly [string, string, string, string | null] | undefined,
   run: (beginCapture: () => void) => Promise<T>,
-  options: { sandbox?: SandboxConfig; acceleration?: boolean; signal?: AbortSignal } = {},
+  options: {
+    sandbox?: SandboxConfig;
+    acceleration?: boolean;
+    signal?: AbortSignal;
+    knownMutation?: true;
+  } = {},
 ): Promise<T> {
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
   const assertCurrent = () => {
@@ -97,6 +91,7 @@ async function joinLocalWorkspaceOperation<T>(
     session,
     options.sandbox,
     options.acceleration,
+    options.knownMutation,
   ]);
   const pending = pendingOperations.get(key);
   let result: T;
@@ -137,7 +132,10 @@ async function joinLocalWorkspaceOperation<T>(
 }
 
 /** Checkpoint callers keep their own session authority while sharing queued capture. */
-export function checkpointLocalWorkspace(owner: LocalWorkspaceOwner): Promise<void> {
+export function checkpointLocalWorkspace(
+  owner: LocalWorkspaceOwner,
+  options: { knownMutation?: true } = {},
+): Promise<void> {
   return joinLocalWorkspaceOperation(
     pendingCheckpoints,
     owner,
@@ -145,7 +143,10 @@ export function checkpointLocalWorkspace(owner: LocalWorkspaceOwner): Promise<vo
     (beginCapture) =>
       withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
         beginCapture();
-        if (await probeUnchangedLocalWorkspace(owner, store, ["canonical"])) {
+        if (
+          !options.knownMutation &&
+          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"]))
+        ) {
           return;
         }
         await runLocalWorkspaceProjection(
@@ -155,6 +156,7 @@ export function checkpointLocalWorkspace(owner: LocalWorkspaceOwner): Promise<vo
           { reason: "checkpoint" },
         );
       }),
+    options,
   );
 }
 

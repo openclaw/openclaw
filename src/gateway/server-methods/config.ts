@@ -580,7 +580,7 @@ async function commitConfigRestartWrite(params: {
       outcome: await writeResult.application,
       mode: params.mode,
       client: params.client,
-      respond: params.respond,
+      respond: writeResult.reply,
       success: { ok: true, path: writeResult.path, ...persistedConfig, changedPaths },
       persistedConfig,
     })
@@ -598,7 +598,7 @@ async function commitConfigRestartWrite(params: {
     invalidateGatewayRuntimeConfigSchema();
   }
   if (params.summary && noopReload) {
-    params.respond(true, { ok: true, path: writeResult.path, ...persistedConfig, changedPaths });
+    writeResult.reply(true, { ok: true, path: writeResult.path, ...persistedConfig, changedPaths });
     writeResult.queueFollowUp();
     return;
   }
@@ -613,7 +613,7 @@ async function commitConfigRestartWrite(params: {
     client: params.client,
     context: params.context,
   });
-  params.respond(
+  writeResult.reply(
     true,
     {
       ok: true,
@@ -779,7 +779,7 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     invalidateGatewayRuntimeConfigSchema();
-    respond(
+    writeResult.reply(
       true,
       {
         ok: true,

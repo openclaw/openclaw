@@ -1,7 +1,7 @@
 import {
   decodeSystemOneResponse,
   encodeSystemOneQuestions,
-  isDecisionBatchV1Representable,
+  validateDecisionBatchV2,
   validateDecisionResultV2,
   type DecisionBatchV2,
   type DecisionProviderContextV2,
@@ -18,11 +18,13 @@ export async function evaluatePerplexityDecision(
     context.model.provider !== "perplexity-decisions" ||
     context.model.id !== "pplx-decider-v1.2" ||
     context.model.api !== undefined ||
-    !isDecisionBatchV1Representable(batch) ||
+    !validateDecisionBatchV2(batch) ||
+    (batch.state.type !== "text" && batch.state.type !== "json") ||
     (context.reasoning !== undefined && context.reasoning !== "auto") ||
     Object.keys(batch.questions).length > 128 ||
     Object.values(batch.questions).some(
       (q) =>
+        (q.type !== "boolean" && q.type !== "choice" && q.type !== "score") ||
         (q.type === "choice" && Object.keys(q.criteria).length > 255) ||
         (q.type === "score" && q.criteria.length > 10),
     )

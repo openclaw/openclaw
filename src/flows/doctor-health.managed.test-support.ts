@@ -446,9 +446,6 @@ async function runManagedRepair(
         expectProcessOwnerReleased();
       } else if (outcome === "workspace-cleanup-failed") {
         await expect(run).rejects.toThrow(/workspace.*requires migration/);
-      } else if (approvalsBlocked) {
-        await expect(run).rejects.toThrow(ExecApprovalsMigrationRequiredError);
-        expectProcessOwnerReleased();
       } else if (outcome === "restart-unhealthy") {
         await expect(run).rejects.toThrow("managed Gateway did not become ready");
       } else {
@@ -492,9 +489,14 @@ async function runManagedRepair(
         );
       }
       if (approvalsCase) {
+        expectProcessOwnerReleased();
         if (approvalsBlocked) {
           expect(fs.readFileSync(approvalsPath, "utf8")).toBe(approvalsBefore);
-          expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
+          if (outcome === "approvals-malformed") {
+            expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
+          } else {
+            expect(loadExecApprovalsReadOnly().defaults?.security).toBe("deny");
+          }
         } else {
           expect(fs.existsSync(approvalsPath)).toBe(false);
           expect(loadExecApprovalsReadOnly().defaults?.security).toBe("full");
@@ -505,7 +507,7 @@ async function runManagedRepair(
           );
         }
       }
-      if (clean || is("ready", "interactive-ready", "archive-verification", "approvals-migrated")) {
+      if (clean || approvalsCase || is("ready", "interactive-ready", "archive-verification")) {
         expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
       } else {
         expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");

@@ -21,6 +21,7 @@ import {
 import { loadPluginManifest } from "../src/plugins/manifest.js";
 import { createPluginMetadataSnapshotFixture } from "../src/plugins/plugin-metadata.test-support.js";
 import { resolveProviderAuthLookupMaps } from "../src/secrets/provider-env-vars.js";
+import responses from "./fixtures/decision-index-native-responses.json" with { type: "json" };
 
 const cases = [
   {
@@ -97,52 +98,13 @@ function registered(row: (typeof cases)[number]) {
   return { decision, context };
 }
 function reply(row: (typeof cases)[number]) {
-  return {
-    model: row.served,
-    answers:
-      row.format === "openai"
-        ? [
-            { name: "refund", type: "predicate", probability: 0.98 },
-            {
-              name: "team",
-              type: "choice",
-              choice: "billing",
-              confidence: 0.8,
-              probabilities: [
-                { value: "billing", probability: 0.9 },
-                { value: "support", probability: 0.1 },
-              ],
-            },
-            {
-              name: "urgency",
-              type: "score",
-              score: 0.2,
-              confidence: 0.6,
-              probabilities: [
-                { label: "0", value: 0, probability: 0.8 },
-                { label: "1", value: 1, probability: 0.2 },
-              ],
-            },
-          ]
-        : {
-            refund: { type: "noul", noul: 0.98 },
-            team: {
-              type: "choice",
-              choice: "billing",
-              confidence: 0.8,
-              probabilities: { billing: 0.9, support: 0.1 },
-            },
-            urgency: {
-              type: "score",
-              score: row.format === "fastino" ? 0 : 0.2,
-              ...(row.format === "fastino" ? { expected_level: 0.2 } : {}),
-              confidence: 0.6,
-              probabilities: { "0": 0.8, "1": 0.2 },
-              legend: { "0": "Routine", "1": "Emergency" },
-            },
-          },
-    usage: { input_tokens: 42, output_tokens: 252 },
-  };
+  const response =
+    row.format === "openai"
+      ? responses.openai
+      : row.format === "fastino"
+        ? responses.fastino
+        : responses.systemone;
+  return { ...structuredClone(response), model: row.served };
 }
 const fetch = vi.fn<typeof globalThis.fetch>();
 beforeEach(() => {
@@ -241,6 +203,7 @@ it.each(cases)("rejects $provider route mismatches and native bounds before HTTP
   ).toEqual({ status: "unavailable", reason: "unsupported-input" });
   const inputs: DecisionBatchV2[] = [
     { ...batch, state: { type: "image", dataUri: "data:image/png;base64,AA==" } },
+    { ...batch, questions: { q: { type: "tags", criteria: { billing: "Payments" } } } },
     {
       ...batch,
       questions: {
@@ -268,14 +231,30 @@ it.each(cases)("rejects $provider route mismatches and native bounds before HTTP
   }
   expect(fetch).not.toHaveBeenCalled();
 });
+it.each(
+  cases
+    .filter((row) => row.format !== "openai")
+    .flatMap((row) => [true, 42, "scalar evidence"].map((value) => ({ row, value }))),
+)("preserves scalar JSON evidence for $row.provider: $value", async ({ row, value }) => {
+  fetch.mockResolvedValue(Response.json(reply(row)));
+  const { decision, context } = registered(row);
+  expect(
+    await decision.evaluate({ ...batch, state: { type: "json", value } }, context),
+  ).toMatchObject({ status: "ok" });
+  expect(fetch).toHaveBeenCalledOnce();
+  const body = fetch.mock.calls[0]?.[1]?.body;
+  if (typeof body !== "string") {
+    throw new Error("Expected serialized JSON");
+  }
+  expect(JSON.parse(body).state).toBe(JSON.stringify(value));
+});
 it("rejects GLiDE scores missing expected_level instead of silently substituting argmax", async () => {
   const row = cases[3]!;
-  const payload = reply(row);
-  if (Array.isArray(payload.answers)) {
-    throw new Error("Expected native answer map");
-  }
+  const payload = structuredClone(responses.fastino);
   const { expected_level: _expected, ...urgency } = payload.answers.urgency;
-  fetch.mockResolvedValue(Response.json({ ...payload, answers: { ...payload.answers, urgency } }));
+  fetch.mockResolvedValue(
+    Response.json({ ...payload, model: row.served, answers: { ...payload.answers, urgency } }),
+  );
   const { decision, context } = registered(row);
   expect(await decision.evaluate(batch, context)).toEqual({
     status: "unavailable",

@@ -378,7 +378,8 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
         role,
         inputs,
       },
-      { token: deps.token },
+      // Recovery must enumerate every historical attempt, including long rerun chains.
+      { token: deps.token, deadlineMs: Date.now() + 10 * 60_000 },
     );
     const coverage = admission.coverage.children.find((child) => child.key === role);
     validateQualificationJobs(verified.receipt.jobs, coverage.requiredJobs, "Original " + role);
@@ -429,6 +430,8 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     },
     {
       verifyPayloads: true,
+      // Large Docker bodies may need the full transfer budget; metadata stays capped at 60s.
+      dockerArchiveTimeoutMs: 4 * 60_000,
       expectedPackage: {
         fileName: binding.package.fileName,
         sha256: binding.package.packageSha256,

@@ -18,6 +18,10 @@ PATH=$search_path
 export PATH
 is_probe() {
   filter_fetch=
+  projection_fetch=
+  explicit_filter=
+  fetch_filter=
+  fetch_depth=
   shallow_change=
   argument_count=$#
   while [ "$#" -gt 0 ]; do
@@ -43,9 +47,12 @@ is_probe() {
         [ "$command" = fetch ] || return 1
         for arg do
           case $arg in
-            --filter|--filter=*|--no-filter|--all|--multiple) return 1 ;;
+            --) break ;;
+            --all|--multiple) return 1 ;;
+            --filter|--filter=*|--no-filter) explicit_filter=1 ;;
           esac
         done
+        projection_fetch=1
         for arg do
           case $arg in
             https://github.com/*|git@github.com:*|ssh://git@github.com/*) filter_fetch=1 ;;
@@ -82,6 +89,7 @@ query_repository() {
   done
   shift "$tail_count"
   case $query in
+    projection) git "$@" config --bool --get openclaw.projection 2>/dev/null ;;
     common) git "$@" rev-parse --path-format=absolute --git-common-dir ;;
     blobless) git "$@" config --get-regexp '^remote\\..*\\.partialclonefilter$' '^blob:none$' >/dev/null 2>&1 ;;
   esac
@@ -96,18 +104,28 @@ check_shared_shallow() {
     fi
   done
 }
+fetch_defaults() {
+  if [ "$(query_repository projection "$@")" = true ]; then
+    [ "$shallow_change" = 1 ] || fetch_depth=64
+    [ "$explicit_filter" = 1 ] || fetch_filter=blob:none
+  elif [ "$filter_fetch" = 1 ] && [ "$explicit_filter" != 1 ] && query_repository blobless "$@"; then
+    fetch_filter=blob:none
+  fi
+}
 if ! is_probe "$@"; then
-  if [ "$shallow_change" = 1 ]; then
+  if [ "$projection_fetch" = 1 ]; then fetch_defaults "$@"; fi
+  if [ "$shallow_change" = 1 ] || [ -n "$fetch_depth" ]; then
     check_shared_shallow "$@" || exit 2
   fi
-  if [ "$filter_fetch" = 1 ] && query_repository blobless "$@"; then
-    # Native fetch records the URL as a promisor, including its hydration source.
+  if [ -n "$fetch_filter$fetch_depth" ]; then
+    # Native Git owns promisor registration; only standalone projections get a depth cap.
     tail_count=$(($# - global_count - 1))
     prefix_count=$((global_count + 1))
     while [ "$prefix_count" -gt 0 ]; do
       set -- "$@" "$1"; shift; prefix_count=$((prefix_count - 1))
     done
-    set -- "$@" --filter=blob:none
+    [ -z "$fetch_filter" ] || set -- "$@" "--filter=$fetch_filter"
+    [ -z "$fetch_depth" ] || set -- "$@" "--depth=$fetch_depth"
     while [ "$tail_count" -gt 0 ]; do
       set -- "$@" "$1"; shift; tail_count=$((tail_count - 1))
     done

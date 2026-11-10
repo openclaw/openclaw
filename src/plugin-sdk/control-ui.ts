@@ -190,6 +190,8 @@ type ControlUiInlineView = {
 export type ControlUiPanel = {
   id: string;
   label: string;
+  /** Fixed host icon-registry name; unknown/omitted names fall back to plug. Manifest SVG artwork takes precedence. */
+  icon?: string;
   mount: ControlUiView<BoardGetParams>;
 };
 

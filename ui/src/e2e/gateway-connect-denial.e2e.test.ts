@@ -58,17 +58,29 @@ suite.define(() => {
           .toEqual({ attempts: 1, visible: true });
         const initialAttempts = (await gateway.getRequests("connect")).length;
         for (let second = 0; second < 60; second++) {
+          const attemptsBeforeTick = (await gateway.getRequests("connect")).length;
           await page.clock.runFor(1_000);
           // WebCrypto and fetch use real threads; settle the handshake before advancing again.
           await expect
             .poll(async () => {
-              await page.clock.runFor(1);
-              const socketsClosed = await page.evaluate(() =>
-                (window as MockGatewayWindow)
-                  .openclawControlUiE2eGateway!.socketStates()
-                  .every((socket) => socket.readyState === WebSocket.CLOSED),
-              );
-              return socketsClosed;
+              const handshake = await page.evaluate((previousAttempts) => {
+                const mockGateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+                const sockets = mockGateway.socketStates();
+                const requests = mockGateway.requests.filter(
+                  (request) => request.method === "connect",
+                ).length;
+                return {
+                  preparing:
+                    requests === previousAttempts &&
+                    sockets.some((socket) => socket.readyState === WebSocket.OPEN),
+                  settled: sockets.every((socket) => socket.readyState === WebSocket.CLOSED),
+                };
+              }, attemptsBeforeTick);
+              // Closed attempts may never send; only pump an unsettled handshake after signing.
+              if (!handshake.preparing && !handshake.settled) {
+                await page.clock.runFor(1);
+              }
+              return handshake.settled;
             })
             .toBe(true);
         }

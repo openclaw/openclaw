@@ -1439,33 +1439,37 @@
   overscroll-behavior-inline: contain;
   scrollbar-width: none;
 
-  .chat-selection-annotations__chip.chat-attachment-thumb {
-    height: 56px;
-    min-width: 0;
-    max-width: min(216px, 100%);
-  }
+  .chat-comment-preview {
+    .chat-selection-annotations__chip.chat-attachment-thumb {
+      --chat-attachment-radius: calc(var(--radius-md) * var(--openclaw-corner-radius-scale));
 
-  .chat-selection-annotations__chip .chat-attachment-file {
-    gap: 10px;
-    padding: 7px 13px 7px 7px;
-  }
+      height: 30px;
+      max-width: min(216px, 100%);
+    }
 
-  .chat-attachment-preview-icon {
-    display: grid;
-    place-items: center;
-    flex: 0 0 40px;
-    width: 40px;
-    height: 40px;
-    border-radius: max(0px, calc(var(--chat-attachment-radius) - 8px));
-    corner-shape: inherit;
-    background: transparent;
-    color: var(--muted);
-  }
+    .chat-attachment-file {
+      gap: 6px;
+      padding: 6px 8px;
+    }
 
-  .chat-attachment-preview-icon svg {
-    width: 16px;
-    height: 16px;
-    stroke-width: 1.75px;
+    .chat-attachment-preview-icon {
+      display: grid;
+      place-items: center;
+      flex: 0 0 16px;
+      width: 16px;
+      height: 16px;
+      color: var(--muted);
+    }
+
+    .chat-attachment-preview-icon svg {
+      stroke-width: 1.75px;
+    }
+
+    .chat-comment-count-gap {
+      display: inline-block;
+      width: 4px;
+      font-size: 0;
+    }
   }
 
   &[data-disabled="true"] {
@@ -1991,12 +1995,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   gap: var(--chat-composer-chip-gap, 6px);
   width: 100%;
   height: var(--chat-composer-chip-height, 30px);
-  min-height: var(--chat-composer-chip-height, 30px);
   /* Symmetric on purpose: this trigger carries a label and an optional leading
      icon, never a trailing one, so the old 6px trailing inset was unmatched
      asymmetry that made the chip look narrower on its right than its siblings. */
-  padding-block: 0;
-  padding-inline: var(--chat-composer-chip-padding-inline, 8px);
+  padding: 0 var(--chat-composer-chip-padding-inline, 8px);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -2011,7 +2013,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .agent-chat__input .chat-controls__inline-select-trigger {
+  /* The chip fills the action row's box (see --chat-composer-chip-height) and
+     paints its pill one step inside it, on the same 30px tier as the primary
+     action's painted disc. */
+  border-block: 1px solid transparent;
   border-radius: var(--radius-full);
+  background-clip: padding-box;
 }
 
 .agent-chat__composer-lead .chat-controls__permission-trigger {

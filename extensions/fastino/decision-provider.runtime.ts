@@ -1,6 +1,6 @@
 import {
   decodeSystemOneResponse,
-  isDecisionBatchV1Representable,
+  validateDecisionBatchV2,
   validateDecisionResultV2,
   type DecisionBatchV2,
   type DecisionProviderContextV2,
@@ -23,7 +23,9 @@ export async function evaluateFastinoDecision(
     context.model.provider !== "fastino" ||
     context.model.id !== "fastino/GLiDE" ||
     context.model.api !== undefined ||
-    !isDecisionBatchV1Representable(batch) ||
+    !validateDecisionBatchV2(batch) ||
+    (batch.state.type !== "text" && batch.state.type !== "json") ||
+    Object.keys(batch.questions).length > 256 ||
     (context.reasoning !== undefined && context.reasoning !== "auto") ||
     Object.values(batch.questions).some(
       (q) =>
@@ -33,30 +35,31 @@ export async function evaluateFastinoDecision(
   ) {
     return { status: "unavailable", reason: "unsupported-input" };
   }
-  const questions = Object.fromEntries(
-    Object.entries(batch.questions).map(([id, q]) => [
-      id,
-      {
-        type: q.type === "boolean" ? "noul" : q.type,
-        instructions:
-          text(q.instructions) ||
-          (q.type === "boolean"
-            ? "Evaluate the true and false criteria."
-            : q.type === "choice"
-              ? "Choose the option that best matches the state."
-              : "Rate the state against the ordered rubric."),
-        ...(q.type === "score"
-          ? { criteria: q.criteria.map(text) }
-          : q.criteria
-            ? {
-                criteria: Object.fromEntries(
-                  Object.entries(q.criteria).map(([key, value]) => [key, text(value)]),
-                ),
-              }
-            : {}),
-      },
-    ]),
-  );
+  const questions: Record<string, unknown> = {};
+  for (const [id, q] of Object.entries(batch.questions)) {
+    if (q.type !== "boolean" && q.type !== "choice" && q.type !== "score") {
+      return { status: "unavailable", reason: "unsupported-input" };
+    }
+    questions[id] = {
+      type: q.type === "boolean" ? "noul" : q.type,
+      instructions:
+        text(q.instructions) ||
+        (q.type === "boolean"
+          ? "Evaluate the true and false criteria."
+          : q.type === "choice"
+            ? "Choose the option that best matches the state."
+            : "Rate the state against the ordered rubric."),
+      ...(q.type === "score"
+        ? { criteria: q.criteria.map(text) }
+        : q.criteria
+          ? {
+              criteria: Object.fromEntries(
+                Object.entries(q.criteria).map(([key, value]) => [key, text(value)]),
+              ),
+            }
+          : {}),
+    };
+  }
   return evaluateDecisionHttp(context, {
     provider: "fastino",
     baseUrl: context.model.baseUrl ?? "https://api.fastino.ai/v1",
