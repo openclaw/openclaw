@@ -1,2 +1,2 @@
-1048
+1077
 # OpenClaw ID re-bind: real-Gateway lost-key recovery and crash-after-commit proof, authority refusals, staging child, one-write publication and CLI signing.
