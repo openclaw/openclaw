@@ -43,7 +43,7 @@ async function claw() {
       ? prep
       : params.action === "account_link_code"
         ? { code: "ACCOUNT-CODE" }
-        : { ok: true, bindingSeq: 2 },
+        : { ok: true, moved: true, bindingSeq: 2 },
   );
   const client = { request } as unknown as GatewayBrowserClient;
   return { kit: await encodeKit(secret), prep, request, client };

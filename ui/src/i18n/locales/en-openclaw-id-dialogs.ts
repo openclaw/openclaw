@@ -105,6 +105,8 @@ const enOpenClawIdDialogs = {
       "Could not check the keys OpenClaw ID lists for this claw. Try again shortly.",
     moveKeysBadKit: "That isn't a recovery code. Check it and try again.",
     moveKeysDone: "This claw now uses new keys.",
+    moveKeysFollowUpFailed:
+      "Follow-up setup failed. Run {command} to check remote access. Do not move to new keys again.",
     regenExpiry: "End this browser's owner access after (days)",
     regenExpiryHint: "Leave empty for no expiry.",
   },

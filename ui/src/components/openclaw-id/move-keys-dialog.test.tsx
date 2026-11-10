@@ -2,18 +2,19 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { startOpenClawIdFeatureLifetime } from "../../lib/openclaw-id/feature-lifetime.ts";
+import type { RebindCommitResult } from "../../lib/openclaw-id/rebind.ts";
 import * as toast from "../../lib/toast.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { showMoveKeysDialog } from "./move-keys-dialog.tsx";
 
-// mock-isolation: kit signing is covered by rebind.test.ts; here the plan is fixed and the
-// commit is held open so dismissal can be tried while it runs.
+// Kit signing is covered by rebind.test.ts; hold commit settlement to exercise dismissal.
 const commit = vi.hoisted(() => ({
   reject: (_error: Error) => {},
-  release: () => {},
+  release: (_result: RebindCommitResult) => {},
   calls: [] as string[],
 }));
-vi.mock("../../lib/openclaw-id/rebind.ts", () => ({
+vi.mock("../../lib/openclaw-id/rebind.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/openclaw-id/rebind.ts")>()),
   prepareRebind: async () => ({
     ok: true,
     plan: {
@@ -27,7 +28,7 @@ vi.mock("../../lib/openclaw-id/rebind.ts", () => ({
     },
   }),
   commitRebind: () =>
-    new Promise<void>((resolve, reject) => {
+    new Promise<RebindCommitResult>((resolve, reject) => {
       commit.reject = reject;
       commit.calls.push("commit");
       commit.release = resolve;
@@ -60,27 +61,56 @@ async function click(label: string) {
   });
 }
 
-it("stays open through a running commit and reports the move, never a cancellation", async () => {
-  const result = showMoveKeysDialog({
-    client: {} as GatewayBrowserClient,
-    signedIn: { sub: "s", email: null, name: null, exp: 4_102_444_800, idToken: "t" },
-    hostname: "studio.example.test",
-  });
-  await vi.waitFor(() => expect(document.querySelector("input[type=password]")).not.toBeNull());
-  const input = document.querySelector<HTMLInputElement>("input[type=password]")!;
-  input.value = "OCK1-synthetic";
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  await click("Check");
-  await click("Move to new keys");
-  await vi.waitFor(() => expect(commit.calls).toEqual(["commit"]));
-  // Escape or the backdrop while the commit runs: refused, nothing cancelled.
-  const dismissal = new Event("modal-cancel", { cancelable: true });
-  document.querySelector("openclaw-modal-dialog")!.dispatchEvent(dismissal);
-  expect(dismissal.defaultPrevented).toBe(true);
-  commit.release();
-  expect(await result).toBe(true);
-  expect(commit.calls).toEqual(["commit"]);
-});
+it.each(["success", "follow-up-failed", "retired-follow-up-failed"])(
+  "stays open through commit and reports %s without inviting another move",
+  async (outcome) => {
+    const notice = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    const result = showMoveKeysDialog({
+      client: {} as GatewayBrowserClient,
+      signedIn: { sub: "s", email: null, name: null, exp: 4_102_444_800, idToken: "t" },
+      hostname: "studio.example.test",
+    });
+    await vi.waitFor(() => expect(document.querySelector("input[type=password]")).not.toBeNull());
+    const input = document.querySelector<HTMLInputElement>("input[type=password]")!;
+    input.value = "OCK1-synthetic";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await click("Check");
+    await click("Move to new keys");
+    await vi.waitFor(() => expect(commit.calls).toEqual(["commit"]));
+    // Escape or the backdrop while the commit runs: refused, nothing cancelled.
+    const dismissal = new Event("modal-cancel", { cancelable: true });
+    document.querySelector("openclaw-modal-dialog")!.dispatchEvent(dismissal);
+    expect(dismissal.defaultPrevented).toBe(true);
+    if (outcome === "retired-follow-up-failed") {
+      endFeature();
+    }
+    commit.release(
+      outcome === "success"
+        ? { ok: true, moved: true, bindingSeq: 2 }
+        : {
+            ok: true,
+            moved: true,
+            bindingSeq: 2,
+            published: null,
+            followUpError: "tunnel restart failed",
+            nextStep: "openclaw id status",
+          },
+    );
+    expect(await result).toBe(true);
+    expect(commit.calls).toEqual(["commit"]);
+    expect(notice).toHaveBeenCalledExactlyOnceWith(
+      outcome === "success"
+        ? { severity: "success", message: "This claw now uses new keys." }
+        : {
+            severity: "warning",
+            message: "This claw now uses new keys.",
+            description:
+              "Follow-up setup failed. Run openclaw id status to check remote access. Do not move to new keys again.",
+            detail: "tunnel restart failed",
+          },
+    );
+  },
+);
 
 it("discards the confirmation on another tab's account replacement", async () => {
   const result = showMoveKeysDialog({

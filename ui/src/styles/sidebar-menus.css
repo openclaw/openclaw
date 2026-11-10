@@ -1594,10 +1594,6 @@
   line-height: 1.4;
 }
 
-.sidebar-openclaw-id__status[data-attention="true"] .nav-item__icon {
-  color: var(--warn);
-}
-
 .sidebar-openclaw-id__detail {
   color: var(--muted);
   font-size: calc(12px * var(--control-ui-text-scale));

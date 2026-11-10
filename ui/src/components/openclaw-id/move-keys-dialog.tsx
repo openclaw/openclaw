@@ -15,6 +15,7 @@ import {
   cancelRebind,
   commitRebind,
   prepareRebind,
+  type RebindCommitResult,
   type RebindPlan,
   type RebindRefusal,
 } from "../../lib/openclaw-id/rebind.ts";
@@ -164,13 +165,14 @@ export function showMoveKeysDialog(params: {
       const move = (current: RebindPlan) =>
         run(async () => {
           setError(null);
+          let result: RebindCommitResult;
           try {
             if (retired || feature.aborted) {
               retire();
               return;
             }
             committing = true;
-            await commitRebind(params.client, current);
+            result = await commitRebind(params.client, current);
           } catch (cause) {
             if (retired) {
               showToast({ severity: "error", message: openClawIdUiError(cause, "setup").message });
@@ -183,7 +185,16 @@ export function showMoveKeysDialog(params: {
             committing = false;
           }
           setPlan(null);
-          showToast({ severity: "success", message: t("openclawId.moveKeysDone") });
+          showToast(
+            result.followUpError === undefined
+              ? { severity: "success", message: t("openclawId.moveKeysDone") }
+              : {
+                  severity: "warning",
+                  message: t("openclawId.moveKeysDone"),
+                  description: t("openclawId.moveKeysFollowUpFailed", { command: result.nextStep }),
+                  detail: result.followUpError,
+                },
+          );
           modal.finish(true);
         });
 

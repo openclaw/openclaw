@@ -79,10 +79,16 @@ export async function prepareRebind(params: {
   return { ok: true, plan };
 }
 
+/** A committed binding, even when restarting remote access or publishing needs follow-up. */
+export type RebindCommitResult = { ok: true; moved: true; bindingSeq: number } & (
+  | { followUpError?: never }
+  | { published: null; followUpError: string; nextStep: "openclaw id status" }
+);
+
 /** Stores the signed binding; remote access restarts on the new keys and publishes them. */
 export async function commitRebind(client: GatewayBrowserClient, plan: RebindPlan) {
   plan.assertCurrent();
-  return await client.request<{ ok: true; bindingSeq: number }>("openclawId.authority", {
+  return await client.request<RebindCommitResult>("openclawId.authority", {
     action: "rebind_commit",
     binding: plan.binding,
     code: plan.code,

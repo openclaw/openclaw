@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createApplicationConfigCapability } from "../app/config.ts";
+import {
+  createApplicationConfigCapability,
+  type ApplicationConfigCapability,
+} from "../app/config.ts";
 import { client, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import type { SidebarAttentionStore } from "../app/sidebar-attention-store.ts";
 import type { OpenClawIdPublication, OpenClawIdStatusResult } from "../lib/openclaw-id/types.ts";
@@ -27,17 +30,17 @@ afterEach(() => {
 function setup(read: () => Promise<OpenClawIdStatusResult>) {
   let enabled = true;
   let publication: OpenClawIdPublication = superseded;
-  const changes = new Set<() => void>();
+  const changes = new Set<Parameters<ApplicationConfigCapability["subscribe"]>[0]>();
   const defaults = createApplicationConfigCapability({ resourceBasePath: "" }).current;
   const config = {
     get current() {
       return { ...defaults, openclawIdEnabled: enabled };
     },
-    subscribe(listener: () => void) {
+    subscribe(listener: Parameters<ApplicationConfigCapability["subscribe"]>[0]) {
       changes.add(listener);
       return () => changes.delete(listener);
     },
-  };
+  } satisfies Pick<ApplicationConfigCapability, "current" | "subscribe">;
   const request = vi.fn(async (method: string) => {
     if (method === "openclawId.status") {
       return read();
@@ -66,7 +69,7 @@ function setup(read: () => Promise<OpenClawIdStatusResult>) {
     },
     disable() {
       enabled = false;
-      changes.forEach((listener) => listener());
+      changes.forEach((listener) => listener(config.current));
     },
   };
 }

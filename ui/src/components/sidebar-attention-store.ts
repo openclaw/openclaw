@@ -41,7 +41,6 @@ import {
   buildSidebarAttentionEntries,
   cronOverdueAt,
 } from "./sidebar-attention-items.ts";
-import { readOpenClawIdKeyAttention } from "./sidebar-attention-openclaw-id.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 
 type SidebarAttentionOwner = {
@@ -567,16 +566,19 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       this.onChange();
       return;
     }
-    void readOpenClawIdKeyAttention(client, current)
-      .then((attention) => {
-        if (current()) {
-          this.keyAttention = attention;
-          this.onChange();
-        }
-      })
-      .catch(() => {
-        // A failed read is not evidence that a known key problem was repaired.
-      });
+    void (async () => {
+      const { readOpenClawIdKeyAttention } = await import("./sidebar-attention-openclaw-id.ts");
+      if (!current()) {
+        return;
+      }
+      const attention = await readOpenClawIdKeyAttention(client, current);
+      if (current()) {
+        this.keyAttention = attention;
+        this.onChange();
+      }
+    })().catch(() => {
+      // A failed read is not evidence that a known key problem was repaired.
+    });
   }
 
   private synchronizeGateway(): void {

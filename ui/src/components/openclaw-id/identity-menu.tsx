@@ -1,5 +1,10 @@
-import { createMemo } from "solid-js";
-import type { OpenClawIdPeopleLink, OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
+import { createMemo, onSettled, refresh } from "solid-js";
+import type { GatewayEventListener } from "../../api/gateway.ts";
+import type {
+  OpenClawIdPeopleLink,
+  OpenClawIdPublication,
+  OpenClawIdStatusResult,
+} from "../../lib/openclaw-id/types.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import {
@@ -17,33 +22,45 @@ import {
 export function OpenClawIdIdentityMenu(props: SidebarIdentityMenuParams) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
-  const client = createMemo(() => {
-    const snapshot = gateway.read().snapshot;
-    return snapshot.phase === "connected" ? snapshot.client : null;
-  });
+  const connection = createMemo(
+    () => {
+      const { snapshot, connectionRevision } = gateway.read();
+      return snapshot.phase === "connected" && snapshot.client
+        ? { client: snapshot.client, revision: connectionRevision }
+        : null;
+    },
+    { equals: (a, b) => a?.client === b?.client && a?.revision === b?.revision },
+  );
   const status = createMemo(
     async () =>
-      client()
-        ?.request<OpenClawIdStatusResult>("openclawId.status", {})
+      connection()
+        ?.client.request<OpenClawIdStatusResult>("openclawId.status", {})
         .catch(() => null) ?? null,
     { loadingValue: null },
   );
-  // The publication (owner-only) for this computer's key warnings: superseded or needing a code.
-  const publication = createMemo(
-    async () => {
-      const current = status();
-      if (current?.channel !== "local_operator" || !current.owner || !current.link.linked) {
-        return null;
-      }
-      return (
-        (await client()
-          ?.request<{ link: OpenClawIdPeopleLink }>("openclawId.people", {})
+  // A failed reread retains this owner's warning; retiring its scope disposes that projection.
+  const publication = createMemo(() => {
+    const owner = connection();
+    const current = status();
+    if (!owner || current?.channel !== "local_operator" || !current.owner || !current.link.linked) {
+      return null;
+    }
+    const read = createMemo<OpenClawIdPublication | null>(
+      (previous) =>
+        owner.client
+          .request<{ link: OpenClawIdPeopleLink }>("openclawId.people", {})
           .then(({ link }) => link.publication ?? null)
-          .catch(() => null)) ?? null
-      );
-    },
-    { loadingValue: null },
-  );
+          .catch(() => previous),
+      { loadingValue: null },
+    );
+    const onGatewayEvent: GatewayEventListener = (event) => {
+      if (event.event === "openclawId.people.changed") {
+        void refresh(read);
+      }
+    };
+    onSettled(() => context.gateway.subscribeEvents(onGatewayEvent));
+    return read;
+  });
   const extension = createMemo(() => {
     const current = status();
     if (!current || current.status.state === "off") {
@@ -51,7 +68,7 @@ export function OpenClawIdIdentityMenu(props: SidebarIdentityMenuParams) {
     }
     return {
       identity: openClawIdMenuIdentity(current),
-      entries: openClawIdMenuEntries(current, publication()),
+      entries: openClawIdMenuEntries(current, publication()?.()),
       signOut: openClawIdSignOutEntries(current),
       onSelect: (value: string) =>
         selectOpenClawIdMenuValue(value, {

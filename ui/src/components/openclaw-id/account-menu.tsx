@@ -94,7 +94,11 @@ function statusRow(
         data-attention={attention ? "true" : undefined}
         role={attention ? "status" : undefined}
       >
-        <span class="nav-item__icon" aria-hidden="true">
+        <span
+          class="nav-item__icon"
+          aria-hidden="true"
+          style={{ color: attention ? "var(--warn)" : undefined }}
+        >
           <Icon name={icon} />
         </span>
         <span class="sidebar-openclaw-id__lines">
@@ -383,10 +387,11 @@ export function selectOpenClawIdMenuValue(
     const hostname = status.link.hostname;
     if (signedIn) {
       openDialog(async () => {
-        const moved = await (
-          await import("./move-keys-dialog.tsx")
-        ).showMoveKeysDialog({ client, signedIn, hostname });
-        if (moved) {
+        if (
+          await (
+            await import("./move-keys-dialog.tsx")
+          ).showMoveKeysDialog({ client, signedIn, hostname })
+        ) {
           context.onKeysChanged?.();
         }
       });
