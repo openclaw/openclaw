@@ -320,15 +320,18 @@ are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
 from the live check. Checkpoints after commands and file mutations use the same
 check for the guest workspace: commands that leave accepted files unchanged do
-not pause the sandbox. Changed checkpoints still pause through capture and
-publication, including writes from background processes and termination handlers.
+not pause the sandbox. Changed command checkpoints pause until their captured
+files are stored in an immutable Git result, then resume while those files are
+reconciled into the managed worktree. Command completion still waits for that
+reconciliation, so a read after a completed command sees its saved changes.
+Later background writes remain in the private checkout for the next checkpoint.
 Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.
 Completed preparation results are not cached. Each caller retains its own
 cancellation and authority checks. OpenClaw records pending results and
-rollback journals in SQLite, and resumes
-only after settlement. New shell calls and command preparation wait for an active
+rollback journals in SQLite. Imports into the private checkout keep runtimes paused
+through settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
 hold that preparation lease for their entire lifetime. Files and assistant-media
 reads select the current backing without acquiring checkpoint custody or pausing

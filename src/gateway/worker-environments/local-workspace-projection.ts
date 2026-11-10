@@ -1,4 +1,7 @@
-import type { LocalWorkspacePauseReason } from "../../agents/sandbox/local-workspace-quiescence.js";
+import type {
+  LocalWorkspacePauseReason,
+  quiesceLocalWorkspace,
+} from "../../agents/sandbox/local-workspace-quiescence.js";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
@@ -152,7 +155,13 @@ export function checkpointLocalWorkspace(
         await runLocalWorkspaceProjection(
           owner,
           store,
-          (state) => state.synchronize("canonical", { captureRejected: true }),
+          (state, quiescence) =>
+            state.synchronize("canonical", {
+              captureRejected: true,
+              afterCapture:
+                quiescence &&
+                (() => timeWorktreePreparationPhase("runtimeResume", quiescence.resume)),
+            }),
           { reason: "checkpoint" },
         );
       }),
@@ -439,11 +448,7 @@ export async function withLocalWorkspaceProjection<T>(
   owner: LocalWorkspaceOwner,
   run: (
     state: ReturnType<typeof projectionOperations>,
-    quiescence?: Awaited<
-      ReturnType<
-        typeof import("../../agents/sandbox/local-workspace-quiescence.js").quiesceLocalWorkspace
-      >
-    >,
+    quiescence?: Awaited<ReturnType<typeof quiesceLocalWorkspace>>,
   ) => Promise<T>,
   options: { provision?: boolean; signal?: AbortSignal; reason?: LocalWorkspacePauseReason } = {},
 ) {
@@ -459,11 +464,7 @@ async function runLocalWorkspaceProjection<T>(
   run: Parameters<typeof withLocalWorkspaceProjection<T>>[1],
   options: { provision?: boolean; reason?: LocalWorkspacePauseReason } = {},
 ) {
-  const assertCurrent = () => {
-    store.get();
-    owner.assertCurrent();
-  };
-  assertCurrent();
+  owner.assertCurrent();
   let previous = store.get();
   // A reset may recover its prior result; another session incarnation cannot adopt it.
   if (
@@ -495,7 +496,7 @@ async function runLocalWorkspaceProjection<T>(
             retained: parseLocalWorkspacePausedRuntimes(previous.paused_runtimes_json),
             persist: (runtimes) =>
               operations.rememberPaused(runtimes.length ? JSON.stringify(runtimes) : null),
-            assertCurrent,
+            assertCurrent: () => void operations.current(),
           }),
         )
       : undefined;
@@ -509,7 +510,8 @@ async function runLocalWorkspaceProjection<T>(
     throw error;
   } finally {
     // Retirement finished cleanup before removal could invalidate the old binding.
-    // Otherwise, only acknowledged journal changes allow the frozen guest to resume.
+    // Imports keep the guest frozen until journal settlement. Command exports may
+    // already have resumed after capture; their later journal touches canonical files only.
     if (!quiescence?.retired) {
       store.workerAuthority.assertCurrent?.();
     }

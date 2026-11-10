@@ -17,6 +17,7 @@ import {
   selectLocalWorkspaceCheckpoint,
   stageLocalWorkspaceCheckpoint,
   createLocalWorkspaceCheckpointRejection,
+  type LocalWorkspaceSyncOptions,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
@@ -271,14 +272,16 @@ export function projectionOperations(
   const settle = async (
     retainAccepted = false,
     preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
+    afterCapture?: () => Promise<void>,
   ) =>
     rejection.settle(
-      () => settlePending(retainAccepted, preparedSnapshot),
+      () => settlePending(retainAccepted, preparedSnapshot, afterCapture),
       preparedSnapshot?.currentManifestRef,
     );
   const settlePending = async (
     retainAccepted: boolean,
     preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
+    afterCapture?: () => Promise<void>,
   ) => {
     await recover();
     const conversionSource = current();
@@ -372,6 +375,9 @@ export function projectionOperations(
     if (checkpoint && checkpoint.previousRoot !== selected.baseline_ref) {
       throw new Error("Local workspace checkpoint no longer matches its baseline");
     }
+    // The Git result now owns the command's bytes. Canonical-only reconciliation
+    // can run beside later guest writes; command completion still awaits acceptance.
+    await afterCapture?.();
     const refreshBaseline = refresh ? await baselineDocument() : undefined;
     let conflictPaths: string[] | undefined;
     await withStagedWorkerWorkspaceManifest(
@@ -473,13 +479,8 @@ export function projectionOperations(
       await cleanupAccepted();
     }
   };
-  const synchronize = (target: Direction, options?: { captureRejected?: true }) =>
-    rejection.synchronize({
-      target,
-      captureRejected: options?.captureRejected,
-      settle,
-      scan,
-    });
+  const synchronize = (target: Direction, options?: LocalWorkspaceSyncOptions) =>
+    rejection.synchronize({ target, ...options, settle, scan });
   const prepare = async (dependencies?: {
     sandbox: SandboxConfig;
     allocation: WorktreeAllocationGuard;

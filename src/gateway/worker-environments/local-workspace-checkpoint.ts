@@ -15,6 +15,10 @@ import {
 } from "./workspace-result-staging.js";
 
 export type LocalWorkspaceSyncTarget = "canonical" | "projection";
+export type LocalWorkspaceSyncOptions = {
+  captureRejected?: true;
+  afterCapture?: () => Promise<void>;
+};
 class UnstagedWorkspacePathError extends Error {}
 
 export class RejectedLocalWorkspaceResultError extends Error {
@@ -81,15 +85,17 @@ export function createLocalWorkspaceCheckpointRejection(params: {
         throw error;
       }
     },
-    synchronize: async (input: {
-      target: LocalWorkspaceSyncTarget;
-      captureRejected?: true;
-      settle: (
-        retainAccepted?: boolean,
-        snapshot?: LocalWorkspaceManifestCheckpoint,
-      ) => Promise<void>;
-      scan: (target: LocalWorkspaceSyncTarget) => Promise<LocalWorkspaceManifestCheckpoint>;
-    }) => {
+    synchronize: async (
+      input: LocalWorkspaceSyncOptions & {
+        target: LocalWorkspaceSyncTarget;
+        settle: (
+          retainAccepted?: boolean,
+          snapshot?: LocalWorkspaceManifestCheckpoint,
+          afterCapture?: () => Promise<void>,
+        ) => Promise<void>;
+        scan: (target: LocalWorkspaceSyncTarget) => Promise<LocalWorkspaceManifestCheckpoint>;
+      },
+    ) => {
       const selected = params.current();
       const rejected = selected.rejectedResult;
       const replacedRejected = Boolean(
@@ -115,7 +121,8 @@ export function createLocalWorkspaceCheckpointRejection(params: {
           pending_target: input.target,
           checkpoint_json: JSON.stringify(snapshot),
         });
-        await input.settle(false, snapshot);
+        // Recovery above may import into the guest; only this new capture may resume it.
+        await input.settle(false, snapshot, input.afterCapture);
       } else if (replacedRejected) {
         await params.update({ pending_ref: null, pending_target: null, checkpoint_json: null });
       }
