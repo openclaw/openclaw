@@ -1931,6 +1931,26 @@ describe("anthropic transport stream", () => {
         expect(eventTypes).not.toContain("done");
       }
     });
+    it("names the output limit when max_tokens cuts a tool call", async () => {
+      const started = await startRepairServer([
+        startMessage("msg_loopback", 4, "claude-opus-5"),
+        anthropicContentBlockStart(0, {
+          type: "tool_use",
+          id: "call_cut",
+          name: "read",
+          input: {},
+        }),
+        jsonDelta(0, '{"path":"a'),
+        anthropicMessageDelta({ stop_reason: "max_tokens" }, { output_tokens: 8192 }),
+        { type: "message_stop" },
+      ]);
+      server = started.server;
+      const { result } = await runRepairStream(started.baseUrl);
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toBe(
+        "Provider output limit reached inside a tool call; raise maxTokens",
+      );
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

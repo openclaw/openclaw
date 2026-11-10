@@ -571,7 +571,13 @@ export async function runAnthropicStreamLifecycle(params: {
           throw new Error(output.errorMessage ?? "An unknown error occurred");
         }
         if ([...blockIndexes.values()].some((index) => blocks[index]?.type === "toolCall")) {
-          throw new Error("Provider completed stream with an incomplete tool call");
+          // Name the output cap so it does not read as a provider defect. Keep the
+          // text in sync with PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.
+          throw new Error(
+            output.stopReason === "length"
+              ? "Provider output limit reached inside a tool call; raise maxTokens"
+              : "Provider completed stream with an incomplete tool call",
+          );
         }
         // Proxies may omit message_stop, but EOF cannot complete a started response
         // without a terminal fact. Preserve their existing empty/ping-only behavior.

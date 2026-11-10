@@ -54,6 +54,7 @@ export const TERMINATED_TRANSPORT_MESSAGE_RE = /^terminated$/i;
 const PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES = new Set([
   "Provider completed tool call with malformed JSON arguments",
   "Provider completed stream with an incomplete tool call",
+  "Provider output limit reached inside a tool call; raise maxTokens",
   "Provider returned an incomplete or malformed tool call",
   "Mistral completed tool call has invalid JSON arguments",
   "Responses stream completed tool call with invalid JSON arguments",
