@@ -56,6 +56,7 @@ import {
 } from "./manager-index-metadata.js";
 import { readMemoryIndex } from "./manager-index-read.js";
 import { bindPostgresMemoryPublication } from "./manager-publication-postgres.js";
+import { MemoryPublicationStage } from "./manager-publication-stage.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheHeader,
@@ -222,10 +223,10 @@ function createPublicationBackend(
     assertMemoryShadowIdentity(databasePath, input.fileIdentity);
   }
   // Each agent run binds its own backend; shadow runs use the private writer queue.
-  // Large sources stay in worker memory without per-fragment SQLite I/O.
+  // Staged sources avoid per-fragment SQLite I/O; past a budget they spill to a private file.
   let staged:
     | ({
-        fragments: MemoryPublicationFragment[];
+        stage: MemoryPublicationStage;
       } & (
         | { kind: "source"; header: MemorySourceIndexHeader }
         | { kind: "cache"; header: MemoryEmbeddingCacheHeader }
@@ -238,6 +239,7 @@ function createPublicationBackend(
     }
   };
   const discard = () => {
+    staged?.stage.close();
     staged = undefined;
   };
   const finish = <T>(outcome: MemoryPublicationResult<T>): MemoryPublicationResult<T> => {
@@ -479,10 +481,12 @@ function createPublicationBackend(
         );
       }
       if (command.type === "stage.start" || command.type === "cache.stage.start") {
+        discard();
+        const stage = new MemoryPublicationStage();
         staged =
           command.type === "stage.start"
-            ? { ...command.input, kind: "source", fragments: [] }
-            : { ...command.input, kind: "cache", fragments: [] };
+            ? { ...command.input, kind: "source", stage }
+            : { ...command.input, kind: "cache", stage };
         return undefined;
       }
       if (command.type === "stage.discard") {
@@ -493,7 +497,7 @@ function createPublicationBackend(
         if (!staged) {
           throw new Error("Memory publication input was not started");
         }
-        staged.fragments.push(...command.input.fragments);
+        staged.stage.append(command.input.fragments);
         return undefined;
       }
       if (command.type === "cache.prune") {
@@ -529,8 +533,8 @@ function createPublicationBackend(
             throw new Error("Memory cache input was not started");
           }
           header = staged.header;
-          const fragments = staged.fragments;
-          readEntries = () => readPublicationRows<MemoryEmbeddingCacheEntry>(fragments);
+          const stage = staged.stage;
+          readEntries = () => readPublicationRows<MemoryEmbeddingCacheEntry>(stage.read());
         }
         const outcome = writeCache((size) => {
           const eligible = new Map<string, boolean>();
@@ -666,7 +670,7 @@ function createPublicationBackend(
           throw new Error("Memory publication input was not started");
         }
         header = staged.header;
-        rows = readPublicationRows<MemorySourceIndexRow>(staged.fragments);
+        rows = readPublicationRows<MemorySourceIndexRow>(staged.stage.read());
       }
       let facts: ReturnType<typeof readMemoryDatabaseFacts> | undefined;
       const outcome = write(() => {

@@ -1,0 +1,2 @@
+105
+# Memory rebuild: a heap-limited read and SQLite worker red/green for reusing and publishing more vectors than either heap holds.
