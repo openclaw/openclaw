@@ -83,8 +83,8 @@ export async function restoreRepairGateway(params: {
     };
     const expectedVersion = await readPackageVersion(params.root);
     const expectedBuildId = await readBuiltGatewayBuildId(params.root);
-    // One service inspection and admission check right before the effect; the
-    // synchronous checks below cover only this function's own awaits.
+    // Inspect the service once; synchronous guards cover our awaits and native
+    // preparation without repeating the full ownership inspection.
     const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
     assertDoctorServiceSelection(env, state.env);
     const verdict = await inspectManagedGatewayServiceBeforeUpdate({ root: params.root, state });
@@ -117,7 +117,14 @@ export async function restoreRepairGateway(params: {
         stdout: params.json ? process.stderr : process.stdout,
         preserveDefinition: true,
         assertCurrent,
-        beforeEffect: assertCurrent,
+        beforeEffect: () => {
+          assertCurrent();
+          if (readPendingStop().started) {
+            throw new Error(
+              "Recovered update's Gateway stop intent changed. Run openclaw gateway status --deep.",
+            );
+          }
+        },
       });
     }
     // Keep startup evidence independent of readiness failures and later stopped snapshots.
