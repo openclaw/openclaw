@@ -359,6 +359,26 @@ Research public sources.
       expect.objectContaining({ id: "file:workspace/AGENTS.md", included: true }),
       ...choices.excluded.map((id) => expect.objectContaining({ id, included: false })),
     ]);
+    expect(review.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "skill",
+          requirement: { source: "clawhub", ref: "@maker/sources", version: "1.2.3" },
+        }),
+        expect.objectContaining({
+          kind: "plugin",
+          requirement: { source: "clawhub", ref: "@maker/github", version: "2.0.0" },
+        }),
+        expect.objectContaining({
+          kind: "automation",
+          automation: {
+            message: "Recap research.",
+            schedule: { cron: "0 9 * * 1", timezone: "UTC" },
+            session: "isolated",
+          },
+        }),
+      ]),
+    );
     const template = review.files.find((file) => file.path === "CLAW.md")!.content;
     expect(template).toContain("description: Researches public sources for a new user.");
     expect(template).not.toMatch(

@@ -71,6 +71,12 @@ export type TemplateDraftReviewItem = {
   label: string;
   detail: string;
   included: boolean;
+  requirement?: { source: "clawhub"; ref: string; version: string };
+  automation?: {
+    message: string;
+    schedule: { cron: string; timezone: string };
+    session: "main" | "isolated";
+  };
 };
 export type TemplatesDraftsReadResult = { content: string; revision: string };
 export type TemplatesDraftsCreateResult = { draftId: string; prompt: string };

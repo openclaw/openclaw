@@ -205,6 +205,7 @@ export async function prepareTemplateDraft(params: {
       kind: pkg.kind === "skill" ? "skill" : "plugin",
       label: pkg.ref,
       detail: `${pkg.source} · ${pkg.version}`,
+      requirement: { source: pkg.source, ref: pkg.ref, version: pkg.version },
     });
   }
   for (const [name, server] of Object.entries(draftManifest.mcpServers)) {
@@ -216,6 +217,7 @@ export async function prepareTemplateDraft(params: {
       kind: "automation",
       label: job.name ?? job.id,
       detail: `${job.schedule.cron} · ${job.schedule.timezone}`,
+      automation: { message: job.message, schedule: job.schedule, session: job.session },
     });
   }
   const known = new Set(items.map((item) => item.id));
