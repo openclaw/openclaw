@@ -16,6 +16,7 @@ type ClaudeListedCapabilities = {
   xhighEffort: boolean;
   maxEffort: boolean;
   disabledThinking?: boolean;
+  serverCompaction?: boolean;
 };
 
 function readSupported(capabilities: unknown, path: readonly string[]): boolean | undefined {
@@ -39,11 +40,13 @@ function readClaudeListedCapabilities(capabilities: unknown): ClaudeListedCapabi
     return undefined;
   }
   const disabledThinking = readSupported(capabilities, ["thinking", "types", "disabled"]);
+  const serverCompaction = readSupported(capabilities, ["context_management", "compact_20260112"]);
   return {
     adaptiveThinking,
     xhighEffort,
     maxEffort,
     ...(disabledThinking === undefined ? {} : { disabledThinking }),
+    ...(serverCompaction === undefined ? {} : { serverCompaction }),
   };
 }
 

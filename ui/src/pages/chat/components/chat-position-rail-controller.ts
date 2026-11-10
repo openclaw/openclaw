@@ -111,7 +111,7 @@ export function createPositionRail(props: PositionRailParams) {
       return;
     }
     // Native observers supply geometry; offset-only changes read it in the queued frame.
-    const height = scroller.clientHeight;
+    const height = scroller.checkVisibility() ? scroller.clientHeight : 0;
     viewportVisible = height > 0;
     if (!viewportVisible) {
       // Hidden rails retain their mounted window and scroll reserve until they return.

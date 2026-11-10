@@ -47,6 +47,8 @@ export type TemplateAddPlanContext = {
   workspace?: string;
   existingAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
+  /** Workspace owned by the caller's exact pending ordinary creation receipt. */
+  admittedWorkspace?: string;
   existingMcpServerNames?: Iterable<string>;
   existingMcpServers?: Record<string, Record<string, unknown>>;
   packagePreflight?: TemplatePackagePreflight;
@@ -165,7 +167,9 @@ export async function buildTemplateAddPlan(params: {
   const workspaceExistsOnDisk = await lstat(workspace)
     .then(() => true)
     .catch(() => false);
-  const workspaceBlocked = configuredWorkspaceConflict || workspaceExistsOnDisk;
+  const workspaceBlocked =
+    configuredWorkspaceConflict ||
+    (workspaceExistsOnDisk && context.admittedWorkspace !== workspace);
   const workspaceCollisionMessage = configuredWorkspaceConflict
     ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
     : `Workspace ${JSON.stringify(workspace)} already exists.`;
@@ -590,7 +594,7 @@ export async function buildTemplateAddPlan(params: {
   });
 
   // Strict v1 validation permits only deterministic main or isolated targets.
-  for (const job of params.manifest.cronJobs) {
+  for (const job of params.manifest.automations) {
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -610,7 +614,7 @@ export async function buildTemplateAddPlan(params: {
       templateAddCapabilityChange({
         kind: "cronJob",
         id: job.id,
-        path: `cronJobs.${job.id}`,
+        path: `automations.${job.id}`,
         action: "schedule",
         reason: "The Template declares recurring scheduled work.",
         effect: { ...job, agentId: finalId },

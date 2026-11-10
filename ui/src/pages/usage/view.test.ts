@@ -78,6 +78,17 @@ function averageCostSummary(container: ParentNode) {
 }
 
 describe("renderUsage", () => {
+  it("renders the toolbar's filter, display and refresh actions as one row of icon buttons", () => {
+    const { container } = mountReactiveUsage(createUsageProps());
+    const actions = [...container.querySelectorAll(".usage-view-options button")];
+    expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Filters",
+      "Display",
+      "Refresh",
+    ]);
+    expect(actions.every((button) => button.matches(".oc-icon-button--32:not(.btn)"))).toBe(true);
+  });
+
   it("identifies each query removal action and removes only its named token", () => {
     const props = createUsageProps();
     props.filters.queryDraft = 'provider:openai "label:Team Planning"';

@@ -11,7 +11,7 @@
   border-radius: var(--radius-full);
   background: var(--bg-hover);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-decoration: none;
   white-space: nowrap;
 }
@@ -106,7 +106,7 @@
   color: var(--text);
   background: transparent;
   font: inherit;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
 }
 .lr-url:focus {
   border-color: var(--border-strong);
@@ -118,6 +118,15 @@
 }
 .lr-rail-menu {
   min-width: 224px;
+}
+.lr-rail-message {
+  max-width: 28ch;
+  margin: 4px 8px 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .lr-rail-menu .oc-menu-item__icon svg {
   width: 16px;
@@ -154,7 +163,7 @@
 }
 .lr-toolbar--mobile .lr-url {
   height: 32px;
-  font-size: 16px;
+  font-size: var(--control-ui-text-lg);
 }
 .lr-toolbar--mobile .lr-actions {
   display: inline-flex;
@@ -192,7 +201,7 @@
 .lr-initial-form .lr-url {
   height: 36px;
   border: 0;
-  font-size: 16px;
+  font-size: var(--control-ui-text-lg);
 }
 .lr-initial-form button {
   flex: none;
@@ -203,7 +212,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   cursor: default;
 }
 .lr-initial-form button:hover {
@@ -224,7 +233,7 @@
   min-height: 0;
   overflow: auto;
   padding: 24px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
@@ -233,14 +242,14 @@
 }
 h1 {
   margin: 10px 0 16px;
-  font-size: 25px;
+  font-size: calc(25px * var(--control-ui-text-scale));
   line-height: 1.25;
   font-weight: 650;
   letter-spacing: -0.025em;
 }
 h2 {
   margin: 24px 0 12px;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
 }
 a {
@@ -248,7 +257,7 @@ a {
 }
 .lr-meta {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 .lr-item-meta {
   display: flex;
@@ -281,7 +290,7 @@ a {
   padding: 9px 12px;
   border-left: 2px solid var(--warn);
   background: color-mix(in srgb, var(--warn) 8%, transparent);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 .lr-comment {
   border: 1px solid var(--border);
@@ -310,12 +319,12 @@ a {
 }
 .lr-filename {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 .lr-stats {
   white-space: nowrap;
   margin-left: 10px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 .lr-add {
   color: var(--ok);
@@ -330,7 +339,7 @@ a {
   margin: 0;
   overflow: auto;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.7;
   tab-size: 2;
 }
@@ -437,7 +446,7 @@ a {
 }
 .lr-loading-label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   margin: 12px 0 18px;
 }
 .lr-skeleton {
@@ -473,32 +482,8 @@ a {
   height: 10px;
   margin: 12px 0;
 }
-.lr-refresh-note {
-  position: sticky;
-  top: 30px;
-  z-index: 2;
-  height: 0;
-  display: flex;
-  justify-content: flex-end;
-}
-.lr-refresh-note > span {
-  height: fit-content;
-  max-width: 100%;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  background: var(--bg);
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--text) 8%, transparent);
-  font-size: 11px;
-}
-.lr-refresh-note button {
-  margin-left: 8px;
-  font: inherit;
-  color: var(--accent);
-  background: transparent;
-  border: 0;
-  cursor: default;
+.lr-refresh[aria-busy="true"] svg {
+  animation: btn-spinner-spin 1s linear infinite;
 }
 @keyframes lr-loading-pulse {
   50% {
@@ -506,7 +491,8 @@ a {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .lr-skeleton {
+  .lr-skeleton,
+  .lr-refresh[aria-busy="true"] svg {
     animation: none;
   }
 }

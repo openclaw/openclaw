@@ -7,7 +7,7 @@ openclaw-chat-outbox-recovery:empty {
   max-height: 108px;
   overflow-y: auto;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
 }
 
@@ -57,7 +57,7 @@ openclaw-chat-outbox-recovery:empty {
 .chat-outbox-recovery__actions .btn {
   min-height: 24px;
   padding: 2px 6px;
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-outbox-recovery__actions .btn:not(:hover, :focus-visible) {

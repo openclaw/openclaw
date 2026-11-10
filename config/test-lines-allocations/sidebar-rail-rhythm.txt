@@ -1,0 +1,2 @@
+50
+# Browser geometry regression for one sidebar rail control size and pitch, and one row fill edge and text column across the Sessions, Pages, pinned and Users views.

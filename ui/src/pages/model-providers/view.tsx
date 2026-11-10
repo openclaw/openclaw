@@ -25,7 +25,6 @@ import {
 } from "../../lib/reactive/provider-presentation.tsx";
 import type { JSX } from "../../types/solid-elements.js";
 import "../../styles/model-providers.css";
-import "../../styles/usage.css";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { DefaultModels } from "./default-models-view.tsx";

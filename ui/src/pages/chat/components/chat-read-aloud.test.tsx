@@ -127,15 +127,18 @@ it("keeps native transcript speech with its current application context", async 
   const props = {
     applicationContext: context,
     transcript,
-    messages: [{ role: "assistant", content: speechText }],
+    messages: [{ role: "assistant", content: speechText, timestamp: 1000 }],
   };
   const container = renderChatView(props);
   const action = (name: string) =>
     container.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`);
+  // Cold transcript admission can defer the initial rows into another task.
+  await waitForSolid(() => expect(action("Read aloud")).not.toBeNull());
   const thread = container.querySelector(".chat-thread-inner");
   const button = action("Read aloud")!;
   button.click();
   await waitForSolid(() => expect(audio[0]?.src).toBe("blob:synthetic-speech"));
+  await waitForSolid(() => expect(action("Stop reading")).toBe(button));
   expect(play).toHaveBeenCalledTimes(2);
   expect(request).toHaveBeenCalledWith("tts.speak", { text: speechText });
   renderChatInto(container, props);
@@ -149,8 +152,8 @@ it("keeps native transcript speech with its current application context", async 
       runtimeConfig,
     }),
   });
+  await waitForSolid(() => expect(revoke).toHaveBeenCalledWith("blob:synthetic-speech"));
   expect(container.querySelector(".chat-thread-inner")).toBe(thread);
-  expect(revoke).toHaveBeenCalledWith("blob:synthetic-speech");
   action("Read aloud")!.click();
   await waitForSolid(() => expect(replacementRequest).toHaveBeenCalledOnce());
   expect(request).toHaveBeenCalledOnce();

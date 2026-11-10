@@ -489,6 +489,22 @@ describe("SessionManager stale-parent rebase", () => {
     },
   );
 
+  it.each(["appendMessage", "appendMessageAsync"] as const)(
+    "rebases hidden nested tool activity after a same-turn source reply (%s)",
+    async (method) => {
+      // Child coordination turns hide their records; a parallel message(action=send)
+      // can commit its reply before the nested send's activity is recorded.
+      const { manager, persist, events } = await setup();
+      const callId = manager.appendMessage(rebaseAssistant("calling tools"));
+      await persist("source-reply", rebaseAssistant("reply for the human"), 3, callId);
+      const id = await manager[method]({ ...nestedTool(4), display: false });
+      expect((await events()).slice(-2)).toMatchObject([
+        { id: "source-reply", parentId: callId },
+        { id, parentId: "source-reply", message: { display: false } },
+      ]);
+    },
+  );
+
   it("rejects a stale custom message after a same-turn assistant append", async () => {
     const { manager, persist, events } = await setup();
     await persist("delivered-reply", rebaseAssistant("stale reply"));

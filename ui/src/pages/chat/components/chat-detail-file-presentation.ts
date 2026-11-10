@@ -1,6 +1,7 @@
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
+import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import type { createAttachmentDownload } from "./chat-attachment-download.ts";
 import type { createFileCopy } from "./chat-file-copy.ts";
@@ -170,6 +171,9 @@ export function createFilePresentationActions(context: {
       return;
     }
     if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
+      if (isComposingKeyboardEvent(event)) {
+        return;
+      }
       event.preventDefault();
       moveFileSearch(event.shiftKey ? -1 : 1);
     }

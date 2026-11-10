@@ -25,6 +25,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { initializeLocalWorkspaceProjection } from "./local-workspace-checkout.js";
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
 import { cloneLocalWorkspaceTemplate } from "./local-workspace-template.js";
+import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
 
 const mocks = vi.hoisted(() => ({
   backend: vi.fn(),
@@ -60,7 +61,7 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
 const sandbox = resolveSandboxConfigForAgent();
 const read = (root: string, relative: string) => fs.readFile(path.join(root, relative), "utf8");
 const git = (root: string, ...args: string[]) => requireGit(root, args);
-const sourceText = "export const version = 'original';\n";
+const sourceText = "export const version = 'initial';\n";
 const firstLock = "lockfileVersion: '9.0'\n# first generation\n";
 const secondLock = "lockfileVersion: '9.0'\n# second generation\n";
 const dependencyFile = "node_modules/dependency/index.js";
@@ -153,25 +154,31 @@ async function fixture(signal: AbortSignal) {
     const temporaryRoot = path.join(root, `${name}-temporary`);
     const destination = path.join(root, name);
     await fs.mkdir(temporaryRoot);
-    await expect(
-      cloneLocalWorkspaceTemplate({
-        source,
-        repoRoot: source,
+    const manifest = await cloneLocalWorkspaceTemplate({
+      source,
+      repoRoot: source,
+      baseCommit: commit,
+      branch: `openclaw/${name}`,
+      destination,
+      temporaryRoot,
+      templateRoot,
+      env,
+      sandbox,
+      guard: {
+        signal,
+        commitGuard: () => signal.throwIfAborted(),
+        rollbackGuard: () => {},
+        requireDiskSpace: async () => {},
+      },
+    });
+    expect(manifest).toEqual(
+      await captureWorkspaceManifestDocument({
+        root: destination,
         baseCommit: commit,
-        branch: `openclaw/${name}`,
-        destination,
-        temporaryRoot,
-        templateRoot,
-        env,
-        sandbox,
-        guard: {
-          signal,
-          commitGuard: () => signal.throwIfAborted(),
-          rollbackGuard: () => {},
-          requireDiskSpace: async () => {},
-        },
+        buildCacheInputs: new Set(),
+        signal,
       }),
-    ).resolves.toBe(true);
+    );
     return destination;
   };
 }
@@ -199,10 +206,17 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
   expect(await read(first, dependencyFile)).toBe("consumer edit\n");
   expect(await git(second, "branch", "--show-current")).toBe("openclaw/second");
   expect(mocks.install).toHaveBeenCalledOnce();
-  const refreshed = await Promise.all([
-    clone("updated-a", sourceCommit),
-    clone("updated-b", sourceCommit),
-  ]);
+  // Replacement refs must not hide same-size changes from exact-commit refreshes.
+  await git(source, "replace", sourceCommit, baseCommit);
+  let refreshed: string[];
+  try {
+    refreshed = await Promise.all([
+      clone("updated-a", sourceCommit),
+      clone("updated-b", sourceCommit),
+    ]);
+  } finally {
+    await git(source, "replace", "--delete", sourceCommit);
+  }
   for (const checkout of refreshed) {
     expect(await git(checkout, "rev-parse", "HEAD")).toBe(sourceCommit);
     expect(await read(checkout, "source.ts")).toBe("export const version = 'updated';\n");
@@ -484,7 +498,14 @@ it("joins background preparation through the allocation owner", async ({ signal 
       }),
     );
     release.resolve();
-    await expect(cloning).resolves.toBe(true);
+    expect(await cloning).toEqual(
+      await captureWorkspaceManifestDocument({
+        root: destination,
+        baseCommit: selectedCommit,
+        buildCacheInputs: new Set(),
+        signal,
+      }),
+    );
     await preparation;
     expect(await read(destination, dependencyFile)).toBe(secondLock);
     expect(mocks.install).toHaveBeenCalledOnce();

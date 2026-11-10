@@ -8,6 +8,11 @@ read_when:
 
 ## Local equivalents
 
+Changed-file, backport, and Plugin SDK comparisons acquire missing commit objects
+from `origin` with normal history negotiation before reading their trees. They
+retain the clone's blob filter, refs, and `FETCH_HEAD`; unavailable local ref names
+remain errors. Local-availability probes do not fetch implicitly.
+
 Strict managed commands join their process group and captured output before
 releasing temporary resources. A leader can exit before an unreferenced helper
 finishes responding to stdin EOF, so normal POSIX exit reserves half the existing

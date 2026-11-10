@@ -28,7 +28,7 @@
   border-radius: 7px;
   color: var(--muted);
   white-space: nowrap;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--control-ui-text-scale));
   transition:
     color 0.12s ease,
     background 0.12s ease,
@@ -76,7 +76,7 @@
   flex: 1 1 auto;
 }
 .tabstrip-tab__status {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   color: var(--muted);
 }
 .tabstrip-tab__badge {
