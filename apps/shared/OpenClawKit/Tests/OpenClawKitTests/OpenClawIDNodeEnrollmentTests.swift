@@ -437,7 +437,7 @@ struct OpenClawIDNodeEnrollmentTests {
         }
     }
 
-    @Test func inflatedSnapshotIsRefusedUnkeptAndARebindUnderNewKeysIsDialed() throws {
+    @Test func inflatedSnapshotIsRefusedUnkeptAndARebindUnderNewKeysIsDialed() async throws {
         let (fixture, json) = try fixture()
         let root = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(repeating: 42, count: 32))
         let fingerprint = OpenClawIDNodeIdentity.hex(SHA256.hash(data: root.publicKey.rawRepresentation))
@@ -477,6 +477,31 @@ struct OpenClawIDNodeEnrollmentTests {
             return try OpenClawIDNodeTrust.assess(response: OpenClawIDCanonicalJSON.object(response).encoded,
                 link: link, discoveryOrigin: origin, peerKey: fixture.node_key.iroh, previous: previous, now: now)
         }
+        // The first response can contain a verified binding with an inflated snapshot. Retain
+        // that binding's pin even though no snapshot/route has ever been accepted, across restart.
+        let first = try assess(binding: 2, gateway: newGateway, seq: 50, claims: 9,
+                               previous: nil, at: fixture.now)
+        #expect(throws: OpenClawIDNodeEnrollmentError.rollback) { try first.verdict.get() }
+        let pinned = try #require(first.observation)
+        #expect(pinned.bindingSequence == 2)
+        #expect(pinned.snapshotSequence == 0 && pinned.snapshotIssuedAt == 0)
+        #expect(pinned.snapshotBindingSequence == 2 && pinned.snapshotGatewayKey == nil)
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("node-enrollment.sqlite")
+        let id = UUID()
+        let store = OpenClawIDNodeNativeTrustStore(databaseURL: url, enrollmentID: id, assertCurrent: {})
+        try await store.observe(hostname: link.hostname, state: pinned)
+        #expect(try await store.savedEnrollment(hostname: link.hostname) == nil)
+        await store.close()
+        let reopened = OpenClawIDNodeNativeTrustStore(databaseURL: url, enrollmentID: id, assertCurrent: {})
+        let restored = try #require(await reopened.load(hostname: link.hostname))
+        #expect(restored == pinned)
+        #expect(throws: OpenClawIDNodeEnrollmentError.rollback) {
+            try assess(binding: 1, gateway: oldGateway, seq: 51, claims: 1,
+                       previous: restored, at: fixture.now + 1)
+        }
+        await reopened.close()
         let admitted = try assess(binding: 1, gateway: oldGateway, seq: 7, claims: 1, previous: nil, at: fixture.now)
         let state = try admitted.verdict.get().state
         // The old K_gw alone signs binding_seq 9: refused, and nothing of it is kept.
