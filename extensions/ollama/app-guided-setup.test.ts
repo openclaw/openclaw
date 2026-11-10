@@ -18,7 +18,7 @@ const configuredModel: ModelDefinitionConfig = {
 
 async function withOllamaServer(
   options: {
-    models?: string[];
+    models?: Array<string | { name: string; remote_host?: string; remote_model?: string }>;
     loaded?: string[];
     show?: Record<string, unknown>;
     showStatus?: number;
@@ -42,7 +42,11 @@ async function withOllamaServer(
           );
         } else if (request.url === "/api/tags") {
           response.end(
-            JSON.stringify({ models: (options.models ?? [selected]).map((name) => ({ name })) }),
+            JSON.stringify({
+              models: (options.models ?? [selected]).map((model) =>
+                typeof model === "string" ? { name: model } : model,
+              ),
+            }),
           );
         } else if (request.url === "/api/show") {
           inspected.push((JSON.parse(body) as { model: string }).model);
@@ -170,6 +174,51 @@ describe("Ollama app-guided setup HTTP discovery", () => {
       });
       expect(inspected).toEqual([selected]);
     });
+  });
+
+  it.each([
+    { name: "remote host", tag: { remote_host: "https://ollama.com" }, expected: 262_144 },
+    { name: "remote model", tag: { remote_model: "upstream-model" }, expected: 262_144 },
+    { name: "local", tag: {}, expected: 16_384 },
+    {
+      name: "authored remote cap",
+      tag: { remote_model: "upstream-model" },
+      cap: 4096,
+      expected: 4096,
+    },
+    { name: "authored local cap", tag: {}, cap: 4096, expected: 4096 },
+  ])("prepare preserves the $name output budget", async ({ tag, cap, expected }) => {
+    const id = "bare-alias";
+    await withOllamaServer(
+      {
+        models: [{ name: id, ...tag }],
+        loaded: cap === undefined ? [id] : [],
+        show: {
+          model_info: { "model.context_length": 262_144 },
+          capabilities: ["completion", "tools"],
+        },
+      },
+      async (baseUrl) => {
+        const result = await guidedSetup().prepare({
+          config: {
+            models: {
+              providers: {
+                ollama: {
+                  baseUrl,
+                  models: cap === undefined ? [] : [{ ...configuredModel, id, maxTokens: cap }],
+                },
+              },
+            },
+          },
+          env: {},
+          modelRef: `ollama/${id}`,
+        });
+        expect(result?.defaultModel).toBe(`ollama/${id}`);
+        expect(result?.configPatch?.models?.providers?.ollama?.models?.[0]?.maxTokens).toBe(
+          expected,
+        );
+      },
+    );
   });
 
   it.each(["local", "cloud"] as const)(

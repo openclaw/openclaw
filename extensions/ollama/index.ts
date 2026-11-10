@@ -68,6 +68,7 @@ import {
   fetchOllamaModels,
   fetchLoadedOllamaModelNames,
   isOllamaCloudModel,
+  isOllamaRemoteModel,
   queryOllamaModelShowInfo,
   resolveOllamaApiBase,
   toDynamicOllamaModel,
@@ -254,11 +255,16 @@ async function discoverAppGuidedOllamaModel(
       configuredCloudModel ??
       buildOllamaModelDefinition(candidateId, contextWindow, showInfo.capabilities, {
         ...showInfo,
-        remote: isHostedOllamaCloud(connection.baseUrl),
+        remote:
+          isHostedOllamaCloud(connection.baseUrl) ||
+          installedModels.some(
+            (candidate) => candidate.name === candidateId && isOllamaRemoteModel(candidate),
+          ),
       });
     model = capLocalOllamaModelContext(
       {
         ...definition,
+        maxTokens: requestedConfiguredModel?.maxTokens ?? definition.maxTokens,
         thinkingLevelMap: definition.thinkingLevelMap ?? showInfo.thinkingLevelMap,
         contextWindow,
         compat: { ...definition.compat, supportsTools: true },
