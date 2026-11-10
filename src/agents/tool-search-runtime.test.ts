@@ -258,7 +258,8 @@ describe("Tool Search input schemas", () => {
     const wrapped = finalized.map((tool) => copyAgentToolMetadata(tool, { ...tool }));
     const { catalogRef, runtime } = createRuntime(wrapped);
     const advertised = catalogRef.current?.entries[0]?.parameters;
-    expect(advertised).toHaveProperty("properties.optional.enum", ["true"]);
+    expect(advertised).toHaveProperty("properties.optional.type", "boolean");
+    expect(advertised).not.toHaveProperty("properties.optional.enum");
 
     const input = { path: "nonexistent.txt", optional: true };
     await expect(runtime.call("read", input)).resolves.toBeDefined();

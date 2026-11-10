@@ -6,6 +6,7 @@ import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation
 import {
   prepareLocalWorkspaceCheckpointCapture,
   removeLocalWorkspaceCheckpointCapture,
+  retireLocalWorkspaceCheckpointCapture,
   type LocalWorkspaceSyncOptions,
 } from "./local-workspace-checkpoint.js";
 import { projectionOperations } from "./local-workspace-state.js";
@@ -22,7 +23,11 @@ export async function runLocalWorkspaceProjection<T>(
     quiescence?: Awaited<ReturnType<typeof quiesceLocalWorkspace>>,
     capture?: LocalWorkspaceSyncOptions["capture"],
   ) => Promise<T>,
-  options: { provision?: boolean; reason?: LocalWorkspacePauseReason } = {},
+  options: {
+    provision?: boolean;
+    reason?: LocalWorkspacePauseReason;
+    snapshotCapture?: boolean;
+  } = {},
 ) {
   owner.assertCurrent();
   let previous = store.get();
@@ -46,7 +51,11 @@ export async function runLocalWorkspaceProjection<T>(
   }
   const { quiesceLocalWorkspace, parseLocalWorkspacePausedRuntimes } =
     await import("../../agents/sandbox/local-workspace-quiescence.js");
-  const filesystemOptions = { signal: store.signal, commitGuard: () => void operations.current() };
+  const filesystemOptions = {
+    env: owner.env,
+    signal: store.signal,
+    commitGuard: () => void operations.current(),
+  };
   let quiescence: Awaited<ReturnType<typeof quiesceLocalWorkspace>> | undefined;
   const pause = async () => {
     quiescence =
@@ -67,7 +76,7 @@ export async function runLocalWorkspaceProjection<T>(
         : undefined;
   };
   const capture =
-    previous && options.reason === "checkpoint"
+    previous && options.reason === "checkpoint" && options.snapshotCapture
       ? await prepareLocalWorkspaceCheckpointCapture(
           previous.projection_path,
           filesystemOptions,
@@ -76,8 +85,9 @@ export async function runLocalWorkspaceProjection<T>(
         )
       : undefined;
   await pause();
+  let accepted = false;
   try {
-    return await run(
+    const result = await run(
       operations,
       quiescence && {
         get retired() {
@@ -88,6 +98,8 @@ export async function runLocalWorkspaceProjection<T>(
       },
       capture,
     );
+    accepted = true;
+    return result;
   } catch (error) {
     if (error instanceof Error && workspaceSizeRecoveryPaths(error).length > 0) {
       const { describeLocalWorkspaceRecovery } = await import("./local-workspace-recovery.js");
@@ -112,7 +124,11 @@ export async function runLocalWorkspaceProjection<T>(
       }
     }
     if (previous && options.reason === "checkpoint") {
-      await removeLocalWorkspaceCheckpointCapture(previous.projection_path, filesystemOptions);
+      if (accepted) {
+        await retireLocalWorkspaceCheckpointCapture(previous.projection_path, filesystemOptions);
+      } else {
+        await removeLocalWorkspaceCheckpointCapture(previous.projection_path, filesystemOptions);
+      }
     }
   }
 }

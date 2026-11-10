@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
-import { constants, realpathSync, type BigIntStats } from "node:fs";
+import { constants, lstatSync, realpathSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
+import { isMainThread } from "node:worker_threads";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { sha256File } from "../../infra/directory-durability.js";
 import {
@@ -284,6 +286,26 @@ export async function scanActualWorkspaceManifest(
   const hashContext = activeWorkspaceHashContext();
   const scanConcurrency = 4;
   const discoveryBatchSize = 32;
+  let metadataReads = 0;
+  let metadataYield: Promise<void> | undefined;
+  const readMetadata =
+    params.btrfsSnapshot && !isMainThread
+      ? async (absolute: string): Promise<BigIntStats> => {
+          if (metadataYield) {
+            await metadataYield;
+          }
+          scanSignal.throwIfAborted();
+          const stats = lstatSync(absolute, { bigint: true });
+          // All discovery workers share the yield: even an included-path depth must
+          // service cancellation messages after at most one batch of synchronous reads.
+          if (++metadataReads % discoveryBatchSize === 0) {
+            metadataYield = setImmediate().then(() => {
+              metadataYield = undefined;
+            });
+          }
+          return stats;
+        }
+      : (absolute: string) => fs.lstat(absolute, { bigint: true });
   // Nested discovery batches must not replace their first failure with a later caller abort.
   let taskFailureWasFirst = false;
   const runScans = async (
@@ -398,7 +420,7 @@ export async function scanActualWorkspaceManifest(
     }
     checkTraversal(relative);
     const absolute = path.join(root, relative);
-    const stats = await fs.lstat(absolute, { bigint: true }).catch((error: unknown) => {
+    const stats = await readMetadata(absolute).catch((error: unknown) => {
       if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
         return undefined;
       }
@@ -445,7 +467,7 @@ export async function scanActualWorkspaceManifest(
           return;
         }
         const absolute = path.join(root, relative);
-        const stats = await fs.lstat(absolute, { bigint: true });
+        const stats = await readMetadata(absolute);
         if (stats.isDirectory() && !stats.isSymbolicLink()) {
           if (params.btrfsSnapshot && stats.ino === 2n) {
             throw Object.assign(new Error("Btrfs snapshot omitted a nested subvolume"), {

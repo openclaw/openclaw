@@ -320,14 +320,24 @@ are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
 from the live check. Checkpoints after commands and file mutations use the same
 check for the guest workspace: commands that leave accepted files unchanged do
-not pause the sandbox. For a private checkout provisioned as a btrfs subvolume,
-changed command checkpoints settle any pending recovery while paused, take a
-filesystem snapshot, then resume while the captured files are scanned and
-reconciled into the managed worktree. Other checkouts pause until their files are stored in an immutable Git
+not pause the sandbox. Small, fast workspaces capture directly into an immutable
+Git result. A probe taking at least half a second or an accepted inventory of at
+least 20,000 entries selects filesystem capture for private checkouts provisioned
+as btrfs subvolumes. These checkpoints settle pending recovery while paused, take
+a snapshot, then resume while the captured files are scanned and reconciled into
+the managed worktree. The first capture after substantial workspace growth can
+still use the direct path; later probes see the larger accepted inventory.
+Other checkouts pause until their files are stored in an immutable Git
 result. A snapshot that omits nested subvolumes is discarded and captured again
 under pause, preserving their contents. Command completion still waits for
 canonical acceptance, so a read after a completed command sees its saved changes.
 Later background writes remain in the private checkout for the next checkpoint.
+After acceptance and runtime resume, the workspace lease transfers the snapshot
+to a unique retired path for asynchronous cleanup. The next command can run while
+cleanup continues. Before another snapshot, capture admission waits for cleanup
+and retries any interrupted removal, keeping the cleanup backlog bounded.
+Snapshot creation may wait for dirty data to flush, so the short paused operation
+does not guarantee a fixed maximum pause duration.
 Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.

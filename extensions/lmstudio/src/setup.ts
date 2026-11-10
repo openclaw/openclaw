@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { removeProviderAuthProfilesWithLock } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  resolveDefaultModelMaxTokens,
   selectPreferredLocalModelId,
   type ModelDefinitionConfig,
   type ModelProviderConfig,
@@ -169,7 +170,8 @@ function applyRequestedContextWindowToAllModels(params: {
       requestedContextWindow,
       contextLimitByModelId.get(model.id) ?? requestedContextWindow,
     );
-    return { ...model, contextTokens, maxTokens: Math.min(model.maxTokens, contextTokens) };
+    // These fresh discovery rows carry a synthesized cap, not an authored output limit.
+    return { ...model, contextTokens, maxTokens: resolveDefaultModelMaxTokens(contextTokens) };
   });
 }
 
