@@ -338,7 +338,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "nodeHost.workerRuns.capacity":
     "Maximum concurrent worker sessions hosted by this node (default: the number of available CPU cores). Must be an integer from 1 through 1024.",
   "nodeHost.workerRuns.isolation":
-    'Select the worker-session process boundary: "none" runs directly on the node host (default); "container" requires a working Docker-compatible engine and never falls back to host execution.',
+    'Select the worker-session process boundary: "none" runs directly on the node host (default); "container" requires a working Docker-compatible engine; "filesystem" restricts Linux workers to their workspace, model HOME, and temporary directory using Landlock ABI 3+. Isolation setup failures never fall back to unrestricted execution.',
   "nodeHost.workerRuns.containerImage":
     'Optional Node 24.22.1+ or 26.12.1+ image for container-isolated workers (default: "node:24.22.1-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
   "nodeHost.browserProxy":

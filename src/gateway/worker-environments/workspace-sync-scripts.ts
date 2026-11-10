@@ -271,7 +271,7 @@ function comparePathNames(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 async function nulPaths(args) {
-  const value = await readManifestGit(root, ["ls-files", "-z", ...args], MAX_WORKSPACE_INVENTORY_PATH_BYTES);
+  const value = await readManifestGit(root, ["-c", "core.fsmonitor=false", "ls-files", "-z", ...args], MAX_WORKSPACE_INVENTORY_PATH_BYTES);
   const paths = value.toString("utf8").split("\0").filter(Boolean);
   if (paths.length > MAX_WORKSPACE_GIT_CANDIDATES) {
     fail("worker workspace has too many Git path candidates");

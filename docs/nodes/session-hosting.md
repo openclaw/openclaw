@@ -395,9 +395,10 @@ This relaxes only the writability check for the listed ancestors. Private state
 and temporary directories must remain private and correctly owned; fs-safe's
 ownership, symlink, confinement, and identity checks still apply. Trusting an
 ancestor does not prevent another writer from replacing directories below it.
-Use this only when the deployment excludes untrusted writers and trusts its
-storage administrators. A PVC or `ReadWriteOnce` access mode alone does not
-establish that isolation.
+Use this only when the deployment prevents untrusted writers, including processes
+sharing the node's UID, from renaming or recreating the trusted ancestry throughout
+the workspace lifetime, and trusts its storage administrators. A dedicated Pod,
+PVC, or `ReadWriteOnce` access mode alone does not establish that isolation.
 
 ### Work in an existing device folder
 
@@ -456,6 +457,30 @@ when you need to upload attachments. The Gateway Files panel and workspace revea
 are unavailable for device-folder sessions; use the agent's file tools on the
 selected device instead. Gateway file operations reject these sessions rather
 than reading or writing a similarly named local workspace.
+
+### Restrict Linux worker filesystem access
+
+Set `nodeHost.workerRuns.isolation` to `"filesystem"` to restrict the worker
+process and its descendants before the worker runtime starts. This mode requires
+Linux with Landlock ABI 3 or later and the packaged native process helpers.
+Missing support or failed setup rejects the launch; it never falls back to
+unrestricted execution. Restart the node host after changing this setting.
+
+The worker can write its admitted workspace, a model HOME below its captured
+execution HOME, and a per-process temporary directory. It can read runtime code,
+system libraries, and captured platform CA files. It cannot rename those writable
+roots through their ungranted parent directories. The existing process owner
+keeps responsibility for descendants. Normal shutdown removes temporary storage
+after their extinction. An abrupt node-host exit can leave temporary directories;
+remove them only after its worker processes have exited. Worker-local inference
+is supported without a nested container.
+
+This mode restricts filesystem access, not network access, signals, or all file
+metadata operations. It does not revoke inherited file descriptors or confine
+other node processes. Deployments using trusted writable ancestors must still
+exclude other unconfined writers for the workspace lifetime, including writers
+left over from before this mode was enabled. Stop existing workers before enabling
+it. Use existing outer isolation and tool policy for the remaining boundaries.
 
 ### Isolate hosted worker sessions in containers
 

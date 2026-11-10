@@ -103,7 +103,8 @@ export function resolvePreferredOpenClawTmpDir(
   const resolveRoot = loadResolveSecureTempRoot();
   const rootOptions = {
     ...options,
-    preferredDir: options.preferredDir ?? DEFAULT_POSIX_TMP_ROOT,
+    preferredDir:
+      options.preferredDir ?? process.env.OPENCLAW_INTERNAL_WORKER_TMPDIR ?? DEFAULT_POSIX_TMP_ROOT,
     fallbackPrefix: "openclaw",
     warningPrefix: "[openclaw]",
     unsafeFallbackLabel: "OpenClaw temp dir",

@@ -65,7 +65,7 @@ export async function runNodeWorkspaceManifestCapture(
   },
 ): Promise<string> {
   const { env, signal, ...input } = params;
-  const commandEnv = workspaceCommandEnv(input.home, env);
+  const commandEnv = { ...workspaceCommandEnv(input.home, env), GIT_NO_LAZY_FETCH: "1" };
   return await computeWorkspaceManifest(
     { type: "workspace.manifest.remote-capture", input },
     signal,

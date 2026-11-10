@@ -120,6 +120,101 @@ describe("device worker placement dispatch", () => {
     clearRuntimeConfigSnapshot();
   });
 
+  it.each([true, false])(
+    "resolves a required named device before repository admission (paired=%s)",
+    async (paired) => {
+      const profile = { provider: "device", settings: { device: "device-1", inference: "worker" } };
+      setRuntimeConfigSnapshot({
+        cloudWorkers: {
+          requiredProfile: "dedicated-native",
+          profiles: { "dedicated-native": profile },
+        },
+      });
+      const harness = await createHarness(database, placementStore, {
+        resolveWorkspace: async () => ({
+          kind: "repository",
+          repository: {
+            workspaceId: "repository-1",
+            agentId: REQUEST.agentId,
+            sessionKey: REQUEST.sessionKey,
+            url: "https://github.com/acme/public.git",
+            requestedRef: null,
+            runSetupScript: false,
+            baseCommit: null,
+            baseManifestHash: null,
+            branch: "session-1",
+            checkpointRef: null,
+            manifestHash: null,
+            revision: 1,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+          },
+        }),
+      });
+      bindDeviceWorkerAvailability(harness.environments, async () =>
+        paired
+          ? { available: true, node: deviceProof() }
+          : { available: false, unavailableReason: "unpaired" },
+      );
+      // Stop at allocation: this regression owns admission, not Git or node transport.
+      vi.mocked(harness.environments.createWithRequest).mockRejectedValue(
+        new Error("allocation boundary reached"),
+      );
+      await expect(
+        harness.service.dispatch({ ...REQUEST, profileId: "dedicated-native" }),
+      ).rejects.toThrow(paired ? "allocation boundary reached" : "not a paired node host");
+      if (paired) {
+        expect(harness.environments.createWithRequest).toHaveBeenCalledWith(
+          expect.objectContaining({
+            profileId: "dedicated-native",
+            inheritedProfile: {
+              providerId: "device",
+              profileSnapshot: { install: "bundle", settings: profile.settings },
+            },
+          }),
+        );
+      } else {
+        expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["removed", "changed"])(
+    "revokes a named device profile %s while dispatch awaits the workspace",
+    async (change) => {
+      setRuntimeConfigSnapshot({
+        cloudWorkers: {
+          requiredProfile: "dedicated-native",
+          profiles: {
+            "dedicated-native": { provider: "device", settings: { device: "device-1" } },
+          },
+        },
+      });
+      const harness = await createHarness(database, placementStore, {
+        resolveWorkspace: async () => {
+          setRuntimeConfigSnapshot({
+            cloudWorkers: {
+              requiredProfile: "dedicated-native",
+              profiles: change === "removed" ? {} : { "dedicated-native": { provider: "fake" } },
+            },
+          });
+          return { kind: "local", path: root };
+        },
+      });
+      bindDeviceWorkerAvailability(harness.environments, async () => ({
+        available: true,
+        node: deviceProof(),
+      }));
+      await expect(
+        harness.service.dispatch({ ...REQUEST, profileId: "dedicated-native" }),
+      ).rejects.toMatchObject({
+        code: change === "removed" ? "profile_not_found" : "invalid_profile",
+      });
+      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+      expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    },
+  );
+
   it("provisions, syncs, and activates a local-install device environment", async () => {
     const harness = await createHarness(database, placementStore);
     bindDeviceWorkerAvailability(harness.environments, async () => ({

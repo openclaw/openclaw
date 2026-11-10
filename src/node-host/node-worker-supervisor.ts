@@ -110,6 +110,7 @@ class NodeWorkerSupervisor {
       containerEngine,
       containerLifecycle: this.containerLifecycle,
       containerImage: options.containerImage,
+      filesystemIsolation: options.filesystemIsolation,
       starting: this.starting,
       initialize: () => this.initialize(),
       isClosed: () => this.closed,

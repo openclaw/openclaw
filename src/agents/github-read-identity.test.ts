@@ -575,9 +575,14 @@ describe("prepared GitHub read authority", () => {
   });
 
   it("admits explicit anonymous reads only while native credentials remain absent", async () => {
-    run.mockImplementation(async (argv: string[]) =>
-      argv[2] === "status" ? commandResult('{"hosts":{}}') : commandResult("", 1),
-    );
+    run.mockImplementation(async (argv: string[], { env }: { env: NodeJS.ProcessEnv }) => {
+      if (argv[2] !== "status") {
+        return commandResult("", 1);
+      }
+      // gh reports GH_HOST as an errored account even without stored credentials.
+      const hosts = env.GH_HOST ? { [env.GH_HOST]: [{ state: "error" }] } : {};
+      return commandResult(JSON.stringify({ hosts }));
+    });
     const options = readOptions();
     await expect(prepareRead(options)).rejects.toThrow("credential is unavailable");
     const identity = await prepareRead({ ...options, allowAnonymous: true });

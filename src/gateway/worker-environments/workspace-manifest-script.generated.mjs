@@ -489,7 +489,7 @@ export async function runWorkspaceManifestProgram(
   async function nulPaths(args) {
     const value = await readManifestGit(
       root,
-      ["ls-files", "-z", ...args],
+      ["-c", "core.fsmonitor=false", "ls-files", "-z", ...args],
       MAX_WORKSPACE_INVENTORY_PATH_BYTES,
     );
     const paths = value.toString("utf8").split("\0").filter(Boolean);

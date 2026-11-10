@@ -172,6 +172,7 @@ export class NodeWorkerChildLifecycle {
         containerEngine: this.options.containerEngine,
         containerLifecycle: this.options.containerLifecycle,
         containerImage: this.options.containerImage,
+        filesystemIsolation: this.options.filesystemIsolation,
       });
       if (prepared.kind === "terminal") {
         return prepared.receipt;

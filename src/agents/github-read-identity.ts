@@ -220,7 +220,9 @@ export async function readNativeGitHubToken(
   // configured accounts. Only an empty host map proves anonymous admission.
   const observed = await runGitHubIdentityCommand(
     ["gh", "auth", "status", "--active", "--hostname", githubHost, "--json", "hosts"],
-    commandEnv,
+    // gh counts GH_HOST as a configured host even without credentials.
+    // --hostname already selects the issuer; absence proof must not invent an account.
+    { ...commandEnv, GH_HOST: undefined },
     undefined,
     remainingMs,
   );
