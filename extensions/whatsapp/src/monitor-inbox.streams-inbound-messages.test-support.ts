@@ -80,11 +80,13 @@ export async function expectSocketOperationTimeout(
 export function groupMetadata(params: {
   id?: string;
   subject: string;
+  desc?: string;
   participants?: string[];
 }): GroupMetadata {
   return {
     id: params.id ?? "123@g.us",
     subject: params.subject,
+    desc: params.desc,
     owner: undefined,
     participants: (params.participants ?? ["555@s.whatsapp.net"]).map((id) => ({ id })),
   };

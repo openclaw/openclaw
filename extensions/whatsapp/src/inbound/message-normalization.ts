@@ -93,10 +93,12 @@ export function createWhatsAppInboundMessageNormalizer(options: {
       : from;
 
     let groupSubject: string | undefined;
+    let groupDesc: string | undefined;
     let groupParticipants: string[] | undefined;
     if (group) {
       const meta = await groupMetadata.get(remoteJid);
       groupSubject = meta.subject;
+      groupDesc = meta.desc;
       groupParticipants = meta.participants;
     }
     const messageTimestampSeconds = options.parseTimestampSeconds(msg.messageTimestamp);
@@ -222,6 +224,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
       from,
       senderE164,
       groupSubject,
+      groupDesc,
       groupParticipants,
       messageTimestampMs,
       access,
