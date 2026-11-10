@@ -40,7 +40,11 @@ requires the shared database that this connection must open. Use an env, file or
 exec SecretRef instead; `openclaw doctor` reports invalid connection refs.
 The host resolves the secret and passes the connection to
 database workers; workers do not resolve SecretRefs. Treat the DSN as a credential
-and do not put it in logs or diagnostic captures.
+and do not put it in logs or diagnostic captures. Active PostgreSQL connection
+environment references are omitted from inherited host-command and sandbox
+environments, including custom names. Explicit user-owned environment overrides
+remain supported; changing or clearing the active configuration updates this
+filter.
 
 Restart the Gateway after changing the engine, then run `openclaw doctor` to see
 each store's selected engine. Doctor warns that PostgreSQL is experimental and

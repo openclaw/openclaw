@@ -27,7 +27,10 @@ import type {
   AuthProfileStore,
   RuntimeAuthProfileStore,
 } from "../agents/auth-profiles/types.js";
-import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
+import {
+  cloneConfigWithResolutionFacts,
+  resolveConfigSecretRef,
+} from "../config/resolution-facts.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -39,6 +42,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef, isSecretRef, type SecretRef } from "../config/types.secrets.js";
+import { setGatewayCredentialEnvKeys } from "../infra/host-env-security.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
@@ -858,6 +862,21 @@ export function activateSecretsRuntimeSnapshotState(params: {
   next.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
   const previousLineageStartRevision = activeSnapshotLineageStartRevision;
   activeSnapshot = next;
+  // The active secrets snapshot owns replacement and rollback, not offline DB resolvers.
+  const connectionRef =
+    next.config.database?.engine === "postgres"
+      ? resolveConfigSecretRef({
+          config: next.sourceConfig,
+          path: "database.postgres.connection",
+          value: next.sourceConfig.database?.postgres?.connection,
+          defaults: next.sourceConfig.secrets?.defaults,
+          includeResolved: true,
+        })
+      : null;
+  setGatewayCredentialEnvKeys(
+    "database.postgres.connection",
+    connectionRef?.source === "env" ? [connectionRef.id] : [],
+  );
   activeSnapshotRevision += 1;
   activeSnapshotLineageStartRevision = params.preserveActivationLineage
     ? previousLineageStartRevision
@@ -1214,6 +1233,7 @@ export function clearSecretsRuntimeSnapshotState(): void {
   activeSnapshotLineageAuthStores = [];
   activeSnapshotLineageAuthMutations = {};
   activeSnapshot = null;
+  setGatewayCredentialEnvKeys("database.postgres.connection", []);
   activeRefreshContext = null;
   clearActiveRuntimeWebToolsMetadata();
   setActiveDegradedSecretOwners([]);
