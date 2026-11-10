@@ -1,208 +1,28 @@
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import { request as requestHttp, type ServerResponse } from "node:http";
+import { request as requestHttp } from "node:http";
 import path from "node:path";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import {
-  createMockIncomingRequest,
-  createMockServerResponse,
-  postRawWebhook,
-  withEnv,
-  withServer,
-  withStateDirEnv,
-} from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { postRawWebhook, withEnv, withServer, withStateDirEnv } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
 import { resolveA2aChannelAccount } from "./accounts.js";
-import { a2aChannelPlugin } from "./channel.js";
-import { createA2aGatewayFixture } from "./gateway.test-support.js";
-import type { dispatchA2aInbound } from "./inbound.js";
-import type { A2aTaskStore } from "./task-store.js";
+import {
+  expectReply,
+  rpc,
+  rpcError,
+  rpcFailure,
+  sendRequest,
+  startHttpHarness,
+  taskRequest,
+  taskResult,
+  wireHeaders,
+  workingTask,
+} from "./http.test-support.js";
 import {
   createPendingStoreFixture,
   createTerminalStoreFixture,
 } from "./task-store.test-support.js";
-import type { A2aChannelConfig } from "./types.js";
-
-type HttpReply = { status: number; json(): Promise<unknown>; text(): Promise<string> };
-async function expectReply(reply: HttpReply | Promise<HttpReply>, expected: object, status = 200) {
-  const response = await reply;
-  expect(response.status).toBe(status);
-  await expect(response.json()).resolves.toMatchObject(expected);
-  return response;
-}
-
-function taskRequest(id: string, requestId = "task", method = "GetTask") {
-  return rpc(method, { id }, requestId);
-}
-
-const taskResult = (task: unknown) => ({ result: { task } });
-const rpcError = (code: number, message?: unknown) => ({
-  error: { code, ...(message === undefined ? {} : { message }) },
-});
-const rpc = (method: string, params?: unknown, id: string | number | null = "bad") => ({
-  jsonrpc: "2.0",
-  id,
-  method,
-  ...(params === undefined ? {} : { params }),
-});
-const rpcFailure = (id: string | null, code: number, message: unknown) => ({
-  jsonrpc: "2.0",
-  id,
-  ...rpcError(code, message),
-});
-const wireHeaders = { "content-type": "application/json", authorization: "Bearer alpha-secret" };
-
-vi.mock("node:timers", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:timers")>();
-  return {
-    ...actual,
-    setTimeout: ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
-      globalThis.setTimeout(callback, delay, ...args)) as typeof actual.setTimeout,
-    clearTimeout: ((timer: ReturnType<typeof globalThis.setTimeout> | undefined) =>
-      globalThis.clearTimeout(timer)) as typeof actual.clearTimeout,
-  };
-});
-
-const { createdStores, dispatchers } = vi.hoisted(() => ({
-  createdStores: [] as A2aTaskStore[],
-  dispatchers: new WeakMap<
-    A2aTaskStore,
-    (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>
-  >(),
-}));
-vi.mock("./task-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./task-store.js")>();
-  return {
-    ...actual,
-    A2aTaskStore: class extends actual.A2aTaskStore {
-      constructor(...args: ConstructorParameters<typeof actual.A2aTaskStore>) {
-        super(...args);
-        createdStores.push(this);
-      }
-    },
-  };
-});
-vi.mock("./inbound.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./inbound.js")>()),
-  dispatchA2aInbound: async (message: Parameters<typeof dispatchA2aInbound>[0]) =>
-    dispatchers.get(message.store)?.(message),
-}));
-const activeAccounts: Array<{ controller: AbortController; lifecycle: Promise<unknown> }> = [];
-
-afterEach(async () => {
-  for (const { controller, lifecycle } of activeAccounts.splice(0)) {
-    controller.abort();
-    await lifecycle;
-  }
-  resetPluginRuntimeStateForTest();
-  vi.restoreAllMocks();
-});
-
-async function startHttpHarness(options?: {
-  terminalStore?: ReturnType<typeof createTerminalStoreFixture>;
-  pendingStore?: ReturnType<typeof createPendingStoreFixture>;
-  config?: OpenClawConfig;
-  a2aConfig?: Partial<A2aChannelConfig>;
-  onDispatch?: (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>;
-}) {
-  const { registry, controller, ctx, runtime } = createA2aGatewayFixture({
-    cfg: options?.config ?? {},
-    version: VERSION,
-    terminalStore: options?.terminalStore,
-    pendingStore: options?.pendingStore,
-    config: {
-      peers: { alpha: { token: "alpha-secret" }, beta: { token: "beta-secret" } },
-      ...options?.a2aConfig,
-    },
-  });
-  const lifecycle = Promise.resolve(a2aChannelPlugin.gateway!.startAccount!(ctx));
-  activeAccounts.push({ controller, lifecycle });
-  await vi.waitFor(() =>
-    expect(registry.httpRoutes.some((route) => route.path === "/a2a/v1")).toBe(true),
-  );
-  const taskStore = createdStores.pop();
-  const handler = registry.httpRoutes.find((route) => route.path === "/a2a/v1")?.handler;
-  if (!taskStore || !handler) {
-    throw new Error("A2A account did not register its HTTP route");
-  }
-  const onDispatch = vi.fn<typeof dispatchA2aInbound>(
-    options?.onDispatch ??
-      (async (message) => {
-        await taskStore.complete(message.taskId, `echo: ${message.text}`);
-      }),
-  );
-  dispatchers.set(taskStore, onDispatch);
-  const baseUrl = "http://gateway.example.test";
-
-  const dispatchRequest = async (dispatch: {
-    method: "GET" | "POST";
-    endpoint: string;
-    body?: string;
-    token?: string | null;
-  }) => {
-    const request = createMockIncomingRequest(dispatch.body === undefined ? [] : [dispatch.body]);
-    request.method = dispatch.method;
-    request.url = dispatch.endpoint;
-    request.headers = {
-      host: "gateway.example.test",
-      ...(dispatch.body === undefined
-        ? {}
-        : {
-            "content-type": "application/json",
-            "content-length": String(Buffer.byteLength(dispatch.body)),
-          }),
-      ...(dispatch.token ? { authorization: `Bearer ${dispatch.token}` } : {}),
-    };
-    Object.defineProperty(request.socket, "remoteAddress", { value: "127.0.0.1" });
-
-    const response = createMockServerResponse();
-    const events = new EventEmitter();
-    response.once = events.once.bind(events) as ServerResponse["once"];
-    const originalEnd = response.end.bind(response);
-    response.end = ((body?: string) => {
-      originalEnd(body);
-      events.emit("finish");
-      return response;
-    }) as ServerResponse["end"];
-    await handler(request, response);
-
-    return {
-      status: response.statusCode,
-      json: async (): Promise<unknown> => JSON.parse(response.body ?? ""),
-      text: async () => response.body ?? "",
-    };
-  };
-
-  return {
-    baseUrl,
-    runtime,
-    stop: async () => {
-      controller.abort();
-      await lifecycle;
-    },
-    taskStore,
-    handler,
-    onDispatch,
-    get: (endpoint: string) => dispatchRequest({ method: "GET", endpoint }),
-    post: (body: unknown, token: string | null = "alpha-secret") =>
-      dispatchRequest({
-        method: "POST",
-        endpoint: "/a2a/v1",
-        body: typeof body === "string" ? body : JSON.stringify(body),
-        token,
-      }),
-  };
-}
-
-async function workingTask(harness: Awaited<ReturnType<typeof startHttpHarness>>) {
-  const response = await harness.post(sendRequest({ returnImmediately: true }));
-  const { result } = (await response.json()) as { result: { task: { id: string } } };
-  return result.task.id;
-}
 
 it.each(["request body", "durable admission", "blocking result", "batch result"] as const)(
   "rechecks peer authorization after awaiting %s",
@@ -320,29 +140,6 @@ it.each(["request body", "durable admission", "blocking result", "batch result"]
     );
   },
 );
-
-function sendRequest({
-  id = "send-1",
-  text = "hello",
-  returnImmediately,
-  ...message
-}: {
-  id?: string | number;
-  taskId?: string;
-  contextId?: string;
-  messageId?: string;
-  text?: string;
-  returnImmediately?: boolean;
-} = {}) {
-  return rpc(
-    "SendMessage",
-    {
-      message: { ...message, role: "ROLE_USER", parts: [{ text }] },
-      ...(returnImmediately ? { configuration: { returnImmediately: true } } : {}),
-    },
-    id,
-  );
-}
 
 it("serves the same retained terminal task only to its owner after an account restarts", async () => {
   const terminalStore = createTerminalStoreFixture();
@@ -514,7 +311,7 @@ describe("A2A HTTP agent discovery", () => {
           },
         ],
         version: VERSION,
-        capabilities: { streaming: false, pushNotifications: false },
+        capabilities: { streaming: true, pushNotifications: false },
         defaultInputModes: ["text/plain"],
         defaultOutputModes: ["text/plain"],
         skills: ["writer", "reviewer"].map((id) => ({
@@ -718,6 +515,9 @@ describe("A2A JSON-RPC protocol boundary", () => {
       -32602,
     ],
     ["missing task id", rpc("GetTask", {}), -32602],
+    ["missing stream message", rpc("SendStreamingMessage", {}), -32602],
+    ["missing subscription task id", rpc("SubscribeToTask", {}), -32602],
+    ["unknown subscription task", rpc("SubscribeToTask", { id: "unknown" }), -32001],
   ])("rejects %s", async (_label, request, errorCode) => {
     const harness = await startHttpHarness();
     await expectReply(harness.post(request), { id: "bad", error: { code: errorCode } });
@@ -730,8 +530,6 @@ describe("A2A JSON-RPC protocol boundary", () => {
     ["ListTaskPushNotificationConfig", -32003],
     ["ListTaskPushNotificationConfigs", -32003],
     ["DeleteTaskPushNotificationConfig", -32003],
-    ["SendStreamingMessage", -32004],
-    ["SubscribeToTask", -32004],
     ["GetExtendedAgentCard", -32004],
     ["UnknownTaskPushNotificationConfig", -32601],
   ])("rejects %s with capability-specific error %s", async (method, code) => {

@@ -122,6 +122,29 @@ The task transitions from `TASK_STATE_WORKING` to `TASK_STATE_COMPLETED`, `TASK_
 
 `CancelTask` is refused with JSON-RPC error `-32004` rather than acknowledged. A dispatched agent run has no plugin API for stopping it, so reporting `TASK_STATE_CANCELED` would tell the peer the work stopped while the run kept using tools. Refusing keeps the reported state honest.
 
+## Stream a task
+
+Use `SendStreamingMessage` with the same parameters as `SendMessage` to receive
+`text/event-stream`. The first JSON-RPC SSE event contains the accepted Task.
+Native assistant previews then arrive as `artifactUpdate` events with a stable
+`artifactId`, `append: false`, and cumulative replacement text. These are sanitized
+preview snapshots from the running agent, including when its turn was queued;
+they are not individual model tokens. Tool output, reasoning, and approval details
+are not forwarded. A final artifact update and terminal status follow only after
+the original Task's completion has been recorded.
+
+Disconnecting only ends that subscription. Reconnect with `SubscribeToTask` and
+`params: { "id": "<task-id>" }`, using the same peer credential. The first event is
+the current complete Task snapshot; no inference is restarted. Intermediate
+previews are transient and may be coalesced or lost across Gateway restart.
+The final result follows the persistence and retention rules below.
+
+Streaming requires a single JSON-RPC request with an `id`; batches and notifications
+cannot stream. Each account permits 64 concurrent streams. A subscription closes
+after two minutes, so subscribe to the original Task again if it is still working.
+Slow readers retain only the latest Task snapshot while their socket drains.
+Preview text is capped at 512 KiB; the existing final-result limits still apply.
+
 ## Configure outbound peers
 
 Add a peer URL when OpenClaw should send messages to another A2A agent. Set `outboundToken` when the remote agent requires its own bearer token:
@@ -198,7 +221,7 @@ Outbound destinations come only from operator-configured peer URLs. Inbound call
 
 ## A2A 1.0 limitations
 
-The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Streaming, server-sent events, push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
+The current plugin supports text messages and structured JSON data parts, which are appended as compact JSON text. File URL and raw binary parts are ignored. Push notifications, task cancellation, task listing, extended Agent Cards, and multi-tenant routing are not supported.
 
 The Agent Card advertises `pushNotifications: false`. Push notification configuration methods return JSON-RPC error `-32003` (`PushNotificationNotSupportedError`), as required by the [A2A 1.0 specification](https://a2a-protocol.org/v1.0.0/specification/#334-capability-validation). Other recognized unsupported methods return `-32004`; unknown method names return `-32601`.
 

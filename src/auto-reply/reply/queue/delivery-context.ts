@@ -343,6 +343,9 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
       ? [item.runObservers.onAgentRunTerminalOutcome]
       : [],
   );
+  const partialObservers = items.flatMap((item) =>
+    item.runObservers?.onPartialReply ? [item.runObservers.onPartialReply] : [],
+  );
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const explicitSkillSelections = [
     ...new Map(
@@ -380,10 +383,25 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
     queuedFollowupReplyDisposition: collectReplyDisposition(items),
     runObservers:
-      terminalObservers.length === 0
+      terminalObservers.length === 0 && partialObservers.length === 0
         ? authoritySource?.runObservers
         : {
             ...authoritySource?.runObservers,
+            onPartialReply:
+              partialObservers.length > 0
+                ? async (payload: Parameters<(typeof partialObservers)[number]>[0]) => {
+                    const results = await Promise.allSettled(
+                      partialObservers.map(async (observe) => observe(payload)),
+                    );
+                    const failure = results.find((result) => result.status === "rejected");
+                    if (failure?.status === "rejected") {
+                      throw failure.reason;
+                    }
+                    return results.some(
+                      (result) => result.status === "fulfilled" && result.value !== false,
+                    );
+                  }
+                : undefined,
             onAgentRunTerminalOutcome: (
               outcome: Parameters<(typeof terminalObservers)[number]>[0],
             ) => {

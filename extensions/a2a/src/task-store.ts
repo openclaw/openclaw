@@ -52,7 +52,7 @@ function isDefiniteStorageRefusal(
 
 type A2aTaskWaiter = (task: A2aTaskRecord) => void;
 
-function isTerminalTask(task: A2aTaskRecord): boolean {
+export function isTerminalTask(task: A2aTaskRecord): boolean {
   return [
     "TASK_STATE_COMPLETED",
     "TASK_STATE_FAILED",
@@ -77,6 +77,7 @@ export class A2aTaskStore {
   readonly #taskMessageKeys = new Map<string, string>();
   readonly #terminalTasks = new Map<string, number>();
   readonly #waiters = new Map<string, Set<A2aTaskWaiter>>();
+  readonly #observers = new Map<string, Set<(task: A2aTaskRecord) => void>>();
 
   readonly #writes = new Map<string, Promise<A2aTaskRecord | undefined>>();
   readonly #starts = new Map<string, Promise<void>>();
@@ -203,8 +204,12 @@ export class A2aTaskStore {
       return task;
     }
     const terminal = { ...task };
+    // Previews never become a final answer merely because execution returned no text.
+    terminal.artifacts = [];
     if (text?.trim()) {
-      terminal.artifacts = [{ artifactId: randomUUID(), parts: [{ text }] }];
+      terminal.artifacts = [
+        { artifactId: task.artifacts[0]?.artifactId ?? randomUUID(), parts: [{ text }] },
+      ];
     }
     terminal.status = {
       state: "TASK_STATE_COMPLETED",
@@ -214,6 +219,53 @@ export class A2aTaskStore {
         : {}),
     };
     return this.#finishTask(task, terminal);
+  }
+
+  /** Native, already-sanitized cumulative preview; final persistence remains completion-owned. */
+  update(taskId: string, text: string | undefined): void {
+    const task = this.#tasks.get(taskId);
+    if (
+      !task ||
+      task.status.state !== "TASK_STATE_WORKING" ||
+      this.#writes.has(taskId) ||
+      !text?.trim()
+    ) {
+      return;
+    }
+    // Bound transient previews independently of the final result's existing storage limits.
+    const previous = task.artifacts[0]?.parts[0];
+    if (
+      Buffer.byteLength(text) > 512 * 1024 ||
+      (previous && "text" in previous && previous.text === text)
+    ) {
+      return;
+    }
+    task.artifacts = [
+      { artifactId: task.artifacts[0]?.artifactId ?? randomUUID(), parts: [{ text }] },
+    ];
+    this.#publish(task);
+  }
+
+  observe(task: A2aTaskRecord, listener: (task: A2aTaskRecord) => void): () => void {
+    const observers = this.#observers.get(task.id) ?? new Set();
+    observers.add(listener);
+    this.#observers.set(task.id, observers);
+    return () => {
+      observers.delete(listener);
+      if (observers.size === 0) {
+        this.#observers.delete(task.id);
+      }
+    };
+  }
+
+  #publish(task: A2aTaskRecord): void {
+    for (const observe of this.#observers.get(task.id) ?? []) {
+      try {
+        observe(task);
+      } catch {
+        // A transport observer cannot change the execution or durable terminal result.
+      }
+    }
   }
 
   async fail(taskId: string, error: unknown): Promise<A2aTaskRecord | undefined> {
@@ -259,6 +311,7 @@ export class A2aTaskStore {
     this.#taskMessageKeys.clear();
     this.#terminalTasks.clear();
     this.#taskOwners.clear();
+    this.#observers.clear();
     this.#tasks.clear();
   }
 
@@ -326,6 +379,7 @@ export class A2aTaskStore {
         await this.#deletePending(task.id);
       }
       Object.assign(task, terminal);
+      this.#publish(task);
       this.#terminalTasks.set(task.id, finishedAt);
       const waiters = this.#waiters.get(task.id);
       this.#waiters.delete(task.id);

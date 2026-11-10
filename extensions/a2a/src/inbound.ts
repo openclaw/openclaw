@@ -152,6 +152,8 @@ export async function dispatchA2aInbound(params: {
     // starts a separate outbound message without that task correlation.
     replyOptions: {
       sourceReplyDeliveryMode: "automatic",
+      onPartialReply: (payload) => params.store.update(params.taskId, payload.text),
+      onQueuedPartialReply: (payload) => params.store.update(params.taskId, payload.text),
       onQueuedFollowupReplyBatch: deliverQueuedReply,
       onAgentRunTerminalOutcome: (outcome) => {
         runCompleted = outcome === "completed";

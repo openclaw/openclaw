@@ -18,13 +18,38 @@ describe("A2A task store", () => {
   });
 
   it("completes empty replies without inventing an artifact", async () => {
-    expect(await store.complete(create("empty").id, undefined)).toMatchObject({
+    const task = create("empty");
+    await store.start(task.id);
+    store.update(task.id, "provisional text");
+    expect(await store.complete(task.id, undefined)).toMatchObject({
       status: {
         state: "TASK_STATE_COMPLETED",
         message: { role: "ROLE_AGENT", parts: [{ text: "Agent completed without reply text" }] },
       },
       artifacts: [],
     });
+  });
+
+  it("keeps observer failures out of execution and durable final completion", async () => {
+    const durable = createTerminalStoreFixture();
+    store = new A2aTaskStore(durable, createPendingStoreFixture());
+    const task = create("observer-failure");
+    await store.start(task.id);
+    store.observe(task, () => {
+      throw new Error("transient observer failure");
+    });
+    const observed: string[] = [];
+    store.observe(task, (value) => observed.push(value.status.state));
+    store.update(task.id, "native preview");
+    await store.complete(task.id, "durable final");
+    expect(observed).toEqual(["TASK_STATE_WORKING", "TASK_STATE_COMPLETED"]);
+    const reopened = new A2aTaskStore(durable, createPendingStoreFixture());
+    await reopened.restore();
+    expect(reopened.get(task.id, "alice")).toMatchObject({
+      status: { state: "TASK_STATE_COMPLETED" },
+      artifacts: [{ parts: [{ text: "durable final" }] }],
+    });
+    await reopened.stop();
   });
 
   it("records bounded failures and policy rejections without consuming sibling replies", async () => {
