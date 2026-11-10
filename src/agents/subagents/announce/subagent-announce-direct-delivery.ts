@@ -445,7 +445,7 @@ async function sendSubagentAnnounceDirectlyBound(
         throw new SourceOwnerChangedError();
       }
       // Announce cleanup and requester-settle retries call this function again.
-      // A delivered injection settles the completion, so a later attempt cannot
+      // A recorded result settles the completion, so a later attempt cannot
       // turn the same pre-pause child into a requester model run.
       const pausedGoalMessage = resolvePausedGoalChildInjection({
         completionTarget: params.completionTarget,
@@ -460,8 +460,9 @@ async function sendSubagentAnnounceDirectlyBound(
           (hasRequiredSubagentNoOutputCompletion &&
             !hasSuccessfulTrustedSubagentNoOutputCompletion),
       });
-      // Without a resolved requester generation the ordinary turn path still owns it.
-      if (pausedGoalMessage && requesterAgentId && requesterSessionId) {
+      // The row only records history. A requester with an external delivery route,
+      // or without a resolved generation, keeps the ordinary path that delivers it.
+      if (pausedGoalMessage && !deliveryTarget.deliver && requesterAgentId && requesterSessionId) {
         if (params.onBeforeDispatch) {
           await params.onBeforeDispatch();
           dispatchPrepared = true;

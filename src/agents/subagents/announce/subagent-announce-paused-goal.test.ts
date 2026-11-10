@@ -70,6 +70,7 @@ function deliver(options: {
   sourceTool?: string;
   expectsCompletionMessage?: boolean;
   pausedGoalVisibleText?: string;
+  directOrigin?: { channel: string; to: string };
   spawns?: ChildSpawn[];
   onBeforeDispatch?: () => void | Promise<void>;
   onAccepted?: (payload: unknown) => void;
@@ -153,6 +154,7 @@ function deliver(options: {
       ...(options.pausedGoalVisibleText
         ? { pausedGoalVisibleText: options.pausedGoalVisibleText }
         : {}),
+      ...(options.directOrigin ? { directOrigin: options.directOrigin } : {}),
       sourceTool: options.sourceTool ?? "subagent_announce",
       requesterIsSubagent: false,
       expectsCompletionMessage: options.expectsCompletionMessage ?? true,
@@ -208,22 +210,16 @@ it("injects a child result spawned before a paused goal without a requester turn
   expect(accepted).toEqual([undefined]);
 });
 
-it("injects again when the same paused-goal completion is retried", async () => {
-  const fixture = deliver({
-    goal: goal("paused", pausedAt),
-    createdAt: 100,
-    startedAt: 200,
-  });
-  const first = await fixture.run();
-  const second = await fixture.run();
-  expect(first).toMatchObject({ delivered: true, path: "direct" });
-  expect(second).toMatchObject({ delivered: true, path: "direct" });
-  expect(methods(fixture)).toEqual(["inject", "inject"]);
-  for (const call of fixture.inject.mock.calls) {
-    expect(call[0]).toMatchObject({
-      text: shown(childResult),
-    });
-  }
+it("reuses one idempotency key when a paused-goal completion is retried", async () => {
+  const fixture = deliver({ goal: goal("paused", pausedAt), createdAt: 100, startedAt: 200 });
+  await fixture.run();
+  await fixture.run();
+  const keys = fixture.inject.mock.calls.map((call) => call[0].idempotencyKey);
+  expect(keys).toEqual([
+    "paused-goal-completion:paused-goal",
+    "paused-goal-completion:paused-goal",
+  ]);
+  expect(methods(fixture)).not.toContain("agent");
 });
 
 it.each([
@@ -234,6 +230,12 @@ it.each([
     goal: goal("paused", pausedAt),
     createdAt: 100,
     completionTarget: "parent" as const,
+  },
+  {
+    name: "a requester with an external delivery route",
+    goal: goal("paused", pausedAt),
+    createdAt: 100,
+    directOrigin: { channel: "telegram", to: "12345" },
   },
   {
     name: "a successful child with no output",
