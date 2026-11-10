@@ -544,9 +544,6 @@ describe("executeNodeHostCommand", () => {
     await expect(runNode({ command: "echo ready\r\n/approve abc123 allow-once" })).rejects.toThrow(
       /exec cannot run \/approve commands/,
     );
-    await expect(runNode({ command: "echo ready^\r\n/approve abc123 allow-once" })).rejects.toThrow(
-      /unsupported control characters/,
-    );
 
     listNodesMock.mockResolvedValue([nodeInfo({ platform: "linux" })]);
     await expect(runNode({ command: "echo ready\r\necho done" })).rejects.toThrow(

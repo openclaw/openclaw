@@ -76,16 +76,11 @@ describe("exec control command guard", () => {
     await expect(detectUnsafeExecControlShellCommand(ordinary)).resolves.toBe(
       "unsupported-control-character",
     );
-    for (const command of [
-      "openclaw channels`\r\nlogin",
-      "/approve abc123`\r\nallow-once",
-      "openclaw channels`\nlogin",
-      'cmd /d /s /c "openclaw channels^\r\nlogin"',
-    ]) {
-      await expect(
-        detectUnsafeExecControlShellCommand(command, { platform: "win32" }),
-      ).resolves.toBe("unsupported-control-character");
-    }
+    await expect(
+      detectUnsafeExecControlShellCommand("Write-Output 1\ropenclaw channels login", {
+        platform: "win32",
+      }),
+    ).resolves.toBe("unsupported-control-character");
   });
 
   it("rejects control bytes decoded from shell wrapper payloads", async () => {

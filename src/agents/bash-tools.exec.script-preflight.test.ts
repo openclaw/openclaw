@@ -257,15 +257,6 @@ describeWin("exec script preflight on Windows paths", () => {
     });
   });
 
-  it.each(["\n", "\r\n"])(
-    "rejects PowerShell backtick newline %j before execution",
-    async (newline) => {
-      await expect(runExecPreflight(`Write-Output 1\`${newline}2`)).rejects.toThrow(
-        /unsupported control characters/,
-      );
-    },
-  );
-
   it.each(["relative", "absolute"])("validates Python %s paths", async (kind) => {
     await withScripts({ "subdir/bad.py": "payload = $DM_JSON" }, async (workdir) => {
       const script =

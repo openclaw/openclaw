@@ -501,9 +501,7 @@ operations before normal approval handling. Commands over 128 KiB or beyond the
 parser work limit are rejected; write large content with a file tool or script
 file, or simplify the command.
 Windows Gateway and node exec accept ordinary CRLF line endings in PowerShell
-and CMD commands, respectively. Backtick-newline continuations in PowerShell,
-caret-newline continuations in CMD, and other carriage returns remain unsupported
-by this inspection path.
+and CMD commands, respectively. Other carriage returns remain unsupported.
 
 Examples:
 

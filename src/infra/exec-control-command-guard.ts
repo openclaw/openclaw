@@ -297,10 +297,6 @@ export async function detectUnsafeExecControlShellCommand(
 ): Promise<UnsafeExecControlShellCommandKind | null> {
   // Only trim shell whitespace; CR, VT, and FF must reach the parser for rejection.
   const windows = normalizeLowercaseStringOrEmpty(context.platform).startsWith("win");
-  if (windows && /[`^]\r?\n/u.test(command)) {
-    // Windows shells join these lines, which the Bash inspection cannot reconstruct.
-    return "unsupported-control-character";
-  }
   // Windows shells accept CRLF as a line ending. Normalize only the inspection copy;
   // the caller still executes the original command unchanged.
   const inspectionCommand = windows ? command.replaceAll("\r\n", "\n") : command;
