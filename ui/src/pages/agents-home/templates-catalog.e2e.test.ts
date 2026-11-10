@@ -77,8 +77,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
 
   async function fixture(
     viewport = { width: 1440, height: 900 },
-    entry = workflowOperator,
-    detailPublisher: Partial<Pick<typeof workflowOperator, "ownerHandle" | "official">> = {},
+    entry: ClawHubTemplateCatalogEntry = workflowOperator,
+    detailPublisher: Partial<Pick<ClawHubTemplateCatalogEntry, "ownerHandle" | "official">> = {},
     loading = false,
     colorScheme: "light" | "dark" = "light",
   ) {
@@ -507,7 +507,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       ...workflowOperator,
       packageName: "@maker/workflow-operator",
       channel: "community",
-    };
+    } satisfies ClawHubTemplateCatalogEntry;
     const { page, gateway } = await fixture(undefined, community, {
       ownerHandle: "maker",
       official: false,
