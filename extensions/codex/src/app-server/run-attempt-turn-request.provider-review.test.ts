@@ -30,7 +30,8 @@ vi.mock("./attempt-diagnostics.js", () => ({
   createCodexModelCallDiagnosticEmitter: () => ({ setRequestPayloadBytes: vi.fn() }),
   utf8JsonByteLength: () => 1,
 }));
-vi.mock("./client-runtime.js", () => ({
+vi.mock("./client-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client-runtime.js")>()),
   prepareCodexWorkspaceReferences: () => ({
     include: !references.delivered,
     accepted: () => {
