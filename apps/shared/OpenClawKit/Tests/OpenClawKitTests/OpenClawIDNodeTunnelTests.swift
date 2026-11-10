@@ -246,6 +246,26 @@ import Testing
         await tunnel.shutdown()
     }
 
+    @Test func aProbeThatVerifiesANewerBindingRetiresTheActiveConnection() async throws {
+        let endpoint = NodeTestEndpoint(stream: NodeTestStream(input: Data(), chunk: 1))
+        let a = "iroh:" + String(repeating: "a", count: 64)
+        let b = "iroh:" + String(repeating: "b", count: 64)
+        let keys = NodeKeySequence([a, b, b])
+        let tunnel = OpenClawIDNodeTunnel(
+            endpoint: endpoint, verifiedServerKey: { try await keys.next() },
+            relayURL: URL(string: "https://relay.example/")!,
+            clock: OpenClawIDNodeClock(now: { 0 }, sleep: { duration in
+                if duration == .milliseconds(500) { return }
+                try await NodeTestWaiter<Void>().wait()
+            }))
+        _ = try await tunnel.openStream()
+        // The server key rotated: the probe dials the new key, so streams must stop using A.
+        try await tunnel.checkLiveness()
+        _ = try await tunnel.openStream()
+        #expect(await endpoint.keys == [a, b, b])
+        await tunnel.shutdown()
+    }
+
     @Test func fullRangeCloseCodesAreNotNarrowedIntoRevocation() {
         #expect(OpenClawIDNodeClose(code: 1, kind: .application).requiresReenrollment)
         #expect(OpenClawIDNodeClose(code: 2, kind: .application).requiresReenrollment)
@@ -304,11 +324,13 @@ private actor NodeTestStream: OpenClawIDNodeStream {
 private actor NodeTestEndpoint: OpenClawIDNodeEndpoint {
     let stream: any OpenClawIDNodeStream
     var dials = 0
+    var keys: [String] = []
     var shutdowns = 0
     init(stream: any OpenClawIDNodeStream) { self.stream = stream }
     func connect(serverKey: String, relayURL: URL, alpn: Data) async throws -> any OpenClawIDNodeConnection {
         #expect(alpn == Data("openclaw/tunnel/1".utf8))
         self.dials += 1
+        self.keys.append(serverKey)
         return NodeTestConnection(stream: self.stream)
     }
     func relayStatus() async -> [OpenClawIDNodeRelayStatus] { [] }

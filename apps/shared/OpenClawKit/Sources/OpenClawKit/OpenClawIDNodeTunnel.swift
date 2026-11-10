@@ -30,8 +30,14 @@ public actor OpenClawIDNodeTunnel {
     private let serverKey: @Sendable () async throws -> String
     private let relayURL: URL
     private let clock: OpenClawIDNodeClock
-    private var pending: Task<any OpenClawIDNodeConnection, Error>?
-    private var active: (id: UUID, connection: any OpenClawIDNodeConnection)?
+    private var pending: Task<(connection: any OpenClawIDNodeConnection, key: String), Error>?
+    private var active: (id: UUID, connection: any OpenClawIDNodeConnection, key: String)?
+    // Reconnects and probes re-verify K_srv independently; refreshes run one at a time (in commit
+    // order) and `latestKey` is the newest one's, so a connection to a superseded key is refused.
+    private var keyLane: Task<String, Error>?
+    private var keySequence: UInt64 = 0
+    private var latestKeySequence: UInt64 = 0
+    private var latestKey: String?
     private var closeWatcher: Task<Void, Never>?
     private var watchdog: Task<Void, Never>?
     private var probe: Task<Void, Error>?
@@ -70,12 +76,30 @@ public actor OpenClawIDNodeTunnel {
         try Task.checkCancellation()
     }
 
-    private func dial() async throws -> any OpenClawIDNodeConnection {
+    private func verifiedKey() async throws -> String {
+        let previous = self.keyLane
+        let refresh = self.serverKey
+        let task = Task {
+            _ = try? await previous?.value
+            return try await refresh()
+        }
+        self.keyLane = task
+        self.keySequence &+= 1
+        let sequence = self.keySequence
+        let key = try await task.value
+        if sequence > self.latestKeySequence {
+            self.latestKeySequence = sequence
+            self.latestKey = key
+        }
+        return key
+    }
+
+    private func dial() async throws -> (connection: any OpenClawIDNodeConnection, key: String) {
         try self.checkActive()
         let delay = max(0, self.nextDial - self.clock.now())
         if delay > 0 { try await self.clock.sleep(.seconds(delay)) }
         try self.checkActive()
-        let key = try await self.serverKey()
+        let key = try await self.verifiedKey()
         try self.checkActive()
         let endpoint = self.endpoint
         let relay = self.relayURL
@@ -110,7 +134,7 @@ public actor OpenClawIDNodeTunnel {
                 try self.checkActive()
                 self.denialBackoff = 10
                 self.nextDial = -Double.infinity
-                return connection
+                return (connection, key)
             } catch {
                 await connection.close(code: 0)
                 throw error
@@ -129,20 +153,25 @@ public actor OpenClawIDNodeTunnel {
     private func connection() async throws -> any OpenClawIDNodeConnection {
         try self.checkActive()
         if let active = self.active { return active.connection }
-        if let pending = self.pending { return try await pending.value }
+        if let pending = self.pending { return try await pending.value.connection }
         let generation = self.generation
         let task = Task { try await self.dial() }
         self.pending = task
         do {
-            let connection = try await task.value
+            let (connection, key) = try await task.value
             guard generation == self.generation, !self.stopped, !self.removed else {
                 await connection.close(code: 0)
                 try self.checkActive()
                 throw CancellationError()
             }
             self.pending = nil
+            // A newer refresh committed another binding while this dial ran: never install it.
+            guard key == self.latestKey else {
+                await connection.close(code: 0)
+                throw OpenClawIDNodeTransportError.closed
+            }
             let id = UUID()
-            self.active = (id, connection)
+            self.active = (id, connection, key)
             self.lastReceived = self.clock.now()
             self.closeWatcher = Task { [weak self] in
                 do {
@@ -204,7 +233,7 @@ public actor OpenClawIDNodeTunnel {
         let current = self.active
         self.lastProbe = self.clock.now()
         let task = Task {
-            let connection = try await self.dial()
+            let (connection, _) = try await self.dial()
             await connection.close(code: 0)
         }
         self.probe = task
@@ -212,6 +241,12 @@ public actor OpenClawIDNodeTunnel {
             try await task.value
             self.probe = nil
             try self.checkActive()
+            // The probe verified a newer binding: the active connection's server key is retired.
+            if let active = self.active, active.key != self.latestKey {
+                self.active = nil
+                await active.connection.close(code: 10)
+                return
+            }
             self.lastReceived = self.clock.now()
         } catch {
             self.probe = nil
@@ -229,6 +264,8 @@ public actor OpenClawIDNodeTunnel {
         self.generation &+= 1
         self.pending?.cancel()
         self.pending = nil
+        self.keyLane?.cancel()
+        self.keyLane = nil
         self.probe?.cancel()
         self.probe = nil
         self.watchdog?.cancel()
