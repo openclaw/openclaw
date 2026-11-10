@@ -462,15 +462,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   );
 
   it.each([
-    { extra: [], args: [], jobArgs: undefined, preset: "runtime" },
     {
-      targets: [
+      extra: [
         "src/agents/provider-auth-websocket.test.ts",
         "src/cron/session-run.session-model-strictness.integration.test.ts",
         "src/agents/sessions/agent-session-steering-context.test.ts",
       ],
-      args: [],
-      jobArgs: undefined,
       preset: "runtime",
     },
     {
@@ -482,8 +479,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/commands/doctor-plugin-package-consent.test.ts",
         "test/scripts/type-suppression-inventory.test.ts",
       ],
-      args: [],
-      jobArgs: undefined,
       preset: "runtime",
     },
     {
@@ -494,22 +489,15 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/scripts/ci-test-timings-tooling.test.ts",
         "test/scripts/type-suppression-inventory.test.ts",
       ],
-      args: [],
-      jobArgs: undefined,
       preset: "runtime",
     },
-    {
-      targets: ["test/scripts/run-vitest.test.ts"],
-      args: [],
-      jobArgs: undefined,
-      preset: "tooling",
-    },
-    { extra: [nodeTarget], args: [], jobArgs: undefined, preset: "full" },
-    { extra: [], args: ["--root", "custom-root"], jobArgs: undefined, preset: "full" },
+    { targets: ["test/scripts/run-vitest.test.ts"], preset: "tooling" },
+    { extra: [nodeTarget], preset: "full" },
+    { extra: [], args: ["--root", "custom-root"], preset: "full" },
     { extra: [], args: ["--root", "custom-root"], jobArgs: [], preset: "full" },
   ])(
     "passes the $preset artifact owner through the CI child bootstrap",
-    async ({ targets, extra = [], args, jobArgs, preset }) => {
+    async ({ targets, extra = [], args = [], jobArgs, preset }) => {
       machine(8, 31);
       const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
       const plans = resolveShardPlans({
