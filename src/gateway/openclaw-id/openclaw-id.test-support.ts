@@ -1,9 +1,8 @@
 // Shared fixtures for Gateway OpenClaw ID tests: an in-memory claw record and a
 // linked claw with root R pinned and owner device D1 (tunnel key W1) admitted.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { expect, vi } from "vitest";
+import { afterAll, expect, vi } from "vitest";
 import {
   computeRedemptionProof,
   deriveInviteProofKey,
@@ -24,9 +23,11 @@ import {
   type MembershipTarget,
   type StatementSigner,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import { serializePluginStoreJson } from "../../plugin-state/plugin-store-validation.js";
 import { createOpenClawIdAuthority } from "./authority.js";
+import type { LinkCommit } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
 import type { OpenClawIdMemberProfiles } from "./member-profiles.js";
 import { createOpenClawIdService, type OpenClawIdEffects } from "./service.js";
@@ -35,6 +36,9 @@ export const TEST_K_SRV = formatIrohEndpointKey(randomBytes(32)) as IrohEndpoint
 
 // The state directory holding each linked claw's Gateway key, for serviceFor.
 const clawStateDirs = new WeakMap<object, string>();
+// Each linkedClaw's key directory; removed once the importing test file finishes.
+const stateDirs = createTempDirTracker();
+afterAll(stateDirs.cleanup);
 export const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 /** A claw record store kept in memory. */
@@ -82,10 +86,16 @@ export async function linkedClaw(
     write: (record: StoredClaw) => Promise<void>;
     profiles?: OpenClawIdMemberProfiles;
   } = memoryStore(),
+  // Commits the link another way (through a service) instead of the authority directly.
+  commit?: (
+    authority: ReturnType<typeof createOpenClawIdAuthority>,
+    stateDir: string,
+    input: LinkCommit,
+  ) => Promise<{ ok: boolean }>,
 ) {
   const authority = createOpenClawIdAuthority(store);
   // The binding names K_gw, so a service over this claw needs the key file in its state dir.
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-id-claw-"));
+  const stateDir = stateDirs.make("openclaw-id-claw-");
   const gatewayKeySeed = Buffer.from(randomBytes(32));
   fs.mkdirSync(path.join(stateDir, "openclaw-id"), { mode: 0o700 });
   fs.writeFileSync(path.join(stateDir, "openclaw-id", "gateway.key"), gatewayKeySeed, {
@@ -129,11 +139,10 @@ export async function linkedClaw(
     root,
   );
   const binding = await signStatement("ServerBinding", { ...prep, issued_at: nowSeconds() }, root);
-  const linked = await authority.commitLink(
-    { root_pub: formatEd25519PublicKey(root.publicKey), owner_device: change, binding },
-    "local_operator",
-    { kSrv: TEST_K_SRV, kGw },
-  );
+  const input = { root_pub: formatEd25519PublicKey(root.publicKey), owner_device: change, binding };
+  const linked = commit
+    ? await commit(authority, stateDir, input)
+    : await authority.commitLink(input, "local_operator", { kSrv: TEST_K_SRV, kGw });
   expect(linked.ok).toBe(true);
   const seq = async () => (await authority.load())?.authority?.seq ?? 0;
   // Signs a MembershipChange at the next seq, as D1 unless told otherwise.
