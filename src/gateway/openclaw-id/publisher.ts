@@ -120,6 +120,15 @@ export async function publishClaw(params: {
   let ownerAccountId = params.record.discovery.owner_account_id;
   const registeredBefore = ownerAccountId !== null;
   let descriptorFailure: Extract<PublishOutcome, { state: "failed" }> | undefined;
+  const snapshot = await signStatement(
+    "MembershipSnapshot",
+    snapshotBody(state, bindingSeq, now),
+    params.signer,
+  );
+  // A binding after the first comes from a re-bind (new K_gw): until Discovery confirmed it,
+  // it goes out with its snapshot in one write.
+  const rebindPending =
+    bindingSeq > 1 && params.record.discovery.published_binding_seq < bindingSeq;
   try {
     if (!ownerAccountId) {
       if (!params.enrollmentCode) {
@@ -127,6 +136,9 @@ export async function publishClaw(params: {
       }
       ownerAccountId = (await params.client.registerClaw(params.enrollmentCode, descriptor))
         .owner_account_id;
+    } else if (rebindPending) {
+      await params.client.publishDescriptor(descriptor, snapshot);
+      return { state: "published", ownerAccountId, snapshotSeq: state.seq, snapshotIssuedAt: now };
     } else {
       await params.client.publishDescriptor(descriptor);
     }
@@ -138,11 +150,6 @@ export async function publishClaw(params: {
     }
   }
   try {
-    const snapshot = await signStatement(
-      "MembershipSnapshot",
-      snapshotBody(state, bindingSeq, now),
-      params.signer,
-    );
     await params.client.publishSnapshot(descriptor.claw_id, snapshot);
   } catch (error) {
     const failed = descriptorFailure ?? failure(error);

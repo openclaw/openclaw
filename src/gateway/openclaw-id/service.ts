@@ -364,6 +364,14 @@ export function createOpenClawIdService(params: {
       }));
     lastPublish = outcome;
     if (outcome.state === "published") {
+      const bindingSeq = record.binding?.body.binding_seq ?? 0;
+      // The first publication of a re-bind's binding tells every owner device.
+      if (bindingSeq > 1 && record.discovery.published_binding_seq < bindingSeq) {
+        const event = { type: "notify_owners", event: "rebind", ref: String(bindingSeq) } as const;
+        void notifyOwners([event]).catch((error: unknown) =>
+          params.log.warn(`openclaw-id: owner notices failed: ${String(error)}`),
+        );
+      }
       await (
         await getAuthority()
       ).recordDiscovery({
@@ -767,6 +775,25 @@ export function createOpenClawIdService(params: {
         });
       await publicationRetry.adopt(publication);
       return { ...result, ...(publication ? { publication } : {}) };
+    },
+
+    /**
+     * "Move to new keys" (`openclaw id rebind`): prepare, commit or cancel a re-bind on this
+     * machine. See service-rebind.ts.
+     */
+    async rebind(action: "prepare" | "commit" | "cancel", channel?: Channel, binding?: unknown) {
+      const { createServiceRebind } = await import("./service-rebind.js");
+      const restart = async () => {
+        await stopRuntime();
+        await reconcile();
+      };
+      const ops = createServiceRebind({
+        getStateDir: params.getStateDir,
+        getAuthority,
+        restartRemoteAccess: () => (queue = queue.then(restart, restart)),
+        log: params.log,
+      });
+      return action === "commit" ? await ops.commit(channel, binding) : await ops[action](channel);
     },
 
     /** Retries publication, for example with an enrollment code obtained after linking. */

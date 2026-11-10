@@ -58,6 +58,7 @@ import {
 } from "./member-profiles.js";
 import { createNodeInviteOperations, listNodeInviteViews } from "./node-invites.js";
 import type { OwnerDeviceView } from "./owner-devices-view.js";
+import { createRebindOperations } from "./rebind-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
 /** What the local link ceremony signs for: the claw's identity and keys. */
@@ -476,6 +477,8 @@ export function createOpenClawIdAuthority(
     },
 
     ...createNodeInviteOperations({ serialize, load, commit }),
+
+    ...createRebindOperations({ serialize, load, commit }),
 
     /** Records an invite redemption from the mailbox as pending (it admits nothing). */
     redeem(

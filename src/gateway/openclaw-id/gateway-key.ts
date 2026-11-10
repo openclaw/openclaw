@@ -10,8 +10,10 @@ import {
   type StatementSigner,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import {
+  ed25519PublicKeyHex,
   loadBoundKey,
   loadOrCreateEndpointKey,
+  stagedKeyPath,
   type BoundKeyRefusal,
 } from "./tunnel-child/keyfile.js";
 
@@ -54,4 +56,15 @@ export async function loadGatewaySigner(
   const signer = await ed25519SignerFromSeed(key);
   key.fill(0);
   return { signer, pub: formatEd25519PublicKey(signer.publicKey) };
+}
+
+/**
+ * Creates the next K_gw for a re-bind in the staged `.next` file, or reuses the one staged
+ * before, and returns its public key. It becomes the Gateway key once a binding names it.
+ */
+export function stageGatewayKey(stateDir: string): Ed25519PublicKey {
+  const { key } = loadOrCreateEndpointKey(stagedKeyPath(gatewayKeyPath(stateDir)));
+  const pub = formatEd25519PublicKey(Buffer.from(ed25519PublicKeyHex(key), "hex"));
+  key.fill(0);
+  return pub;
 }

@@ -104,8 +104,19 @@ export function createDiscoveryClient(params: {
     /** Reads only this Gateway's registration, authenticated by the currently registered K_gw. */
     getRegistration: (clawId: string) =>
       call<GetRegistrationResponse>("getRegistration", { claw_id: clawId }),
-    publishDescriptor: (descriptor: ClawDescriptor) =>
-      call<void>("publishDescriptor", { claw_id: descriptor.claw_id }, { descriptor }),
+    /**
+     * Publishes the descriptor; a re-bind's new binding carries its snapshot in the same
+     * write (discovery.md, "Re-bind"), so Discovery never holds one without the other.
+     */
+    publishDescriptor: (
+      descriptor: ClawDescriptor,
+      snapshot?: SignedStatement<"MembershipSnapshot">,
+    ) =>
+      call<void>(
+        "publishDescriptor",
+        { claw_id: descriptor.claw_id },
+        snapshot ? { descriptor, snapshot } : { descriptor },
+      ),
     publishSnapshot: (clawId: string, snapshot: SignedStatement<"MembershipSnapshot">) =>
       call<void>("publishSnapshot", { claw_id: clawId }, { snapshot }),
     /** Long-polls the Gateway mailbox after `cursor`. */

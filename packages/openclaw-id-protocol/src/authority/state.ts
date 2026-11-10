@@ -124,7 +124,7 @@ export type AuthorityEvent =
   | { type: "cancel_runs"; account_id: string }
   | {
       type: "notify_owners";
-      event: "kit_used" | "redemption_pending" | "redemption_resolved";
+      event: "kit_used" | "redemption_pending" | "redemption_resolved" | "rebind";
       ref: string;
     }
   | { type: "publish_snapshot" };
