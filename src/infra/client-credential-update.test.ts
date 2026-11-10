@@ -21,6 +21,7 @@ import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backu
 import { backupDoctorMigrationDatabases } from "../commands/doctor-migration-backup.js";
 import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { beginUpdatePluginCohort } from "../plugins/update-cohort-recovery.js";
 import { readBackupEngine, verifyMatchedPostgresBackup } from "../snapshot/database-backup.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { stateEngineSchema } from "../state/openclaw-state-db-engine.js";
@@ -43,6 +44,7 @@ import {
   openClientCredentialCustody,
   runClientCredentialOperation,
 } from "./client-credential-store.js";
+import { identity, policy, seedCredentials } from "./client-credential-update.test-support.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
@@ -53,7 +55,7 @@ import { generateStoredDeviceIdentity } from "./device-identity-material.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createNpmTarget } from "./package-update-steps.test-support.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import { inspectScopedMigrationSnapshot } from "./sqlite-migration-scoped-snapshot.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
@@ -63,7 +65,6 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const directories = useAutoCleanupTempDirTracker(afterAll);
 const namespaces = new Set<string>();
-const identity = generateStoredDeviceIdentity(12);
 const stat4Enabled = (() => {
   using database = openNodeSqliteDatabase(":memory:");
   return Boolean(
@@ -75,12 +76,6 @@ const credentialTables = [
   "device_auth_tokens",
   "gateway_origin_device_tokens",
 ] as const;
-const policy = {
-  version: 1,
-  socket: { path: "/synthetic/native.sock", token: "synthetic-socket-token", future: "keep" },
-  defaults: { security: "allowlist", ask: "on-miss" },
-  agents: {},
-};
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
@@ -102,54 +97,6 @@ afterAll(async () => {
     await client.end();
   }
 });
-
-function seedCredentials(db: EngineConnection, native: boolean, sourceVersion: 25 | 26 | 27 | 28) {
-  db.prepare("INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)").run(
-    "primary",
-    identity.deviceId,
-    identity.publicKeyPem,
-    identity.privateKeyPem,
-    12,
-    99,
-  );
-  db.prepare("INSERT INTO device_auth_tokens VALUES (?, ?, ?, ?, ?)").run(
-    identity.deviceId,
-    "operator",
-    "synthetic-original-token",
-    '[ "operator.read" ]',
-    101,
-  );
-  if (native) {
-    return;
-  }
-  db.prepare("INSERT INTO gateway_origin_device_tokens VALUES (?, ?, ?, ?, ?, ?)").run(
-    "https://synthetic.invalid",
-    identity.deviceId,
-    "operator",
-    "synthetic-origin-token",
-    '["operator.write"]',
-    102,
-  );
-  db.prepare("INSERT INTO exec_approvals_config VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-    "current",
-    JSON.stringify(policy),
-    policy.socket.path,
-    1,
-    "allowlist",
-    "on-miss",
-    null,
-    null,
-    0,
-    0,
-    104,
-  );
-  db.prepare(
-    "INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, 'fixture', 123, 123)",
-  ).run(sourceVersion);
-  db.prepare("INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)").run(
-    String(sourceVersion),
-  );
-}
 
 async function fixture(
   engine: "sqlite" | "postgres",
@@ -480,6 +427,29 @@ async function rollback(f: Fixture, captured: Awaited<ReturnType<typeof capture>
 }
 
 describe("client credential public update custody", () => {
+  it("reserves plugin rollback before Doctor without migrating legacy credentials", async () => {
+    const f = await fixture("sqlite", false, 28);
+    const before = await f.readShared();
+    const captured = await capture(f);
+    const runtime = {
+      root: f.root,
+      nodePath: process.execPath,
+      version: "2026.11.2",
+      buildId: null,
+    };
+    const pair = await beginUpdatePluginCohort({
+      runId: captured.run.runId,
+      env: f.env,
+      fence: { assertCurrent() {} },
+      installKey: f.root,
+      from: runtime,
+      to: { ...runtime, version: "2026.11.5" },
+    });
+    expect(pair.cohort.disposition).toBe("pending");
+    expect(await f.readShared()).toEqual(before);
+    expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
+  });
+
   it("preserves a fresh installation through public capture, Doctor, and rollback", async () => {
     const f = await fixture("sqlite", false, 25, "empty");
     const captured = await capture(f, true);

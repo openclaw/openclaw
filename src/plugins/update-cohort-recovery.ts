@@ -149,7 +149,8 @@ export async function beginUpdatePluginCohort(
   },
 ): Promise<PluginCohortRecoveryPair> {
   return await withPluginLifecycleLease(
-    { env: params.env, assertCurrent: params.fence.assertCurrent },
+    // Reservation precedes candidate Doctor; lease bookkeeping must not migrate its source.
+    { env: params.env, schemaPolicy: "existing", assertCurrent: params.fence.assertCurrent },
     async (lease) => {
       const fence = {
         assertCurrent: () => {
