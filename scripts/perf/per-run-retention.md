@@ -112,3 +112,39 @@ It reports source-qualified owner counts, exact unions of individually dominated
 subtrees, and reviewed retaining paths. Different owners share objects, so their
 byte totals must not be added. A group union is not a prediction of memory freed
 by jointly closing all its objects; use the before/after release experiment for that.
+
+## Completion-custody owner cost
+
+Use `scripts/perf/subagent-custody-settlement.mjs` for a supplementary measurement
+of the actual registry settlement method, separate from the Gateway workload:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs \
+  /absolute/candidate/scripts/perf/subagent-custody-settlement.mjs \
+  "$PWD" "$PWD/.local/custody-timing-a1"
+```
+
+Run from each pinned source checkout with an absent output directory and the same
+Node executable. The script sets synthetic state/config paths before importing
+the owner. Each process discards two warm trials, then measures 20 fresh trials of
+1,000 kept, non-announcing child acknowledgements. It admits ten rows outside each
+timed interval, settles their changed run IDs individually, and reports four
+250-run rounds. Setup, GC and final teardown are excluded. Check the reported
+unreleased counts and preserved historical rows before interpreting timings.
+
+Use separate fresh processes in A0/A1/B1/A2/B2/A3/B3/A4/B4/A5/B5 order; A0 is an
+adjacent unchanged control. Pool each process into one observation, not 20
+independent samples. Record median, p95, spread and host load. Declare acceptable
+control and paired regressions before running; stop and investigate failed gates.
+
+Add `allocation` as the final argument for a separate inspector-sampled run with
+collected objects included. Only ancestry under `settleCompletionAuthorities`
+counts as owner allocation; the total also includes fixture construction. A missing
+owner frame is unmeasured, not zero. Traced timing is diagnostic, and allocation
+results require separate controls. The script preserves the raw sample tree.
+
+This benchmark includes the real owner scan, alias lookup, Map deletion and abort
+listener removal, with tiny synthetic authority-release callbacks. It excludes
+database commits and full operator/source teardown, so it cannot establish Gateway
+latency. A correct release can allocate temporarily while reducing retained memory;
+report that tradeoff rather than treating allocation and retention as equivalent.
