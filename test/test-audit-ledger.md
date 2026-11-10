@@ -484,6 +484,27 @@ assertion. Production and test bytes were restored after the mutation.
 The baseline took 28.67 seconds and the candidate 22.67 seconds wall time;
 these single runs establish correctness, not a performance improvement.
 
+### PR preparation follow-up
+
+At `3f805fa2e950994cdad3f9e857eb966cf5fa8103`, three preparation suites were
+reviewed with their owners, callers, support, history and CI routing:
+24 declarations / 56 expanded cases, with R53/F3 by expanded case.
+These standalone counts do not add to the overlapping root/scripts aggregate.
+
+| Suite under `test/scripts/`    | Original declarations / cases | Retained contract                                                                                                    |
+| ------------------------------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `pr-prepare-preflight.test.ts` | 2 / 12                        | Mode selection and real wrapper rejection before observations, locks or evidence retirement.                         |
+| `pr-prepare-testbox.test.ts`   | 5 / 13                        | Remote argument normalization, input rejection, ordered stages, receipt integrity and last-success selection.        |
+| `pr-prepare-gates.test.ts`     | 17 / 31                       | Local and hosted qualification, source/alias authority, Git publication, evidence replacement and workspace pinning. |
+
+The stamp fixture now has two valid successes, so it distinguishes first-match
+from last-match selection. The runtime-commit case requires exact-head verifier
+dispatch as well as excluding parent reuse. The existing local-build fixture
+now runs real workspace pinning and checks its plugin root at bootstrap;
+the mock-only ordering case is consolidated into that keeper.
+The candidate has 23 declarations / 55 expanded cases and 12 fewer test lines.
+Runtime and mutation qualification remain pending in this source checkpoint.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
@@ -495,6 +516,7 @@ these single runs establish correctness, not a performance improvement.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.
 - CI merge-preparation source/comment candidates remain pending Linux keeper proof; the independent Git-owner admission guard stays. Do not treat a stopped Testbox allocation as a product result.
+- The `gates.sh` changed-file owner list omits `pr-prepare-testbox.test.ts`; full tooling includes it and direct edits select it. Repair that routing separately from the preparation proof audit.
 
 Remaining: classify unread core/plugin/native/script declarations and shared
 fixtures; qualify candidates at their actual boundaries; validate and land owner
