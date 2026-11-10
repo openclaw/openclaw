@@ -1,7 +1,4 @@
-import type { JSX } from "@solidjs/web";
-import { Show, onSettled, createMemo, createSignal, merge } from "solid-js";
-import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
-import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
+import { Show, onSettled, createMemo, createSignal, lazy, merge } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
@@ -9,58 +6,26 @@ import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-detail
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
-import { ChatBranchActions } from "./chat-branch-actions.tsx";
+import { loadChatDetailsEnvironmentBody } from "./chat-details-desktop-loader.ts";
 import {
   animateDetailsDesktopEntrance,
   ChatDetailsDesktopSection,
 } from "./chat-details-desktop-section.tsx";
 import "./chat-details-environment-desktop.css";
 import type { ChatDetailsEnvironmentDesktopProps } from "./chat-details-types.ts";
-import { ChatPanePlacement, createChatMachinePresentation } from "./chat-pane-placement.tsx";
+import { hasEnvironmentTextChanges } from "./chat-environment-content.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { createChatMachinePresentation } from "./chat-pane-placement.tsx";
 import { retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
 
-export function EnvironmentAction(props: {
-  presented: boolean;
-  onOpen?: () => void;
-  children: () => JSX.Element;
-}) {
-  return (
-    <Show when={props.onOpen} fallback={props.children()}>
-      <button
-        class="chat-environment__action"
-        type="button"
-        onClick={() => {
-          if (props.presented) {
-            props.onOpen?.();
-          }
-        }}
-      >
-        {props.children()}
-        <Icon name="chevronRight" />
-      </button>
-    </Show>
-  );
-}
-
-export function hasEnvironmentTextChanges(result?: { additions?: number; deletions?: number }) {
-  return (result?.additions ?? 0) > 0 || (result?.deletions ?? 0) > 0;
-}
-
-export function EnvironmentChangeCounts(props: { result: SessionsDiffResult }) {
-  return (
-    <span class="chat-environment__counts">
-      <Show when={props.result.additions > 0}>
-        <span class="chat-environment__added">+{props.result.additions}</span>
-      </Show>
-      <Show when={props.result.deletions > 0}>
-        <span class="chat-environment__removed">−{props.result.deletions}</span>
-      </Show>
-    </span>
-  );
-}
+const ChatDetailsEnvironmentBody = lazy(loadChatDetailsEnvironmentBody, {
+  export: "ChatDetailsEnvironmentBody",
+});
+// Prepare the lazy binding before Desktop measures its expanded sections.
+void ChatDetailsEnvironmentBody.preload().catch(() => undefined);
 
 export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps) {
   const workspace = () => props.details.detailsWorkspace;
@@ -125,13 +90,24 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       ? candidate
       : undefined;
   };
-  const branchName = () => workspace()?.branch ?? work()?.branch?.branch;
+  const live = createMemo(() => ({
+    branch: workspace()?.branch ?? work()?.branch?.branch,
+    worktree: Boolean(session()?.worktree),
+  }));
+  const facts = () =>
+    (!props.details.sessionFactsReady && props.details.cachedDetails?.environment) || live();
+  const branchName = () => facts().branch;
+  const receipt = createMemo(() =>
+    props.details.sessionFactsReady && props.details.onDetailsSnapshot
+      ? { environment: live(), write: props.details.onDetailsSnapshot }
+      : undefined,
+  );
   const diff = () => {
     const result = work()?.branch ?? changes();
     return result && hasEnvironmentTextChanges(result) ? result : undefined;
   };
   const hasContent = createMemo(() =>
-    Boolean(machineMenu() || host() || branchName() || work() || session()?.worktree || changes()),
+    Boolean(machineMenu() || host() || branchName() || work() || facts().worktree || changes()),
   );
   // Capture cache availability before the first asynchronous arrival.
   const [initiallyEmpty] = createSignal<boolean>((previous) => previous ?? !hasContent());
@@ -142,6 +118,12 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       : undefined,
   );
   return [
+    <Show when={receipt()} keyed>
+      {(value) => {
+        onSettled(() => value.write({ environment: value.environment }));
+        return null;
+      }}
+    </Show>,
     <Show when={requestUncommitted()} keyed>
       {(request) => {
         onSettled(request);
@@ -192,114 +174,22 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                 </Show>
               }
             >
-              <Show
-                when={machineMenu() && props.presented}
-                fallback={
-                  <Show when={host()}>
-                    <div class="chat-details__row chat-environment__row">
-                      <EnvironmentAction presented={props.presented} onOpen={props.onOpenMachine}>
-                        {() => (
-                          <>
-                            <MachineIcon />
-                            <span ref={createTextOverflow(host)} title={host()}>
-                              {host()}
-                            </span>
-                          </>
-                        )}
-                      </EnvironmentAction>
-                    </div>
-                  </Show>
-                }
-              >
-                <div class="chat-environment__machine">
-                  <ChatPanePlacement
-                    {...placement}
-                    trigger={{
-                      class: "chat-details__row chat-environment__machine-trigger",
-                      label: (view) => (host() ? `${host()} · ${view.label}` : view.label),
-                      content: (view) => (
-                        <>
-                          <MachineIcon />
-                          <span
-                            ref={createTextOverflow(() => host() ?? view.label)}
-                            title={host() ?? view.label}
-                          >
-                            {host() ?? view.label}
-                          </span>
-                          <Icon name="moreHorizontal" />
-                        </>
-                      ),
-                    }}
-                  />
-                </div>
-              </Show>
-              <Show when={branchName() || work()}>
-                <div class="chat-environment__branch">
-                  <div class="chat-details__row chat-environment__row" title={branchName()}>
-                    <Icon name={branchName() ? "gitBranch" : "gitPullRequest"} />
-                    <span
-                      ref={createTextOverflow(branchName)}
-                      class="chat-environment__branch-name"
-                    >
-                      {branchName() ?? t("chat.pullRequests.publishPr")}
-                    </span>
-                    <Show when={session()?.worktree}>
-                      <small class="chat-details__badge">{t("chat.sessionDetails.worktree")}</small>
-                    </Show>
-                  </div>
-                  <Show when={diff() || work()}>
-                    <div class="chat-environment__branch-controls">
-                      <Show when={diff()}>
-                        {(value) => (
-                          <SessionGitDiff
-                            classPrefix="chat-pr"
-                            item={value()}
-                            onOpen={
-                              work()?.branch ? work()?.onOpenSessionDiff : props.onOpenUncommitted
-                            }
-                          />
-                        )}
-                      </Show>
-                      <Show when={work()}>
-                        {(value) => (
-                          <ChatBranchActions
-                            branch={value().branch}
-                            branchName={branchName() ?? t("chat.pullRequests.publishPr")}
-                            status={value().status}
-                            publication={value().publication}
-                            presented={props.presented && expanded()}
-                            onDismiss={value().onDismissBranch}
-                          />
-                        )}
-                      </Show>
-                    </div>
-                  </Show>
-                </div>
-              </Show>
-              <Show when={session()?.worktree && !branchName()}>
-                <div class="chat-details__row chat-environment__row chat-environment__worktree">
-                  <Icon name="folder" />
-                  <span>{t("chat.sessionDetails.worktree")}</span>
-                </div>
-              </Show>
-              <Show when={!branchName() && !work() && changes()}>
-                <div class="chat-details__row chat-environment__row">
-                  <EnvironmentAction
-                    presented={props.presented}
-                    onOpen={props.onOpenUncommitted ?? props.work?.onOpenSessionDiff}
-                  >
-                    {() => (
-                      <>
-                        <Icon name="diff" />
-                        <span>{t("chat.sessionDetails.changes")}</span>
-                        <Show when={changes()}>
-                          {(result) => <EnvironmentChangeCounts result={result()} />}
-                        </Show>
-                      </>
-                    )}
-                  </EnvironmentAction>
-                </div>
-              </Show>
+              <ChatLazyBoundary>
+                <ChatDetailsEnvironmentBody
+                  {...props}
+                  placement={placement}
+                  expanded={expanded()}
+                  machineMenu={machineMenu()}
+                  host={host()}
+                  branchName={branchName()}
+                  worktree={facts().worktree}
+                  work={work()}
+                  fallbackWork={props.work}
+                  diff={diff()}
+                  changes={changes()}
+                  renderMachineIcon={() => <MachineIcon />}
+                />
+              </ChatLazyBoundary>
             </ChatDetailsDesktopSection>
           </div>
         );

@@ -2,7 +2,7 @@ import { NODE_TOOLCHAIN_INSTALL_SH } from "./node-toolchain.js";
 import { REPOSITORY_NODE_REQUIREMENT_SOURCE } from "./repository-node-requirement.generated.js";
 
 /** Runs inside the supported bootstrap Node, before any repository setup command. */
-export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machineHome) => {
+export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machineHome, reusePrepared = false) => {
   if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch)) return;
   const fs = require("node:fs");
   const path = require("node:path");
@@ -18,6 +18,19 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
   }
   const requirement = (${REPOSITORY_NODE_REQUIREMENT_SOURCE})(files);
   const manifest = files["package.json"] ? JSON.parse(files["package.json"]) : {};
+  const bin = path.join(homeDir, ".local", "bin");
+  const recordFile = path.join(homeDir, ".local", "repository-node.json");
+  const identity = JSON.stringify([requirement ?? null, manifest.packageManager ?? null, process.platform, process.arch, process.execPath]);
+  if (reusePrepared) {
+    try {
+      const previous = JSON.parse(fs.readFileSync(recordFile, "utf8"));
+      if (previous.identity === identity && Object.entries(previous.links).every(([name, target]) => {
+        const link = path.join(bin, name);
+        fs.accessSync(link, fs.constants.X_OK);
+        return fs.readlinkSync(link) === target;
+      })) return previous.setupPath;
+    } catch { /* Old images and incomplete toolchains take the full preparation path. */ }
+  }
   let nodeBin = path.dirname(process.execPath);
   let semver, version;
   const fetchText = async (url) => {
@@ -56,7 +69,6 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
     if (installed.status !== 0) throw new Error("Repository Node installation failed; check nodejs.org access, disk space and image prerequisites, then retry: " + (installed.stderr || installed.error?.message || installed.status));
     nodeBin = installed.stdout.trim();
   }
-  const bin = path.join(homeDir, ".local", "bin");
   fs.mkdirSync(bin, { recursive: true, mode: 0o700 });
   // A repository release without Corepack uses the worker's. When its engines reject the repository
   // Node, run a copy whose entry stubs exec the worker Node: enable links shims into the running
@@ -71,7 +83,24 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
     fs.rmSync(copy, { recursive: true, force: true });
     fs.cpSync(root, copy, { recursive: true });
     // System packages are read-only; cpSync keeps their modes, which would block these rewrites and the next refresh.
-    for (const entry of ["", ...fs.readdirSync(copy, { recursive: true })]) fs.chmodSync(path.join(copy, entry), 0o700);
+    // This bootstrap runs on a remote machine without OpenClaw modules. Keep its bounded
+    // Dirent traversal local, and never chmod a symlink (chmod follows its target).
+    const pending = [{ directory: copy, depth: 0 }];
+    let count = 0;
+    while (pending.length) {
+      const { directory, depth } = pending.pop();
+      fs.chmodSync(directory, 0o700);
+      const handle = fs.opendirSync(directory);
+      try {
+        for (let entry = handle.readSync(); entry; entry = handle.readSync()) {
+          if (++count > 100000 || depth >= 64) throw new Error("Corepack copy directory scan limit exceeded");
+          if (entry.isSymbolicLink()) continue;
+          const file = path.join(directory, entry.name);
+          if (entry.isDirectory()) pending.push({ directory: file, depth: depth + 1 });
+          else if (entry.isFile()) fs.chmodSync(file, 0o700);
+        }
+      } finally { handle.closeSync(); }
+    }
     // Shell runs line two and execs the worker Node; JavaScript reads it as a string and a comment.
     const header = "#!/bin/sh\\n':' //; exec '" + process.execPath.replaceAll("'", "'\\\\''") + "' \\"$0\\" \\"$@\\"\\n";
     for (const entry of fs.readdirSync(path.join(copy, "dist"))) {
@@ -98,5 +127,7 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
     });
     if (enabled.status !== 0) throw new Error("Corepack enable failed; supply Corepack in the image or profile setup and retry preparation: " + (enabled.stderr || enabled.error?.message || enabled.status));
   }
+  const links = Object.fromEntries(fs.readdirSync(bin).filter((name) => fs.lstatSync(path.join(bin, name)).isSymbolicLink()).map((name) => [name, fs.readlinkSync(path.join(bin, name))]));
+  fs.writeFileSync(recordFile, JSON.stringify({ identity, setupPath, links }), { mode: 0o600 });
   return setupPath;
 }`;

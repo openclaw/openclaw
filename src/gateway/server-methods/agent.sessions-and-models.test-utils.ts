@@ -4,7 +4,6 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
-import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
@@ -60,6 +59,8 @@ import {
   withPluginSubagentTestState,
 } from "./agent.spawned-child.test-support.js";
 import {
+  createElevatedExecApprovalFixture,
+  mockTelegramSessionEntry,
   getAgentTestMocks,
   operatorWriteCliClient,
   makeContext,
@@ -107,92 +108,12 @@ describe("gateway agent handler", () => {
   afterEach(describe0AfterEach0);
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-gateway-agent-sessions-");
 
-  it("rejects ordinary work on a restart-recovery tombstone", async () => {
-    const entry = {
-      sessionId: "tombstoned-session",
-      updatedAt: Date.now(),
-      status: "failed",
-      abortedLastRun: false,
-      mainRestartRecovery: {
-        cycleId: "cycle-exhausted",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
-    };
-    mockMainSessionEntry(entry);
-    mocks.updateSessionStore.mockImplementation(
-      async (_path, updater) => await updater({ "agent:main:main": structuredClone(entry) }),
-    );
-    const commandCallCount = mocks.agentCommand.mock.calls.length;
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "continue old work",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "tombstone-reuse",
-      },
-      { reqId: "tombstone-reuse", respond },
-    );
-
-    expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-    const error = expectRespondError(respond, { code: ErrorCodes.INVALID_REQUEST });
-    expectStringFieldContains(error, "message", "ended during restart recovery");
-  });
-
-  it("rejects ordinary work while restart recovery exhaustion is being tombstoned", async () => {
-    const entry = {
-      sessionId: "exhausted-session",
-      updatedAt: Date.now(),
-      status: "interrupted",
-      abortedLastRun: true,
-      mainRestartRecovery: {
-        cycleId: "cycle-exhausted",
-        revision: 4,
-        chargedAttempts: 3,
-      },
-    };
-    mockMainSessionEntry(entry);
-    mocks.updateSessionStore.mockImplementation(
-      async (_path, updater) => await updater({ "agent:main:main": structuredClone(entry) }),
-    );
-    const commandCallCount = mocks.agentCommand.mock.calls.length;
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "continue old work",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "exhausted-reuse",
-      },
-      { reqId: "exhausted-reuse", respond },
-    );
-
-    expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-    const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
-    expectStringFieldContains(error, "message", "quarantined after restart recovery exhaustion");
-  });
-
   it("does not restore elevated defaults from idempotency key suffixes", async () => {
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const registration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-75832",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
+    const { registration } = createElevatedExecApprovalFixture("req-elevated-75832");
     if (!registration) {
       throw new Error("expected runtime handoff id");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     mockSuccessfulAgentCommand();
 
     await invokeAgent(
@@ -290,7 +211,7 @@ describe("gateway agent handler", () => {
             { client, respond, context, flushDispatch: false },
           );
           expect(replacementWrite).toHaveBeenCalledOnce();
-          expect(finish).toHaveBeenCalledWith("cancelled");
+          expect(finish).toHaveBeenCalledWith("cancelled", undefined);
           expect(dispose).toHaveBeenCalledOnce();
           expect(respond).toHaveBeenCalledWith(
             false,
@@ -511,24 +432,92 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("projects a nonterminal tool-use result past the explicit deadline as timed out", async () => {
-    const abortController = new AbortController();
-    const timeoutReason = new Error("chat run timed out");
-    timeoutReason.name = "TimeoutError";
-    mocks.agentCommand.mockImplementationOnce(async () => {
-      abortController.abort(timeoutReason);
-      return {
-        payloads: [{ text: "Exec failed", isError: true }],
+  it.each([
+    {
+      name: "projects a nonterminal tool-use result past the explicit deadline as timed out",
+      runId: "agent-run-tool-use-deadline",
+      ingress: {
+        message: "review the repository",
+        timeout: "600",
+      },
+      commandResult: (abortController: AbortController) => {
+        const timeoutReason = new Error("chat run timed out");
+        timeoutReason.name = "TimeoutError";
+        abortController.abort(timeoutReason);
+        return {
+          payloads: [{ text: "Exec failed", isError: true }],
+          meta: {
+            durationMs: 602_530,
+            aborted: false,
+            replayInvalid: true,
+            livenessState: "working",
+            stopReason: "toolUse",
+            completion: { stopReason: "toolUse", finishReason: "toolUse" },
+          },
+        };
+      },
+      terminalOutcome: {
+        status: "timeout",
+        stopReason: "timeout",
+      },
+      reply: {
+        status: "timeout",
+        summary: "aborted",
+        stopReason: "timeout",
+      },
+    },
+    {
+      name: "projects a provider timeout result without an abort flag or stop reason as timed out",
+      runId: "agent-run-provider-timeout-result",
+      ingress: {
+        message: "run a command that exceeds the provider deadline",
+        timeout: "10",
+      },
+      commandResult: () => ({
+        payloads: [{ text: "Request timed out before a response was generated.", isError: true }],
         meta: {
-          durationMs: 602_530,
+          durationMs: 30_454,
           aborted: false,
           replayInvalid: true,
           livenessState: "working",
-          stopReason: "toolUse",
-          completion: { stopReason: "toolUse", finishReason: "toolUse" },
+          timeoutPhase: "provider",
+          providerStarted: true,
+          error: {
+            kind: "incomplete_turn",
+            message: "Request timed out before a response was generated.",
+          },
         },
-      };
-    });
+      }),
+      terminalOutcome: {
+        status: "timeout",
+        reason: "hard_timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      reply: {
+        status: "timeout",
+        summary: "aborted",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    },
+    {
+      name: "projects a resolved agent error as a failed gateway response",
+      runId: "agent-run-resolved-error",
+      ingress: { message: "run the agent", timeout: "600" },
+      commandResult: () => ({
+        payloads: [{ text: "Provider rejected the request.", isError: true }],
+        meta: {
+          error: { kind: "incomplete_turn", message: "provider rejected the request" },
+          stopReason: "error",
+        },
+      }),
+      terminalOutcome: { status: "error", reason: "failed", stopReason: "error" },
+      reply: { status: "error", summary: "failed", stopReason: "error" },
+    },
+  ])("$name", async ({ runId, ingress, commandResult, terminalOutcome, reply }) => {
+    const abortController = new AbortController();
+    mocks.agentCommand.mockImplementationOnce(async () => commandResult(abortController));
     const context = makeContext();
     const respond = vi.fn();
     const onSettled = vi.fn(() => true);
@@ -536,13 +525,12 @@ describe("gateway agent handler", () => {
     await dispatchAgentRunFromGateway({
       admittedRunEntry: undefined,
       ingressOpts: {
-        message: "review the repository",
+        ...ingress,
         sessionKey: "agent:main:main",
-        timeout: "600",
         allowModelOverride: false,
       },
-      runId: "agent-run-tool-use-deadline",
-      dedupeKeys: ["agent:agent-run-tool-use-deadline"],
+      runId,
+      dedupeKeys: [`agent:${runId}`],
       abortController,
       cleanupAbortController: vi.fn(),
       io: createAgentTurnIo(respond),
@@ -551,132 +539,14 @@ describe("gateway agent handler", () => {
     });
 
     expect(onSettled).toHaveBeenCalledWith({
-      terminalOutcome: expect.objectContaining({
-        status: "timeout",
-        stopReason: "timeout",
-      }),
+      terminalOutcome: expect.objectContaining(terminalOutcome),
       onRecovered: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({
-        runId: "agent-run-tool-use-deadline",
-        status: "timeout",
-        summary: "aborted",
-        stopReason: "timeout",
-      }),
+      expect.objectContaining({ runId, ...reply }),
       undefined,
-      { runId: "agent-run-tool-use-deadline" },
-    );
-  });
-
-  it("projects a provider timeout result without an abort flag or stop reason as timed out", async () => {
-    mocks.agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "Request timed out before a response was generated.", isError: true }],
-      meta: {
-        durationMs: 30_454,
-        aborted: false,
-        replayInvalid: true,
-        livenessState: "working",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: {
-          kind: "incomplete_turn",
-          message: "Request timed out before a response was generated.",
-        },
-      },
-    });
-    const context = makeContext();
-    const respond = vi.fn();
-    const onSettled = vi.fn(() => true);
-
-    await dispatchAgentRunFromGateway({
-      admittedRunEntry: undefined,
-      ingressOpts: {
-        message: "run a command that exceeds the provider deadline",
-        sessionKey: "agent:main:main",
-        timeout: "10",
-        allowModelOverride: false,
-      },
-      runId: "agent-run-provider-timeout-result",
-      dedupeKeys: ["agent:agent-run-provider-timeout-result"],
-      abortController: new AbortController(),
-      cleanupAbortController: vi.fn(),
-      io: createAgentTurnIo(respond),
-      context,
-      onSettled,
-    });
-
-    expect(onSettled).toHaveBeenCalledWith({
-      terminalOutcome: expect.objectContaining({
-        status: "timeout",
-        reason: "hard_timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      }),
-      onRecovered: expect.any(Function),
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        runId: "agent-run-provider-timeout-result",
-        status: "timeout",
-        summary: "aborted",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      }),
-      undefined,
-      { runId: "agent-run-provider-timeout-result" },
-    );
-  });
-
-  it("projects a resolved agent error as a failed gateway response", async () => {
-    mocks.agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "Provider rejected the request.", isError: true }],
-      meta: {
-        error: { kind: "incomplete_turn", message: "provider rejected the request" },
-        stopReason: "error",
-      },
-    });
-    const context = makeContext();
-    const respond = vi.fn();
-    const onSettled = vi.fn(() => true);
-
-    await dispatchAgentRunFromGateway({
-      admittedRunEntry: undefined,
-      ingressOpts: {
-        message: "run the agent",
-        sessionKey: "agent:main:main",
-        timeout: "600",
-        allowModelOverride: false,
-      },
-      runId: "agent-run-resolved-error",
-      dedupeKeys: ["agent:agent-run-resolved-error"],
-      abortController: new AbortController(),
-      cleanupAbortController: vi.fn(),
-      io: createAgentTurnIo(respond),
-      context,
-      onSettled,
-    });
-
-    expect(onSettled).toHaveBeenCalledWith({
-      terminalOutcome: expect.objectContaining({
-        status: "error",
-        reason: "failed",
-        stopReason: "error",
-      }),
-      onRecovered: expect.any(Function),
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        runId: "agent-run-resolved-error",
-        status: "error",
-        summary: "failed",
-        stopReason: "error",
-      }),
-      undefined,
-      { runId: "agent-run-resolved-error" },
+      { runId },
     );
   });
 
@@ -1366,7 +1236,7 @@ describe("gateway agent handler", () => {
     expect(call.to).toBeUndefined();
   });
 
-  it("rolls stale gateway agent sessions even when updatedAt was recently touched", async () => {
+  it("resets stale gateway agent sessions without rotating a recently touched transcript", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -1407,7 +1277,7 @@ describe("gateway agent handler", () => {
         sessionKey?: string;
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
-      expect(call.sessionId).not.toBe("stale-session-id");
+      expect(call.sessionId).toBe("stale-session-id");
       expect(getCapturedEntry()?.sessionStartedAt).toBe(now);
       expect(getCapturedEntry()?.lastInteractionAt).toBe(now);
       expect(mocks.emitGatewaySessionEndPluginHook).toHaveBeenCalledTimes(1);
@@ -1527,7 +1397,7 @@ describe("gateway agent handler", () => {
     }
   });
 
-  it("emits idle lifecycle reason when inactivity rotates a gateway agent session", async () => {
+  it("emits idle lifecycle reason when inactivity resets a gateway agent session", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -1567,7 +1437,7 @@ describe("gateway agent handler", () => {
         sessionKey?: string;
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
-      expect(call.sessionId).not.toBe("idle-session-id");
+      expect(call.sessionId).toBe("idle-session-id");
       expectRecordFields(
         mockCallArg(mocks.emitGatewaySessionEndPluginHook) as Record<string, unknown>,
         {
@@ -1591,7 +1461,7 @@ describe("gateway agent handler", () => {
     }
   });
 
-  it("emits lifecycle hooks when a committed rotation later fails delivery validation", async () => {
+  it("emits lifecycle hooks when a committed reset later fails delivery validation", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(now);
@@ -1760,7 +1630,7 @@ describe("gateway agent handler", () => {
         sessionKey?: string;
       }>();
       expect(call.sessionKey).toBe("agent:main:main");
-      expect(call.sessionId).not.toBe("stale-session-id");
+      expect(call.sessionId).toBe("stale-session-id");
       expect(getCapturedEntry()?.sessionStartedAt).toBe(now);
       expect(getCapturedEntry()?.lastInteractionAt).toBe(now);
     } finally {

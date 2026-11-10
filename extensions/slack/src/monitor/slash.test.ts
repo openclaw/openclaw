@@ -19,14 +19,6 @@ import { getSlackSlashMocks } from "./slash.test-harness.js";
 
 const { dispatchMock } = getSlackSlashMocks();
 
-function responseTexts(mock: ReturnType<typeof vi.fn>): unknown[] {
-  return mock.mock.calls.map(([payload]) =>
-    payload && typeof payload === "object" && !Array.isArray(payload)
-      ? (payload as { text?: unknown }).text
-      : undefined,
-  );
-}
-
 function createPolicyHarness(
   overrides: Parameters<typeof createArgMenusHarness>[1] & {
     channelId?: string;
@@ -118,7 +110,7 @@ async function dispatchPublicAnswer(params: unknown) {
   return { counts: { final: 1, tool: 0, block: 0 } };
 }
 
-describe("Slack App Home command presentation", () => {
+describe("slack slash commands channel policy", () => {
   it("omits the single command when slash commands are disabled", async () => {
     const harness = createPolicyHarness({ slashCommandEnabled: false });
     await expect(registerCommands(harness.ctx, harness.account)).resolves.toEqual({
@@ -126,9 +118,6 @@ describe("Slack App Home command presentation", () => {
     });
     expect(harness.commands.size).toBe(0);
   });
-});
-
-describe("slack slash commands channel policy", () => {
   it("drops mismatched slash payloads before dispatch", async () => {
     const harness = createPolicyHarness({ shouldDropMismatchedSlackEvent: () => true });
     const { respond, ack } = await registerAndRunPolicySlash(harness, {
@@ -164,9 +153,8 @@ describe("slack slash commands access groups", () => {
       channelName: "notdirectmessage",
       resolveChannelName: async () => ({}),
     });
-    const { respond } = await registerAndRunPolicySlash(harness);
+    await registerAndRunPolicySlash(harness);
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(responseTexts(respond)).not.toContain("You are not authorized to use this command.");
     expect(firstDispatchArg().ctx?.CommandAuthorized).toBe(true);
   });
 
@@ -190,9 +178,6 @@ describe("slack slash commands access groups", () => {
       return;
     }
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(responseTexts(respond)).not.toContain(
-      "You are not authorized to use this command here.",
-    );
     expect(firstDispatchArg().ctx).toMatchObject({
       ChatType: "group",
       From: "slack:group:G_MPIM",

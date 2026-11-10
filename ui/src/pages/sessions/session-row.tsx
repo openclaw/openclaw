@@ -5,9 +5,15 @@ import {
 import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
+import {
+  formatGoalDetail,
+  formatGoalSummary,
+} from "../../../../src/shared/session-goal-display.js";
 import type { AgentIdentityResult, GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
+import { IconButton, ROW_GLYPH_STROKE } from "../../components/solid/icon-button.tsx";
+import { sessionIconMask } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import {
   formatThinkingOverrideLabel,
@@ -22,8 +28,7 @@ import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
-import { resolveSessionDisplayKind } from "../../lib/session-display.ts";
-import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
+import { resolveSessionDisplayKind, resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
@@ -35,8 +40,8 @@ import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/s
 import type { JSX as SolidJSX } from "../../types/solid-elements.js";
 import { CategoryCell } from "./category-cell.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
-import type { SessionsProps } from "./view-types.ts";
 import "../../components/tooltip.ts";
+import type { SessionsProps } from "./view-types.ts";
 
 const SESSION_RUN_STATUS_LABELS = {
   queued: "sessionsView.statusQueued",
@@ -63,14 +68,16 @@ function SessionStatusBadge(props: { row: GatewaySessionRow }) {
             : (props.row.status && SESSION_RUN_STATUS_LABELS[props.row.status]) ||
               "sessionsView.statusUnknown",
     );
-  const kind = (): "ok" | "warn" | "muted" | "danger" =>
+  const kind = (): "running" | "ok" | "warn" | "muted" | "danger" =>
     props.row.status === "queued"
       ? "warn"
-      : active() || props.row.status === "done"
-        ? "ok"
-        : idle() || !props.row.status || props.row.status === "interrupted"
-          ? "muted"
-          : "danger";
+      : active()
+        ? "running"
+        : props.row.status === "done"
+          ? "ok"
+          : idle() || !props.row.status || props.row.status === "interrupted"
+            ? "muted"
+            : "danger";
   const detail = () => `${t("sessionsView.status")}: ${label()}`;
   // The tooltip needs a focusable trigger for keyboard access.
   return (
@@ -198,14 +205,15 @@ function isRowControlTarget(target: EventTarget | null): boolean {
   );
 }
 
-export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
+export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; rowIndex: number }) {
   let menuTrigger: HTMLButtonElement | null = null;
-  let sessionLink: HTMLAnchorElement | undefined;
   const row = createMemo(() => props.row);
   const updated = createMemo(() =>
     row().updatedAt ? formatRelativeTimestamp(row().updatedAt) : t("common.na"),
   );
-  const isExpanded = () => props.expandedSessionKey === row().key;
+  const isExpanded = createMemo(() => props.expandedSessionKey === row().key);
+  const selectLabel = createMemo(() => t("sessionsView.selectSession"));
+  const menuLabel = createMemo(() => t("chat.sidebar.openSessionMenu"));
   const detailsId = () => `session-details-${encodeURIComponent(row().key)}`;
   const displayName = () => normalizeOptionalString(row().displayName) ?? null;
   const trimmedLabel = () => normalizeOptionalString(row().label) ?? "";
@@ -236,6 +244,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
       : undefined,
   );
   const displayKind = createMemo(() => resolveSessionDisplayKind(row()));
+  const listTitle = createMemo(() => resolveSessionDisplayName(row().key, row()));
   const kindClass = () => ["session-kind", `session-kind--${displayKind()}`];
   const rowClass = () => [
     "session-data-row session-data-row--expandable",
@@ -246,15 +255,35 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
     },
   ];
   // The {count} placeholder predates the drawer redesign; it carries the session title.
-  const detailsToggleLabel = () =>
+  const detailsToggleLabel = createMemo(() =>
     isExpanded()
       ? t("sessionsView.hideSessionDetails", { count: keyCellTitle() })
-      : t("sessionsView.showSessionDetails", { count: keyCellTitle() });
+      : t("sessionsView.showSessionDetails", { count: keyCellTitle() }),
+  );
   const categoryMode = () => props.groupBy === "category";
   // Dropping on a row targets that row's group so the whole section area accepts drops.
   const rowDrop = createMemo(() =>
     categoryDropHandlers(props, normalizeOptionalString(row().category) ?? null),
   );
+  const unreadDot = () =>
+    row().unread === true ? (
+      <span class="session-unread-dot" role="img" aria-label={t("sessionsView.unread")} />
+    ) : undefined;
+  function RowLink(link: { text: string }) {
+    return (
+      <Show when={canLink()} fallback={<span>{link.text}</span>}>
+        <a
+          href={chatUrl()}
+          class="session-link"
+          onClick={(e: MouseEvent) =>
+            handleNavigationClick(e, () => props.onNavigateToChat(row().key))
+          }
+        >
+          {link.text}
+        </a>
+      </Show>
+    );
+  }
   const openMenuFromEvent: SolidJSX.EventHandler<
     HTMLTableRowElement,
     MouseEvent | KeyboardEvent
@@ -270,6 +299,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
     <>
       <tr
         class={rowClass()}
+        aria-rowindex={props.rowIndex}
         tabindex="0"
         aria-controls={isExpanded() ? detailsId() : undefined}
         draggable={categoryMode() ? "true" : undefined}
@@ -305,42 +335,34 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
         }}
       >
         <td class="data-table-checkbox-col">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={props.selectedKeys.has(row().key)}
             onChange={() => props.onToggleSelect(row().key)}
-            aria-label={`${t("sessionsView.selectSession")}: ${row().key}`}
+            aria-label={`${selectLabel()}: ${row().key}`}
           />
         </td>
         <td class="data-table-key-col">
-          <openclaw-tooltip
-            prop:content={keyCellTitle()}
-            prop:descriptionTarget={canLink() ? () => sessionLink ?? null : undefined}
-          >
-            <div class={["session-key-cell", { mono: !friendlyKeyLabel() }]}>
+          {props.phoneLayout ? (
+            <div class="session-list-cell">
+              <span class="session-list-cell__title">
+                {unreadDot()}
+                <RowLink text={listTitle()} />
+              </span>
+              <span class="session-list-cell__meta">
+                <code class="session-list-cell__key">{row().key}</code>
+                <span aria-hidden="true">·</span>
+                <span class="session-list-cell__updated">{updated()}</span>
+              </span>
+            </div>
+          ) : (
+            <div
+              class={["session-key-cell", { mono: !friendlyKeyLabel() }]}
+              data-tooltip={keyCellTitle()}
+            >
               <div class="session-key-cell__text">
                 <span class="session-key-cell__primary">
-                  {row().unread === true ? (
-                    <span
-                      class="session-unread-dot"
-                      role="img"
-                      aria-label={t("sessionsView.unread")}
-                    />
-                  ) : undefined}
-                  {canLink() ? (
-                    <a
-                      ref={(element) => (sessionLink = element)}
-                      href={chatUrl()}
-                      class="session-link"
-                      onClick={(e: MouseEvent) =>
-                        handleNavigationClick(e, () => props.onNavigateToChat(row().key))
-                      }
-                    >
-                      {friendlyKeyLabel() ?? row().key}
-                    </a>
-                  ) : (
-                    <span>{friendlyKeyLabel() ?? row().key}</span>
-                  )}
+                  {unreadDot()}
+                  <RowLink text={friendlyKeyLabel() ?? row().key} />
                   {trimmedLabel() ? (
                     <span class="session-label-chip" title={trimmedLabel()}>
                       {trimmedLabel()}
@@ -352,7 +374,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                 ) : undefined}
               </div>
             </div>
-          </openclaw-tooltip>
+          )}
         </td>
         {props.allAgentsScope ? (
           <td class="session-agent-col">
@@ -362,28 +384,43 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
           </td>
         ) : undefined}
         {categoryMode() ? <CategoryCell {...props} row={row()} /> : undefined}
-        <td>{updated()}</td>
+        {props.phoneLayout ? undefined : <td>{updated()}</td>}
         <td class="session-actions-cell">
           <div class="session-actions">
-            <button
+            <IconButton
+              size={28}
+              glyph="row"
               class="session-details-toggle"
-              type="button"
+              label={detailsToggleLabel()}
+              tooltip={false}
+              icon={
+                <i
+                  class="session-css-icon"
+                  aria-hidden="true"
+                  style={{ "mask-image": sessionIconMask("chevronDown", ROW_GLYPH_STROKE) }}
+                />
+              }
               aria-expanded={isExpanded() ? "true" : "false"}
               aria-controls={isExpanded() ? detailsId() : undefined}
-              aria-label={detailsToggleLabel()}
               onClick={(e: MouseEvent) => {
                 e.stopPropagation();
                 props.onToggleDetails(row().key);
               }}
-            >
-              <Icon name="chevronDown" />
-            </button>
-            <button
-              ref={(element) => (menuTrigger = element)}
-              class="icon-btn"
-              type="button"
-              title={t("chat.sidebar.openSessionMenu")}
-              aria-label={`${t("chat.sidebar.openSessionMenu")}: ${row().key}`}
+            />
+            <IconButton
+              ref={(element: HTMLButtonElement) => (menuTrigger = element)}
+              size={28}
+              glyph="row"
+              class="session-row-menu-trigger"
+              label={`${menuLabel()}: ${row().key}`}
+              tooltip={menuLabel()}
+              icon={
+                <i
+                  class="session-css-icon"
+                  aria-hidden="true"
+                  style={{ "mask-image": sessionIconMask("moreHorizontal", ROW_GLYPH_STROKE) }}
+                />
+              }
               aria-haspopup="menu"
               aria-expanded={props.sessionMenu?.key === row().key ? "true" : "false"}
               onClick={(event) => {
@@ -392,9 +429,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                 const rect = trigger.getBoundingClientRect();
                 props.onOpenSessionMenu(row(), { x: rect.right, y: rect.bottom + 4 }, trigger);
               }}
-            >
-              <Icon name="moreHorizontal" />
-            </button>
+            />
           </div>
         </td>
       </tr>
@@ -551,7 +586,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
     }
 
     return (
-      <tr id={detailsId()} class="session-details-row">
+      <tr id={detailsId()} class="session-details-row" aria-rowindex={props.rowIndex + 1}>
         <td colspan={sessionsTableColumnCount(props)}>
           <div class="session-details-panel">
             <div class="session-details-panel__hero">

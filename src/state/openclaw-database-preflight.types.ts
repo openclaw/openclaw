@@ -10,6 +10,11 @@ export type AgentDatabasePreflightStats = {
   schemaProcessCount: number;
   schemaInspectionCount: number;
   schemaSnapshotCount: number;
+  statePreflightMs?: number;
+  agentPreflightMs?: number;
+  stateIntegrityCheckCount?: number;
+  stateIntegrityMs?: number;
+  stateSealCount?: number;
 };
 
 export type IncompatibleOpenClawDatabase = {
@@ -43,6 +48,8 @@ export type OpenClawDatabaseSchemaPreflight = {
   indeterminate: IndeterminateOpenClawDatabase[];
   agentRefusals?: AgentDatabaseAdmissionRefusal[];
   pendingMigrations?: Omit<IncompatibleOpenClawDatabase, "writerAppVersion">[];
+  /** Current owned schemas that need no repair; full integrity may still be pending. */
+  readReadyAgentPaths?: string[];
   deferredSchemaPublications?: DeferredStateSchemaPublication[];
 };
 
@@ -101,3 +108,19 @@ export type OpenClawDatabasePreflightOptions = {
   agentAdmissionConfig?: OpenClawConfig;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
 };
+
+export type OpenClawDatabaseReadinessOptions = {
+  env: NodeJS.ProcessEnv;
+  onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
+  onRegisteredAgentDatabases?: OpenClawDatabasePreflightOptions["onRegisteredAgentDatabases"];
+} & (
+  | {
+      operation: "doctor";
+      configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
+      config?: OpenClawConfig;
+      onDeferredSchemaPublication?: (publication: DeferredStateSchemaPublication) => void;
+      onVerified?: (schemas: OpenClawDatabaseSchemaPreflight) => void;
+    }
+  | { operation: "gateway-restart"; config?: OpenClawConfig }
+  | { operation: "gateway-startup"; config: OpenClawConfig }
+);

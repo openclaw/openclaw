@@ -1,6 +1,7 @@
 import { createSignal, getOwner } from "solid-js";
 import { mountSolid, type MountSolidOptions } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import {
   ActivityGroup,
@@ -118,22 +119,26 @@ export function createChatThreadHarness(container: HTMLElement, transcript: Chat
   let update: (props: ChatThreadProps) => void;
   return {
     render(props: ChatThreadProps) {
+      transcript.start();
       const next = { ...props };
       if (root) {
         update(next);
       } else {
-        root = mountSolid(
-          () => {
-            const [current, setCurrent] = createSignal(next);
-            update = setCurrent;
-            return <ChatThread props={current()} transcript={transcript} />;
-          },
-          { container },
+        root = settleChatMount(() =>
+          mountSolid(
+            () => {
+              const [current, setCurrent] = createSignal(next);
+              update = setCurrent;
+              return <ChatThread props={current()} transcript={transcript} />;
+            },
+            { container },
+          ),
         );
       }
       if (!getOwner()) {
         flush();
       }
+      transcript.update();
     },
     unmount() {
       root?.unmount();

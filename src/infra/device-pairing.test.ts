@@ -2,8 +2,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { overbroadBootstrapProfile } from "./device-bootstrap-profile.test-support.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
+import {
+  requireValue,
+  requestPairing as requestPairingInStateDir,
+  mutatePairedDevice,
+} from "./device-pairing-fixtures.test-support.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
 import { approveNodePairing, requestNodePairing } from "./device-pairing-node.js";
@@ -28,8 +34,6 @@ import {
   resolveNodePairingGeneration,
   updatePairedDeviceMetadata,
   updatePairedDevicePresence,
-  withPairedDeviceRecords,
-  type PairedDevice,
 } from "./device-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "./push-apns.js";
 
@@ -37,10 +41,7 @@ function requestPairing(
   request: Partial<Parameters<typeof requestDevicePairing>[0]>,
   stateDir = baseDir,
 ) {
-  return requestDevicePairing(
-    { deviceId: "device-1", publicKey: "public-key-1", ...request },
-    stateDir,
-  );
+  return requestPairingInStateDir(request, stateDir);
 }
 
 function requestBootstrap(patch: Partial<Parameters<typeof requestDevicePairing>[0]> = {}) {
@@ -127,13 +128,6 @@ function requireToken(token: string | undefined): string {
   return requireValue(token, "expected device token");
 }
 
-function requireValue<T>(value: T | null | undefined, message: string): T {
-  if (value == null) {
-    throw new Error(message);
-  }
-  return value;
-}
-
 function requireRotatedEntry(result: RotateDeviceTokenResult) {
   expect(result.ok).toBe(true);
   if (!result.ok) {
@@ -146,18 +140,6 @@ async function setOperatorScopes(baseDir: string, scopes: string[]) {
   await mutatePairedDevice(baseDir, "device-1", (device) => {
     const operatorToken = requireValue(device.tokens?.operator, "expected paired operator token");
     operatorToken.scopes = scopes;
-  });
-}
-
-async function mutatePairedDevice(
-  baseDir: string,
-  deviceId: string,
-  mutate: (device: PairedDevice) => void,
-) {
-  await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
-    const device = requireValue(pairedByDeviceId[deviceId], `expected paired device ${deviceId}`);
-    mutate(device);
-    return { value: undefined, persist: true };
   });
 }
 
@@ -696,18 +678,7 @@ describe("device pairing tokens", () => {
       scopes: ["node.exec", "operator.approvals", "operator.read", "operator.write"],
     });
 
-    await approveBootstrap(request, {
-      roles: ["node", "operator"],
-      scopes: [
-        "node.exec",
-        "operator.admin",
-        "operator.approvals",
-        "operator.pairing",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ],
-    });
+    await approveBootstrap(request, overbroadBootstrapProfile());
 
     const paired = await getPairedDevice("device-1", baseDir);
     const granted = ["operator.approvals", "operator.read", "operator.write"];

@@ -1,6 +1,6 @@
 import { expect } from "vitest";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
-import { appendTranscriptEventSnapshotSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSnapshotSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 

@@ -212,6 +212,7 @@ describe("installPluginFromNpmSpec e2e", () => {
         import fs from "node:fs/promises";
         import path from "node:path";
         import { randomUUID } from "node:crypto";
+        import { listDirectoryTreeStrict } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.directoryInventory).href)};
         import { runPluginInstallCommand } from ${JSON.stringify(installCommandUrl.href)};
         import { writeConfigFile } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.config).href)};
         import { readHookInstalls } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.hookInstalls).href)};
@@ -266,9 +267,7 @@ describe("installPluginFromNpmSpec e2e", () => {
           }
           cancellationAbort.abort();
           await cancellation;
-          const npmEntries = await fs.readdir(path.join(process.env.OPENCLAW_STATE_DIR, "npm"), {
-            recursive: true,
-          }).catch((error) => {
+          const npmEntries = await listDirectoryTreeStrict(path.join(process.env.OPENCLAW_STATE_DIR, "npm")).catch((error) => {
             if (error.code === "ENOENT") return [];
             throw error;
           });
@@ -277,7 +276,7 @@ describe("installPluginFromNpmSpec e2e", () => {
             configUnchanged: configBefore === await fs.readFile(process.env.OPENCLAW_CONFIG_PATH, "utf8"),
             pluginInstalls: (await readPersistedInstalledPluginIndexInstallRecordsAsync()) ?? {},
             hookInstalls: readHookInstalls(),
-            npmPayloads: npmEntries.filter((entry) => entry.endsWith(path.join("node_modules", packageName))),
+            npmPayloads: npmEntries.map((entry) => entry.relativePath).filter((entry) => entry.endsWith(path.join("node_modules", packageName))),
             hookPayload: existsSync(path.join(process.env.OPENCLAW_STATE_DIR, "hooks", packageName)),
           };
           releaseAgentRunDelegatedAuthority(authority);

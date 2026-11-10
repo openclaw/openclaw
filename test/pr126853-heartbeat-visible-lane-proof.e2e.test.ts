@@ -126,10 +126,6 @@ describe("PR #126853 real Gateway lane proof", () => {
           fs.mkdir(bundledPluginsDir, { recursive: true }),
           fs.mkdir(path.dirname(configPath), { recursive: true }),
         ]);
-        await fs.writeFile(
-          path.join(workspaceDir, "HEARTBEAT.md"),
-          "Handle pending system events and reply with a concise acknowledgement.\n",
-        );
         const token = "pr126853-proof-token";
         for (const [key, value] of Object.entries({
           HOME: tempHome,
@@ -164,9 +160,9 @@ describe("PR #126853 real Gateway lane proof", () => {
               : body.includes(visibleMarker)
                 ? "visible"
                 : undefined;
-            // Startup heartbeats share this provider; hold only the two explicit turns.
+            // Startup automations share this provider; hold only the two explicit turns.
             if (!kind) {
-              writeAssistantResponse(response, "HEARTBEAT_OK");
+              writeAssistantResponse(response, "NO_REPLY");
               return;
             }
             providerOrder.push(kind);
@@ -177,7 +173,7 @@ describe("PR #126853 real Gateway lane proof", () => {
               visibleRequestStarted();
             }
             await providerResponsesReleased;
-            writeAssistantResponse(response, kind === "heartbeat" ? "HEARTBEAT_OK" : "VISIBLE_OK");
+            writeAssistantResponse(response, kind === "heartbeat" ? "NO_REPLY" : "VISIBLE_OK");
           })().catch((error: unknown) => {
             response.writeHead(500).end(error instanceof Error ? error.message : String(error));
           });
@@ -200,7 +196,6 @@ describe("PR #126853 real Gateway lane proof", () => {
               workspace: workspaceDir,
               skipBootstrap: true,
               maxConcurrent: 1,
-              heartbeat: { every: "5m", target: "none" },
               model: { primary: provider.modelRef },
               models: {
                 [provider.modelRef]: {
@@ -239,25 +234,28 @@ describe("PR #126853 real Gateway lane proof", () => {
           agentId: "main",
           cwd: workspaceDir,
         });
-        await expect(
-          gateway.client.request<{ ok: boolean }>("wake", {
-            mode: "now",
-            text: heartbeatMarker,
-            sessionKey: heartbeatSessionKey,
-            agentId: "main",
-          }),
-        ).resolves.toEqual({ ok: true });
-        await within(heartbeatRequest, "waiting for the heartbeat provider request").catch(
-          async (error: unknown) => {
-            const lastHeartbeat = await gateway?.client
-              .request("last-heartbeat", {})
-              .catch((lookupError: unknown) => ({ lookupError: String(lookupError) }));
-            throw new Error(
-              `heartbeat did not reach provider; order=${JSON.stringify(providerOrder)} last=${JSON.stringify(lastHeartbeat)}`,
-              { cause: error },
-            );
-          },
-        );
+        const automation = await gateway.client.request<{ id: string }>("cron.add", {
+          agentId: "main",
+          name: "Visible lane heartbeat proof",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 5 * 60_000 },
+          sessionTarget: `session:${heartbeatSessionKey}`,
+          wakeMode: "now",
+          idleOnly: true,
+          payload: { kind: "agentTurn", message: heartbeatMarker },
+          delivery: { mode: "none" },
+        });
+        const heartbeatRun = await gateway.client.request<{
+          ok: boolean;
+          enqueued: boolean;
+          runId: string;
+        }>("cron.run", { id: automation.id, mode: "force" });
+        expect(heartbeatRun).toMatchObject({
+          ok: true,
+          enqueued: true,
+          runId: expect.any(String),
+        });
+        await within(heartbeatRequest, "waiting for the heartbeat provider request");
 
         const visibleSessionKey = "agent:main:pr126853-visible";
         const visibleRunId = "pr126853-visible-run";
@@ -305,14 +303,15 @@ describe("PR #126853 real Gateway lane proof", () => {
         ).resolves.toMatchObject({ status: "ok" });
         await expect
           .poll(
-            async () =>
-              await gateway?.client.request<{ status: string; preview?: string }>(
-                "last-heartbeat",
-                {},
-              ),
+            async () => {
+              const history = await gateway?.client.request<{
+                entries: Array<{ runId?: string; status?: string }>;
+              }>("cron.runs", { id: automation.id, runId: heartbeatRun.runId, limit: 1 });
+              return history?.entries.find((entry) => entry.runId === heartbeatRun.runId);
+            },
             { timeout: 15_000, interval: 50 },
           )
-          .toMatchObject({ status: "ok-empty" });
+          .toMatchObject({ runId: heartbeatRun.runId, status: "ok" });
       } finally {
         releaseProviderResponses();
         if (gateway) {

@@ -6,89 +6,84 @@ import {
   isIncognitoSessionKey,
 } from "../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../sessions/agent-harness-session-key.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
-import type { RequesterOrigin } from "./requester-origin.js";
 
-type OperatorInputRecoverySourceParams = {
+type ScheduledOperatorSourceParams = {
   authority?: AdmittedRunOperatorAuthority;
-  entry: InternalSessionEntry;
+  entry?: InternalSessionEntry;
   agentId: string;
-  sessionKey: string;
+  sessionKey?: string;
   sourceRunId: string;
+  /** A direct human reauthorizing an already source-bound job supplies a real Gateway snapshot. */
+  independent?: boolean;
 };
 
-/** Original admitted operator evidence; each recovery owner still re-admits its own work. */
-export function createOperatorInputRecoverySource(
-  params: OperatorInputRecoverySourceParams,
+/** Retains authenticated permission independently of where the automation will execute. */
+export function captureScheduledOperatorSource(
+  params: ScheduledOperatorSourceParams,
 ): RestartRecoveryOperatorSource | undefined {
   const { authority, entry, sessionKey } = params;
-  if (!authority || entry.incognito || isIncognitoSessionKey(sessionKey)) {
+  if (!authority) {
     return undefined;
   }
   assertAdmittedRunOperatorAuthority(authority);
   authority.assertCurrent();
+  const independent = Boolean(authority.openclawIdPrincipal || params.independent);
+  const unavailable = () => {
+    if (independent) {
+      throw new Error(
+        "The original authenticated authority could not be retained for this automation.",
+      );
+    }
+    return undefined;
+  };
   const snapshot = authority.recoverySnapshot;
   if (!snapshot) {
-    return undefined;
+    return unavailable();
   }
-  const source: RestartRecoveryOperatorSource = {
-    version: 1,
-    agentId: params.agentId,
-    sessionKey,
-    sessionId: entry.sessionId,
-    ...(entry.lifecycleRevision !== undefined
-      ? { lifecycleRevision: entry.lifecycleRevision }
-      : {}),
-    sourceRunId: params.sourceRunId,
-    snapshot: {
-      ...structuredClone(snapshot),
-      scopes: intersectOperatorScopes(snapshot.scopes, authority.scopes),
-    },
-  };
+  let source: RestartRecoveryOperatorSource;
+  if (independent) {
+    // No conversation IDs or contents are needed to retain the authenticated device grant.
+    source = {
+      version: 1,
+      kind: "gateway",
+      agentId: params.agentId,
+      sourceRunId: params.sourceRunId,
+      snapshot: { ...snapshot, scopes: intersectOperatorScopes(snapshot.scopes, authority.scopes) },
+    };
+  } else {
+    if (
+      !entry ||
+      !sessionKey ||
+      entry.incognito ||
+      entry.acp ||
+      entry.pluginOwnerId ||
+      entry.cronRunContinuation ||
+      isIncognitoSessionKey(sessionKey) ||
+      isCronSessionKey(sessionKey) ||
+      isAcpSessionKey(sessionKey) ||
+      isAgentHarnessSessionKey(sessionKey)
+    ) {
+      return undefined;
+    }
+    source = {
+      version: 1,
+      agentId: params.agentId,
+      sessionKey,
+      sessionId: entry.sessionId,
+      ...(entry.lifecycleRevision !== undefined
+        ? { lifecycleRevision: entry.lifecycleRevision }
+        : {}),
+      sourceRunId: params.sourceRunId,
+      snapshot: { ...snapshot, scopes: intersectOperatorScopes(snapshot.scopes, authority.scopes) },
+    };
+  }
   return Buffer.byteLength(JSON.stringify(source), "utf8") <= 65_536
     ? freezeJsonSnapshot(source)
-    : undefined;
-}
-
-/** Capture the admitted turn; restart ownership is selected from its exact active run. */
-export function createRestartRecoveryOperatorSource(
-  params: OperatorInputRecoverySourceParams & {
-    inputProvenance?: InputProvenance;
-    requesterOrigin?: RequesterOrigin;
-  },
-): RestartRecoveryOperatorSource | undefined {
-  const { entry, sessionKey } = params;
-  const requesterSettle =
-    params.inputProvenance?.kind === "inter_session" &&
-    params.inputProvenance.sourceTool === "subagent_settle" &&
-    params.inputProvenance.sourceChannel === "internal" &&
-    params.sourceRunId.startsWith("announce:requester-settle:") &&
-    Boolean(params.inputProvenance.sourceSessionKey?.trim());
-  // Native child sessions can admit later independent turns under this source.
-  // Cron, ACP, plugins, and harnesses retain their own continuation contracts.
-  if (
-    entry.acp ||
-    entry.pluginOwnerId ||
-    entry.cronRunContinuation ||
-    (params.inputProvenance &&
-      params.inputProvenance.kind !== "external_user" &&
-      !(
-        params.inputProvenance.kind === "inter_session" &&
-        (params.requesterOrigin
-          ? params.requesterOrigin.operatorProfileId === params.authority?.profileId
-          : requesterSettle)
-      )) ||
-    isCronSessionKey(sessionKey) ||
-    isAcpSessionKey(sessionKey) ||
-    isAgentHarnessSessionKey(sessionKey)
-  ) {
-    return undefined;
-  }
-  return createOperatorInputRecoverySource(params);
+    : unavailable();
 }

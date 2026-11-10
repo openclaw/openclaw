@@ -213,6 +213,35 @@ The anchors from the single-page version still resolve here.
 }
 ```
 
+## Generation overlap
+
+`generationOverlap: true` opts a native plugin into replacement while previously
+admitted turns finish on its old generation. Omitted or `false` preserves serialized
+replacement. Other value types are rejected. Both the predecessor and successor
+must opt in; the Gateway also checks their registered resource surfaces.
+If both `generationOverlap` and `reload.turnHandover` are declared, overlap takes
+precedence: admitted turns keep their old generation, and any serialized
+replacement waits for them to finish.
+
+Declare this only when registration, service startup, runtime state, and cleanup
+are independent for each generation. A successor must not overwrite a shared
+module singleton, close its predecessor's resources, or take an exclusive
+listener, port, or subscription that the predecessor still needs. If successor
+preparation fails, cleaning up that successor must leave the predecessor usable.
+Shared persistent data must remain compatible across both generations, and its
+writer coordination must span separately loaded module copies. Timers and
+watchers belong to their service or instance cleanup owner, which must stop and
+join them during retirement.
+An opted-in service must meet the same generation ownership contract. Channel
+replacement remains serialized, as do other exclusive resource surfaces.
+
+For eligible replacements, new work selects the successor once it is published.
+Already admitted turns retain their original tools, hooks, and end hooks until
+they finish. The predecessor's services and registration cleanup retire after
+its last admitted holder releases. The declaration does not bypass current
+credentials, approvals, or external-effect authorization. See
+[Plugin lifecycle and cleanup](/plugins/sdk-runtime#plugin-lifecycle-and-cleanup).
+
 ## Top-level field reference
 
 | Field                                | Required | Type                         | What it means                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -220,6 +249,7 @@ The anchors from the single-page version still resolve here.
 | `id`                                 | Yes      | `string`                     | Primary plugin id. This is the id used in `plugins.entries.<id>`. Exception: a package whose `package.json` declares multiple plugin entries registers each entry as `<id>/<entry-basename>` (for example `pack/one`), and that entry-scoped id is the `plugins.entries` key for that entry. Entry basenames must be unique within the package; colliding basenames are rejected at discovery. |
 | `configSchema`                       | Yes      | `object`                     | Inline JSON Schema for this plugin's config.                                                                                                                                                                                                                                                                                                                                                   |
 | `requiresPlugins`                    | No       | `string[]`                   | Plugin ids that must also be installed for this plugin to have an effect. Discovery keeps the plugin loadable but warns when any required plugin is missing.                                                                                                                                                                                                                                   |
+| `generationOverlap`                  | No       | `boolean`                    | Explicit author opt-in for independently owned plugin generations to overlap during replacement. Defaults to serialized replacement; see [Generation overlap](#generation-overlap).                                                                                                                                                                                                            |
 | `enabledByDefault`                   | No       | `true`                       | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default.                                                                                                                                                                                                                                                                   |
 | `enabledByDefaultOnPlatforms`        | No       | `string[]`                   | Marks a bundled plugin as enabled by default only on the listed Node.js platforms, for example `["darwin"]`. Explicit config still wins.                                                                                                                                                                                                                                                       |
 | `legacyPluginIds`                    | No       | `string[]`                   | Legacy ids that normalize to this primary plugin id.                                                                                                                                                                                                                                                                                                                                           |
@@ -235,6 +265,7 @@ The anchors from the single-page version still resolve here.
 | `modelIdNormalization`               | No       | `object`                     | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                                                                                                                                                                                      |
 | `providerEndpoints`                  | No       | `object[]`                   | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                                                                                                                                                                                       |
 | `managesOwnAvailability`             | No       | `boolean`                    | Declares that this plugin's providers manage their own rate-limit and overload recovery. Only transient capacity cooldowns are bypassed; authentication, billing, and subscription blocks remain enforced. Read from metadata before plugin runtime loads.                                                                                                                                     |
+| `reload`                             | No       | `object`                     | `{ "turnHandover": true }` lets a reload hand running agent turns to the new plugin version at their next model step instead of waiting for them to finish. Declare it only when the plugin keeps no in-memory state a later call in the same turn depends on. See [Reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins).                                                            |
 | `providerRequest`                    | No       | `object`                     | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                                                                                                                                                                                         |
 | `secretProviderIntegrations`         | No       | `Record<string, object>`     | Declarative [SecretRef](/gateway/secrets) exec provider presets that setup or install surfaces can offer without hardcoding provider-specific integrations in core.                                                                                                                                                                                                                            |
 | `cliBackends`                        | No       | `string[]`                   | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                                                                                                                                                                                                    |
@@ -267,9 +298,11 @@ The anchors from the single-page version still resolve here.
 | `channelConfigs`                     | No       | `Record<string, object>`     | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                                                                                                                                                                                                     |
 | `channelAccountKeyPolicies`          | No       | `Record<string, object>`     | Stored account-key selection rules for declared channels. See [account-key policies](/plugins/manifest/surfaces#channelaccountkeypolicies-reference).                                                                                                                                                                                                                                          |
 | `skills`                             | No       | `string[]`                   | Skill directories to load, relative to the plugin root.                                                                                                                                                                                                                                                                                                                                        |
+| `agentSkillsDir`                     | No       | `string`                     | One folder name for learned skills that each agent keeps under its own state folder. Skill loading reads it while the plugin is enabled, ranked between bundled and managed skills, without loading the plugin.                                                                                                                                                                                |
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                                                                                                                                                                    |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                                                                                                                                                        |
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                   |
+| `recommendedPrompts`                 | No       | `string[]`                   | Up to three author-written starter prompts, read without executing plugin code. See [Recommended prompts](#recommended-prompts).                                                                                                                                                                                                                                                               |
 | `categories`                         | No       | `string[]`                   | One to three controlled catalog category slugs, ordered with the primary category first. Bundled plugins must declare exactly one active category.                                                                                                                                                                                                                                             |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                                                                                                                                                                  |
 | `configGroups`                       | No       | `object[]`                   | Author-defined Settings sections with unique ids, titles, optional integer order, and immediate config property names. See [configGroups](/plugins/manifest/setup-and-auth#configgroups-reference).                                                                                                                                                                                            |
@@ -280,6 +313,57 @@ An `AuthAlias` is either a provider id string or an object with `provider` and
 endpoint after trimming whitespace and trailing slashes. It does not rename
 stored credential providers or contribute a new setup provider. Existing profile
 order, explicit bindings, and plugin trust checks still apply.
+
+## Recommended prompts
+
+`recommendedPrompts` is optional, author-written presentation metadata for starter
+prompts. Native plugins, including third-party plugins, declare it at the top level:
+
+```json
+{
+  "id": "weekly-planner",
+  "configSchema": { "type": "object", "additionalProperties": false },
+  "recommendedPrompts": [
+    "Help me plan my week around my priorities.",
+    "Compare the options for my next project."
+  ]
+}
+```
+
+- Declare at most **three** non-empty strings, each at most **128 Unicode code
+  points** after whitespace normalization. Omit the field or use `[]` when there
+  are no useful recommendations.
+- Write the actual user request, not a button label. Do not include a plugin
+  mention in the authored text; the host owns plugin selection and mention context.
+- OpenClaw trims outer whitespace and collapses internal whitespace, including
+  line breaks, to single spaces. Ordering and the complete normalized text are
+  preserved; overlong prompts are rejected, never truncated. Clients must display
+  the same normalized text they insert.
+- Invalid optional declarations are ignored as a whole, with a native manifest
+  warning, rather than partially shown or used to block plugin loading.
+- These strings do not install, enable, execute, or grant trust to a plugin.
+  Catalog, inspection, and local discovery detail can read them without loading
+  the plugin runtime.
+
+On upgrade, previously accepted declarations with a prompt longer than 128 normalized
+Unicode code points are ignored as a whole; the plugin still loads. Shorten those
+prompts to restore recommendations. Existing internal whitespace is now collapsed
+to single spaces, including line breaks.
+
+The Gateway also understands `recommendedPrompts` in a registry's selected-version
+`pluginManifestSummary`. Pre-install availability depends on the registry actually
+publishing that field; a registry summary that omits it cannot supply recommendations.
+See [Plugin bundles](/plugins/bundles#recommended-prompts) for Codex-compatible input.
+
+The Control UI shows these prompts in an artwork panel on the plugin detail page.
+The shared artwork follows the user’s primary theme color while preserving its neutral
+background and raster texture. Plugins without recommendations retain their existing layout. Choosing a prompt
+uses the existing install or enable flow, including any required capability review,
+then opens a new chat with the plugin mention and the displayed text in the editable
+composer. It never sends automatically. Installation progress and failures stay on
+the plugin page, and existing chat drafts are preserved. A successful installation
+can open the draft even if credentials or configuration still need attention; prompt
+selection does not add a separate authentication-readiness gate.
 
 ## Catalog categories
 
@@ -435,8 +519,9 @@ normal allocation retains its authentication and provisioning checks.
 
 - Settings validation matches manifest IDs case-insensitively. Errors and schema defaults use the authored settings entry rather than creating a second entry with different casing.
 - Required-field errors identify every missing field after schema defaults are applied. For dependencies on multiple fields, the error reports the dependency condition without claiming that fields already present are missing.
-- Cached schemas validate every config value independently, including `unevaluatedProperties` and `unevaluatedItems` constraints.
-- Unknown `channels.*` keys are **errors**, unless the channel id is declared by a plugin manifest. If the same id also appears in `plugins.allow`, `plugins.entries`, or `plugins.installs` (a plugin that is referenced but not currently discoverable), OpenClaw downgrades this to a **warning** instead.
+- Cached schemas validate every config value independently, including `unevaluatedProperties` and `unevaluatedItems` constraints. Node/Bun and JIT standalone hosts compile dynamic schemas; AOT standalone hosts use cached schema evaluation without generating JavaScript.
+- Config format checks are local to the manifest schema: `uri` requires an absolute URL, standard descriptive formats such as `email` remain annotations, and custom registered formats are captured when the schema is prepared. They do not change format validation in other plugins or tools.
+- Unknown `channels.*` keys are **errors**, unless the channel id is declared by a plugin manifest. If the same id also appears in `plugins.allow`, `plugins.entries`, or `plugins.installs` (a plugin that is referenced but not currently discoverable), OpenClaw downgrades this to a **warning** instead. An exact `{ enabled: false }` channel entry is also warning-only. Doctor preserves it when no stale-plugin evidence exists; matching evidence still permits stale-config cleanup. Unknown active entries and disabled entries with additional settings remain errors without stale-plugin evidence.
 - `plugins.entries.<id>`, `plugins.allow`, and `plugins.deny` referencing unknown plugin ids are **warnings** ("stale config entry ignored"), not errors, so upgrades and removed/renamed plugins do not block gateway startup. An exact `{ enabled: false }` plugin entry is an intentional uninstall marker, so validation and Doctor keep it without a stale-config warning.
 - `plugins.slots.memory` referencing an unknown plugin id is an **error**, except for the known `memory-lancedb` official external plugin, which warns instead.
 - If a plugin is installed but has a broken or missing manifest or schema, validation fails and Doctor reports the plugin error.

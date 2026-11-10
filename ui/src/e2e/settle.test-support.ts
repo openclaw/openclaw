@@ -64,6 +64,7 @@ export async function isComposerDraftCommitted({ context, expected }: DraftProbe
     type Draft = {
       revision: number;
       text: string;
+      permissionMode?: string;
       replyTarget?: { sourceMessageId?: string };
       attachments: { fileName?: string; selectionAnnotation?: { comment: string } }[];
     };
@@ -79,6 +80,7 @@ export async function isComposerDraftCommitted({ context, expected }: DraftProbe
     });
     return Boolean(
       draft &&
+      (expected.permissionMode === undefined || draft.permissionMode === expected.permissionMode) &&
       (expected.replySourceMessageId === undefined ||
         (draft.replyTarget?.sourceMessageId ?? null) === expected.replySourceMessageId) &&
       (expected.text === null
@@ -104,6 +106,7 @@ export async function waitForCommittedComposerDraft(
   attachments: number | readonly string[],
   annotationComments?: readonly (string | null)[],
   replySourceMessageId?: string | null,
+  permissionMode?: string,
 ): Promise<void> {
   const context = await getControlUiContextHandle(page);
   try {
@@ -111,6 +114,7 @@ export async function waitForCommittedComposerDraft(
       context,
       expected: {
         scopeKey,
+        ...(permissionMode !== undefined ? { permissionMode } : {}),
         text,
         attachmentCount: typeof attachments === "number" ? attachments : attachments.length,
         attachmentNames: typeof attachments === "number" ? null : JSON.stringify(attachments),

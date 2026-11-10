@@ -1,6 +1,14 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
+import { calculateCost } from "../model-utils.js";
+import {
+  applyResponsesCacheWritePricing,
+  mapResponsesTerminalUsage,
+  readResponsesReasoningTokens,
+} from "../providers/openai-responses-terminal-usage.js";
+import type { Usage } from "../types.js";
+import { createZeroUsage } from "../utils/usage.js";
 import type { OpenAIResponsesCompactEndpointResult } from "./openai-responses-compact-request.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
 import {
@@ -20,7 +28,7 @@ export async function postOpenAIResponsesCompaction(params: {
   model: Model;
   request: ReturnType<typeof buildOpenAIResponsesParams>;
   options: OpenAIResponsesOptions | undefined;
-}): Promise<OpenAIResponsesCompactEndpointResult> {
+}): Promise<OpenAIResponsesCompactEndpointResult & { modelUsage: Usage }> {
   const instructions =
     typeof params.request.instructions === "string" && params.request.instructions.length > 0
       ? params.request.instructions
@@ -68,15 +76,27 @@ export async function postOpenAIResponsesCompaction(params: {
       "Responses compact endpoint: usage must include input_tokens and output_tokens",
     );
   }
+  // Price the compact call like a normal Responses call: run accounting treats
+  // an unpriced call as making the whole run's cost unavailable.
+  const reasoningTokens = readResponsesReasoningTokens(usage);
+  const modelUsage: Usage = {
+    ...createZeroUsage(),
+    ...mapResponsesTerminalUsage(usage),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+    usageReport: { state: "available" },
+  };
+  calculateCost(params.model, modelUsage);
+  applyResponsesCacheWritePricing(modelUsage, usage);
   return {
     output: window,
     item,
     historyMode: window.length > 1 ? "retained-users" : "compacted-prefix",
     usage,
+    modelUsage,
     model: params.model,
     replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(params.model, {
       authProfileId: params.options?.authProfileId,
       sessionId: params.options?.sessionId,
     }),
-  } as OpenAIResponsesCompactEndpointResult; // SAFETY: Output, trailing item, and usage passed the endpoint guards above.
+  } as OpenAIResponsesCompactEndpointResult & { modelUsage: Usage }; // SAFETY: Output, trailing item, and usage passed the endpoint guards above.
 }

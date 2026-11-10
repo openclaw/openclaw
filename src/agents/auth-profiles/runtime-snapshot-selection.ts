@@ -1,5 +1,7 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { readAgentDatabaseReadAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import { observeCachedCanonicalAuthProfileCredentials } from "./credential-observation.js";
@@ -20,6 +22,7 @@ import {
   type RuntimeAuthSharedOwner,
 } from "./runtime-snapshot-owner.js";
 import type { FreshSharedAuthStoreHandoff } from "./shared-store-bootstrap.js";
+import { resolveAuthProfileDatabaseOwnerId } from "./sqlite.js";
 import type { AuthProfileStore, AuthProfileStoreOwner, RuntimeAuthProfileStore } from "./types.js";
 
 export type OwnedRuntimeSnapshot = {
@@ -159,14 +162,21 @@ export function createRuntimeAuthProfileSnapshotSelection(
       const workerProfiles = buildPersistedAuthProfileSecretsStore(store).profiles;
       const publishedProfiles = buildPersistedAuthProfileSecretsStore(published).profiles;
       let usageStats: AuthProfileStore["usageStats"];
-      for (const [profileId, credential] of Object.entries(workerProfiles)) {
-        if (!isDeepStrictEqual(credential, publishedProfiles[profileId])) {
+      const profileIds = new Set([
+        ...Object.keys(workerProfiles),
+        ...Object.keys(store.usageStats ?? {}).filter((id) => id.startsWith("inline-api-key:")),
+        ...Object.keys(published.usageStats ?? {}).filter((id) => id.startsWith("inline-api-key:")),
+      ]);
+      for (const profileId of profileIds) {
+        if (!isDeepStrictEqual(workerProfiles[profileId], publishedProfiles[profileId])) {
           continue;
         }
         // A cleared local profile must not inherit a different owner's same-id block.
         const usageOwner =
           published.profiles[profileId] === requested?.profiles[profileId] ? requested : inherited;
-        const usage = usageOwner?.usageStats?.[profileId];
+        const usage = profileId.startsWith("inline-api-key:")
+          ? published.usageStats?.[profileId]
+          : usageOwner?.usageStats?.[profileId];
         if (isDeepStrictEqual(store.usageStats?.[profileId], usage)) {
           continue;
         }
@@ -224,6 +234,17 @@ export function createRuntimeAuthProfileSnapshotSelection(
     }
     const inheritedKey = resolveRuntimeStoreKey(inheritedAuthDir, env);
     const requestedKey = resolveRuntimeStoreKey(agentDir, env);
+    if (agentDir) {
+      const refusal = readAgentDatabaseReadAdmissionRefusal(
+        resolveAuthProfileDatabaseOwnerId(agentDir),
+        { env },
+      );
+      if (
+        refusal?.paths.some((pathname) => isSameOpenClawAgentDatabasePath(pathname, requestedKey))
+      ) {
+        return undefined;
+      }
+    }
     const inherited = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(inheritedKey);
     if (requestedKey === inheritedKey) {
       return inherited;

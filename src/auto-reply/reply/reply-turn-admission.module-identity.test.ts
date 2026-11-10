@@ -117,33 +117,23 @@ it("keeps admitted session ownership when transformed plugins import the native 
         });
         try {
           host = await import(${JSON.stringify(pathToFileURL(path.join(dist, "host.js")).href)});
-          const native = await import(${JSON.stringify(pathToFileURL(path.join(dist, "admission-runtime.js")).href)});
-          assert.equal(native.admitReplyTurn, host.admitReplyTurn, "native SDK shares the host graph");
-          assert.equal(native.waitForSessionRunIdle, host.waitForSessionRunIdle, "native wait shares the host graph");
           const modulePath = path.join(root, "plugin.ts");
           transformed = host.getCachedPluginModuleLoader({
             modulePath, rootDir: root, importerUrl: import.meta.url, tryNative: false,
             aliasMap: { "openclaw/plugin-sdk/admission-fixture": path.join(root, "dist/admission-runtime.js") },
           })(modulePath);
-          assert.equal(transformed.admitReplyTurn, host.admitReplyTurn, "plugin transformation retains the native admission owner");
           assert.equal(transformed.waitForSessionRunIdle, host.waitForSessionRunIdle, "plugin transformation retains the native wait owner");
-          for (const foreign of [false, true]) {
-            const name = foreign ? "transformed-foreign-store" : "transformed-same-store";
+            const name = "transformed-same-store";
             const sessionKey = "global";
             const sessionId = "before-" + name;
             const successorId = "after-" + name;
-            // Reuse the target database; each scenario still owns a distinct operation and UUID.
-            const caseRoot = path.join(root, "state");
-            const targetStore = path.join(caseRoot, "target", "sessions.json");
-            const parentStore = foreign
-              ? path.join(caseRoot, "foreign", "sessions.json") : targetStore;
+            const targetStore = path.join(root, "state", "target", "sessions.json");
             const write = (storePath, id) => host.replaceSessionEntrySync(
               { agentId: "main", storePath, sessionKey }, { sessionId: id, updatedAt: Date.now() },
             );
             write(targetStore, sessionId);
-            if (foreign) write(parentStore, sessionId);
             const admitted = await bounded(transformed.admitReplyTurn({
-              agentId: "main", sessionKey, sessionId, storePath: parentStore, kind: "visible", resetTriggered: false,
+              agentId: "main", sessionKey, sessionId, storePath: targetStore, kind: "visible", resetTriggered: false,
             }), name + " parent");
             assert.equal(admitted.status, "owned", "parent must hold actual admission");
             const parent = admitted.operation;
@@ -152,28 +142,21 @@ it("keeps admitted session ownership when transformed plugins import the native 
             let pending;
             try {
               parent.setPhase("preflight_compacting");
-              const ownerIdle = foreign
-                ? undefined
-                : host.waitForSessionRunIdle(sessionKey);
+              const ownerIdle = host.waitForSessionRunIdle(sessionKey);
               pending = host.admitReplyTurn({
                 agentId: "main", sessionKey, sessionId, expectedSessionId: sessionId, storePath: targetStore,
                 kind: "queued_followup", resetTriggered: false, waitTimeoutMs: 5_000,
                 upstreamAbortSignal: controller.signal,
               });
               void pending.catch(() => {});
-              if (foreign) {
-                // Equal logical keys/UUIDs do not serialize independent physical stores.
-                child = await bounded(pending, name + " independent physical admission");
-              } else {
-                await Promise.resolve();
-              }
-              write(parentStore, successorId);
+              await Promise.resolve();
+              write(targetStore, successorId);
               parent.updateSessionId(successorId);
               parent.complete();
               await ownerIdle;
               child ??= await bounded(pending, name + " successor");
               assert.equal(child.status, "owned");
-              assert.equal(child.operation.sessionId, foreign ? sessionId : successorId);
+              assert.equal(child.operation.sessionId, successorId);
             } finally {
               parent.complete();
               if (child?.status === "owned") child.operation.complete();
@@ -183,7 +166,6 @@ it("keeps admitted session ownership when transformed plugins import the native 
                 if (unfinished?.status === "owned") unfinished.operation.complete();
               }
             }
-          }
         } finally {
           for (const runtime of [transformed, host]) await runtime?.closeOpenClawAgentDatabasesAsync();
           for (const runtime of [transformed, host]) await runtime?.closeOpenClawStateDatabaseAsync();

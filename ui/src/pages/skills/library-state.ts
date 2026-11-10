@@ -21,9 +21,10 @@ import {
   SKILL_LIBRARY_MAX_FILE_BYTES,
   SKILL_LIBRARY_MAX_FILES,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
@@ -57,6 +58,16 @@ export type LibraryDraft = {
   rollbackRevision: string;
   dirty: boolean;
 };
+
+// The in-app dialog, not window.confirm: webviews without a dialog bridge answer that silently.
+function confirmDiscard(): Promise<boolean> {
+  return showConfirmDialog({
+    title: t("skillLibrary.discard"),
+    message: t("skillLibrary.discardBody"),
+    confirmLabel: t("skillLibrary.discardAction"),
+    danger: true,
+  });
+}
 
 function libraryDraft(read?: SkillsLibraryReadResult): LibraryDraft {
   return {
@@ -176,17 +187,8 @@ export function createSkillLibrary(
       data.importSelection = [];
     }
   }
-  function showWorkspace() {
-    const view = observation.read().view;
-    return view === null || view === "workspace";
-  }
   function canWrite() {
     return canCallGatewayMethod(gateway.snapshot, "skills.library.save", "operator.write", {
-      requireAdvertisement: false,
-    });
-  }
-  function canTransfer() {
-    return canCallGatewayMethod(gateway.snapshot, "skills.library.mutate", "operator.admin", {
       requireAdvertisement: false,
     });
   }
@@ -333,10 +335,17 @@ export function createSkillLibrary(
     setLocal,
     edit: observation.edit,
     setImportOpen,
-    showWorkspace,
+    showWorkspace() {
+      const view = observation.read().view;
+      return view === null || view === "workspace";
+    },
     uploadsEnabled: () => uploadsEnabled(config()),
     canWrite,
-    canTransfer,
+    canTransfer() {
+      return canCallGatewayMethod(gateway.snapshot, "skills.library.mutate", "operator.admin", {
+        requireAdvertisement: false,
+      });
+    },
     canCreate,
     canEdit,
     entries: () => presentation().entries,
@@ -373,8 +382,8 @@ export function createSkillLibrary(
         state.query = "";
       });
     },
-    close() {
-      if (data.busy || (data.draft?.dirty && !window.confirm(t("skillLibrary.discard")))) {
+    async close() {
+      if (data.busy || (data.draft?.dirty && !(await confirmDiscard()))) {
         return;
       }
       data.draft = null;
@@ -385,7 +394,7 @@ export function createSkillLibrary(
       });
     },
     async open(skillId: string) {
-      if (data.draft?.dirty && !window.confirm(t("skillLibrary.discard"))) {
+      if (data.draft?.dirty && !(await confirmDiscard())) {
         return;
       }
       const connection = gateway.capture();
@@ -469,7 +478,13 @@ export function createSkillLibrary(
       }
       if (
         (operation === "remove" || operation === "transfer") &&
-        !window.confirm(t(`skillLibrary.confirm.${operation}`, { slug: draft.slug }))
+        (!(await showConfirmDialog({
+          title: t(`skillLibrary.confirm.${operation}`, { slug: draft.slug }),
+          message: t(`skillLibrary.confirmBody.${operation}`),
+          confirmLabel: t(`skillLibrary.${operation}`),
+          danger: operation === "remove",
+        })) ||
+          data.draft !== draft)
       ) {
         return;
       }

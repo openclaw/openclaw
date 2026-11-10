@@ -153,7 +153,6 @@ export function assertControlUiE2eOwnership(
     });
   }
   expect(projects[0]?.test.exclude).toEqual(expect.arrayContaining(uiE2eSerialTestFiles));
-
   const realGateway = new Set(uiE2eRealGatewayTestFiles);
   const ordinary = trackedUiE2eFiles.filter((file) => !realGateway.has(file));
   const serial = new Set(uiE2eSerialTestFiles);
@@ -173,7 +172,11 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
     "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
     "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
+    "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
+    "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+    "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
     "ui/src/e2e/service-worker-update.e2e.test.ts",
+    "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
   ]);
   expect(localSelected[3]).toEqual(
     uiE2ePrivateServerTestFiles.filter((file) => uiE2eSerialTestFiles.includes(file)),
@@ -186,6 +189,25 @@ export function assertControlUiE2eOwnership(
   const ordinarySelected = select(ordinaryConfig);
   expect(selectedFiles(ordinaryConfig.test as typeof rootTest)).toEqual(ordinary);
   assertPartition(ordinarySelected, ordinary);
+
+  const productionArtifactFiles = [
+    "ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts",
+    "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+    "ui/src/e2e/service-worker-update.e2e.test.ts",
+  ];
+  const delegated = createUiE2eVitestConfig(
+    { OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1", OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: "1" },
+    [],
+  );
+  assertPartition(
+    select(delegated),
+    ordinary.filter((file) => !productionArtifactFiles.includes(file)),
+  );
+  const production = createUiE2eVitestConfig(
+    { OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: "/fixture/production-ui" },
+    [],
+  );
+  expect(select(production)).toEqual([[], productionArtifactFiles, [], []]);
 
   // The packaged delivery proof needs the runtime build owned by the prebuilt lane.
   const packagedWorkboard = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";

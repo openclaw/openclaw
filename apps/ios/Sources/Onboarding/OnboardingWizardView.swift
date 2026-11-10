@@ -906,6 +906,8 @@ extension OnboardingWizardView {
                 self.handleScannedLink(link)
             case let .setupCode(code):
                 self.handleScannedSetupCode(code)
+            case .espDevice:
+                return
             }
         }
         if delivery == nil {
@@ -1051,7 +1053,8 @@ extension OnboardingWizardView {
         self.pendingTargetSuppression.releaseAutoConnect(.qrScanner, controller: self.gatewayController)
     }
 
-    private func openQRScannerFromOnboarding(status: String = "Opening QR scanner…") {
+    private func openQRScannerFromOnboarding(status: String = "") {
+        // The scanner sheet provides opening feedback; keep the parent neutral when it is canceled.
         // Stop active reconnect loops before scanning new credentials.
         self.qrCodeCompletion.cancel()
         self.invalidateSetupAttempt()

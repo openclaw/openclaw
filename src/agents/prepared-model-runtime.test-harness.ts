@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -22,10 +21,15 @@ type BuildPreparedModelCatalogSnapshot =
 type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
 type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
+type PrepareStaticCatalog =
+  typeof import("./models-config.providers.implicit.js").prepareImplicitProviderStaticCatalog;
 
 const materializationChanges = vi.hoisted<{
   onChange?: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void;
 }>(() => ({}));
+const { makeEmptyPluginMetadataOwners } = await vi.hoisted(
+  () => import("../plugins/plugin-metadata-empty.test-support.js"),
+);
 const preparedModelRuntimeMocks = vi.hoisted(() => ({
   pluginMetadataSnapshot: {
     plugins: [],
@@ -40,18 +44,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     manifestRegistry: { plugins: [], diagnostics: [] },
     registryDiagnostics: [],
     declaredProviderOwners: new Map(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      providerAuthContributions: [],
-      modelIdNormalizationPolicies: new Map(),
-    },
+    owners: makeEmptyPluginMetadataOwners(),
   },
   preparedAuthStore: undefined as import("./auth-profiles/types.js").AuthProfileStore | undefined,
   credentialsRevision: 0,
@@ -91,7 +84,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     modelsJsonContents: null,
     pluginCatalogs: [],
   })),
-  prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({ entries: [] })),
+  prepareStaticCatalog: vi.fn<PrepareStaticCatalog>(async () => ({ entries: [] })),
   runPreparedModelCatalogWorker: vi.fn(
     async (_providerIds?: readonly string[]): Promise<ModelCatalogSnapshot> => ({
       entries: [],
@@ -170,11 +163,8 @@ vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
   },
 }));
 
-vi.mock("./model-catalog.js", async () => ({
-  findModelCatalogEntry: (await import("./model-catalog-lookup.js")).findModelCatalogEntry,
-  loadManifestModelCatalog: (
-    await vi.importActual<typeof import("./model-catalog.js")>("./model-catalog.js")
-  ).loadManifestModelCatalog,
+vi.mock("./model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-catalog.js")>()),
   buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
     preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
 }));
@@ -256,11 +246,6 @@ const agentScopeMocks = vi.hoisted(() => ({
     config.agents?.entries?.[agentId],
   resolveNativeModelPrimary: preparedModelRuntimeMocks.resolveNativeModelPrimary,
   resolveAgentModelFallbacksOverride: () => undefined,
-  resolveEffectiveModelFallbacks: () => undefined,
-  resolveModelFallbackAvailability: () => ({
-    kind: "none_configured" as const,
-    source: "explicit" as const,
-  }),
   resolveSubagentSpawnModelFallbacksOverride: () => undefined,
   resolveRunModelFallbacksOverride: () => undefined,
   resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
@@ -269,11 +254,18 @@ const agentScopeMocks = vi.hoisted(() => ({
   }),
 }));
 
-// The projection is a pure function; use the real implementation so tests that
-// swap in real availability resolvers (reply-fallback) keep prod semantics.
 vi.mock("./agent-scope.js", async () => ({
   ...(await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js")),
   ...agentScopeMocks,
+}));
+// Keep the real projection when reply-fallback swaps in real availability resolvers.
+vi.mock("./model-selection-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-selection-config.js")>()),
+  resolveEffectiveModelFallbacks: () => undefined,
+  resolveModelFallbackAvailability: () => ({
+    kind: "none_configured" as const,
+    source: "explicit" as const,
+  }),
 }));
 vi.mock("./agent-scope-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
@@ -402,8 +394,9 @@ vi.mock("./models-config.js", () => ({
     preparedModelRuntimeMocks.planOpenClawModelsJsonSource(...args),
 }));
 
+// mock-isolation: lifecycle fixtures supply prepared catalog facts without loading provider discovery.
 vi.mock("./models-config.providers.implicit.js", () => ({
-  prepareImplicitProviderStaticCatalog: (...args: unknown[]) =>
+  prepareImplicitProviderStaticCatalog: (...args: Parameters<PrepareStaticCatalog>) =>
     preparedModelRuntimeMocks.prepareStaticCatalog(...args),
 }));
 
@@ -425,24 +418,6 @@ vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal
     preparedModelRuntimeMocks.loadStaticCatalog(...args),
   createBundledStaticCatalogModelResolver: (...args: Parameters<CreateStaticCatalogResolver>) =>
     preparedModelRuntimeMocks.createStaticCatalogResolver(...args),
-}));
-
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: (subsystem: string) => {
-    const logger: SubsystemLogger = {
-      subsystem,
-      child: () => logger,
-      isEnabled: () => false,
-      trace: vi.fn(),
-      debug: vi.fn(),
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: preparedModelRuntimeMocks.warn,
-      fatal: vi.fn(),
-      raw: vi.fn(),
-    };
-    return logger;
-  },
 }));
 
 type PreparedModelRuntimeTestApi = {

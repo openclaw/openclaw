@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsPatchMutation } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -25,6 +25,7 @@ import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu-solid.tsx";
 import {
   createHarness as createBaseHarness,
+  endArchiveUndoWindow,
   sessionRow,
   sessionTarget,
 } from "./session-organizer-batch-mutations.test-support.ts";
@@ -173,13 +174,11 @@ describe("patchSessionRows", () => {
         { targets: [sessionTarget(parent)], patch: { unread: false } },
         { targets: [sessionTarget(parent)], patch: { unread: true } },
       ]);
-      expect(h.patch.mock.calls).toEqual([
-        [
-          run.key,
-          { unread: false },
-          { agentId: "main", expectedMarkedUnreadAt: null, expectedSessionId: run.sessionId },
-        ],
-      ]);
+      expect(h.acknowledgeHiddenRuns).toHaveBeenCalledExactlyOnceWith([run], {
+        agentId: "main",
+        publishErrors: true,
+      });
+      expect(h.patch).not.toHaveBeenCalled();
     },
   );
 
@@ -205,6 +204,10 @@ describe("patchSessionRows", () => {
     const h = createHarness({ scopes: ["operator.sessions.write"] });
     await h.action({ kind: "toggle-unread" }, [parent], true);
     expect(h.request).toHaveBeenCalledOnce();
+    expect(h.acknowledgeHiddenRuns).toHaveBeenCalledWith([run], {
+      agentId: "main",
+      publishErrors: true,
+    });
     expectNoCalls(h.patch, h.publishSessionMutationError);
   });
 
@@ -216,7 +219,7 @@ describe("patchSessionRows", () => {
     await expect(h.patchRows(rows, { archived: false })).resolves.toBeNull();
 
     expect(h.request).not.toHaveBeenCalled();
-    expectError(h, "Session lifecycle action requires a durable session identity.");
+    expectError(h, "This action needs a saved session.");
   });
 
   it("dispatches 101 rows as ordered protocol-sized chunks and refreshes once", async () => {
@@ -410,7 +413,6 @@ function withHiddenRun(
     subagentSummary: {
       attention: { kind: "none" },
       runningChildCount: 0,
-      failedChildCount: 0,
       unreadHiddenRuns: [run],
     },
   });
@@ -456,6 +458,7 @@ function cloudWorkerRow(hasActiveRun: boolean): SidebarRecentSession {
       method: "sessions.reclaim",
       requiredScope: "operator.write",
       blocksActiveRun: true,
+      copyKey: "sessionsView.stopCloudWorker",
     },
   });
 }
@@ -513,7 +516,8 @@ describe("session organizer destructive confirmations", () => {
     response.resolve({ deleted: true, worktreePreserved: preservedWorktree("busy", "wt-busy") });
     await pending;
     expect(showToast).toHaveBeenCalledWith({
-      message: "Managed Worktrees:\nfeature — live run or cleanup active",
+      severity: undefined,
+      message: "Managed worktrees:\nfeature — live run or cleanup active",
     });
   });
 
@@ -533,7 +537,7 @@ describe("session organizer destructive confirmations", () => {
     const pending = deleteSessionsBatch(h.host, rows, h.scope);
     const actions = await waitForConfirmDialogActions();
     expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "Delete 2 sessions and their transcripts?",
+      "Delete 2 sessions?This also deletes their transcripts.",
     );
     answerConfirmDialog(actions, "confirm");
     await pending;
@@ -548,7 +552,7 @@ describe("session organizer destructive confirmations", () => {
     );
     expectError(h, retryError);
     expect(alertSpy).toHaveBeenCalledWith(
-      "Managed Worktrees:\nopenclaw/busy — live run or cleanup active",
+      "Managed worktrees:\nopenclaw/busy — live run or cleanup active",
     );
     alertSpy.mockRestore();
   });
@@ -574,7 +578,7 @@ describe("session organizer destructive confirmations", () => {
       return;
     }
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(showToast).toHaveBeenCalledWith({ message: operation.staleMessage });
+    expect(showToast).toHaveBeenCalledWith({ severity: "error", message: operation.staleMessage });
 
     // Reconnecting must release the old dialog's lock before the operator retries.
     h.renewScope();
@@ -597,7 +601,8 @@ describe("session organizer destructive confirmations", () => {
 
     expectNoCalls(h.request, h.replaceCurrentSession);
     expect(showToast).toHaveBeenCalledWith({
-      message: "Managed Worktrees:\nfeature — cleanup failed",
+      severity: undefined,
+      message: "Managed worktrees:\nfeature — cleanup failed",
     });
   });
 
@@ -658,6 +663,33 @@ describe("session organizer destructive confirmations", () => {
       deleteTranscript: true,
       expectedSessionId: row.sessionId,
     });
+  });
+
+  it("warns about bound automations even after the delete confirmation opt-out", async () => {
+    patchSettings({ sessionDeleteConfirm: false });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const h = createHarness(destructiveHarness);
+    const original = h.request.getMockImplementation()!;
+    h.request.mockImplementation(async (method, params, options) =>
+      method === "cron.list"
+        ? { jobs: [{ id: "job-1", name: "Nightly digest" }], total: 1 }
+        : original(method, params, options),
+    );
+    const row = makeRow(0, { hasAutomation: true });
+    const pending = h.remove(row, { offerSkip: true });
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.textContent).toContain('Deleting "Batch 0" pauses its automations.');
+    expect(document.body.textContent).toContain("Nightly digest (job-1)");
+    expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
+    expect(actions.textContent).toContain("Delete anyway");
+    answerConfirmDialog(actions, "cancel");
+    await pending;
+    expect(h.deleteOne).not.toHaveBeenCalled();
+    expect(info.mock.calls.map(([message]) => message)).toEqual([
+      "[session-automation-confirm] delete shown",
+      "[session-automation-confirm] delete cancelled",
+    ]);
+    info.mockRestore();
   });
 
   it.each(["cloud worker stop", "preserved worktree removal"])(
@@ -731,6 +763,7 @@ describe("session organizer batch archive confirmation", () => {
         }
         await pending;
         if (decision === "confirm") {
+          await endArchiveUndoWindow(h);
           expectArchive(h, rows, true);
           expect(h.finishArchive).toHaveBeenCalledTimes(rows.length);
         } else {
@@ -744,7 +777,7 @@ describe("session organizer batch archive confirmation", () => {
   );
 
   it.each([false, true])(
-    "keeps idle archive and archived=%s restore immediate",
+    "skips confirmation for idle archive and archived=%s restore",
     async (archived) => {
       const h = createHarness();
       const rows = [sessionRow(0), sessionRow(1)].map((row) =>
@@ -752,6 +785,9 @@ describe("session organizer batch archive confirmation", () => {
       );
       await h.action({ kind: "toggle-archived" }, rows, false);
       expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      if (!archived) {
+        await endArchiveUndoWindow(h);
+      }
       expectArchive(h, rows, !archived);
     },
   );

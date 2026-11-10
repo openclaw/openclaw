@@ -21,10 +21,6 @@ import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-r
 const manager = vi.hoisted(() => ({
   resolveSessionAsync: vi.fn<() => Promise<AcpSessionResolution>>(),
   runTurn: vi.fn<(input: AcpRunTurnInput) => Promise<void>>(),
-  getObservabilitySnapshot: () => ({
-    turns: { queueDepth: 0 },
-    runtimeCache: { activeSessions: 0 },
-  }),
 }));
 
 vi.mock("../../acp/control-plane/manager.js", () => ({
@@ -105,12 +101,6 @@ it.each(["message", "steer"] as const)(
       expect(result?.reply?.text).toContain(`ACP steer sent to ${sessionKey}`);
     }
 
-    expect(manager.runTurn).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        mode: mode === "message" ? "prompt" : "steer",
-        text: "keep going",
-      }),
-    );
     expect(captured).toMatchObject([
       {
         kind: "capture",

@@ -60,6 +60,7 @@ export async function createPluginReloadRecoveryFixture(
   },
   options: {
     config?: OpenClawConfig;
+    generationOverlap?: boolean;
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
     env?: NodeJS.ProcessEnv;
     register?: (
@@ -127,7 +128,10 @@ export async function createPluginReloadRecoveryFixture(
     }
   };
   for (const id of ["first", "sibling"] as const) {
-    const record = createPluginRecord({ id });
+    const record = createPluginRecord({
+      id,
+      ...(id === "first" ? { generationOverlap: options.generationOverlap } : {}),
+    });
     previous.registry.plugins.push(record);
     const api = previous.createApi(record, { config });
     register(api, id, record);
@@ -174,7 +178,10 @@ export async function createPluginReloadRecoveryFixture(
       if (id === "first" && cfg.plugins?.entries?.first?.enabled === false) {
         continue;
       }
-      const record = createPluginRecord({ id });
+      const record = createPluginRecord({
+        id,
+        ...(id === "first" ? { generationOverlap: options.generationOverlap } : {}),
+      });
       candidate.registry.plugins.push(record);
       if (loadModules) {
         const api = candidate.createApi(record, { config: cfg });
@@ -298,7 +305,7 @@ export async function createPluginReloadRecoveryFixture(
           prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
             await options.prepareAttached?.();
             return {
-              publish: () => {
+              publish: (beforeDispose) => {
                 adoptPluginHttpRouteHandoffs(registryOwner.registry, candidate.pluginRegistry);
                 activatePluginRegistry(
                   candidate.pluginRegistry,
@@ -308,7 +315,7 @@ export async function createPluginReloadRecoveryFixture(
                   registryOwner.registry,
                   trackActivationCleanup,
                 );
-                registryOwner.publish(candidate.pluginRegistry);
+                registryOwner.publish(candidate.pluginRegistry, beforeDispose);
               },
               afterCommit: vi.fn(),
             };

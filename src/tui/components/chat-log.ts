@@ -466,7 +466,7 @@ export class ChatLog extends Container {
     const run = this.getAssistantRun(effectiveRunId);
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
     const existing = run.streaming;
-    const finalized = new Set(run.frozen);
+    const finalized = new Set([...run.finalized, ...run.frozen]);
     let lastAssistant: MarkdownMessageComponent | undefined;
     run.frozen.clear();
     run.committedText = undefined;

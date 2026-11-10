@@ -552,16 +552,21 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }),
         metricsActive
           ? tracesActive
-            ? undefined
-            : { exclude: ["diagnostic.phase.completed"], includePromptStats: false }
+            ? { exclude: ["worker.request"] }
+            : {
+                exclude: ["diagnostic.phase.completed", "worker.request"],
+                includePromptStats: false,
+              }
           : tracesActive
             ? {
                 exclude: [
+                  "worker.request",
                   "gateway.event_loop.sample",
                   "diagnostic.gc",
                   "gateway.ws.event",
                   "gateway.ws.connections",
                   "sessions.list.retention",
+                  "sessions.projection.retention",
                   "sessions.event.retention",
                   "sessions.event.rows.reset",
                 ],

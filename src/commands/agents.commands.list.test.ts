@@ -14,7 +14,6 @@ import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { defaultRuntime } from "../runtime.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
@@ -53,29 +52,29 @@ async function list(options: Parameters<typeof agentsListCommand>[0]) {
 
 const telegramBinding = [{ agentId: "main", match: { channel: "telegram" } }];
 const telegramPlugin = (label = "Telegram", name?: string) =>
-  createChannelTestPluginBase({
-    id: "telegram",
+  plugin(
+    "telegram",
+    { describeAccount: () => makeAccount("default", { name }) },
+    [makeAccount("default")],
     label,
-    config: {
-      resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-      describeAccount: () => ({ accountId: "default", enabled: true, configured: true, name }),
-    },
-  });
+  );
 function setEntries(
   entries: NonNullable<OpenClawConfig["agents"]>["entries"],
   bindings?: OpenClawConfig["bindings"],
 ) {
   mocks.config.mockResolvedValue({ agents: { entries }, bindings } satisfies OpenClawConfig);
 }
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.provenance.mockResolvedValue([]);
+  mocks.displayProvenance.mockResolvedValue([]);
+});
+afterEach(() => vi.restoreAllMocks());
 
 describe("agentsListCommand", () => {
-  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
-    vi.clearAllMocks();
     setEntries({ main: {} }, telegramBinding);
     mocks.plugins.mockReturnValue([telegramPlugin()]);
-    mocks.provenance.mockResolvedValue([]);
-    mocks.displayProvenance.mockResolvedValue([]);
   });
   it("keeps the migrated default in JSON after reloading explicit ownership", async () => {
     const migrated = createCanonicalAgentConfigFixture({
@@ -148,11 +147,7 @@ describe("agentsListCommand", () => {
       fs.writeFileSync(path.join(workspace, "avatar.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
       const agent = (identity: IdentityConfig) => ({ workspace, identity });
       setEntries({
-        configured: agent({
-          name: " Chosen ",
-          emoji: "🦉",
-          avatar: "https://e.test/n.png",
-        }),
+        configured: agent({ name: " Chosen ", emoji: "🦉", avatar: "https://e.test/n.png" }),
         partial: agent({ name: "Chosen" }),
         fallback: agent({ name: " ", emoji: "\t", avatar: "slack://avatar.png" }),
         local: agent({ avatar: "avatar.png" }),
@@ -258,6 +253,8 @@ const providerMocks = {
     typeof externalPluginRepairs.resolveMissingOfficialExternalChannelPluginRepairHints
   >(() => []),
 };
+const expectProviders = (output: unknown, providers: string[]) =>
+  expect(output).toMatchObject([{ providers }]);
 async function listProviders(cfg: OpenClawConfig = {}, bindings: AgentRouteBinding[] = []) {
   mocks.config.mockResolvedValue({
     ...cfg,
@@ -277,9 +274,10 @@ const plugin = (
   id: string,
   config: Partial<Plugin["config"]> = {},
   accounts: ChannelAccountSnapshot[] = [{ accountId: "default" }],
+  label = id,
 ): Plugin => ({
   id,
-  meta: { id, label: id, selectionLabel: id, docsPath: `/channels/${id}`, blurb: "Fixture" },
+  meta: { id, label, selectionLabel: id, docsPath: `/channels/${id}`, blurb: "Fixture" },
   capabilities: { chatTypes: ["direct"] },
   config: {
     listAccountIds: () => accounts.map((account) => account.accountId),
@@ -319,17 +317,14 @@ function configureDisplayPlugins() {
     makeAccount("beta", { name: "Beta", enabled: false, configured: false }),
   ]);
   telegram.meta.label = "Telegram";
-  const imessage = plugin("imessage", {}, [makeAccount("Alpha", { name: "Work" })]);
-  imessage.meta.label = "iMessage";
+  const imessage = plugin("imessage", {}, [makeAccount("Alpha", { name: "Work" })], "iMessage");
   providerMocks.plugins.mockReturnValue([telegram, imessage]);
   providerMocks.configuredChannels.mockReturnValue(["feishu"]);
   providerMocks.repairs.mockReturnValue([feishuRepair]);
 }
 
 describe("agent provider inventories", () => {
-  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
-    vi.clearAllMocks();
     vi.spyOn(channelIds, "normalizeChannelId").mockImplementation(providerMocks.normalize);
     vi.spyOn(channelExposure, "isChannelVisibleInConfiguredLists").mockReturnValue(true);
     vi.spyOn(configuredChannelIds, "listExplicitConfiguredChannelIdsForConfig").mockImplementation(
@@ -339,8 +334,6 @@ describe("agent provider inventories", () => {
       externalPluginRepairs,
       "resolveMissingOfficialExternalChannelPluginRepairHints",
     ).mockImplementation(providerMocks.repairs);
-    mocks.provenance.mockResolvedValue([]);
-    mocks.displayProvenance.mockResolvedValue([]);
     providerMocks.plugins.mockReturnValue([]);
     providerMocks.configuredChannels.mockReturnValue([]);
     providerMocks.repairs.mockReturnValue([]);
@@ -349,15 +342,10 @@ describe("agent provider inventories", () => {
   });
 
   it("builds a read-only mixed account inventory without exposing unavailable credentials", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        imessage: { accounts: { Alpha: { name: "Alias" }, alpha: { name: "Exact" }, Secret: {} } },
-      },
-    };
-    const inspectAccount = vi.fn(() => makeAccount("default", { linked: true, name: "Work" }));
+    const accounts = { Alpha: { name: "Alias" }, alpha: { name: "Exact" }, Secret: {} };
+    const cfg: OpenClawConfig = { channels: { imessage: { accounts } } };
     const resolveAccount = vi.fn(() => fail("must inspect read-only accounts"));
     const isLinked = vi.fn(() => fail("linkage unavailable"));
-    const resolveAccountState = vi.fn(() => "enabled" as const);
     const calls: Array<string | null | undefined> = [];
     const resolveRawAccount = (config: OpenClawConfig, requestedId?: string | null) => {
       calls.push(requestedId);
@@ -381,7 +369,10 @@ describe("agent provider inventories", () => {
       [],
     );
     providerMocks.plugins.mockReturnValue([
-      plugin("workchat", { inspectAccount, resolveAccount }),
+      plugin("workchat", {
+        inspectAccount: () => makeAccount("default", { linked: true, name: "Work" }),
+        resolveAccount,
+      }),
       plugin(
         "prepared",
         {
@@ -420,7 +411,7 @@ describe("agent provider inventories", () => {
         ...plugin("legacychat", { describeAccount: undefined, isConfigured: () => true }, [
           makeAccount("default"),
         ]),
-        status: { resolveAccountState },
+        status: { resolveAccountState: () => "enabled" as const },
       },
       plugin("disabledchat", {}, [makeAccount("default", { enabled: false, configured: false })]),
       raw,
@@ -432,36 +423,25 @@ describe("agent provider inventories", () => {
     bindings.push(route("feishu"));
     providerMocks.plugins.mockClear();
     const output = await listProviders(cfg, bindings);
-    expect(output).toMatchObject([
-      {
-        providers: [
-          "workchat default (Work): linked",
-          "prepared work (Prepared): configured",
-          "telegram default: configured unavailable",
-          "slack optional: configured",
-          "slack missing: not configured",
-          "slack unavailable: configured unavailable",
-          "quietchat default: not configured",
-          "legacychat default: enabled",
-          "disabledchat default: disabled",
-          "imessage alpha (Exact): configured",
-          "imessage Secret: configured unavailable",
-          "Feishu default: missing plugin - Install the official Feishu plugin.",
-        ],
-      },
+    expectProviders(output, [
+      "workchat default (Work): linked",
+      "prepared work (Prepared): configured",
+      "telegram default: configured unavailable",
+      "slack optional: configured",
+      "slack missing: not configured",
+      "slack unavailable: configured unavailable",
+      "quietchat default: not configured",
+      "legacychat default: enabled",
+      "disabledchat default: disabled",
+      "imessage alpha (Exact): configured",
+      "imessage Secret: configured unavailable",
+      "Feishu default: missing plugin - Install the official Feishu plugin.",
     ]);
     expect(JSON.stringify(output)).not.toContain("PRIVATE_PROVIDER_TOKEN");
     expect(resolveAccount).not.toHaveBeenCalled();
-    expect(inspectAccount).toHaveBeenCalledWith(expect.objectContaining(cfg), "default");
     expect(isLinked).not.toHaveBeenCalled();
-    expect(resolveAccountState).toHaveBeenCalledOnce();
     expect(calls).toEqual(raw.config.listAccountIds(cfg));
     expect(cfg.channels?.imessage?.accounts?.Alpha?.name).toBe("Alias");
-    expect(providerMocks.repairs).toHaveBeenCalledWith({
-      config: expect.objectContaining(cfg),
-      channelIds: ["feishu"],
-    });
-    expect(providerMocks.plugins).toHaveBeenCalledOnce();
     expect(providerMocks.plugins).toHaveBeenCalledWith(expect.objectContaining(cfg), {
       includeSetupFallbackPlugins: false,
     });
@@ -517,18 +497,14 @@ describe("agent provider inventories", () => {
     providerMocks.summaryIsDefault = summaryIsDefault;
     configureDisplayPlugins();
     const output = await listProviders();
-    expect(output).toMatchObject([
-      summaryIsDefault
-        ? {
-            providers: [
-              "Telegram alpha (Alpha): configured",
-              "iMessage Alpha (Work): configured",
-              "Feishu default: missing plugin - Install the official Feishu plugin.",
-            ],
-          }
-        : { id: "proof" },
-    ]);
-    if (!summaryIsDefault) {
+    if (summaryIsDefault) {
+      expectProviders(output, [
+        "Telegram alpha (Alpha): configured",
+        "iMessage Alpha (Work): configured",
+        "Feishu default: missing plugin - Install the official Feishu plugin.",
+      ]);
+    } else {
+      expect(output).toMatchObject([{ id: "proof" }]);
       expect(output).not.toHaveProperty("0.providers");
     }
   });

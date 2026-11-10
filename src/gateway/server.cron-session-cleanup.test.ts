@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
+import { readSessionArchiveText } from "../../test/helpers/session-archive.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -147,7 +147,7 @@ test.each(["current", "revoked"] as const)(
       const outcome = await observed;
       const handlerSettlements = await Promise.allSettled(executions);
       const archives = (await fs.readdir(dir)).filter((name) => name.includes(".deleted."));
-      const archived = archives.map((name) => readSessionArchiveContentSync(path.join(dir, name)));
+      const archived = archives.map((name) => readSessionArchiveText(path.join(dir, name)));
       const result = {
         outcome,
         base: loadSessionEntry({ sessionKey, storePath }),
@@ -164,11 +164,6 @@ test.each(["current", "revoked"] as const)(
           base: { sessionId: sessionIds[2] },
           archivedGenerations: [false, false, false],
         });
-        for (const [index, sessionId] of sessionIds.entries()) {
-          expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toEqual([
-            events[index],
-          ]);
-        }
       } else {
         expect(result).toMatchObject({
           outcome: { response: { ok: true, payload: { removed: true } } },
@@ -176,9 +171,11 @@ test.each(["current", "revoked"] as const)(
           archivedGenerations: [true, true, true],
           handlerErrors: [],
         });
-        for (const sessionId of sessionIds) {
-          expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toEqual([]);
-        }
+      }
+      for (const [index, sessionId] of sessionIds.entries()) {
+        expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toEqual(
+          authority === "revoked" ? [events[index]] : [],
+        );
       }
     } finally {
       vi.useRealTimers();

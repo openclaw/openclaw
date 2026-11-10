@@ -13,11 +13,11 @@ import {
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
 import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
-import type { VitestWorkerDescriptor } from "./vitest-worker-descriptor.mts";
+import type { VitestWorkerDescriptor, VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
-function createVitestWorkerDirectory(env: NodeJS.ProcessEnv) {
+function createVitestWorkerDirectory(env: NodeJS.ProcessEnv, preset: VitestWorkerPreset) {
   const parent = path.join(root, ".artifacts", "vitest-workers");
   fs.mkdirSync(parent, { recursive: true });
   let directory: string;
@@ -26,7 +26,8 @@ function createVitestWorkerDirectory(env: NodeJS.ProcessEnv) {
   } else {
     // A retained or live generation keeps its slot. Only joined disposal releases it.
     for (let slot = 0; ; slot++) {
-      directory = path.join(parent, `run-cache-${slot}`);
+      // Runtime borrowers must not replace a full seed or reserve its exact output path.
+      directory = path.join(parent, `run-cache-${preset === "runtime" ? "runtime-" : ""}${slot}`);
       try {
         fs.mkdirSync(directory, { mode: 0o700 });
         break;
@@ -45,8 +46,14 @@ function createVitestWorkerDirectory(env: NodeJS.ProcessEnv) {
 export function createVitestWorkerRun(
   env: NodeJS.ProcessEnv = process.env,
   parent?: VitestWorkerDescriptor,
+  requestedPreset?: VitestWorkerPreset,
+  compilerExecPath = process.execPath,
 ) {
-  const directory = parent?.directory ?? createVitestWorkerDirectory(env);
+  const preset = parent ? (parent.preset ?? "full") : (requestedPreset ?? "full");
+  if (preset === "runtime" && requestedPreset === "full") {
+    throw new Error("Runtime compiled subprocess owner cannot serve a full preset borrower");
+  }
+  const directory = parent?.directory ?? createVitestWorkerDirectory(env, preset);
   let preparation: Promise<VitestWorkerManifest> | undefined;
   let retainArtifacts:
     | typeof import("./vitest-worker-cache.mts").retainVitestWorkerArtifacts
@@ -95,8 +102,12 @@ export function createVitestWorkerRun(
       }
       compilerJoined = false;
       const code = await runManagedCommand({
-        bin: process.execPath,
-        args: [fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)), directory],
+        bin: compilerExecPath,
+        args: [
+          fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)),
+          directory,
+          ...(preset === "runtime" ? ["--preset=runtime"] : []),
+        ],
         cwd: root,
         env,
         shell: false,
@@ -138,69 +149,90 @@ export function createVitestWorkerRun(
       return manifest;
     })());
   }
-  return {
-    descriptor: { directory } satisfies VitestWorkerDescriptor,
-    prepare,
-    borrow<T>(
-      child: ChildProcess,
-      completion: Promise<T>,
-      onPreparationProgress?: () => void,
-    ): Promise<T> {
-      let request: Promise<void> | undefined;
-      const onMessage = (message: unknown) => {
-        if (message !== VITEST_WORKER_PREPARE_REQUEST || request) {
-          return;
-        }
-        request = (async () => {
-          let reply: { type: string; error?: string } = { type: VITEST_WORKER_PREPARE_REPLY };
-          try {
-            const manifest = await prepare();
-            await verifyVitestWorkerArtifacts(directory, manifest);
-            if (disposal) {
-              throw new Error("Compiled subprocess owner is closing");
-            }
-            onPreparationProgress?.();
-          } catch (error) {
-            reply = { type: VITEST_WORKER_PREPARE_REPLY, error: String(error) };
+  function borrow<T>(
+    child: ChildProcess,
+    completion: Promise<T>,
+    onPreparationProgress?: () => void,
+  ): Promise<T> {
+    let request: Promise<void> | undefined;
+    const onMessage = (message: unknown) => {
+      if (message !== VITEST_WORKER_PREPARE_REQUEST || request) {
+        return;
+      }
+      request = (async () => {
+        let reply: { type: string; error?: string } = { type: VITEST_WORKER_PREPARE_REPLY };
+        try {
+          const manifest = await prepare();
+          await verifyVitestWorkerArtifacts(directory, manifest);
+          if (disposal) {
+            throw new Error("Compiled subprocess owner is closing");
           }
-          if (child.connected) {
-            child.send(reply, (error) => {
-              channelError ??= error ?? undefined;
-            });
-          }
-        })();
-        // Only accepted admission and verified readiness count as progress.
-        // Duplicate IPC and the compiler's intermediate output cannot renew it.
-        if (!disposal) {
           onPreparationProgress?.();
+        } catch (error) {
+          reply = { type: VITEST_WORKER_PREPARE_REPLY, error: String(error) };
         }
-      };
-      child.on("message", onMessage);
-      // Existing Windows completion observes exit; artifact ownership additionally
-      // waits for close so inherited handles cannot outlive deletion.
-      const closed = new Promise<void>((resolve) => {
-        child.once("close", () => resolve());
-      });
-      const joined = (async () => {
-        try {
-          return await completion;
-        } finally {
-          await closed;
-          child.off("message", onMessage);
+        if (child.connected) {
+          child.send(reply, (error) => {
+            channelError ??= error ?? undefined;
+          });
         }
       })();
-      // Child completion must let callers reach disposal to cancel compilation.
-      // The owner still joins admission reads before releasing their generation.
-      const ownedCompletion = (async () => {
-        try {
-          await joined;
-        } finally {
-          await request;
+      // Only accepted admission and verified readiness count as progress.
+      // Duplicate IPC and the compiler's intermediate output cannot renew it.
+      if (!disposal) {
+        onPreparationProgress?.();
+      }
+    };
+    child.on("message", onMessage);
+    // Existing Windows completion observes exit; artifact ownership additionally
+    // waits for close so inherited handles cannot outlive deletion.
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
+    const joined = (async () => {
+      try {
+        return await completion;
+      } finally {
+        await closed;
+        child.off("message", onMessage);
+      }
+    })();
+    // Child completion must let callers reach disposal to cancel compilation.
+    // The owner still joins admission reads before releasing their generation.
+    const ownedCompletion = (async () => {
+      try {
+        await joined;
+      } finally {
+        await request;
+      }
+    })();
+    borrowers.push(ownedCompletion);
+    void ownedCompletion.catch(() => {});
+    return joined;
+  }
+  return {
+    descriptor: { directory, preset } satisfies VitestWorkerDescriptor,
+    prepare,
+    borrow,
+    async withBorrower<T>(run: (onReady: (child: ChildProcess) => void) => Promise<T>): Promise<T> {
+      const completion = Promise.withResolvers<T>();
+      let borrower: Promise<T> | undefined;
+      try {
+        const result = await run((child) => {
+          borrower = borrow(child, completion.promise);
+        });
+        completion.resolve(result);
+        return result;
+      } catch (error) {
+        // A startup failure has no borrower observing the deferred rejection.
+        if (borrower) {
+          completion.reject(error);
         }
-      })();
-      borrowers.push(ownedCompletion);
-      void ownedCompletion.catch(() => {});
-      return joined;
+        throw error;
+      } finally {
+        // Command settlement precedes close; retain the loan through that join.
+        await borrower;
+      }
     },
     /** `interrupted`: the invocation is exiting by signal, so its outcome cannot change. */
     dispose({ interrupted = false }: { interrupted?: boolean } = {}): Promise<void> {

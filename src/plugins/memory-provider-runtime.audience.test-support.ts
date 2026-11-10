@@ -3,13 +3,13 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createPluginRecord } from "./loader-records.js";
 import { resolveMemoryAudienceFromEntry } from "./memory-audience.js";
 import type {
   MemoryAudience,
   MemoryCallerContext,
   MemoryProviderHandle,
 } from "./memory-provider-types.js";
+import { createOwnershipRecord } from "./registry-ownership.test-support.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRegistryOwner } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
@@ -43,7 +43,6 @@ export async function withChildAudience(
     const root = entry({ chatType: "direct" });
     const child = entry({
       spawnedBy: AUDIENCE_ROOT_KEY,
-      parentSessionKey: AUDIENCE_ROOT_KEY,
       spawnedBySessionId: root.sessionId,
       parentSessionLifecycleRevision: root.lifecycleRevision,
       spawnedBySenderIsOwner: rootSenderIsOwner,
@@ -69,12 +68,10 @@ export async function withChildAudience(
   });
 }
 
-export function childMemoryContext(audience: MemoryAudience): MemoryCallerContext {
-  return {
-    authority: { kind: "session", sessionKey: AUDIENCE_CHILD_KEY, sandboxed: false, audience },
-    assertCurrent() {},
-  };
-}
+export const childMemoryContext = (audience: MemoryAudience): MemoryCallerContext => ({
+  authority: { kind: "session", sessionKey: AUDIENCE_CHILD_KEY, sandboxed: false, audience },
+  assertCurrent() {},
+});
 
 /** Register a selected native provider; preserve the host-supplied open context. */
 export async function withNativeMemoryProvider<T>(
@@ -82,13 +79,7 @@ export async function withNativeMemoryProvider<T>(
   action: () => Promise<T>,
 ): Promise<T> {
   const registry = createTestPluginRegistry();
-  const record = createPluginRecord({
-    id: NATIVE_PROVIDER_ID,
-    source: "fixture",
-    origin: "config",
-    enabled: true,
-    configSchema: false,
-  });
+  const record = createOwnershipRecord(NATIVE_PROVIDER_ID);
   record.kind = "memory";
   record.memorySlotSelected = true;
   registry.registry.plugins.push(record);

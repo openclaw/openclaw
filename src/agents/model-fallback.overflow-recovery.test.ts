@@ -31,6 +31,19 @@ let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithMod
 beforeAll(async () => {
   installEmbeddedRunnerBaseE2eMocks();
   installEmbeddedRunnerFastRunE2eMocks({ runEmbeddedAttempt: runAttempt });
+  const { resolveLogicalTurnContextEngines } = await import("../context-engine/registry.js");
+  const engines = await resolveLogicalTurnContextEngines();
+  const engine: ContextEngine = {
+    ...engines.configured.engine,
+    info: { id: "fixture", name: "Fixture context engine" },
+    compact,
+  };
+  const ref = { engine, registeredId: engine.info.id };
+  vi.mocked(resolveLogicalTurnContextEngines).mockResolvedValue({
+    configured: ref,
+    configuredId: "fixture",
+    fallback: ref,
+  });
   // mock-isolation: Synthetic model fixtures must not write a runtime model catalog.
   vi.doMock("./models-config.js", () => ({
     ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
@@ -39,22 +52,6 @@ beforeAll(async () => {
   vi.doMock("./embedded-agent-runner/model.js", () => ({
     resolveModelAsync: async (provider: string, modelId: string) =>
       createResolvedEmbeddedRunnerModel(provider, modelId),
-  }));
-  // mock-isolation: Keep real recovery policy while controlling only the compaction backend.
-  vi.doMock("../context-engine/registry.js", () => ({
-    hasSameContextEngineInstance: (left: ContextEngine, right: ContextEngine) => left === right,
-    resolveContextEngine: vi.fn(async () => ({ dispose: async () => {} })),
-    resolveContextEngineOwnerPluginId: () => undefined,
-    resolveLogicalTurnContextEngines: async () => {
-      const engine: ContextEngine = {
-        info: { id: "fixture", name: "Fixture context engine" },
-        ingest: async () => ({ ingested: false }),
-        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-        compact,
-      };
-      const ref = { engine, registeredId: engine.info.id };
-      return { configured: ref, configuredId: "fixture", fallback: ref };
-    },
   }));
   runEmbeddedAgent = wrapRunWithTestPreparedAdmission(
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,

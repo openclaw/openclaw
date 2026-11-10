@@ -142,7 +142,7 @@ describe("skills-clawhub", () => {
           : await install("agentreceipt", {
               version: "2.0.0",
               force: true,
-              clawManaged: true,
+              templateManaged: true,
               ...(failure === "ClawHub receipt" ? deferred : {}),
             });
       expect(result).toMatchObject({
@@ -285,7 +285,7 @@ describe("skills-clawhub", () => {
     },
   );
 
-  it("requires live warning confirmation for a forced Claw-managed update", async () => {
+  it("requires live warning confirmation for a forced Template-managed update", async () => {
     denySecurity(["security.status_not_clean"], {
       overview: "Review the skill before updating it.",
       security: { status: "suspicious", passed: false },
@@ -296,7 +296,7 @@ describe("skills-clawhub", () => {
       await install("agentreceipt", {
         version: "1.0.0",
         force: true,
-        clawManaged: true,
+        templateManaged: true,
         confirmInstall,
       }),
     ).toMatchObject({ ok: false, error: "Install cancelled." });

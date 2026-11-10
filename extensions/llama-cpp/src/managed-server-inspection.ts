@@ -5,23 +5,6 @@ import {
 import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { LlamaServerAsset } from "./llama-server-assets.js";
-
-export type LlamaServerRuntimeFacts = {
-  engine: "llama.cpp";
-  state: "ready" | "failed";
-  backend?: LlamaServerAsset["backend"];
-  buildInfo?: string;
-  model?: { id: string; path?: string };
-  capabilities?: { vision: boolean; draft: boolean };
-  endpoints: {
-    health: "ready" | "unavailable";
-    models: "ready" | "unavailable";
-    props: "ready" | "unavailable";
-    metrics: "ready" | "unavailable";
-  };
-  loadError?: string;
-};
 
 async function fetchEndpoint(
   url: string,
@@ -57,7 +40,7 @@ export async function inspectLlamaServerRuntime(params: {
   baseUrl: string;
   modelId: string;
   loadError?: string;
-}): Promise<LlamaServerRuntimeFacts> {
+}) {
   const root = params.baseUrl.replace(/\/v1\/?$/u, "").replace(/\/+$/u, "");
   const query = `model=${encodeURIComponent(params.modelId)}&autoload=false`;
   const [health, models, props, metrics] = await Promise.all([
@@ -80,8 +63,11 @@ export async function inspectLlamaServerRuntime(params: {
         ? selected.path
         : undefined;
   return {
-    engine: "llama.cpp",
-    state: health.ok && models.ok && props.ok && !params.loadError ? "ready" : "failed",
+    engine: "llama.cpp" as const,
+    state:
+      health.ok && models.ok && props.ok && !params.loadError
+        ? ("ready" as const)
+        : ("failed" as const),
     backend: undefined,
     buildInfo: typeof propsRecord?.build_info === "string" ? propsRecord.build_info : undefined,
     model: { id: params.modelId, ...(pathValue ? { path: pathValue } : {}) },
@@ -91,10 +77,10 @@ export async function inspectLlamaServerRuntime(params: {
       draft: false,
     },
     endpoints: {
-      health: health.ok ? "ready" : "unavailable",
-      models: models.ok ? "ready" : "unavailable",
-      props: props.ok ? "ready" : "unavailable",
-      metrics: metrics.ok ? "ready" : "unavailable",
+      health: health.ok ? ("ready" as const) : ("unavailable" as const),
+      models: models.ok ? ("ready" as const) : ("unavailable" as const),
+      props: props.ok ? ("ready" as const) : ("unavailable" as const),
+      metrics: metrics.ok ? ("ready" as const) : ("unavailable" as const),
     },
     ...(params.loadError ? { loadError: params.loadError } : {}),
   };

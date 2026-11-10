@@ -39,6 +39,8 @@ restoration failure; slow startup does not undo a completed repair.
 
     Permission or I/O errors while inspecting systemd units or legacy backups are not treated as missing services. Doctor reports incomplete inspection or skipped cleanup; restore access to the reported path and rerun Doctor before retrying cleanup. The service audit also reports backups it cannot inspect without exposing their contents.
 
+    An older system Gateway under another account does not block forward schema migration when its inspected environment and account home resolve to a different database. Shared state remains protected across accounts, including filesystem aliases. Manager or PAM state selectors, private filesystem mappings, and incomplete account, environment-file, or state-path inspection retain the older-service migration restriction; restore inspection access or run Doctor as the service account. This repair requires the newer CLI and does not change the installed updater or service lifecycle.
+
     On Linux, Doctor and update status recognize standard systemd `[Unit]`, `[Service]`, and `[Install]` directives, including execution and resource controls. Custom settings are reported as unchanged; unknown keys and keys in the wrong section still produce an unrecognized-setting warning. Recognition does not validate directive values or authorize replacing customized units or drop-ins.
 
     Options and sections prefixed with `X-` are recognized as application metadata and reported as unchanged, without unrecognized-setting warnings. They do not affect fallback health checks, matching systemd's behavior, but still protect operator-owned metadata from service rewrites.
@@ -109,6 +111,8 @@ restoration failure; slow startup does not undo a completed repair.
 
     This includes files declared by the bundled `bootstrap-extra-files` hook when a fresh Gateway startup would select it, provided each matched basename is one of those six (for example, `packages/core/AGENTS.md`). Other basenames are ignored. Doctor uses each agent's workspace and limits without importing or running custom hook handlers. It predicts fresh-start selection, not the previous handler generation that a running Gateway can retain after a failed hook reload.
 
+    Doctor also reports root `MEMORY.md` and `USER.md` files, and personal `users/<profile-id>/USER.md` files, that the active memory runtime classifies as `untrusted` (check `core/doctor/memory-provenance`). Automatic context excludes those files. Each finding names the file and the time and session of the last recorded tracked write; that record keeps only the latest tracked write, so it may not be the write that quarantined the file. See [Freeform edits and quarantine](/concepts/memory-provenance#freeform-edits-and-quarantine).
+
   </Accordion>
   <Accordion title="11c. Shell completion">
     Doctor checks whether tab completion is installed for the current shell (zsh, bash, fish, or PowerShell):
@@ -124,23 +128,27 @@ restoration failure; slow startup does not undo a completed repair.
     When `openclaw doctor --fix` removes a missing channel plugin, it also removes the dangling channel-scoped config that referenced that plugin: `channels.<id>` entries, heartbeat targets that named the channel, and `agents.*.models["<channel>/*"]` overrides. This prevents Gateway boot loops where the channel runtime is gone but config still asks the gateway to bind to it.
   </Accordion>
   <Accordion title="11e. Project clone shape">
-    Doctor checks stored project clones registered with `source: "cloned"`. It
-    reports the project name and path, shallow state, every
-    `remote.*.partialclonefilter` and `remote.*.promisor` key (including URL-keyed
-    twins), and `extensions.partialclone` when present. Address-like names replace
-    userinfo with `***` and omit query strings and fragments, including remote-helper
-    and scp-like addresses that are not standard URLs. Full clones produce no
-    finding. Missing or unreadable clones are reported as skipped; other projects
-    are still checked. Agent workspaces and manually registered checkouts are
-    outside this check.
+    Doctor checks stored project clones registered with `source: "cloned"` for
+    shallow history. Agent workspaces and manually registered checkouts are outside
+    this check. Full-history clones, including `blob:none` partial clones, need no
+    migration. New managed clones already have full history.
 
-    Each clone uses three local Git reads, each limited to five seconds and
-    64 KiB of captured output. Doctor does not fetch, repack, or change clone
-    configuration, even with `--fix`. Partial clones support managed-worktree
-    object prefetch, but full clones avoid missing-object and shallow-history
-    failures during checkout and snapshot restore.
+    Without `--fix`, Doctor only reports affected clones. With `--fix`, it runs
+    `git fetch --unshallow --filter=blob:none origin` under the existing project
+    checkout lifecycle lease. Busy clones are skipped immediately with a retry
+    message. Each fetch runs at lower priority with a 30-minute timeout; failures
+    are reported per clone without stopping the remaining checks. If `origin` is
+    itself shallow, Doctor reports incomplete history instead of success.
 
-    For a focused read-only report, run:
+    The migration retains blob filtering, local objects, refs, and reflogs. It
+    disables automatic maintenance, pruning, submodule recursion, and implicit
+    lazy fetching. It does not repack or expire reflogs. For clones with at least
+    1,000 packs, Doctor suggests a separate operator-run bounded repack under the
+    same lifecycle lease. Unshallowing prevents repeated history downloads; it
+    does not reclaim space from packs already accumulated.
+
+    Run `openclaw doctor --fix` with access to the clone's `origin`. For a focused
+    read-only report, run:
 
     ```bash
     openclaw doctor --lint --only core/doctor/project-clone-shape --json
@@ -148,56 +156,7 @@ restoration failure; slow startup does not undo a completed repair.
 
     The check also runs in ordinary Doctor and `--lint --all`; it is excluded
     from the default lint profile. Lint inspects the registry through Doctor's
-    private state snapshot.
-
-    Follow Doctor's printed commands in a POSIX shell with access to `origin`.
-    Stop on any failed step. For a shallow partial clone with the usual origin
-    keys, the sequence is:
-
-    ```bash
-    cd /path/to/project-clone
-    git config --unset-all remote.origin.partialclonefilter
-    git fetch --refetch --unshallow origin
-    git rev-list --objects --missing=print --all | grep '^?' | cut -c2- | git fetch origin --no-tags --no-write-fetch-head --recurse-submodules=no --stdin
-    git config --unset-all remote.origin.promisor
-    git repack -a -d
-    ```
-
-    Unset **every** reported `partialclonefilter` key before refetching, including
-    keys such as `remote.https://github.com/openclaw/openclaw.git.partialclonefilter`.
-    Omit `--unshallow` if the repository is not shallow; Git rejects that option
-    for complete history. Keep promisor settings until missing objects have been
-    fetched by ID, then unset every reported `promisor` key and, if present,
-    `extensions.partialclone` before repacking. Doctor prints exact unset commands
-    for plain remote names without `://`, `::`, or `@`. For address-like entries, follow the local lookup and
-    unset instructions before continuing; the original key may contain credentials
-    and must not be copied into shared reports. The redacted name identifies the
-    entry but is not its literal Git config key.
-
-    Git can retain `objects/pack/*.promisor` sidecars after the remote keys are
-    unset and the repository is repacked. The sidecars are harmless: OpenClaw
-    determines partial-clone repair availability from Git configuration, not from
-    those files. To remove the stale on-disk label, first confirm that the missing
-    object command below prints nothing and that `git fsck` succeeds:
-
-    ```bash
-    git rev-list --objects --missing=print --all | sed -n 's/^?//p'
-    git fsck --full
-    ```
-
-    Then move only the sidecars out of the pack directory, keeping them as a
-    recoverable backup until the next successful Doctor and managed-worktree run:
-
-    ```bash
-    promisor_marker_backup="$(git rev-parse --git-dir)/retired-promisor-markers"
-    mkdir -p "$promisor_marker_backup"
-    find "$(git rev-parse --git-dir)/objects/pack" -maxdepth 1 -type f -name '*.promisor' -exec mv -n {} "$promisor_marker_backup"/ \;
-    git fsck --full
-    ```
-
-    Rerun Doctor afterward. If history or objects remain missing, recover them
-    from the original repository. Origin may not contain local-only snapshots;
-    see [snapshot restore](/concepts/managed-worktrees#snapshots-cleanup-and-restore).
+    private state snapshot. Missing or unreadable clones are reported as skipped.
 
   </Accordion>
   <Accordion title="12. Gateway auth checks (local token)">
@@ -280,7 +239,7 @@ restoration failure; slow startup does not undo a completed repair.
   <Accordion title="17. Gateway runtime best practices">
     When the selected daemon uses a different Node executable that passes the runtime checks, Doctor omits warnings about the unused system Node. Any remaining system Node SQLite capability warning names the executable it checked.
 
-    Doctor accepts Bun 1.4.3+ runtimes that provide WAL-reset-safe `node:sqlite` and warns when the gateway service runs on an older or unsafe Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Supported Bun services, whether recorded or pinned, are retained. A pinned runtime is never migrated. Only an unpinned, unsupported Bun is offered migration to a supported system Node, with interactive approval. Update-driven Doctor runs never migrate the runtime. If no supported Node is available, the service stays on Bun and Doctor warns. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor can offer to migrate an unpinned version-managed Node to a supported system Node install (Homebrew/apt/choco).
+    Doctor accepts Bun 1.4.4+ runtimes that provide WAL-reset-safe `node:sqlite` and warns when the gateway service runs on an older or unsafe Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Supported Bun services, whether recorded or pinned, are retained. A pinned runtime is never migrated. Only an unpinned, unsupported Bun is offered migration to a supported system Node, with interactive approval. Update-driven Doctor runs never migrate the runtime. If no supported Node is available, the service stays on Bun and Doctor warns. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor can offer to migrate an unpinned version-managed Node to a supported system Node install (Homebrew/apt/choco).
 
     When reinstalling an existing but unloaded service without a wrapper or runtime
     pin, Doctor defaults its runtime picker to the supported recorded Node or Bun.

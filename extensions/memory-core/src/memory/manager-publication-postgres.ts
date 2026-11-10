@@ -532,6 +532,10 @@ export function bindPostgresMemoryPublication(
       return write(() => {
         const size = readCacheSize();
         if (size.size <= command.input.maxEntries) {
+          if (command.input.recount) {
+            cacheSize = { size: countMemoryEmbeddingCache(db), exact: true };
+            return cacheSize.size > command.input.maxEntries;
+          }
           return false;
         }
         cacheSize = pruneMemoryEmbeddingCache(

@@ -2,8 +2,8 @@
 
 import { beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import type { GatewaySessionRow } from "../api/types.ts";
-import { createChatSubmissions } from "../app/chat-submissions.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
 import { admitSidebarBootScope } from "../pages/chat/session-snapshot-prewarm.ts";
@@ -27,6 +27,8 @@ import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
+import * as sessionLeadingIndicator from "./session-leading-indicator.ts";
+import { setSessionsGrouping } from "./session-organizer-menu.runtime.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { snapshotSessions } from "./sidebar-snapshot-model.ts";
 
@@ -41,41 +43,37 @@ beforeEach(() => {
   projectRows = vi.spyOn(sidebarAgentSessionRows, "projectSidebarAgentSessionRows");
 });
 
-function session(name: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
-  return {
-    key: key(name),
-    sessionId: `session-${name}`,
-    kind: "direct",
-    label: name,
-    updatedAt: 1,
-    createdAt: 1,
-    owner: { actor: ada },
-    ...fields,
-  };
-}
+const session = (name: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+  key: key(name),
+  sessionId: `session-${name}`,
+  kind: "direct",
+  label: name,
+  updatedAt: 1,
+  createdAt: 1,
+  owner: { actor: ada },
+  ...fields,
+});
+
+const createQuestionClient = () => createTestGatewayClient(vi.fn(async () => ({ questions: [] })));
 
 async function mount(rows: GatewaySessionRow[]) {
   const sessions = createSessionsHarness("main", []);
-  sessions.publishList({
-    result: {
-      ...sessions.sessions.state.result!,
-      sessions: rows,
-      count: rows.length,
-      owners: [ada, bob],
-    },
-  });
-  const gateway = createGatewayHarness(
-    createTestGatewayClient(vi.fn(async () => ({ questions: [] }))),
+  const publish = (next: GatewaySessionRow[]) =>
+    sessions.publishList({
+      result: {
+        ...sessions.sessions.state.result!,
+        sessions: next,
+        count: next.length,
+        owners: structuredClone([ada, bob]),
+      },
+    });
+  publish(rows);
+  const gateway = createGatewayHarness(createQuestionClient());
+  const context = createContext(
+    gateway.gateway,
+    sessions.sessions,
+    makeBootRoster({ agents: [{ id: "main" }, { id: "work" }] }),
   );
-  const context = {
-    ...createContext(gateway.gateway, sessions.sessions, {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "work" }],
-    }),
-    chatSubmissions: createChatSubmissions(),
-  };
   const overlayListeners = new Set<(snapshot: ApplicationOverlaySnapshot) => void>();
   context.overlays.subscribe = (listener) => {
     overlayListeners.add(listener);
@@ -86,15 +84,6 @@ async function mount(rows: GatewaySessionRow[]) {
   sidebar.sidebarAgentsMode = "chip";
   await settleLitElement(sidebar);
   const row = (sessionKey: string) => sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
-  const publish = (next: GatewaySessionRow[]) =>
-    sessions.publishList({
-      result: {
-        ...sessions.sessions.state.result!,
-        sessions: next,
-        count: next.length,
-        owners: structuredClone(sessions.sessions.state.result!.owners),
-      },
-    });
   return {
     ...mounted,
     sidebar,
@@ -123,51 +112,164 @@ async function update(sidebar: Sidebar, change: (() => void) | Partial<Sidebar>)
   await settleLitElement(sidebar);
 }
 
-describe("sidebar projection memo", () => {
-  it.each([10, 30])("keeps newer pagination at %s rows through cached handoff", async (limit) => {
-    const sessionsToShow = Array.from({ length: 40 }, (_, index) => session(`row-${index}`));
-    const { sidebar, sessions } = await mount(sessionsToShow);
-    const owner = getAppSidebarOwner(sidebar.hostElement)!;
-    const sectionId = "ungrouped";
-    expect(
-      sidebar.querySelector("[data-session-section]")?.getAttribute("data-session-section"),
-    ).toBe(sectionId);
-    vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
-    const rows = snapshotSessions(
-      sessionsToShow.map((row) => sidebar.getSessionNavigationState().toSidebarSession(row)),
-    );
-    owner.restoreSidebarSnapshot({
-      ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
-      mode: "chip",
-      sessions: rows,
-      entries: [],
-      sections: [
-        {
-          id: sectionId,
-          rows: rows.slice(0, 20),
-          totalRowCount: rows.length,
-          visibleRowCount: 20,
-          visibleLimit: 20,
-          collapsedVisibleRowCount: 10,
-          renderHeader: false,
-        },
-      ],
-    });
-    owner.invalidate();
-    await settleLitElement(sidebar);
-    owner.setVisibleSessionLimit(sectionId, limit);
-    owner.releaseSidebarSnapshot();
-    owner.invalidate();
-    await settleLitElement(sidebar);
-    expect(
-      sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
-    ).toHaveLength(limit);
+async function advanceSidebarTime(sidebar: Sidebar, milliseconds: number) {
+  await vi.advanceTimersByTimeAsync(milliseconds);
+  await settleLitElement(sidebar);
+}
+
+async function restoreCachedRows(
+  { sidebar, sessions }: Awaited<ReturnType<typeof mount>>,
+  rows: GatewaySessionRow[],
+  section: Omit<SidebarSnapshotModel["sections"][number], "id" | "rows" | "renderHeader">,
+  grouping?: SidebarSnapshotModel["grouping"],
+) {
+  const owner = getAppSidebarOwner(sidebar.hostElement)!;
+  vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
+  const navigation = sidebar.getSessionNavigationState();
+  owner.restoreSidebarSnapshot({
+    ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
+    mode: "chip",
+    grouping,
+    sections: [
+      {
+        id: "ungrouped",
+        rows: snapshotSessions(rows.map((row) => navigation.toSidebarSession(row))),
+        renderHeader: false,
+        ...section,
+      },
+    ],
   });
+  owner.invalidate();
+  await settleLitElement(sidebar);
+  return owner;
+}
+
+describe("sidebar projection memo", () => {
+  it("keeps a saved group collapsed when opening its top-level session", async () => {
+    const storageKey = "openclaw:sidebar:sessions:collapsed-sections";
+    const saved = JSON.stringify(["category:Alpha"]);
+    localStorage.setItem(storageKey, saved);
+    const current = session("alpha", { category: "Alpha" });
+    const { sidebar } = await mount([current]);
+
+    await update(sidebar, { activeRouteId: "chat", sessionKey: current.key });
+
+    const group = sidebar.querySelector('[data-session-section="category:Alpha"]');
+    expect(group).not.toBeNull();
+    expect(
+      group?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(group?.querySelector(".sidebar-recent-session")).toBeNull();
+    expect(localStorage.getItem(storageKey)).toBe(saved);
+  });
+
+  it("reuses a held roster without enumerating it for each navigation read", async () => {
+    const first = session("first");
+    const { sidebar } = await mount([first]);
+    const result = sidebar.sessionData.sessionsResult!;
+    const enumerate = vi.fn(Reflect.ownKeys);
+    sidebar.sessionData.sessionResultsByAgent = new Proxy<Record<string, SessionsListResult>>(
+      { main: result },
+      { ownKeys: enumerate },
+    );
+    const navigation = sidebar.getSessionNavigationState();
+    enumerate.mockClear();
+
+    expect(sidebar.findSidebarSessionByKey(first.key)?.label).toBe("first");
+    expect(sidebar.getSessionNavigationState()).toBe(navigation);
+    expect(sidebar.findSidebarSessionByKey(first.key)?.label).toBe("first");
+    expect(enumerate).not.toHaveBeenCalled();
+
+    const added = session("added", { key: "agent:work:added", agentId: "work" });
+    sidebar.sessionData.sessionResultsByAgent = new Proxy<Record<string, SessionsListResult>>(
+      { main: result, work: { ...result, sessions: [added], count: 1 } },
+      { ownKeys: enumerate },
+    );
+    const replacement = sidebar.getSessionNavigationState();
+    expect(replacement).not.toBe(navigation);
+    expect(sidebar.findSidebarSessionByKey(added.key)?.label).toBe("added");
+    expect(sidebar.sessionProjection.createdOrder.has(added.key)).toBe(true);
+    enumerate.mockClear();
+    expect(sidebar.getSessionNavigationState()).toBe(replacement);
+    expect(sidebar.findSidebarSessionByKey(first.key)?.label).toBe("first");
+    expect(enumerate).not.toHaveBeenCalled();
+  });
+
+  it("shares one cached row graph between navigation, geometry and badge consumers", async () => {
+    const target = session("shared-cached-row", { unread: true });
+    const mounted = await mount([target]);
+    const { sidebar } = mounted;
+    const owner = await restoreCachedRows(mounted, [target], {
+      totalRowCount: 1,
+      visibleRowCount: 1,
+      visibleLimit: 10,
+      collapsedVisibleRowCount: 1,
+    });
+    const navigationRow = owner.findSidebarMenuSessionByKey(target.key);
+    const badgeRow = () => owner.readSessionPullRequestRows().find((row) => row.key === target.key);
+    expect(navigationRow).toBeDefined();
+    expect(badgeRow()).toBe(navigationRow);
+    expect(owner.reconciledSidebarZone().sessionRows.get(target.key)).toBe(navigationRow);
+    await update(sidebar, { activeRouteId: "chat", sessionKey: target.key });
+    const selected = owner.findSidebarMenuSessionByKey(target.key);
+    expect(selected?.visuallyActive).toBe(true);
+    expect(badgeRow()).toBe(selected);
+    expect(owner.reconciledSidebarZone().sessionRows.get(target.key)).toBe(selected);
+  });
+
+  it.each([
+    { savedGrouping: "none", grouping: "none", limit: undefined, expected: 45 },
+    { savedGrouping: "none", grouping: "category", limit: undefined, expected: 15 },
+    { savedGrouping: "category", grouping: "none", limit: undefined, expected: 30 },
+    { savedGrouping: "category", grouping: "category", limit: 15, expected: 15 },
+    { savedGrouping: "category", grouping: "category", limit: 60, expected: 60 },
+    { savedGrouping: undefined, grouping: "none", limit: undefined, expected: 30 },
+  ] as const)(
+    "keeps $savedGrouping pagination isolated in $grouping through cached handoff",
+    async ({ savedGrouping, grouping, limit, expected }) => {
+      const sessionsToShow = Array.from({ length: 61 }, (_, index) => session(`row-${index}`));
+      const mounted = await mount(sessionsToShow);
+      const { sidebar } = mounted;
+      const owner = getAppSidebarOwner(sidebar.hostElement)!;
+      const sectionId = "ungrouped";
+      expect(
+        sidebar.querySelector("[data-session-section]")?.getAttribute("data-session-section"),
+      ).toBe(sectionId);
+      setSessionsGrouping(owner.sessionOrganizer, savedGrouping ?? "category");
+      await restoreCachedRows(
+        mounted,
+        sessionsToShow.slice(0, 45),
+        {
+          totalRowCount: 61,
+          visibleRowCount: 45,
+          visibleLimit: 45,
+          collapsedVisibleRowCount: savedGrouping === "none" ? 30 : 15,
+        },
+        savedGrouping,
+      );
+      setSessionsGrouping(owner.sessionOrganizer, grouping);
+      if (grouping !== (savedGrouping ?? "category")) {
+        await settleLitElement(sidebar);
+        expect(
+          sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+        ).toHaveLength(expected);
+      }
+      if (limit !== undefined) {
+        owner.setVisibleSessionLimit(sectionId, limit);
+      }
+      owner.releaseSidebarSnapshot();
+      owner.invalidate();
+      await settleLitElement(sidebar);
+      expect(
+        sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+      ).toHaveLength(expected);
+    },
+  );
 
   it("prepares initially hidden session rows from shell inputs while keeping later owner updates parked", async () => {
     const target = session("question-proof");
     const sessions = createSessionsHarness("main", []);
-    const client = createTestGatewayClient(vi.fn(async () => ({ questions: [] })));
+    const client = createQuestionClient();
     const gateway = createGatewayHarness(client);
     gateway.publish({ phase: "connecting", client: null, hello: null });
     const context = createContext(gateway.gateway, sessions.sessions);
@@ -222,8 +324,10 @@ describe("sidebar projection memo", () => {
     expect(row()?.textContent).not.toContain("Updated while hidden");
     expect(sessions.list).toHaveBeenCalledTimes(reads);
     sidebar.navigationVisible = true;
-    await waitForSolid(() => expect(row()?.textContent).toContain("Updated while hidden"));
-    expect(createdRow()?.textContent).toContain("created-while-hidden");
+    await waitForSolid(() => {
+      expect(row()?.textContent).toContain("Updated while hidden");
+      expect(createdRow()?.textContent).toContain("created-while-hidden");
+    });
   });
 
   it("keeps a pending boot read across connected view recreation and retires it on detach", async () => {
@@ -232,16 +336,9 @@ describe("sidebar projection memo", () => {
       .spyOn(SessionSnapshotStore.prototype, "readSidebar")
       .mockReturnValue(pending.promise);
     const sessions = createSessionsHarness("main", [key("cached")]);
-    const gateway = createGatewayHarness(
-      createTestGatewayClient(vi.fn(async () => ({ questions: [] }))),
-    );
+    const gateway = createGatewayHarness(createQuestionClient());
     gateway.publish({ phase: "connecting", client: null, hello: null });
-    const context = createContext(gateway.gateway, sessions.sessions, {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-    });
+    const context = createContext(gateway.gateway, sessions.sessions, makeBootRoster());
     onTestFinished(
       admitSidebarBootScope(gateway.gateway, {
         scope: gateway.gateway.connection.gatewayUrl,
@@ -276,9 +373,9 @@ describe("sidebar projection memo", () => {
     expect(read).toHaveBeenCalledOnce();
   });
 
-  it("keeps one provisional row and invalidates admission without a new list or route", async () => {
+  it("adds no sidebar placeholder for a create; the listed row arrives while naming runs", async () => {
     const old = session("old");
-    const created = session("dashboard:creating");
+    const created = session("dashboard:creating", { label: undefined, titlePending: true });
     const { sidebar, context, gateway, publish, row } = await mount([old]);
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = created.key;
@@ -293,33 +390,41 @@ describe("sidebar projection memo", () => {
       await settleLitElement(sidebar);
       expect(sidebar.getRouteSessionKey()).toBe(created.key);
       expect(sidebar.findSidebarSessionByKey(old.key)?.visuallyActive).toBe(false);
-      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
-      publish([old, created]);
-      await settleLitElement(sidebar);
+      expect(sidebar.querySelector(".skeleton")).toBeNull();
       expect(row(created.key)).toBeNull();
-      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
-      const result = sidebar.sessionData.sessionsResult;
-      const navigation = sidebar.getSessionNavigationState();
-      expect(result?.sessions.some((value) => value.key === created.key)).toBe(true);
       creation.admitted = true;
-      sidebar.invalidate();
+      context.chatSubmissions.acceptCreate({
+        creation,
+        displayName: "Accepted title",
+        canDisplay: () => true,
+      });
       await settleLitElement(sidebar);
-      expect(sidebar.sessionData.sessionsResult).toBe(result);
-      expect(sidebar.getSessionNavigationState()).not.toBe(navigation);
-      expect(sidebar.getRouteSessionKey()).toBe(created.key);
-      expect(sidebar.findSidebarSessionByKey(created.key)?.visuallyActive).toBe(true);
-      expect(row(created.key)).not.toBeNull();
-      expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(0);
+      // The local accepted title never paints a stand-in row.
+      expect(sidebar.textContent).not.toContain("Accepted title");
+      publish([created, old]);
+      await settleLitElement(sidebar);
+      const listed = row(created.key);
+      expect(listed?.classList.contains("sidebar-recent-session--naming")).toBe(true);
+      expect(listed?.querySelector('[aria-busy="true"]')).not.toBeNull();
+      expect(sidebar.querySelector(".skeleton")).toBeNull();
+      expect(context.chatSubmissions.readAcceptedCreate()).toBeUndefined();
+      publish([{ ...created, label: "Release review", titlePending: false }, old]);
+      await settleLitElement(sidebar);
+      expect(row(created.key)).toBe(listed);
+      expect(listed?.classList.contains("sidebar-recent-session--naming")).toBe(false);
+      expect(listed?.querySelector('[aria-busy="true"]')).toBeNull();
+      expect(listed?.textContent).toContain("Release review");
     } finally {
       release();
     }
   });
 
-  it("refreshes Home and route selection after accepted row changes", async () => {
+  it("refreshes Home and selection while retaining held rows across descriptor changes", async () => {
     const home = session("main", { lastMessagePreview: "Home before" });
     const first = session("first");
     const second = session("second", { owner: { actor: bob } });
     const projectHome = vi.spyOn(sidebarAgentSessionRows, "projectSidebarHomeSession");
+    const describeState = vi.spyOn(sessionLeadingIndicator, "describeSessionState");
     const { sidebar, row, publish } = await mount([home, first, second]);
     publish([
       { ...home, lastMessagePreview: "Home after" },
@@ -329,11 +434,47 @@ describe("sidebar projection memo", () => {
     await settleLitElement(sidebar);
     expect(row(first.key)?.textContent).toContain("Renamed first");
     expect(projectHome.mock.results.at(-1)?.value.lastMessagePreview).toBe("Home after");
+    const firstRow = row(first.key);
+    const secondRow = row(second.key);
+    describeState.mockClear();
     await update(sidebar, { activeRouteId: "chat", sessionKey: first.key });
     expect(sidebar.findSidebarSessionByKey(first.key)?.visuallyActive).toBe(true);
+    expect(row(first.key)?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
+    const owner = getAppSidebarOwner(sidebar.hostElement)!;
+    projectRows.mockClear();
+    await update(sidebar, () => {
+      owner.sessionData.activeSessionLineageSelectedRow = { ...first, label: "Detail title" };
+      owner.invalidate();
+    });
+    expect(projectRows).not.toHaveBeenCalled();
+    expect(row(first.key)).toBe(firstRow);
+    expect(row(first.key)?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
     await update(sidebar, { sessionKey: second.key });
     expect(sidebar.findSidebarSessionByKey(first.key)?.visuallyActive).toBe(false);
     expect(sidebar.findSidebarSessionByKey(second.key)?.visuallyActive).toBe(true);
+    expect(row(first.key)).toBe(firstRow);
+    expect(row(second.key)).toBe(secondRow);
+    expect(firstRow?.querySelector("a")?.getAttribute("aria-current")).toBeNull();
+    expect(secondRow?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
+    expect(describeState).not.toHaveBeenCalled();
+    publish([home, { ...first, hasActiveRun: true, unread: true }, second]);
+    await settleLitElement(sidebar);
+    expect(describeState).toHaveBeenCalled();
+    expect(row(first.key)?.querySelector(".sr-only")?.textContent).toContain("Unread");
+
+    const outside = session("outside");
+    await update(sidebar, () => {
+      owner.sessionData.activeSessionLineageSelectedRow = outside;
+      sidebar.sessionKey = outside.key;
+      owner.invalidate();
+    });
+    expect(row(outside.key)?.textContent).toContain("outside");
+    await update(sidebar, () => {
+      owner.sessionData.activeSessionLineageSelectedRow = { ...outside, label: "Updated detail" };
+      owner.invalidate();
+    });
+    expect(row(outside.key)?.textContent).toContain("Updated detail");
+    expect(row(outside.key)?.querySelector("a")?.getAttribute("aria-current")).toBe("page");
   });
 
   it.each([
@@ -369,11 +510,9 @@ describe("sidebar projection memo", () => {
       expect(row(target.key) !== null).toBe(statusFilter === "snoozed");
       sidebar.invalidate();
       await settleLitElement(sidebar);
-      await vi.advanceTimersByTimeAsync(999);
-      await settleLitElement(sidebar);
+      await advanceSidebarTime(sidebar, 999);
       expect(row(target.key) !== null).toBe(statusFilter === "snoozed");
-      await vi.advanceTimersByTimeAsync(2);
-      await settleLitElement(sidebar);
+      await advanceSidebarTime(sidebar, 2);
       expect(row(target.key) !== null).toBe(statusFilter === "active");
       if (adopted) {
         expect(row(target.key)?.hasAttribute("data-catalog-session-key")).toBe(true);
@@ -381,6 +520,28 @@ describe("sidebar projection memo", () => {
       }
     },
   );
+
+  it("re-arms snoozed visibility for the next deadline without a new list", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const first = session("first-wake", { snoozedUntil: 11_000, snoozedAt: 9_000 });
+    const second = session("second-wake", { snoozedUntil: 12_000, snoozedAt: 9_000 });
+    const { sidebar, row, sessions } = await mount([first, second]);
+    sidebar.sessionsStatusFilter = "snoozed";
+    await settleLitElement(sidebar);
+    expect(row(first.key)).not.toBeNull();
+    expect(row(second.key)).not.toBeNull();
+    const reads = sessions.list.mock.calls.length;
+
+    await advanceSidebarTime(sidebar, 11_001 - Date.now());
+    expect(row(first.key)).toBeNull();
+    expect(row(second.key)).not.toBeNull();
+
+    await advanceSidebarTime(sidebar, 12_001 - Date.now());
+    expect(row(first.key)).toBeNull();
+    expect(row(second.key)).toBeNull();
+    expect(sessions.list).toHaveBeenCalledTimes(reads);
+  });
 
   it("updates timed attention, questions, and approvals without replacing the row", async () => {
     vi.useFakeTimers();
@@ -390,17 +551,17 @@ describe("sidebar projection memo", () => {
       agentStatus: { note: "Waiting for credentials", attention: "key", expiresAt },
     });
     const { sidebar, gateway, row, publishApprovals } = await mount([target]);
-    expect(row(target.key)?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    const attention = (kind: string) =>
+      row(target.key)?.querySelector(`[data-session-attention="${kind}"]`);
+    expect(attention("agent")).not.toBeNull();
     projectRows.mockClear();
     // Mount readiness advances fake timers; stop before the expiry invalidation turn.
-    await vi.advanceTimersByTimeAsync(expiresAt - Date.now());
-    await settleLitElement(sidebar);
+    await advanceSidebarTime(sidebar, expiresAt - Date.now());
     expect(projectRows).not.toHaveBeenCalled();
-    expect(row(target.key)?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
-    await vi.advanceTimersByTimeAsync(1);
-    await settleLitElement(sidebar);
+    expect(attention("agent")).not.toBeNull();
+    await advanceSidebarTime(sidebar, 1);
     expect(projectRows).toHaveBeenCalled();
-    expect(row(target.key)?.querySelector('[data-session-attention="agent"]')).toBeNull();
+    expect(attention("agent")).toBeNull();
     await update(sidebar, () =>
       gateway.publishEvent("question.requested", {
         id: "question-memo",
@@ -419,20 +580,16 @@ describe("sidebar projection memo", () => {
         expiresAtMs: Date.now() + 60_000,
       }),
     );
-    expect(
-      row(target.key)
-        ?.querySelector('[data-session-attention="question"]')
-        ?.getAttribute("aria-label"),
-    ).toContain("Continue checking?");
+    expect(attention("question")?.getAttribute("aria-label")).toContain("Continue checking?");
     const parent = sidebar.hostElement.parentElement!;
     sidebar.hostElement.remove();
     parent.append(sidebar.hostElement);
     await settleLitElement(sidebar);
-    expect(row(target.key)?.querySelector('[data-session-attention="question"]')).not.toBeNull();
+    expect(attention("question")).not.toBeNull();
     await update(sidebar, () =>
       gateway.publishEvent("question.resolved", { id: "question-memo", status: "cancelled" }),
     );
-    expect(row(target.key)?.querySelector('[data-session-attention="question"]')).toBeNull();
+    expect(attention("question")).toBeNull();
     await update(sidebar, () =>
       publishApprovals([
         {
@@ -444,13 +601,9 @@ describe("sidebar projection memo", () => {
         },
       ]),
     );
-    expect(
-      row(target.key)
-        ?.querySelector('[data-session-attention="approval"]')
-        ?.getAttribute("aria-label"),
-    ).toContain("git diff");
+    expect(attention("approval")?.getAttribute("aria-label")).toContain("git diff");
     await update(sidebar, () => publishApprovals([]));
-    expect(row(target.key)?.querySelector('[data-session-attention="approval"]')).toBeNull();
+    expect(attention("approval")).toBeNull();
   });
 
   it("replaces held running subtitles at their deadline after reparenting without a full row projection", async () => {
@@ -487,12 +640,10 @@ describe("sidebar projection memo", () => {
     await settleLitElement(sidebar);
     projectRows.mockClear();
     const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
-    await vi.advanceTimersByTimeAsync(1_499);
-    await settleLitElement(sidebar);
+    await advanceSidebarTime(sidebar, 1_499);
     expect(row(target.key)?.textContent).toContain("First activity");
     expect(sections).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await settleLitElement(sidebar);
+    await advanceSidebarTime(sidebar, 1);
     expect(row(target.key)?.textContent).toContain("Second activity");
     expect(row(target.key)?.textContent).not.toContain("First activity");
     expect(sections).toHaveBeenCalledTimes(1);

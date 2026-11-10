@@ -3,55 +3,43 @@ import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsHandlers } from "./agents.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const roster = vi.hoisted(() => ({
   defaultId: "ops",
-  ownership: "explicit" as const,
-  selectionRequired: true,
-  mainKey: "main",
-  scope: "per-sender" as const,
-  agents: [
-    { id: "ops", name: "Operations" },
-    { id: "research", name: "Research" },
-  ],
+  agents: [{ id: "ops" }, { id: "research" }],
 }));
 
-// Roster enrichment reads workspaces and model state; authorization remains real.
+// mock-isolation: Roster enrichment reads workspaces and model state; authorization remains real.
 vi.mock("../session-utils.js", () => ({
-  listAgentsForGateway: async () => roster,
+  listAgentsForGateway: async (cfg: OpenClawConfig) => ({
+    ...roster,
+    agents: roster.agents.map((agent) => {
+      const mode = cfg.agents?.entries?.[agent.id]?.newSessionPermissionMode;
+      return mode ? { ...agent, newSessionPermissionMode: mode } : agent;
+    }),
+  }),
 }));
 
 function roleConfig(agents: GatewayOperatorRoleDefinition["agents"]): OpenClawConfig {
+  const reader: GatewayOperatorRoleDefinition = {
+    sessions: { others: "none" },
+    agents,
+    scopes: ["operator.read"],
+  };
   return {
     agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-    gateway: {
-      roles: {
-        definitions: {
-          reader: { sessions: { others: "none" }, agents, scopes: ["operator.read"] },
-        },
-      },
-    },
+    gateway: { roles: { definitions: { reader } } },
   };
 }
 
 function readerClient(system = false): GatewayClient {
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", version: "test", platform: "test", mode: "test" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId: "reader-profile",
-      displayName: "Reader",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    connect: gatewayConnect(["operator.read"], { id: "test", mode: "test" }),
+    authenticatedUserProfile: gatewayProfile("reader-profile", "Reader"),
     preparedSessionProfile: {
       profileId: "reader-profile",
       aliases: new Set(["reader-profile"]),
@@ -81,7 +69,6 @@ async function listAgents(
       } as GatewayRequestContext,
     },
   );
-  // Routing metadata describes Gateway ownership, independently of the reader's roster.
   expect(respond).toHaveBeenCalledExactlyOnceWith(
     true,
     { ...roster, agents: roster.agents.filter((agent) => expected.includes(agent.id)) },
@@ -91,7 +78,6 @@ async function listAgents(
 
 test.each([
   { agents: ["research"], system: false, expected: ["research"] },
-  { agents: [], system: false, expected: [] },
   { agents: "*" as const, system: false, expected: ["ops", "research"] },
   { agents: [], system: true, expected: ["ops", "research"] },
 ])(
@@ -101,43 +87,13 @@ test.each([
   },
 );
 
-test.each(["single", "batch"] as const)(
-  "agents.list returns an empty roster without waiting for the %s catalog reader",
-  async (mode) => {
-    const entered = createDeferred();
-    const released = createDeferred();
-    const waitForCatalog = async () => {
-      entered.resolve();
-      await released.promise;
-    };
-    const response = listAgents(
-      () => roleConfig([]),
-      [],
-      readerClient(),
-      async () => {
-        await waitForCatalog();
-        return { entries: [] };
-      },
-      mode === "batch"
-        ? async () => {
-            await waitForCatalog();
-            return [];
-          }
-        : undefined,
-    );
-    try {
-      expect(
-        await Promise.race([
-          response.then(() => "responded"),
-          entered.promise.then(() => "waiting for catalog"),
-        ]),
-      ).toBe("responded");
-    } finally {
-      released.resolve();
-      await response;
-    }
-  },
-);
+test("agents.list bypasses catalog readers for an empty roster", async () => {
+  const catalog = vi.fn(async () => ({ entries: [] }));
+  const batch = vi.fn(async () => []);
+  await listAgents(() => roleConfig([]), [], readerClient(), catalog, batch);
+  expect(catalog).not.toHaveBeenCalled();
+  expect(batch).not.toHaveBeenCalled();
+});
 
 test("agents.list applies role changes made while catalog preparation is pending", async () => {
   let cfg = roleConfig(["ops", "research"]);
@@ -157,4 +113,29 @@ test("agents.list applies role changes made while catalog preparation is pending
   cfg = roleConfig(["research"]);
   released.resolve();
   await response;
+});
+
+test.each([
+  ["operator.write", "workspace"],
+  ["operator.admin", "full"],
+] as const)("agents.list presents the attended default for %s", async (scope, mode) => {
+  const cfg = roleConfig("*");
+  cfg.agents!.entries!.ops!.newSessionPermissionMode = "full";
+  cfg.gateway!.roles!.definitions!.reader!.scopes = ["operator.read", scope];
+  const client = readerClient();
+  client.connect.scopes = ["operator.read", scope];
+  const respond = await callAgentHandler(
+    expectDefined(agentsHandlers["agents.list"], "agents.list handler"),
+    "agents.list",
+    {},
+    { client, context: { getRuntimeConfig: () => cfg } as GatewayRequestContext },
+  );
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({
+      agents: [{ id: "ops", newSessionPermissionMode: mode }, { id: "research" }],
+    }),
+    undefined,
+  );
+  expect(roster.agents[0]).not.toHaveProperty("newSessionPermissionMode");
 });

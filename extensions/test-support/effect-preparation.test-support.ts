@@ -27,3 +27,19 @@ export function createEffectPreparationGate() {
   };
   return gate;
 }
+
+export function waitForEffectPreparation(
+  preparing: Promise<unknown>,
+  dispatched: Promise<unknown>,
+  settled?: Promise<unknown>,
+) {
+  const unexpected = (promise: Promise<unknown>, message: string) =>
+    promise.then(() => {
+      throw new Error(message);
+    });
+  return Promise.race([
+    preparing,
+    unexpected(dispatched, "dispatched before preparation"),
+    ...(settled ? [unexpected(settled, "settled before preparation")] : []),
+  ]);
+}

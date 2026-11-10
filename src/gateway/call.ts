@@ -700,9 +700,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     const cleanup = () => {
       startAbort.abort();
       opts.signal?.removeEventListener("abort", abortHandler);
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
     };
     const stopClientThenSettle = (err?: Error, value?: T) => {
       const complete = () => {

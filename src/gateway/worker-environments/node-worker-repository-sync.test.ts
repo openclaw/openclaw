@@ -15,9 +15,12 @@ import {
   parseRemoteWorkspaceManifestEnvelope,
   type RemoteWorkspaceManifestEnvelope,
 } from "./workspace-hash-memo.js";
+import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useAgedWorkspaceHashClock();
+afterEach(() => vi.restoreAllMocks());
 
 it.each([
   { operation: "clone", reason: "clone-failed", stage: "git clone" },
@@ -248,7 +251,11 @@ it.each([
           >[0]
         | undefined;
       let revision = 0;
-      const capture = async (active = actions, directory = first.remoteWorkspaceDir) => {
+      const capture = async (
+        active = actions,
+        directory = first.remoteWorkspaceDir,
+        beforeAcceptance?: () => Promise<void>,
+      ) => {
         const firstCapture = manifestCaptures.length;
         const phases: string[] = [];
         const result = await active.reconcileWorkspace({
@@ -300,17 +307,16 @@ it.each([
         });
         expect(phases).toEqual([
           "repositoryCheckpointUpload",
-          "repositoryVerification",
           "repositoryPublicationUpload",
-          "repositoryVerification",
           "repositoryCheckpointStage",
         ]);
+        await beforeAcceptance?.();
         await verifyReconciledWorkspaceFinal(result, {
           assertActive: async () => {},
           resume: async () => {},
         });
         const captures = manifestCaptures.slice(firstCapture);
-        expect(captures).toHaveLength(4);
+        expect(captures).toHaveLength(2);
         expect(captures.slice(1).every(({ metrics }) => metrics.contentHashCount === 0)).toBe(true);
         expect(captures.slice(1).every(({ metrics }) => metrics.memoHitCount > 0)).toBe(true);
         return captures;
@@ -323,7 +329,8 @@ it.each([
       }
       // Startup must accept setup output even when GitHub normalization is unavailable.
       const initialCaptures = await capture();
-      expect(initialCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
+      // Preparation's persisted memo already covers the unchanged startup tree.
+      expect(initialCaptures[0]!.metrics.memoHitCount).toBeGreaterThan(0);
       expect(revision).toBe(1);
       expect(checkpoint).toBeDefined();
       await gitAt(first.remoteWorkspaceDir, "rm", "--cached", "retained-removal.ignored");
@@ -345,7 +352,8 @@ it.each([
       );
       await fs.writeFile(path.join(first.remoteWorkspaceDir, "first.txt"), "turn one\n");
       const changedCaptures = await capture();
-      expect(changedCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
+      // An edit must change the manifest; an earlier pass may already have hashed it.
+      expect(changedCaptures[0]!.manifestRef).not.toBe(initialCaptures[0]!.manifestRef);
       expect(changedCaptures[0]!.metrics.memoHitCount).toBeGreaterThan(0);
       await fs.writeFile(path.join(first.remoteWorkspaceDir, "second.txt"), "turn two\n");
       await fs.rm(path.join(first.remoteWorkspaceDir, "tracked.txt"));
@@ -430,6 +438,13 @@ it.each([
           mode: "100644",
           sha: null,
         });
+        const accepted = checkpoint;
+        await expect(
+          capture(replacement, restored.remoteWorkspaceDir, () =>
+            fs.writeFile(path.join(restored.remoteWorkspaceDir, "second.txt"), "late edit\n"),
+          ),
+        ).rejects.toThrow("Repository workspace changed during checkpoint capture");
+        expect(checkpoint).toBe(accepted);
       }
     } finally {
       await server.close();

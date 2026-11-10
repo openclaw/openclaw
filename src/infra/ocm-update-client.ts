@@ -151,6 +151,10 @@ function projectJob(
 
 /** OCM launch metadata selects the manager; an RPC can select only a recorded job ID. */
 export async function resolveOcmUpdateManager() {
+  // Config sanitization can remove launch markers, never introduce them.
+  if (!process.env.OCM_SELF || (!process.env.OCM_ACTIVE_ENV && !process.env.OCM_ACTIVE_ENV_ROOT)) {
+    return null;
+  }
   const published = getPublishedConfigRuntimeEnvState();
   // Config env belongs to OpenClaw; it cannot select the manager or its host tools.
   const env = published.sourceConfig

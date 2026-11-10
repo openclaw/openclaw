@@ -44,6 +44,9 @@ and `approve` uses the account belonging to the matching request. Explicitly emp
 or whitespace-only values, such as `--account ""`, are rejected with
 `--account must not be blank`.
 
+Input errors, such as a missing channel or unmatched code, print their reason and
+recovery guidance on stderr without debug mode. They still exit with status `1`.
+
 ## `pairing list`
 
 List pending pairing requests for one channel.
@@ -71,6 +74,9 @@ Usage:
 - `openclaw pairing approve <code>` when exactly one pairing-capable channel is configured
 
 Options: `--channel <channel>`, `--account <accountId>`, `--notify` (send a confirmation back to the requester on the same channel).
+
+For WhatsApp, `--notify` sends the standard approval confirmation through the
+running Gateway, using the approved request's account.
 
 ### Owner bootstrap
 

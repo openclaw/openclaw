@@ -8,12 +8,35 @@ import type { ResolvedConversationCapabilityProfile } from "./conversation-capab
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { prepareExecDefaults } from "./exec-defaults.js";
 import { isGatewayToolAllowedWithoutAction } from "./gateway-tool-policy.js";
+import { resolveModelExecCeilings, type resolveExecToolConfig } from "./lazy-exec-tool.js";
 import {
   resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
 } from "./sandbox/runtime-status.js";
-import type { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
+import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
 import type { PreparedToolConstruction } from "./tool-construction-preparation.js";
+
+/** Final exec policy for one tool assembly; the turn model's `byProvider` ceiling binds last. */
+export function projectAgentToolsExecPolicy(params: {
+  options?: InternalCodingToolsOptions;
+  execConfig: ReturnType<typeof resolveExecToolConfig>;
+  agentId?: string;
+  model: { provider?: string; id?: string };
+}) {
+  const { options } = params;
+  return projectEffectiveExecPolicy({
+    base: params.execConfig,
+    overrides: options?.exec,
+    permissionPolicy: options?.sessionPermissionPolicy,
+    scheduledExecTarget: options?.scheduledToolPolicy?.execTarget,
+    modelExecCeilings: resolveModelExecCeilings({
+      cfg: options?.config,
+      agentId: params.agentId,
+      modelProvider: params.model.provider,
+      modelId: params.model.id,
+    }),
+  });
+}
 
 type BrowserLoopbackParams = {
   options?: InternalCodingToolsOptions;
@@ -87,7 +110,7 @@ function prepareLocalBrowserLoopbackPolicy(
 }
 
 /** Capture session/config policy once; only the approval owner is read at effect. */
-export function createLocalBrowserLoopbackAssertion(
+function createLocalBrowserLoopbackAssertion(
   params: BrowserLoopbackParams,
   readExecApprovals?: () => ExecApprovalsFile,
   preparation = prepareLocalBrowserLoopbackPolicy(params),

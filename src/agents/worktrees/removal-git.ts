@@ -5,6 +5,11 @@ import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec-runner.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
@@ -161,8 +166,9 @@ export async function removeManagedCheckout(
             await fs.unlink(path.join(retired, ".git")).catch(missingPathOrThrow);
             const argv = [
               process.execPath,
-              "-e",
-              'require("node:fs").rmSync(process.argv[1], { recursive: true, force: true })',
+              ...resolveRuntimeWorkerArgv(
+                resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.retiredWorktreeCleanup),
+              ),
               retired,
             ];
             const deleted = await withChildProcessOperation("worktree.cleanup", () =>

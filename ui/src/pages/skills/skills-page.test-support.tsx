@@ -1,9 +1,11 @@
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
 import { createRouter, definePage } from "@openclaw/uirouter";
-import { createSignal, flush } from "solid-js";
+import { Show, createSignal, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SkillStatusReport } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type { SkillsState } from "../../lib/skills/index.ts";
@@ -31,11 +33,38 @@ export const remoteSkill = {
   displayName: "Calendar",
 };
 
+type SkillsRouteFixture = Partial<SkillsRouteData> & { report?: SkillStatusReport | null };
+
 export function mountSkills(
-  request: (method: string, params?: unknown) => Promise<unknown>,
+  request: (
+    method: string,
+    params?: unknown,
+    options?: Parameters<GatewayBrowserClient["request"]>[2],
+  ) => Promise<unknown>,
   surface: "discovery" | "settings" = "discovery",
+  initialData: SkillsRouteFixture & { pendingRoute?: boolean } = {},
 ) {
-  const client = { request } as unknown as GatewayBrowserClient;
+  const {
+    pendingRoute = false,
+    report = { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] },
+    ...initialRoute
+  } = initialData;
+  let nextReport = report;
+  // Fixture inventories enter through the same request owner as live route adoption.
+  const client = {
+    request: (
+      method: string,
+      params?: unknown,
+      options?: Parameters<GatewayBrowserClient["request"]>[2],
+    ) => {
+      if (method === "skills.status" && nextReport) {
+        const value = nextReport;
+        nextReport = null;
+        return Promise.resolve(value);
+      }
+      return options ? request(method, params, options) : request(method, params);
+    },
+  } as unknown as GatewayBrowserClient;
   const connection = createApplicationGateway(
     createApplicationGatewaySnapshot({
       client,
@@ -45,12 +74,10 @@ export function mountSkills(
       sessionKey: "main",
     }),
   );
-  const agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "global" as const,
+  const agentsList = makeBootRoster({
+    scope: "global",
     agents: [{ id: "main" }, { id: "research" }],
-  };
+  });
   const agents = {
     state: { agentsList, agentsLoading: false, agentsError: null },
     ensureList: vi.fn(async () => agentsList),
@@ -94,20 +121,28 @@ export function mountSkills(
     agents,
     selectedAgentId: "main",
     selectionIntentRevision: selection.intentRevision,
-    report: { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] },
     error: null,
+    ...initialRoute,
   };
-  const [routeData, setRouteData] = createSignal(initialRouteData, { ownedWrite: true });
+  const [routeData, setRouteData] = createSignal<SkillsRouteData | undefined>(
+    pendingRoute ? undefined : initialRouteData,
+    { ownedWrite: true },
+  );
   const [currentSurface, setCurrentSurface] = createSignal(surface);
   const mounted = mountSolid(() => (
     <ApplicationProvider value={context}>
-      <SkillsPage routeData={routeData()} surface={currentSurface()} />
+      <Show when={Boolean(routeData())}>
+        <SkillsPage routeData={routeData()} surface={currentSurface()} />
+      </Show>
     </ApplicationProvider>
   ));
   flush();
-  const page = mounted.container.querySelector<HTMLElement>("openclaw-skills-page")!;
+  nextReport = null;
   return {
-    page,
+    get page() {
+      return mounted.container.querySelector<HTMLElement>("openclaw-skills-page")!;
+    },
+    container: mounted.container,
     unmount: mounted.unmount,
     connection,
     agents,
@@ -117,13 +152,18 @@ export function mountSkills(
       setCurrentSurface(next);
       flush();
     },
-    publishRouteData(this: void, patch: Partial<SkillsRouteData>) {
-      setRouteData({ ...initialRouteData, ...patch });
+    publishRouteData(this: void, patch: SkillsRouteFixture) {
+      const { report: fixtureReport = report, ...route } = patch;
+      nextReport = fixtureReport;
+      setRouteData({ ...initialRouteData, ...route });
       flush();
+      nextReport = null;
     },
     refreshRouteData: () => {
+      nextReport = report;
       setRouteData({ ...initialRouteData });
       flush();
+      nextReport = null;
     },
   };
 }

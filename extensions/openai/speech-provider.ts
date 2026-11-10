@@ -1,8 +1,10 @@
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { SpeechProviderPlugin, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import {
   createSpeechDirectiveParser,
+  buildOpenAiSpeechRequestBody,
+  OPENAI_TTS_MODELS,
+  OPENAI_TTS_VOICES,
   parseSpeechDirectiveNumberOverride,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
@@ -12,33 +14,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveOpenAIProviderConfigRecord } from "./realtime-provider-shared.js";
+import {
+  resolveOpenAIProviderConfigRecord,
+  resolveOpenAIRealtimeRequestHeaders,
+} from "./realtime-provider-shared.js";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-
-const OPENAI_TTS_MODELS = [
-  "gpt-4o-mini-tts",
-  "gpt-4o-mini-tts-2025-12-15",
-  "tts-1",
-  "tts-1-hd",
-] as const;
-
-const OPENAI_TTS_VOICES = [
-  "alloy",
-  "ash",
-  "ballad",
-  "cedar",
-  "coral",
-  "echo",
-  "fable",
-  "juniper",
-  "marin",
-  "onyx",
-  "nova",
-  "sage",
-  "shimmer",
-  "verse",
-] as const;
 
 type OpenAiTtsVoice = (typeof OPENAI_TTS_VOICES)[number];
 
@@ -71,32 +52,6 @@ function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTts
   return OPENAI_TTS_VOICES.some((candidate) => candidate === voice);
 }
 
-function resolveOpenAITtsInstructions(
-  model: string,
-  instructions?: string,
-  baseUrl?: string,
-): string | undefined {
-  const next = instructions?.trim();
-  if (!next) {
-    return undefined;
-  }
-  if (baseUrl !== undefined && isCustomOpenAITtsBaseUrl(baseUrl)) {
-    return next;
-  }
-  return model.includes("gpt-4o-mini-tts") ? next : undefined;
-}
-
-function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string, unknown> {
-  const sanitized: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (key === "__proto__" || key === "constructor" || key === "prototype") {
-      continue;
-    }
-    sanitized[key] = entry;
-  }
-  return sanitized;
-}
-
 const OPENAI_SPEECH_RESPONSE_FORMATS = ["mp3", "opus", "wav"] as const;
 
 type OpenAiSpeechResponseFormat = (typeof OPENAI_SPEECH_RESPONSE_FORMATS)[number];
@@ -124,20 +79,6 @@ function normalizeOpenAISpeechResponseFormat(
 function isGroqSpeechBaseUrl(baseUrl: string): boolean {
   const hostname = normalizeLowercaseStringOrEmpty(URL.parse(baseUrl)?.hostname);
   return hostname === "groq.com" || hostname.endsWith(".groq.com");
-}
-
-function resolveSpeechResponseFormat(
-  baseUrl: string,
-  target: "audio-file" | "voice-note" | "telephony",
-  configuredFormat?: OpenAiSpeechResponseFormat,
-): OpenAiSpeechResponseFormat {
-  if (configuredFormat) {
-    return configuredFormat;
-  }
-  if (isGroqSpeechBaseUrl(baseUrl)) {
-    return "wav";
-  }
-  return target === "voice-note" ? "opus" : "mp3";
 }
 
 function readExtraBody(value: unknown): Record<string, unknown> | undefined {
@@ -244,16 +185,20 @@ async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, responseForma
   }
   const responseFormat =
     responseFormatOverride ??
-    resolveSpeechResponseFormat(config.baseUrl, req.target, config.responseFormat);
+    config.responseFormat ??
+    (isGroqSpeechBaseUrl(config.baseUrl) ? "wav" : req.target === "voice-note" ? "opus" : "mp3");
   const { resolveGeneratedMediaMaxBytes } =
     await import("openclaw/plugin-sdk/media-generation-runtime");
   const { text, timeoutMs } = req;
   const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "audio");
-  const effectiveInstructions = resolveOpenAITtsInstructions(
-    model,
-    config.instructions,
-    config.baseUrl,
-  );
+  const nextInstructions = config.instructions?.trim();
+  const effectiveInstructions = !nextInstructions
+    ? undefined
+    : config.baseUrl !== undefined && isCustomOpenAITtsBaseUrl(config.baseUrl)
+      ? nextInstructions
+      : model.includes("gpt-4o-mini-tts")
+        ? nextInstructions
+        : undefined;
 
   if (!isValidOpenAIModel(model, config.baseUrl)) {
     throw new Error(`Invalid model: ${model}`);
@@ -270,30 +215,25 @@ async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, responseForma
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
 
-  const requestHeaders = omitNullRequestHeaders(
-    resolveProviderRequestHeaders({
-      provider: "openai",
-      baseUrl: config.baseUrl,
-      capability: "audio",
-      transport: "http",
-      defaultHeaders: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+  const requestHeaders = resolveOpenAIRealtimeRequestHeaders(
+    { resolveProviderRequestHeaders },
+    config.baseUrl,
+    {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+  );
+  const requestBody = JSON.stringify(
+    buildOpenAiSpeechRequestBody({
+      model,
+      text,
+      voice,
+      responseFormat,
+      speed,
+      instructions: effectiveInstructions,
+      extraBody: config.extraBody,
     }),
-  ) ?? {
-    Authorization: `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-  };
-  const requestBody = JSON.stringify({
-    model,
-    input: text,
-    voice,
-    response_format: responseFormat,
-    ...(speed != null && { speed }),
-    ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
-    ...(config.extraBody == null ? {} : sanitizeExtraBodyRecord(config.extraBody)),
-  });
+  );
   const requestUrl = `${config.baseUrl}/audio/speech`;
   const debugProxyFetchPatchInstalled = proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled();
   const { response, release } = await fetchWithSsrFGuard({

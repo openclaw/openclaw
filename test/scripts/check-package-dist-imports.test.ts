@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
+  preparePackageDistJavaScript,
 } from "../../scripts/lib/package-dist-imports.mjs";
+import { collectPackageRootImports } from "../../src/infra/package-root-imports.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECK_SCRIPT = "scripts/check-package-dist-imports.mjs";
@@ -15,6 +17,7 @@ function packageFixture(sources: Record<string, string>) {
   const root = tempDirs.make("openclaw-package-dist-imports-");
   mkdirSync(join(root, "dist"));
   for (const [file, source] of Object.entries(sources)) {
+    mkdirSync(dirname(join(root, "dist", file)), { recursive: true });
     writeFileSync(join(root, "dist", file), source);
   }
   return root;
@@ -94,6 +97,118 @@ describe("collectPackageDistImportErrors", () => {
 });
 
 describe("collectPackageDistImports", () => {
+  it("carries raw string import specifiers without adding templates, require calls, or URLs", () => {
+    const specifiers: string[] = [];
+    collectPackageDistImports({
+      files: ["dist/index.mjs"],
+      readText: () => `import "./static.mjs?rev=1";
+export { value } from "../named.mjs";
+export * from "./all.mjs";
+import("./dynamic.mjs");
+import(\`./template.mjs\`);
+require("./native.cjs");
+new URL("./worker.mjs", import.meta.url);`,
+      onStaticImport: (specifier) => specifiers.push(specifier),
+    });
+    expect(specifiers).toEqual([
+      "./static.mjs?rev=1",
+      "../named.mjs",
+      "./all.mjs",
+      "./dynamic.mjs",
+    ]);
+  });
+
+  it.each([
+    {
+      name: "static-only imports and loader names in comments",
+      source:
+        '// require and createRequire are only documentation.\nexport const text = "a require example";',
+      literalCall: false,
+      direct: false,
+    },
+    {
+      name: "ambient require",
+      source: 'require("./native.cjs");',
+      literalCall: true,
+      direct: true,
+    },
+    {
+      name: "escaped require identifier",
+      source: String.raw`requ\u0069re("./native.cjs");`,
+      literalCall: true,
+      direct: true,
+    },
+    {
+      name: "escaped createRequire import",
+      source: String.raw`import { create\u0052equire as makeLoader } from "node:module";
+const load = makeLoader(import.meta.url); load("./native.cjs");`,
+      literalCall: true,
+      direct: false,
+    },
+    {
+      name: "escaped createRequire property",
+      source: String.raw`import * as mod from "node:module";
+const load = mod["create\u0052equire"](import.meta.url); load("./native.cjs");`,
+      literalCall: true,
+      direct: false,
+    },
+    {
+      name: "destructured createRequire alias",
+      source: `import * as mod from "node:module";
+const { createRequire: makeLoader } = mod;
+const load = makeLoader(import.meta.url); load("./native.cjs");`,
+      literalCall: true,
+      direct: false,
+    },
+  ])("reports literal-call targets from parsed $name", ({ source, literalCall, direct }) => {
+    const literalTargets: string[] = [];
+    const imports = collectPackageDistImports({
+      files: ["dist/index.mjs"],
+      readText: () => `import "./static.mjs";\n${source}`,
+      onLiteralCall: (specifier) => literalTargets.push(specifier),
+    });
+    expect(literalTargets).toEqual(literalCall ? ["./native.cjs"] : []);
+    expect(imports).toEqual([
+      { importerPath: "dist/index.mjs", importedPath: "dist/static.mjs" },
+      ...(direct
+        ? [{ importerPath: "dist/index.mjs", importedPath: "dist/native.cjs", kind: "require" }]
+        : []),
+    ]);
+  });
+
+  it.each(["ts", "mts", "cts"])("opts into runtime imports from typed %s helpers", (extension) => {
+    const file = `dist/helper.${extension}`;
+    const source =
+      'import type { Missing } from "./types-only.ts";\n' +
+      (extension === "cts"
+        ? 'const runtime: Missing = require("./runtime.cts");'
+        : 'import runtime from "./runtime.mts"; const value: Missing = runtime; new URL("./worker.ts", import.meta.url);');
+    const input = { files: [file], readText: () => source };
+    expect(collectPackageDistImports(input)).toEqual([]);
+    const imports = collectPackageDistImports({ ...input, includeTypeScript: true });
+    const expected = extension === "cts" ? ["runtime.cts"] : ["runtime.mts", "worker.ts"];
+    expect(imports).toEqual(
+      expected.map((target) => ({
+        importerPath: file,
+        importedPath: `dist/${target}`,
+        ...(extension === "cts" ? { kind: "require" } : {}),
+      })),
+    );
+    expect(collectPackageDistImportErrors({ files: [file], imports })).toEqual(
+      expected.map((target) => `${file} imports missing dist/${target}`),
+    );
+  });
+
+  it("normalizes typed native require aliases for package-root import analysis", () => {
+    const source = `import { createRequire } from "node:module";
+const load = createRequire(import.meta.url) as NodeRequire;
+load("./native.cjs");`;
+    expect(collectPackageRootImports(preparePackageDistJavaScript("helper.mts", source))).toContain(
+      "./native.cjs",
+    );
+    expect(preparePackageDistJavaScript("helper.mjs", source)).toBe(source);
+  });
+
   it.each(["mjs", "cjs"])(
     "keeps binding searches bounded while rejecting a redeclaration in a large %s artifact",
     (extension) => {
@@ -142,7 +257,12 @@ return require("./leaf.cjs");`;
   it("leaves installed dependency modules to their own package scope", () => {
     expect(
       collectPackageDistImports({
-        files: ["node_modules/vendor/index.js", "dist/node_modules/vendor/index.mjs"],
+        files: [
+          "node_modules/vendor/index.js",
+          "dist/node_modules/vendor/index.mjs",
+          "node_modules/vendor/index.ts",
+        ],
+        includeTypeScript: true,
         readText: () => {
           throw new Error("Dependency source belongs to a separate package scope");
         },
@@ -218,6 +338,48 @@ new URL("../outside.cjs", import.meta.url);`,
 });
 
 describe("check-package-dist-imports", () => {
+  it("resolves Control UI import maps while retaining missing-file checks", () => {
+    const root = packageFixture({
+      "control-ui/index.html":
+        '<head><script type="importmap" data-cfasync="false">' +
+        JSON.stringify({
+          imports: {
+            "./assets/_1___.js": "./assets/shared-12345678.js",
+            "./assets/_1___.css": "./assets/shared-12345678.css",
+          },
+        }) +
+        "</script></head>",
+      "control-ui/assets/app.js": 'import "./_1___.js";\n',
+      "control-ui/assets/shared-12345678.js": "export {};\n",
+      "control-ui/assets/shared-12345678.css": "body {}\n",
+    });
+    const check = () => runCheck([root]);
+    const complete = check();
+    expect(complete.status, complete.stderr).toBe(0);
+    expect(complete.stdout).toContain("OpenClaw package dist import closure passed.");
+
+    writeFileSync(join(root, "dist/index.js"), 'import "./control-ui/assets/_1___.js";');
+    const outsideUi = check();
+    expect(outsideUi.status).toBe(1);
+    expect(outsideUi.stderr).toContain(
+      "dist/index.js imports missing dist/control-ui/assets/_1___.js",
+    );
+    unlinkSync(join(root, "dist/index.js"));
+    for (const extension of ["js", "css"]) {
+      const target = `dist/control-ui/assets/shared-12345678.${extension}`;
+      unlinkSync(join(root, target));
+      const missingTarget = check();
+      expect(missingTarget.status).toBe(1);
+      expect(missingTarget.stderr).toContain(`imports missing ${target}`);
+      writeFileSync(join(root, target), "");
+    }
+
+    writeFileSync(join(root, "dist/control-ui/index.html"), "<head></head>");
+    const missingMap = check();
+    expect(missingMap.status).toBe(1);
+    expect(missingMap.stderr).toContain("imports missing dist/control-ui/assets/_1___.js");
+  });
+
   it("checks large bundles in a bounded heap and still rejects missing trailing imports", () => {
     const root = packageFixture({ "leaf.mjs": "export {};\n" });
     const source = 'import "./leaf.mjs";\n' + "void 0;\n".repeat(400_000);

@@ -1,4 +1,4 @@
-import { onSettled } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
@@ -13,12 +13,9 @@ import { watchAgentScope } from "../../lib/agents/index.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import {
-  SESSIONS_PAGE_DEFAULT_LIMIT,
-  filterSessionRows,
-  type SessionArchivedFilter,
-  type SessionListSnapshot,
-} from "../../lib/sessions/index.ts";
+import { normalizeSessionsGroupBy } from "../../lib/sessions/grouping.ts";
+import type { SessionArchivedFilter, SessionListSnapshot } from "../../lib/sessions/index.ts";
+import { filterSessionRows } from "../../lib/sessions/navigation.ts";
 import type { SessionPatch } from "../../lib/sessions/patch.ts";
 import {
   resolveSessionPreferredFaceForKey,
@@ -26,6 +23,8 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
+import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
   sessionAgentId,
   sessionAgentIds,
@@ -37,7 +36,6 @@ import { createSessionGroups } from "./custom-groups.ts";
 import { resolveSessionDeleteOutcome } from "./delete-outcome.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import { createSessionsDialog } from "./page-dialog.ts";
-import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
 import { createSessionsRosterReadiness } from "./roster-readiness.ts";
 import type { SessionsRouteData } from "./route.ts";
@@ -55,6 +53,7 @@ import { createTranscriptSearch } from "./transcript-search.ts";
 registerSessionOrganizationEnglish();
 
 const SESSION_SEARCH_DEBOUNCE_MS = 200;
+const GROUP_BY_STORAGE_KEY = "openclaw:sessions:group-by";
 
 export type SessionsPageOwner = ReturnType<typeof createSessionsPage>;
 
@@ -78,7 +77,7 @@ export function createSessionsPage(
   const observation = observeState<SessionsPageState>({
     sortColumn: "updated",
     sortDir: "desc",
-    groupBy: loadStoredGroupBy(),
+    groupBy: normalizeSessionsGroupBy(getSafeLocalStorage()?.getItem(GROUP_BY_STORAGE_KEY)),
     page: 0,
     pageSize: 25,
     result: null,
@@ -121,6 +120,7 @@ export function createSessionsPage(
   let listRequest: Promise<void> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let appliedListResult: SessionsListResult | null | undefined;
+  let appliedArchiving = "";
   const rosterReadiness = createSessionsRosterReadiness(state);
   const details = createSessionDetails({
     captureScope: captureRequestScope,
@@ -252,7 +252,6 @@ export function createSessionsPage(
     publishError: publishRequestError,
     refresh: refreshSessionList,
     agentId: sessionAgentId,
-    patch: patchSession,
   });
 
   const groups = createSessionGroups({
@@ -389,7 +388,13 @@ export function createSessionsPage(
     const apply = (snapshot: SessionListSnapshot) => {
       applyListSnapshot(binding, snapshot);
     };
-    unsubscribeList = sessions.subscribeList(query, apply);
+    const stopList = sessions.subscribeList(query, apply);
+    // A held archive changes row visibility without publishing a new list result.
+    const stopArchiveVisibility = sessions.subscribe(() => apply(sessions.listSnapshot(query)));
+    unsubscribeList = () => {
+      stopList();
+      stopArchiveVisibility();
+    };
     const snapshot = sessions.listSnapshot(query);
     apply(snapshot);
     if (refreshMissing && (!snapshot.result || snapshot.loading)) {
@@ -407,10 +412,18 @@ export function createSessionsPage(
     if (!result) {
       return;
     }
-    if (result !== appliedListResult) {
+    // Archives held behind their Undo window leave the table as they do the sidebar.
+    const isArchiving = (row: GatewaySessionRow) =>
+      binding.sessions.archiveVisibility(row.key) === "pending";
+    const archiving = String(result.sessions.filter(isArchiving).map(({ key }) => key));
+    if (result !== appliedListResult || archiving !== appliedArchiving) {
       appliedListResult = result;
-      state.result = filterSessionRows(result, { archivedFilter: state.statusFilter });
-      void application.agentIdentity.ensure(sessionAgentIds(state.result));
+      appliedArchiving = archiving;
+      state.result = filterSessionRows(result, {
+        archivedFilter: state.statusFilter,
+        isHidden: isArchiving,
+      });
+      void application.agentIdentity.ensure(sessionAgentIds(state.result.sessions));
     }
     if (!snapshot.loading && !snapshot.error && state.result && state.selectedSessions.size > 0) {
       state.selectedSessions = reconcileSelectedSessions(
@@ -548,10 +561,7 @@ export function createSessionsPage(
         hello: application.gateway.snapshot.hello,
       }),
       transcriptSearchAvailable: application.gateway.snapshot.phase === "connected",
-      agentIdentityById: sessionAgentIdentityById(
-        state.result,
-        (agentId) => application.agentIdentity.get(agentId) ?? undefined,
-      ),
+      agentIdentityById: agentIdentityById(),
       personGroupingAvailable,
       // Keep the stored Person preference while the owner roster is unavailable.
       groupBy:
@@ -616,7 +626,11 @@ export function createSessionsPage(
       onGroupByChange: (mode: SessionsPageState["groupBy"]) => {
         state.groupBy = mode;
         state.page = 0;
-        saveStoredGroupBy(mode);
+        try {
+          getSafeLocalStorage()?.setItem(GROUP_BY_STORAGE_KEY, mode);
+        } catch {
+          // Storage may be unavailable or full; the in-memory selection still applies.
+        }
       },
       onAssignCategory: groups.assign,
       onRequestNewCategory: (sessionKey?: string): void =>
@@ -687,12 +701,17 @@ export function createSessionsPage(
     archive: archiveActions.archive,
   };
 
-  const presentationSources = [
-    application.agentIdentity,
-    application.navigation,
-    application.runtimeConfig,
-    application.plugins,
-  ].map((owner) => projectOwner(owner, (source) => source));
+  const identities = projectOwner(application.agentIdentity, (source) => source);
+  const identityRows = createMemo(() => observation.read().result?.sessions ?? []);
+  const agentIdentityById = createMemo(() =>
+    sessionAgentIdentityById(
+      identityRows(),
+      (agentId) => identities.read().get(agentId) ?? undefined,
+    ),
+  );
+  const presentationSources = [application.navigation, application.plugins].map((owner) =>
+    projectOwner(owner, (source) => source),
+  );
   const revision = () =>
     presentationSources.reduce((sum, source) => sum + source.revision(), observation.revision());
   onSettled(() => {

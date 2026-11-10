@@ -1,5 +1,3 @@
-import crypto from "node:crypto";
-import { syncBuiltinESMExports } from "node:module";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -142,7 +140,7 @@ it("backfills the current candidate header while new windows start at the curren
     const candidates: Array<[SessionEntry, SessionEntry, string, number]> = [
       [current, current, scope.sessionId, 42],
       [{ ...current, sessionId: "predecessor" }, current, scope.sessionId, 42],
-      [current, { ...current, lastInteractionAt: 1 }, "replacement", now],
+      [current, { ...current, lastInteractionAt: 1 }, scope.sessionId, now],
     ];
     for (const [initialEntry, candidate, sessionId, sessionStartedAt] of candidates) {
       const result = await buildReusePatch({
@@ -157,17 +155,15 @@ it("backfills the current candidate header while new windows start at the curren
 });
 
 it.each<[Partial<PatchParams>, string, boolean, boolean?]>([
-  [{}, "replacement", true],
+  [{}, "original", true],
   [{ freshEntry: undefined, initialEntry: undefined }, "replacement", true],
   [{ freshEntry }, "original", false],
   [{ expectedExistingSessionId: "original" }, "original", false],
+  [{ requestedSessionId: "original" }, "original", true],
   [{ hasRestoredCronContinuation: true }, "original", false],
-  [{ freshEntry: { ...expiredEntry, modelSelectionLocked: true } }, "original", false],
   [{ freshEntry: failedEntry }, "original", false],
-  [{ freshEntry: failedEntry, visibleRequest: false }, "replacement", true],
+  [{ freshEntry: failedEntry, visibleRequest: false }, "original", true],
   [{ freshEntry: { ...freshEntry, status: "failed" } }, "replacement", true, true],
-  [requested, "replacement", true],
-  [{ ...requested, freshEntry }, "requested", true],
   [{ ...requested, freshEntry: undefined, initialEntry: undefined }, "requested", true],
 ])(
   "reuses %j as %s (new=%s, transcript missing=%s)",
@@ -193,52 +189,6 @@ it.each<[Partial<PatchParams>, string, boolean, boolean?]>([
   },
 );
 
-it.each([
-  { name: "existing identity", input: { freshEntry }, sessionId: "original", allocations: 0 },
-  {
-    name: "requested missing identity",
-    input: { freshEntry: undefined, initialEntry: undefined, requestedSessionId: "requested" },
-    sessionId: "requested",
-    allocations: 1,
-  },
-  {
-    name: "requested fresh identity",
-    input: { freshEntry, requestedSessionId: "requested" },
-    sessionId: "requested",
-    allocations: 1,
-  },
-  {
-    name: "new identity",
-    input: {},
-    sessionId: "00000000-0000-4000-8000-000000000001",
-    allocations: 2,
-  },
-  {
-    name: "stable writer fallback",
-    input: { fallbackSessionId: "selected" },
-    sessionId: "selected",
-    allocations: 1,
-  },
-] satisfies Array<{
-  name: string;
-  input: Partial<PatchParams>;
-  sessionId: string;
-  allocations: number;
-}>)("allocates only the required identity UUIDs for $name", async (scenario) => {
-  const randomUUID = vi
-    .spyOn(crypto, "randomUUID")
-    .mockReturnValue("00000000-0000-4000-8000-000000000001");
-  try {
-    syncBuiltinESMExports();
-    const result = await buildReusePatch({ fallbackSessionId: undefined, ...scenario.input });
-    expect(result.patch.sessionId).toBe(scenario.sessionId);
-    expect(randomUUID).toHaveBeenCalledTimes(scenario.allocations);
-  } finally {
-    randomUUID.mockRestore();
-    syncBuiltinESMExports();
-  }
-});
-
 it("preserves a legacy session's missing revision when reusing it", async () => {
   const legacyEntry = { ...freshEntry, lifecycleRevision: undefined };
   const { patch } = await buildReusePatch({ freshEntry: legacyEntry });
@@ -262,17 +212,14 @@ it("keeps a concurrent replacement after preparing a rotation from the stored ro
       throw new Error("Session preparation did not return a candidate");
     }
     const initialPatch = await buildReusePatch({
+      ...prepared,
       freshEntry: prepared.entry,
       initialEntry: prepared.entry,
-      cfg: prepared.cfg,
       canonicalSessionKey: prepared.canonicalKey,
-      storePath: prepared.storePath,
-      resetPolicy: prepared.resetPolicy,
-      now: prepared.now,
       fallbackSessionId: undefined,
     });
     expect(initialPatch.isNewSession).toBe(true);
-    expect(initialPatch.patch.sessionId).not.toBe("original");
+    expect(initialPatch.patch.sessionId).toBe("original");
     const concurrent: SessionEntry = {
       ...freshEntry,
       sessionId: "concurrent",

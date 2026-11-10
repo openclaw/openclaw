@@ -1,4 +1,5 @@
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { observeIntersection } from "../../../lib/reactive/observers.ts";
 
 const CHAT_ATTACHMENT_VIEWPORT_MARGIN = "240px 0px";
 
@@ -13,11 +14,8 @@ export function observeChatAttachmentViewport(
   onVisible: () => void,
   onHidden?: () => void,
 ): () => void {
-  if (typeof IntersectionObserver !== "function") {
-    onVisible();
-    return () => undefined;
-  }
-  const observer = new IntersectionObserver(
+  const stop = observeIntersection(
+    [element],
     (entries) => {
       const entry = entries.at(-1);
       if (!entry) {
@@ -29,12 +27,11 @@ export function observeChatAttachmentViewport(
         return;
       }
       if (!onHidden) {
-        observer.disconnect();
+        stop();
       }
       onVisible();
     },
     { rootMargin: CHAT_ATTACHMENT_VIEWPORT_MARGIN },
   );
-  observer.observe(element);
-  return () => observer.disconnect();
+  return stop;
 }

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeChatSendShortcut,
   patchSettings,
@@ -5,12 +6,13 @@ import {
 } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
-import "../../../components/tooltip.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
+import "../../../components/tooltip.ts";
 import {
   canSubmitBeforeChatHistory,
   isChatControlCommand,
   isModelIndependentChatCommand,
+  parseSlashCommand,
 } from "../../../lib/chat/commands.ts";
 import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
@@ -22,12 +24,13 @@ import {
   isChatRunWorking,
   isCurrentSessionSubmittedProgress,
 } from "../chat-run-working.ts";
-import { insertComposerDictation, type ComposerDictationOwner } from "../composer-dictation.ts";
+import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
 import type {
   ComposerMicrophoneOwner,
   MicrophonePickerProps,
 } from "../composer-microphone-picker.ts";
+import { createComposerDictationOptions } from "./chat-composer-dictation-options.ts";
 import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
@@ -40,6 +43,7 @@ import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
 import type { ComposerPrediction } from "./chat-composer-prediction.ts";
+import { createQueuedSubmit } from "./chat-composer-queued-submit.ts";
 import { isSkillMenuVisible, type SkillMenuHost } from "./chat-composer-skill-menu-state.ts";
 import type { SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
 import {
@@ -51,7 +55,7 @@ import {
   markComposerInputIntent,
   suppressStaleSubmittedDraftReplay,
 } from "./chat-composer-state.ts";
-import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import type { ChatComposerProps } from "./chat-composer-types.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
 
 registerChatGoalsEnglish();
@@ -76,7 +80,7 @@ export function createChatComposerContext(
   state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canCompose ?? props.canSend;
   const isBusy = props.sending || streaming;
-  const canAbort = Boolean(props.canAbort && props.onAbort);
+  const canAbort = Boolean(props.canAbort);
   const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
   const submittedProgress = props.queue.find((item) =>
     isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
@@ -125,7 +129,11 @@ export function createChatComposerContext(
     }
     state.composerTextarea = nextTextarea;
     if (nextTextarea) {
-      observeTextareaOverflow(nextTextarea, () => props.getTranscriptElement?.() ?? null);
+      observeTextareaOverflow(
+        nextTextarea,
+        () => props.getTranscriptElement?.() ?? null,
+        () => state.composerContext,
+      );
       scheduleTextareaHeightAdjustment(nextTextarea);
       if (state.restoreComposerFocus) {
         state.restoreComposerFocus = false;
@@ -204,6 +212,15 @@ export function createChatComposerContext(
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     activateComposerMode: goalComposer.activateCommand,
   };
+  const slashCommand = parseSlashCommand(visibleDraft)?.command;
+  const slashArgsHint =
+    !goalComposer.active &&
+    slashCommand?.args &&
+    !slashCommand.argOptions?.length &&
+    slashMenuHost.resolveArgOptions(slashCommand).length === 0 &&
+    visibleDraft === `/${slashCommand.name} `
+      ? slashCommand.args
+      : undefined;
   const mentionMenuHost: HumanMentionMenuHost = {
     paneId: props.paneId,
     getDraft: skillMenuHost.getDraft,
@@ -227,10 +244,11 @@ export function createChatComposerContext(
   const showComposer =
     !questionPanelProps ||
     questionPanelProps.model.nonBlocking === true ||
+    questionPanelProps.model.requestedBySession !== undefined ||
     questionPanelProps.model.collapsed;
 
-  // Offline text and attachments may enter the persisted reconnect queue, but
-  // slash commands are live controls and must not execute against stale state.
+  // Offline slash commands need live state, except /stop: its send owner captures
+  // an exact-run intent and revalidates authority after reconnect.
   const canSubmitDraft = (draft: string) =>
     props.canSend &&
     (!props.modelRequiredReason ||
@@ -243,7 +261,9 @@ export function createChatComposerContext(
     state.dictation?.locksComposer !== true &&
     !(state.skillMenu.state.skillMenuOpen && state.skillMenu.state.skillCommandRefreshPending) &&
     (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) === 0 &&
-    (props.connected || !draft.trimStart().startsWith("/"));
+    (props.connected ||
+      !draft.trimStart().startsWith("/") ||
+      normalizeLowercaseStringOrEmpty(draft) === "/stop");
 
   const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
     state.emojiMenu.close();
@@ -266,6 +286,14 @@ export function createChatComposerContext(
     }
   };
 
+  const settleSubmittedCommandMenus = () => {
+    if (state.composerDraftScope !== draftScope || (props.getDraft?.() ?? props.draft) !== "") {
+      return;
+    }
+    state.slashMenu.reset();
+    state.skillMenu.reset();
+  };
+
   const submitDraft = (
     draft: string,
     submissionAction?: Event,
@@ -285,9 +313,16 @@ export function createChatComposerContext(
       void goalComposer.submit(submissionAction);
       return;
     }
-    void props.onSend(followUpModeOverride, submissionAction);
+    const completion = props.onSend(followUpModeOverride, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
+    if (completion) {
+      void completion.then(settleSubmittedCommandMenus, () => undefined);
+    } else {
+      settleSubmittedCommandMenus();
+    }
   };
+
+  const queuedSubmit = createQueuedSubmit(props, state, visibleDraft, canSubmitDraft, submitDraft);
 
   const acceptPrediction = () => {
     if (state.composerComposing || !canCompose) {
@@ -306,6 +341,7 @@ export function createChatComposerContext(
     sendShortcut,
     canSubmitDraft,
     submitDraft,
+    queueSubmit: queuedSubmit.queueSubmit,
     showAbortableUi,
     alternateFollowUpMode,
     goalComposer,
@@ -502,8 +538,10 @@ export function createChatComposerContext(
             patchSettings({ composerHoldToRecord: enabled });
           }
         },
-        onOpenTalkSettings: props.onOpenTalkSettings,
-        onOpenDictationSettings: props.onOpenDictationSettings,
+        onOpenTalkSettings: devicePicker.canConfigure ? props.onOpenTalkSettings : undefined,
+        onOpenDictationSettings: devicePicker.canConfigure
+          ? props.onOpenDictationSettings
+          : undefined,
       }
     : undefined;
   const dictationOptions = createComposerDictationOptions(
@@ -608,6 +646,10 @@ export function createChatComposerContext(
     canCompose,
     showAbortableUi,
     visibleDraft,
+    slashArgsHint,
+    submitQueued: queuedSubmit.submitQueued,
+    queuedSubmitDue: queuedSubmit.queuedSubmitDue,
+    flushQueuedSubmit: queuedSubmit.flushQueuedSubmit,
     predictionText: prediction?.text ?? null,
     acceptPrediction,
     dismissPrediction: () => prediction?.dismiss(),
@@ -634,71 +676,5 @@ export function createChatComposerContext(
     skillMenuHost,
     slashMenuHost,
     goalComposer,
-  };
-}
-
-export function createComposerDictationOptions(
-  props: ChatComposerProps,
-  state: ChatComposerState,
-  devicePicker: ComposerMicrophoneOwner,
-  setError: (error: string | null) => void,
-  onTap?: () => void,
-) {
-  return {
-    client: props.gatewayClient ?? null,
-    sessionKey: props.sessionKey,
-    draftKey: composerDraftKey(props),
-    connected: props.connected,
-    enabled: props.composerHoldToRecord !== false,
-    dictationAvailable: devicePicker.dictationStatus === "ready",
-    realtimeTalkActive: props.realtimeTalkActive === true,
-    onCommit: (transcript: string, late?: true) => {
-      const target = state.composerTextarea;
-      const captured = state.dictationSelection;
-      const liveValue = target?.value ?? props.getDraft?.() ?? props.draft;
-      // Stop unlocks the draft. Preserve later edits by using the live caret only
-      // when a delayed final finds that the captured draft has changed.
-      const selection =
-        captured && (!late || captured.value === liveValue)
-          ? captured
-          : {
-              start: target?.selectionStart ?? liveValue.length,
-              end: target?.selectionEnd ?? liveValue.length,
-              value: liveValue,
-            };
-      const insertion = insertComposerDictation(
-        selection.value,
-        transcript,
-        selection.start,
-        selection.end,
-      );
-      if (target) {
-        target.value = insertion.value;
-        adjustTextareaHeight(target);
-      }
-      commitComposerDraft(props, insertion.value);
-      state.dictationSelection = null;
-      queueMicrotask(() => {
-        const textarea = state.composerTextarea;
-        if (!textarea) {
-          return;
-        }
-        textarea.focus({ preventScroll: true });
-        textarea.selectionStart = insertion.caret;
-        textarea.selectionEnd = insertion.caret;
-      });
-    },
-    onError: (
-      message: string,
-      failure: { kind: "interrupted" | "start"; preservesText: boolean },
-    ) => {
-      const recovery =
-        failure.kind === "interrupted" && failure.preservesText
-          ? t("chat.composer.dictationInterruptedRecovery")
-          : t("chat.composer.dictationStartRecovery");
-      setError(`${message} ${recovery}`);
-    },
-    onDictationUnavailable: devicePicker.handleOpen,
-    onTap,
   };
 }

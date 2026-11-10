@@ -4,7 +4,7 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, danger } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
@@ -36,6 +36,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
+import { selectTelegramSenderMediaMessageIds } from "./group-history-window.js";
 import type { TelegramCachedMessageNode, TelegramReplyChainEntry } from "./message-cache-codec.js";
 import type { TelegramResolvedMedia } from "./message-cache-persistence.js";
 import {
@@ -49,7 +50,12 @@ import {
   resolveTelegramPromptMediaPath,
 } from "./prompt-media-path.js";
 
+// The child file logger never reaches stdout, where container operators look.
+const mediaLog = createSubsystemLogger("telegram/media");
+
 const HOUR_MS = 60 * 60_000;
+const SENDER_MEDIA_MAX_AGE_MS = 2 * 60_000;
+const SENDER_MEDIA_LIMIT = 4;
 
 function resolveRetainedTelegramMedia(params: {
   media?: TelegramResolvedMedia;
@@ -96,7 +102,6 @@ export function createTelegramMessagePipeline({
   telegramCfg,
   resolveTelegramGroupConfig,
   processMessage,
-  logger,
 }: RegisterTelegramHandlerParams) {
   const { token } = opts;
   const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
@@ -129,6 +134,7 @@ export function createTelegramMessagePipeline({
     recordMessageResolvedMedia,
     recordReplyMessageResolvedMedia,
     resolveCachedMessageThreadSpec,
+    getCachedMessage,
     buildReplyChainForMessage,
     toReplyChainEntry,
     buildPromptContextForMessage,
@@ -273,7 +279,7 @@ export function createTelegramMessagePipeline({
         return await spooledReplayFinalization;
       }
       const finalization = (async () => {
-        if (result.kind === "completed") {
+        if (result.kind === "completed" || result.kind === "dropped") {
           // Do not cache or settle a durable-adoption failure. Deferred queue
           // ownership retries this callback with the same spool participants.
           const releaseSettlementHolds = beginSpooledReplaySettlementHolds(
@@ -423,10 +429,9 @@ export function createTelegramMessagePipeline({
             recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
             throw err;
           }
-          logger.warn(
-            { chatId: replyCtx.message.chat.id, error: String(err) },
-            "reply media fetch failed",
-          );
+          mediaLog.warn(`reply media fetch failed: ${String(err)}`, {
+            chatId: replyCtx.message.chat.id,
+          });
         }
         return mediaRef;
       };
@@ -501,16 +506,54 @@ export function createTelegramMessagePipeline({
           });
         }
       }
-      const promptContext = await buildPromptContextForMessage(
-        params.ctx,
-        params.msg,
-        replyChainNodes,
-        runtimeCfg,
-        runtimeTelegramCfg,
-        params.options,
-        promptContextMediaByMessageId,
-        params.promptContextMessageSelection,
-      );
+      const buildPromptContext = () =>
+        buildPromptContextForMessage(
+          params.ctx,
+          params.msg,
+          replyChainNodes,
+          runtimeCfg,
+          runtimeTelegramCfg,
+          params.options,
+          promptContextMediaByMessageId,
+          params.promptContextMessageSelection,
+        );
+      const promptContext = await buildPromptContext();
+      // "Photo, then @bot in a separate message": the photo skipped download as
+      // unaddressed group media. Context calls this only after the mention gate.
+      const resolveSenderMedia = async () => {
+        const senderId = params.msg.from?.id;
+        if (senderId == null) {
+          return undefined;
+        }
+        const messageIds = selectTelegramSenderMediaMessageIds({
+          promptContext,
+          senderId: String(senderId),
+          sinceMs: params.msg.date * 1000 - SENDER_MEDIA_MAX_AGE_MS,
+        });
+        const photos = [];
+        for (const messageId of messageIds) {
+          const node = await getCachedMessage(params.msg.chat.id, messageId);
+          const primary = resolveTelegramPrimaryMedia(node?.sourceMessage);
+          if (node && primary?.kind === "image") {
+            photos.push({ messageId, node, fileId: primary.fileRef.file_id });
+          }
+        }
+        const media: TelegramMediaRef[] = [];
+        for (const { messageId, node, fileId } of photos.slice(-SENDER_MEDIA_LIMIT)) {
+          const mediaRef = await hydrateMedia(node.sourceMessage, fileId, node);
+          if (!mediaRef) {
+            continue;
+          }
+          media.push({ ...mediaRef, sourceMessageId: messageId });
+          const promptMediaPath = mediaRef.path
+            ? resolveTelegramPromptMediaPath(mediaRef.path)
+            : undefined;
+          if (promptMediaPath) {
+            promptContextMediaByMessageId.set(messageId, { ...mediaRef, path: promptMediaPath });
+          }
+        }
+        return media.length > 0 ? { media, promptContext: await buildPromptContext() } : undefined;
+      };
       const result = await processMessage({
         ctx: params.ctx,
         allMedia: params.allMedia,
@@ -533,6 +576,7 @@ export function createTelegramMessagePipeline({
         replyMedia,
         replyChain,
         promptContext,
+        ...(params.allMedia.length === 0 && replyMedia.length === 0 ? { resolveSenderMedia } : {}),
       });
       if (spooledReplay) {
         return await finalizeSpooledReplayResult(result);

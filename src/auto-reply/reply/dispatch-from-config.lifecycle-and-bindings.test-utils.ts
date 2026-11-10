@@ -36,6 +36,7 @@ import {
   mockPluginBinding,
   mockPluginBindingClaim,
   mocks,
+  mockSessionStorePath,
   runtimePluginMocks,
   sessionBindingMocks,
   sessionStoreMocks,
@@ -44,6 +45,7 @@ import {
 import * as dispatchHarness from "./dispatch-from-config.test-support.js";
 import {
   type ResolveInboundConversationParams,
+  mockPluginBoundDiscordBinding,
   dispatchReplyFromConfig,
   runWithReplyOperationLifecycleAdmission,
   setNoAbort,
@@ -90,6 +92,25 @@ function mockPendingPluginClaim(params: {
     pluginRoot: "/tmp/test-plugin",
   });
   return (outcome: PluginTargetedInboundClaimOutcome) => resolveClaim?.(outcome);
+}
+
+function createDiagnosticSlackContext() {
+  return buildTestCtx({
+    Provider: "slack",
+    Surface: "slack",
+    SessionKey: "agent:main:main",
+    MessageSid: "msg-1",
+    To: "slack:C123",
+  });
+}
+
+function createPluginBindingData() {
+  return {
+    kind: "codex-app-server-session",
+    version: 1,
+    sessionFile: "/tmp/session.jsonl",
+    workspaceDir: "/workspace/openclaw",
+  };
 }
 
 beforeAll(dispatchHarness.globalBeforeAll0);
@@ -543,13 +564,7 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      SessionKey: "agent:main:main",
-      MessageSid: "msg-1",
-      To: "slack:C123",
-    });
+    const ctx = createDiagnosticSlackContext();
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -589,13 +604,7 @@ describe("dispatchReplyFromConfig", () => {
     };
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      SessionKey: "agent:main:main",
-      MessageSid: "msg-1",
-      To: "slack:C123",
-    });
+    const ctx = createDiagnosticSlackContext();
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -763,21 +772,11 @@ describe("dispatchReplyFromConfig", () => {
       ]),
     );
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -857,16 +856,12 @@ describe("dispatchReplyFromConfig", () => {
       ]),
     );
     mockPluginBindingClaim(undefined, { pluginId: "test-plugin", receiveMessages: false });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-null-rejection",
       targetSessionKey: "plugin-binding:test:null-rejection",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:null-rejection",
-      },
       pluginId: "test-plugin",
       pluginRoot: "/plugins/test-plugin",
+      conversationId: "channel:null-rejection",
     });
     const dispatcher = createDispatcher();
     const ctx = createRoutedTestCtx("discord", "discord:channel:null-rejection", {
@@ -986,7 +981,7 @@ describe("dispatchReplyFromConfig", () => {
               sessionKey,
               sessionId,
               expectedSessionId: sessionId,
-              storePath: "/tmp/mock-sessions.json",
+              storePath: mockSessionStorePath,
               kind: "visible",
               resetTriggered: false,
             })
@@ -1052,9 +1047,9 @@ describe("dispatchReplyFromConfig", () => {
         expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledOnce();
         const operation = dispatchHarness.getSessionControllerOperation(sessionKey);
         expect(operation).toBeDefined();
-        expect(
-          isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-        ).toBe(true);
+        expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+          true,
+        );
         if (existingOperation) {
           expect(operation).toBe(existingOperation);
           existingOperation.complete();
@@ -1063,7 +1058,7 @@ describe("dispatchReplyFromConfig", () => {
         abort.abort(cancellation);
         mutation = externalLifecycleRequest.runInAsyncScope(async () =>
           runSessionMutation({
-            scope: "/tmp/mock-sessions.json",
+            scope: mockSessionStorePath,
             identities: [sessionKey, sessionId],
             kind: "reset",
             policy: "preempt",
@@ -1087,9 +1082,9 @@ describe("dispatchReplyFromConfig", () => {
         });
         expect(cleanupFinished).toBe(false);
         expect(mutationRan).toBe(false);
-        expect(
-          hasSessionControllerQueuedWork("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-        ).toBe(true);
+        expect(hasSessionControllerQueuedWork(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+          true,
+        );
         expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBe(
           existingOperation ? undefined : operation,
         );
@@ -1103,9 +1098,9 @@ describe("dispatchReplyFromConfig", () => {
         await dispatchSettled;
         expect(cleanupFinished).toBe(true);
         expect(mutationRan).toBe(true);
-        expect(
-          isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-        ).toBe(false);
+        expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+          false,
+        );
         expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBeUndefined();
         expect(dispatchResult).toHaveBeenCalledOnce();
         expect(dispatchFailure).not.toHaveBeenCalled();
@@ -1157,19 +1152,17 @@ describe("dispatchReplyFromConfig", () => {
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledOnce();
     });
     expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBeDefined();
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
-      true,
-    );
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(true);
 
     let mutationRan = false;
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
         await runSessionMutation({
-          scope: "/tmp/mock-sessions.json",
+          scope: mockSessionStorePath,
           identities: [sessionKey, sessionId],
           prepare: async () => {
             await interruptSessionControllerEffects({
-              scope: "/tmp/mock-sessions.json",
+              scope: mockSessionStorePath,
               identities: [sessionKey, sessionId],
             });
           },
@@ -1213,7 +1206,7 @@ describe("dispatchReplyFromConfig", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       kind: "visible",
       resetTriggered: false,
     });
@@ -1243,9 +1236,7 @@ describe("dispatchReplyFromConfig", () => {
     await vi.waitFor(() => {
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledOnce();
     });
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
-      true,
-    );
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(true);
 
     existingOperation.complete();
     expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBeUndefined();
@@ -1255,7 +1246,7 @@ describe("dispatchReplyFromConfig", () => {
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
         await runSessionMutation({
-          scope: "/tmp/mock-sessions.json",
+          scope: mockSessionStorePath,
           identities: [sessionKey, sessionId],
           kind: "reset",
           policy: "preempt",
@@ -1304,7 +1295,7 @@ describe("dispatchReplyFromConfig", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       kind: "visible",
       resetTriggered: false,
     });
@@ -1335,11 +1326,11 @@ describe("dispatchReplyFromConfig", () => {
     let mutationRan = false;
     const mutation = runWithReplyOperationLifecycleAdmission(ownerOperation, async () =>
       runSessionMutation({
-        scope: "/tmp/mock-sessions.json",
+        scope: mockSessionStorePath,
         identities: [sessionKey, sessionId],
         prepare: async () => {
           await interruptSessionControllerEffects({
-            scope: "/tmp/mock-sessions.json",
+            scope: mockSessionStorePath,
             identities: [sessionKey, sessionId],
           });
         },
@@ -1375,16 +1366,12 @@ describe("dispatchReplyFromConfig", () => {
       },
       { pluginLoaded: false, receiveMessages: false },
     );
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-interrupted-fallback",
       targetSessionKey: "plugin-binding:test:interrupted-fallback",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:interrupted-fallback",
-      },
       pluginId: "missing-plugin",
       pluginRoot: "/tmp/missing-plugin",
+      conversationId: "channel:interrupted-fallback",
     });
     const sessionKey = "agent:main:discord:channel:interrupted-fallback";
     const sessionId = "interrupted-fallback-session";
@@ -1426,11 +1413,11 @@ describe("dispatchReplyFromConfig", () => {
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
         await runSessionMutation({
-          scope: "/tmp/mock-sessions.json",
+          scope: mockSessionStorePath,
           identities: [sessionKey, sessionId],
           prepare: async () => {
             await interruptSessionControllerEffects({
-              scope: "/tmp/mock-sessions.json",
+              scope: mockSessionStorePath,
               identities: [sessionKey, sessionId],
             });
           },
@@ -1517,12 +1504,7 @@ describe("dispatchReplyFromConfig", () => {
         conversationId: "chat:abc",
       },
       pluginRoot: "/plugins/openclaw-codex-app-server",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -1768,21 +1750,11 @@ describe("dispatchReplyFromConfig", () => {
       status: "handled",
       result: { handled: true, reply: { text: "should not send" } },
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-aborted-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/workspace/openclaw-app-server",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const abortController = new AbortController();
     abortController.abort();
@@ -1829,22 +1801,12 @@ describe("dispatchReplyFromConfig", () => {
       ),
     ).toEqual({ ok: true });
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-command-escape-1",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       detachHint: "/codex detach",
-      data: {
-        kind: "codex-app-server-session",
-        version: 1,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/workspace/openclaw",
-      },
+      data: createPluginBindingData(),
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -1883,14 +1845,9 @@ describe("dispatchReplyFromConfig", () => {
   it("keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin", async () => {
     setNoAbort();
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-command-unknown-slash",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
     });
     const cfg = emptyConfig;

@@ -32,6 +32,7 @@ afterEach(() => {
 
 function previousVersionState(hasLedger: boolean) {
   const root = dirs.make("update-admission-schema-");
+  vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "1");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
   vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
@@ -79,7 +80,7 @@ it.each([true, false])("admits old state (dryRun/existing ledger: %s)", async (d
     expect(f.snapshot()).toEqual(before);
   };
   assertMigrationBlocked();
-  const run = await admitUpdateCommandRun({ opts: { dryRun }, root: f.root });
+  const run = await admitUpdateCommandRun({ opts: { dryRun }, root: f.root, env: f.env });
   ledger.recordUpdateRunPhase(run.runId, "validating", {}, { env: run.env });
   expect(ledger.getUpdateRun(run.runId, { env: run.env })).toMatchObject({
     status: "running",

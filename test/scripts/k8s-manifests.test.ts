@@ -1,6 +1,19 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
+import { tempWorkspaceSync } from "@openclaw/fs-safe/temp";
+import { afterEach, expect, it } from "vitest";
 import { isMap, isSeq, parseDocument } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const directory = "scripts/k8s/manifests";
 const read = (name: string) => parseDocument(readFileSync(`${directory}/${name}.yaml`, "utf8"));
@@ -79,3 +92,53 @@ it("keeps credentials secret-backed and state writable under the read-only gatew
     agents: { defaults: { workspace: "~/.openclaw/workspace" } },
   });
 });
+
+it.skipIf(process.platform === "win32")(
+  "admits workspaces through the initialized /tmp mount",
+  () => {
+    const root = tempDirs.make("openclaw-k8s-tmp-");
+    const volume = path.join(root, "volume");
+    const home = path.join(root, "state");
+    mkdirSync(volume);
+    mkdirSync(path.join(home, "workspace"), { recursive: true });
+    writeFileSync(path.join(home, "openclaw.json"), "{}");
+    writeFileSync(path.join(home, "workspace", "AGENTS.md"), "fixture");
+    // A disk-backed emptyDir with fsGroup is writable but lacks sticky protection.
+    chmodSync(volume, 0o2777);
+    mkdirSync(path.join(volume, "openclaw"), { mode: 0o700 });
+    expect(() =>
+      tempWorkspaceSync({ rootDir: path.join(volume, "openclaw"), prefix: "probe-" }),
+    ).toThrow(expect.objectContaining({ code: "insecure-permissions" }));
+    expect(named(pod.get("volumes"), "tmp-volume").get("emptyDir")).toBeDefined();
+    const init = named(pod.get("initContainers"), "init-config");
+    expect(init.getIn(["securityContext", "runAsUser"])).toBe(
+      gateway.getIn(["securityContext", "runAsUser"]),
+    );
+    const command = init.get("command");
+    if (!isSeq(command)) {
+      throw new Error("Expected an init command");
+    }
+    execFileSync("sh", [
+      "-c",
+      String(command.items[2])
+        .replaceAll("/home/node/.openclaw", home)
+        .replaceAll("/tmp-volume", volume),
+    ]);
+    const tmp = named(gateway.get("volumeMounts"), "tmp-volume");
+    expect(tmp.get("mountPath")).toBe("/tmp");
+    // Moving the subPath mirrors a bind mount: the unsafe volume root is no longer an ancestor.
+    const mounted = path.join(root, "tmp");
+    const subPath = tmp.get("subPath");
+    renameSync(path.join(volume, typeof subPath === "string" ? subPath : ""), mounted);
+    const privateRoot = path.join(mounted, "openclaw");
+    mkdirSync(privateRoot, { recursive: true, mode: 0o700 });
+    const workspace = tempWorkspaceSync({ rootDir: privateRoot, prefix: "probe-" });
+    try {
+      workspace.writeText("digest.md", "observer workspace");
+      expect(workspace.read("digest.md").toString()).toBe("observer workspace");
+    } finally {
+      workspace.cleanup();
+    }
+    expect(named(init.get("volumeMounts"), "tmp-volume").get("mountPath")).toBe("/tmp-volume");
+  },
+);

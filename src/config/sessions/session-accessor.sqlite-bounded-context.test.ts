@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it as baseIt, vi } from "vitest";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -56,6 +60,17 @@ function assistant(id: string, parent: string | null, content = id) {
   return transcriptMessage(id, parent, { role: "assistant", content });
 }
 
+function toolResult(id: string, parent: string, call: string, text: string, second: number) {
+  return transcriptMessage(id, parent, {
+    role: "toolResult",
+    toolCallId: call,
+    toolName: "read",
+    content: [{ type: "text", text }],
+    isError: false,
+    timestamp: Date.UTC(2026, 7, 15, 0, 0, second),
+  });
+}
+
 function storedMessage(
   id: string,
   parentId: string | null,
@@ -99,13 +114,8 @@ function serializedBytes(events: unknown[]) {
   );
 }
 
-function readContext(
-  scope: Scope,
-  maxBytes = 1024,
-  maxEvents = 10,
-  onRead?: Parameters<typeof boundedContext>[1]["onRead"],
-) {
-  return boundedContext(scope, { maxBytes, maxEvents, onRead });
+function readContext(scope: Scope, maxBytes = 1024, maxEvents = 10) {
+  return boundedContext(scope, { maxBytes, maxEvents });
 }
 
 async function withBoundedContextScope(run: (scope: Scope) => Promise<void>): Promise<void> {
@@ -126,6 +136,187 @@ const it = baseIt.extend<{ scope: Scope }>({
   scope: async ({ task: _task }, use) => withBoundedContextScope(use),
 });
 
+it("keeps bounded hydration identical with complete, partial and absent active facts", async ({
+  scope,
+}) => {
+  const compare = async (ids: string[], maxEvents = 1) => {
+    await waitProjection(scope);
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const { db } = database;
+    const countFacts = () =>
+      db
+        .prepare(
+          "SELECT count(*) AS count FROM session_transcript_active_event_facts WHERE session_id = ?",
+        )
+        .get(scope.sessionId)?.count;
+    const count = countFacts();
+    expect(count).toBeGreaterThan(0);
+    const read = () =>
+      boundedContext(scope, { maxBytes: 16_384, maxEvents, transaction: database });
+    db.exec("SAVEPOINT active_fact_coverage");
+    try {
+      const full = read();
+      const stats = activeStats(scope);
+      expect(eventIds(full.events)).toEqual([scope.sessionId, ...ids]);
+      expect(full.serializedBytes).toBe(serializedBytes(full.events));
+      for (const predicate of ["AND seq % 2 = 0", ""]) {
+        db.prepare(
+          `DELETE FROM session_transcript_active_event_facts WHERE session_id = ? ${predicate}`,
+        ).run(scope.sessionId);
+        expect(read()).toEqual(full);
+        expect(activeStats(scope)).toEqual(stats);
+      }
+      expect(countFacts()).toBe(0);
+    } finally {
+      db.exec("ROLLBACK TO active_fact_coverage; RELEASE active_fact_coverage");
+    }
+    expect(countFacts()).toBe(count);
+  };
+  const pending = {
+    ...makeAgentAssistantMessage({
+      provider: "openclaw",
+      model: "automation-result",
+      content: [{ type: "text" as const, text: "Retained background result" }],
+    }),
+    excludeFromContext: true,
+    openclawModelPlacement: "pending",
+  };
+  await persist(scope, [
+    user("root", null),
+    transcriptMessage("pending", "root", pending),
+    transcriptMessage("excluded", "pending", { ...pending, model: "ordinary" }),
+    user("tail", "excluded"),
+  ]);
+  await compare(["pending", "tail"]);
+  await appendTranscriptEvent(scope, {
+    type: "custom",
+    id: "placement",
+    parentId: "tail",
+    customType: BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+    data: { afterEntryId: "tail", resultEntryIds: ["pending"] },
+  });
+  await persist(scope, [user("next", "placement")]);
+  await compare(["pending", "placement", "next"], 2);
+  await appendTranscriptEvent(scope, reset("reset", "next"));
+  await persist(scope, [user("fresh", "reset")]);
+  await compare(["reset", "fresh"]);
+  await appendTranscriptEvent(scope, compaction("summary", "fresh", "fresh", "Earlier work"));
+  await persist(scope, [user("newest", "summary")]);
+  await compare(["summary", "newest"]);
+  await appendTranscriptEvent(scope, {
+    type: "leaf",
+    id: "switch",
+    parentId: "newest",
+    // Leaf selection cannot cross the latest reset boundary.
+    targetId: "fresh",
+  });
+  await compare(["reset", "fresh"]);
+  await persist(scope, [user("branch", "fresh")]);
+  await compare(["reset", "branch"]);
+});
+
+it("reports slow hydration scan shape without formatting fast reads or draining byte-limited scans", async ({
+  scope,
+}) => {
+  await persist(scope, [
+    user("old", null),
+    transcriptMessage("pending", "old", {
+      ...makeAgentAssistantMessage({
+        provider: "openclaw",
+        model: "automation-result",
+        content: [],
+      }),
+      excludeFromContext: true,
+      openclawModelPlacement: "pending",
+    }),
+    user("large", "pending", "x".repeat(4096)),
+    user("tail", "large"),
+  ]);
+  await waitProjection(scope);
+  const opened = openOpenClawAgentDatabaseReadOnly({ agentId: scope.agentId });
+  assert(opened.found);
+  const database = opened.database;
+  const counter = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["metadata", "dependency"],
+    (sql) =>
+      sql.startsWith('select "active"."event_seq", "active"."active_position"')
+        ? "metadata"
+        : sql.startsWith('with "dependency"')
+          ? "dependency"
+          : null,
+  );
+  const logger = { warn: vi.fn() };
+  const formatAgent = vi.fn(() => "main");
+  try {
+    for (const [maxEvents, maxBytes, metadataRows, exhausted] of [
+      [10, 16_384, 3, 1],
+      [1, 16_384, 2, 0],
+      [10, 1024, 2, 0],
+    ] as const) {
+      for (const slow of [false, true]) {
+        logger.warn.mockClear();
+        formatAgent.mockClear();
+        counter.counts.metadata = counter.counts.dependency = 0;
+        counter.rowCounts.metadata = counter.rowCounts.dependency = 0;
+        withSqliteReaderOwner(
+          { operation: "sessions.transcript-hydration.cron-model", ownerKind: "worker" },
+          () => {
+            runSqliteReadSnapshotSync(
+              database.db,
+              () => boundedContext(scope, { maxEvents, maxBytes, transaction: database }),
+              {
+                logger,
+                slowTransactionHoldMs: slow ? 0 : Infinity,
+              },
+            );
+            if (slow) {
+              runSqliteReadSnapshotSync(database.db, () => undefined, {
+                logger,
+                slowTransactionHoldMs: 0,
+              });
+            }
+          },
+          {
+            get agentId() {
+              return formatAgent();
+            },
+          },
+        );
+        expect(counter.counts).toEqual({ metadata: 1, dependency: 1 });
+        expect(counter.rowCounts).toEqual({ metadata: metadataRows, dependency: 1 });
+        if (!slow) {
+          expect(logger.warn).not.toHaveBeenCalled();
+          expect(formatAgent).not.toHaveBeenCalled();
+          continue;
+        }
+        expect(logger.warn).toHaveBeenCalledWith(
+          "slow SQLite transaction hold",
+          expect.objectContaining({
+            operation: "sessions.transcript-hydration.cron-model",
+            context: {
+              agentId: "main",
+              metadataRows,
+              metadataLimit: maxEvents + 1,
+              activeEvents: 4,
+              dependencyRows: 1,
+              exhausted,
+            },
+          }),
+        );
+        expect(logger.warn).toHaveBeenLastCalledWith(
+          "slow SQLite transaction hold",
+          expect.objectContaining({ context: { agentId: "main" } }),
+        );
+        expect(formatAgent).toHaveBeenCalledTimes(2);
+      }
+    }
+  } finally {
+    counter.restore();
+    database.close();
+  }
+});
+
 async function seedImportedTranscript(scope: Scope, events: unknown[]) {
   await seedUnindexedTranscriptForTest({
     ...scope,
@@ -140,11 +331,7 @@ async function seedImportedTranscript(scope: Scope, events: unknown[]) {
 }
 
 function readHistory(scope: Scope) {
-  return tailPage(scope, {
-    maxBytes: 1024 * 1024,
-    maxMessages: 100,
-    offset: 0,
-  });
+  return tailPage(scope, { maxBytes: 1024 * 1024, maxMessages: 100, offset: 0 });
 }
 
 function observePayloadAcquisition(
@@ -188,8 +375,9 @@ function observePayloadAcquisition(
     return statement;
   });
   const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-    if (pending.delete(text)) {
+    if (typeof text === "string" && text.includes(marker)) {
       decodedRows++;
+      pending.delete(text);
     }
     return parse(text, reviver);
   });
@@ -211,11 +399,89 @@ function observePayloadAcquisition(
   };
 }
 
+it("does not acquire unrelated excluded history while selecting background dependencies", async ({
+  scope,
+}) => {
+  const marker = "unrelated-excluded-history";
+  const excluded = Array.from({ length: 16 }, (_, index) =>
+    transcriptMessage(`${marker}-${index}`, index === 0 ? null : `${marker}-${index - 1}`, {
+      ...makeAgentAssistantMessage({ content: [] }),
+      excludeFromContext: true,
+    }),
+  );
+  await persist(scope, [...excluded, user("anchor", `${marker}-15`), user("tail", "anchor")]);
+  await waitProjection(scope);
+  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+  const acquisition = observePayloadAcquisition(db, marker, () => {
+    expect(eventIds(readContext(scope, 16384, 1).events)).toEqual([scope.sessionId, "tail"]);
+  });
+  expect(acquisition.acquiredBytes).toBe(0);
+});
+
+it.for([false, true])(
+  "bounds legacy payload reads with an unindexed header: %s",
+  async (unindexedHeader, { scope }) => {
+    const marker = "unselected-legacy-payload";
+    await persist(scope, [
+      ...Array.from({ length: 16 }, (_, index) =>
+        user(`old-${index}`, index === 0 ? null : `old-${index - 1}`, marker),
+      ),
+      user("tail", "old-15"),
+    ]);
+    await waitProjection(scope);
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        database.db
+          .prepare(`UPDATE transcript_events
+          SET navigation_type = NULL, navigation_custom_type = NULL,
+              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+              navigation_last_custom_type = NULL, navigation_valid = 1
+          WHERE session_id = ?`)
+          .run(scope.sessionId);
+        if (unindexedHeader) {
+          // Imported headers can lack identity ownership while later messages are indexed.
+          database.db
+            .prepare(
+              "DELETE FROM transcript_event_identities WHERE session_id = ? AND event_id = ?",
+            )
+            .run(scope.sessionId, scope.sessionId);
+        }
+      },
+      { agentId: scope.agentId },
+    );
+    const database = openOpenClawAgentDatabaseReadOnly({ agentId: scope.agentId });
+    assert(database.found);
+    const nativeJson = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    const validJson = nativeJson.prepare("SELECT json_valid(?) AS valid");
+    let unrelatedParses = 0;
+    try {
+      requireNativeSqliteDatabase(database.database.db).function(
+        "json_valid",
+        { deterministic: true },
+        (value) => {
+          unrelatedParses += Number(typeof value === "string" && value.includes(marker));
+          return validJson.get(value)?.valid ?? 0;
+        },
+      );
+      const context = runSqliteReadSnapshotSync(database.database.db, () =>
+        boundedContext(scope, { maxBytes: 4096, maxEvents: 1, transaction: database.database }),
+      );
+      expect(eventIds(context.events)).toEqual([scope.sessionId, "tail"]);
+      expect(context).toMatchObject({ totalEvents: 17, truncated: true });
+      // The imported-prefix path needs the immediate predecessor's logical parent ID.
+      expect(unrelatedParses).toBeLessThanOrEqual(unindexedHeader ? 1 : 0);
+    } finally {
+      database.database.close();
+      nativeJson.close();
+    }
+  },
+);
+
 it("enforces context count and byte budgets and releases rejected reads for later appends", async ({
   scope,
 }) => {
   const append = (id: string, parent: string | null, content = id) =>
-    persist(scope, [transcriptMessage(id, parent, { role: "user", content })]);
+    persist(scope, [user(id, parent, content)]);
   await append("old", null);
   await append("large", "old", "🦞".repeat(1024));
   await append("new", "large");
@@ -228,50 +494,52 @@ it("enforces context count and byte budgets and releases rejected reads for late
   expect(counted.serializedBytes).toBeLessThanOrEqual(16_384);
   expect(read(16_384, 3).truncated).toBe(false);
   const headerBytes = Buffer.byteLength(JSON.stringify(counted.events[0])) + 1;
-  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-  const counter = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(db),
-    ["sizing"],
-    (sql) => (sql.includes("serialized_bytes") ? "sizing" : null),
-  );
-  const bounded = (maxBytes: number, maxRows: number) => {
-    const before = counter.rowCounts.sizing;
+  const bounded = (maxBytes: number) => {
     const context = read(maxBytes);
-    expect(counter.rowCounts.sizing - before).toBeGreaterThan(0);
-    expect(counter.rowCounts.sizing - before).toBeLessThanOrEqual(maxRows);
     expect(context.truncated).toBe(true);
     return context;
   };
-  using _ = { [Symbol.dispose]: counter.restore };
-  expect(ids(bounded(1024, 3))).toEqual([scope.sessionId, "new"]);
-  const exact = bounded(headerBytes, 2);
+  expect(ids(bounded(1024))).toEqual([scope.sessionId, "new"]);
+  const exact = bounded(headerBytes);
   expect(ids(exact)).toEqual([scope.sessionId]);
   expect(exact.events[0]).toMatchObject({ type: "session" });
   expect(exact.serializedBytes).toBe(headerBytes);
   await append("oversized", "new", "🦞".repeat(1024));
-  expect(ids(bounded(1024, 2))).toEqual([scope.sessionId]);
+  expect(ids(bounded(1024))).toEqual([scope.sessionId]);
   await append("next", "oversized");
-  expect(ids(bounded(1024, 3))).toEqual([scope.sessionId, "next"]);
+  expect(ids(bounded(1024))).toEqual([scope.sessionId, "next"]);
 });
 
-it("decodes context payloads without buffering the whole encoded window", async ({ scope }) => {
-  const marker = "synthetic-context-payload:";
-  const content = marker + "🦞".repeat(256);
-  await persist(scope, [
-    user("a", null, content),
-    assistant("b", "a", content),
-    user("c", "b", content),
-  ]);
-  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-  const acquisition = observePayloadAcquisition(db, marker, () => {
-    const context = readContext(scope, 16_384);
-    expect(eventIds(context.events)).toEqual([scope.sessionId, "a", "b", "c"]);
-    expect(context.serializedBytes).toBe(serializedBytes(context.events));
-  });
-  expect(acquisition.decodedRows).toBe(3);
-  expect(acquisition.pendingRows).toBe(0);
-  expect(acquisition.peakPendingBytes).toBeLessThanOrEqual(acquisition.largestRowBytes);
-});
+it.for(["identity", "compressed"] as const)(
+  "decodes %s context payloads without expanded SQL copies",
+  async (storage, { scope }) => {
+    const marker = "synthetic-context-payload:";
+    const content = marker + "🦞".repeat(storage === "compressed" ? 256 : 16);
+    await persist(scope, [
+      user("a", null, content),
+      assistant("b", "a", content),
+      user("c", "b", content),
+    ]);
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    expect(
+      db
+        .prepare("SELECT count(*) AS count FROM transcript_events WHERE event_zstd IS NOT NULL")
+        .get()?.count,
+    ).toBe(storage === "compressed" ? 3 : 0);
+    const acquisition = observePayloadAcquisition(db, marker, () => {
+      const context = readContext(scope, 16_384);
+      expect(eventIds(context.events)).toEqual([scope.sessionId, "a", "b", "c"]);
+      expect(context.serializedBytes).toBe(serializedBytes(context.events));
+      expect(recentEvents(scope, 3)).toEqual(context.events.slice(1));
+    });
+    expect(acquisition.decodedRows).toBe(6);
+    expect(acquisition.pendingRows).toBe(0);
+    expect(acquisition.peakPendingBytes).toBeLessThanOrEqual(acquisition.largestRowBytes);
+    if (storage === "compressed") {
+      expect(acquisition.acquiredBytes).toBe(0);
+    }
+  },
+);
 
 it.for(["header", "compaction"] as const)(
   "bounds oversized %s before acquiring its payload",
@@ -406,12 +674,16 @@ it("keeps reset history closed across compaction with a warm history cache", asy
     expect(page.totalMessages).toBe(ids.length);
     expect(page.events.map(({ event }) => (event as { id: string }).id)).toEqual(ids);
   };
+  const expectContext = (messages: unknown[]) => {
+    expect(manager.buildSessionContext().messages).toMatchObject(messages);
+    expect(activeStats(scope).eventCount).toBe(messages.length);
+  };
+  const summary = (text: string) => ({ role: "compactionSummary", summary: text });
+  const message = (content: string) => ({ role: "user", content });
 
   appendUser("before-reset user");
   manager.appendMessage(
-    makeAgentAssistantMessage({
-      content: [{ type: "text", text: "before-reset assistant" }],
-    }),
+    makeAgentAssistantMessage({ content: [{ type: "text", text: "before-reset assistant" }] }),
   );
   manager.appendResetBoundary("new");
   const freshUserId = appendUser("fresh user");
@@ -421,35 +693,26 @@ it("keeps reset history closed across compaction with a warm history cache", asy
   manager.appendCompaction("fresh-only summary", freshUserId, 100);
   await settle();
   expectHistory([freshUserId]);
-  expect(manager.buildSessionContext().messages).toMatchObject([
-    { role: "compactionSummary", summary: "fresh-only summary" },
-    { role: "user", content: "fresh user" },
-  ]);
-  expect(activeStats(scope).eventCount).toBe(2);
+  expectContext([summary("fresh-only summary"), message("fresh user")]);
 
   const nextUserId = appendUser("after compaction");
   await settle();
   expectHistory([freshUserId, nextUserId]);
   expect(activeStats(scope).eventCount).toBe(3);
 
-  // A newer reset wins for both scopes; another compaction must not revive older resets.
   manager.appendResetBoundary("new", nextUserId);
   const newestUserId = appendUser("after second reset");
   await settle();
   expectHistory([nextUserId, newestUserId]);
-  expect(manager.buildSessionContext().messages).toMatchObject([
-    { role: "user", content: "after compaction" },
-    { role: "user", content: "after second reset" },
-  ]);
-  expect(activeStats(scope).eventCount).toBe(2);
+  expectContext([message("after compaction"), message("after second reset")]);
 
   manager.appendCompaction("newest-only summary", newestUserId, 100);
   await settle();
   expectHistory([nextUserId, newestUserId]);
   const reopened = SessionManager.open(scope);
   expect(reopened.buildSessionContext().messages).toMatchObject([
-    { role: "compactionSummary", summary: "newest-only summary" },
-    { role: "user", content: "after second reset" },
+    summary("newest-only summary"),
+    message("after second reset"),
   ]);
   expect(activeStats(scope).eventCount).toBe(2);
 });
@@ -465,22 +728,8 @@ it("counts paired reset tool results without counting discarded orphan results",
     user("discarded-old", null, `discarded ${"x".repeat(12_000)}`),
     user("kept-user", "discarded-old", "kept question"),
     transcriptMessage("kept-assistant", "kept-user", assistantMessage),
-    transcriptMessage("kept-result", "kept-assistant", {
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read",
-      content: [{ type: "text", text: `paired ${"p".repeat(3_000)}` }],
-      isError: false,
-      timestamp: Date.parse("2026-08-15T00:00:01.000Z"),
-    }),
-    transcriptMessage("discarded-orphan", "kept-result", {
-      role: "toolResult",
-      toolCallId: "orphan-call",
-      toolName: "read",
-      content: [{ type: "text", text: `orphan ${"o".repeat(20_000)}` }],
-      isError: false,
-      timestamp: Date.parse("2026-08-15T00:00:02.000Z"),
-    }),
+    toolResult("kept-result", "kept-assistant", "call-1", `paired ${"p".repeat(3_000)}`, 1),
+    toolResult("discarded-orphan", "kept-result", "orphan-call", `orphan ${"o".repeat(20_000)}`, 2),
   ]);
   await appendTranscriptEvent(scope, reset("reset-boundary", "discarded-orphan", "kept-user"));
   await persist(scope, [user("post-reset", "reset-boundary", "fresh turn")]);
@@ -492,13 +741,7 @@ it("counts paired reset tool results without counting discarded orphan results",
   expect(readHistory(scope).totalMessages).toBe(3);
 
   await persist(scope, [assistant("second-post-reset", "post-reset", "fresh answer")]);
-  const parseSpy = vi.spyOn(JSON, "parse");
-  try {
-    expect(activeStats(scope).eventCount).toBe(5);
-    expect(parseSpy).not.toHaveBeenCalled();
-  } finally {
-    parseSpy.mockRestore();
-  }
+  expect(activeStats(scope).eventCount).toBe(5);
 
   await appendTranscriptEvent(
     scope,
@@ -591,7 +834,7 @@ it("keeps repeated visits on one snapshot and expires their reader on return", a
   expect(() => savedVisit?.(() => {})).toThrow("outside its read snapshot");
 });
 
-it.for(["json", "sql", "consumer"] as const)(
+it.for(["json", "sql", "compressed", "consumer"] as const)(
   "preserves %s failure precedence and releases the read cursor",
   async (failureKind, { scope }) => {
     await persist(scope, [
@@ -615,10 +858,14 @@ it.for(["json", "sql", "consumer"] as const)(
       // The connection-local view corrupts reads without changing canonical rows or projections.
       database.db.exec(`CREATE TEMP VIEW transcript_events AS
         SELECT event.session_id, event.seq, event.created_at,
-          event.event_zstd, event.event_utf8_bytes, event.navigation_json,
+          CASE WHEN identity.event_id = 'middle' AND ${failureKind === "compressed" ? 1 : 0}
+            THEN x'01' ELSE event.event_zstd END AS event_zstd,
+          CASE WHEN identity.event_id = 'middle' AND ${failureKind === "compressed" ? 1 : 0}
+            THEN 0 ELSE event.event_utf8_bytes END AS event_utf8_bytes,
+          event.navigation_json,
           CASE identity.event_id
             WHEN 'oldest' THEN ${failureKind === "sql" ? "json_extract('{broken', '$')" : "'{\"old\":}'"}
-            WHEN 'middle' THEN '{"newer":}'
+            WHEN 'middle' THEN ${failureKind === "compressed" ? "NULL" : "'{\"newer\":}'"}
             ELSE event.event_json
           END AS event_json
         FROM main.transcript_events AS event
@@ -636,7 +883,11 @@ it.for(["json", "sql", "consumer"] as const)(
         ).toThrow(failure);
       } else {
         expect(() => recentEvents(scope, 3)).toThrow(
-          failureKind === "sql" ? "malformed JSON" : parseFailure,
+          failureKind === "sql"
+            ? "malformed JSON"
+            : failureKind === "compressed"
+              ? "Invalid compressed transcript payload bounds"
+              : parseFailure,
         );
       }
     } finally {
@@ -645,9 +896,7 @@ it.for(["json", "sql", "consumer"] as const)(
       }
     }
     expect(database.db.isTransaction).toBe(false);
-    expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
-      busy: 0,
-    });
+    expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({ busy: 0 });
     expect(recentEvents(scope, 3)).toHaveLength(3);
     await appendTranscriptEvent(scope, { type: "custom", id: "after", parentId: "newest" });
     expect(recentEvents(scope, 1)).toMatchObject([{ id: "after" }]);

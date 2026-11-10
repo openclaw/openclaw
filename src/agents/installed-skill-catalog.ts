@@ -1,16 +1,23 @@
+import { isUtf8 } from "node:buffer";
+import type { Root } from "@openclaw/fs-safe/root";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
 import type { SkillInstructionResult } from "./skill-instruction-result.js";
-import { getTextLexicalIndex } from "./tool-search-index.js";
+import { getTextLexicalIndex, prepareTextLexicalDocument } from "./tool-search-index.js";
 import { scoreLexical, tokenizeDocument } from "./tool-search-ranking.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type InstalledSkill = CodeModeSkill & {
+  /** Published content generation; projections preserve it, never read authority. */
+  catalogRevision?: string;
   /** Prompt-listed instructions retain the shipped Code Mode whole-read contract. */
   promptListed?: boolean;
   assertCurrent?: () => void;
+  /** Only the local placement owner may grant access to this pinned skill directory. */
+  resourceRoot?: Promise<Root>;
   /** The owner must bound I/O before allocating the returned content. */
   readSearchContent?: (maxBytes: number, signal?: AbortSignal) => Promise<string>;
 };
@@ -24,6 +31,48 @@ const MAX_BODY_SKILLS = 1_024;
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_INDEX_BODY_BYTES = 4 * 1024 * 1024;
 const READ_CONCURRENCY = 4;
+
+type SearchView = {
+  key: string;
+  bytes: number;
+  metadata?: ReturnType<typeof getTextLexicalIndex>;
+  bodies: NonNullable<Parameters<typeof getTextLexicalIndex>[1]>;
+};
+const searchViews = new WeakMap<readonly InstalledSkill[], SearchView>();
+const catalogViews = new LruCache<SearchView>(4, {
+  maxBytes: 64 * 1024 * 1024,
+  sizeOf: (view) => view.bytes,
+});
+
+function getSearchView(skills: readonly InstalledSkill[]) {
+  const cached = searchViews.get(skills);
+  if (cached) {
+    return cached;
+  }
+  if (skills.some((skill) => !skill.catalogRevision)) {
+    return undefined;
+  }
+  const key = prepareTextLexicalDocument(
+    JSON.stringify(skills.map((skill) => [skill.catalogRevision, skill.name, skill.description])),
+  ).revision;
+  let view = catalogViews.get(key);
+  if (!view) {
+    view = { key, bytes: 128 + key.length * 2, bodies: {} };
+    catalogViews.set(key, view);
+  }
+  searchViews.set(skills, view);
+  return view;
+}
+
+type SearchBody = {
+  document: ReturnType<typeof prepareTextLexicalDocument>;
+  truncated: boolean;
+};
+// Completed file revisions only; live path admission still happens on every read.
+const localBodies = new LruCache<{ body: SearchBody; bytes: number }>(MAX_BODY_SKILLS, {
+  maxBytes: MAX_INDEX_BODY_BYTES,
+  sizeOf: (entry) => entry.bytes,
+});
 
 function assertCatalogCurrent(skills: readonly InstalledSkill[], signal?: AbortSignal) {
   signal?.throwIfAborted();
@@ -50,7 +99,7 @@ async function prepareBodyView(
     MAX_BODY_BYTES,
     Math.floor(MAX_INDEX_BODY_BYTES / Math.max(1, selected.length)),
   );
-  const documents: Array<{ value: InstalledSkill; content: string }> = [];
+  const documents: Array<{ value: InstalledSkill; document: SearchBody["document"] }> = [];
   let truncatedBodies = 0;
   for (let offset = 0; offset < selected.length; offset += READ_CONCURRENCY) {
     const batch = await Promise.allSettled(
@@ -61,7 +110,7 @@ async function prepareBodyView(
         try {
           const body = await readSearchBody(skill, bodyBytes, signal);
           truncatedBodies += body?.truncated ? 1 : 0;
-          return body && { value: skill, content: body.content };
+          return body && { value: skill, document: body.document };
         } catch {
           // Unreadable bodies retain metadata.
           return undefined;
@@ -86,7 +135,11 @@ async function prepareBodyView(
   assertCatalogCurrent(skills, signal);
   assertBodyReadable(canReadInstructions);
   return {
-    bodies: getTextLexicalIndex(documents.map(({ content }) => content)),
+    // File/reader admission above confirms the bytes before reusing any postings.
+    bodies: getTextLexicalIndex(
+      documents.map(({ document }) => document),
+      searchViews.get(skills)?.bodies,
+    ),
     skills: documents.map(({ value }) => value),
     coverage: {
       bodyIndexed: documents.length,
@@ -96,14 +149,28 @@ async function prepareBodyView(
   };
 }
 
-async function readSearchBody(skill: InstalledSkill, maxBytes: number, signal?: AbortSignal) {
+async function readSearchBody(
+  skill: InstalledSkill,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<SearchBody | undefined> {
   const inline = skill.source.readContent;
   if (typeof inline === "string") {
     const prefix = inline.slice(0, maxBytes);
-    const bytes = Buffer.from(prefix);
+    // Keep UTF-8 replacement semantics for malformed or byte-truncated text.
+    const bytes =
+      prefix.isWellFormed() && Buffer.byteLength(prefix) <= maxBytes
+        ? undefined
+        : Buffer.from(prefix);
+    const text = bytes ? bytes.subarray(0, maxBytes).toString("utf8") : prefix;
     return {
-      content: bytes.subarray(0, maxBytes).toString("utf8"),
-      truncated: prefix.length < inline.length || bytes.length > maxBytes,
+      document: skill.catalogRevision
+        ? {
+            text,
+            revision: `skill:${JSON.stringify([skill.catalogRevision, maxBytes])}`,
+          }
+        : prepareTextLexicalDocument(text),
+      truncated: prefix.length < inline.length || (bytes !== undefined && bytes.length > maxBytes),
     };
   }
   if (skill.readSearchContent) {
@@ -111,7 +178,7 @@ async function readSearchBody(skill: InstalledSkill, maxBytes: number, signal?: 
     if (Buffer.byteLength(content) > maxBytes) {
       throw new Error("Skill search reader exceeded its byte budget.");
     }
-    return { content, truncated: false };
+    return { document: prepareTextLexicalDocument(content), truncated: false };
   }
   // An opaque reader is not permission to read an ambient host path, nor a
   // guarantee that a whole-resource read is bounded enough for catalog search.
@@ -120,6 +187,20 @@ async function readSearchBody(skill: InstalledSkill, maxBytes: number, signal?: 
   }
   const opened = await openLocalFileSafely({ filePath: skill.source.filePath });
   try {
+    const { stat, exactIdentity } = opened;
+    const revision = JSON.stringify([
+      opened.realPath,
+      String(exactIdentity.dev),
+      String(exactIdentity.ino),
+      stat.size,
+      stat.mtimeMs,
+      stat.ctimeMs,
+      maxBytes,
+    ]);
+    const cached = localBodies.get(revision);
+    if (cached) {
+      return cached.body;
+    }
     // One extra byte detects truncation without reading the rest of the file.
     const buffer = Buffer.alloc(maxBytes + 1);
     let total = 0;
@@ -131,10 +212,17 @@ async function readSearchBody(skill: InstalledSkill, maxBytes: number, signal?: 
       }
       total += bytesRead;
     }
-    return {
-      content: buffer.subarray(0, Math.min(total, maxBytes)).toString("utf8"),
+    const body = {
+      document: prepareTextLexicalDocument(
+        buffer.subarray(0, Math.min(total, maxBytes)).toString("utf8"),
+      ),
       truncated: total > maxBytes,
     };
+    localBodies.set(revision, {
+      body,
+      bytes: body.document.text.length * 2 + revision.length * 2 + 256,
+    });
+    return body;
   } finally {
     await opened.handle.close();
   }
@@ -165,6 +253,7 @@ export async function searchInstalledSkills(
     throw new ToolInputError(`limit must be an integer between 1 and ${MAX_RESULTS}.`);
   }
   assertCatalogCurrent(skills, signal);
+  const view = getSearchView(skills);
   const includeBodies = canReadInstructions();
   let index: Awaited<ReturnType<typeof prepareBodyView>> | void = undefined;
   if (includeBodies) {
@@ -189,10 +278,21 @@ export async function searchInstalledSkills(
   // Tool-intent expansions (web, cron, etc.) do not belong to skill matching.
   const terms = [...new Set(tokenizeDocument(needle))].map((term) => ({ term, weight: 1 }));
   const scores = new Map<InstalledSkill, number>();
-  for (const { value, score } of scoreLexical(
-    getTextLexicalIndex(skills.map((skill) => `${skill.name} ${skill.description}`)),
-    terms,
-  )) {
+  const metadata =
+    view?.metadata ??
+    getTextLexicalIndex(skills.map((skill) => `${skill.name} ${skill.description}`));
+  if (view) {
+    view.metadata = metadata;
+    // Remove the old charge before changing it; active runs may outlive idle eviction.
+    catalogViews.delete(view.key);
+    view.bytes =
+      128 +
+      (view.key.length + (view.bodies.revision?.length ?? 0)) * 2 +
+      metadata.bytes +
+      (view.bodies.index?.bytes ?? 0);
+    catalogViews.set(view.key, view);
+  }
+  for (const { value, score } of scoreLexical(metadata, terms)) {
     scores.set(skills[value]!, score * 2);
   }
   if (includeBodies && index) {
@@ -248,6 +348,7 @@ export async function readInstalledSkill(
   skills: readonly InstalledSkill[],
   name: string,
   signal?: AbortSignal,
+  relativePath?: string,
 ): Promise<SkillInstructionResult> {
   signal?.throwIfAborted();
   const skill = skills.find((entry) => entry.name === name);
@@ -257,18 +358,48 @@ export async function readInstalledSkill(
     );
   }
   skill.assertCurrent?.();
-  const content =
-    !skill.promptListed && typeof skill.source.readContent !== "string" && !skill.reader
-      ? (
-          await readLocalFileSafely({
-            filePath: skill.source.filePath,
-            maxBytes: MAX_SKILL_INSTRUCTION_BYTES,
-          })
-        ).buffer.toString("utf8")
-      : await readCodeModeSkill(skill, signal);
+  let content: string;
+  if (relativePath !== undefined) {
+    if (
+      !relativePath ||
+      relativePath.split("/").includes("..") ||
+      /[\\\0]|^(?:\/|~(?:\/|$)|[a-z]:)/iu.test(relativePath)
+    ) {
+      throw new ToolInputError("relativePath must stay inside the skill directory.");
+    }
+    if (!skill.resourceRoot) {
+      throw new ToolInputError("This placement is instruction-only; omit relativePath.");
+    }
+    const root = await skill.resourceRoot;
+    signal?.throwIfAborted();
+    skill.assertCurrent?.();
+    const { buffer } = await root.read(relativePath, {
+      maxBytes: MAX_SKILL_INSTRUCTION_BYTES,
+      symlinks: "reject",
+      hardlinks: "reject",
+    });
+    if (buffer.includes(0) || !isUtf8(buffer)) {
+      throw new ToolInputError("Skill companions must be UTF-8 text without NUL bytes.");
+    }
+    content = buffer.toString("utf8");
+  } else {
+    content =
+      !skill.promptListed && typeof skill.source.readContent !== "string" && !skill.reader
+        ? (
+            await readLocalFileSafely({
+              filePath: skill.source.filePath,
+              maxBytes: MAX_SKILL_INSTRUCTION_BYTES,
+            })
+          ).buffer.toString("utf8")
+        : await readCodeModeSkill(skill, signal);
+  }
   signal?.throwIfAborted();
   skill.assertCurrent?.();
-  if (!skill.promptListed && Buffer.byteLength(content, "utf8") > MAX_SKILL_INSTRUCTION_BYTES) {
+  if (
+    relativePath === undefined &&
+    !skill.promptListed &&
+    Buffer.byteLength(content, "utf8") > MAX_SKILL_INSTRUCTION_BYTES
+  ) {
     throw new ToolInputError(
       `Skill ${JSON.stringify(name)} exceeds the ${MAX_SKILL_INSTRUCTION_BYTES}-byte instruction limit.`,
     );
@@ -276,6 +407,7 @@ export async function readInstalledSkill(
   return {
     name: skill.name,
     location: skill.location,
+    ...(relativePath !== undefined ? { relativePath } : {}),
     ...(skill.locationNote ? { locationNote: skill.locationNote } : {}),
     content,
   };

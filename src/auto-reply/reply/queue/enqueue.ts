@@ -2,7 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isRequiredReplyExpectation } from "../../../agents/reply-completion.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
-import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
+import {
+  diagnosticLogger,
+  logMessageQueuedWithBacklogPolicy,
+} from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { settleSessionControllerSourceInjectionOrder } from "../../../sessions/session-controller.mailbox-source.js";
@@ -14,13 +17,18 @@ import {
 } from "../../../sessions/session-controller.mailbox.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { applyQueueDropPolicy, countPendingQueueItems } from "../../../utils/queue-helpers.js";
+import { preserveAmbientOverflowContext } from "./ambient-context.js";
 import {
   createOverflowSummaryRetrySource,
   resolveFollowupAuthorizationKey,
   resolveFollowupDeliveryStorageKey,
 } from "./delivery-context.js";
 import { dropAbortedFollowups, rememberFollowupDrainCallback } from "./drain.js";
-import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./lifecycle.js";
+import {
+  admitFollowupRunLifecycle,
+  completeFollowupRunLifecycle,
+  markFollowupRunEnqueued,
+} from "./lifecycle.js";
 import {
   followupSourceRunners,
   getExistingFollowupQueue,
@@ -132,10 +140,15 @@ export function enqueueFollowupRun(
       !deferOverflow &&
       queue.dropPolicy === "new" &&
       queue.cap > 0 &&
-      countPendingQueueItems(queue.items, queue.inFlight) - supersededGoals.length >= queue.cap
+      countPendingQueueItems(queue.items, queue.inFlight) - supersededGoals.length >= queue.cap &&
+      (isDiscardableRoomEvent(run) ||
+        !queue.items.some((item) => !queue.inFlight.has(item) && isDiscardableRoomEvent(item)))
     ) {
-      run.onQueueDisposition?.("queue-cap-new");
-      completeFollowupRunLifecycle(run);
+      if (isDiscardableRoomEvent(run)) {
+        discardOverflowRoomEvent(run, "queue-cap-new", queue);
+      } else {
+        settleFollowupQueueRefusal(queue, run);
+      }
       return false;
     }
     // Deferred publication wakes Gateway waiters, which must already see the queued phase.
@@ -159,7 +172,7 @@ export function enqueueFollowupRun(
     }
     const front =
       options.position === "front" && (!deferOverflow || options.steerCandidate === true);
-    queue.lastEnqueuedAt = Date.now();
+    queue.lastEnqueuedAt = performance.now();
     queue.lastRun = run.run;
     run.queueAbortSignal = queue.abortController.signal;
     const queuedInput = run.controllerInput!;
@@ -174,6 +187,7 @@ export function enqueueFollowupRun(
         throw new Error("Dedupe source was not submitted to its mailbox");
       }
       const mailbox = recentInput.mailbox;
+      const inputInstance = recentInput.instance;
       for (const [alias, record] of mailbox.recentSources) {
         if (record.expires <= now) {
           mailbox.recentSources.delete(alias);
@@ -183,18 +197,27 @@ export function enqueueFollowupRun(
         mailbox.recentSources.delete(mailbox.recentSources.keys().next().value!);
       }
       mailbox.recentSources.set(recentMessageIdKey, {
-        input: recentInput,
+        inputInstance,
         expires: now + RECENT_MESSAGE_ID_TTL,
       });
       const lifecycle = run.turnAdoptionLifecycle;
       if (lifecycle) {
         const onAbandoned = lifecycle.onAbandoned;
         lifecycle.onAbandoned = () => {
-          if (mailbox.recentSources.get(recentMessageIdKey)?.input === recentInput) {
+          if (mailbox.recentSources.get(recentMessageIdKey)?.inputInstance === inputInstance) {
             mailbox.recentSources.delete(recentMessageIdKey);
           }
           return onAbandoned?.();
         };
+        const onDropped = lifecycle.onDropped;
+        if (onDropped) {
+          lifecycle.onDropped = (reason) => {
+            if (mailbox.recentSources.get(recentMessageIdKey)?.inputInstance === inputInstance) {
+              mailbox.recentSources.delete(recentMessageIdKey);
+            }
+            return onDropped(reason);
+          };
+        }
       }
     }
     if (runFollowup) {
@@ -239,12 +262,102 @@ export function enqueueFollowupRun(
   }
 }
 
+function settleFollowupQueueRefusal(
+  queue: ReturnType<typeof getFollowupQueue>,
+  run: FollowupRun,
+): void {
+  let protectedPendingCount = 0;
+  for (const item of queue.items) {
+    if (!queue.inFlight.has(item) && item.protectFromQueueOverflow === true) {
+      protectedPendingCount += 1;
+    }
+  }
+  // Protected work can fill the cap even after every evictable source is removed.
+  // That is retryable backpressure under every policy, including drop:new.
+  const reason =
+    queue.dropPolicy === "new" && protectedPendingCount < queue.cap ? "queue-cap-new" : "queue-cap";
+  run.onQueueDisposition?.(reason);
+  completeFollowupRunLifecycle(
+    run,
+    reason === "queue-cap-new" ? { kind: "dropped", reason } : undefined,
+  );
+}
+
+function isDiscardableRoomEvent(run: FollowupRun): boolean {
+  return (
+    run.currentInboundEventKind === "room_event" &&
+    !isRequiredReplyExpectation(run.run.terminalReplyExpectation) &&
+    run.protectFromQueueOverflow !== true
+  );
+}
+
+function discardOverflowRoomEvent(
+  run: FollowupRun,
+  disposition: "queue-cap-old" | "queue-cap-new",
+  queue: ReturnType<typeof getFollowupQueue>,
+  candidates: FollowupRun[] = [],
+): void {
+  const contextPreserved =
+    queue.dropPolicy === "summarize" && preserveAmbientOverflowContext(run, candidates, queue.cap);
+  if (run.controllerInput) {
+    run.controllerInput.payload = "unbound";
+  }
+  run.onQueueDisposition?.(disposition);
+  diagnosticLogger.info("followup queue discarded ambient room event at capacity", {
+    sessionId: run.run.sessionId,
+    disposition,
+    contextPreserved,
+  });
+  // This is a terminal policy decision, not abandonment: reopening durable ingress
+  // would replay the chatter we just shed. Adoption only settles source custody;
+  // no model or tool execution is admitted here.
+  void admitFollowupRunLifecycle(run).then(
+    () => {
+      completeFollowupRunLifecycle(run, "consumed");
+    },
+    (error: unknown) => {
+      completeFollowupRunLifecycle(run);
+      defaultRuntime.error?.(`followup ambient overflow settlement failed: ${String(error)}`);
+    },
+  );
+}
+
 function applyFollowupQueueOverflow(
   queue: ReturnType<typeof getFollowupQueue>,
   run: FollowupRun,
 ): boolean {
+  const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
+  if (queue.cap > 0 && pendingCount >= queue.cap) {
+    const needed = pendingCount - queue.cap + 1;
+    const ambient = queue.items
+      .filter((item) => !queue.inFlight.has(item) && isDiscardableRoomEvent(item))
+      .slice(0, needed);
+    // Ambient input must never displace requests or protected work. Same-class
+    // drop:new keeps its existing meaning; otherwise retain the newest context.
+    if (isDiscardableRoomEvent(run) && (queue.dropPolicy === "new" || ambient.length < needed)) {
+      discardOverflowRoomEvent(
+        run,
+        "queue-cap-new",
+        queue,
+        queue.items.filter((item) => !queue.inFlight.has(item)),
+      );
+      return false;
+    }
+    const survivors = queue.items.filter(
+      (item) => !queue.inFlight.has(item) && !ambient.includes(item),
+    );
+    for (const item of ambient) {
+      discardOverflowRoomEvent(item, "queue-cap-old", queue, [...survivors, run]);
+    }
+  }
   const elidedSummaryLines: string[] = [];
-  const capacity = { ...queue, items: queue.items };
+  // The generic drop policy owns temporary lines; publish only paired mailbox entries.
+  const summarySources = queue.summaryEntries.map(({ source }) => source);
+  const capacity = {
+    ...queue,
+    items: queue.items,
+    summaryLines: queue.summaryEntries.map(({ line }) => line),
+  };
   const shouldEnqueue = applyQueueDropPolicy({
     queue: capacity,
     inFlight: queue.inFlight,
@@ -266,7 +379,7 @@ function applyFollowupQueueOverflow(
             source.controllerInput.payload = "summary";
           }
         }
-        queue.summarySources.push(...dropped);
+        summarySources.push(...dropped);
         return;
       }
       for (const item of dropped) {
@@ -276,16 +389,19 @@ function applyFollowupQueueOverflow(
           item.controllerInput.payload = "unbound";
         }
         item.onQueueDisposition?.("queue-cap-old");
-        completeFollowupRunLifecycle(item);
+        completeFollowupRunLifecycle(item, { kind: "dropped", reason: "queue-cap-old" });
       }
     },
     isProtected: (item) => item.protectFromQueueOverflow === true,
   });
   queue.droppedCount = capacity.droppedCount;
-  queue.summaryLines = capacity.summaryLines;
   if (queue.dropPolicy === "summarize") {
-    const overflow = Math.max(0, queue.summarySources.length - queue.summaryLines.length);
-    const removed = queue.summarySources.splice(0, overflow);
+    const overflow = Math.max(0, summarySources.length - capacity.summaryLines.length);
+    const removed = summarySources.splice(0, overflow);
+    queue.summaryEntries = summarySources.map((source, index) => ({
+      source,
+      line: capacity.summaryLines[index]!,
+    }));
     for (const [index, item] of removed.entries()) {
       const summaryLine = elidedSummaryLines[index];
       if (summaryLine === undefined) {
@@ -300,16 +416,12 @@ function applyFollowupQueueOverflow(
       if (elision?.contextKey !== contextKey) {
         elision = {
           contextKey,
-          count: 0,
-          sources: [],
-          summaryLines: [],
+          entries: [],
           sourceRefs: new Map<FollowupRun, FollowupRun>(),
         };
         queue.summaryElisions.push(elision);
       }
-      elision.sources.push(compactSource);
-      elision.count = elision.sources.length;
-      elision.summaryLines.push(summaryLine);
+      elision.entries.push({ source: compactSource, line: summaryLine });
       elision.sourceRefs.set(item, compactSource);
       if (queue.activeSummarySources.has(item)) {
         queue.activeSummarySources.add(compactSource);
@@ -318,8 +430,7 @@ function applyFollowupQueueOverflow(
     }
   }
   if (!shouldEnqueue) {
-    run.onQueueDisposition?.(queue.dropPolicy === "new" ? "queue-cap-new" : "queue-cap");
-    completeFollowupRunLifecycle(run);
+    settleFollowupQueueRefusal(queue, run);
   }
   return shouldEnqueue;
 }
@@ -418,12 +529,12 @@ export function reserveSteerCandidate(
     const wasClearing = queue.clearing;
     queue.clearing = true;
     try {
-      if (consume || receipt.accepted === true) {
+      if (consume) {
         input.payload = "unbound";
         delete run.protectFromQueueOverflow;
-        completeFollowupRunLifecycle(run, receipt.accepted === true ? "consumed" : disposition);
+        completeFollowupRunLifecycle(run, disposition);
       }
-      if (!consume && receipt.accepted !== true) {
+      if (!consume) {
         // A settled negative handoff explicitly requests queued execution. Merely
         // remembering the steering callback must leave the mailbox dormant.
         queue.dispatchEnabled = true;

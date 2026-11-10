@@ -38,6 +38,8 @@ suite.define(() => {
           heldMethods: ["users.prefs.get"],
           methodResponses: {
             "config.get": configSnapshot(config, "theme-defaults"),
+            // This scenario publishes profile snapshots explicitly through respondProfile.
+            "users.prefs.get": {},
             "users.prefs.set": { status: "ok" },
           },
         });
@@ -94,7 +96,7 @@ suite.define(() => {
           await page.locator(".settings-accent-swatch--custom").getAttribute("class"),
         ).not.toContain("--active");
         expect(await page.locator("#settings-accent-status").textContent()).toContain(
-          "Using theme accent",
+          "Theme default",
         );
         expect(await page.locator("[data-accent-custom]").inputValue()).toMatch(/^#[0-9a-f]{6}$/u);
 
@@ -113,7 +115,7 @@ suite.define(() => {
         await waitForControlUiSettingsTakeover(page);
         await expect.poll(read).toMatchObject(defaults);
         await page.getByRole("radio", { name: "Light", exact: true }).click();
-        await expect.poll(read).toMatchObject({ theme: "absolutely-light", accent: "#a8452a" });
+        await expect.poll(read).toMatchObject({ theme: "absolutely-light", accent: "#cc7d5d" });
 
         for (const field of ["ui", "chat"]) {
           await selectPickerValue(

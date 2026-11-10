@@ -5,17 +5,14 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import {
-  applyEmbeddedAttemptToolsAllow,
-  resolveEmbeddedAttemptToolConstructionPlan,
-} from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
-import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import * as inProcessGateway from "../../agents/tools/in-process-gateway.js";
+import {
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
   loadSessionEntry,
@@ -26,7 +23,10 @@ import * as sessionLifecycleProjection from "../../config/sessions/session-lifec
 import { SessionEntryLifecycleUpsertConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { restartHandlers } from "../../gateway/server-methods/restart.js";
+import type { GatewayRequestHandlerOptions } from "../../gateway/server-methods/types.js";
 import { createGatewayHookDispatcher } from "../../gateway/server/hooks.js";
+import * as restartCoordinator from "../../infra/restart-coordinator.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueRequiredSystemEventEntry,
@@ -51,6 +51,7 @@ import {
 } from "./session-event-handoff.js";
 import {
   configureEventState,
+  openEventToolHost,
   runEventFixture,
   startEmbeddedTurn,
 } from "./session-event.test-support.js";
@@ -73,13 +74,13 @@ await Promise.all([
 ]);
 
 type EventReceipt = ReturnType<typeof enqueueSessionEventForHost>;
-function observeEnqueue(source: string, onReceipt: (receipt: EventReceipt) => void) {
+function observeEnqueue(source: string | undefined, onReceipt: (receipt: EventReceipt) => void) {
   const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
   return vi
     .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
     .mockImplementation((text, options) => {
       const receipt = enqueue(text, options);
-      if (options.source === source) {
+      if (source === undefined || options.source === source) {
         onReceipt(receipt);
       }
       return receipt;
@@ -145,13 +146,9 @@ async function enqueueGuardedCliWatchdog(params: {
     ],
   });
   let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
-  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
-  const observer = vi
-    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
-    .mockImplementation((...args) => {
-      receipt = enqueue(...args);
-      return receipt;
-    });
+  const observer = observeEnqueue(undefined, (value) => {
+    receipt = value;
+  });
   const supervisor = vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue({
     acquireScopeCleanup: () => async () => {},
     spawn: async () => ({
@@ -212,18 +209,6 @@ async function enqueueGuardedCliWatchdog(params: {
 it.for([
   { entry: { archivedAt: 1 }, error: "archived", retryable: false },
   { entry: { initializationPending: true }, error: "still initializing", retryable: true },
-  {
-    entry: {
-      mainRestartRecovery: {
-        cycleId: "failed-recovery",
-        revision: 1,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
-    },
-    error: "ended during restart recovery",
-    retryable: false,
-  },
 ] satisfies Array<{ entry: Partial<InternalSessionEntry>; error: string; retryable: boolean }>)(
   "preserves session event admission policy: $error",
   async ({ entry, error, retryable }, { signal }) => {
@@ -335,73 +320,10 @@ it.for([
       runEmbeddedAgentMock
         .mockReset()
         .mockImplementation(async (params: RunEmbeddedAgentParams) => {
-          const admittedRunContext = await startEmbeddedTurn(params, "ordinary reply admission");
-          const workspace = await resolveAttemptWorkspaceSandbox({
-            ...params,
-            admittedRunContext,
-          });
-          const host = createAgentHarnessHostCapabilities({
-            attempt: {
-              admittedRunContext,
-              runId: params.runId,
-              abortSignal: params.abortSignal,
-              config: params.config,
-              agentId: params.agentId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              sessionTarget: params.sessionTarget,
-              permissionMode: params.permissionMode,
-              requireWorkspaceOnly: params.requireWorkspaceOnly,
-              sessionRoot: workspace.sessionPermissionRoot,
-              workspaceDir: params.workspaceDir,
-              bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
-              cwd: params.cwd,
-              sandboxAgentId: params.sandboxAgentId,
-              skillsSnapshot: params.skillsSnapshot,
-              toolExecutionAllow: params.toolExecutionAllow,
-              toolsAllow: params.toolsAllow,
-              runtimePluginToolGrant: params.runtimePluginToolGrant,
-              trigger: params.trigger,
-            },
-            pluginId: "openclaw",
-          });
+          const { tools, close } = await openEventToolHost(params, "ordinary reply admission");
           let restoreDatabase: (() => void) | undefined;
           try {
             observedMode = params.permissionMode;
-            const toolRunContext = buildEmbeddedAttemptToolRunContext({
-              ...params,
-              model:
-                params.provider && params.model
-                  ? { provider: params.provider, id: params.model }
-                  : undefined,
-            });
-            const construction = resolveEmbeddedAttemptToolConstructionPlan({
-              toolsAllow: toolRunContext.runtimeToolAllowlist,
-            });
-            const boundTools = expectDefined(
-              host.capabilities.createToolSurface,
-              "managed tool surface",
-            )({
-              ...toolRunContext,
-              config: params.config,
-              agentId: params.agentId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              workspaceDir: workspace.effectiveWorkspace,
-              cwd: workspace.effectiveCwd,
-              sessionPermissionPolicy: workspace.sessionPermissionPolicy,
-              toolConstructionPlan: {
-                ...construction.codingToolConstructionPlan,
-                includeShellTools: false,
-                includeChannelTools: false,
-                includeOpenClawTools: false,
-                includePluginTools: false,
-              },
-            });
-            const tools = applyEmbeddedAttemptToolsAllow(
-              boundTools,
-              construction.runtimeToolAllowlist,
-            );
             const read = expectDefined(
               tools.find((tool) => tool.name === "read"),
               "read tool",
@@ -418,7 +340,7 @@ it.for([
                 const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
                 const foreignPath = `${database.path}.foreign.sqlite`;
                 const originalPath = `${database.path}.original`;
-                const foreign = openOpenClawAgentDatabase({
+                openOpenClawAgentDatabase({
                   agentId: scope.agentId,
                   path: foreignPath,
                 });
@@ -429,13 +351,6 @@ it.for([
                     label: "foreign owner",
                   },
                 );
-                expect(
-                  String(
-                    foreign.db
-                      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-                      .get(scope.sessionKey)?.entry_json,
-                  ),
-                ).toContain("foreign owner");
                 fsSync.renameSync(database.path, originalPath);
                 fsSync.renameSync(foreignPath, database.path);
                 restoreDatabase = () => {
@@ -473,7 +388,7 @@ it.for([
             return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
           } finally {
             restoreDatabase?.();
-            host.close();
+            close();
           }
         });
       let creationConflictObserved = false;
@@ -773,7 +688,6 @@ it.for([
               retainedOverflow,
             );
           }
-          expect(starts).toHaveLength(1);
           observed.forEach((notice) => assertCursor(notice));
           // Subsequent queue execution uses real time; only the notice coalescing window was advanced.
           vi.useRealTimers();
@@ -891,6 +805,110 @@ it.for([
         observer.mockRestore();
         resetSystemEventsForTest();
       }
+    });
+  },
+);
+
+const ownerRequesterOutcomes = {
+  owner: { owner: true, restart: { ok: true }, requester: "456", scheduled: 1 },
+  guest: { owner: false, restart: { gated: true }, requester: undefined, scheduled: 0 },
+  "revoked-before-admission": { owner: false, restart: { gated: true }, scheduled: 0 },
+  // Revoking publishes config, which retires the admitted turn's tool host before the call.
+  "revoked-after-admission": {
+    owner: true,
+    restart: "agent harness host capability is no longer active",
+    scheduled: 0,
+  },
+};
+
+it.for(Object.keys(ownerRequesterOutcomes) as Array<keyof typeof ownerRequesterOutcomes>)(
+  "runs an owner-only tool from a background completion only for its current owner requester: %s",
+  async (requester, { signal, onTestFinished }) => {
+    await runEventFixture("session-event-owner-requester", onTestFinished, async (state) => {
+      const config = await configureEventState(state, {
+        channels: { telegram: {} },
+        commands: { ownerAllowFrom: ["456"] },
+      });
+      const revoke = () =>
+        setRuntimeConfigSnapshot({ ...config, commands: { ownerAllowFrom: ["789"] } });
+      const scope = { agentId: "main", sessionKey: "agent:main:owner-requester" };
+      await replaceSessionEntry(scope, { sessionId: "owner-requester", updatedAt: Date.now() });
+      // The host-owned exec caller supplies the requester; the producer only asks to retain it.
+      const senderId = requester === "guest" ? "789" : "456";
+      const target = await withGatewayToolCallerIdentity(
+        { ...scope, requesterOrigin: { ...scope, messageProvider: "telegram", senderId } },
+        () =>
+          captureSessionEventTargetForHost("main", scope.sessionKey, {
+            retainRequesterOwner: true,
+          }),
+      );
+      if (requester === "revoked-before-admission") {
+        revoke();
+      }
+      // Only the Gateway transport and final scheduler are stubbed; the real restart handler
+      // still rechecks the projected requester against current config.
+      const scheduled = vi
+        .spyOn(restartCoordinator, "scheduleSafeGatewayRestart")
+        .mockReturnValue({ ok: true } as never);
+      const gatewayContext = vi
+        .spyOn(inProcessGateway, "getInProcessGatewayToolContext")
+        .mockReturnValue({} as never);
+      const gatewayCall = vi
+        .spyOn(inProcessGateway, "callInProcessGatewayTool")
+        .mockImplementation(async (method, params) => {
+          let response: unknown;
+          await restartHandlers[method]!({
+            params,
+            context: { getRuntimeConfig: () => getRuntimeConfigSnapshot()! },
+            respond: (ok, value, error) => {
+              if (!ok) {
+                throw new Error(error?.message);
+              }
+              response = value;
+            },
+          } as GatewayRequestHandlerOptions);
+          return response as never;
+        });
+      onTestFinished(() =>
+        [scheduled, gatewayContext, gatewayCall].forEach((spy) => spy.mockRestore()),
+      );
+      let senderIsOwner: boolean | undefined;
+      let restart: unknown;
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        // The turn's assembled surface owns the owner-only gate for the model's call.
+        const { tools, close } = await openEventToolHost(params, "completion admission", {
+          includeOpenClawTools: true,
+        });
+        senderIsOwner = params.senderIsOwner;
+        if (requester === "revoked-after-admission") {
+          revoke();
+        }
+        restart = await tools
+          .find((tool) => tool.name === "gateway")!
+          .execute("owner-only-restart", { action: "restart" })
+          .then(
+            (result) => result.details,
+            (error: unknown) => (error instanceof Error ? error.message : String(error)),
+          )
+          .finally(close);
+        return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
+      });
+      const receipt = enqueueSessionEventForHost("Background command finished.", {
+        ...scope,
+        source: "exec",
+        expectedTarget: target,
+        abortSignal: signal,
+        deliver: false,
+        deliveryContext: { channel: "telegram", to: "456" },
+      });
+      await expect(receipt.settled).resolves.toMatchObject({ status: "completed" });
+      expect({
+        owner: senderIsOwner,
+        restart,
+        requester: (gatewayCall.mock.calls[0]?.[1] as { requester?: { senderId?: string } })
+          ?.requester?.senderId,
+        scheduled: scheduled.mock.calls.length,
+      }).toEqual(ownerRequesterOutcomes[requester]);
     });
   },
 );

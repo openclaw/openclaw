@@ -5,6 +5,7 @@ import { registerBoardDocumentEnglish } from "../../../i18n/locales/en-board-doc
 import { registerEnglishCatalog, t } from "../../reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
 import type { BoardWidget } from "../types.ts";
+import "../../../styles/settings.css";
 import "./report.css";
 
 registerEnglishCatalog(registerBoardDocumentEnglish);
@@ -121,7 +122,7 @@ function ReportBlockView(props: { block: ReportBlock }) {
       case "table":
         return (
           <div class="board-report__table">
-            <table>
+            <table class={{ "settings-table--stacked": block.columns.length > 3 }}>
               <Show when={block.title}>
                 <caption>{block.title}</caption>
               </Show>
@@ -134,7 +135,9 @@ function ReportBlockView(props: { block: ReportBlock }) {
                 <For each={block.rows}>
                   {(row) => (
                     <tr>
-                      <For each={row}>{(cell) => <td>{cell}</td>}</For>
+                      <For each={row}>
+                        {(cell, index) => <td data-label={block.columns[index()]}>{cell}</td>}
+                      </For>
                     </tr>
                   )}
                 </For>
@@ -173,13 +176,22 @@ function ReportBlockView(props: { block: ReportBlock }) {
 }
 
 function ReportWidgetContent(props: ReportWidgetProps) {
-  const content = createMemo(() => {
-    try {
-      return { report: parseBoardReport(props.widget?.props) };
-    } catch (error) {
-      return { error };
-    }
-  });
+  const content = createMemo(
+    () => {
+      try {
+        return { report: parseBoardReport(props.widget?.props) };
+      } catch (error) {
+        return { error };
+      }
+    },
+    {
+      // Keep parsed content and focus when only the widget metadata changes.
+      equals: (previous, next) =>
+        previous.report !== undefined &&
+        next.report !== undefined &&
+        JSON.stringify(previous.report) === JSON.stringify(next.report),
+    },
+  );
   return (
     <Show when={content().report} fallback={<BoardWidgetError error={content().error} />}>
       {(report) => (

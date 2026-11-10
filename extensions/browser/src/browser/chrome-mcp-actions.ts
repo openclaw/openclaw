@@ -20,6 +20,69 @@ import {
   type ChromeMcpPinnedTarget,
 } from "./chrome-mcp-routing.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
+import {
+  findValuedSnapshotFields,
+  isSensitiveFieldDescriptor,
+  parseFieldDescriptor,
+  redactSnapshotFieldValue,
+} from "./sensitive-field-values.js";
+
+async function redactChromeMcpSensitiveFieldValues(
+  target: ChromeMcpPinnedTarget,
+  targetId: string,
+  root: ChromeMcpSnapshotNode,
+): Promise<void> {
+  const groups = new Map<string, Array<{ node: ChromeMcpSnapshotNode; uid: string }>>();
+  for (const node of findValuedSnapshotFields(root)) {
+    const ref = node.id;
+    if (!ref) {
+      redactSnapshotFieldValue(node);
+      continue;
+    }
+    const binding = resolveChromeMcpSnapshotRef(target.session, targetId, ref);
+    const documentUid = binding.documentUid;
+    if (!documentUid) {
+      redactSnapshotFieldValue(node);
+      continue;
+    }
+    const group = groups.get(documentUid) ?? [];
+    group.push({ node, uid: binding.uid });
+    groups.set(documentUid, group);
+  }
+
+  for (const [documentUid, group] of groups) {
+    let rawDescriptors: unknown;
+    try {
+      rawDescriptors = extractJsonMessage(
+        await target.callTool("evaluate_script", {
+          pageId: target.pageId,
+          function: `(documentRoot, ...elements) => elements.map((element) => {
+            if (!element || element.nodeType !== 1) return null;
+            return {
+              tagName: element.tagName,
+              type: element.getAttribute("type"),
+              autocomplete: element.getAttribute("autocomplete"),
+            };
+          })`,
+          args: [documentUid, ...group.map(({ uid }) => uid)],
+          waitForStableDom: false,
+        }),
+      );
+    } catch (error) {
+      if (target.session.transport.pid === null) {
+        throw error;
+      }
+      rawDescriptors = null;
+    }
+    const descriptors = Array.isArray(rawDescriptors) ? rawDescriptors : [];
+    for (const [index, { node }] of group.entries()) {
+      const descriptor = parseFieldDescriptor(descriptors[index]);
+      if (!descriptor || isSensitiveFieldDescriptor(descriptor)) {
+        redactSnapshotFieldValue(node);
+      }
+    }
+  }
+}
 
 export async function focusChromeMcpTab(
   profileName: string,
@@ -112,7 +175,9 @@ export async function takeChromeMcpSnapshot(
   return await withChromeMcpTarget(params, async (target) => {
     getChromeMcpRoutingState(target.session).snapshotsByTarget.delete(params.targetId);
     const result = await target.callTool("take_snapshot", { pageId: target.pageId });
-    return registerChromeMcpSnapshot(target.session, params.targetId, result).root;
+    const { root } = registerChromeMcpSnapshot(target.session, params.targetId, result);
+    await redactChromeMcpSensitiveFieldValues(target, params.targetId, root);
+    return root;
   });
 }
 

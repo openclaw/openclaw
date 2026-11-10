@@ -79,31 +79,6 @@ const TAVILY_EXTRACT_MAX_RESULTS = 20;
 const TAVILY_RESULT_URL_MAX_CHARS = 2_048;
 const TAVILY_PUBLISHED_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
-type TavilySearchParams = {
-  cfg?: OpenClawConfig;
-  query: string;
-  searchDepth?: string;
-  topic?: string;
-  maxResults?: number;
-  includeAnswer?: boolean;
-  timeRange?: string;
-  includeDomains?: string[];
-  excludeDomains?: string[];
-  timeoutSeconds?: number;
-  signal?: AbortSignal;
-};
-
-type TavilyExtractParams = {
-  cfg?: OpenClawConfig;
-  urls: string[];
-  query?: string;
-  extractDepth?: string;
-  chunksPerSource?: number;
-  includeImages?: boolean;
-  timeoutSeconds?: number;
-  signal?: AbortSignal;
-};
-
 function normalizeTavilyResultUrl(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > TAVILY_RESULT_URL_MAX_CHARS) {
     return undefined;
@@ -176,9 +151,19 @@ async function postTavilyJson(params: {
   );
 }
 
-export async function runTavilySearch(
-  params: TavilySearchParams,
-): Promise<Record<string, unknown>> {
+export async function runTavilySearch(params: {
+  cfg?: OpenClawConfig;
+  query: string;
+  searchDepth?: string;
+  topic?: string;
+  maxResults?: number;
+  includeAnswer?: boolean;
+  timeRange?: string;
+  includeDomains?: string[];
+  excludeDomains?: string[];
+  timeoutSeconds?: number;
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
   const apiKey = requireTavilyApiKey(params.cfg, "web_search (tavily)");
   const count = resolveIntegerOption(params.maxResults, DEFAULT_SEARCH_COUNT, { min: 1, max: 20 });
@@ -280,9 +265,16 @@ export async function runTavilySearch(
   return result;
 }
 
-export async function runTavilyExtract(
-  params: TavilyExtractParams,
-): Promise<Record<string, unknown>> {
+export async function runTavilyExtract(params: {
+  cfg?: OpenClawConfig;
+  urls: string[];
+  query?: string;
+  extractDepth?: string;
+  chunksPerSource?: number;
+  includeImages?: boolean;
+  timeoutSeconds?: number;
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
   const apiKey = requireTavilyApiKey(params.cfg, "tavily_extract");
   const baseUrl = resolveTavilyBaseUrl(params.cfg);

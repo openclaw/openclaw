@@ -180,19 +180,14 @@ export function registerSessionSandboxMutationTests({
       for (const key of keys) {
         await upsertSessionEntryCore(scope(key), { sessionId: key, updatedAt: 1 });
       }
-      const requestClient = adminClient();
-      let respond = await invoke(
-        "sessions.patchMany",
-        {
-          targets: keys.map((key, index) => ({
-            key,
-            expectedSessionId: key,
-            expectedSandboxMode: index === 0 ? null : "off",
-          })),
-          patch: { sandboxMode: "off" },
-        },
-        requestClient,
-      );
+      let respond = await invoke("sessions.patchMany", {
+        targets: keys.map((key, index) => ({
+          key,
+          expectedSessionId: key,
+          expectedSandboxMode: index === 0 ? null : "off",
+        })),
+        patch: { sandboxMode: "off" },
+      });
       expectAccepted(respond, {
         outcomes: [
           { key: keys[0], ok: true },
@@ -201,14 +196,10 @@ export function registerSessionSandboxMutationTests({
       });
       expect(loadSessionEntry(scope(keys[0]!))?.sandboxMode).toBe("off");
       expect(loadSessionEntry(scope(keys[1]!))).not.toHaveProperty("sandboxMode");
-      respond = await invoke(
-        "sessions.patchMany",
-        {
-          targets: [{ key: keys[0], expectedSandboxMode: "off" }],
-          patch: { sandboxMode: null },
-        },
-        requestClient,
-      );
+      respond = await invoke("sessions.patchMany", {
+        targets: [{ key: keys[0], expectedSandboxMode: "off" }],
+        patch: { sandboxMode: null },
+      });
       expectAccepted(respond, { outcomes: [{ key: keys[0], ok: true }] });
       expect(loadSessionEntry(scope(keys[0]!))).not.toHaveProperty("sandboxMode");
     }));

@@ -1,11 +1,26 @@
 import { afterEach, expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import "../../styles.css";
 import "../../styles/usage.css";
 import { CostBreakdownCompact, DailyChartCompact } from "./view-chart.tsx";
+import { mountView } from "./view-render.test-support.ts";
+
+function chart(
+  dailyEntries: Parameters<typeof DailyChartCompact>[0]["dailyEntries"],
+  dailyChartMode: "by-provider" | "by-type",
+) {
+  return DailyChartCompact({
+    dailyEntries,
+    dailyChartMode,
+    selectedDays: [],
+    chartMode: "tokens",
+    onDailyChartModeChange: () => {},
+    providerSeries: [],
+    onSelectDay: () => {},
+    range: { startDate: dailyEntries[0]!.date, endDate: dailyEntries.at(-1)!.date, complete: true },
+  });
+}
 
 registerUsageEnglish();
 afterEach(() => document.body.replaceChildren());
@@ -21,22 +36,7 @@ it.each(["by-provider", "by-type"] as const)(
       input: 100,
       totalTokens: 100,
     }));
-    const container = document.body.appendChild(document.createElement("div"));
-    mountSolid(
-      () =>
-        DailyChartCompact({
-          dailyEntries: daily,
-          selectedDays: [],
-          chartMode: "tokens",
-          dailyChartMode,
-          onDailyChartModeChange: () => {},
-          providerSeries: [],
-          onSelectDay: () => {},
-          range: { startDate: "2024-01-01", endDate: "2024-12-31", complete: true },
-        }),
-      { container },
-    );
-    flush();
+    const { container } = mountView(() => chart(daily, dailyChartMode));
     for (const width of [1280, 390]) {
       await page.viewport(width, 800);
       const plot = container.querySelector<HTMLElement>(".daily-chart-bars")!;
@@ -66,25 +66,10 @@ it("keeps token segments proportional and legend markers round beside form style
     cacheRead: 80,
     totalTokens: 100,
   };
-  const container = document.createElement("div");
-  document.body.append(container);
-  mountSolid(
-    () => [
-      DailyChartCompact({
-        dailyEntries: [{ ...totals, date: "2026-09-18" }],
-        selectedDays: [],
-        chartMode: "tokens",
-        dailyChartMode: "by-type",
-        onDailyChartModeChange: () => {},
-        providerSeries: [],
-        onSelectDay: () => {},
-        range: { startDate: "2026-09-18", endDate: "2026-09-18", complete: true },
-      }),
-      CostBreakdownCompact({ totals, mode: "tokens" }),
-    ],
-    { container },
-  );
-  flush();
+  const { container } = mountView(() => [
+    chart([{ ...totals, date: "2026-09-18" }], "by-type"),
+    CostBreakdownCompact({ totals, mode: "tokens" }),
+  ]);
   await Promise.all(
     [...container.querySelectorAll("openclaw-tooltip")].map((tooltip) => tooltip.updateComplete),
   );

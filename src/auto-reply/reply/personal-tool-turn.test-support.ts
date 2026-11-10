@@ -222,7 +222,7 @@ export async function withPersonalToolTurn<T>(
   let reject = false;
   let registeredHandle: EmbeddedAgentQueueHandle | undefined;
   const completionRequested = createDeferred();
-  let testOutcome: Promise<PromiseSettledResult<T>> | undefined;
+  let testOutcome: Promise<T> | undefined;
   // Post-turn assertions retain the fixture registration after native execution and custody end.
   const producer = Promise.resolve().then(async () => {
     try {
@@ -332,10 +332,7 @@ export async function withPersonalToolTurn<T>(
               },
             });
           },
-        }).then(
-          (value) => ({ status: "fulfilled", value }),
-          (reason: unknown) => ({ status: "rejected", reason }),
-        );
+        });
         await Promise.race([testOutcome, completionRequested.promise]);
       };
       await withGatewayToolCallerIdentity(
@@ -369,18 +366,11 @@ export async function withPersonalToolTurn<T>(
     }
   });
   try {
-    const [producerOutcome] = await Promise.allSettled([producer]);
-    const outcome = await testOutcome;
-    if (producerOutcome.status === "rejected") {
-      throw producerOutcome.reason;
-    }
-    if (!outcome) {
+    await producer;
+    if (!testOutcome) {
       throw new Error("The personal tool producer did not start its test");
     }
-    if (outcome.status === "rejected") {
-      throw outcome.reason;
-    }
-    return outcome.value;
+    return await testOutcome;
   } finally {
     if (registeredHandle) {
       clearActiveEmbeddedRun(queued.sessionId, registeredHandle, queued.sessionKey);
@@ -390,4 +380,13 @@ export async function withPersonalToolTurn<T>(
     }
     admission?.close();
   }
+}
+
+export function createPersonalToolParticipant(profileId: string, name: string) {
+  return {
+    profileId,
+    name,
+    senderId: `${profileId}-sender`,
+    gatewayUiCommandTarget: { connId: `${profileId}-tab`, profileId },
+  };
 }

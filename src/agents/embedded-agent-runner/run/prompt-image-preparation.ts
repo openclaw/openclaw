@@ -54,15 +54,13 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
     workspaceOnly: input.effectiveFsWorkspaceOnly,
-    // The loader reads these only when hydrating a file, not for text or inline images.
-    get localRoots() {
-      return input.effectiveFsWorkspaceOnly
-        ? undefined
-        : (localRoots ??= getAgentScopedMediaLocalRoots(
+    localRoots: input.effectiveFsWorkspaceOnly
+      ? undefined
+      : () =>
+          (localRoots ??= getAgentScopedMediaLocalRoots(
             attempt.config ?? {},
             input.mediaOwnerAgentId,
-          ));
-    },
+          )),
     sandbox:
       input.sandbox?.enabled && input.sandbox.fsBridge
         ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }

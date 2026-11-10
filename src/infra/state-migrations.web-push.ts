@@ -30,7 +30,6 @@ import {
   parseLegacySubscriptions,
   parseLegacyVapidKeys,
 } from "./state-migrations.web-push-parse.js";
-import { decodeUtf8Input } from "./utf8-input.js";
 
 const LEGACY_SUBSCRIPTIONS_MAX_BYTES = 4 * 1024 * 1024;
 const LEGACY_VAPID_KEYS_MAX_BYTES = 64 * 1024;
@@ -110,17 +109,12 @@ async function readLegacyState(
   let vapidKeys: VapidKeyPair | null = null;
   if (await subscriptionsSource.exists()) {
     const snapshot = await subscriptionsSource.read();
-    subscriptions = parseLegacySubscriptions(
-      decodeUtf8Input(snapshot.buffer, "Legacy Web Push subscriptions"),
-    );
+    subscriptions = parseLegacySubscriptions(snapshot.raw);
     sources.push({ claim: subscriptionsSource, snapshot });
   }
   if (await vapidSource.exists()) {
     const snapshot = await vapidSource.read();
-    vapidKeys = parseLegacyVapidKeys(
-      decodeUtf8Input(snapshot.buffer, "Legacy Web Push VAPID keys"),
-      env,
-    );
+    vapidKeys = parseLegacyVapidKeys(snapshot.raw, env);
     sources.push({ claim: vapidSource, snapshot });
   }
   return { subscriptions, vapidKeys, sources };

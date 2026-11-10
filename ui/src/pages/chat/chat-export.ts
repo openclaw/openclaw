@@ -1,9 +1,8 @@
 import { t } from "../../i18n/index.ts";
-import { loadCompleteChatHistory } from "../../lib/chat/complete-history.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { scopedAgentIdForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentIdForSession } from "../../lib/sessions/navigation.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { exportChatMarkdown, type ChatExportResult } from "./export.ts";
+import type { ChatExportResult } from "./export.ts";
 
 type ChatExportHost = Pick<
   ChatPageHost,
@@ -39,15 +38,18 @@ export async function exportCurrentChat(
     host.sessionKey === sessionKey &&
     host.currentSessionId === currentSessionId &&
     scopedAgentIdForSession(host, sessionKey) === agentId;
-  const messages = await loadCompleteChatHistory({
-    client,
-    sessionKey,
-    sessionId: currentSessionId,
-    agentId,
-    isCurrent,
-  });
+  const { exportCapturedChat } = await import("./chat-export.runtime.ts");
   if (!isCurrent()) {
     throw new Error(t("sessionsView.copyTranscriptChanged"));
   }
-  return exportChatMarkdown(messages, assistantName);
+  return exportCapturedChat(
+    {
+      client,
+      sessionKey,
+      sessionId: currentSessionId,
+      agentId,
+      isCurrent,
+    },
+    assistantName,
+  );
 }

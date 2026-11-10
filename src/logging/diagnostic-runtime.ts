@@ -27,14 +27,12 @@ export function resetDiagnosticActivityForTest(): void {
   lastActivityAt = 0;
 }
 
-type DiagnosticMessageQueueParams = SessionRef & {
-  channel?: string;
-  source: string;
-};
-
 /** Records queue activity while letting internal run owners distinguish steering from backlog. */
 export function logMessageQueuedWithBacklogPolicy(
-  params: DiagnosticMessageQueueParams,
+  params: SessionRef & {
+    channel?: string;
+    source: string;
+  },
   countsTowardBacklog: boolean,
 ): void {
   if (!areDiagnosticsEnabledForProcess()) {
@@ -106,11 +104,11 @@ export function logSessionStateChange(
   if (params.state === "processing" && prevState !== "processing") {
     state.activeQueuedTurn = state.queueDepth > 0;
   }
-  if (params.state === "idle") {
+  if (params.state === "idle" || params.consumeQueuedTurn === true) {
     if (params.consumeQueuedTurn !== false) {
       state.queueDepth = Math.max(0, state.queueDepth - 1);
     }
-    state.activeQueuedTurn = false;
+    state.activeQueuedTurn = state.state === "processing" && state.queueDepth > 0;
   }
   emitDiagnosticEvent({
     type: "session.state",

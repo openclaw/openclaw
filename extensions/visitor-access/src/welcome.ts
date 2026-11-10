@@ -65,7 +65,7 @@ export class VisitorWelcome {
     }
     this.inFlight.add(invitation.grantId);
     try {
-      return await this.setUp(invitation, guest);
+      return await this.setUp(invitation, guest, client.preparedSessionProfile?.githubLogin);
     } finally {
       this.inFlight.delete(invitation.grantId);
     }
@@ -92,6 +92,7 @@ export class VisitorWelcome {
   private async setUp(
     invitation: ActiveVisitorInvitation,
     guest: GuestProfile,
+    githubLogin: string | null | undefined,
   ): Promise<WelcomeEnsureResult> {
     const { grantId, onboarding: recorded } = invitation;
     const advance = (
@@ -118,20 +119,45 @@ export class VisitorWelcome {
       }
       reservation = reserved.onboarding;
       const name = guest.displayName?.replace(/\s+/gu, " ").trim() || undefined;
+      const titleName = name || githubLogin?.trim();
       // Create as the guest: the caller-bound request makes the guest the session owner.
       // A retry adopts the reserved key, so it never creates a second session.
       await this.gateway.request("sessions.create", {
         key: sessionKey,
         agentId,
-        displayName: name ? `Welcome, ${name}` : "Welcome",
+        displayName: titleName ? `Welcome ${titleName}` : "Welcome",
       });
-      const message = welcomeMessage({
-        invitation,
-        config,
-        agentId,
-        guestName: name,
-        guestProfileId: guest.profileId,
-      });
+      // Legacy grants have no inviter; nobody can mention themselves.
+      const inviter =
+        invitation.invitedBy?.profileId === guest.profileId ? undefined : invitation.invitedBy;
+      const label = inviter?.label?.replace(/\s+/gu, " ").trim() || undefined;
+      const greeting = name ? `Welcome to OpenClaw, ${name}.` : "Welcome to OpenClaw.";
+      const access =
+        invitation.expiresAt === null
+          ? "Your guest access does not expire."
+          : `Your guest access runs through ${utcMinute(invitation.expiresAt)}.`;
+      const mentionText = `@${label ?? "inviter"}`;
+      const invited = inviter
+        ? `${mentionText} invited you. ${access}`
+        : `You were invited as a guest. ${access}`;
+      const note = invitation.note?.trim();
+      const capabilities = guestCapabilities(config, agentId).map((line) => `- ${line}`);
+      const text = [
+        greeting,
+        "",
+        invited,
+        ...(note ? ["", `Note from ${label ?? "your inviter"}:`, note] : []),
+        "",
+        `This is your own session with ${agentName(config, agentId)}. As a guest you can:`,
+        ...capabilities,
+      ].join("\n");
+      const start = greeting.length + 2;
+      const message = {
+        text,
+        mentions: inviter
+          ? [{ profileId: inviter.profileId, start, end: start + mentionText.length }]
+          : [],
+      };
       // The idempotency key replays the same agent message and Inbox entry on retry.
       await this.gateway.appendAgentMessage({
         sessionKey,
@@ -233,51 +259,4 @@ function guestCapabilities(config: OpenClawConfig, agentId: string): string[] {
     lines.push("read and reply in other people's sessions");
   }
   return lines;
-}
-
-/** Plain, short welcome text; the inviter is a structured mention when recorded. */
-function welcomeMessage({
-  invitation,
-  config,
-  agentId,
-  guestName,
-  guestProfileId,
-}: {
-  invitation: ActiveVisitorInvitation;
-  config: OpenClawConfig;
-  agentId: string;
-  guestName?: string;
-  guestProfileId: string;
-}): { text: string; mentions: Array<{ profileId: string; start: number; end: number }> } {
-  // Legacy grants have no inviter; nobody can mention themselves.
-  const inviter =
-    invitation.invitedBy?.profileId === guestProfileId ? undefined : invitation.invitedBy;
-  const label = inviter?.label?.replace(/\s+/gu, " ").trim() || undefined;
-  const greeting = guestName ? `Welcome to OpenClaw, ${guestName}.` : "Welcome to OpenClaw.";
-  const access =
-    invitation.expiresAt === null
-      ? "Your guest access does not expire."
-      : `Your guest access runs through ${utcMinute(invitation.expiresAt)}.`;
-  const mentionText = `@${label ?? "inviter"}`;
-  const invited = inviter
-    ? `${mentionText} invited you. ${access}`
-    : `You were invited as a guest. ${access}`;
-  const note = invitation.note?.trim();
-  const capabilities = guestCapabilities(config, agentId).map((line) => `- ${line}`);
-  const text = [
-    greeting,
-    "",
-    invited,
-    ...(note ? ["", `Note from ${label ?? "your inviter"}:`, note] : []),
-    "",
-    `This is your own session with ${agentName(config, agentId)}. As a guest you can:`,
-    ...capabilities,
-  ].join("\n");
-  const start = greeting.length + 2;
-  return {
-    text,
-    mentions: inviter
-      ? [{ profileId: inviter.profileId, start, end: start + mentionText.length }]
-      : [],
-  };
 }

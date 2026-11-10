@@ -5,7 +5,7 @@ export const REPETITIVE_OUTPUT_ERROR_MESSAGE =
   "Repetitive output stopped. Try a larger model or shorten your request before retrying.";
 export const REPEATED_TOOL_ERROR_CODE = "openclaw_repeated_tool_error";
 export const REPEATED_TOOL_ERROR_MESSAGE =
-  "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool arguments or switch to a model with native tool calling before retrying.";
+  "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool inputs or service, then use a changed request.";
 
 /** A tool rejected model-authored arguments during prepareArguments, before execution. */
 export class ToolArgumentValidationError extends Error {

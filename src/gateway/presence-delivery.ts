@@ -102,6 +102,7 @@ export function preparePresenceDelivery(
       for (const [field, value] of Object.entries(currentFields)) {
         if (
           value !== undefined &&
+          value !== previousFields[field] &&
           JSON.stringify(value) !== JSON.stringify(previousFields[field])
         ) {
           Object.defineProperty(set, field, { value, enumerable: true });

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { createHarness } from "./gateway.mjs";
 
 const harness = await createHarness();
@@ -57,6 +58,47 @@ try {
   assert.equal(methods("session/start").length, 2);
   assert.notEqual(methods("turn/start").at(-1).params.sessionId, sessionId);
   console.log("PASS session reset creates fresh native session");
+  // A write-only operator run can ask for review and must receive its own verdict.
+  const writer = await harness.connect(["operator.read", "operator.write"]);
+  try {
+    const written = await harness.turn("fixture:approval", {
+      via: writer,
+      key: "agent:main:writer-approval",
+      decision: "allow-once",
+    });
+    assert.equal(written.approvals.length, 1);
+    assert.equal(methods("approval/decide").at(-1).params.choiceId, "server-allow-id");
+    // Ending the run while it waits must keep the later allowance from reaching Muse.
+    const decided = methods("approval/decide").length;
+    const revoked = await harness.turn("fixture:approval", {
+      via: writer,
+      key: "agent:main:writer-approval",
+      decision: "allow-once",
+      expectError: true,
+      allowApprovalFailure: true,
+      beforeApproval: async (runId) => {
+        await writer.request("chat.abort", { sessionKey: "agent:main:writer-approval", runId });
+        await harness.client.request("agent.wait", { runId, timeoutMs: 30000 });
+      },
+    });
+    // The verdict was submitted after the run settled; give delivery time to reach Muse.
+    await delay(1000);
+    console.log(
+      `revoked wait: run=${JSON.stringify(revoked.wait)} resolve=${revoked.approvalFailure ? String(revoked.approvalFailure) : "accepted"}`,
+    );
+    assert.equal(revoked.approvals.length, 1);
+    assert.notEqual(revoked.wait.status, "ok");
+    assert.equal(
+      methods("approval/decide")
+        .slice(decided)
+        .some((row) => row.params.choiceId === "server-allow-id"),
+      false,
+      "a revoked wait must not forward the allowance to Muse",
+    );
+  } finally {
+    writer.stop();
+  }
+  console.log("PASS write-only operator run receives its own verdict, and not after its run ends");
   await harness.stop();
   harness.config.tools.exec.security = "allowlist";
   harness.saveConfig();

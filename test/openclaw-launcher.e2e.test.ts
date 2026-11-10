@@ -291,6 +291,19 @@ describe("openclaw launcher", () => {
   }
 
   describe("browser native transport dispatch", () => {
+    it("warns on the native transport without corrupting its output or recovering Node", async () => {
+      const native = path.join(root, "dist", "extensions", "browser", "native-host-entry.js");
+      await fs.mkdir(path.dirname(native), { recursive: true });
+      await fs.writeFile(native, 'process.stdout.write("native-frame");');
+      const result = await runPreloadedLauncher(
+        'Object.defineProperty(process.versions, "node", { value: "24.21.0" });',
+        ["browser", "extension", "native-host"],
+      );
+      expectOutput(result, "native-frame");
+      expect(result.stderr.match(/SECURITY WARNING/g)).toHaveLength(1);
+      expect(result.stderr).not.toContain("Retrying with");
+    });
+
     it("uses only the fixed native artifact before pending package repair or ordinary CLI startup", async () => {
       const native = path.join(root, "dist", "extensions", "browser", "native-host-entry.js");
       await fs.mkdir(path.dirname(native), { recursive: true });
@@ -451,6 +464,49 @@ describe("openclaw launcher", () => {
       return { root, home, nodePath, installLog, run };
     }
 
+    it.each([
+      { compileCache: false, args: ["status", "--json"] },
+      { compileCache: true, args: ["status", "--json"] },
+      { compileCache: false, args: ["status"] },
+    ])(
+      "warns once on stderr without installing for a certificate-only gap ($args, cache=$compileCache)",
+      async ({ compileCache, args }) => {
+        const fixture = await prepareRecovery({ version: "24.21.0" });
+        await writeEntry(`
+        const { emitNodeSecurityWarning } = await import("../node-version.mjs");
+        emitNodeSecurityWarning?.(process.versions.node);
+        process.stdout.write(JSON.stringify({ started: true }));
+      `);
+        const result = fixture.run(
+          "y\n",
+          args,
+          compileCache
+            ? {
+                NODE_COMPILE_CACHE: path.join(fixture.home, "compile-cache"),
+              }
+            : {},
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({ started: true });
+        expect(result.stderr.match(/SECURITY WARNING/g)).toHaveLength(1);
+        expect(result.stderr).toContain("eMudhra");
+        expect(result.stderr).toContain("24.22.1+");
+        expect(result.stderr).toContain("26.12.1+");
+        expect(result.stderr).not.toContain("Update NodeJS:");
+        await expectAbsent(fixture.installLog);
+      },
+    );
+
+    it("prefers an installed patched Node for a certificate-only gap", async () => {
+      const fixture = await prepareRecovery({ version: "24.21.0", cached: true });
+      const result = fixture.run("", ["status", "--json"]);
+      expect(result.status, result.stderr).toBe(17);
+      expect(JSON.parse(result.stdout).recovered).toBe(true);
+      expect(result.stderr).toContain("recommended security patch");
+      expect(result.stderr).not.toContain("SECURITY WARNING");
+      await expectAbsent(fixture.installLog);
+    });
+
     it("accepts Yes before pending lifecycle imports, installs only Node, and retries exact arguments", async () => {
       const fixture = await prepareRecovery({ pendingLifecycle: true });
       const args = ["status", "--profile", "two words", "literal;argument"];
@@ -597,21 +653,21 @@ describe("openclaw launcher", () => {
     expect(result.stdout).toBe("diagnostic-entry\n");
   });
 
-  it("requires the TLS security release floor even when SQLite is lossless", async () => {
+  it("admits compatible Node below the recommended security patches with lossless SQLite", async () => {
     await writeEntry('process.stdout.write("runtime-loaded\\n");\n');
-    for (const version of ["24.22.0", "24.22.1"]) {
+    for (const version of ["24.15.9", "24.16.0", "24.22.0", "26.1.0"]) {
       const result = await runPreloadedLauncher(
         `Object.defineProperty(process.versions, "node", { value: ${JSON.stringify(version)} });`,
         ["gateway", "start"],
       );
 
-      if (version === "24.22.1") {
+      if (version !== "24.15.9") {
         expect(result.status, version).toBe(0);
         expect(result.stdout, version).toContain("runtime-loaded");
       } else {
         expect(result.status, version).toBe(1);
         expect(result.stderr, version).toContain(
-          `openclaw: Node ${version}: openclaw requires Node >=24.22.1 <25, or >=26.12.1.`,
+          `openclaw: Node ${version}: openclaw requires Node >=24.16.0 <25, or >=26.1.0`,
         );
       }
     }
@@ -652,6 +708,15 @@ describe("openclaw launcher", () => {
     expect(result.stderr).toContain(
       "this Bun runtime is unsupported because it does not provide node:sqlite",
     );
+  });
+
+  it("does not apply Node certificate warnings to Bun's compatibility version", async () => {
+    await writeEntry('process.stdout.write("bun-entry");');
+    const result = await runPreloadedLauncher(
+      'Object.defineProperty(process.versions, "bun", { value: "1.4.4" }); Object.defineProperty(process.versions, "node", { value: "24.21.0" });',
+    );
+    expectOutput(result, "bun-entry");
+    expect(result.stderr).not.toContain("SECURITY WARNING");
   });
 
   it.each(["transitive", "missing", "unbuilt"])(

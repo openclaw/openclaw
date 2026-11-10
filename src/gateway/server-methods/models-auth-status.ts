@@ -6,7 +6,6 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
-  errorShape,
   validateModelsAuthSetApiKeyParams,
   type ModelsAuthSetApiKeyResult,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -51,7 +50,8 @@ import type {
   ModelAuthStatusResult,
 } from "./models-auth-status.types.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -184,26 +184,28 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    let assertCurrent: (() => void) | undefined;
+    // The save writes credentials and can widen the model allowlist: both need live requester authority.
+    const requestAuthority = readGatewayRequestMutationAuthority(options);
+    let assertCurrent: () => void = requestAuthority.assertCurrent;
     if (expectedOwnerId !== undefined) {
       if (typeof expectedOwnerId !== "string" || !expectedOwnerId.trim()) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "expectedOwnerId must be a non-empty string"),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "expectedOwnerId must be a non-empty string",
         );
         return;
       }
       if (!hasGatewayAdminScope(client)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.FORBIDDEN, "missing scope: operator.admin"),
-        );
+        respondError(respond, ErrorCodes.FORBIDDEN, "missing scope: operator.admin");
         return;
       }
       try {
-        assertCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+        const assertOwnerCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+        assertCurrent = () => {
+          requestAuthority.assertCurrent();
+          assertOwnerCurrent();
+        };
       } catch (error) {
         respond(false, undefined, localStateOwnerChangedError(error));
         return;
@@ -213,28 +215,37 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const config = context.getRuntimeConfig();
       // CLI-only target semantics must not load the model-command runtime during Gateway startup.
-      const scope = assertCurrent
-        ? {
-            ok: true as const,
-            ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
-              config,
-              params.agentId,
-              { kind: "mutation" },
-            ),
-          }
-        : resolveModelAuthAgentScope(config, params.agentId);
+      const scope =
+        expectedOwnerId !== undefined
+          ? {
+              ok: true as const,
+              ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
+                config,
+                params.agentId,
+                { kind: "mutation" },
+              ),
+            }
+          : resolveModelAuthAgentScope(config, params.agentId);
       if (!scope.ok) {
         respond(false, undefined, scope.error);
         return;
       }
       const { saveModelProviderApiKey } = await import("../../commands/models/auth-api-key.js");
-      const { profileId, warning: configWarning } = await saveModelProviderApiKey({
+      const {
+        profileId,
+        warning: configWarning,
+        modelAccess,
+      } = await saveModelProviderApiKey({
         config,
         provider,
         apiKey: params.apiKey,
+        agentId: scope.agentId,
         agentDir: scope.agentDir,
         assertCurrent,
       });
+      if (modelAccess) {
+        log.info(modelAccess);
+      }
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelsAuthSetApiKeyResult = {
@@ -248,22 +259,22 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
   "models.authLogout": async ({ params, respond, context }) => {
     const provider = readProviderParam(params);
     if (!provider) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "provider is required"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "provider is required");
       return;
     }
     const selection = readLogoutProfileSelection(params);
     if (!selection.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selection.message));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, selection.message);
       return;
     }
     if (
       (params.credentialType !== undefined && params.credentialType !== "api_key") ||
       (params.credentialType !== undefined && selection.profileIds !== undefined)
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Choose either API keys or specific profiles"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Choose either API keys or specific profiles",
       );
       return;
     }
@@ -289,10 +300,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         selection.profileIds &&
         selection.profileIds.some((profileId) => !availableProfiles.includes(profileId))
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "profileIds contain unavailable auth profiles"),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "profileIds contain unavailable auth profiles",
         );
         return;
       }
@@ -517,6 +528,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
                   ...(usage.summary ? { summary: usage.summary } : {}),
                   ...(usage.plan ? { plan: usage.plan } : {}),
                   ...(usage.billing?.length ? { billing: usage.billing } : {}),
+                  ...(includeProfileIdentity && usage.authProfileId
+                    ? { authProfileId: usage.authProfileId }
+                    : {}),
                   ...(includeProfileIdentity && usage.accountEmail
                     ? { accountEmail: usage.accountEmail }
                     : {}),

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { notifyRenderLifecycleForTest } from "../pages/chat/render-lifecycle.ts";
 import {
   evaluateControlUiContext,
@@ -12,8 +13,12 @@ import {
   requireString,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
+import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -503,16 +508,23 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
 suite.define(() => {
   it("commits a streamed delta burst in frame-bound transcript batches", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      // Missing Resource Timing entries must not prevent menu readiness.
+      await page.addInitScript(() => performance.setResourceTimingBufferSize(0));
+      const heldMenu = await holdModuleResponse(
+        page,
+        /\/board-widget-menu[^/]*\.(?:js|tsx)(?:\?.*)?$/u,
+      );
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.describe", "models.list"],
+        deferredMethods: ["models.list"],
+        heldMethods: ["sessions.describe"],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await settleInitialModelCatalog(page, gateway);
       const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
 
-      // Release the startup fact read after Send so it observes the running turn,
-      // then join its publication before measuring stream invalidations.
+      // Keep every startup fact read parked until Send, then release them together
+      // so the latest observation publishes the running turn before measurement.
       await gateway.waitForRequest("sessions.describe");
       await gateway.resolveDeferred("sessions.describe");
       const applicationHandle = await getControlUiContextHandle(page);
@@ -548,6 +560,23 @@ suite.define(() => {
           ),
         )
         .toBe(true);
+      // Exercise the lazy menus and observe rendered readiness, independent of
+      // resource timing entries or whether their modules were already evaluated.
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      await pane.locator(".chat-header-session-menu__trigger").click();
+      await heldMenu.request;
+      const sessionMenu = pane.locator("openclaw-chat-header-session-menu");
+      expect(await sessionMenu.getByRole("menuitem", { name: "Advanced" }).count()).toBe(0);
+      heldMenu.release();
+      await sessionMenu.getByRole("menuitem", { name: "Advanced" }).waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await pane.getByRole("button", { name: "Add attachment", exact: true }).click();
+      await pane
+        .locator(".agent-chat__capability-menu .oc-menu-item:not([disabled])")
+        .first()
+        .waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await pane.evaluate((element: ChatPaneElement) => element.updateComplete);
       await waitForChatScrollIdle(page);
       await installRenderProbe(page);
       await resetRenderProbe(page);
@@ -590,7 +619,7 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const runId = await openStreamingTurn(page, gateway, "tool flood probe");
 
       await probeDeferredToolProjection(page, runId);
@@ -641,7 +670,7 @@ suite.define(() => {
 
       const loadStartedAt = Date.now();
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await page
         .locator(".chat-thread-inner")
         .getByText("LONG-TAIL-SENTINEL")
@@ -671,7 +700,7 @@ suite.define(() => {
       scrollAwayAndBack: false,
     },
     {
-      name: "keeps composer edits local after scrolling returns to the same offset",
+      name: "keeps composer edits local after scrolling returns to the same reading position",
       scrollAwayAndBack: true,
     },
   ])("$name", async ({ scrollAwayAndBack }) => {
@@ -681,7 +710,7 @@ suite.define(() => {
         deferredMethods: ["models.list"],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await page.locator(".chat-thread-inner").getByText("LONG-TAIL-SENTINEL").waitFor();
       await settleInitialModelCatalog(page, gateway);
 
@@ -696,10 +725,11 @@ suite.define(() => {
         ? await (async () => {
             const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
             await thread.hover();
-            // Keep the saved offset inside the range when virtualizer measurements shrink it.
+            // Move clear of the end before saving the reader's visible anchor.
             await page.mouse.wheel(0, -200);
             await waitForChatScrollIdle(page);
             const originalTop = await thread.evaluate((element) => element.scrollTop);
+            const originalAnchor = await captureTopVisibleVirtualRow(thread);
             // Real reader input retires end-follow; an 8 px offset is still at the end.
             await page.mouse.wheel(0, -100);
             await expect
@@ -708,14 +738,28 @@ suite.define(() => {
             // Virtualizer measurements can adjust the wheel's final offset.
             await waitForChatScrollIdle(page);
             const awayTop = await thread.evaluate((element) => element.scrollTop);
-            await page.mouse.wheel(0, originalTop - awayTop);
-            await expect
-              .poll(() => thread.evaluate((element) => element.scrollTop))
-              .toBe(originalTop);
+            // Newly measured rows can change absolute offsets. Return the same
+            // visible row to its original position inside the viewport.
+            const returnDelta = await thread.evaluate((element, anchor) => {
+              const row = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].find(
+                (candidate) => candidate.dataset.virtualRowKey === anchor.key,
+              );
+              if (!row) {
+                throw new Error("Expected the original reader anchor while returning");
+              }
+              return (
+                row.getBoundingClientRect().top -
+                element.getBoundingClientRect().top -
+                anchor.viewportTop
+              );
+            }, originalAnchor);
+            await page.mouse.wheel(0, returnDelta);
+            await waitForChatScrollIdle(page);
             return {
               originalTop,
               awayTop,
-              restoredTop: await thread.evaluate((element) => element.scrollTop),
+              originalAnchor,
+              restoredAnchor: await captureTopVisibleVirtualRow(thread),
             };
           })()
         : null;
@@ -723,7 +767,10 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       if (scroll) {
         expect(scroll.awayTop).toBeLessThan(scroll.originalTop);
-        expect(scroll.restoredTop).toBe(scroll.originalTop);
+        expect(scroll.restoredAnchor.key).toBe(scroll.originalAnchor.key);
+        expect(
+          Math.abs(scroll.restoredAnchor.viewportTop - scroll.originalAnchor.viewportTop),
+        ).toBeLessThanOrEqual(1);
       }
       await installRenderProbe(page);
       await resetRenderProbe(page);
@@ -752,7 +799,7 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
 
       const runId = await openStreamingTurn(page, gateway, "idle quiescence probe");
       await gateway.emitChatFinal({ runId, text: "short finalized turn" });

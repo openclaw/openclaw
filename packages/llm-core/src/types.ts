@@ -322,6 +322,8 @@ export interface Usage {
   cacheTelemetry?: { state: "available" | "unavailable" };
   /** Subset of `cacheWrite` written with 1-hour retention when reported. */
   cacheWrite1h?: number;
+  /** Subset of `cacheWrite` written with 5-minute retention when reported. */
+  cacheWrite5m?: number;
   /**
    * Whether usage is complete for this provider response. Missing terminal usage
    * and provisional stream counters are unavailable, including after interruption.
@@ -538,6 +540,8 @@ export interface AssistantMessage {
   provider: Provider;
   model: string;
   responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
+  /** Provider-reported access only; absent/null never confirms a requested program. */
+  responseAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red" | null;
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
   providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
   turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
@@ -599,8 +603,16 @@ export interface Tool<TParameters extends TSchema = TSchema> {
   async?: false;
 }
 
+/** Derived prompt bytes belong to this exact immutable text revision. */
+export interface PreparedSystemPrompt {
+  readonly text: string;
+  readonly stripped: string;
+  readonly instructions: string;
+}
+
 export interface Context {
   systemPrompt?: string;
+  preparedSystemPrompt?: PreparedSystemPrompt;
   messages: Message[];
   tools?: Tool[];
 }
@@ -714,6 +726,8 @@ export interface OpenAIResponsesCompat {
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
+  /** Whether to send `prompt_cache_key`. Default: true for Azure; endpoint-detected for OpenAI. */
+  supportsPromptCacheKey?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
   /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */

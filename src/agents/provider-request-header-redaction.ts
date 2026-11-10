@@ -63,43 +63,44 @@ export function createExactSecretValueMatcher(
   return (text) => pattern.test(text);
 }
 
-export function redactExactSecretValues(
-  text: string,
+export function createExactSecretValueRedactor(
   values: readonly string[],
-  sourceTruncated: boolean,
-): string {
+): (text: string, sourceTruncated: boolean) => string {
   const representations = collectSecretRepresentations(values).toSorted(
     (left, right) => right[0].length - left[0].length,
   );
   if (representations.length === 0) {
-    return text;
+    return (text) => text;
   }
   const matcher = new RegExp(representations.map(secretRepresentationPattern).join("|"), "gu");
-  const redacted = text.replace(matcher, REDACTED_SECRET);
-  if (!sourceTruncated) {
-    return redacted;
-  }
-
-  let longestPartialSuffix = 0;
-  for (const [candidate, percentCaseInsensitive] of representations) {
-    const comparableText = percentCaseInsensitive
-      ? normalizePercentEscapeHexCase(redacted)
-      : redacted;
-    const comparableCandidate = percentCaseInsensitive
-      ? normalizePercentEscapeHexCase(candidate)
-      : candidate;
-    let prefixLength = Math.min(comparableCandidate.length - 1, comparableText.length);
-    while (
-      prefixLength > longestPartialSuffix &&
-      !comparableText.endsWith(comparableCandidate.slice(0, prefixLength))
-    ) {
-      prefixLength -= 1;
+  return (text, sourceTruncated) => {
+    const redacted = text.replace(matcher, REDACTED_SECRET);
+    if (!sourceTruncated) {
+      return redacted;
     }
-    longestPartialSuffix = Math.max(longestPartialSuffix, prefixLength);
-  }
-  return longestPartialSuffix === 0
-    ? redacted
-    : `${redacted.slice(0, -longestPartialSuffix)}${REDACTED_SECRET}`;
+
+    let longestPartialSuffix = 0;
+    let normalizedRedacted: string | undefined;
+    for (const [candidate, percentCaseInsensitive] of representations) {
+      const comparableText = percentCaseInsensitive
+        ? (normalizedRedacted ??= normalizePercentEscapeHexCase(redacted))
+        : redacted;
+      const comparableCandidate = percentCaseInsensitive
+        ? normalizePercentEscapeHexCase(candidate)
+        : candidate;
+      let prefixLength = Math.min(comparableCandidate.length - 1, comparableText.length);
+      while (
+        prefixLength > longestPartialSuffix &&
+        !comparableText.endsWith(comparableCandidate.slice(0, prefixLength))
+      ) {
+        prefixLength -= 1;
+      }
+      longestPartialSuffix = Math.max(longestPartialSuffix, prefixLength);
+    }
+    return longestPartialSuffix === 0
+      ? redacted
+      : `${redacted.slice(0, -longestPartialSuffix)}${REDACTED_SECRET}`;
+  };
 }
 
 export function collectRequestHeaderSecretValues(headers: HeadersInit): string[] {
@@ -131,7 +132,7 @@ export function collectRequestHeaderSecretValues(headers: HeadersInit): string[]
     if (authorization?.[1]?.toLowerCase() === "basic") {
       const bytes = Buffer.from(credentialComponent, "base64");
       if (
-        bytes.toString("base64").replace(/=+$/u, "") === credentialComponent.replace(/=+$/u, "")
+        bytes.toString("base64").replace(/[=]+$/u, "") === credentialComponent.replace(/[=]+$/u, "")
       ) {
         // RFC 7617: proxies may reflect the decoded pair or password. The first
         // colon separates them; deployed Basic credentials use UTF-8 or Latin-1.
@@ -153,9 +154,8 @@ export function redactProviderResponseErrorText(
   headers: HeadersInit,
   options?: { sourceTruncated?: boolean },
 ): string {
-  const exactRedacted = redactExactSecretValues(
+  const exactRedacted = createExactSecretValueRedactor(collectRequestHeaderSecretValues(headers))(
     text,
-    collectRequestHeaderSecretValues(headers),
     options?.sourceTruncated === true,
   );
   return redactToolPayloadText(exactRedacted);

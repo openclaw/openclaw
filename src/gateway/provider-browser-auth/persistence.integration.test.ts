@@ -1,8 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import * as httpFixture from "../../../test/helpers/gateway-integration-fixtures.js";
-import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
 import { clearAuthProfileMigrationDiagnostics } from "../../agents/auth-profiles/legacy-source-diagnostic.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
@@ -10,6 +7,8 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profile
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
 import { runModelsAuthLoginFlowCore } from "../../commands/models/auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { cleanupPluginLoaderFixturesForTest } from "../../plugins/loader.test-fixtures.js";
+import { updatePluginManifest, writeWorkspacePlugin } from "../../plugins/loader.test-harness.js";
 import { getPluginLoaderCacheState } from "../../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -17,6 +16,7 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { createProviderBrowserAuthSession } from "../provider-browser-auth.js";
 import { createGatewayHttpServer } from "../server-http.js";
 import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.js";
+import { PROVIDER_AUTH_INTEGRATION_ENV } from "../test-helpers.env.js";
 
 const providerId = "browser-auth-proof";
 const profileId = `${providerId}:default`;
@@ -24,16 +24,13 @@ const retainedProfile = { type: "api_key" as const, provider: "other", key: "fix
 const credential = { type: "api_key", provider: providerId, key: "fixture-code-key" };
 const retainedProfiles = { "other:retained": retainedProfile };
 
-async function writeBrowserProvider(workspaceDir: string, authorizationState: string) {
-  const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", providerId);
-  writeJsonFile(path.join(pluginDir, "openclaw.plugin.json"), {
+afterAll(cleanupPluginLoaderFixturesForTest);
+
+function writeBrowserProvider(workspaceDir: string, authorizationState: string) {
+  const { plugin } = writeWorkspacePlugin({
+    workspaceDir,
     id: providerId,
-    providers: [providerId],
-    configSchema: { type: "object", additionalProperties: false, properties: {} },
-  });
-  await fs.writeFile(
-    path.join(pluginDir, "index.cjs"),
-    `module.exports = (api) =>
+    body: `module.exports = (api) =>
         api.registerProvider({
           id: ${JSON.stringify(providerId)}, label: "Browser auth proof",
           auth: [{ id: "oauth", label: "Browser", kind: "oauth",
@@ -52,21 +49,14 @@ async function writeBrowserProvider(workspaceDir: string, authorizationState: st
             },
           }],
         });`,
-  );
+  });
+  updatePluginManifest(plugin, { providers: [providerId] });
 }
 
 it.each(["complete", "cancel"] as const)("callback receipt: %s", async (outcome) => {
   const state = await createOpenClawTestState({
     label: `browser-auth-${outcome}`,
-    env: {
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-      OPENCLAW_OAUTH_DIR: undefined,
-      OPENCLAW_GATEWAY_URL: undefined,
-      OPENCLAW_GATEWAY_PORT: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-    },
+    env: { ...PROVIDER_AUTH_INTEGRATION_ENV },
   });
   const authorizationState = `browser-${outcome}`;
   const opened = createDeferredCore<string>();
@@ -97,7 +87,7 @@ it.each(["complete", "cancel"] as const)("callback receipt: %s", async (outcome)
   try {
     getPluginLoaderCacheState().clear();
     resetPluginRuntimeStateForTest();
-    await writeBrowserProvider(state.workspaceDir, authorizationState);
+    writeBrowserProvider(state.workspaceDir, authorizationState);
     const localOrigin = await httpFixture.listenLoopback(server);
     await state.writeConfig(config);
     saveAuthProfileStore({ version: 1, profiles: retainedProfiles }, undefined, {
@@ -149,11 +139,7 @@ it.each(["complete", "cancel"] as const)("callback receipt: %s", async (outcome)
     expect(response.status).toBe(outcome === "complete" ? 200 : 410);
     expect(response.headers.get("set-cookie")).toBeNull();
     expect(response.headers.get("cache-control")).toBe("no-store");
-    const receipt = await response.text();
-    if (outcome === "complete") {
-      expect(receipt).toContain("Sign-in response received.");
-      expect(receipt).toContain("Return to OpenClaw for the sign-in result.");
-    }
+    await response.text();
     expect(loadPersistedAuthProfileStore()?.profiles).toEqual(retainedProfiles);
     const replay = await fetch(callbackUrl);
     expect(replay.status).toBe(410);

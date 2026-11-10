@@ -14,11 +14,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { redactCdpErrorText, withCdpSocket } from "./cdp.helpers.js";
 import { getChromeWebSocketEndpoint, type RunningChrome } from "./chrome.js";
-import type {
-  BrowserGraphicsAcceleration,
-  BrowserGraphicsDevice,
-  BrowserGraphicsDiagnostics,
-} from "./client.types.js";
+import type { BrowserGraphicsAcceleration, BrowserGraphicsDiagnostics } from "./client.types.js";
 
 function readChromeString(value: unknown): string {
   return normalizeOptionalString(value) ?? "";
@@ -62,34 +58,6 @@ function firstAttribute(
     }
   }
   return null;
-}
-
-function classifyGraphicsAcceleration(params: {
-  renderer: string | null;
-  devices: BrowserGraphicsDevice[];
-  featureStatus: Record<string, string>;
-}): BrowserGraphicsAcceleration {
-  const deviceText = params.devices
-    .flatMap((device) => [device.vendor, device.device, device.driverVendor])
-    .join(" ");
-  const description = `${params.renderer ?? ""} ${deviceText}`.toLowerCase();
-  if (
-    /(swiftshader|swangle|llvmpipe|softpipe|software rasterizer|swrast|microsoft basic render driver|d3d11-warp|\bdisabled\b)/.test(
-      description,
-    )
-  ) {
-    return "software";
-  }
-  if (description.trim()) {
-    return "hardware";
-  }
-
-  // Chrome omits renderer/device text when GPU use is disabled, but its core
-  // feature states still distinguish the effective software rendering path.
-  const coreFeatureStatuses = ["2d_canvas", "gpu_compositing", "rasterization", "webgl"].map(
-    (feature) => params.featureStatus[feature]?.toLowerCase() ?? "",
-  );
-  return coreFeatureStatuses.some((status) => status.includes("software")) ? "software" : "unknown";
 }
 
 async function inspectChromeGraphicsDiagnostics(
@@ -141,10 +109,34 @@ async function inspectChromeGraphicsDiagnostics(
       .filter(([, status]) => !status.toLowerCase().startsWith("enabled"))
       .map(([feature, status]) => ({ feature, status }));
 
+    const deviceText = devices
+      .flatMap((device) => [device.vendor, device.device, device.driverVendor])
+      .join(" ");
+    const description = `${renderer ?? ""} ${deviceText}`.toLowerCase();
+    let acceleration: BrowserGraphicsAcceleration;
+    if (
+      /(swiftshader|swangle|llvmpipe|softpipe|software rasterizer|swrast|microsoft basic render driver|d3d11-warp|\bdisabled\b)/.test(
+        description,
+      )
+    ) {
+      acceleration = "software";
+    } else if (description.trim()) {
+      acceleration = "hardware";
+    } else {
+      // Chrome omits renderer/device text when GPU use is disabled, but its core
+      // feature states still distinguish the effective software rendering path.
+      const coreFeatureStatuses = ["2d_canvas", "gpu_compositing", "rasterization", "webgl"].map(
+        (feature) => featureStatus[feature]?.toLowerCase() ?? "",
+      );
+      acceleration = coreFeatureStatuses.some((status) => status.includes("software"))
+        ? "software"
+        : "unknown";
+    }
+
     return {
       status: "available",
       observedAt,
-      acceleration: classifyGraphicsAcceleration({ renderer, devices, featureStatus }),
+      acceleration,
       renderer,
       vendor: firstAttribute(attributes, ["glVendor", "angleVendor", "webglVendor"]),
       version: firstAttribute(attributes, ["glVersion", "angleVersion"]),

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
@@ -65,17 +66,12 @@ function boardResponse(sizeH: number) {
     revision: 1,
     tabs: [{ tabId: "main", title: "Main", position: 0 }],
     widgets: [
-      {
+      createBoardWidget({
         name: "continuity",
-        tabId: "main",
         title: "Dashboard",
-        contentKind: "html",
         sizeW: 12,
         sizeH,
         heightMode: "fixed",
-        position: 0,
-        grantState: "none",
-        revision: 1,
         instanceId: "continuity-instance",
         frameUrl: `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/continuity/index.html?bt=ticket`,
         viewTicket: "ticket",
@@ -83,7 +79,7 @@ function boardResponse(sizeH: number) {
         viewGeneration: "0123456789abcdef0123456789abcdef",
         sandboxUrl: buildBoardWidgetSandboxPath({ grantState: "none" }),
         sandboxPort,
-      },
+      }),
     ],
   };
 }

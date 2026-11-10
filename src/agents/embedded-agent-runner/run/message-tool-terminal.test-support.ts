@@ -4,18 +4,22 @@ import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 
-const terminalModel: Model = {
-  id: "test-model",
-  name: "Test Model",
-  api: "openai-responses",
-  provider: "test-provider",
-  baseUrl: "https://example.test",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1_000,
-  maxTokens: 1_000,
-};
+export function createTerminalTestModel(): Model {
+  return {
+    id: "test-model",
+    name: "Test Model",
+    api: "openai-responses",
+    provider: "test-provider",
+    baseUrl: "https://example.test",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_000,
+    maxTokens: 1_000,
+  };
+}
+
+const terminalModel = createTerminalTestModel();
 
 export function terminalResponse(
   content: AssistantMessage["content"],

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   claimAgentRunApprovalAuthority,
@@ -10,7 +10,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { createCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
 import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { computerUseSdkEntrypoint } from "../../plugins/loader-sdk-bridge-artifacts.test-support.js";
@@ -48,7 +48,7 @@ async function createRuntimeFixture(pluginId: string, managed = false) {
     config.desktop = { host: { enabled: true, managed: true } };
   }
   await state.writeConfig(config);
-  const sdkHost = createCompiledSdkHost([computerUseSdkEntrypoint], (prefix) =>
+  const sdkHost = prepareCompiledSdkHost([computerUseSdkEntrypoint])((prefix) =>
     tempDirs.make(prefix),
   );
   const env = {
@@ -66,12 +66,11 @@ async function createRuntimeFixture(pluginId: string, managed = false) {
 }
 
 function reachGate<T>(gate: Promise<T>, invocation: Promise<unknown>, label: string) {
-  return Promise.race([
+  return awaitGateBeforeSettlement(
     gate,
-    invocation.then(() => {
-      throw new Error(`${label} native input never reached its gate`);
-    }),
-  ]);
+    invocation,
+    `${label} native input never reached its gate`,
+  );
 }
 
 it.each(["direct-run", "parent-closes-scope", "scope-closes"] as const)(

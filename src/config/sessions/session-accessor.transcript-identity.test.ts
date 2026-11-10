@@ -1,6 +1,8 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   readOpenClawAgentDatabaseRegistryToken,
   registerOpenClawAgentDatabase,
@@ -23,6 +25,7 @@ import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlit
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import * as transcriptTargets from "./session-accessor.transcript-target.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import { readSessionEntriesFromStoreInWorker } from "./session-entry-read-runtime.js";
 import {
   captureSessionStoreReadCandidates,
@@ -55,6 +58,23 @@ describe("transcript turn physical identity", () => {
       messages: [{ message }],
       updateMode: "none",
     });
+  const resolveTarget = (target: ReturnType<typeof scope>) =>
+    transcriptTargets.resolveSessionTranscriptRuntimeTarget(target, undefined, {
+      keyFormat: "agent-qualified",
+    });
+  const retainEntry = (target: ReturnType<typeof scope>) =>
+    readSessionEntriesFromStoreInWorker({
+      agentId: "main",
+      storePath: target.storePath,
+      sessionKeys: [target.sessionKey],
+    });
+  const inventoryReader =
+    (...args: Parameters<typeof prepareSessionStoreTargetInventory>) =>
+    () =>
+      prepareSessionStoreTargetInventoryRead(prepareSessionStoreTargetInventory(...args)).withRead(
+        async (inventory) => inventory.agents[0]?.result,
+      );
+  const agents = { entries: { main: {}, other: {} } };
   const keys = () =>
     database().db.prepare("SELECT session_key FROM session_nodes ORDER BY session_key").all();
   const retainWindowOnly = () => {
@@ -64,29 +84,61 @@ describe("transcript turn physical identity", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it("retains locked full entry facts without announcing an unchanged entry, and publishes real changes", async () => {
+    const target = scope("agent:main:retained-turn");
+    const entry = {
+      sessionId,
+      updatedAt: 1,
+      delivery: { kind: "none" as const },
+      skillsSnapshot: { prompt: "Stable synthetic prompt", skills: [] },
+    };
+    replaceSessionEntrySync(target, entry);
+    await retainEntry(target);
+    const changes: string[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
+        changes.push(change.scope ?? "unspecified");
+      }
+    });
+    const retained = () =>
+      readRetainedSessionEntryFacts(
+        { agentId: "main", path: database().path },
+        { sessionKeys: [target.sessionKey], projection: "full" },
+      )?.entries[0]?.entry;
+    try {
+      await persistSessionTranscriptTurn(target, {
+        messages: [{ message }],
+        touchSessionEntry: false,
+      });
+      expect(changes).toEqual([]);
+      expect(retained()).toEqual(entry);
+      await persistSessionTranscriptTurn(target, {
+        messages: [{ message: { role: "assistant", content: "Changed entry turn" } }],
+        touchSessionEntry: true,
+      });
+      expect(changes).toEqual(["session-entry"]);
+      expect(retained()).toMatchObject({
+        sessionId,
+        skillsSnapshot: entry.skillsSnapshot,
+        updatedAt: expect.any(Number),
+      });
+      expect(retained()?.updatedAt).toBeGreaterThan(entry.updatedAt);
+    } finally {
+      stop();
+    }
+  });
+
   it("resolves the current transcript and lifecycle revision across entry writes", async () => {
     const selected = scope("agent:main:current");
     replaceSessionEntrySync(selected, { sessionId, updatedAt: 1, lifecycleRevision: "first" });
-    await readSessionEntriesFromStoreInWorker({
-      agentId: "main",
-      storePath: selected.storePath,
-      sessionKeys: [selected.sessionKey],
-    });
-    expect(
-      await transcriptTargets.resolveSessionTranscriptRuntimeTarget(selected, undefined, {
-        keyFormat: "agent-qualified",
-      }),
-    ).toMatchObject({
+    await retainEntry(selected);
+    expect(await resolveTarget(selected)).toMatchObject({
       sessionId,
       sessionKey: selected.sessionKey,
       selectedLifecycleRevision: "first",
     });
     await replaceSessionEntry(selected, { sessionId, updatedAt: 2, lifecycleRevision: "second" });
-    expect(
-      await transcriptTargets.resolveSessionTranscriptRuntimeTarget(selected, undefined, {
-        keyFormat: "agent-qualified",
-      }),
-    ).toMatchObject({
+    expect(await resolveTarget(selected)).toMatchObject({
       sessionId,
       sessionKey: selected.sessionKey,
       selectedLifecycleRevision: "second",
@@ -98,21 +150,29 @@ describe("transcript turn physical identity", () => {
     const run = scope(`${base.sessionKey}:run:${sessionId}`);
     replaceSessionEntrySync(base, { sessionId, updatedAt: 1, lifecycleRevision: "base" });
     replaceSessionEntrySync(run, { sessionId, updatedAt: 2, lifecycleRevision: "run" });
-    await readSessionEntriesFromStoreInWorker({
-      agentId: "main",
-      storePath: base.storePath,
-      sessionKeys: [base.sessionKey],
-    });
-    expect(
-      await transcriptTargets.resolveSessionTranscriptRuntimeTarget(base, undefined, {
-        keyFormat: "agent-qualified",
-      }),
-    ).toMatchObject({
+    await retainEntry(base);
+    expect(await resolveTarget(base)).toMatchObject({
       sessionId,
       sessionKey: run.sessionKey,
       selectedSessionId: sessionId,
       selectedLifecycleRevision: "run",
     });
+    const originalBase = loadSessionEntryReadOnly(base);
+    for (const content of ["First shared-ID turn", "Second shared-ID turn"]) {
+      await expect(
+        persistSessionTranscriptTurn(base, {
+          messages: [{ message: { role: "user", content } }],
+          updateMode: "none",
+        }),
+      ).resolves.toMatchObject({
+        messages: [{ appended: true }],
+        sessionEntry: { sessionId, lifecycleRevision: "run" },
+      });
+    }
+    expect(loadSessionEntryReadOnly(base)).toEqual(originalBase);
+    expect(
+      loadTranscriptEventsSync(run).filter((event) => isRecord(event) && event.type === "message"),
+    ).toHaveLength(2);
   });
 
   it("reuses a selected target until an owning registry write reassigns it", async () => {
@@ -159,16 +219,7 @@ describe("transcript turn physical identity", () => {
       { sessionId, updatedAt: 1 },
     );
     const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
-    const select = () =>
-      prepareSessionStoreTargetInventoryRead(
-        prepareSessionStoreTargetInventory(
-          {
-            agents: { entries: { main: {}, other: {} } },
-            session: { store: storePath },
-          },
-          ["other"],
-        ),
-      ).withRead(async (inventory) => inventory.agents[0]?.result);
+    const select = inventoryReader({ agents, session: { store: storePath } }, ["other"]);
     const selected = await select();
     expect(selected).toEqual({ available: true, targets: [] });
     const initialReads = reads.mock.calls.length;
@@ -198,16 +249,7 @@ describe("transcript turn physical identity", () => {
     replaceSessionEntrySync(session, { sessionId, updatedAt: 1 });
     const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
     const closes = vi.spyOn(targetDiscoveryLane.pool, "closeResources");
-    const select = () =>
-      prepareSessionStoreTargetInventoryRead(
-        prepareSessionStoreTargetInventory(
-          {
-            agents: { entries: { main: {} } },
-          },
-          ["main"],
-          env,
-        ),
-      ).withRead(async (inventory) => inventory.agents[0]?.result);
+    const select = inventoryReader({ agents: { entries: { main: {} } } }, ["main"], env);
     const expected = { available: true, targets: [{ agentId: "main", storePath }] };
     expect(await select()).toEqual(expected);
     const initialReads = reads.mock.calls.length;
@@ -222,13 +264,9 @@ describe("transcript turn physical identity", () => {
 
   it("refreshes family inventory after writing an already registered sibling", async () => {
     const storePath = `${fixture.storePath()}.family.json`;
-    const request = prepareSessionStoreTargetInventory(
-      {
-        agents: { entries: { main: {}, other: {} } },
-        session: { store: storePath },
-      },
-      ["other"],
-    );
+    const request = prepareSessionStoreTargetInventory({ agents, session: { store: storePath } }, [
+      "other",
+    ]);
     const siblingPath = `${fixture.storePath()}.family.other.sqlite`;
     openOpenClawAgentDatabase({ agentId: "other", path: siblingPath });
     const select = () =>

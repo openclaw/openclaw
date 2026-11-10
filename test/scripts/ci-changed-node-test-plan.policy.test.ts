@@ -51,6 +51,7 @@ it("classifies build-artifact and QA smoke impact by changed surface", () => {
     "cli-invocation.mjs",
     "tsdown.config.ts",
     "scripts/lib/build-artifact-cache.mts",
+    "scripts/test-built-source-verifiers.mts",
   ]);
   expectImpact(affectsBuild, false, [
     "src/gateway/server.auth.control-ui.trusted-proxy.suite.ts",
@@ -85,6 +86,10 @@ it.each([
   [
     ["src/foo.ts", "scripts/run-vitest.mts", "scripts/run-vitest.mjs"],
     "global execution or resolution input: scripts/run-vitest.mts",
+  ],
+  [
+    ["scripts/lib/vitest-node-args.mts"],
+    "global execution or resolution input: scripts/lib/vitest-node-args.mts",
   ],
   [null, "missing changed paths"],
 ] satisfies [string[] | null, string][])(

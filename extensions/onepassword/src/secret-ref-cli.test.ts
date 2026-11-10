@@ -3,21 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveTrustedOnePasswordCli } from "../onepassword-op-path.js";
+import type { AuditRow } from "./broker.js";
+import { registerOnePasswordCommands } from "./cli.js";
+import { parseOnePasswordConfig } from "./config.js";
+import { MemoryKeyedStore } from "./memory-store.test-support.js";
 import { registerOnePasswordSecretRefCommands } from "./secret-ref-cli.js";
 
-const readTokenFileMock = vi.hoisted(() =>
-  vi.fn<
-    (
-      filePath: string | undefined,
-      label: string,
-      options?: Parameters<typeof tryReadSecretFileSync>[2],
-    ) => string | undefined
-  >(),
-);
-const tokenFile = path.join(os.tmpdir(), "openclaw-onepassword-missing-token");
 const pluginIntegration = { pluginId: "onepassword", integrationId: "onepassword" };
 const provider = { source: "exec", pluginIntegration } as const;
 
@@ -25,53 +18,52 @@ vi.mock("../onepassword-op-path.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../onepassword-op-path.js")>()),
   resolveTrustedOnePasswordCli: vi.fn(),
 }));
-vi.mock("openclaw/plugin-sdk/secret-file-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-file-runtime")>()),
-  tryReadSecretFileSync: readTokenFileMock,
-}));
-
 let tempDir: string;
+let tokenFile: string;
+let output = "";
+let auditStore: MemoryKeyedStore<AuditRow>;
+const brokerConfig = parseOnePasswordConfig({
+  vault: "Automation",
+  items: {
+    alpha: { item: "Sensitive title", policy: "auto" },
+    beta: { item: "Other" },
+    gamma: { item: "Third", policy: "deny" },
+  },
+});
 beforeEach(async () => {
   tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onepassword-cli-"));
+  tokenFile = path.join(tempDir, "token");
   vi.stubEnv("PATH", "");
   vi.stubEnv("CLAW_1PASSWORD_OP", undefined);
   vi.mocked(resolveTrustedOnePasswordCli).mockReset();
-  readTokenFileMock.mockReset();
-});
-
-type OnePasswordPlan = {
-  providerUpserts: Record<string, unknown>;
-  targets: Array<Record<string, unknown>>;
-};
-
-async function run(args: string[], config: OpenClawConfig = {}): Promise<string> {
-  let output = "";
+  auditStore = new MemoryKeyedStore<AuditRow>();
   vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     output += String(chunk);
     return true;
   });
+});
+
+async function run(args: string[], config: OpenClawConfig = {}): Promise<string> {
+  output = "";
   const program = new Command().exitOverride();
-  registerOnePasswordSecretRefCommands({
-    command: program.command("onepassword"),
-    config,
-    tokenFile,
+  registerOnePasswordCommands({
+    program,
+    auditStore,
+    resolveConfig: () => brokerConfig,
+    resolveOpClient: () => ({ opBin: "/usr/local/bin/op", tokenFilePresent: async () => true }),
+    registerAdditionalCommands: (command) =>
+      registerOnePasswordSecretRefCommands({ command, config, tokenFile }),
   });
-  await program.parseAsync(["onepassword", "secretref", ...args], { from: "user" });
+  await program.parseAsync(["onepassword", ...args], { from: "user" });
   return output;
 }
 
-async function runStatus(config: OpenClawConfig): Promise<Record<string, unknown>> {
-  return JSON.parse(await run(["status", "--json"], config)) as Record<string, unknown>;
-}
+const runJson = async (args: string[], config?: OpenClawConfig) =>
+  JSON.parse(await run(args, config)) as Record<string, unknown>;
+const runStatus = (config: OpenClawConfig) => runJson(["secretref", "status", "--json"], config);
 
 const runSetup = (planPath: string, args = ["--openai-id", "op://openclaw/OpenAI/credential"]) =>
-  run(["setup", "--plan-out", planPath, ...args]);
-
-async function createSetupPlan(args: string[]): Promise<OnePasswordPlan> {
-  const planPath = path.join(tempDir, "plan.json");
-  await runSetup(planPath, args);
-  return JSON.parse(await fs.readFile(planPath, "utf8")) as OnePasswordPlan;
-}
+  run(["secretref", "setup", "--plan-out", planPath, ...args]);
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -79,34 +71,52 @@ afterEach(async () => {
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 
-it("builds provider config and model API-key targets", async () => {
-  const plan = await createSetupPlan([
-    "--anthropic-id",
-    "op://openclaw/Anthropic/credential",
-    "--openrouter-id",
-    "openclaw/OpenRouter/credential",
-    "--provider-key",
-    "xai=op://openclaw/xAI/credential",
-  ]);
-
-  expect(plan.providerUpserts.onepassword).toEqual(provider);
-  expect(plan.targets).toEqual([
-    expect.objectContaining({
-      type: "models.providers.apiKey",
-      providerId: "anthropic",
-      ref: { source: "exec", provider: "onepassword", id: "op://openclaw/Anthropic/credential" },
-    }),
-    expect.objectContaining({ providerId: "openrouter" }),
-    expect.objectContaining({ providerId: "xai" }),
-  ]);
-});
+it.each(process.platform === "win32" ? [false] : [false, true])(
+  "writes provider targets through a canonical directory (alias: %s)",
+  async (alias) => {
+    let directory = tempDir;
+    if (alias) {
+      const parent = path.join(tempDir, "alias");
+      await fs.mkdir(parent);
+      directory = path.join(parent, "output");
+      await fs.symlink(tempDir, directory);
+      await fs.chmod(parent, 0o777);
+    }
+    const planPath = path.join(await fs.realpath(directory), "plan.json");
+    expect(
+      await runSetup(path.join(directory, "plan.json"), [
+        "--openrouter-id",
+        "openclaw/OpenRouter/credential",
+        "--provider-key",
+        "xai=op://openclaw/xAI/credential",
+      ]),
+    ).toContain(`Plan written to ${planPath}`);
+    const plan: unknown = JSON.parse(await fs.readFile(planPath, "utf8"));
+    expect(plan).toMatchObject({
+      version: 1,
+      providerUpserts: { onepassword: provider },
+      targets: [
+        {
+          type: "models.providers.apiKey",
+          providerId: "openrouter",
+          ref: {
+            source: "exec",
+            provider: "onepassword",
+            id: "openclaw/OpenRouter/credential",
+          },
+        },
+        { providerId: "xai" },
+      ],
+    });
+  },
+);
 
 it.each(["op://openclaw/../credential", "op://openclaw\\OpenAI\\credential", "op://vault/clé"])(
   "rejects invalid 1Password ref %s",
   async (id) => {
-    await expect(createSetupPlan(["--provider-key", `openai=${id}`])).rejects.toThrow(
-      "Invalid --provider-key openai 1Password SecretRef id",
-    );
+    await expect(
+      runSetup(path.join(tempDir, "plan.json"), ["--provider-key", `openai=${id}`]),
+    ).rejects.toThrow("Invalid --provider-key openai 1Password SecretRef id");
   },
 );
 
@@ -120,74 +130,102 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "writes through the canonical directory instead of a replaceable alias",
-  async () => {
-    const trustedDir = path.join(tempDir, "trusted");
-    const aliasParent = path.join(tempDir, "alias");
-    await fs.mkdir(trustedDir);
-    await fs.mkdir(aliasParent);
-    const aliasDir = path.join(aliasParent, "output");
-    const canonicalPlanPath = path.join(await fs.realpath(trustedDir), "plan.json");
-    await fs.symlink(trustedDir, aliasDir);
-    await fs.chmod(aliasParent, 0o777);
-    const output = await runSetup(path.join(aliasDir, "plan.json"));
-    expect(output).toContain(`Plan written to ${canonicalPlanPath}`);
-    expect(JSON.parse(await fs.readFile(canonicalPlanPath, "utf8"))).toMatchObject({ version: 1 });
+it.each(["ready", "untrusted", "not-found"] as const)(
+  "reports %s prerequisites without exposing tokens",
+  async (state) => {
+    vi.stubEnv("CLAW_1PASSWORD_OP", state === "not-found" ? undefined : "/trusted/op");
+    vi.stubEnv("PATH", "/bin");
+    const ready = state === "ready";
+    const op = vi.mocked(resolveTrustedOnePasswordCli);
+    if (state === "untrusted") {
+      op.mockRejectedValue(new Error("unsafe path detail"));
+    } else {
+      op.mockResolvedValue(ready ? "/trusted/op" : undefined);
+    }
+    if (state !== "not-found") {
+      const source = path.join(tempDir, "token-source");
+      await fs.writeFile(source, "not-a-real-service-account-token", { mode: 0o600 });
+      if (ready) {
+        await fs.link(source, tokenFile);
+      } else if (process.platform === "win32") {
+        await fs.mkdir(tokenFile);
+      } else {
+        await fs.symlink(source, tokenFile);
+      }
+    }
+    const result = await runStatus(
+      ready ? {} : { secrets: { providers: { "corp-onepassword": provider } } },
+    );
+    expect(result).toMatchObject({
+      opBinaryPath: ready ? "/trusted/op" : null,
+      opStatus: state,
+      tokenFileStatus: ready ? "ready" : "missing-or-unsafe",
+      prerequisitesReady: ready,
+      providerAlias: ready ? "onepassword" : "corp-onepassword",
+      providerReady: !ready,
+      ready: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("not-a-real-service-account-token");
+    if (state === "not-found") {
+      expect(result.issues).toEqual(["op-not-found", "token-file-missing-or-unsafe"]);
+    }
   },
 );
 
-it("reports trusted executable and token prerequisites without exposing the token", async () => {
-  vi.stubEnv("CLAW_1PASSWORD_OP", "/trusted/op");
-  vi.stubEnv("PATH", "/bin");
-  vi.mocked(resolveTrustedOnePasswordCli).mockResolvedValue("/trusted/op");
-  readTokenFileMock.mockReturnValue("not-a-real-service-account-token");
-  const result = await runStatus({});
-  expect(result).toMatchObject({
-    opCommand: "/trusted/op",
-    opBinaryPath: "/trusted/op",
-    opStatus: "ready",
-    tokenFile,
-    tokenFileStatus: "ready",
-    prerequisitesReady: true,
+async function seedAudit(...rows: Partial<AuditRow>[]) {
+  for (const [index, row] of rows.entries()) {
+    await auditStore.register(String(index), {
+      timestampMs: (index + 1) * 1000,
+      agentId: "agent-a",
+      sessionKey: "session-a",
+      toolCallId: "call-a",
+      slug: "alpha",
+      reason: "short",
+      outcome: "auto",
+      ...row,
+    });
+  }
+}
+
+it("status contains readiness and counts without token or item values", async () => {
+  expect(await runJson(["status"])).toEqual({
+    tokenFilePresent: true,
+    opBinaryResolved: true,
+    opBinaryPath: "/usr/local/bin/op",
+    itemCount: 3,
+    policyCounts: { auto: 1, approve: 1, deny: 1 },
   });
-  expect(JSON.stringify(result)).not.toContain("not-a-real-service-account-token");
-  expect(resolveTrustedOnePasswordCli).toHaveBeenCalledWith({
-    configuredPath: "/trusted/op",
-    pathEnv: "/bin",
-  });
-  expect(tryReadSecretFileSync).toHaveBeenCalledWith(
-    tokenFile,
-    "1Password service account token",
-    expect.objectContaining({ rejectHardlinks: false, rejectSymlink: true }),
+});
+
+it.each([
+  [`prefix-${"x".repeat(100)}`, `prefix-${"x".repeat(70)}...`],
+  [`${"x".repeat(76)}\u{1f600}tail`, `${"x".repeat(76)}...`],
+  [`${"x".repeat(75)}\u{1f600}tail`, `${"x".repeat(75)}\u{1f600}...`],
+])(
+  "limits audit output and truncates %s without exposing private fields",
+  async (reason, truncated) => {
+    await seedAudit({}, { agentId: "agent-b", slug: "beta", reason, outcome: "approved" });
+    expect(await runJson(["audit", "--limit", "1"])).toEqual([
+      {
+        timestamp: "1970-01-01T00:00:02.000Z",
+        agent: "agent-b",
+        slug: "beta",
+        outcome: "approved",
+        reason: truncated,
+      },
+    ]);
+  },
+);
+
+it.each(["0", "1.5", "1e3", "1001"])("rejects invalid audit limits: %j", async (limit) => {
+  const entries = vi.spyOn(auditStore, "entries");
+  await expect(run(["audit", "--limit", limit])).rejects.toThrow(
+    "--limit must be an integer from 1 to 1000",
   );
+  expect(entries).not.toHaveBeenCalled();
+  expect(output).toBe("");
 });
 
-it("reports untrusted op and unsafe token prerequisites", async () => {
-  vi.stubEnv("CLAW_1PASSWORD_OP", "op");
-  vi.mocked(resolveTrustedOnePasswordCli).mockRejectedValue(new Error("unsafe path detail"));
-  readTokenFileMock.mockImplementation(() => {
-    throw new Error("unsafe token detail");
-  });
-  await expect(runStatus({})).resolves.toMatchObject({
-    opCommand: "op",
-    opBinaryPath: null,
-    opStatus: "untrusted",
-    tokenFile,
-    tokenFileStatus: "missing-or-unsafe",
-    prerequisitesReady: false,
-  });
-});
-
-it("discovers a configured custom provider alias", async () => {
-  const result = await runStatus({ secrets: { providers: { "corp-onepassword": provider } } });
-  expect(result).toMatchObject({
-    providerAlias: "corp-onepassword",
-    providerReady: true,
-    opStatus: "not-found",
-    tokenFileStatus: "missing-or-unsafe",
-    prerequisitesReady: false,
-    ready: false,
-    issues: ["op-not-found", "token-file-missing-or-unsafe"],
-  });
+it("accepts the maximum decimal audit limit", async () => {
+  expect(await runJson(["audit", "--limit", "1000"])).toEqual([]);
 });

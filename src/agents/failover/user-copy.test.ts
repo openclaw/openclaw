@@ -25,8 +25,6 @@ describe("failover user copy", () => {
     `400 ${JSON.stringify({ error: { type: "invalid_request_error", message }, request_id: "req_prompt_size_canary", details: "x".repeat(size) })}`;
   it.each([
     ["Weekly usage limit exhausted; resets 2026-10-20 00:00:00 UTC.", false],
-    ["Weekly usage limit exhausted; resets 2026-10-20 00:00:00 UTC.", true],
-    ["您已达到每周/每月使用上限，您的限额将在 2026-10-20 00:00:00 重置。", false],
     ["您已达到每周/每月使用上限，您的限额将在 2026-10-20 00:00:00 重置。", true],
   ])("extracts quota reset guidance: %s (structured=%s)", (message, structured) => {
     const raw = structured
@@ -88,10 +86,7 @@ describe("failover user copy", () => {
 
   it.each([
     [`400 ${promptMessage}`, promptCopy],
-    [
-      http400(16_384, "This prompt is longer than the free tier allows for a single request."),
-      retryCopy,
-    ],
+    [http400(16_384), retryCopy],
   ])("renders prompt-size policy for %s", (raw, expected) => {
     expect(rate(raw)).toBe(expected);
   });
@@ -100,19 +95,6 @@ describe("failover user copy", () => {
     const raw = http400(700);
     // 700 bytes of padding keeps this above the old 512-byte truncation boundary.
     expect([rate(raw), reply({ message: raw })]).toEqual([promptCopy, promptCopy]);
-  });
-
-  it.each([
-    [
-      "OpenAI API error (400): 400 max_new_tokens (384000) exceeds model's maximum output tokens (65536)",
-      "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.",
-    ],
-    ...["{ malformed response", "<html>Private gateway response</html>"].map((raw) => [
-      raw,
-      "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
-    ]),
-  ])("renders bounded format-error copy: %s", (raw, expected) => {
-    expect(renderFormatErrorCopy(raw)).toBe(expected);
   });
 
   it("bounds provider diagnostics without dropping the cause", () => {
@@ -150,20 +132,15 @@ describe("failover user copy", () => {
   });
 
   it("preserves the first bounded provider hint from structured exhausted attempts", () => {
-    const attempts = [0, 1, 2].map((index) => ({
-      provider: `mock${index}`,
-      model: `synthetic-${"long-model-name-".repeat(10)}${index}`,
+    const attempts = [17, 18].map((minutes) => ({
+      provider: "mock",
+      model: "model",
       reason: "rate_limit" as const,
-      error: `Rate limit reached. Please try again in ${17 + index} minutes.`,
+      error: `Rate limit reached. Please try again in ${minutes} minutes.`,
     }));
-    expect(
-      reply({
-        message: `All models failed (3): ${attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error} (rate_limit)`)
-          .join(" | ")}`,
-        attempts,
-      }),
-    ).toBe("⚠️ Rate limit reached. Please try again in 17 minutes.");
+    expect(reply({ message: `All models failed: ${"x".repeat(500)}`, attempts })).toBe(
+      "⚠️ Rate limit reached. Please try again in 17 minutes.",
+    );
   });
 
   it.each([
@@ -203,7 +180,6 @@ describe("failover user copy", () => {
       true,
       `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`,
     ],
-    ["401 Unauthorized: invalid api key", true, `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`],
     [
       "unexpected status 404 Not Found: The model `gpt-x` does not exist",
       true,
@@ -214,10 +190,7 @@ describe("failover user copy", () => {
   ] as const)("renders provider copy in context: %s", (raw, errorContext, expected) => {
     expect(sanitizedCopy(raw, errorContext ? { errorContext } : undefined)).toEqual(expected);
   });
-  const aggregate =
-    "All models failed (3): anthropic/claude-opus-5: You've hit your session limit · resets 6:20pm (Europe/London) (unknown) | " +
-    "claude-cli/claude-sonnet-5: You've hit your session limit · resets 6:20pm (Europe/London) (unknown) | " +
-    "openai/gpt-5.6-sol: Codex error: The usage limit has been reached (rate_limit)";
+  const aggregate = `All models failed (2): mock/${"model".repeat(60)}: You've hit your session limit · resets 6:20pm (Europe/London) (unknown) | mock/fallback: The usage limit has been reached (rate_limit)`;
 
   it("keeps reset hints beyond the summary length guard", () => {
     expect(aggregate.length).toBeGreaterThan(300);

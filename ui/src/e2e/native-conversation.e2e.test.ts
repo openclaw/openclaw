@@ -7,6 +7,7 @@ import {
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
+  textContent,
   captureUiProofEnabled,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -137,21 +138,19 @@ suite.define(() => {
       await installConversationHost(page);
       const linkedUrl = controlUiSessionUrl(suite.server.baseUrl, "agent:main:linked");
       const gateway = await installMockGateway(page, {
-        workspace: "/workspace",
+        workspace: "/default-workspace",
         sessions: ["main", "next", "linked"].map((name) => ({
           key: `agent:main:${name}`,
           label: name,
           kind: "direct",
+          spawnedCwd: "/workspace",
         })),
         historyMessages: [
           {
             role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general) · [Notes](notes.txt)`,
-              },
-            ],
+            content: textContent(
+              `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general) · [Notes](notes.txt)`,
+            ),
           },
         ],
         methodResponses: {
@@ -535,7 +534,7 @@ suite.define(() => {
       });
       const menu = pane.locator("openclaw-chat-header-session-menu");
       await menu.getByRole("menuitem", { name: "Run session proof", exact: true }).waitFor();
-      await menu.getByRole("menuitem", { name: "Stop cloud worker…", exact: true }).waitFor();
+      await menu.getByRole("menuitem", { name: "Stop cloud device…", exact: true }).waitFor();
       expect(await gateway.getRequests("fixture.sessionAction")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
       await menu.getByRole("menuitem", { name: "Run session proof", exact: true }).click();
@@ -546,14 +545,14 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: "Fail session proof", exact: true }).click();
       await page.getByText("Synthetic session action failed.", { exact: true }).waitFor();
       await command(page, "open-session-actions", sessionB, "open-stop-cancel");
-      await menu.getByRole("menuitem", { name: "Stop cloud worker…", exact: true }).click();
+      await menu.getByRole("menuitem", { name: "Stop cloud device…", exact: true }).click();
       const dialog = page.locator("openclaw-modal-dialog");
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
       await command(page, "open-session-actions", sessionB, "open-stop-confirm");
       await gateway.deferNext("sessions.reclaim");
-      await menu.getByRole("menuitem", { name: "Stop cloud worker…", exact: true }).click();
-      await dialog.getByRole("button", { name: "Stop worker", exact: true }).click();
+      await menu.getByRole("menuitem", { name: "Stop cloud device…", exact: true }).click();
+      await dialog.getByRole("button", { name: "Stop", exact: true }).click();
       expect(requireRecord((await gateway.waitForRequest("sessions.reclaim")).params)).toEqual({
         key: sessionB.sessionKey,
         agentId: sessionB.agentId,

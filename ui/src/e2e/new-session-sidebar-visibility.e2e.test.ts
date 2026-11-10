@@ -102,13 +102,14 @@ suite.define(() => {
       await gateway.setMethodResponse("sessions.list", response([created, old]));
       await gateway.resolveDeferred("sessions.create");
       await page.clock.runFor(200);
-      await waitForCommittedChatRoute(page);
       // Only presentation frames may elapse: no collection window, cooldown,
       // manual refresh, or terminal message may make the new row appear.
       await page.clock.runFor(0);
       const row = page.locator(`.sidebar-recent-session[data-session-key="${created.key}"]`);
       await expect.poll(() => row.count()).toBe(1);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      await page.clock.resume();
+      await waitForCommittedChatRoute(page);
     });
   });
 });

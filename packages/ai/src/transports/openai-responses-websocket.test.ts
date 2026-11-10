@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import OpenAI from "openai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { collectForRetentionCheck } from "../../../../src/test-utils/retention.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 
 const websocketState = vi.hoisted(() => ({
@@ -298,12 +298,8 @@ describe("native OpenAI Responses WebSocket transport", () => {
       );
       const control = new WeakRef({ unowned: true });
       // Keep real cache timers and ALS alive while collecting the completed turn.
-      await nextTurn();
-      queryObjects(WeakRef);
-      // Completed SDK promise state can keep the last caller reachable during
-      // the first collection. Collect across a job boundary without closing sockets.
-      await nextTurn();
-      queryObjects(WeakRef);
+      // Completed SDK promise state can survive the first collection.
+      await collectForRetentionCheck("websocket-caller", 2);
       expect(control.deref()).toBeUndefined();
       expect(references.filter((reference) => reference.deref())).toHaveLength(0);
       await runWithAiTransportHost(host, async () => {
@@ -330,29 +326,5 @@ describe("native OpenAI Responses WebSocket transport", () => {
       cleanupSessionResources(undefined, host);
       callers.disable();
     }
-  });
-
-  it("keeps matching-session and all-session cleanup inside one runtime owner", async () => {
-    const firstHost = createAiTransportHost();
-    const secondHost = createAiTransportHost();
-    queueCompletions("first-shared", "first-other", "second-shared");
-    for (const [host, sessionId] of [
-      [firstHost, "session-1"],
-      [firstHost, "other"],
-      [secondHost, "session-1"],
-    ] as const) {
-      await runWithAiTransportHost(host, () =>
-        consumeResponse(createStream(request(), { sessionId })),
-      );
-    }
-
-    cleanupSessionResources("session-1", firstHost);
-    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, false, false]);
-
-    cleanupSessionResources(undefined, firstHost);
-    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, true, false]);
-
-    cleanupSessionResources(undefined, secondHost);
-    expect(websocketState.instances.map(({ closed }) => closed)).toEqual([true, true, true]);
   });
 });

@@ -9,6 +9,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
+import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
 import type { ChannelPlugin, OpenClawConfig, PluginRuntime, ReplyPayload } from "../api.js";
 import { linePlugin } from "../channel-plugin-api.js";
 import lineEntry from "../index.js";
@@ -223,15 +224,7 @@ it.each([false, true])(
       (error: unknown) => ({ error }),
     );
     try {
-      await Promise.race([
-        preparing.promise,
-        dispatched.promise.then(() => {
-          throw new Error("dispatched before preparation");
-        }),
-        sending.then(() => {
-          throw new Error("settled before preparation");
-        }),
-      ]);
+      await waitForEffectPreparation(preparing.promise, dispatched.promise, sending);
       expect(startedWhileActive).toEqual([]);
       if (retired) {
         retire();

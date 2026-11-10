@@ -10,6 +10,7 @@ import {
   peekExecRequestSystemEventEntries,
 } from "../infra/system-events.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import {
   removeNotifyOnExit,
   getSession,
@@ -65,8 +66,11 @@ export function cancelBackgroundExecSession(sessionId: string): boolean {
   if (!isBackgroundExecCancellable(session)) {
     return false;
   }
-  const supervisor = getProcessSupervisor();
-  supervisor.cancel(sessionId, "manual-cancel");
+  if (session.durable) {
+    session.durable.cancel(captureAgentToolSourceExecutionGuard());
+  } else {
+    getProcessSupervisor().cancel(sessionId, "manual-cancel");
+  }
   markCancellationRequested(session);
   return true;
 }
@@ -97,7 +101,11 @@ export async function drainAgentExecProcesses(
       session.requestCancelled = true;
       if (!session.exited && !session.finalizing) {
         markCancellationRequested(session);
-        getProcessSupervisor().cancel(session.id, "manual-cancel");
+        if (session.durable) {
+          session.durable.cancel(assertCurrent);
+        } else {
+          getProcessSupervisor().cancel(session.id, "manual-cancel");
+        }
       }
       removeNotifyOnExit(session);
     }

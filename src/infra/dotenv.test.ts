@@ -1,5 +1,4 @@
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -22,18 +21,6 @@ const CREDENTIAL_AND_GATEWAY_ENV_KEYS = `
   .trim()
   .split(/\s+/);
 
-const BUNDLED_TRUST_ROOT_ENV_LINES = [
-  "OPENCLAW_BROWSER_CONTROL_MODULE=data:text/javascript,boom",
-  "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
-  "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1",
-] as const;
-
-const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
-  (line) => line.split("=")[0] ?? "",
-);
-
 const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS =
   "AppData ComSpec LocalAppData ProgramFiles ProgramW6432 SystemRoot windir"
     .split(" ")
@@ -47,12 +34,16 @@ function expectEnvUndefined(keys: readonly string[]) {
 
 const fixture = useDotEnvFixture();
 beforeEach(() => clearEnv(["FOO", "BAR"]));
+const writeState = (contents: string) =>
+  writeEnvFile(path.join(fixture.stateDir, ".env"), contents);
+const writeWorkspace = (contents: string) =>
+  writeEnvFile(path.join(fixture.cwdDir, ".env"), contents);
 
-async function expectBlockedWorkspaceEnv(directory: string, lines: readonly string[]) {
+async function expectBlockedWorkspaceEnv(lines: readonly string[]) {
   const keys = lines.map((line) => line.split("=")[0] ?? "");
-  await writeEnvFile(path.join(directory, ".env"), lines.join("\n"));
+  await writeWorkspace(lines.join("\n"));
   clearEnv(keys);
-  loadWorkspaceDotEnvFile(path.join(directory, ".env"));
+  loadWorkspaceDotEnvFile(path.join(fixture.cwdDir, ".env"));
   expectEnvUndefined(keys);
 }
 
@@ -61,8 +52,8 @@ describe("loadDotEnv", () => {
     ["CWD", "from-cwd"],
     ["shell", "from-shell"],
   ])("keeps %s precedence over the global fallback", async (source, expected) => {
-    await writeEnvFile(path.join(fixture.stateDir, ".env"), "FOO=from-global\nBAR=1\n");
-    await writeEnvFile(path.join(fixture.cwdDir, ".env"), "FOO=from-cwd\n");
+    await writeState("FOO=from-global\nBAR=1\n");
+    await writeWorkspace("FOO=from-cwd\n");
     if (source === "shell") {
       process.env.FOO = "from-shell";
     }
@@ -71,13 +62,12 @@ describe("loadDotEnv", () => {
   });
 
   it("lets the state dotenv replace only explicitly service-managed inherited values", async () => {
-    const stateEnvPath = path.join(fixture.stateDir, ".env");
-    await writeEnvFile(stateEnvPath, "MANAGED_API_KEY=from-state\nOPERATOR_API_KEY=from-state\n");
+    await writeState("MANAGED_API_KEY=from-state\nOPERATOR_API_KEY=from-state\n");
     process.env.MANAGED_API_KEY = "stale-service-value";
     process.env.OPERATOR_API_KEY = "operator-service-value";
 
     const loaded = loadGlobalRuntimeDotEnvFiles({
-      stateEnvPath,
+      stateEnvPath: path.join(fixture.stateDir, ".env"),
       overrideKeys: ["MANAGED_API_KEY"],
     });
 
@@ -89,7 +79,7 @@ describe("loadDotEnv", () => {
   });
 
   it("loads global env when the working directory was deleted", async () => {
-    await writeEnvFile(path.join(fixture.stateDir, ".env"), "FOO=from-global\n");
+    await writeState("FOO=from-global\n");
     vi.spyOn(process, "cwd").mockImplementation(() => {
       throw new Error("ENOENT: uv_cwd");
     });
@@ -113,45 +103,24 @@ describe("loadDotEnv", () => {
     loadDotEnv();
 
     expect(process.env).toMatchObject({ FOO: "from-global", BAR: "from-gateway" });
-    expect(loggerMocks.warn).toHaveBeenCalledOnce();
-    const [message, metadata] = expectDefined(
-      loggerMocks.warn.mock.calls[0],
-      "logger warning call",
-    );
-    expect(String(message)).toContain("Conflicting values in");
-    expect(String((metadata as { ignoredPath?: unknown } | undefined)?.ignoredPath)).toContain(
-      "gateway.env",
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Conflicting values in"),
+      expect.objectContaining({ ignoredPath: expect.stringContaining("gateway.env") }),
     );
   });
 
-  it("blocks credential and gateway auth vars from CWD .env", async () => {
-    await expectBlockedWorkspaceEnv(
-      fixture.cwdDir,
-      CREDENTIAL_AND_GATEWAY_ENV_KEYS.map((key) => `${key}=attacker-${key}`),
-    );
-  });
-
-  it("blocks Windows shell trust-root vars from workspace .env", async () => {
-    await expectBlockedWorkspaceEnv(
-      fixture.cwdDir,
-      WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS.map((key) => `${key}=./evil-${key}`),
-    );
-  });
-
-  it("blocks path-override vars from workspace .env", async () => {
-    const bundledPluginsDir = path.join(fixture.base, "attacker-bundled");
-    await expectBlockedWorkspaceEnv(fixture.cwdDir, [
-      `NPM_CONFIG_PREFIX=${path.join(fixture.cwdDir, ".npm-prefix")}`,
-      "OPENCLAW_AGENT_DIR=./evil-agent",
-      `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
-      "OPENCLAW_OAUTH_DIR=./evil-oauth",
-      "PI_CODING_AGENT_DIR=./evil-pi-agent",
-      `PNPM_HOME=${path.join(fixture.cwdDir, ".pnpm")}`,
-    ]);
-  });
-
-  it("blocks lowercase npm_execpath from workspace .env", async () => {
-    await expectBlockedWorkspaceEnv(fixture.cwdDir, ["npm_execpath=./evil/npm-cli.js"]);
+  it.each([
+    ["credential and gateway auth", CREDENTIAL_AND_GATEWAY_ENV_KEYS],
+    ["Windows shell trust-root", WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS],
+    [
+      "path-override",
+      "NPM_CONFIG_PREFIX OPENCLAW_AGENT_DIR OPENCLAW_BUNDLED_PLUGINS_DIR OPENCLAW_OAUTH_DIR PI_CODING_AGENT_DIR PNPM_HOME".split(
+        " ",
+      ),
+    ],
+    ["lowercase npm_execpath", ["npm_execpath"]],
+  ] as const)("blocks %s vars from workspace .env", async (_name, keys) => {
+    await expectBlockedWorkspaceEnv(keys.map((key) => `${key}=./evil-${key}`));
   });
 
   it("still allows trusted global .env to set non-workspace runtime vars", async () => {
@@ -163,7 +132,7 @@ describe("loadDotEnv", () => {
       SLACK_API_URL: "http://trusted-slack.example.com/api/",
       ZALO_API_URL: "http://trusted-zalo.example.com/",
     };
-    await writeEnvFile(path.join(fixture.stateDir, ".env"), envContents(trusted));
+    await writeState(envContents(trusted));
     clearEnv(Object.keys(trusted));
     loadDotEnv();
     expect(process.env).toMatchObject(trusted);
@@ -172,7 +141,7 @@ describe("loadDotEnv", () => {
 
 describe("loadCliDotEnv", () => {
   it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
-    await writeEnvFile(path.join(fixture.cwdDir, ".env"), "OPENCLAW_STATE_DIR=./evil-state\n");
+    await writeWorkspace("OPENCLAW_STATE_DIR=./evil-state\n");
 
     // Exercise the blocklist rather than the already-set skip.
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
@@ -181,22 +150,14 @@ describe("loadCliDotEnv", () => {
     expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
   });
 
-  it("blocks bundled trust-root vars from workspace .env during CLI startup", async () => {
-    await writeEnvFile(
-      path.join(fixture.cwdDir, ".env"),
-      [...BUNDLED_TRUST_ROOT_ENV_LINES].join("\n"),
-    );
-
-    clearEnv(BUNDLED_TRUST_ROOT_ENV_KEYS);
-    loadCliDotEnv();
-
-    expectEnvUndefined(BUNDLED_TRUST_ROOT_ENV_KEYS);
-  });
-
   it("blocks workspace .env takeover vars before loading the global fallback", async () => {
     const blocked = {
       OPENCLAW_CONFIG_PATH: "./evil-config.json",
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(fixture.base, "attacker-bundled"),
+      OPENCLAW_BROWSER_CONTROL_MODULE: "data:text/javascript,boom",
+      OPENCLAW_BUNDLED_HOOKS_DIR: "./attacker-hooks",
+      OPENCLAW_BUNDLED_SKILLS_DIR: "./attacker-skills",
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
       NODE_OPTIONS: "--require ./evil.js",
       NODE_REDIRECT_WARNINGS: "./warnings.log",
       NODE_REPL_EXTERNAL_MODULE: "./evil-repl.js",
@@ -206,11 +167,10 @@ describe("loadCliDotEnv", () => {
       UV_PYTHON: "./attacker-python",
       uv_python: "./attacker-python-lower",
     };
-    await writeEnvFile(
-      path.join(fixture.cwdDir, ".env"),
+    await writeWorkspace(
       envContents({ SAFE_KEY: "from-cwd", OPENCLAW_STATE_DIR: "./evil-state", ...blocked }),
     );
-    await writeEnvFile(path.join(fixture.stateDir, ".env"), "BAR=from-global\n");
+    await writeState("BAR=from-global\n");
     clearEnv(["SAFE_KEY", "BAR", ...Object.keys(blocked)]);
 
     loadCliDotEnv();

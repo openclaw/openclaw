@@ -23,6 +23,19 @@ export function createExactAssistantMessage(params: {
   };
 }
 
+export function messageEvent<Message, Parent>(id: string, parentId: Parent, message: Message) {
+  return { type: "message", id, parentId, message };
+}
+
+export function timedMessageEvent<Message, Parent, Timestamp>(
+  id: string,
+  parentId: Parent,
+  timestamp: Timestamp,
+  message: Message,
+) {
+  return { type: "message", id, parentId, timestamp, message };
+}
+
 export function transcriptMessage(eventId: string, parentId: string | null, message: unknown) {
   return { eventId, parentId, message };
 }

@@ -29,11 +29,11 @@ import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import type { AgentDatabaseMigrationTarget } from "./state-migrations.media-persistence-targets.js";
 
 /** Doctor alone may remove windows whose logical node no longer exists. */
-export function repairDoctorSessionWindowOrphans(
+export async function repairDoctorSessionWindowOrphans(
   database: DatabaseSync,
   pathname: string,
   assertCurrent: () => void,
-): string[] {
+): Promise<string[]> {
   assertCurrent();
   const schemaVersion = readSqliteUserVersion(database);
   if (
@@ -56,20 +56,24 @@ export function repairDoctorSessionWindowOrphans(
     true,
   );
   database.exec("PRAGMA foreign_keys = ON;");
+  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
+  const windows = db
+    .selectFrom("session_windows")
+    .leftJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
+    .where("session_nodes.session_key", "is", null)
+    .select("session_windows.session_id");
+  if (!executeSqliteQueryTakeFirstSync(database, windows)) {
+    return [];
+  }
+  const backupPath = await backupDoctorSqliteRepair(pathname, "session-window");
+  assertCurrent();
   return runSqliteImmediateTransactionSync(
     database,
     () => {
       assertCurrent();
-      const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
-      const windows = db
-        .selectFrom("session_windows")
-        .leftJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
-        .where("session_nodes.session_key", "is", null)
-        .select("session_windows.session_id");
       if (!executeSqliteQueryTakeFirstSync(database, windows)) {
         return [];
       }
-      const backupPath = backupDoctorSqliteRepair(pathname, "session-window");
       assertCurrent();
       const foreignKeys = database.prepare("PRAGMA foreign_key_list(session_windows);");
       foreignKeys.setReadBigInts(true);
@@ -142,7 +146,9 @@ export async function repairDoctorSessionWindowsBeforeMigration(params: {
             assertAgentDatabaseMaintenanceAuthority(maintenance);
             assertOpenClawAgentDatabaseOwner(database, { agentId: target.agentId, pathname });
           };
-          changes.push(...repairDoctorSessionWindowOrphans(database, pathname, assertCurrent));
+          changes.push(
+            ...(await repairDoctorSessionWindowOrphans(database, pathname, assertCurrent)),
+          );
         } finally {
           database.close();
         }

@@ -2,6 +2,7 @@ import { asOptionalObjectRecord, asRecord } from "@openclaw/normalization-core/r
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
@@ -397,6 +398,13 @@ export async function prepareToolExecutionEnd(
       : undefined;
   const endedAt = Date.now();
   const execDetails = readExecToolDetails(sanitizedResult);
+  // A routine check has no activity bubble, but errors and approval requests still surface.
+  const hideFromChannelProgress =
+    explicitHideFromChannelProgress ||
+    (readAutomationDisplayState(runId) !== "ordinary" &&
+      !isToolError &&
+      execDetails?.status !== "approval-pending" &&
+      execDetails?.status !== "approval-unavailable");
   const itemData = {
     ...projectAgentToolActivity({
       toolCallId,
@@ -406,7 +414,7 @@ export async function prepareToolExecutionEnd(
       meta,
       result: sanitizedResult,
       status: isToolError ? terminalErrorStatus : "completed",
-      hideFromChannelProgress: explicitHideFromChannelProgress,
+      hideFromChannelProgress,
     }),
     startedAt: startData?.startTime,
     endedAt,
@@ -415,7 +423,6 @@ export async function prepareToolExecutionEnd(
   // Activity acceptance can suppress presentation, but the tool has settled.
   ctx.state.itemActiveIds.delete(itemData.itemId);
   ctx.state.itemCompletedCount += 1;
-  const hideFromChannelProgress = explicitHideFromChannelProgress;
   const createResultData = () => ({
     phase: "result",
     name: toolName,

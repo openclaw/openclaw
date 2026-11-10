@@ -5,12 +5,8 @@ import {
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
-  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
-  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
-  executeProviderOperationWithRetry,
-  fetchWithTimeoutGuarded,
   pollProviderOperationJson,
   postJsonResponse,
   resolveProviderOperationTimeoutMs,
@@ -44,17 +40,19 @@ type BytePlusTaskResponse = {
   resolution?: unknown;
 };
 
-type BytePlusTaskStatus = "running" | "failed" | "queued" | "succeeded" | "cancelled";
-
-function readBytePlusTaskStatus(payload: BytePlusTaskResponse): BytePlusTaskStatus {
+function isBytePlusTaskComplete(payload: BytePlusTaskResponse): boolean {
   const status = normalizeOptionalString(payload.status);
   switch (status) {
     case "running":
-    case "failed":
     case "queued":
+      return false;
     case "succeeded":
+      return true;
+    case "failed":
     case "cancelled":
-      return status;
+      throw new Error(
+        readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed",
+      );
     case undefined:
       throw new Error("BytePlus video status response missing task status");
     default:
@@ -219,13 +217,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         pollIntervalMs: POLL_INTERVAL_MS,
         requestFailedMessage: "BytePlus video status request failed",
         timeoutMessage: `BytePlus video generation task ${taskId} did not finish in time`,
-        isComplete: (payload) => readBytePlusTaskStatus(payload) === "succeeded",
-        getFailureMessage: (payload) => {
-          const status = readBytePlusTaskStatus(payload);
-          return status === "failed" || status === "cancelled"
-            ? readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed"
-            : undefined;
-        },
+        isComplete: isBytePlusTaskComplete,
       });
       const completedContent = completed.content;
       if (completedContent !== undefined && !isRecord(completedContent)) {
@@ -248,38 +240,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         requestFailedMessage: "BytePlus generated video download failed",
         maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         validateBinaryResponse: true,
-        fetchResponse: ({ deadline: downloadDeadline, timeoutMs }) =>
-          executeProviderOperationWithRetry({
-            provider: "byteplus",
-            stage: "download",
-            operation: async () => {
-              // Result URLs never inherit task credentials or private-network trust.
-              const result = await fetchWithTimeoutGuarded(
-                videoUrl,
-                { method: "GET" },
-                timeoutMs(),
-                fetchFn,
-                {
-                  mode: "strict",
-                  dispatcherPolicy: dispatcherPolicy ?? { mode: "env-proxy" },
-                },
-              );
-              try {
-                await assertOkOrThrowHttpError(
-                  result.response,
-                  "BytePlus generated video download failed",
-                  {
-                    bodyTimeoutMs: timeoutMs,
-                    onBodyTimeout: () => createProviderOperationTimeoutError(downloadDeadline),
-                  },
-                );
-                return result;
-              } catch (error) {
-                await result.release();
-                throw error;
-              }
-            },
-          }),
+        dispatcherPolicy,
       });
       return {
         videos: [video],

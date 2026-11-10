@@ -8,7 +8,7 @@ import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-tes
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
-import { relayMocks } from "./buzz-bus.test-helpers.js";
+import { createBuzzRelayInfoFetchMock, relayMocks } from "./buzz-bus.test-helpers.js";
 import { handleBuzzInbound } from "./inbound.js";
 import { setBuzzRuntime } from "./runtime.js";
 import type { ResolvedBuzzAccount } from "./types.js";
@@ -209,15 +209,7 @@ export function useBuzzBusLifecycleFixture() {
     relayMocks.stallProfileQueryEose = false;
     relayMocks.stallThreadRootQueryEose = false;
     relayMocks.stallRoomEoseChannelId = undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({
-          self: RELAY_PUBLIC_KEY,
-          software: "https://github.com/block/buzz",
-        }),
-      ),
-    );
+    vi.stubGlobal("fetch", createBuzzRelayInfoFetchMock(RELAY_PUBLIC_KEY));
   });
 
   afterEach(async () => {

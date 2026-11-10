@@ -59,9 +59,22 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     const httpReachableMock = vi
       .mocked(deps.chromeModule.isChromeReachable)
       .mockResolvedValueOnce(httpReady);
-    const wsReachableMock = vi
-      .mocked(deps.chromeModule.isChromeCdpReady)
-      .mockResolvedValueOnce(false);
+    const wsReachableMock = vi.mocked(deps.chromeModule.isChromeCdpReady);
+    const refused: typeof deps.chromeModule.isChromeCdpReady = async (...args) => {
+      await args[4]?.onDiagnostic?.({
+        ok: false,
+        code: "http_unreachable",
+        connectionRefused: true,
+        cdpUrl: "http://127.0.0.1:18800",
+        message: "connect ECONNREFUSED",
+        elapsedMs: 1,
+      });
+      return false;
+    };
+    wsReachableMock.mockImplementationOnce(refused);
+    if (httpReady) {
+      wsReachableMock.mockImplementationOnce(refused);
+    }
     const ctx = deps.createBrowserRouteContext({ getState: () => state });
     await expect(ctx.forProfile("openclaw").ensureBrowserAvailable()).rejects.toThrow(error);
     expect(httpReachableMock).toHaveBeenCalled();
@@ -216,14 +229,19 @@ function expectFetchCalledWithManualRedirect(
 
 describe("browser server-context loopback direct WebSocket profiles", () => {
   it("uses an HTTPS /json base for secure direct WebSocket profiles with a /cdp suffix", async () => {
+    let closed = false;
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);
       if (u === "https://127.0.0.1:18800/json/list?token=abc") {
-        return jsonResponse([rawTab("T2", "https://example.com", "page", "wss://127.0.0.1")]);
+        return jsonResponse(
+          closed ? [] : [rawTab("T2", "https://example.com", "page", "wss://127.0.0.1")],
+        );
       }
-      if (
-        ["activate", "close"].some((op) => u === `https://127.0.0.1:18800/json/${op}/T2?token=abc`)
-      ) {
+      if (u === "https://127.0.0.1:18800/json/close/T2?token=abc") {
+        closed = true;
+        return jsonResponse({});
+      }
+      if (u === "https://127.0.0.1:18800/json/activate/T2?token=abc") {
         return jsonResponse({});
       }
       throw new Error(`unexpected fetch: ${u}`);

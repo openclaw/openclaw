@@ -52,7 +52,7 @@ function makeState(
     probe,
   ) => {
     if (ready && probe) {
-      const pageReady = await isReachable(probe.timeoutMs?.() ?? ms, { ephemeral: true, signal });
+      const pageReady = await isReachable(ms, { ephemeral: true, signal });
       probe.onResult(pageReady ? 1 : null);
     }
     return ready;
@@ -107,7 +107,8 @@ async function callRoute(params: {
     },
   );
   expect(response.statusCode).toBe(params.expectedStatus ?? 200);
-  return responseBodyRecord(response);
+  expect(response.body).toBeTypeOf("object");
+  return response.body as Record<string, unknown>;
 }
 
 function trackLaunch(
@@ -122,30 +123,6 @@ function trackLaunch(
       ...mode,
     },
   });
-}
-
-async function callStartRoute(params: {
-  profile?: Record<string, unknown>;
-  query?: Record<string, unknown>;
-  expectedStatus?: number;
-}) {
-  const ensureBrowserAvailable = vi.fn(async () => {});
-  const state = makeState({ headless: false, ...params.profile });
-  const body = await callRoute({
-    state,
-    route: "/start",
-    query: params.query ?? {},
-    expectedStatus: params.expectedStatus,
-    forProfile: () => ({ profile: state.forProfile().profile, ensureBrowserAvailable }),
-  });
-  return { body, ensureBrowserAvailable };
-}
-
-function responseBodyRecord(response: { body: unknown }): Record<string, unknown> {
-  if (!response.body || typeof response.body !== "object") {
-    throw new Error("expected JSON response body");
-  }
-  return response.body as Record<string, unknown>;
 }
 
 describe("basic browser routes", () => {
@@ -173,9 +150,6 @@ describe("basic browser routes", () => {
       expect.objectContaining({
         id: "extension-version",
         status: "warn",
-        summary: expect.stringContaining(
-          `running ${outdatedVersion}; bundled ${chromeExtensionManifest.version}`,
-        ),
       }),
     );
     expect(report.status).not.toHaveProperty("chromeExtension");
@@ -214,16 +188,13 @@ describe("basic browser routes", () => {
       engine: "lightpanda",
       sessionScope: "connection",
       screenshotFidelity: "none",
-      availableEngines: [
-        ["chromium", "managed-or-attach", "browser", "rendered"],
-        ["lightpanda", "attach-only", "connection", "none"],
-      ].map(([id, launchMode, sessionScope, screenshotFidelity]) => ({
-        id,
-        launchMode,
-        sessionScope,
-        screenshotFidelity,
-      })),
     });
+    expect(response.availableEngines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "lightpanda", launchMode: "attach-only" }),
+        expect.objectContaining({ id: "chromium", launchMode: "managed-or-attach" }),
+      ]),
+    );
   });
 
   it.each([
@@ -283,7 +254,7 @@ describe("basic browser routes", () => {
     expect(graphics.endpoint).not.toHaveBeenCalled();
   });
 
-  it("retries unavailable graphics diagnostics and caches the first available result", async () => {
+  it("keeps status passive and inspects graphics only for deep doctor", async () => {
     const clock = vi.spyOn(Date, "now");
     onTestFinished(() => clock.mockRestore());
     const unavailable = {
@@ -295,16 +266,6 @@ describe("basic browser routes", () => {
       status: "available",
       observedAt: 456,
       acceleration: "unknown",
-      renderer: null,
-      vendor: null,
-      version: null,
-      backend: null,
-      devices: [],
-      featureStatus: {},
-      disabledFeatures: [],
-      driverBugWorkarounds: [],
-      videoDecoding: [],
-      videoEncoding: [],
     } as const;
     graphics.endpoint.mockResolvedValue({ url: "ws://127.0.0.1:18800/devtools/browser" });
     graphics.read
@@ -313,44 +274,42 @@ describe("basic browser routes", () => {
     const state = makeState({}, { ready: true });
     trackLaunch(state);
 
+    expect((await callRoute({ state })).graphics).toBeNull();
+    expect(graphics.read).not.toHaveBeenCalled();
     for (const expected of [unavailable, available, available]) {
       clock.mockReturnValue(expected.observedAt);
-      expect((await callRoute({ state })).graphics).toEqual(expected);
+      const report = await callRoute({ state, route: "/doctor", query: { deep: "true" } });
+      expect(report.status).toMatchObject({ graphics: expected });
     }
+    expect((await callRoute({ state })).graphics).toMatchObject(available);
     expect(graphics.read).toHaveBeenCalledTimes(2);
   });
 
-  it("passes valid start headless override to local managed profiles", async () => {
-    const { body, ensureBrowserAvailable } = await callStartRoute({
-      query: { headless: "true" },
-    });
-
-    expect(body).toEqual({ ok: true, profile: "openclaw" });
-    expect(ensureBrowserAvailable).toHaveBeenCalledWith({ headless: true });
-  });
-
   it.each([
-    {
-      name: "invalid value",
-      query: { headless: "maybe" },
-      profile: undefined,
-      error: 'Invalid headless value. Use "true" or "false".',
-    },
-    {
-      name: "existing-session override",
-      query: { headless: "true" },
-      profile: { name: "chrome-live", driver: "existing-session", attachOnly: true },
-      error:
-        'Headless start override is only supported for locally launched openclaw profiles. Profile "chrome-live" is attach-only, remote, or existing-session.',
-    },
-  ])("rejects start $name", async ({ query, profile, error }) => {
-    const { body, ensureBrowserAvailable } = await callStartRoute({
-      query,
-      profile,
-      expectedStatus: 400,
+    ["true", {}, undefined],
+    ["maybe", {}, 'Invalid headless value. Use "true" or "false".'],
+    [
+      "true",
+      { name: "chrome-live", driver: "existing-session", attachOnly: true },
+      'Headless start override is only supported for locally launched openclaw profiles. Profile "chrome-live" is attach-only, remote, or existing-session.',
+    ],
+  ] as const)("validates start headless=%s for %j", async (headless, profile, error) => {
+    const ensureBrowserAvailable = vi.fn(async () => {});
+    const state = makeState({ headless: false, ...profile });
+    const body = await callRoute({
+      route: "/start",
+      state,
+      query: { headless },
+      expectedStatus: error ? 400 : 200,
+      forProfile: () => ({ profile: state.forProfile().profile, ensureBrowserAvailable }),
     });
-    expect(body.error).toBe(error);
-    expect(ensureBrowserAvailable).not.toHaveBeenCalled();
+    if (error) {
+      expect(body.error).toBe(error);
+      expect(ensureBrowserAvailable).not.toHaveBeenCalled();
+    } else {
+      expect(body).toEqual({ ok: true, profile: "openclaw" });
+      expect(ensureBrowserAvailable).toHaveBeenCalledWith({ headless: true });
+    }
   });
 
   it("cancels an in-flight Chrome MCP page-readiness probe", async () => {

@@ -3,7 +3,7 @@ import type { PluginInlineViewBlock } from "../../../src/shared/plugin-inline-vi
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createIntersectionObserver, createResizeObserver } from "../lib/reactive/observers.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { sharedPluginsProjection } from "../lib/reactive/shared-application-projections.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
 import { PluginContribution } from "./control-ui-view.solid.tsx";
@@ -16,11 +16,7 @@ export function PluginInlineView(props: {
   presented?: boolean;
 }) {
   const app = useOptionalApplication();
-  const runtime = projectSource(app?.plugins, {
-    read: (source) => source,
-    subscribe: (source, publish) => source?.subscribe(publish) ?? (() => {}),
-    equality: "revision",
-  });
+  const runtime = app?.plugins ? sharedPluginsProjection(app.plugins) : undefined;
   const [near, setNear] = createSignal(false);
   const [height, setHeight] = createSignal(160);
   const contentPresented = useContext(ContentPresentation);
@@ -42,7 +38,7 @@ export function PluginInlineView(props: {
   );
   const key = () => props.block.pluginId + "/" + props.block.viewId + "@" + props.block.version;
   const status = createMemo(() => {
-    const owner = runtime.read();
+    const owner = runtime?.read();
     if (owner?.isLoading(props.block.pluginId)) {
       return "loading";
     }
@@ -52,7 +48,7 @@ export function PluginInlineView(props: {
   });
   const notice = () => (
     <div class="card" role="status">
-      <strong>{runtime.read()?.inlineViewLabel(key()) ?? props.block.viewId}</strong>
+      <strong>{runtime?.read().inlineViewLabel(key()) ?? props.block.viewId}</strong>
       <p class="muted">
         {t(status() === "loading" ? "pluginUi.inlineLoading" : "pluginUi.inlineUnavailable")}
       </p>

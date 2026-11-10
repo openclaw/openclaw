@@ -241,7 +241,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       setCompactionSafeguardCancellation(sessionManager, undefined);
       // Rebuild on retry so provider wrappers and payload shaping use the fallback effort.
       attemptedThinking.add(thinkLevel);
-      const systemPromptText = buildSystemPromptText();
+      const systemPromptText = await buildSystemPromptText();
       let session: AgentSession | undefined;
       let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
       let resetCompactionTimeout: (() => void) | undefined;
@@ -299,6 +299,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         diagnosticOwner = createDiagnosticEmbeddedRunOwner({
           watchdogAttempt: operation
             ? operation.watchdog.attachAttempt({
+                nested: true,
                 assertCurrent: () => {
                   params.abortSignal?.throwIfAborted();
                   assertSessionControllerOperation(operation);
@@ -523,6 +524,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   summaryOutputPolicy,
                   {
                     requestBudget: accountingRecorder?.requestBudget,
+                    requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
                     onSummaryReady: () => {
                       summaryReady = true;

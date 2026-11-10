@@ -61,12 +61,10 @@ describe("normalization-core/cjk-chars", () => {
     },
   );
 
-  it.each([0x16fe3, 0x1aff0, 0x1b001, 0x1f200])(
+  it.each([0x16fe3, 0x1aff0, 0x1b001, 0x1f200, 0x17000, 0x18800, 0x18b00, 0x1b170, 0x1b2ff])(
     "uses a conservative supplementary-CJK weight for U+%s",
-    (codePoint) => {
-      expect(estimateStringChars(String.fromCodePoint(codePoint))).toBe(
-        CHARS_PER_TOKEN_ESTIMATE * 4,
-      );
+    (cp) => {
+      expect(estimateStringChars(String.fromCodePoint(cp))).toBe(CHARS_PER_TOKEN_ESTIMATE * 4);
     },
   );
 
@@ -87,7 +85,7 @@ describe("normalization-core/cjk-chars", () => {
     ["\u{3347F}\u{33480}\u{10FFFF}", 20],
     ["\ud800\ud800\udc00", 3],
     ["\u9FA5\u9FA6", 16],
-    ["a你\u1100\uFF61\u{1D360}\u{20000}😀", 55],
+    ["a你\u1100\uFF61\u{1D360}\u{20000}\u{18D00}😀", 71],
   ])("keeps repeated estimates stable for %j", (text, expected) => {
     expect([text, "ascii", text, "", text].map(estimateStringChars)).toEqual([
       expected,

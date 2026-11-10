@@ -31,10 +31,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { compactWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { estimateContextTokens } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -61,17 +61,18 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createCompactionExtension } from "./agent-session-loop-resource-loader.test-support.js";
-import type { AgentSessionEvent } from "./agent-session-types.js";
+import {
+  agentSessionRunProviderCompaction,
+  type AgentSessionEvent,
+} from "./agent-session-types.js";
 import type { ExtensionFactory, ExtensionEvent } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 import { SettingsManager } from "./settings-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const stateDir of tempDirs.dirs) {
-      await cleanupSessionStateForTest({ stateDir });
-    }
-    cleanup();
+    await cleanupTrackedSessionState(tempDirs.dirs, cleanup);
   }),
 );
 registerAgentSessionLoopTestLifecycle();
@@ -148,6 +149,23 @@ type AgentEventHandler = NonNullable<
 >;
 
 describe("AgentSession compaction", () => {
+  it("removes the context replacement listener when disposed during provider compaction", async () => {
+    const { session } = await createTestSession();
+    const released = createDeferred();
+    const replaced = vi.fn();
+    session[agentSessionSetContextReplacementHook](replaced);
+    const compaction = session[agentSessionRunProviderCompaction](async (_signal, committed) => {
+      await released.promise;
+      committed(100, 50);
+    });
+
+    session.dispose();
+    released.resolve();
+    await compaction;
+
+    expect(replaced).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "long untrusted focus",
@@ -735,16 +753,12 @@ describe("compaction writer admission", () => {
     });
     const before = await loadTranscriptEvents(target);
     const messagesBefore = [...session.messages];
-    const release = createDeferred();
-    const entered = createDeferred();
+    const gate = createEnteredGate();
     const reservation = runOpenClawAgentWriteAdmission(
       toDatabaseOptions(resolveSqliteReadScope(target)),
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
+      gate.wait,
     );
-    await entered.promise;
+    await gate.entered;
     const work = session.compact();
     const outcome = work.then(
       (value) => ({ status: "fulfilled" as const, value }),
@@ -755,7 +769,7 @@ describe("compaction writer admission", () => {
       // The summary continuations reach the held writer before cancellation.
       await nextTurn();
       session.abortCompaction();
-      release.resolve();
+      gate.release();
       const result = await outcome;
       expect(result).toMatchObject({
         status: "rejected",
@@ -765,7 +779,7 @@ describe("compaction writer admission", () => {
       expect(session.messages).toEqual(messagesBefore);
       expect(published).toEqual([]);
     } finally {
-      release.resolve();
+      gate.release();
       await Promise.allSettled([reservation, work]);
     }
   });

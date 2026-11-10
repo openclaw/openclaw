@@ -25,6 +25,10 @@ export async function readMemoryStats(source: MemoryStatsSource, agentId: string
     {
       input: JSON.stringify({
         ...source,
+        // Source children do not inherit the host plugin loader's SDK aliases.
+        fileLockUrl: moduleUrl.pathname.endsWith(".ts")
+          ? import.meta.resolve("openclaw/plugin-sdk/file-lock")
+          : undefined,
         tableName: MEMORY_TABLE_NAME,
         predicate: memoryAgentPredicate(agentId),
       }),

@@ -40,6 +40,15 @@ const runPowerShell = (args: string[]) =>
   spawnSync(powershell, [...powershellArgs, ...args], { encoding: "utf8" });
 const probe = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-Command", "exit 0"]);
 const runWithPowerShell = probe.status === 0 ? it : it.skip;
+runWithPowerShell("runs the piped installer and validates optional Node versions", () => {
+  const result = runPowerShell([
+    "-File",
+    "test/scripts/install-ps1-entrypoint.ps1",
+    "-InstallerPath",
+    join(process.cwd(), SCRIPT_PATH),
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+});
 runWithPowerShell.each(["file", "streamed"] as const)(
   "preserves handled failure and caller lifetime through the %s installer entrypoint",
   (mode) => {
@@ -94,3 +103,37 @@ runWithPowerShell.each(["valid", "missing-head", "broken-gitfile", "subdirectory
     expect(result.status, result.stdout + result.stderr).toBe(0);
   },
 );
+const runHandoffFixture = (scenario: string) => {
+  const result = runPowerShell([
+    "-File",
+    "test/scripts/install-ps1-handoff.ps1",
+    "-InstallerPath",
+    join(process.cwd(), SCRIPT_PATH),
+    "-FixtureRoot",
+    harness.createTempDir("openclaw-install-handoff-"),
+    "-Scenario",
+    scenario,
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+};
+runWithPowerShell("prints a manual setup command after batch process creation fails", () => {
+  runHandoffFixture("failure");
+});
+const runWithWindowsPowerShell = process.platform === "win32" ? runWithPowerShell : it.skip;
+runWithWindowsPowerShell(
+  "executes a batch shim in a literal special-character path and preserves its exit status",
+  () => {
+    runHandoffFixture("launch");
+  },
+);
+runWithPowerShell("restores a conflicted pull before continuing a Git install", () => {
+  const result = runPowerShell([
+    "-File",
+    "test/scripts/install-git-pull.ps1",
+    "-InstallerPath",
+    join(process.cwd(), SCRIPT_PATH),
+    "-FixtureRoot",
+    join(harness.createTempDir("openclaw-install-pull-"), "fixture"),
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+});

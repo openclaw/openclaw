@@ -6,15 +6,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  restoreStateDirEnv,
-  setStateDirEnv,
-  snapshotStateDirEnv,
-} from "../test-helpers/state-dir-env.js";
 import { auditDocsConfigExamples } from "./docs-config-examples.js";
 import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 const fence = (body: string, info = "json5") => `\`\`\`${info}\n${body}\n\`\`\``;
 const pluginFence = (key: string, value: string) =>
   fence(`{ plugins: { entries: { openai: { config: { ${key}: "${value}" } } } } }`);
@@ -45,7 +44,6 @@ describe("docs config examples", () => {
     [fence("[{ gateway: {} }]"), "skippedNonObject"],
     [fence("{ agents: {}, gateway: {}, promptOverlays: {} }"), undefined, ""],
     [fence('{ channels: { slack: { identity: "bot" } } }'), undefined, "channels.slack"],
-    [pluginFence("personality", "off")],
     [fence('{ agents: { $include: "./agents.json5" }, gateway: { port: 18789 } }')],
   ])("audits %s", (markdown, skipped, issuePath) => {
     const audit = auditMarkdown(markdown);
@@ -59,7 +57,7 @@ describe("docs config examples", () => {
     }
   });
 
-  it("validates plugin-owned keys without opening the operator state database", () => {
+  it("uses source plugin schemas without reading operator state or the cwd plugin tree", () => {
     const poisonedRoot = tempDirs.make("openclaw-docs-config-poison-");
     const databasePath = resolveOpenClawStateSqlitePath({
       ...process.env,
@@ -72,21 +70,8 @@ describe("docs config examples", () => {
     } finally {
       database.close();
     }
-    const envSnapshot = snapshotStateDirEnv();
-    setStateDirEnv(poisonedRoot);
-    try {
-      const audit = auditMarkdown(pluginFence("personalityy", "friendly"));
-      expect(audit.findings).toHaveLength(1);
-      expect(audit.findings[0]?.issuePath).toBe("plugins.entries.openai.config");
-      expect(fs.existsSync(resolveRepoBundledPluginEnv("unused").OPENCLAW_STATE_DIR!)).toBe(false);
-    } finally {
-      restoreStateDirEnv(envSnapshot);
-    }
-  });
-
-  it("uses source schemas instead of another working directory's plugin tree", () => {
-    const directory = tempDirs.make("openclaw-docs-config-cwd-");
-    const pluginDir = path.join(directory, "extensions", "openai");
+    vi.stubEnv("OPENCLAW_STATE_DIR", poisonedRoot);
+    const pluginDir = path.join(poisonedRoot, "extensions", "openai");
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n");
     fs.writeFileSync(
@@ -96,29 +81,22 @@ describe("docs config examples", () => {
         configSchema: { type: "object", properties: {}, additionalProperties: false },
       }),
     );
-    const cwd = vi.spyOn(process, "cwd").mockReturnValue(directory);
-    try {
-      const audit = auditMarkdown(
-        [pluginFence("personality", "off"), pluginFence("personalityy", "friendly")].join("\n"),
-      );
-      expect(audit.stats.candidatesValidated).toBe(2);
-      expect(audit.findings).toEqual([
-        expect.objectContaining({
-          issuePath: "plugins.entries.openai.config",
-          message: expect.stringContaining('"personalityy"'),
-        }),
-      ]);
-    } finally {
-      cwd.mockRestore();
-    }
+    vi.spyOn(process, "cwd").mockReturnValue(poisonedRoot);
+    const audit = auditMarkdown(
+      [pluginFence("personality", "off"), pluginFence("personalityy", "friendly")].join("\n"),
+    );
+    expect(audit.stats.candidatesValidated).toBe(2);
+    expect(audit.findings).toEqual([
+      expect.objectContaining({
+        issuePath: "plugins.entries.openai.config",
+        message: expect.stringContaining('"personalityy"'),
+      }),
+    ]);
+    expect(fs.existsSync(resolveRepoBundledPluginEnv("unused").OPENCLAW_STATE_DIR!)).toBe(false);
   });
 
   it("keeps real docs aligned with the config schema", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-
-    // This test is selected when src/config changes, so retiring a key checks docs even
-    // without a docs edit. The check:docs script covers docs-only PRs; together the two
-    // CI lanes leave no change-classification gap.
     expect(auditDocsConfigExamples({ repoRoot }).findings).toEqual([]);
   });
 });

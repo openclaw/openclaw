@@ -40,6 +40,7 @@ import {
 } from "../registry/subagent-registry-read.js";
 import type { PendingFinalDeliveryPayload } from "../registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { getSubagentTerminalReplySummary } from "../registry/subagent-run-payload-facts.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
@@ -220,7 +221,7 @@ async function runSubagentAnnounceFlowBound(
       if (!settled && isSessionRunActive(childSessionId)) {
         shouldDeleteChildSession = false;
         // Keep delete cleanup retryable until the active child can be removed.
-        if (outcome?.status !== "timeout" || params.cleanup === "delete") {
+        if (outcome.status !== "timeout" || params.cleanup === "delete") {
           return "retryable";
         }
       }
@@ -373,7 +374,10 @@ async function runSubagentAnnounceFlowBound(
         reply = timeoutProgress;
       }
     }
-    if (!params.terminalReply && (!ownResult || !childRun?.completion?.terminalReply)) {
+    if (
+      !params.terminalReply &&
+      (!ownResult || !childRun || !getSubagentTerminalReplySummary(childRun))
+    ) {
       if (
         !legacySilent &&
         !reply &&
@@ -603,7 +607,7 @@ async function runSubagentAnnounceFlowBound(
     if (hasSqliteWorkerOutcomeUnknown(err)) {
       throw err;
     }
-    defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
+    defaultRuntime.error(`Subagent announce failed: ${String(err)}`);
     if (!deliveryResultReported) {
       await reportDeliveryResult(
         err instanceof SourceOwnerChangedError

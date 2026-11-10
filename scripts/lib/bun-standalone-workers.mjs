@@ -24,7 +24,9 @@ export function prepareStandaloneWorkers({
   workerEntries,
   runtimeBootstrap,
   moduleAliases = {},
+  sourceWorkerAliases: initialSourceWorkerAliases = {},
 }) {
+  let sourceWorkerAliases = initialSourceWorkerAliases;
   const wrapperRoot = path.join(outputRoot, "standalone-workers");
   const entrypoints = [];
   const workerMap = {};
@@ -41,20 +43,29 @@ export function prepareStandaloneWorkers({
   }
 
   const workerThreadsShim = path.join(outputRoot, "standalone-worker-threads.cjs");
-  // CJS consumers must share this bundled factory, not require a relocated ESM chunk.
-  fs.writeFileSync(
-    workerThreadsShim,
-    `const path = require("node:path");
+  const writeWorkerShim = () => {
+    for (const entry of Object.values(sourceWorkerAliases)) {
+      if (!Object.hasOwn(workerMap, entry)) {
+        throw new Error(`Unknown standalone worker alias target: ${entry}`);
+      }
+    }
+    // CJS consumers must share this bundled factory, not require a relocated ESM chunk.
+    fs.writeFileSync(
+      workerThreadsShim,
+      `const path = require("node:path");
 const { fileURLToPath } = require("node:url");
 const native = require("node:worker_threads");
 const root = path.join(path.dirname(process.execPath), "runtime");
 const entries = ${JSON.stringify(workerMap)};
+const sourceAliases = ${JSON.stringify(sourceWorkerAliases)};
 function embeddedWorker(filename, options) {
   if (options?.eval) return filename;
   const url = filename instanceof URL ? filename : undefined;
   if (url && url.protocol !== "file:") return filename;
   const pathname = url ? fileURLToPath(url) : filename;
   if (typeof pathname !== "string" || !path.isAbsolute(pathname)) return filename;
+  const sourceEntry = sourceAliases[pathname];
+  if (sourceEntry) return new URL(entries[sourceEntry]);
   const relative = path.relative(root, pathname).split(path.sep).join("/");
   if (relative.startsWith("../") || relative === "..") return filename;
   const entry = entries[relative];
@@ -68,7 +79,9 @@ class Worker extends native.Worker {
 }
 module.exports = { ...native, Worker };
 `,
-  );
+    );
+  };
+  writeWorkerShim();
   function rewriteWorkerImports(filename, contents, ast) {
     if (filename === workerThreadsShim) {
       return contents;
@@ -110,5 +123,29 @@ module.exports = { ...native, Worker };
     }
     return transformed;
   }
-  return { entrypoints, workerMap, workerThreadsShim, rewriteWorkerImports };
+  return {
+    entrypoints,
+    workerMap,
+    workerThreadsShim,
+    rewriteWorkerImports,
+    /** @param {string[]} outputPaths */
+    validateOutputs(outputPaths) {
+      const emitted = new Set(
+        outputPaths.map(
+          (filename) =>
+            `file:///$bunfs/root/${path.relative(path.join(outputRoot, "modules"), filename).split(path.sep).join("/")}`,
+        ),
+      );
+      const missing = Object.entries(workerMap)
+        .filter(([, target]) => !emitted.has(target))
+        .map(([entry]) => entry);
+      if (missing.length) {
+        throw new Error(`Missing embedded standalone worker outputs: ${missing.join(", ")}`);
+      }
+    },
+    updateSourceWorkerAliases(aliases) {
+      sourceWorkerAliases = aliases;
+      writeWorkerShim();
+    },
+  };
 }

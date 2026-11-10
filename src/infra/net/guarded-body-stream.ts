@@ -83,40 +83,52 @@ function wrapBodyStream(
   };
   const cancel = async (reason: unknown) => await finalize(async () => await reader.cancel(reason));
   const wrappedBody = new ReadableStream<Uint8Array>(
-    {
-      async pull(controller) {
-        const signal = params.signal;
-        if (signal && !abortAttached) {
-          abortAttached = true;
-          detachAbort = attachBodyAbort(signal, new WeakRef(controller), cancel);
-        }
-        if (finalized) {
-          return;
-        }
-        try {
-          const chunk = await reader.read();
-          if (chunk.done) {
-            controller.close();
+    // Keep controller-owning continuations out of the finalizer's closure scope.
+    (() => {
+      let onError: (error: unknown) => Promise<void>;
+      let onChunk: (chunk: ReadableStreamReadResult<Uint8Array>) => Promise<void> | undefined;
+      return {
+        start(controller: ReadableStreamDefaultController<Uint8Array>) {
+          onError = async (error: unknown) => {
+            if (finalized) {
+              return;
+            }
+            // The SDK response contract exposes release failures; guarded streams
+            // report the source failure immediately and release resources best-effort.
+            if (errorSource === "release") {
+              await finalize();
+            }
+            controller.error(error);
             await finalize();
-            return;
+          };
+          onChunk = (chunk) => {
+            try {
+              if (chunk.done) {
+                controller.close();
+                return finalize().catch(onError);
+              }
+              params.refreshTimeout?.();
+              controller.enqueue(chunk.value);
+              return undefined;
+            } catch (error) {
+              return onError(error);
+            }
+          };
+        },
+        pull(controller: ReadableStreamDefaultController<Uint8Array>) {
+          const signal = params.signal;
+          if (signal && !abortAttached) {
+            abortAttached = true;
+            detachAbort = attachBodyAbort(signal, new WeakRef(controller), cancel);
           }
-          params.refreshTimeout?.();
-          controller.enqueue(chunk.value);
-        } catch (error) {
           if (finalized) {
-            return;
+            return undefined;
           }
-          // The SDK response contract exposes release failures; guarded streams
-          // report the source failure immediately and release resources best-effort.
-          if (errorSource === "release") {
-            await finalize();
-          }
-          controller.error(error);
-          await finalize();
-        }
-      },
-      cancel,
-    },
+          return reader.read().then(onChunk, onError);
+        },
+        cancel,
+      };
+    })(),
     params.signal ? { highWaterMark: 0 } : undefined,
   );
   guardedBodyCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);

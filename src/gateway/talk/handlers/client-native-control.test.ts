@@ -15,7 +15,7 @@ import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db
 import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
 import { resolveOpenClientVoiceSessionId } from "../../../talk/client-voice-session-read.js";
 import * as voiceSessionReads from "../../../talk/client-voice-session-read.js";
-import { readOwnedVoiceSessionFacts } from "../../../talk/client-voice-session-store.js";
+import { readVoiceSessionRecord } from "../../../talk/client-voice-session-store.js";
 import { flushClientVoiceSessionWrites } from "../../../talk/client-voice-session.js";
 import { VoiceTranscriptOperationRegistry } from "../../../talk/voice-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
@@ -397,12 +397,13 @@ describe("native Talk through the public OpenAI plugin registration", () => {
               talkEventTypes(broadcast).filter((type) => type === "session.ready"),
             ).toHaveLength(1);
             expect(
-              readOwnedVoiceSessionFacts({
-                agentId: AGENT_ID,
-                sessionKey: SESSION_KEY,
-                voiceSessionId: requireString(result, "voiceSessionId"),
-              }),
-            ).toMatchObject({ origin: "client", status: "open", transcriptCapable: true });
+              readVoiceSessionRecord(AGENT_ID, requireString(result, "voiceSessionId")),
+            ).toMatchObject({
+              sessionKey: SESSION_KEY,
+              origin: "client",
+              status: "open",
+              transcriptCapable: true,
+            });
             expect(talkEventTypes(broadcast)).not.toContain("turn.ended");
             socket.serverEvent(
               nativeDelegation("real-runner-request", "Complete a small voice consultation."),

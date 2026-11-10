@@ -38,6 +38,11 @@ contributions, and transcript persistence. Part of the [Plugin hooks](/plugins/h
   message run. It can include `channel`, `accountId`, `senderId`,
   `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,
   not false assurances; deny the action if policy requires those fields.
+- optional `ctx.trigger`, the run origin when its producer supplies one, such as
+  `"user"`, `"cron"`, or `"memory"`. Memory flushes retain the originating turn's
+  requester. This field is metadata, not authorization: it never grants owner
+  identity or overrides requester checks. It is absent when the producer does
+  not supply a trigger; other tool hooks do not gain this field automatically.
 
 It can return:
 
@@ -71,8 +76,10 @@ Guard behavior for typed lifecycle hooks:
 - The first `requireApproval` wins, and its plugin id is stamped by the host.
   It freezes the selected parameter snapshot: later handlers can block but
   cannot change the approved parameters.
-- Native tool relays can have narrower contracts. Codex native tools support
-  blocking and observation, but parameter rewrites are rejected; see
+- Native tool relays can have narrower contracts. Codex native tools apply
+  rewrites only to the shell or `apply_patch` `command` and to MCP arguments
+  within size, depth, and number-precision limits, and block on any other
+  rewrite; see
   [Codex hook boundaries](/plugins/codex-harness-runtime#hook-boundaries).
 - `requireApproval` pauses the agent run and asks the user through plugin
   approvals. `/approve` can approve both exec and plugin approvals. In Codex

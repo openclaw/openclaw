@@ -30,6 +30,7 @@ export function createRuntimeBase(): PluginRuntimeBase {
       "requester-model-family-v1",
       NATIVE_SUBAGENT_LIST_CAPABILITY,
       "native-subagent-profiles-v1",
+      "native-subagent-blind-v1",
       COMMAND_SCHEDULED_TURNS_CAPABILITY,
       COMMAND_SCHEDULED_TURNS_RESTART_CAPABILITY,
       "channel-ingress-transform-v1",

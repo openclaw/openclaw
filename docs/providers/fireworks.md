@@ -139,7 +139,7 @@ OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id s
   </Accordion>
 
   <Accordion title="Why thinking is forced off for Kimi">
-    Fireworks serves Kimi without a separate reasoning channel, so chain-of-thought can surface in the visible `content` stream. On every Fireworks Kimi request OpenClaw sends `thinking: { type: "disabled" }` and strips `reasoning`, `reasoning_effort`, and `reasoningEffort` from the payload (`extensions/fireworks/stream.ts`). The provider policy (`extensions/fireworks/thinking-policy.ts`) advertises only the `off` thinking level for Kimi model ids, so manual `/think` switches and provider-policy surfaces stay aligned with the runtime contract.
+    Fireworks serves Kimi without a separate reasoning channel, so chain-of-thought can surface in the visible `content` stream. On every Fireworks Kimi request OpenClaw sends `thinking: { type: "disabled" }` and strips `reasoning`, `reasoning_effort`, and `reasoningEffort` from the payload (`extensions/fireworks/index.ts`). The provider policy (`extensions/fireworks/thinking-policy.ts`) advertises only the `off` thinking level for Kimi model ids, so manual `/think` switches and provider-policy surfaces stay aligned with the runtime contract.
 
     To use Kimi reasoning end-to-end, configure the [Moonshot provider](/providers/moonshot) and route the same model through it.
 

@@ -27,14 +27,12 @@ type DynamicModelContext = {
 };
 
 type ResolvedModelLike = Record<string, unknown>;
-type NormalizedTransportLike = {
-  api?: string | null;
-  baseUrl?: string;
-};
-
 type ProviderRuntimeTestMockOptions = {
   handledDynamicProviders?: readonly string[];
 };
+type ProviderContext<T> = { provider: string; context: T };
+type TransportContext = { api?: string | null; baseUrl?: string };
+const GPT54_TEMPLATES = ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"];
 
 function findTemplate(
   ctx: { modelRegistry: ModelRegistryLike },
@@ -56,14 +54,9 @@ function cloneTemplate(
   template: ResolvedModelLike | undefined,
   modelId: string,
   patch: ResolvedModelLike,
-  fallback: ResolvedModelLike,
-) {
-  return {
-    ...(template ?? fallback),
-    id: modelId,
-    name: modelId,
-    ...patch,
-  } as ResolvedModelLike;
+  fallback: ResolvedModelLike = {},
+): ResolvedModelLike {
+  return { ...(template ?? fallback), id: modelId, name: modelId, ...patch };
 }
 
 function modelDefaults(
@@ -101,56 +94,57 @@ function isNativeOpenAICodexBaseUrl(baseUrl?: string): boolean {
 }
 
 function normalizeDynamicModel(params: { provider: string; model: ResolvedModelLike }) {
-  // This mock mirrors provider-owned normalization contracts that model tests
-  // need without loading real plugin runtimes.
   if (params.provider !== "openai") {
     return undefined;
   }
   const baseUrl = typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
-  const useCodexTransport =
-    (params.model.api === "openai-chatgpt-responses" &&
-      (!baseUrl || baseUrl === OPENAI_BASE_URL || isNativeOpenAICodexBaseUrl(baseUrl))) ||
-    isNativeOpenAICodexBaseUrl(baseUrl);
-  const nextApi = useCodexTransport ? "openai-chatgpt-responses" : params.model.api;
-  const nextBaseUrl =
-    nextApi === "openai-chatgpt-responses" && useCodexTransport ? OPENAI_CODEX_BASE_URL : baseUrl;
-  if (nextApi !== params.model.api || nextBaseUrl !== baseUrl) {
-    return { ...params.model, api: nextApi, baseUrl: nextBaseUrl };
+  if (
+    usesNativeCodexTransport(params.model.api, baseUrl) &&
+    (params.model.api !== "openai-chatgpt-responses" || baseUrl !== OPENAI_CODEX_BASE_URL)
+  ) {
+    return { ...params.model, api: "openai-chatgpt-responses", baseUrl: OPENAI_CODEX_BASE_URL };
   }
   return undefined;
 }
 
-function normalizeTransport(params: {
-  provider: string;
-  context: { api?: string | null; baseUrl?: string };
-}): NormalizedTransportLike | undefined {
-  // Transport normalization proves provider hooks can upgrade legacy endpoints
-  // and API names before resolved models are returned to callers.
-  const {
-    provider,
-    context: { api, baseUrl },
-  } = params;
-  const isNativeOpenAiTransport =
-    api === "openai-completions" &&
-    (baseUrl === OPENAI_BASE_URL || (provider === "openai" && !baseUrl));
-  const isNativeOpenAICodexTransport =
-    provider === "openai" &&
-    ((api === "openai-chatgpt-responses" &&
+function usesNativeCodexTransport(api: unknown, baseUrl?: string) {
+  return (
+    (api === "openai-chatgpt-responses" &&
       (!baseUrl || baseUrl === OPENAI_BASE_URL || isNativeOpenAICodexBaseUrl(baseUrl))) ||
-      isNativeOpenAICodexBaseUrl(baseUrl));
-  if (isNativeOpenAiTransport) {
-    return {
-      api: "openai-responses",
-      baseUrl,
-    };
+    isNativeOpenAICodexBaseUrl(baseUrl)
+  );
+}
+
+function normalizeTransport({
+  provider,
+  context: { api, baseUrl },
+}: ProviderContext<TransportContext>) {
+  if (
+    api === "openai-completions" &&
+    (baseUrl === OPENAI_BASE_URL || (provider === "openai" && !baseUrl))
+  ) {
+    return { api: "openai-responses", baseUrl };
   }
-  if (isNativeOpenAICodexTransport) {
-    return {
-      api: "openai-chatgpt-responses",
-      baseUrl: OPENAI_CODEX_BASE_URL,
-    };
+  if (provider === "openai" && usesNativeCodexTransport(api, baseUrl)) {
+    return { api: "openai-chatgpt-responses", baseUrl: OPENAI_CODEX_BASE_URL };
   }
   return undefined;
+}
+
+const responseTemplates: Record<string, string[]> = {
+  "gpt-5.5": ["gpt-5.5", "gpt-5.4"],
+  "gpt-5.4": ["gpt-5.4"],
+};
+
+function openAIModelSpecs(modelId: string): ResolvedModelLike {
+  return modelId === "gpt-5.5"
+    ? {
+        cost: openAIPrice(5, 30, 0.5),
+        contextWindow: 1_000_000,
+        contextTokens: 272_000,
+        mediaInput: { image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" } },
+      }
+    : { cost: openAIPrice(2.5, 15, 0.25), contextWindow: 1_050_000 };
 }
 
 function buildDynamicModel(params: DynamicModelContext) {
@@ -181,18 +175,16 @@ function buildDynamicModel(params: DynamicModelContext) {
         lower === "gpt-5.5" &&
         (providerConfigSelectsChatGpt || isOpenAIChatGptModelTemplate(exactModel))
       ) {
-        const model = exactModel;
-        if (model) {
-          const modelContextTokens = model.contextTokens;
-          const modelContextWindow = model.contextWindow;
-          const contextTokens =
-            typeof modelContextTokens === "number"
-              ? modelContextTokens
-              : Math.min(
-                  272_000,
-                  typeof modelContextWindow === "number" ? modelContextWindow : 272_000,
-                );
-          return { ...model, contextWindow: 400_000, contextTokens };
+        if (exactModel) {
+          const { contextTokens, contextWindow } = exactModel;
+          return {
+            ...exactModel,
+            contextWindow: 400_000,
+            contextTokens:
+              typeof contextTokens === "number"
+                ? contextTokens
+                : Math.min(272_000, typeof contextWindow === "number" ? contextWindow : 272_000),
+          };
         }
         return cloneTemplate(
           undefined,
@@ -202,20 +194,15 @@ function buildDynamicModel(params: DynamicModelContext) {
             contextTokens: 272_000,
             maxTokens: 128_000,
           }),
-          {},
         );
       }
-      const codexTemplate =
-        lower === "gpt-5.5-pro"
-          ? findTemplate(params, "openai", ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex"])
-          : lower === "gpt-5.4" ||
-              isLegacyGpt54Alias ||
-              lower === "gpt-5.4-pro" ||
-              lower === "gpt-5.4-mini"
-            ? findTemplate(params, "openai", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
-            : lower === "gpt-5.3-codex-spark"
-              ? findTemplate(params, "openai", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
-              : findTemplate(params, "openai", ["gpt-5.4"]);
+      const codexTemplate = findTemplate(
+        params,
+        "openai",
+        ["gpt-5.4", "gpt-5.4-codex", "gpt-5.3-codex-spark"].includes(lower)
+          ? GPT54_TEMPLATES
+          : ["gpt-5.4"],
+      );
       const templateSelectsChatGpt = !isSparkModel && isOpenAIChatGptModelTemplate(codexTemplate);
       if (
         isLegacyGpt54Alias ||
@@ -229,61 +216,42 @@ function buildDynamicModel(params: DynamicModelContext) {
           ? OPENAI_CODEX_BASE_URL
           : (templateBaseUrl ?? OPENAI_CODEX_BASE_URL);
         const fallback = modelDefaults("openai", "openai-chatgpt-responses", chatGptBaseUrl);
-        const chatGptPatch = {
-          provider: "openai",
-          api: "openai-chatgpt-responses",
-          baseUrl: chatGptBaseUrl,
-          contextTokens: 272_000,
-          maxTokens: 128_000,
-        };
-        const patches: Record<string, ResolvedModelLike> = {
-          "gpt-5.5-pro": { ...chatGptPatch, cost: openAIPrice(30, 180), contextWindow: 1_000_000 },
-          "gpt-5.4": {
-            ...chatGptPatch,
-            cost: openAIPrice(2.5, 15, 0.25),
-            contextWindow: 1_050_000,
-          },
-          "gpt-5.4-pro": { ...chatGptPatch, cost: openAIPrice(30, 180), contextWindow: 1_050_000 },
-          "gpt-5.4-mini": {
-            ...chatGptPatch,
-            cost: openAIPrice(0.75, 4.5, 0.075),
-            contextWindow: 400_000,
-          },
-          "gpt-5.3-codex-spark": {
-            provider: "openai",
-            api: "openai-chatgpt-responses",
-            baseUrl: chatGptBaseUrl,
-            reasoning: true,
-            input: ["text"],
-            cost: OPENROUTER_FALLBACK_COST,
-            contextWindow: 128_000,
-            maxTokens: 128_000,
-          },
-        };
         const key = isLegacyGpt54Alias ? "gpt-5.4" : lower;
-        const patch = Object.hasOwn(patches, key) ? patches[key] : undefined;
+        const patch =
+          key === "gpt-5.3-codex-spark"
+            ? {
+                provider: "openai",
+                api: "openai-chatgpt-responses",
+                baseUrl: chatGptBaseUrl,
+                reasoning: true,
+                input: ["text"],
+                cost: OPENROUTER_FALLBACK_COST,
+                contextWindow: 128_000,
+                maxTokens: 128_000,
+              }
+            : key === "gpt-5.4"
+              ? {
+                  provider: "openai",
+                  api: "openai-chatgpt-responses",
+                  baseUrl: chatGptBaseUrl,
+                  contextTokens: 272_000,
+                  maxTokens: 128_000,
+                  ...openAIModelSpecs(key),
+                }
+              : undefined;
         if (patch) {
           return cloneTemplate(
             codexTemplate,
-            isLegacyGpt54Alias ? "gpt-5.4" : lower === "gpt-5.4" ? "gpt-5.4" : modelId,
+            isLegacyGpt54Alias || lower === "gpt-5.4" ? "gpt-5.4" : modelId,
             patch,
             fallback,
           );
         }
         return undefined;
       }
-      const templateIds =
-        lower === "gpt-5.5"
-          ? ["gpt-5.5", "gpt-5.4", "gpt-5.4-pro"]
-          : lower === "gpt-5.4"
-            ? ["gpt-5.4"]
-            : lower === "gpt-5.4-pro"
-              ? ["gpt-5.4-pro", "gpt-5.4"]
-              : lower === "gpt-5.4-mini"
-                ? ["gpt-5.4-mini"]
-                : lower === "gpt-5.4-nano"
-                  ? ["gpt-5.4-nano", "gpt-5.4-mini"]
-                  : undefined;
+      const templateIds = Object.hasOwn(responseTemplates, lower)
+        ? responseTemplates[lower]
+        : undefined;
       if (!templateIds) {
         return undefined;
       }
@@ -294,46 +262,19 @@ function buildDynamicModel(params: DynamicModelContext) {
         template.baseUrl !== OPENAI_BASE_URL;
       const patch = modelDefaults("openai", "openai-responses", OPENAI_BASE_URL, {
         maxTokens: 128_000,
-        ...(lower === "gpt-5.5"
-          ? {
-              cost: openAIPrice(5, 30, 0.5),
-              contextWindow: 1_000_000,
-              contextTokens: 272_000,
-              mediaInput: {
-                image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
-              },
-            }
-          : lower === "gpt-5.4"
-            ? { cost: openAIPrice(2.5, 15, 0.25), contextWindow: 1_050_000 }
-            : lower === "gpt-5.4-pro"
-              ? { cost: openAIPrice(30, 180), contextWindow: 1_050_000 }
-              : lower === "gpt-5.4-mini"
-                ? { cost: openAIPrice(0.75, 4.5, 0.075), contextWindow: 400_000 }
-                : { cost: openAIPrice(0.2, 1.25, 0.02), contextWindow: 400_000 }),
+        ...openAIModelSpecs(lower),
       });
-      return cloneTemplate(
-        template,
-        modelId,
-        {
-          ...patch,
-          ...(preserveTemplateTransport ? { api: template.api, baseUrl: template.baseUrl } : {}),
-        },
-        modelDefaults("openai", "openai-responses", OPENAI_BASE_URL, {
-          contextWindow: patch.contextWindow,
-          maxTokens: patch.maxTokens,
-        }),
-      );
+      return cloneTemplate(template, modelId, {
+        ...patch,
+        ...(preserveTemplateTransport ? { api: template.api, baseUrl: template.baseUrl } : {}),
+      });
     }
     case "anthropic":
     case "claude-cli": {
-      if (lower !== "claude-opus-4-6" && lower !== "claude-sonnet-4-6") {
+      if (lower !== "claude-sonnet-4-6") {
         return undefined;
       }
-      const template = findTemplate(
-        params,
-        "anthropic",
-        lower === "claude-opus-4-6" ? ["claude-opus-4-6"] : ["claude-sonnet-4-6"],
-      );
+      const template = findTemplate(params, "anthropic", [lower]);
       return cloneTemplate(
         template,
         modelId,
@@ -353,66 +294,40 @@ function buildDynamicModel(params: DynamicModelContext) {
 
 export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOptions = {}) {
   const handledDynamicProviders = new Set(
-    options.handledDynamicProviders ?? [
-      "openrouter",
-      "github-copilot",
-      "openai",
-      "xai",
-      "anthropic",
-      "google-antigravity",
-      "zai",
-    ],
+    options.handledDynamicProviders ?? ["openai", "anthropic"],
   );
 
   return {
-    buildProviderUnknownModelHintWithPlugin: (params: { provider: string }) => {
-      switch (params.provider) {
-        case "ollama":
-          return (
-            "Ollama requires authentication to be registered as a provider. " +
-            'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +
-            "See: https://docs.openclaw.ai/providers/ollama"
-          );
-        default:
-          return undefined;
-      }
-    },
-    runProviderDynamicModel: (params: {
-      provider: string;
-      context: Omit<DynamicModelContext, "provider">;
-    }) =>
+    buildProviderUnknownModelHintWithPlugin: (params: { provider: string }) =>
+      params.provider === "ollama"
+        ? "Ollama requires authentication to be registered as a provider. " +
+          'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +
+          "See: https://docs.openclaw.ai/providers/ollama"
+        : undefined,
+    runProviderDynamicModel: (params: ProviderContext<Omit<DynamicModelContext, "provider">>) =>
       handledDynamicProviders.has(params.provider)
         ? buildDynamicModel({ ...params.context, provider: params.provider })
         : undefined,
-    shouldPreferProviderRuntimeResolvedModel: (params: {
-      provider: string;
-      context: { modelId: string };
-    }) =>
+    shouldPreferProviderRuntimeResolvedModel: (params: ProviderContext<{ modelId: string }>) =>
       params.provider === "openai" &&
-      ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(
+      ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex-spark"].includes(
         params.context.modelId.trim().toLowerCase(),
       ),
-    prepareProviderDynamicModel: async (_params: {
-      provider: string;
-      context: { modelId: string };
-    }) => undefined,
-    normalizeProviderResolvedModelWithPlugin: (params: {
-      provider: string;
-      context: { model: unknown };
-    }) =>
+    prepareProviderDynamicModel: async (_params: ProviderContext<{ modelId: string }>) => undefined,
+    normalizeProviderResolvedModelWithPlugin: (params: ProviderContext<{ model: unknown }>) =>
       handledDynamicProviders.has(params.provider)
         ? normalizeDynamicModel({
             provider: params.provider,
             model: params.context.model as ResolvedModelLike,
           })
         : undefined,
-    applyProviderResolvedTransportWithPlugin: (params: {
-      provider: string;
-      config?: unknown;
-      workspaceDir?: string;
-      env?: NodeJS.ProcessEnv;
-      context: { model: unknown };
-    }) => {
+    applyProviderResolvedTransportWithPlugin: (
+      params: ProviderContext<{ model: unknown }> & {
+        config?: unknown;
+        workspaceDir?: string;
+        env?: NodeJS.ProcessEnv;
+      },
+    ) => {
       const model = params.context.model as ResolvedModelLike;
       const normalized = normalizeTransport({
         provider: params.provider,
@@ -424,20 +339,13 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       if (!normalized) {
         return undefined;
       }
-      const nextApi = normalized.api ?? model.api;
-      const nextBaseUrl = normalized.baseUrl ?? model.baseUrl;
-      if (nextApi === model.api && nextBaseUrl === model.baseUrl) {
-        return undefined;
-      }
-      return {
+      const next = {
         ...model,
-        api: nextApi,
-        baseUrl: nextBaseUrl,
+        api: normalized.api ?? model.api,
+        baseUrl: normalized.baseUrl ?? model.baseUrl,
       };
+      return next.api === model.api && next.baseUrl === model.baseUrl ? undefined : next;
     },
-    normalizeProviderTransportWithPlugin: (params: {
-      provider: string;
-      context: { api?: string | null; baseUrl?: string };
-    }) => normalizeTransport(params),
+    normalizeProviderTransportWithPlugin: normalizeTransport,
   };
 }
