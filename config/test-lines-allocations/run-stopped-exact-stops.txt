@@ -1,2 +1,2 @@
-# Announce run_stopped for the exact Stops of reserved, exec-only and worker runs.
-205
+# Announce run_stopped for the exact Stops of reserved, registered and exec-only runs.
+196

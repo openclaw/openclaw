@@ -163,7 +163,6 @@ describe("chat.abort authorization", () => {
   });
 
   it("cancels the admitted worker session after the selected store changes", async () => {
-    const runStopped = observeRunStopped();
     const cancel = vi.fn(() => ["worker-run"]);
     const context = createChatAbortContext({
       workerEnvironmentService: createWorkerInferenceCancellationService(
@@ -173,7 +172,7 @@ describe("chat.abort authorization", () => {
         {
           agentId: "main",
           sessionId: "original-worker-session",
-          sessionKey: "agent:main:worker",
+          sessionKey: "agent:main:main",
           storePath: "/original-worker-store/sessions.json",
         },
       ),
@@ -183,13 +182,9 @@ describe("chat.abort authorization", () => {
       sessionId: "original-worker-session",
       runId: "worker-run",
     });
-    expect(runStopped.mock.calls).toEqual([
-      stoppedEvent("main", "agent:main:worker", ["worker-run"]),
-    ]);
   });
 
   it("rejects non-admin worker-only inference aborts", async () => {
-    const runStopped = observeRunStopped();
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
     const context = workerContext(cancelInferenceForSession);
     for (const runId of [undefined, "worker-run"]) {
@@ -198,16 +193,12 @@ describe("chat.abort authorization", () => {
       expect(requireLastRespondCall(respond)[2]?.message).toBe("unauthorized");
     }
     expect(cancelInferenceForSession).not.toHaveBeenCalled();
-    expect(runStopped).not.toHaveBeenCalled();
 
     expectResult(await abortAsAdmin({ context, runId: "worker-run" }), ["worker-run"]);
     expect(cancelInferenceForSession).toHaveBeenCalledWith({
       sessionId: "main-session",
       runId: "worker-run",
     });
-    expect(runStopped.mock.calls).toEqual([
-      stoppedEvent("main", "agent:main:main", ["worker-run"]),
-    ]);
   });
 
   it("announces a reserved run's Stop only after its authority holds", async () => {

@@ -564,13 +564,6 @@ export async function handleChatAbortRequestWithLifecycle(
       respondError(respond, ErrorCodes.INVALID_REQUEST, "unauthorized");
       return;
     }
-    // Recheck authority after session preparation before announcing the Stop.
-    assertCurrent();
-    notifySessionRunStopped({
-      source: "client-run",
-      sessions: [workerTarget ?? { agentId: abortAgentId, sessionKey: canonicalAbortSessionKey }],
-      runIds: workerCancellation.runIds,
-    });
     cancelWorker();
     await stopWithoutCapturedRun("rpc");
     await respondWithWorkerRuns([]);
