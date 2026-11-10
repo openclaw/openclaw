@@ -49,6 +49,7 @@ const runtimeOnlyUnitFiles = new Set([
   "src/plugins/plugin-generation-worker.test.ts",
   "src/state/dreaming-startup-admission.test.ts",
   "test/canonical-descendant.integration.test.ts",
+  "test/codex-account-usage.integration.test.ts",
   "test/codex-settled-turn-finalization.integration.test.ts",
   "test/codex-web-search-native.integration.test.ts",
   "test/codex-web-search-policy.integration.test.ts",
@@ -58,6 +59,7 @@ const runtimeOnlyUnitFiles = new Set([
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-native-search.gateway.test.ts",
   "test/plugins/deep-research-routing.gateway.test.ts",
+  "test/runtime-agent.codex-initialization.integration.test.ts",
   "test/scripts/ci-test-timings-tooling.test.ts",
   "test/scripts/eager-import-closure.test.ts",
   "test/scripts/lint-suppressions.test.ts",
@@ -191,6 +193,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
       config === "test/vitest/vitest.runtime-config.config.ts" ||
       config === "test/vitest/vitest.plugins.config.ts" ||
       config === "test/vitest/vitest.tooling.config.ts" ||
+      config === "test/vitest/vitest.tooling-isolated.config.ts" ||
       config === "test/vitest/vitest.unit-fast.config.ts" ||
       config === "test/vitest/vitest.unit-fast-isolated.config.ts" ||
       config === "test/vitest/vitest.gateway-client.config.ts" ||

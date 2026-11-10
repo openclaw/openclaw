@@ -205,6 +205,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/canonical-descendant.integration.test.ts",
         "test/codex-web-search-native.integration.test.ts",
         "test/cron-conversation-delivery.codex.integration.test.ts",
+        "test/runtime-agent.codex-initialization.integration.test.ts",
         "test/skill-usage.codex.integration.test.ts",
         "test/slack-outbound-permanent-rejection-loopback.test.ts",
       ],
@@ -309,6 +310,21 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/scripts/ci-test-timings-tooling.test.ts",
         "test/scripts/vitest-worker-shutdown.test.ts",
       ],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+      files: ["test/codex-account-usage.integration.test.ts"],
+      preset: "runtime",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+      files: ["test/codex-account-usage.integration.test.ts", "unknown.test.ts"],
+      preset: "full",
+    },
+    {
+      configs: ["test/vitest/vitest.tooling-isolated.config.ts"],
+      files: [],
       preset: "full",
     },
     {
