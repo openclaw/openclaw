@@ -2,4 +2,4 @@
 # (new regressions asserting status --deep surfaces the gateway health reason as an
 # ExpectedCliError instead of the generic "The CLI command failed." line, with a
 # diagnostic recovery step that never recommends a refused lifecycle command).
-61
+59
