@@ -32,11 +32,10 @@ describe("templates release", () => {
     );
     seedLegacyTemplateInstall(plan, { env: process.env });
     const { id, tools, ...agent } = plan.agent.config;
+    const editedTools = { ...tools, exec: { mode: "full" as const } };
     const config = {
       ...fixture.config,
-      agents: {
-        entries: { [id]: { ...agent, tools: { ...tools, exec: { mode: "full" as const } } } },
-      },
+      agents: { entries: { [id]: { ...agent, tools: editedTools } } },
     };
     await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
     await setAppliedRuntimeConfigSnapshot(config, config);
@@ -48,7 +47,7 @@ describe("templates release", () => {
         await import("../templates/tool-policy-runtime.js");
       await snapshot.setAppliedRuntimeConfigSnapshot(config, config);
       return resolveTemplateToolPolicyConsent({
-        agentTools: config.agents.entries.worker.tools,
+        agentTools: editedTools,
         agentId: "worker",
         hasAgentAllowlist: true,
         ownsProfile: true,
