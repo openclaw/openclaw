@@ -27,7 +27,7 @@ Produce and review technical documentation that is clear, actionable, and mainta
 ## Workflow
 
 1. Classify task: `build` or `review`; context: `brownfield` or `evergreen`.
-2. Inventory full documentation scope early (governance + product docs): AGENTS/CONTRIBUTING/aliases plus docs directories, framework sources, and root/module READMEs.
+2. Inventory the requested file, directory, or diff scope early. Include governance and product docs for documentation-wide work. Repository size alone does not expand a scoped review.
 3. Detect multilingual scope (README/docs in multiple languages) and define required parity level.
 4. Read `references/agent-and-contributing.md` for agent instruction and `CONTRIBUTING.md` workflow rules (inventory, canonical/alias mapping, dual-mode balance, deliverable standards, and precedence/conflict handling).
 5. Read `references/principles.md` for the governing ruleset (Matt Palmer & OpenAI).
@@ -37,7 +37,7 @@ Produce and review technical documentation that is clear, actionable, and mainta
 9. For complex or high-risk tasks (build or review), it is acceptable to run longer, deeper, and more exhaustive investigations when needed for confidence.
 10. When available, use sub-agents for bounded parallel discovery/review work, then merge outputs into one coherent final deliverable.
 11. Use `references/tooling.md` when platform/tooling choices affect recommendations.
-12. Run a proactive issue sweep for both governance and docs-content surfaces, and fix high-confidence defects in the same pass unless explicitly asked for report-only mode.
+12. Run a proactive issue sweep within the requested scope. Fix high-confidence defects in the same pass unless asked for report-only mode.
 13. In brownfield mode, prioritize compatibility with current docs IA, tooling, and release state.
 14. In evergreen mode, prioritize timeless wording, update strategy, and durable structure.
 15. Return deliverables plus validation notes, parity status, and remaining gaps.

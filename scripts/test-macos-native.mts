@@ -211,13 +211,18 @@ await runWithFailedTrailer("macos-native", async () => {
     for (const dir of [path.dirname(keychain), path.join(home, "Library/Preferences")]) {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
-    const run = async (bin: string, commandArgs: string[], timeoutMs?: number) => {
+    const run = async (
+      bin: string,
+      commandArgs: string[],
+      timeoutMs?: number,
+      outputFd?: number,
+    ) => {
       canRemove = false;
       const code = await runManagedCommand({
         bin,
         args: commandArgs,
         env: childEnv,
-        stdio: "inherit",
+        stdio: outputFd === undefined ? "inherit" : ["ignore", outputFd, outputFd],
         requireProcessTreeExit: true,
         timeoutMs,
       });
@@ -230,16 +235,7 @@ await runWithFailedTrailer("macos-native", async () => {
       const output = path.join(root, "service-inspection.txt");
       const fd = fs.openSync(output, "w", 0o600);
       try {
-        canRemove = false;
-        const code = await runManagedCommand({
-          bin: "launchctl",
-          args: ["print", serviceTarget],
-          env: childEnv,
-          stdio: ["ignore", fd, fd],
-          requireProcessTreeExit: true,
-          timeoutMs: 30_000,
-        });
-        canRemove = true;
+        const code = await run("launchctl", ["print", serviceTarget], 30_000, fd);
         const text = fs.readFileSync(output, "utf8");
         const pid = /^\tpid = ([0-9]+)$/mu.exec(text)?.[1];
         if (code === 0 && pid) {

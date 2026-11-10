@@ -1,3 +1,4 @@
+import { getByRole } from "@solidjs/testing-library";
 import { expect, it, vi } from "vitest";
 import { createInitialCronState, startCronEdit } from "../../lib/cron/index.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
@@ -35,7 +36,7 @@ it.each([
     const toggle = getElement(row, `[data-test-id="cron-row-toggle-${job.id}"]`, HTMLSpanElement);
     const toggleInput = getElement(toggle, "input.settings-toggle__input", HTMLInputElement);
     const actionLabel = `${enabled ? "Pause" : "Resume"}: ${expected}`;
-    expect(text(toggle, ".settings-control__sr-label")).toBe(actionLabel);
+    expect(getByRole(toggle, "switch", { name: actionLabel })).toBe(toggleInput);
     expect(toggle).toMatchObject({ title: actionLabel });
     expect(toggleInput.checked).toBe(enabled);
 

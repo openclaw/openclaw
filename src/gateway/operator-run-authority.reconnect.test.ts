@@ -7,6 +7,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthenticatedDeviceTokenIdentity } from "../infra/device-pairing-identity.js";
+import type { PairedDevice } from "../infra/device-pairing.types.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -20,7 +21,6 @@ import {
 } from "./device-revocation.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { pairedOperator } from "./operator-run-recovery.test-support.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { dispatchProfile } from "./server/client-fixtures.test-support.js";
@@ -37,13 +37,22 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-function device(overrides: { deviceId?: string; token?: string } = {}) {
+function device(overrides: { deviceId?: string; token?: string } = {}): PairedDevice {
   return {
-    ...pairedOperator({
-      deviceId: overrides.deviceId ?? "reconnect-device",
-      token: overrides.token ?? "synthetic-reconnect-token",
-    }),
+    deviceId: overrides.deviceId ?? "reconnect-device",
     publicKey: "synthetic-reconnect-public-key",
+    roles: ["operator"],
+    approvedScopes: ["operator.admin"],
+    tokens: {
+      operator: {
+        token: overrides.token ?? "synthetic-reconnect-token",
+        role: "operator",
+        scopes: ["operator.admin"],
+        createdAtMs: 1,
+      },
+    },
+    createdAtMs: 1,
+    approvedAtMs: 1,
   };
 }
 
@@ -85,7 +94,7 @@ function fixture(profileId: string, initialConfig: OpenClawConfig = {}) {
   const connect = (
     overrides: {
       profileId?: string;
-      device?: ReturnType<typeof pairedOperator>;
+      device?: PairedDevice;
       scopes?: string[];
       deviceTokenAuth?: boolean;
     } = {},

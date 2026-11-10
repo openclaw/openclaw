@@ -37,15 +37,12 @@ function configured(
 type LocalityCase = { params: TimeoutParams; expected: number; cron?: number };
 
 describe("LLM watchdog policy", () => {
-  it("caps idle and first-event watchdogs at the agent budget", () => {
-    expectBudgets({ cfg: defaults(30) }, 30_000);
-  });
-
-  it("keeps the cloud watchdog finite when the configured run timeout is unlimited", () => {
-    const cfg = defaults(0);
+  it.each([30, 0])("keeps finite and unlimited budgets (%s)", (seconds) => {
+    const cfg = defaults(seconds);
     const runTimeoutMs = resolveAgentTimeoutMs({ cfg });
-    expect(runTimeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(resolveLlmIdleTimeoutMs({ cfg, runTimeoutMs, model: cloud })).toBe(120_000);
+    expect(runTimeoutMs).toBe(seconds ? 30_000 : MAX_TIMER_TIMEOUT_MS);
+    const params = seconds ? { cfg } : { cfg, runTimeoutMs, model: cloud };
+    expectBudgets(params, seconds ? 30_000 : 120_000);
   });
 
   it.each([
@@ -54,6 +51,8 @@ describe("LLM watchdog policy", () => {
     ["http://[fe80::1]:11434", 0],
     ["http://172.32.0.1:11434", 120_000],
     ["http://192.169.1.1:11434", 120_000],
+    ["http://[::ffff:126.255.255.255]:11434", 120_000],
+    ["http://[::ffff:128.0.0.0]:11434", 120_000],
   ])("classifies the endpoint without DNS: %s", (baseUrl, expected) => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(expected);
   });
@@ -92,6 +91,7 @@ describe("LLM watchdog policy", () => {
 
   it.each([
     ["kimi-k2.5:cloud", "http://127.0.0.1:11434", 0],
+    ["kimi-k2.5:cloud", "http://[::ffff:127.0.0.2]:11434", 0],
     ["gpt-oss:120b-cloud", "http://ollama-box:11434", 300_000],
   ])("keeps hosted watchdogs for custom Ollama model %s through %s", (id, baseUrl, localIdle) => {
     const { cfg } = configured({ "local-ollama": "ollama-local" }, "local-ollama", { baseUrl });

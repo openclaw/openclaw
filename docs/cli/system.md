@@ -93,6 +93,10 @@ instances, and similar status lines).
 - Requires a running Gateway reachable by your current config (local or
   remote).
 - System events are ephemeral and not persisted across restarts.
+- Ctrl-C or SIGTERM cancels a pending `system presence` or `system heartbeat last`
+  query without printing a late response. The CLI exits with status 130 or 143.
+  System events and heartbeat changes already sent to the Gateway keep waiting
+  for their acceptance receipt during cleanup.
 
 ## Related
 

@@ -1,5 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+  isPendingBackgroundResultMessage,
+} from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
+import {
   readTranscriptIdentityByEventId,
   replaceTranscriptSuffixEventsSync,
 } from "../../config/sessions/session-accessor.js";
@@ -207,6 +211,10 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
           )
         : undefined;
     const persistedSuffixStartSeq = candidateSeq ?? this.persistedSuffixStartSeq;
+    this.ownTranscriptEntries([
+      ...this.fileEntries,
+      ...this.opaqueFileEntries.map((entry) => entry.record),
+    ]);
     const current = new SessionManagerSuffixPersistence(this.cwd, undefined, this.fileEntries);
     current.opaqueFileEntries = this.opaqueFileEntries.map((entry) => ({ ...entry }));
     current.buildIndex();
@@ -217,8 +225,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     const candidatePersistedIndex = currentEntries.findIndex(
       (entry) => isRecord(entry) && entry.id === candidate?.id,
     );
-    // Custom data never participates in topology or FTS. Keep loaded payloads by reference
-    // while the storage owner carries their original bytes through the atomic suffix rewrite.
+    // Opaque custom data stays in SQLite; placement data participates in model navigation.
     const retainedCustomData = new Map<string, unknown>(
       this.boundedContextIncomplete && candidatePersistedIndex >= 0
         ? currentEntries
@@ -226,6 +233,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
             .flatMap((entry) =>
               isRecord(entry) &&
               entry.type === "custom" &&
+              entry.customType !== BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE &&
               typeof entry.id === "string" &&
               entry.data !== undefined
                 ? [[entry.id, entry.data] as const]
@@ -299,6 +307,10 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     }
     const preparedEntries = [...retainedContextPrefix, ...expectedPersistedEntries];
     const prepared = new SessionManagerSuffixPersistence(this.cwd, undefined, preparedEntries);
+    prepared.ownTranscriptEntries([
+      ...prepared.fileEntries,
+      ...prepared.opaqueFileEntries.map((entry) => entry.record),
+    ]);
     const restoreOmittedParentAncestry = (
       source: SessionManagerSuffixPersistence,
       destination: SessionManagerSuffixPersistence,
@@ -419,10 +431,18 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     prepared.clampOpaqueFileEntryIndexes();
     prepared.buildIndex();
     restoreOmittedParentAncestry(this, prepared);
-    // The predecessor may be outside a bounded window but is still the durable active leaf.
-    // Preserve its opaque identity so the serialized leaf control can restore it on a full reopen.
-    prepared.leafId = replacementParentId;
-    prepared.appendParentId = replacementParentId;
+    // Accepted results remain active through cleanup, including artifacts awaiting placement.
+    // Otherwise restore the predecessor, which may lie outside the bounded payload window.
+    const preservedResult = activeBranch
+      .slice(candidatePreservedStart)
+      .findLast(
+        (entry) =>
+          (entry.type === "custom" &&
+            entry.customType === BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE) ||
+          (entry.type === "message" && isPendingBackgroundResultMessage(entry.message)),
+      );
+    prepared.leafId = preservedResult?.id ?? replacementParentId;
+    prepared.appendParentId = prepared.leafId;
     const events = prepared.getPersistedFileEntries(prepared.appendMode);
     const suffixEvents = preparedSuffixOffset > 0 ? events.slice(preparedSuffixOffset) : events;
     const incrementalPlanningBytes = [...expectedPersistedEntries, ...suffixEvents].reduce<number>(
@@ -443,6 +463,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     const adoptPrepared = (version?: typeof this.transcriptVersion) => {
       // Publish the detached tree before later post-commit observers can append through this manager.
       this.fileEntries = prepared.fileEntries.map(restoreCustomData);
+      this.pendingWritableTranscriptEntries = prepared.pendingWritableTranscriptEntries;
       this.opaqueFileEntries = prepared.opaqueFileEntries;
       this.buildIndex();
       restoreOmittedParentAncestry(prepared, this);

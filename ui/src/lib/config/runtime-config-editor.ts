@@ -3,6 +3,7 @@ import { registerListener } from "../../../../src/shared/listeners.js";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { listen } from "../reactive/listener.ts";
 import { showToast } from "../toast.ts";
 import { createAppliedConfigRefreshOwner } from "./applied-refresh.ts";
 import { applyConfigSnapshot, clearConfigDraftTracking } from "./config-draft-model.ts";
@@ -15,6 +16,7 @@ import {
   type ConfigMethod,
 } from "./config-gateway-operations.ts";
 import { canEnsureConfigRead } from "./config-gateway-read.ts";
+import { createConfigSavedNotice } from "./config-saved-notice.ts";
 import {
   agentConfigEntry,
   clearConfigRequestVersions,
@@ -44,27 +46,48 @@ export function createRuntimeConfigEditor(
   }
   // Raw edits never autosave; form edits and outstanding writes also remain
   // owned by this capability when a worker update or reconnect wants to reload.
-  const stopReloadGuard = registerControlUiReloadGuard(
-    () =>
-      !state.configFormDirty &&
-      !state.configSaving &&
-      !state.configApplying &&
-      !writes.hasUnacknowledgedDraftWrite(),
-    () => showToast({ message: t("configView.reloadBlocked") }),
+  const canReload = () =>
+    !state.configFormDirty &&
+    !state.configSaving &&
+    !state.configApplying &&
+    !writes.hasUnacknowledgedDraftWrite();
+  const stopReloadGuard = registerControlUiReloadGuard(canReload, () =>
+    showToast({ severity: "error", message: t("configView.reloadBlocked") }),
   );
+  // Browser reloads and tab closes bypass the managed guard; the draft lives only in memory.
+  const stopBeforeUnload =
+    typeof window === "undefined"
+      ? undefined
+      : listen(window, "beforeunload", (event) => {
+          if (!canReload()) {
+            event.preventDefault();
+            event.returnValue = "";
+          }
+        });
   const listeners = new Set<(state: RuntimeConfigState) => void>();
   const loads = new Map<"config" | "schema", Promise<unknown>>();
   let schemaRead: Promise<Result<void, string>> | null = null;
+  let schemaDemand: RuntimeConfigState["client"] | "admitted" = null;
   let disposed = false;
 
   const publish = () => {
     if (disposed) {
       return;
     }
+    // Pre-hello demand belongs to one client; admitted demand survives reconnects.
+    if (
+      !schemaRead &&
+      (schemaDemand === "admitted" || (schemaDemand && schemaDemand === state.client)) &&
+      canLoadConfigSchema()
+    ) {
+      void loadSchema();
+    }
+    savedNotice.sync();
     for (const listener of listeners) {
       listener(state);
     }
   };
+  const savedNotice = createConfigSavedNotice(state, publish);
   // Bootstrap changes update the capability's fallback config before views read it.
   const stopBootstrap = bootstrap?.subscribe(publish);
   const run = async <T>(task: () => Promise<T>, loadKey?: "config" | "schema"): Promise<T> => {
@@ -95,13 +118,10 @@ export function createRuntimeConfigEditor(
   };
   const loadConfigOnce = (task: () => Promise<unknown>) =>
     loads.get("config") ?? run(task, "config");
-  // The display reader keeps its request; editing takes custody without waiting
-  // to expose independent schema reads or an explicit replacement refresh.
-  if (initialRead) {
-    void run(() => initialRead, "config");
-  }
-
   const loadSchema = () => {
+    if (canLoadConfigSchema()) {
+      schemaDemand = "admitted";
+    }
     if (loads.has("schema") && schemaRead) {
       return schemaRead;
     }
@@ -124,6 +144,7 @@ export function createRuntimeConfigEditor(
   ) => {
     const epoch = currentConfigConnectionEpoch(state);
     const pendingSchema = loads.get("schema");
+    const previousSchema = schemaRead;
     const config = run(
       () =>
         loadConfig(state, {
@@ -134,11 +155,11 @@ export function createRuntimeConfigEditor(
       "config",
     );
     if ((state.configSchemaVersion !== null || pendingSchema) && canLoadConfigSchema()) {
-      // Config success clears lastError; load the schema afterward to preserve its failures.
+      // Refresh schema after this config replacement unless an independent read supersedes it.
       void config.then(async () => {
         // A plugin change during a schema read needs one catch-up after that read.
         await pendingSchema;
-        if (currentConfigConnectionEpoch(state) === epoch) {
+        if (currentConfigConnectionEpoch(state) === epoch && schemaRead === previousSchema) {
           await loadSchema();
         }
       });
@@ -153,6 +174,13 @@ export function createRuntimeConfigEditor(
     run,
     mutate,
     resetLoads: () => {
+      // Denied read access retires demand; transport reconnects keep admitted interest.
+      if (
+        (gateway.snapshot.phase === "connected" && !canLoadConfigSchema()) ||
+        (schemaDemand !== "admitted" && (schemaDemand !== state.client || !canLoadConfigSchema()))
+      ) {
+        schemaDemand = null;
+      }
       loads.clear();
       schemaRead = null;
     },
@@ -173,6 +201,11 @@ export function createRuntimeConfigEditor(
     }
     return hasOperatorReadAccess(snapshot.hello?.auth ?? null);
   };
+  // The display reader keeps its request; editing takes custody without waiting
+  // to expose independent schema reads or an explicit replacement refresh.
+  if (initialRead) {
+    void run(() => initialRead, "config");
+  }
   return {
     snapshotOwner: writes,
     get state() {
@@ -201,9 +234,15 @@ export function createRuntimeConfigEditor(
       appliedRefresh.reconcile();
     },
     ensureSchemaLoaded: async () => {
-      if (!state.configSchema && canLoadConfigSchema()) {
-        await loadSchema();
+      if (!state.configSchema || !schemaRead) {
+        if (canLoadConfigSchema()) {
+          return loadSchema();
+        }
+        if (!state.connected && schemaDemand !== "admitted") {
+          schemaDemand = state.client;
+        }
       }
+      return { ok: true as const, value: undefined };
     },
     refresh: async (options?: { background?: boolean }) => {
       appliedRefresh.cancel();
@@ -242,6 +281,8 @@ export function createRuntimeConfigEditor(
     dispose() {
       stopBootstrap?.();
       stopReloadGuard();
+      stopBeforeUnload?.();
+      savedNotice.dispose();
       disposed = true;
       writes.dispose();
       listeners.clear();

@@ -2,10 +2,13 @@ import {
   ErrorCodes,
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
-  GatewayErrorDetailCodes,
   readMissingScopeError,
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  SETUP_ADMISSION_BUSY_ERROR_CODE,
+  WIZARD_NOT_FOUND_ERROR_CODE,
+} from "../../../packages/gateway-protocol/src/gateway-error-codes.js";
 
 function hasGatewayErrorDetail(err: unknown, expectedCode: string, detailCode: string): boolean {
   const error = asRecord(err);
@@ -23,19 +26,11 @@ function hasGatewayErrorDetail(err: unknown, expectedCode: string, detailCode: s
 
 /** Identifies an expired process-local wizard session without parsing public copy. */
 export function isWizardNotFoundError(err: unknown): boolean {
-  return hasGatewayErrorDetail(
-    err,
-    ErrorCodes.INVALID_REQUEST,
-    GatewayErrorDetailCodes.WIZARD_NOT_FOUND,
-  );
+  return hasGatewayErrorDetail(err, ErrorCodes.INVALID_REQUEST, WIZARD_NOT_FOUND_ERROR_CODE);
 }
 
 export function isSetupAdmissionBusyError(err: unknown): boolean {
-  return hasGatewayErrorDetail(
-    err,
-    ErrorCodes.UNAVAILABLE,
-    GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY,
-  );
+  return hasGatewayErrorDetail(err, ErrorCodes.UNAVAILABLE, SETUP_ADMISSION_BUSY_ERROR_CODE);
 }
 
 export function isMissingOperatorReadScopeError(err: unknown): boolean {
@@ -48,8 +43,17 @@ export function isArchiveAccessDeniedError(err: unknown): boolean {
   );
 }
 
-export function formatMissingOperatorReadScopeMessage(feature: string): string {
-  return `You don't have permission to view ${feature}. Ask the person who manages OpenClaw for access.`;
+export async function formatMissingOperatorReadScopeMessage(
+  feature: string,
+  fallback: string,
+): Promise<string> {
+  try {
+    const errors = await import("./permission-error.ts");
+    return errors.formatMissingOperatorReadScopeMessage(feature);
+  } catch {
+    // Keep the Gateway denial visible if the optional error catalog cannot load.
+    return fallback;
+  }
 }
 
 /** Retry only a typed deadline or an explicitly retryable rejection of this read. */

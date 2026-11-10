@@ -174,7 +174,7 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   position: absolute;
   right: -14px;
   top: -2px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1;
   color: var(--accent);
   opacity: 0;
@@ -813,7 +813,6 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   width: 100%;
   margin: 8px 0;
   font-size: var(--control-ui-text-xs);
-  text-transform: uppercase;
 }
 
 .chat-handoff-resume__rule::after {

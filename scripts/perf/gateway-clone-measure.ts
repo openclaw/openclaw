@@ -5,6 +5,9 @@
  * --source-dir points to baseline files saved with their src/gateway-relative paths.
  * --workload sharing measures sharing snapshots across 10k synthetic sessions with
  * 40 plugin tool names. Its --source-dir contains session-accessor.sqlite-entry-cache.types.ts.
+ * --workload memory-command or memory-append uses 1,000 incognito sessions with 32 KiB
+ * skills metadata. Its --source-dir contains session-actor-memory.ts. --counts counts clones
+ * separately from uninstrumented CPU and sampled allocation runs.
  * Accept fewer copies/lower allocation with unchanged isolation; compare CPU in
  * separate untraced passes, alternating baseline/candidate order for five pairs.
  * Run baseline/candidate in alternating order; this is not whole-Gateway stress evidence.
@@ -19,6 +22,7 @@ import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { SessionActor } from "../../src/config/sessions/session-actor-contract.js";
 import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 
@@ -27,14 +31,19 @@ const { values } = parseArgs({
     workload: { type: "string", default: "tool" },
     iterations: { type: "string", default: "3000" },
     allocation: { type: "boolean", default: false },
+    counts: { type: "boolean", default: false },
     "source-dir": { type: "string" },
   },
 });
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
-assert(["tool", "history", "sharing"].includes(values.workload));
+assert(["tool", "history", "sharing", "memory-command", "memory-append"].includes(values.workload));
+assert(!(values.allocation && values.counts), "Measure allocation and clone counts separately");
+const memoryCommand = values.workload.startsWith("memory-");
 const ownerRoot = new URL(
-  values.workload === "sharing" ? "../../src/config/sessions/" : "../../src/gateway/",
+  values.workload === "sharing" || memoryCommand
+    ? "../../src/config/sessions/"
+    : "../../src/gateway/",
   import.meta.url,
 );
 if (values["source-dir"]) {
@@ -42,7 +51,9 @@ if (values["source-dir"]) {
   const replacements = new Map(
     (values.workload === "sharing"
       ? ["session-accessor.sqlite-entry-cache.types.ts"]
-      : ["session-transcript-readers.ts", "worker-environments/live-event-projection.ts"]
+      : memoryCommand
+        ? ["session-actor-memory.ts"]
+        : ["session-transcript-readers.ts", "worker-environments/live-event-projection.ts"]
     ).map((file) => [new URL(file, ownerRoot).href, path.join(sourceDir, file)]),
   );
   registerHooks({
@@ -62,7 +73,74 @@ if (values["source-dir"]) {
 let run: () => Promise<void>;
 let cleanup = () => {};
 let operationsPerIteration: number;
-if (values.workload === "sharing") {
+if (memoryCommand) {
+  const { createMemorySessionActorOwner } =
+    await import("../../src/config/sessions/session-actor-memory.js");
+  const owner = createMemorySessionActorOwner({ agentId: "synthetic", path: "/synthetic/memory" });
+  const authority = { assertCurrent() {}, authorize() {} };
+  const actors: SessionActor[] = [];
+  const prompt = "Synthetic skills instructions. ".repeat(1093);
+  for (let index = 0; index < 1_000; index++) {
+    const actor = await owner.acquire(
+      { database: owner.identity, sessionKey: `agent:synthetic:dashboard:incognito-${index}` },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const created = await actor.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: {
+          entry: {
+            sessionId: `synthetic-${index}`,
+            updatedAt: 1,
+            incognito: true,
+            skillsSnapshot: { prompt, skills: [] },
+          },
+          transcriptEvents: [
+            { type: "session", id: `synthetic-${index}`, version: 3, cwd: "/synthetic" },
+          ],
+        },
+      },
+      authority,
+    );
+    assert.equal(created.kind, "committed");
+    actors.push(actor);
+  }
+  let cursor = 0;
+  operationsPerIteration = 1;
+  run = async () => {
+    const index = cursor++;
+    const actor = actors[index % actors.length]!;
+    const context = { commandId: `command-${index}`, phaseId: "synthetic-turn" };
+    const result =
+      values.workload === "memory-append"
+        ? await actor.appendTranscriptEvent(
+            {
+              ...context,
+              sessionId: `synthetic-${index % actors.length}`,
+              lifecycleRevision: null,
+              eventJson: JSON.stringify({
+                type: "custom",
+                id: `event-${index}`,
+                customType: "synthetic",
+                data: { text: "Synthetic event payload. ".repeat(128) },
+              }),
+            },
+            authority,
+          )
+        : await actor.patch(
+            { ...context, reducers: [{ kind: "activity", updatedAt: index + 2 }] },
+            authority,
+          );
+    assert.equal(result.kind, "committed");
+    if (result.kind === "committed") {
+      assert.equal(result.receipt.postimage.entry?.skillsSnapshot?.prompt, prompt);
+      if (values.workload === "memory-command") {
+        assert.equal(result.receipt.postimage.entry?.updatedAt, index + 2);
+      }
+    }
+  };
+  cleanup = () => owner.close();
+} else if (values.workload === "sharing") {
   const { projectSessionSharingEntry } =
     await import("../../src/config/sessions/session-accessor.sqlite-entry-cache.types.js");
   const entries: InternalSessionEntry[] = Array.from({ length: 10_000 }, (_, index) => ({
@@ -204,6 +282,14 @@ if (values.allocation) {
 const diagnostics = startGatewayBenchDiagnostics();
 const hostLoad = loadavg();
 const before = process.memoryUsage();
+let cloneCalls = 0;
+const clone = globalThis.structuredClone;
+if (values.counts) {
+  globalThis.structuredClone = function <T>(value: T, options?: StructuredSerializeOptions): T {
+    cloneCalls++;
+    return clone(value, options);
+  };
+}
 const cpuBefore = process.threadCpuUsage();
 const started = performance.now();
 for (let index = 0; index < iterations; index++) {
@@ -214,6 +300,7 @@ for (let index = 0; index < iterations; index++) {
 }
 const wallMs = performance.now() - started;
 const cpu = process.threadCpuUsage(cpuBefore);
+globalThis.structuredClone = clone;
 await setImmediate();
 const metrics = diagnostics();
 let sampledBytes: number | undefined;
@@ -236,6 +323,7 @@ console.log(
     iterations,
     operations,
     allocation: values.allocation,
+    cloneCallsPerOperation: values.counts ? cloneCalls / operations : undefined,
     wallMs,
     cpuUsPerOperation: (cpu.user + cpu.system) / operations,
     sampledBytesPerOperation: sampledBytes === undefined ? undefined : sampledBytes / operations,

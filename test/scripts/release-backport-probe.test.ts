@@ -1,6 +1,7 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { formatBackportProbes, probeBackport } from "../../scripts/release-backport-probe.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -53,6 +54,45 @@ function fixture() {
 }
 
 describe("release backport tree probe", () => {
+  it("negotiates an absent candidate before reading its trees and reuses local commits offline", () => {
+    const f = fixture();
+    git(f.root, ["config", "uploadpack.allowFilter", "true"]);
+    const clone = createTempDir("release-backport-partial-");
+    git(f.root, [
+      "clone",
+      "--filter=blob:none",
+      "--single-branch",
+      "--branch",
+      "baseline",
+      "--no-checkout",
+      pathToFileURL(f.root).href,
+      clone,
+    ]);
+    const packets = path.join(clone, "packets");
+    const checkpoint = path.join(clone, ".git/FETCH_HEAD");
+    fs.writeFileSync(checkpoint, "retained checkpoint\n");
+    const config = fs.readFileSync(path.join(clone, ".git/config"));
+    const args = [SCRIPT, "--baseline", f.baseline, "--candidate", f.clean];
+    const result = childProcess.spawnSync(process.execPath, args, {
+      cwd: clone,
+      encoding: "utf8",
+      env: { ...process.env, GIT_TRACE_PACKET: packets },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(`${f.clean}\t${f.baseline}\tclean\t0\t1\tclean.txt\t0`);
+    expect(fs.readFileSync(packets, "utf8")).toMatch(/fetch> have /u);
+    expect(fs.readFileSync(checkpoint, "utf8")).toBe("retained checkpoint\n");
+    expect(fs.readFileSync(path.join(clone, ".git/config"))).toEqual(config);
+    expect(git(clone, ["rev-parse", "HEAD"])).toBe(f.baseline);
+    expect(
+      childProcess.execFileSync(process.execPath, args, {
+        cwd: clone,
+        encoding: "utf8",
+        env: { ...process.env, GIT_ALLOW_PROTOCOL: "" },
+      }),
+    ).toBe(result.stdout);
+  });
+
   it("classifies clean, conflicted, and already-covered patches without a worktree", () => {
     const f = fixture();
     const probes = [f.clean, f.conflicted, f.covered].map((candidate) =>

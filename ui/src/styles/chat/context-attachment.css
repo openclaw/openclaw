@@ -1,6 +1,6 @@
 .chat-context-attachment {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   margin: 6px 0 10px;
   max-width: 100%;
   min-width: 0;
@@ -8,7 +8,7 @@
 .chat-context-attachment__summary {
   align-items: center;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   display: flex;
   gap: 6px;
   list-style: none;
@@ -38,13 +38,13 @@
 .chat-context-attachment__body {
   background: var(--bg-accent);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   margin-top: 8px;
   max-width: 440px;
   padding: 12px;
 }
 .chat-context-attachment__body p {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   margin: 0 0 10px;
 }
 .chat-context-attachment__body p:last-child {
@@ -71,7 +71,7 @@
 }
 .chat-context-attachment__technical pre {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }

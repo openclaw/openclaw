@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import {
   formatCliImageTurnContext,
@@ -7,8 +8,6 @@ import {
 } from "../agents/cli-image-turn-correlation.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
-import type { SessionEntry } from "../config/sessions.js";
-import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import { MemoryCliSessionHistoryIndex } from "./cli-session-history-index-memory.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import { mergeCliHistoryWithLookupStats } from "./cli-session-history-lookup.test-support.js";
@@ -16,7 +15,6 @@ import {
   readClaudeCliSessionMessagesAsync,
   mergeImportedChatHistoryMessages,
   answer,
-  boundEntry,
   buildLegacyReseedPrompt,
   claudeUser,
   cliMeta,
@@ -25,19 +23,6 @@ import {
   withClaudeProjectsDir,
 } from "./cli-session-history.test-support.js";
 import { requireGatewayRecord } from "./test-helpers.assertions.js";
-
-async function readChatHistory(homeDir: string, entry: SessionEntry, localMessages: unknown[]) {
-  const binding = getCliSessionBinding(entry, "claude-cli");
-  const importedMessages = binding?.sessionId
-    ? await readClaudeCliSessionMessagesAsync({
-        cliSessionId: binding.sessionId,
-        homeDir,
-        localSessionId: entry.sessionId,
-        reseedReceipt: binding.reseedReceipt,
-      })
-    : [];
-  return merge(localMessages, importedMessages);
-}
 
 const CLAUDE_RESUME_DRIFT_NOTES = [
   "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=system-prompt.",
@@ -51,11 +36,10 @@ function readBoundHistory(
   localMessages: unknown[],
   reseedReceipt?: ReturnType<typeof receipt>,
 ) {
-  return withClaudeProjectsDir(async ({ filePath, homeDir, sessionId }) => {
+  return withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
     await writeClaudeEntries(filePath, entries);
-    const entry = boundEntry(sessionId);
-    entry.cliSessionBindings = { "claude-cli": { sessionId, reseedReceipt } };
-    return { messages: await readChatHistory(homeDir, entry, localMessages), sessionId };
+    const imported = await readMessages({ localSessionId: "openclaw-session", reseedReceipt });
+    return { messages: merge(localMessages, imported), sessionId };
   });
 }
 
@@ -337,9 +321,7 @@ describe("cli session history", () => {
       content: secretText,
     } as AgentMessage);
     const redactedContent = readRecord(localMessage).content;
-    if (typeof redactedContent !== "string") {
-      throw new Error("expected redacted local text content");
-    }
+    expect(typeof redactedContent).toBe("string");
     const { messages, sessionId } = await readBoundHistory(
       [
         claudeUser(`${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n${secretText}`, {
@@ -580,30 +562,29 @@ describe("cli session history", () => {
 
   it.each([
     {
-      name: "keeps a backdated exec completion after the answer it followed",
-      localMessages: [
-        { role: "assistant", content: "long final answer", timestamp: 200 },
-        {
-          role: "user",
-          content: "Exec completed",
-          timestamp: 100,
-          provenance: { kind: "internal_system", sourceTool: "exec" },
-        },
-        { role: "assistant", content: "short follow-up", timestamp: 300 },
+      name: "keeps earlier imports before a backdated local's preceding answer",
+      localMessages: [200, 100, 300].map((t) => historyRow(`local ${t}`, t)),
+      imported: [50, 150, 200, 250].map((t) => historyRow(`import ${t}`, t)),
+      expected: [
+        "import 50",
+        "import 150",
+        "local 200",
+        "local 100",
+        "import 200",
+        "import 250",
+        "local 300",
       ],
-      imported: [{ role: "assistant", content: "unmatched cli import", timestamp: 50 }],
-      expected: ["unmatched cli import", "long final answer", "Exec completed", "short follow-up"],
     },
     {
       name: "splices unmatched imports in timestamp order without moving local rows",
       localMessages: [200, 300, 0, 400, 500, 600].map((t) => historyRow(`local ${t}`, t)),
       imported: [150, 100].map((t) => historyRow(`import ${t}`, t)),
       expected: [
+        "import 100",
+        "import 150",
         "local 200",
         "local 300",
         "local 0",
-        "import 100",
-        "import 150",
         "local 400",
         "local 500",
         "local 600",
@@ -627,4 +608,114 @@ it("keeps lone surrogates distinct from replacement characters in SQLite match k
   const local = { role: "assistant", content: "\ud800" };
   const imported = { role: "assistant", content: "\ufffd" };
   expect(merge([local], [imported])).toEqual([local, imported]);
+});
+
+it.each([
+  ["covered", [], 1],
+  ["identity", [], 1],
+  ["uuidless", [], 1],
+  ["undated", [], 1],
+  ["partial", ["covered"], 1],
+  ["audio", ["covered"], 1],
+  ["ambiguous", ["earlier", "covered"], 2],
+  ["identified", ["earlier"], 2],
+  ["separate-window", ["earlier"], 2],
+  ["resume", [], 1],
+  ["image", [], 1],
+  ["retry", ["retry"], 1],
+  ["tool-result", [], 2],
+  ["thinking", [], 1],
+  ["other-backend", ["covered"], 1],
+] as const)("reconciles native aggregate coverage: %s", (mode, retained, userCount) => {
+  const at = mode === "undated" ? undefined : mode === "separate-window" ? 600_001 : 1_000;
+  const timestamp = (offset: number) => (at === undefined ? undefined : at + offset);
+  const meta = (externalId: string) => ({
+    importedFrom: mode === "other-backend" ? "codex" : "claude-cli",
+    cliSessionId: "session-1",
+    ...(mode === "uuidless" ? {} : { externalId }),
+  });
+  const prompt =
+    mode === "image"
+      ? imageTurn("coverage-image", "question", 1_000, "coverage")
+      : user(
+          "question",
+          mode === "identified" ? undefined : at,
+          mode === "identity" ? meta("native-user") : undefined,
+        );
+  const aggregate: Record<string, unknown> = {
+    ...answer(timestamp(3)),
+    content: "Checking. Done.",
+    idempotencyKey: "cli-assistant:covered",
+  };
+  if (mode === "identity") {
+    aggregate["__openclaw"] = { idempotencyKey: aggregate.idempotencyKey };
+    delete aggregate.idempotencyKey;
+  }
+  if (mode === "audio") {
+    aggregate.openclawDisplayContent = [{ type: "audio", url: "/managed-audio" }];
+  }
+  if (mode === "thinking") {
+    aggregate.content = [
+      { type: "text", text: "Checking. Done." },
+      { type: "thinking", thinking: "Internal reasoning." },
+    ];
+  }
+  const localMessages: unknown[] = [prompt, aggregate];
+  if (mode === "ambiguous" || mode === "identified" || mode === "separate-window") {
+    localMessages.unshift(
+      user("question", 1_000, mode === "identified" ? cliMeta("earlier-user") : undefined),
+      { ...aggregate, idempotencyKey: "cli-assistant:earlier" },
+    );
+  }
+  if (mode === "retry") {
+    localMessages.push({ ...aggregate, idempotencyKey: "cli-assistant:retry" });
+  }
+  const nativePrompt =
+    mode === "image"
+      ? `Different caption\n\n${imagePrompt("coverage-image")}`
+      : mode === "resume"
+        ? `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\nquestion`
+        : mode === "identity"
+          ? "rewritten question"
+          : "question";
+  const imported: unknown[] = [
+    user(nativePrompt, at, meta("native-user")),
+    ...["Checking.", "Done."].map((content, index) => ({
+      role: "assistant",
+      timestamp: timestamp(index + 1),
+      content:
+        mode === "tool-result" && index === 0
+          ? [
+              { type: "text", text: content },
+              { type: "toolcall", id: "calc", name: "calc", arguments: {} },
+            ]
+          : content,
+      __openclaw: meta(`segment-${index}`),
+    })),
+  ];
+  if (mode === "partial") {
+    imported.pop();
+  }
+  if (mode === "tool-result") {
+    imported.splice(
+      2,
+      0,
+      user(
+        [{ type: "tool_result", tool_use_id: "calc", content: "4" }],
+        timestamp(2),
+        meta("tool-result"),
+      ),
+    );
+  }
+  const merged = merge(localMessages, imported);
+  const keys = merged
+    .map(readRecord)
+    .map(
+      (message) =>
+        message.idempotencyKey ?? asOptionalRecord(message["__openclaw"])?.idempotencyKey,
+    )
+    .filter((key) => typeof key === "string" && key.startsWith("cli-assistant:"));
+  expect(keys).toEqual(retained.map((key) => `cli-assistant:${key}`));
+  expect(merged).toEqual(expect.arrayContaining(imported.slice(1)));
+  expect(merged.filter((message) => readRecord(message).role === "user")).toHaveLength(userCount);
 });

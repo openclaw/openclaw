@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -14,7 +15,7 @@ import {
 } from "../../routing/session-key.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
 import type { ModelFallbackNotice } from "../../shared/model-fallback-notice.js";
-import type { SkillWorkshopChangeNotice } from "../../shared/skill-workshop-change-notice.js";
+import type { PluginNotice } from "../../shared/plugin-notice.js";
 import {
   CRON_DIRECT_DELIVERY_CONTEXT_KIND,
   OPENCLAW_DELIVERY_MIRROR_MODEL,
@@ -26,7 +27,6 @@ import { rethrowIncognitoSessionError } from "../../state/incognito-session-erro
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
-import type { RecoveryNoticeMirror } from "./recovery-notice.js";
 import {
   createSessionEntryWithTranscript,
   isSessionTranscriptProjectionUnavailableError,
@@ -112,9 +112,8 @@ type InternalSessionTranscriptDeliveryMirror =
   | {
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     }
-  | SkillWorkshopChangeNotice
-  | ModelFallbackNotice
-  | RecoveryNoticeMirror;
+  | PluginNotice
+  | ModelFallbackNotice;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
@@ -284,6 +283,7 @@ type SessionTranscriptAssistantAppendOptions = {
   beforeMessageWrite?: AssistantBeforeMessageWrite;
   assertCurrent?: () => void;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
+  contextFreeCommand?: true;
   /** Delivered command exchanges are replayable conversation, not delivery bookkeeping. */
   command?: { text: string; idempotencyKey: string };
 };
@@ -454,6 +454,17 @@ async function appendExactAssistantMessageWithSource(
     ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
   const message = {
     ...params.message,
+    ...(params.contextFreeCommand
+      ? {
+          excludeFromContext: true,
+          __openclaw: {
+            ...asOptionalRecord(
+              "__openclaw" in params.message ? params.message["__openclaw"] : undefined,
+            ),
+            contextFreeCommand: true,
+          },
+        }
+      : {}),
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
   const preparedUnkeyedMessage =
@@ -514,6 +525,9 @@ async function appendExactAssistantMessageWithSource(
                 content: [{ type: "text" as const, text: params.command.text }],
                 timestamp: Date.now(),
                 idempotencyKey: params.command.idempotencyKey,
+                ...(params.contextFreeCommand
+                  ? { excludeFromContext: true, __openclaw: { contextFreeCommand: true } }
+                  : {}),
               },
               idempotencyLookup: "scan" as const,
             },

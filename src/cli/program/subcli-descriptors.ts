@@ -182,6 +182,7 @@ const registrations = {
     register: async (program) => (await import("../webhooks-cli.js")).registerWebhooksCli(program),
   },
   qr: { register: async (program) => (await import("../qr-cli.js")).registerQrCli(program) },
+  pair: { register: async (program) => (await import("../pair-cli.js")).registerPairCli(program) },
   clawbot: {
     register: async (program) => (await import("../clawbot-cli.js")).registerClawbotCli(program),
   },
@@ -215,7 +216,8 @@ const registrations = {
     register: async (program) => (await import("../secrets-cli.js")).registerSecretsCli(program),
   },
   skills: {
-    register: async (program) => (await import("../skills-cli.js")).registerSkillsCli(program),
+    register: async (program, argv) =>
+      (await import("../skills-cli.js")).registerSkillsCli(program, argv),
     machineOutput: ({ argv }) => isSkillsMachineOutput(argv),
   },
   update: {

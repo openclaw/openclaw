@@ -66,13 +66,18 @@ suite.define(() => {
                 : '[data-test-id="cron-new-task"]',
             )
             .click();
+          if (narrow && mode === "edit") {
+            // Include validation help when exercising a wrapped edit footer.
+            await page.locator("#cron-name").fill("");
+            await page.locator(".cron-submit-reason").waitFor({ state: "visible" });
+          }
           await page.evaluate(() => document.fonts.ready);
           if (narrow) {
             const footer = page.locator(".cron-editor-actions");
             const originalHeight = await footer.evaluate(
               (element) => element.getBoundingClientRect().height,
             );
-            await page.setViewportSize({ width: 390, height: 707 });
+            await page.setViewportSize({ width: mode === "edit" ? 320 : 390, height: 707 });
             await expect
               .poll(() => footer.evaluate((element) => element.getBoundingClientRect().height))
               .toBeGreaterThan(originalHeight);
@@ -106,6 +111,14 @@ suite.define(() => {
             await page.locator("#cron-name").fill("Garden keyboard task");
           }
           await page.keyboard.press("Tab");
+          if (mode === "edit") {
+            await page.keyboard.press("Tab");
+            expect(
+              await page
+                .locator("#cron-owner-profile-id")
+                .evaluate((element) => element.matches(":focus")),
+            ).toBe(true);
+          }
           await page.keyboard.press("Tab");
           await page.keyboard.press("Tab");
           const interval = page.locator('[data-test-id="cron-schedule-kind-every"]');
@@ -277,6 +290,16 @@ suite.define(() => {
       await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
       await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("systemEvent");
       await expect.poll(() => pickerValue("#cron-session-target")).toBe("main");
+      await expect
+        .poll(() =>
+          page
+            .getByText(
+              "Main adds the task to the agent’s timeline. Isolated starts a reply in a separate session.",
+              { exact: true },
+            )
+            .isVisible(),
+        )
+        .toBe(true);
 
       const target = page.locator("#cron-session-target");
       await target.click();

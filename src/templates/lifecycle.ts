@@ -83,9 +83,9 @@ export async function buildTemplateAddPlan(params: {
   context?: TemplateAddPlanContext;
 }): Promise<TemplateAddPlan> {
   const context = params.context ?? {};
-  const finalId = context.agentId
-    ? context.agentId
-    : selectNextTemplateAgentId(params.manifest.agent.id, context.existingAgentIds ?? []);
+  const finalId =
+    context.agentId ??
+    selectNextTemplateAgentId(params.manifest.agent.id, context.existingAgentIds ?? []);
   const copyNumber = templateAgentCopyNumber(params.manifest.agent.id, finalId);
   const workspace = canonicalWorkspacePath(
     context.workspace ?? resolve(resolveRequiredHomeDir(), ".openclaw", `workspace-${finalId}`),
@@ -590,7 +590,7 @@ export async function buildTemplateAddPlan(params: {
   });
 
   // Strict v1 validation permits only deterministic main or isolated targets.
-  for (const job of params.manifest.cronJobs) {
+  for (const job of params.manifest.automations) {
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -610,7 +610,7 @@ export async function buildTemplateAddPlan(params: {
       templateAddCapabilityChange({
         kind: "cronJob",
         id: job.id,
-        path: `cronJobs.${job.id}`,
+        path: `automations.${job.id}`,
         action: "schedule",
         reason: "The Template declares recurring scheduled work.",
         effect: { ...job, agentId: finalId },

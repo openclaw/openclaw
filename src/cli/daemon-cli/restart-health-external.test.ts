@@ -148,3 +148,51 @@ it.each(["final-delay", "missing", "read-failure"] as const)(
     }
   },
 );
+
+it("stops external-listener health polling once the command signal is aborted", async () => {
+  const controller = new AbortController();
+  const aborted = new Error("restart-interrupt");
+  callGateway.mockRejectedValue(new Error("connect ECONNREFUSED"));
+  sleep.mockImplementationOnce(async () => {
+    controller.abort(aborted);
+  });
+
+  await expect(
+    waitForListener({ attempts: 3, delayMs: 60_000, signal: controller.signal }),
+  ).rejects.toBe(aborted);
+  expect(sleep).toHaveBeenCalledWith(60_000, controller.signal);
+});
+
+it("stops an in-flight listener probe once the command signal is aborted", async () => {
+  const controller = new AbortController();
+  const aborted = new Error("restart-interrupt");
+  callGateway.mockImplementation(async () => {
+    controller.abort(aborted);
+    throw new Error("connect ECONNREFUSED");
+  });
+
+  await expect(
+    waitForListener({ attempts: 3, delayMs: 60_000, signal: controller.signal }),
+  ).rejects.toBe(aborted);
+  expect(sleep).not.toHaveBeenCalled();
+});
+
+it("stops waiting for the previous lock owner to release once the command signal is aborted", async () => {
+  const controller = new AbortController();
+  const aborted = new Error("restart-interrupt");
+  const previousLockIdentity = mockGatewayLockReplacement();
+  readActiveGatewayLockIdentity.mockResolvedValue(previousLockIdentity);
+  sleep.mockImplementationOnce(async () => {
+    controller.abort(aborted);
+  });
+
+  await expect(
+    waitForListener({
+      attempts: 3,
+      delayMs: 60_000,
+      previousLockIdentity,
+      signal: controller.signal,
+    }),
+  ).rejects.toBe(aborted);
+  expect(sleep).toHaveBeenCalledWith(60_000, controller.signal);
+});

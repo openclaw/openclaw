@@ -6,7 +6,8 @@ import type {
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
-import type { ChatDetailsSnapshot, DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
+import type { DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
+import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
 import type { ChatSessionProgressProps } from "./chat-composer-types.ts";
 import type { ChatOutputsDesktopProps } from "./chat-outputs-data.ts";
 import type { ChatPanePlacementProps } from "./chat-pane-placement.tsx";
@@ -84,12 +85,15 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "subagentSessions"
     | "subagentParentKey"
     | "subagentSessionsHydrated"
+    | "subagentSessionsUnavailable"
     | "onOpenSubagent"
     | "onOpenSubagents"
     | "personActivity"
     | "onScrollPortRef"
   > & {
     cachedDetails?: ChatDetailsSnapshot;
+    /** The session observation has accepted current facts; cached rows are display only. */
+    sessionFactsReady?: boolean;
     onDetailsSnapshot?: (patch: DetailsSnapshotPatch) => void;
     desktopPresentation?: ChatDetailsDesktopPresentation;
     desktopDisclosures?: ChatDetailsDesktopDisclosures;

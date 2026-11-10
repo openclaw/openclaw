@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 let PluginRuntimeCloseRetainedError: typeof import("../../../plugins/runtime-close-error.js").PluginRuntimeCloseRetainedError;
 let scheduler: typeof import("./swarm-scheduler.js");
+let enqueueSwarmRun: typeof import("./swarm-scheduler.lifecycle.test-support.js").enqueueSwarmRun;
 
 // queueMicrotask-driven starts need real microtask turns; fake timers'
 // runAllTicks only drains nextTick, so flush the microtask queue explicitly.
@@ -21,7 +22,7 @@ function holdRun(runId: string) {
 function makeQueue(groupId = "group", maxConcurrent = 1) {
   const started: string[] = [];
   type Reserve = Parameters<typeof scheduler.reserveSwarmRun>[0];
-  type Enqueue = Parameters<typeof scheduler.enqueueSwarmRun>[0];
+  type Enqueue = Parameters<typeof enqueueSwarmRun>[0];
   const reserve = (runId: string, overrides: Partial<Reserve> = {}) =>
     scheduler.reserveSwarmRun({ groupId, runId, maxConcurrent, activeRunIds: [], ...overrides });
   const launch = (runId: string) => ({
@@ -34,7 +35,7 @@ function makeQueue(groupId = "group", maxConcurrent = 1) {
   });
   const activate = (runId: string) => scheduler.activateSwarmRun(launch(runId));
   const enqueue = (runId: string, overrides: Partial<Enqueue> = {}) =>
-    scheduler.enqueueSwarmRun({ maxConcurrent, activeRunIds: [], ...launch(runId), ...overrides });
+    enqueueSwarmRun({ maxConcurrent, activeRunIds: [], ...launch(runId), ...overrides });
   const watchCapacity = (runId: string) => {
     const owner = {};
     const waits: boolean[] = [];
@@ -50,6 +51,7 @@ describe("swarm scheduler", () => {
   beforeEach(async () => {
     vi.resetModules();
     scheduler = await import("./swarm-scheduler.js");
+    ({ enqueueSwarmRun } = await import("./swarm-scheduler.lifecycle.test-support.js"));
     ({ PluginRuntimeCloseRetainedError } = await import("../../../plugins/runtime-close-error.js"));
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   });

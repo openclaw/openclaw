@@ -4,8 +4,10 @@ import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { invalidateConfigGetResponseCache } from "../config-get-response.js";
 import { SerializedJsonPayload, serializeGatewayFrame } from "../serialized-json.js";
+import { replyWithBillingRouteWarnings } from "./config-write-flow.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
+import type { RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   read: vi.fn(),
@@ -67,7 +69,11 @@ beforeEach(() => {
   mocks.schema = { schema: { title: "First schema" }, uiHints: undefined };
   mocks.readForWrite.mockImplementation(async () => readSnapshot());
   mocks.commit.mockImplementation(
-    async (input: { snapshot: { hash: string }; nextConfig: OpenClawConfig }) => {
+    async (input: {
+      snapshot: { hash: string };
+      nextConfig: OpenClawConfig;
+      respond?: RespondFn;
+    }) => {
       if (input.snapshot.hash !== storedHash) {
         throw new ConfigMutationConflictError("config changed since last load");
       }
@@ -78,6 +84,7 @@ beforeEach(() => {
         config: storedConfig,
         hash: storedHash,
         queueFollowUp: vi.fn(),
+        reply: replyWithBillingRouteWarnings(input.respond, [], undefined),
       };
     },
   );

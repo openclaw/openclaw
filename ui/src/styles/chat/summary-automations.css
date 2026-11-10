@@ -5,9 +5,9 @@ openclaw-chat-summary-automations {
   .chat-details__caption {
     gap: 4px;
     color: var(--muted);
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
     font-weight: 500;
-    line-height: 24px;
+    line-height: calc(24px * var(--control-ui-text-scale));
 
     > svg {
       width: 14px;
@@ -31,10 +31,11 @@ openclaw-chat-summary-automations {
     border-radius: 0;
     background: transparent;
     color: var(--muted);
-    font-size: 12px;
-    line-height: 24px;
+    font-size: var(--control-ui-text-sm);
+    line-height: calc(24px * var(--control-ui-text-scale));
 
     &:hover {
+      background: transparent;
       color: var(--text);
     }
 
@@ -50,8 +51,7 @@ openclaw-chat-summary-automations {
   }
 }
 
-.chat-summary__automations,
-.session-automation-result {
+.chat-summary__automations {
   display: grid;
   gap: 2px;
   min-width: 0;
@@ -64,10 +64,10 @@ openclaw-chat-summary-automations {
   min-height: 32px;
   gap: 8px;
   padding: 4px 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text);
-  font-size: 12px;
-  line-height: 24px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(24px * var(--control-ui-text-scale));
 
   &:hover {
     background: var(--surface-hover);
@@ -136,8 +136,8 @@ openclaw-chat-summary-automations {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 24px;
+  font-size: var(--control-ui-text-xs);
+  line-height: calc(24px * var(--control-ui-text-scale));
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -162,8 +162,6 @@ openclaw-chat-summary-automations {
   flex: 0 0 12px;
   width: 12px;
   height: 12px;
-  border-color: color-mix(in srgb, var(--muted) 30%, transparent);
-  border-top-color: var(--muted);
   animation-duration: 1.5s;
 }
 
@@ -174,14 +172,14 @@ openclaw-chat-summary-automations {
   gap: 8px;
   padding: 5px 7px;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .chat-summary__automation-retry {
   flex: none;
   padding: 2px 7px;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 
   &[aria-disabled="true"] {
     opacity: 0.6;
@@ -198,25 +196,4 @@ openclaw-chat-summary-automations {
   align-items: center;
   gap: 8px;
   min-width: 0;
-}
-
-.session-automation-result {
-  line-height: 16px;
-}
-
-.session-automation-result__summary {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow-wrap: anywhere;
-}
-
-.session-automation-result__checked {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.session-automation-result__error {
-  color: var(--danger);
 }

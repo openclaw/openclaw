@@ -14,6 +14,7 @@ import path from "node:path";
 import { PerformanceObserver, performance } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { sampledOwnerBytes } from "../lib/sampled-owner-allocation.mjs";
 
 const [baseRoot, candidateRoot, callsArgument = "5000"] = process.argv.slice(2);
 assert(baseRoot && candidateRoot, "provide BASE_ROOT and CAND_ROOT");
@@ -164,23 +165,6 @@ let checksum = 0;
 let gcEntries = [];
 const observer = new PerformanceObserver((list) => gcEntries.push(...list.getEntries()));
 observer.observe({ entryTypes: ["gc"] });
-function allocationBytes(profile, url) {
-  const ids = new Set();
-  function visit(node, parentOwned = false) {
-    const owned = parentOwned || node.callFrame.url === url;
-    if (owned) {
-      ids.add(node.id);
-    }
-    return (
-      (owned ? node.selfSize : 0) +
-      node.children.reduce((sum, child) => sum + visit(child, owned), 0)
-    );
-  }
-  return {
-    bytes: visit(profile.head),
-    samples: profile.samples.filter((sample) => ids.has(sample.nodeId)).length,
-  };
-}
 console.log(
   JSON.stringify({
     protocol: "gateway-object-copies-v1",
@@ -232,7 +216,7 @@ try {
             const used = process.threadCpuUsage(cpu);
             const memory = process.memoryUsage();
             const allocation = inspector
-              ? allocationBytes(
+              ? sampledOwnerBytes(
                   (await inspector.post("HeapProfiler.stopSampling")).profile,
                   owners[side].url,
                 )

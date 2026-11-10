@@ -98,13 +98,30 @@ it("retains focused grant controls on unrelated host updates and applies permiss
   expect(body()).toContain("Read access is required to view connected apps.");
 });
 
-it("pairs within the caller's ceiling without a browser-supplied principal", async () => {
-  const { request } = fixture([grants, pairing]);
+it("keeps pairing actions together while respecting the caller's ceiling", async () => {
+  const pending = Promise.withResolvers<unknown>();
+  const { request } = fixture([grants, pending.promise, pairing]);
   await shows("Pair with code");
   click("Pair with code");
   expect(body()).not.toContain("Full role access");
+  const dialog = document.querySelector(".mcp-connected-apps__dialog")!;
+  const actions = () => dialog.querySelector("openclaw-modal-actions")!;
+  const labels = () => [...actions().querySelectorAll("button")].map((node) => node.textContent);
+  expect(actions()).not.toBeNull();
+  expect(labels()).toEqual(["Cancel", "Create pairing code"]);
+  expect(dialog.lastElementChild).toBe(actions());
+  click("Create pairing code");
+  expect(labels()).toEqual(["Cancel", "Creating code…"]);
+  expect(dialog.querySelectorAll("button:enabled, input:enabled")).toHaveLength(0);
+  pending.reject(new Error("Pairing failed. Try again."));
+  await shows("Pairing failed. Try again.");
+  expect(dialog.querySelector('[role="alert"]')?.nextElementSibling).toBe(actions());
+  expect(dialog.lastElementChild).toBe(actions());
+  expect(labels()).toEqual(["Cancel", "Create pairing code"]);
   click("Create pairing code");
   await shows("PAIR-CODE");
+  expect(labels()).toEqual(["Done"]);
+  expect(dialog.lastElementChild).toBe(actions());
   expect(request).toHaveBeenLastCalledWith("mcp-relay.pair", {
     ceiling: ["operator.read", "operator.write"],
   });

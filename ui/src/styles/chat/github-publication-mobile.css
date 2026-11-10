@@ -1,7 +1,7 @@
 .github-publication-mobile {
   color: var(--text);
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--control-ui-text-md);
+  line-height: calc(20px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
 }
 
@@ -17,7 +17,7 @@
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--mobile-list-surface, var(--bg-hover));
 }
 
@@ -45,9 +45,9 @@
 .github-publication-mobile__publication h3 {
   margin: 0 12px 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-weight: 500;
-  line-height: 18px;
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .github-publication-mobile__account-row {
@@ -56,7 +56,7 @@
   gap: 10px;
   min-height: 56px;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--mobile-list-surface, var(--bg-hover));
   text-align: start;
 }
@@ -88,6 +88,13 @@
   color: var(--muted);
   font-size: 10px;
   font-weight: 500;
+  overflow: hidden;
+}
+
+.github-publication-mobile__avatar > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .github-publication-mobile__account-row > svg {
@@ -102,7 +109,7 @@
   width: 100%;
   padding: 0;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -144,14 +151,14 @@
   gap: 2px;
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--control-ui-text-md);
+  line-height: calc(20px * var(--control-ui-text-scale));
 }
 
 .github-publication-mobile__choice-login {
   color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .github-publication-mobile__status:empty {
@@ -178,15 +185,15 @@
   gap: 10px;
   min-width: 0;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(18px * var(--control-ui-text-scale));
 }
 
 .github-publication-mobile .chat-pr__publication-note {
   display: grid;
   gap: 6px;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(18px * var(--control-ui-text-scale));
   overflow-wrap: anywhere;
 }
 
@@ -229,15 +236,20 @@
   border-radius: var(--radius-full);
   background: var(--primary);
   color: var(--primary-foreground);
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   font-weight: 500;
-  line-height: 20px;
+  line-height: calc(20px * var(--control-ui-text-scale));
   text-align: center;
   white-space: normal;
 }
 
 .github-publication-mobile__actions .chat-pr__create:hover:not(:disabled) {
   background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.github-publication-mobile__actions .chat-pr__create:active:not(:disabled) {
+  background: var(--primary-active);
   color: var(--primary-foreground);
 }
 

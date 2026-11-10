@@ -38,7 +38,7 @@
 
 .login-gate__command--hero code {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.45;
   color: var(--text-strong);
   overflow-wrap: anywhere;

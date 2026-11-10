@@ -4,6 +4,7 @@ import {
   pathForTemplateCatalogEntry,
   pathForRoute,
 } from "../../app-route-paths.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -57,13 +58,23 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
     gateway.revision();
     return context.gateway.snapshot.client ? draftTarget() : null;
   };
-  const packageName = () =>
-    props.routeData
-      ? templateCatalogPackageNameFromPath(
-          props.routeData.location.pathname,
-          props.routeData.basePath,
-        )
-      : null;
+  const source = createMemo(
+    () => {
+      const data = props.routeData;
+      const packageName = data
+        ? templateCatalogPackageNameFromPath(data.location.pathname, data.basePath)
+        : null;
+      if (!packageName) {
+        return null;
+      }
+      const version = new URLSearchParams(data?.location.search).get("version");
+      return { packageName, ...(version ? { version } : {}) };
+    },
+    {
+      equals: (left, right) =>
+        left?.packageName === right?.packageName && left?.version === right?.version,
+    },
+  );
 
   return (
     <Show when={props.routeData && available() !== null} fallback={<TemplatesLoading />}>
@@ -71,9 +82,9 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
         when={available()}
         fallback={
           <SettingsPage wide carapace>
-            <div class="callout warn" role="status">
+            <InlineAlert tone="warning" role="status">
               {t("templatesCatalog.disabled")}
-            </div>
+            </InlineAlert>
           </SettingsPage>
         }
       >
@@ -82,21 +93,25 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
           keyed
           fallback={
             <Show
-              when={packageName()}
+              when={source()}
               keyed
               fallback={
                 <TemplatesExplore
                   onSelect={(entry) =>
                     context.navigate("templates", {
                       pathname: pathForTemplateCatalogEntry(entry.packageName, context.basePath),
+                      search: entry.latestVersion
+                        ? `?${new URLSearchParams({ version: entry.latestVersion })}`
+                        : "",
                     })
                   }
                 />
               }
             >
-              {(selectedPackage) => (
+              {(selectedSource) => (
                 <TemplatesCatalogDialog
-                  initialPackageName={selectedPackage}
+                  initialPackageName={selectedSource.packageName}
+                  initialVersion={selectedSource.version}
                   onClose={() =>
                     context.navigate("templates", {
                       pathname: pathForRoute("templates", context.basePath),

@@ -1,8 +1,10 @@
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
+import { createTemplateDraft } from "../templates/draft.js";
 import { buildTemplateAddPlan } from "../templates/lifecycle.js";
 import {
   TEMPLATE_BUILD_RESULT_SCHEMA_VERSION,
@@ -26,10 +28,12 @@ import type {
   TemplatesBuildOptions,
   TemplatesCreateOptions,
   TemplatesDevOptions,
+  TemplatesDraftOptions,
   TemplatesValidateOptions,
 } from "./templates-cli.js";
 
 const TEMPLATE_DEV_RESULT_SCHEMA_VERSION = "openclaw.templateDev.v1" as const;
+const TEMPLATE_DRAFT_RESULT_SCHEMA_VERSION = "openclaw.templateDraft.v1" as const;
 
 function reportProjectError(
   error: unknown,
@@ -37,7 +41,8 @@ function reportProjectError(
   schemaVersion:
     | typeof TEMPLATE_PROJECT_RESULT_SCHEMA_VERSION
     | typeof TEMPLATE_BUILD_RESULT_SCHEMA_VERSION
-    | typeof TEMPLATE_DEV_RESULT_SCHEMA_VERSION,
+    | typeof TEMPLATE_DEV_RESULT_SCHEMA_VERSION
+    | typeof TEMPLATE_DRAFT_RESULT_SCHEMA_VERSION,
   json: boolean | undefined,
 ): void {
   const code = error instanceof TemplateProjectError ? error.code : fallbackCode;
@@ -56,8 +61,8 @@ export async function runTemplatesCreateCommand(
 ): Promise<void> {
   try {
     const result = await createTemplateProject(projectPath, {
-      ...(opts.name ? { name: opts.name } : {}),
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
+      name: opts.name,
+      agentId: opts.agentId,
     });
     if (opts.json) {
       writeRuntimeJson(runtime, {
@@ -68,13 +73,41 @@ export async function runTemplatesCreateCommand(
       });
       return;
     }
-    runtime.log(`Created Template project: ${result.root}`);
-    runtime.log(`Package: ${result.packageJson.name}@${result.packageJson.version}`);
+    runtime.log(`Created Template project: ${sanitizeTerminalText(result.root)}`);
+    runtime.log(
+      `Package: ${sanitizeTerminalText(result.packageJson.name)}@${sanitizeTerminalText(result.packageJson.version)}`,
+    );
   } catch (error) {
     reportProjectError(
       error,
       "project_create_failed",
       TEMPLATE_PROJECT_RESULT_SCHEMA_VERSION,
+      opts.json,
+    );
+  }
+}
+
+export async function runTemplatesDraftCommand(
+  workspaceDir: string,
+  opts: TemplatesDraftOptions,
+): Promise<void> {
+  try {
+    const draft = await createTemplateDraft(workspaceDir);
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        schemaVersion: TEMPLATE_DRAFT_RESULT_SCHEMA_VERSION,
+        stability: TEMPLATE_OUTPUT_STABILITY,
+        ok: true,
+        ...draft,
+      });
+    } else {
+      runtime.log(`Prepared private Template draft: ${sanitizeTerminalText(draft.path)}`);
+    }
+  } catch (error) {
+    reportProjectError(
+      error,
+      "draft_create_failed",
+      TEMPLATE_DRAFT_RESULT_SCHEMA_VERSION,
       opts.json,
     );
   }
@@ -111,10 +144,12 @@ export async function runTemplatesValidateCommand(
     });
     return;
   }
-  runtime.log(`Valid Template project: ${result.root}`);
-  runtime.log(`Package: ${result.packageJson.name}@${result.packageJson.version}`);
+  runtime.log(`Valid Template project: ${sanitizeTerminalText(result.root)}`);
+  runtime.log(
+    `Package: ${sanitizeTerminalText(result.packageJson.name)}@${sanitizeTerminalText(result.packageJson.version)}`,
+  );
   for (const path of result.excludedPaths) {
-    runtime.log(`Excluded: ${path}`);
+    runtime.log(`Excluded: ${sanitizeTerminalText(path)}`);
   }
 }
 
@@ -128,9 +163,11 @@ export async function runTemplatesBuildCommand(
       writeRuntimeJson(runtime, { ...result, stability: TEMPLATE_OUTPUT_STABILITY, ok: true });
       return;
     }
-    runtime.log(`Built Template: ${result.template.name}@${result.template.version}`);
-    runtime.log(`Artifact: ${result.artifact}`);
-    runtime.log(`Integrity: ${result.integrity}`);
+    runtime.log(
+      `Built Template: ${sanitizeTerminalText(result.template.name)}@${sanitizeTerminalText(result.template.version)}`,
+    );
+    runtime.log(`Artifact: ${sanitizeTerminalText(result.artifact)}`);
+    runtime.log(`Integrity: ${sanitizeTerminalText(result.integrity)}`);
     runtime.log(`Excluded project paths: ${result.excludedPaths.length}`);
   } catch (error) {
     reportProjectError(
@@ -189,7 +226,7 @@ export async function runTemplatesDevCommand(
       diagnostics: result.diagnostics,
       context: {
         config,
-        ...(opts.agentId ? { agentId: opts.agentId } : {}),
+        agentId: opts.agentId,
         ...(opts.workspace ? { workspace: opts.workspace } : {}),
         existingAgentIds,
         existingWorkspacePaths: existingAgentIds.map((agentId) =>
@@ -219,10 +256,12 @@ export async function runTemplatesDevCommand(
       plan,
     });
   } else {
-    runtime.log(`Template dev preview: ${build.template.name}@${build.template.version}`);
-    runtime.log(`Artifact integrity: ${build.integrity}`);
-    runtime.log(`Agent: ${plan.agent.finalId}`);
-    runtime.log(`Workspace: ${plan.agent.workspace}`);
+    runtime.log(
+      `Template dev preview: ${sanitizeTerminalText(build.template.name)}@${sanitizeTerminalText(build.template.version)}`,
+    );
+    runtime.log(`Artifact integrity: ${sanitizeTerminalText(build.integrity)}`);
+    runtime.log(`Agent: ${sanitizeTerminalText(plan.agent.finalId)}`);
+    runtime.log(`Workspace: ${sanitizeTerminalText(plan.agent.workspace)}`);
     logTemplateAgentConfiguration(plan);
     runtime.log(`Actions: ${plan.summary.totalActions}`);
     runtime.log(`Capability escalations: ${plan.capabilityChanges.length}`);

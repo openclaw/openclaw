@@ -18,6 +18,8 @@ import type { WorkerTunnelManager } from "./tunnel.js";
 export type WorkerEnvironmentCreateRequest = {
   profileId: string;
   idempotencyKey: string;
+  /** Immutable admitted acquisition policy; unselected profiles and reserves stay fixed-lease. */
+  retainedPolicy?: import("../../plugins/worker-retention.types.js").WorkerRetentionPolicy;
   machineClass?: string;
   executionMode?: WorkerExecutionMode;
   projectPath?: string;
@@ -66,7 +68,7 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
       inheritedToolPolicySource?: "sender";
       inheritedToolDenylist?: string[];
       delegatedToolPolicyActive?: boolean;
-      skillWorkshop?: AnyAgentTool;
+      skillLibrary?: AnyAgentTool;
       portalAvailable?: boolean;
       prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
     }) => Promise<AnyAgentTool[]>;

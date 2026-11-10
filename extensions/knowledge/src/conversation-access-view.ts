@@ -7,7 +7,7 @@ import { icon } from "./ui-icons.js";
 
 type Access = GrantEntry["access"];
 /** A conversation the operator can see, for labels and the grant picker. */
-export type GrantSession = { key: string; title: string; archived: boolean };
+type GrantSession = { key: string; title: string; archived: boolean };
 /** Known group and channel conversations of the viewed agent; `complete` says
  * whether a grant missing from them can be reported as matching none. */
 export type GrantSessions = { rows: GrantSession[]; complete: boolean };

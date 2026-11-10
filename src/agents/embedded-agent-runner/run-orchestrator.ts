@@ -66,7 +66,7 @@ import { withRequiredSessionPlacement } from "../session-placement-admission.js"
 import { resolveSessionPlacementTurnSettlementAssertion } from "../session-placement-forced-terminal-settlement.js";
 import { captureSessionSuspension, type SessionSuspensionParams } from "../session-suspension.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { redactRunIdentifier } from "../workspace-run.js";
+import { redactRunIdentifier, resolveRunBootstrapWorkspaceDir } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import { buildCompletedAgentUsageMeta, mergeCompletedAgentUsage } from "./completed-usage.js";
 import { resolveGlobalLane } from "./lanes.js";
@@ -555,7 +555,7 @@ async function runEmbeddedAgentForSession(
                 agentDir,
                 workspaceResolution,
                 workspaceDir: resolvedWorkspace,
-                bootstrapWorkspaceDir: canonicalWorkspace,
+                bootstrapWorkspaceDir: resolveRunBootstrapWorkspaceDir(params, canonicalWorkspace),
                 isCanonicalWorkspace,
                 globalLane,
                 hookRunner,
@@ -575,10 +575,12 @@ async function runEmbeddedAgentForSession(
               });
             };
             const runWithPreparedRuntime = () =>
-              withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
-                context = AsyncLocalStorage.snapshot();
-                return runPrepared();
-              });
+              preparedModelRuntimeLease.run(() =>
+                withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
+                  context = AsyncLocalStorage.snapshot();
+                  return runPrepared();
+                }),
+              );
             return params.pluginGeneration
               ? await withPreparedModelRuntimePluginGenerationScope(
                   preparedModelRuntimeLease.pluginGeneration,

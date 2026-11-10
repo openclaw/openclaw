@@ -66,7 +66,6 @@ import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-fa
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
-import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -74,6 +73,7 @@ import {
 } from "../infra/sqlite-worker-identity.js";
 import { readLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import { rewritePluginAuthProfileRefs } from "../plugins/auth-profile-config-refs.js";
+import { createVerifiedDatabaseMigrationBackup } from "../snapshot/database-backup.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
@@ -1405,11 +1405,11 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
       target.agentDir === undefined && resolveSharedAuthStoreOwnership(env).location === "state-db"
         ? "shared-state"
         : "agent";
-    const backup = await createVerifiedSqliteSnapshot({
+    const backup = await createVerifiedDatabaseMigrationBackup({
       sourcePath: target.databasePath,
       targetPath: `${target.databasePath}.auth-profile-migration-${backupId}.bak`,
-      preserveRowIds: true,
-      beforePublish: () => assertTargetCurrent(target),
+      config: params.cfg,
+      assertCurrent: () => assertTargetCurrent(target),
       validate: (database) => {
         for (const field of ["store", "state"] as const) {
           if (field === "state" && target.unreadableStateJson !== undefined) {

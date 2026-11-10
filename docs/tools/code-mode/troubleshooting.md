@@ -48,9 +48,8 @@ JavaScript syntax errors are rejected during source preparation, before any
 nested tool dispatch. The bounded diagnostic includes a one-based source line
 and column. Malformed JavaScript reports its syntax error before module-access
 checks. Correct the source and submit a new `exec`; OpenClaw does not repair
-or replay it automatically. This no-dispatch outcome does not enable
-`restartSafe` or change the result's `replaySafe` flag. Exceptions thrown by valid
-guest code, including `SyntaxError`, remain runtime failures.
+or replay it automatically. Exceptions thrown by valid guest code, including
+`SyntaxError`, remain runtime failures.
 
 The current parser has a known limitation with division immediately after an
 optional keyword-named property, such as `value?.return / 2 / 3`. This is valid
@@ -62,16 +61,17 @@ objects and prototypes are not passed through the JSON result bridge. This
 bridge contract does not make the Node executor a security boundary; see
 [Code Mode executors](/tools/code-mode/executors).
 
-`failurePhase` identifies where the terminal error originated. An uncaught
+`failurePhase` identifies where the terminal error originated. `"input"` means
+input validation, such as rejected JavaScript; it does not identify worker
+startup or time spent waiting for the worker to accept input. An uncaught
 rejected tool call reports `"bridge"`; a new JavaScript error after a successful
 call or a caught tool rejection reports `"guest"`. Rethrowing the original tool
 error keeps `"bridge"`, including after `wait`. Bridge failure origin and code
 come only from host replies. Guest code cannot settle its own pending tool calls
 or forge bridge provenance.
 
-Failure origin is separate from replay safety. When `bridgeDispatchStarted` is
-`true` and `replaySafe` is `false`, check the destination before repeating a send
-or another action that changes state—even for a guest error. A failed `exec`
+When `bridgeDispatchStarted` is `true`, check the destination before repeating a
+send or another action that changes state, even for a guest error. A failed `exec`
 does not by itself prove that a message was not delivered.
 
 ## Telemetry
@@ -133,6 +133,14 @@ logs retain the raw diagnostic; log exports apply their normal redaction.
 Missing or ambiguous edit anchors are input errors. Correct the patch or edit
 after inspecting the current file. Code Mode never automatically retries failed
 guest code or nested tool calls; earlier actions in the cell may have completed.
+After three consecutive identical failed calls, the agent's always-on
+[tool-error guard](/tools/loop-detection#repeated-tool-errors) blocks that exact
+action and gives the model one opportunity to change its approach. Repeating the
+blocked action ends the turn with a recorded, visible diagnostic. When no plugin
+middleware matches the tool, Code Mode's changing telemetry counters do not reset
+this failure streak; changed error results, changed arguments, and successful
+calls do. Matching middleware can change the result in place; its final result is
+compared in full, including retained telemetry.
 
 Node worker heap exhaustion reports `runtime_unavailable` with the configured
 heap allowance and guidance to paginate results or retain less guest data.

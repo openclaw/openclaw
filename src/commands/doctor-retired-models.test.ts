@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { expect, it, vi } from "vitest";
 import { resolveAgentModelFallbacksOverride } from "../agents/agent-scope.js";
@@ -43,6 +45,43 @@ async function writePlatformProfile(state: Awaited<ReturnType<typeof fixture>>["
     "platformagent",
   );
 }
+
+it.each(["sqlite", "legacy"] as const)(
+  "reports constrained %s session selections without changing healthy routes",
+  async (storage) => {
+    const { state, sessions } = await fixture();
+    const sessionKey = "agent:main:retirement-selection";
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    for (const [selection, requiresFullDoctor] of [
+      [{ modelSelectionLocked: true }, true],
+      [{ modelOverride: "current-model", modelOverrideSource: "user" }, true],
+      [{ authProfileOverride: "chatgpt", authProfileOverrideSource: "user" }, true],
+      [{}, false],
+    ] as const) {
+      const entry = {
+        sessionId: "retirement-selection",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "current-model",
+        ...selection,
+      };
+      if (storage === "sqlite") {
+        await writeSession(state, sessionKey, entry);
+      } else {
+        fs.mkdirSync(state.sessionsDir(), { recursive: true });
+        fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: entry }));
+      }
+      const result = await sessions();
+      expect(result.requiresFullDoctor).toBe(requiresFullDoctor ? true : undefined);
+      expect(result.changes).toEqual([]);
+      expect(
+        storage === "sqlite"
+          ? readSession(state, sessionKey)
+          : JSON.parse(fs.readFileSync(storePath, "utf8"))[sessionKey],
+      ).toMatchObject(entry);
+    }
+  },
+);
 
 it("repairs only the retired physical route in OAuth config", async () => {
   const { cfg, defaults, main, repair } = await fixture("oauth");

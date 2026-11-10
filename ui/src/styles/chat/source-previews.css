@@ -13,7 +13,7 @@ openclaw-chat-sources {
 .chat-source-popover__kind,
 .chat-source-popover__unavailable {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.5;
 }
 
@@ -55,7 +55,7 @@ openclaw-chat-sources {
   border-color: var(--accent);
 }
 .chat-source-card__title {
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 500;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -119,7 +119,7 @@ openclaw-chat-sources {
 }
 .chat-source-popover__excerpt {
   margin: 6px 0 12px;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
@@ -132,7 +132,7 @@ openclaw-chat-sources {
   gap: 6px;
   min-height: 30px;
   color: var(--link);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   text-decoration: none;
 }
 .chat-source-popover__open:hover {

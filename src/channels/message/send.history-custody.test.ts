@@ -31,10 +31,8 @@ it.each(["batch", "context", "private-core"] as const)(
       channel: "reef",
       to: "reef:recipient",
       payloads: [{ text: "accepted notice" }],
-      transcriptGeneration: generation,
       sessionGeneration: generation,
       session: { agentId: generation.agentId, policyKey: generation.sessionKey },
-      transcriptProvenance: { kind: "recovery-notice" as const, noticeId: "notice" },
     };
     if (entrypoint === "batch") {
       await sendDurableMessageBatch(injected);
@@ -44,7 +42,6 @@ it.each(["batch", "context", "private-core"] as const)(
       await sendDurableMessageBatchCore(injected, undefined, undefined, generation);
     }
     expect(deliver).toHaveBeenCalledOnce();
-    expect(deliver.mock.calls[0]?.[0].transcriptGeneration).toBeUndefined();
     expect(deliver.mock.calls[0]?.[0].sessionGeneration).toEqual(
       entrypoint === "private-core" ? generation : undefined,
     );

@@ -2,8 +2,6 @@ import { randomBytes } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import { createContext as createGatewayContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
 import { prepareSubagentRunsSnapshotForRunIds } from "./subagent-registry-state.js";
 import {
@@ -14,9 +12,8 @@ import {
   stored,
   useSubagentRegistryWorkerFixture,
 } from "./subagent-registry-worker.test-support.js";
-import { prepareSubagentRecoveryFixture } from "./subagent-registry.persistence.test-support.js";
 
-const fixture = useSubagentRegistryWorkerFixture();
+useSubagentRegistryWorkerFixture();
 
 it.each(["0", "1"])(
   "releases completed payloads and persists their removal (catalog=%s)",
@@ -110,79 +107,39 @@ it.each(["0", "1"])(
   },
 );
 
-it.each(["metadata mutation", "requester recovery"])(
-  "hydrates settled payloads for %s",
-  async (operation) => {
-    const terminalReply = {
-      disposition: "visible" as const,
-      text: "The completed child result",
-      modelRouteChange: "The runtime selected the fallback model.",
-    };
-    const child = entry("settled-recovery", {
-      execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
-      cleanupCompletedAt: 3,
-      expectsCompletionMessage: true,
-      completion: { required: true, resultText: terminalReply.text, terminalReply },
-      delivery: {
-        status: "delivered",
-        payload: {
-          requesterSessionKey: "agent:main:requester",
-          requesterDisplayKey: "original requester",
-          childSessionKey: "agent:main:subagent:settled-recovery",
-          childRunId: "settled-recovery",
-          task: "Original delivery task",
-          terminalReply,
-        },
+it("hydrates settled payloads for metadata mutation", async () => {
+  const terminalReply = {
+    disposition: "visible" as const,
+    text: "The completed child result",
+    modelRouteChange: "The runtime selected the fallback model.",
+  };
+  const child = entry("settled-metadata", {
+    execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
+    cleanupCompletedAt: 3,
+    expectsCompletionMessage: true,
+    completion: { required: true, resultText: terminalReply.text, terminalReply },
+    delivery: {
+      status: "delivered",
+      payload: {
+        requesterSessionKey: "agent:main:requester",
+        requesterDisplayKey: "original requester",
+        childSessionKey: "agent:main:subagent:settled-metadata",
+        childRunId: "settled-metadata",
+        task: "Original delivery task",
+        terminalReply,
       },
-    });
-    // Only policy admission is stubbed; persistence, requester identity and custody are real.
-    await prepareSubagentRecoveryFixture(child, { stateDir: fixture.state.stateDir });
-    await register(child);
-    expect([...getSubagentActivationRuns(subagentRuns)]).toEqual([]);
+    },
+  });
+  await register(child);
+  expect([...getSubagentActivationRuns(subagentRuns)]).toEqual([]);
 
-    if (operation === "metadata mutation") {
-      await change(child.runId, (row) => {
-        expect(row.completion?.terminalReply).toEqual(terminalReply);
-        expect(row.delivery?.payload).toEqual(child.delivery?.payload);
-        expect(row.operatorRecoverySource).toEqual(child.operatorRecoverySource);
-        row.label = "Updated after completion";
-      });
-      const durable = stored(child.runId);
-      expect(durable?.completion?.terminalReply).toEqual(terminalReply);
-      expect(durable?.delivery?.payload).toEqual(child.delivery?.payload);
-      expect(durable?.operatorRecoverySource).toEqual(child.operatorRecoverySource);
-      expect(durable?.label).toBe("Updated after completion");
-      return;
-    }
-
-    subagentRuns.clear();
-    await restore();
-    await change(child.runId, {
-      requesterSettleWake: { status: "pending", attemptCount: 0 },
-    });
-    const gateway = createGatewayContext();
-    let gatewayOpen = true;
-    const resolver = () => (gatewayOpen ? gateway : undefined);
-    await expect(
-      bindSubagentRunGatewayOwners({
-        runs: subagentRuns,
-        entries: [...getSubagentActivationRuns(subagentRuns)],
-        resumedRuns: new Set(),
-        getGatewayContextResolver: () => resolver,
-        onRecovered: () => {},
-      }),
-    ).resolves.toBe(true);
-    const recovered = subagentRuns.get(child.runId)!;
-    const dispatch = vi.fn(() => "authorized requester continuation");
-    expect(subagentRuns.runWithCompletionAuthority(recovered, dispatch)).toBe(
-      "authorized requester continuation",
-    );
-    expect(recovered.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
-    expect(recovered.completion?.terminalReply).toEqual(terminalReply);
-    expect(recovered.delivery?.payload).toEqual(child.delivery?.payload);
-    expect(recovered.operatorRecoverySource).toEqual(child.operatorRecoverySource);
-    gatewayOpen = false;
-    expect(() => subagentRuns.runWithCompletionAuthority(recovered, dispatch)).toThrow();
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  },
-);
+  await change(child.runId, (row) => {
+    expect(row.completion?.terminalReply).toEqual(terminalReply);
+    expect(row.delivery?.payload).toEqual(child.delivery?.payload);
+    row.label = "Updated after completion";
+  });
+  const durable = stored(child.runId);
+  expect(durable?.completion?.terminalReply).toEqual(terminalReply);
+  expect(durable?.delivery?.payload).toEqual(child.delivery?.payload);
+  expect(durable?.label).toBe("Updated after completion");
+});

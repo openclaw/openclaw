@@ -53,7 +53,10 @@ transport SecretRefs and applies its existing private-network, proxy, and TLS po
 The authored configuration keeps its original secret references.
 
 If your provider exposes an OpenAI-compatible `/models` API, opt the
-single-provider helper into shared discovery:
+single-provider helper into shared discovery. Bundled providers with such an
+API must list models live, through this option or a `buildProvider` that
+discovers, so the account's listing decides which models appear and new vendor
+models need no OpenClaw release:
 
 ```typescript
 catalog: {
@@ -98,8 +101,10 @@ Passive model-list reads that wait for a configuration replacement resume agains
 the newly committed catalog and configuration. They do not retry with the retired
 configuration. Exact runtime acquisitions remain bound to their requested configuration.
 
-Bundled providers set `discoveryMode: "strict"` in their catalog options.
-This code option keeps successful empty results empty and reports failed
+Bundled providers also set `discoveryMode: "strict"` in their catalog options.
+It changes only how discovery reports results and never enables discovery:
+with a static or manifest-backed `buildProvider` and no `liveModelDiscovery`
+or custom `run`, the provider serves its static rows. This code option keeps successful empty results empty and reports failed
 acquisition through `ProviderCatalogResult.outcomes`, rather than returning
 seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 `auth-rejected` outcome; other acquisition failures produce `unavailable`.

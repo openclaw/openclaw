@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
-import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
@@ -8,14 +7,18 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import type { OperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
 import {
   matchesSubagentChildSessionOwner,
+  resolveRecordedRequester,
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { SubagentRunIndex } from "./subagent-registry-memory-index.js";
+import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
@@ -85,7 +88,6 @@ export function compactSubagentRunForMemory(entry: SubagentRunRecord): SubagentR
   if (compact.delivery) {
     delete compact.delivery.payload;
   }
-  delete compact.operatorRecoverySource;
   bindGatewayContextResolver(compact, getGatewayContextResolver(entry));
   recordSubagentRunPayloadEviction(compact, entry);
   return immutableSubagentRun(compact);
@@ -102,7 +104,6 @@ export function restoreSubagentRunPayload(
   const restored = copySubagentRunRuntimeOwner(resident, {
     ...resident,
     task: full.task,
-    operatorRecoverySource: full.operatorRecoverySource,
     ...(resident.delivery
       ? { delivery: { ...resident.delivery, payload: full.delivery?.payload } }
       : {}),
@@ -154,47 +155,6 @@ export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(rec
 }
 
 const emptyRunBucket: readonly SubagentRunRecord[] = Object.freeze([]);
-
-class SubagentRunIndex extends Map<string, SubagentRunRecord[]> {
-  constructor(private readonly keyFor: (entry: SubagentRunRecord) => string | undefined) {
-    super();
-  }
-
-  update(previous?: SubagentRunRecord, entry?: SubagentRunRecord): void {
-    const previousKey = previous && this.keyFor(previous);
-    const key = entry && this.keyFor(entry);
-    if (previousKey && previousKey !== key) {
-      const bucket = this.get(previousKey);
-      const position = bucket && previous ? bucket.indexOf(previous) : -1;
-      if (bucket && position >= 0) {
-        bucket.splice(position, 1);
-        if (bucket.length === 0) {
-          this.delete(previousKey);
-        }
-      }
-    }
-    if (!key || !entry) {
-      return;
-    }
-    const bucket = this.get(key);
-    if (bucket?.length === 1 && bucket[0] === previous) {
-      bucket[0] = entry;
-    } else if (bucket) {
-      // Replacement moves to the end, preserving the collector's last-published lookup.
-      const position = previous ? bucket.indexOf(previous) : -1;
-      if (position >= 0) {
-        bucket.splice(position, 1);
-      }
-      bucket.push(entry);
-    } else {
-      this.set(key, [entry]);
-    }
-  }
-
-  getLatest(key: string): SubagentRunRecord | undefined {
-    return this.get(key)?.at(-1);
-  }
-}
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
 // must stay O(1) regardless of retained collector records. The map subclass
@@ -278,22 +238,12 @@ function completeRetirementPublication(publication: SubagentRetirementPublicatio
   publication.resolve();
 }
 
-type CompletionAuthority = NonNullable<
-  Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>
->;
-type CompletionCustody = {
-  authority: CompletionAuthority;
-  entry: SubagentRunRecord;
-  stop: () => void;
-};
-
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   readLookup = new SubagentSessionReadLookup();
   readonly workIndex = new SubagentRunWorkIndex();
-  private readonly completionAuthorities = new Map<object, CompletionCustody>();
+  private readonly completionAuthorities = new Map<object, SubagentCompletionCustody>();
   // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
-  // True marks restart custody; false marks a live admitted source.
-  private readonly requiredCompletionEntries = new WeakMap<object, boolean>();
+  private readonly requiredCompletionEntries = new WeakSet<object>();
   private readonly retiredCompletionEntries = new WeakSet<object>();
 
   retireCompletionAuthority(observed: SubagentRunRecord): void {
@@ -311,15 +261,18 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     return getCurrentSubagentRunOwner(this, entry) ?? entry;
   }
 
-  requireCompletionAuthority(entry: SubagentRunRecord): void {
-    this.requiredCompletionEntries.set(getSubagentRunRuntimeKey(entry), true);
-  }
-
-  bindCompletionAuthority(row: SubagentRunRecord, source: CompletionAuthority, recovered = false) {
+  bindCompletionAuthority(
+    row: SubagentRunRecord,
+    source: SubagentCompletionCustody["authority"],
+    requesterRunInstance?: OperationalRunInstanceRef,
+    requesterCompletion: SubagentCompletionCustody["requesterCompletion"] = requesterRunInstance
+      ? { runId: requesterRunInstance.runId }
+      : undefined,
+  ) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
     // A committed row with captured custody stays restricted if its source expires before publication.
-    this.requiredCompletionEntries.set(key, this.requiredCompletionEntries.get(key) ?? recovered);
+    this.requiredCompletionEntries.add(key);
     source.assertCurrent();
     if (
       this.retiredCompletionEntries.has(key) &&
@@ -328,11 +281,13 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       throw new Error("Subagent completion retry no longer owns its source");
     }
     this.releaseCompletionAuthority(entry);
-    this.requiredCompletionEntries.set(key, recovered);
+    this.requiredCompletionEntries.add(key);
     this.retiredCompletionEntries.delete(key);
-    const custody: CompletionCustody = {
+    const custody: SubagentCompletionCustody = {
       authority: source,
       entry,
+      requesterRunInstance,
+      requesterCompletion,
       stop: () => source.signal.removeEventListener("abort", revoked),
     };
     const revoked = () => this.releaseCompletionAuthority(custody.entry);
@@ -340,6 +295,39 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     source.signal.addEventListener("abort", revoked, { once: true });
     if (source.signal.aborted) {
       revoked();
+    }
+  }
+
+  /** Steering adopts an existing execution without replacing its completion source. */
+  bindRequesterRunInstance(entry: SubagentRunRecord, instance?: OperationalRunInstanceRef): void {
+    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
+    if (custody && instance && isSameSubagentRunOwner(this.get(entry.runId), entry)) {
+      custody.requesterRunInstance = instance;
+      custody.requesterCompletion = { runId: instance.runId };
+    }
+  }
+
+  getRequesterRunInstance(entry: SubagentRunRecord): OperationalRunInstanceRef | undefined {
+    return isSameSubagentRunOwner(this.get(entry.runId), entry)
+      ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterRunInstance
+      : undefined;
+  }
+
+  /** Completion follows task adoption without changing the original execution receipt. */
+  getRequesterCompletion(entry: SubagentRunRecord) {
+    return isSameSubagentRunOwner(this.get(entry.runId), entry)
+      ? this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.requesterCompletion
+      : undefined;
+  }
+
+  /** Retain the accepted terminal postimage before a later turn replaces the session row. */
+  recordRequesterCompletion(sessionKey: string, agentId: string, runId: string): void {
+    for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
+      const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(child));
+      const requesterAgentId = resolveRecordedRequester(child);
+      if (custody?.requesterCompletion?.runId === runId && requesterAgentId === agentId) {
+        custody.requesterCompletion = { runId, ended: true };
+      }
     }
   }
 
@@ -390,8 +378,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   private isCancellationNotice(entry: SubagentRunRecord): boolean {
     return (
       entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-      entry.execution.outcome?.status === "error" &&
-      !this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(entry))
+      entry.execution.outcome?.status === "error"
     );
   }
 
@@ -413,6 +400,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         sources.some(
           (source) =>
             source?.operatorAuthority?.source !== original.source ||
+            source?.operatorAuthority?.invocation !== original.invocation ||
             !isDeepStrictEqual(source?.operatorAuthority?.scopes, original.scopes),
         )
       ) {
@@ -432,14 +420,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       }
       custody?.authority.assertCurrent();
       const source = custody?.authority.operatorAuthority;
-      // Siblings re-admitted independently share durable input evidence, not an old capability.
-      const sameRecoveredSource =
-        this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(resultEntry)) &&
-        this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(entry)) &&
-        resultEntry.operatorRecoverySource !== undefined &&
-        isDeepStrictEqual(resultEntry.operatorRecoverySource, entry.operatorRecoverySource);
       if (
-        (!sameRecoveredSource && source?.source !== first?.source) ||
+        source?.source !== first?.source ||
+        source?.invocation !== first?.invocation ||
         !isDeepStrictEqual(source?.scopes, first?.scopes) ||
         !isDeepStrictEqual(custody?.authority.scopes, firstCustody?.authority.scopes)
       ) {
@@ -452,14 +435,32 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   /** Committed replacement transfers custody without reviving a retired source. */
   transferCompletionAuthority(previous: SubagentRunRecord, next: SubagentRunRecord): void {
     transferFollowupCohort(previous, next);
+    if (
+      previous.runId !== next.runId &&
+      matchesSubagentChildSessionOwner(previous, next.childSessionKey, next.childAgentId) &&
+      (previous.taskRunId ?? previous.runId) === (next.taskRunId ?? next.runId)
+    ) {
+      // Advance descendant accounting only after this task's replacement commits.
+      // Keep the original instance for active-turn receipt checks.
+      for (const child of getSubagentRunsForRequesterSession(previous.childSessionKey)) {
+        if (
+          !matchesSubagentChildSessionOwner(next, child.requesterSessionKey, child.requesterAgentId)
+        ) {
+          continue;
+        }
+        const childCustody = this.completionAuthorities.get(getSubagentRunRuntimeKey(child));
+        if (childCustody?.requesterCompletion?.runId === previous.runId) {
+          childCustody.requesterCompletion = { runId: next.runId };
+        }
+      }
+    }
     const previousKey = getSubagentRunRuntimeKey(previous);
     const nextKey = getSubagentRunRuntimeKey(next);
     if (this.retiredCompletionEntries.has(previousKey)) {
       this.retiredCompletionEntries.add(nextKey);
     }
-    const recovered = this.requiredCompletionEntries.get(previousKey);
-    if (recovered !== undefined) {
-      this.requiredCompletionEntries.set(nextKey, recovered);
+    if (this.requiredCompletionEntries.has(previousKey)) {
+      this.requiredCompletionEntries.add(nextKey);
     }
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(previous));
     if (!custody) {
@@ -485,7 +486,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         !record ||
         !isSameSubagentRunOwner(this.get(entry.runId), entry) ||
         record.generation !== entry.generation ||
-        (!record.requesterTurnRunId &&
+        ((!record.requesterTurnRunId || record.expectsCompletionMessage === false) &&
           !record.requesterSettleWake &&
           record.pauseReason !== "sessions_yield" &&
           (record.cleanupCompletedAt !== undefined ||

@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
+import { SerializedJsonArray } from "../serialized-json.js";
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -174,6 +175,7 @@ it.each(["unchanged", "sharing", "replay"] as const)(
             },
           };
         },
+        readChatStartupProjection: async () => ({ metadata: { swarmEnabled: false } }),
       });
       prepareGatewayRecipientProfile(client);
       expect(client.preparedSessionProfile?.role).toBe("view");
@@ -215,6 +217,7 @@ it.each(["unchanged", "sharing", "replay"] as const)(
           respond,
           isWebchatConnect: () => false,
           extraHandlers: sessionSubscriptionHandlers,
+          acceptsSerializedJson: true,
         });
         expect(read, JSON.stringify(respond.mock.calls)).toHaveBeenCalledOnce();
         expect(observedDuringRead).toBe(true);
@@ -223,7 +226,10 @@ it.each(["unchanged", "sharing", "replay"] as const)(
             true,
             expect.objectContaining({
               approvalReplay: expect.objectContaining({ sessionKey: scope.sessionKey }),
-              initialHistory: expect.objectContaining({ ok: true }),
+              initialHistory: expect.objectContaining({
+                ok: true,
+                payload: expect.objectContaining({ messages: expect.any(SerializedJsonArray) }),
+              }),
             }),
             undefined,
           );

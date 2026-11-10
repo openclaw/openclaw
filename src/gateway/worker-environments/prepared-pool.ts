@@ -9,7 +9,7 @@ import {
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { WorkerEnvironmentRecord as Environment } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
-/** Environment rows own inventory; placement activation and explicit builds establish demand. */
+/** Environment rows own inventory; activation, explicit builds, and standing policy establish demand. */
 export function createPreparedWorkerPool(options: pool.PoolOptions) {
   const { store, signal, now } = options;
   let inFlight: Promise<void> | undefined;
@@ -105,28 +105,36 @@ export function createPreparedWorkerPool(options: pool.PoolOptions) {
     const preparation =
       intent.profileSnapshot.runtimePreparation ?? intent.profileSnapshot.project?.preparation;
     return preparation
-      ? store.list().filter((record) => {
-          const limits = pool.poolPolicy(options, record.profileId, record.providerId);
-          const presenceDemand = presence.current();
-          return (
-            limits.target > 0 &&
-            limits.maxTotal > 0 &&
-            record.state === "ready" &&
-            record.providerId === intent.providerId &&
-            record.preparation !== null &&
-            record.preparation.key === preparation.key &&
-            record.preparation.consumedAtMs === null &&
-            ((presenceDemand &&
-              presenceDemand.project.key ===
-                readWorkerProjectSnapshot(record.profileSnapshot.project)?.key &&
-              (presenceDemand.retireAtMs ?? Number.MAX_SAFE_INTEGER) > now()) ||
-              record.preparation.expiresAtMs > now()) &&
-            record.destroyRequestedAtMs === null &&
-            record.sharedHost === false &&
-            record.nodeDeviceId !== null &&
-            record.leaseId !== null
-          );
-        })
+      ? store
+          .list()
+          .filter((record) => {
+            const limits = pool.poolPolicy(options, record.profileId, record.providerId);
+            return (
+              limits.target > 0 &&
+              limits.maxTotal > 0 &&
+              record.state === "ready" &&
+              record.providerId === intent.providerId &&
+              record.preparation !== null &&
+              record.preparation.key === preparation.key &&
+              (readWorkerProjectSnapshot(record.profileSnapshot.project)?.baseCommit ===
+                intent.profileSnapshot.project?.baseCommit ||
+                options.resolveProvider(record.providerId)?.refreshPreparedProject !== undefined) &&
+              record.preparation.consumedAtMs === null &&
+              // Standing demand replenishes capacity; it cannot extend a restored finite deadline.
+              record.preparation.expiresAtMs > now() &&
+              record.destroyRequestedAtMs === null &&
+              record.sharedHost === false &&
+              record.nodeDeviceId !== null &&
+              record.leaseId !== null
+            );
+          })
+          .toSorted((a, b) => {
+            const commit = intent.profileSnapshot.project?.baseCommit;
+            return (
+              Number(readWorkerProjectSnapshot(b.profileSnapshot.project)?.baseCommit === commit) -
+              Number(readWorkerProjectSnapshot(a.profileSnapshot.project)?.baseCommit === commit)
+            );
+          })
       : [];
   };
   const maintain = async (environmentId?: string) => {

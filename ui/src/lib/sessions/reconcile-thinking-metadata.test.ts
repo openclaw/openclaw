@@ -91,6 +91,7 @@ describe("reconcileSessionHistory thinking profiles", () => {
       undefined,
     );
 
+    expect(next?.sessions[0]).toMatchObject({ ...row, model: "replacement", updatedAt: 2 });
     expect(next?.sessions[0]?.thinkingLevels).toBeUndefined();
     expect(next?.sessions[0]?.thinkingDefault).toBeUndefined();
   });

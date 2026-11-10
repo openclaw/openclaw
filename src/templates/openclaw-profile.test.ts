@@ -15,14 +15,14 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 async function profileFixture(profile?: string, pointer?: string) {
   const root = tempDirs.make("openclaw-template-profile-");
   await mkdir(join(root, "profiles"));
-  const path = join(root, "openclaw.template.json");
+  const path = join(root, "CLAW.md");
   await writeFile(
     path,
-    JSON.stringify({
+    `---\n${JSON.stringify({
       schemaVersion: 1,
       agent: { id: "triage" },
       ...(pointer ? { metadata: { "openclaw.config": pointer } } : {}),
-    }),
+    })}\n---\n`,
   );
   const profilePath = join(root, pointer ?? "profiles/openclaw.yml");
   const write = (content: string | Buffer) => writeFile(profilePath, content);

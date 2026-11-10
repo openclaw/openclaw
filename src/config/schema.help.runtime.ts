@@ -479,7 +479,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.alsoAllow":
     "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
   "tools.byProvider":
-    "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
+    'Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy. exec.mode sets a restrict-only host exec ceiling for turns on that provider or provider/model (it never drops mandatory approvals or loosens a stricter mode), so mode "auto" puts only that model\'s exec misses behind the exec reviewer.',
   "agents.entries.*.tools.profile":
     "Per-agent override for tool profile selection when one agent needs a different capability baseline. Use this sparingly so policy differences across agents stay intentional and reviewable.",
   "agents.entries.*.tools.alsoAllow":
@@ -551,10 +551,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Trusted real target roots that skill symlinks may resolve into when they sit outside their configured source root. Keep this narrow, such as a sibling repo skills directory.",
   "skills.load.watch":
     "Enable filesystem-triggered skill discovery with a safety rescan every 30 minutes for missed events. Disabling this leaves explicit OpenClaw skill changes, relevant configuration changes, and Gateway startup refreshing skills immediately. Existing sessions use changed snapshots on their next agent turn.",
-  "skills.workshop.autonomous.mode":
-    'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work, and archives learned skills unused for 30 days. Every change is recorded and undoable. "propose" saves what background reviews would change as drafts instead; review them with /learn drafts. "off" disables background learning. Default: "auto".',
-  "skills.workshop.autonomous.channelNotices":
-    'Post background review notices to channel conversations, except Slack, with an Undo button (default: false); the Control UI shows that message as plain text. When disabled, notices appear only as the Learned row in the Control UI chat. Saying "undo" works either way.',
   approvals:
     "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":

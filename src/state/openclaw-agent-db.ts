@@ -9,6 +9,7 @@ import {
   resolveExistingSqliteFileUri,
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import {
   isPostgresSqlConnection,
   sqlPublicationAnchor,
@@ -31,7 +32,6 @@ import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamatio
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
-  registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
@@ -169,6 +169,7 @@ export function clearOpenClawAgentDatabaseOpenFailure(
 export type { OpenClawAgentDatabaseWriteAdmission } from "./openclaw-agent-db-admission.js";
 export const {
   openOpenClawAgentDatabase,
+  openOpenClawAgentDatabaseInWorker,
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
   withOpenClawAgentDatabaseRuntime,
@@ -266,8 +267,16 @@ function* openOpenClawAgentDatabaseSteps(
   let reuseIntegrity = false;
   let liveOwnerProvenance: string | undefined;
   let integrityRevoked = false;
+  let processDeath = false;
   const diagnostics: SqliteIntegrityDiagnostics = {};
   const validation = pending?.validation ?? preparedLease?.validation;
+  const previouslyRevoked =
+    preparedLease?.integrityRevoked === true ||
+    pending?.integrityRevoked === true ||
+    hasRevokedOpenClawAgentDatabaseValidation(pathname, validation);
+  const claimProvenance = preparedLease
+    ? preparedLease.provenance
+    : readAgentDatabaseLeaseProvenance(pathname);
   const captureVerification: OpenClawAgentIntegrityVerificationReceiver = (
     runtimeIntegrityAllowed,
     invalidated,
@@ -276,6 +285,8 @@ function* openOpenClawAgentDatabaseSteps(
   ) => {
     reuseIntegrity = runtimeIntegrityAllowed;
     liveOwnerProvenance = admittedFileProvenance;
+    processDeath =
+      invalidated && runtimeIntegrityAllowed && !previouslyRevoked && because === undefined;
     // A host refusal may have no positive validation receipt to transfer.
     integrityRevoked =
       invalidated || preparedLease?.integrityRevoked === true || pending?.integrityRevoked === true;
@@ -358,9 +369,7 @@ function* openOpenClawAgentDatabaseSteps(
     let isValidatedReopen = Boolean(getOpenClawAgentDatabaseValidation(validationDatabase));
     // Lease history governs first admission; it cannot expire this process's checked file.
     const reuseAdmittedIntegrity =
-      isValidatedReopen ||
-      reuseIntegrity ||
-      (pending?.workerPrepared === true && !integrityRevoked);
+      reuseIntegrity || (pending?.workerPrepared === true && !integrityRevoked);
     let reusedSchema = false;
     let walMaintenance: SqliteWalMaintenance;
     try {
@@ -415,18 +424,24 @@ function* openOpenClawAgentDatabaseSteps(
         }
         // The host grant can revoke transferred proof; decide reuse after it returns.
         diagnostics.integrityGateReason = integrityRevoked
-          ? "stale-lease-full"
+          ? processDeath &&
+            claimProvenance !== null &&
+            readAgentDatabaseLeaseProvenance(pathname) === claimProvenance
+            ? "process-death"
+            : "stale-lease-full"
           : hasRevokedOpenClawAgentDatabaseValidation(pathname, validation)
             ? "revoked"
             : reuseIntegrity
               ? (readSqliteDatabaseCleanCloseRefusal(db) ?? "no-proof")
               : "lease-class";
-        diagnostics.because ??= integrityRevoked
-          ? agentDatabaseAdmissionProvenanceRefusal(preparedLease?.provenance, pathname)
-          : undefined;
+        diagnostics.because ??=
+          diagnostics.integrityGateReason === "stale-lease-full"
+            ? agentDatabaseAdmissionProvenanceRefusal(preparedLease?.provenance, pathname)
+            : undefined;
         let verification: { verifiedAt: number } | undefined;
         if (
           diagnostics.integrityGateReason === "revoked" ||
+          diagnostics.integrityGateReason === "process-death" ||
           diagnostics.integrityGateReason === "stale-lease-full"
         ) {
           isValidatedReopen = false;
@@ -434,6 +449,18 @@ function* openOpenClawAgentDatabaseSteps(
         } else if (reuseIntegrity) {
           // Path admission can precede replacement detection; borrow only this native file's proof.
           verification = readSqliteDatabaseIntegrityVerification(db);
+        }
+        if (
+          integrityCheck !== "quick" &&
+          (integrityCheck === "full" ||
+            !["process-death", "lease-class", "no-proof"].includes(diagnostics.integrityGateReason))
+        ) {
+          // A missing seal alone is not corruption evidence; known refusals must survive death.
+          recordOpenClawAgentDatabaseAdmission(
+            leaseId,
+            { agentId, path: pathname, env: leaseEnvironment },
+            "full-required",
+          );
         }
         const requiresCurrentVersionConvergence = yield* agentDatabaseIntegrityBeforeMutationSteps(
           db,
@@ -449,6 +476,7 @@ function* openOpenClawAgentDatabaseSteps(
           reusedSchema,
           integrityCheck,
           repairAdmission?.integrityTables ?? [],
+          preparedLease?.startupIntegrity,
         );
         assertCurrent(validationDatabase);
         if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {
@@ -544,8 +572,12 @@ function* openOpenClawAgentDatabaseSteps(
           agentId,
           path: pathname,
           env: options.env,
-          // A temporary QUICK repair handle must not publish FULL runtime admission.
-          admittedDb: integrityCheck === "quick" ? undefined : selected,
+          // Bounded admission retains process proof without minting a FULL receipt or seal.
+          // Temporary QUICK repair handles still cannot publish runtime admission.
+          admittedDb:
+            integrityCheck === "quick" && diagnostics.integrityGateOutcome !== "pending"
+              ? undefined
+              : selected,
         },
         registrationObserver,
       );
@@ -555,7 +587,7 @@ function* openOpenClawAgentDatabaseSteps(
     cache.terminal.clear(pathname);
     // Safety net for processes that end without an orderly close: agent DBs have
     // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
-    cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
+    cache.unregisterExitClose ??= registerProcessExitCleanup(closeOpenClawAgentDatabases);
     finishPhase("registration");
     registerAgentDatabaseHandle(database, leaseId, leaseEnvironment);
     assertCurrent(database);
@@ -626,7 +658,7 @@ function* openOpenClawAgentDatabaseSteps(
       getOpenClawDatabaseMaintenanceScope()?.own(retainedDatabase.db, "agent-handles", () =>
         closeMaintenanceAgentDatabase(retainedDatabase),
       );
-      cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
+      cache.unregisterExitClose ??= registerProcessExitCleanup(closeOpenClawAgentDatabases);
     } else if (!deferLeaseRelease) {
       const closeOutcome = error instanceof SqliteWorkerOpenRefusedError ? "read-only" : undefined;
       try {

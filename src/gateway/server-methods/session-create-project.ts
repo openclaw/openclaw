@@ -34,17 +34,12 @@ import {
 } from "../../sessions/session-controller.rpc-sources.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { githubApiToken } from "../github-public-api.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { projectRequesterForClient, resolveRequesterProject } from "../project-access.js";
 import { prepareGatewayProjectGitHubIdentity } from "../project-github-identity.js";
-import type {
-  PrepareGatewaySessionLifecycle,
-  PreparedGatewaySessionLifecycle,
-} from "../session-create-service.types.js";
 import { commitPreparedSessionWorkspace } from "../session-lifecycle-preparation.js";
+import { resolveSessionProjectRootForRecord } from "../session-project-source.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveExplicitSessionName } from "../session-title-state.js";
 import {
@@ -54,8 +49,8 @@ import {
 import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import type { GatewayClient } from "./client-types.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const SESSION_PROJECT_OWNERSHIP_ERROR =
@@ -63,6 +58,27 @@ const SESSION_PROJECT_OWNERSHIP_ERROR =
 const workspacePreparations = new KeyedAsyncQueue();
 
 type RepositorySource = NonNullable<SessionsCreateParams["repository"]>;
+
+/** A hidden registry project reads as an unknown id to restricted requesters. */
+export async function resolveRequestedSessionProject(
+  cfg: OpenClawConfig,
+  params: Pick<SessionsCreateParams, "projectId" | "worktree">,
+  client: GatewayClient | null,
+): Promise<Result<{ root?: string; worktree: boolean }, ErrorShape>> {
+  const projectId = normalizeOptionalString(params.projectId);
+  if (!projectId) {
+    return ok({ worktree: params.worktree === true });
+  }
+  const requester = projectRequesterForClient(client);
+  const project = await resolveRequesterProject(cfg, projectId, requester, { fresh: true });
+  if (!project) {
+    return invalidSessionRequest(`unknown project id: ${projectId}`);
+  }
+  // Product-owned clones are maintenance sources, never session checkouts.
+  const worktree = project.source === "cloned" || params.worktree === true;
+  const root = await resolveSessionProjectRootForRecord(project, worktree);
+  return root.ok ? ok({ root: root.value, worktree }) : root;
+}
 
 export function resolveSessionRepositoryCreation(
   params: SessionsCreateParams,
@@ -98,77 +114,6 @@ export function resolveSessionRepositoryCreation(
     );
   }
   return ok({ url, ...(ref ? { ref } : {}) });
-}
-
-export function prepareSessionRepositoryWorkspace(
-  repository: RepositorySource,
-  options: { runSetupScript: boolean; assertCurrent: () => void },
-): PrepareGatewaySessionLifecycle {
-  const { assertCurrent } = options;
-  return async (target) => {
-    const store = getSessionRepositoryWorkspaceStore();
-    const source = captureOpenClawStateWorkerContext({ path: store.path });
-    const assertSourceCurrent = () => {
-      source.admission.assertCurrent();
-      assertCurrent();
-    };
-    const existing = await store.find({ agentId: target.agentId, sessionKey: target.key });
-    if (
-      target.entry &&
-      (!target.entry.repositoryWorkspaceId ||
-        target.entry.repositoryWorkspaceId !== existing?.workspaceId)
-    ) {
-      return invalidSessionRequest("repository source requires a new repository session");
-    }
-    if (
-      existing &&
-      (existing.url !== repository.url || existing.requestedRef !== (repository.ref ?? null))
-    ) {
-      return invalidSessionRequest("session repository source cannot be changed");
-    }
-    assertSourceCurrent();
-    const workspace = await store.create({
-      agentId: target.agentId,
-      sessionKey: target.key,
-      url: repository.url,
-      requestedRef: repository.ref,
-      runSetupScript: options.runSetupScript,
-      assertCurrent: assertSourceCurrent,
-    });
-    const withCommit: NonNullable<PreparedGatewaySessionLifecycle["withCommit"]> = (run) =>
-      runOpenClawStateWorkerOperation(source, () => run(assertSourceCurrent), {
-        assertCurrent: assertSourceCurrent,
-      });
-    return ok({
-      repositoryWorkspaceId: workspace.workspaceId,
-      withCommit,
-      ...(!existing
-        ? {
-            rollback: async () => {
-              // Creation still holds the session lifecycle lock. Cleanup owns only the
-              // untouched row it allocated, even when the initiating caller has gone away.
-              source.admission.assertCurrent();
-              const prepared = await store.prepare(workspace.workspaceId);
-              await store.delete({
-                workspaceId: workspace.workspaceId,
-                assertCurrent: () => {
-                  source.admission.assertCurrent();
-                  const current = prepared.current();
-                  if (
-                    current &&
-                    (current.agentId !== target.agentId ||
-                      current.sessionKey !== target.key ||
-                      current.revision !== workspace.revision)
-                  ) {
-                    throw new Error("Repository preparation changed before rollback");
-                  }
-                },
-              });
-            },
-          }
-        : {}),
-    });
-  };
 }
 
 export function validateSessionWorktreeSelection(
@@ -410,7 +355,7 @@ export async function prepareSessionWorkspaceForRun(params: {
           current.lifecycleRevision !== entry.lifecycleRevision ||
           current.projectId !== saved.projectId ||
           current.pendingProjectGitUrl !== saved.pendingProjectGitUrl ||
-          !isDeepStrictEqual(current.pendingWorktree, pending)
+          !isDeepStrictEqual(current.pendingWorktree, saved.pendingWorktree)
         ) {
           throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
         }
@@ -464,123 +409,107 @@ export async function prepareSessionWorkspaceForRun(params: {
       if (!directory) {
         throw new Error("Saved worktree workspace is invalid; select the repository and retry.");
       }
-      const root = prepareSessionCreateFilesystemRoot({
-        cfg,
-        // Direct bindings still require containment. Pending managed checkouts use
-        // the saved child requirement and source custody in the preparation owner.
-        enforceSandboxContainment: !pending && Boolean(project || saved.projectId),
-        sandboxRequired: saved.sandbox === "required",
-        requestedProjectId: project?.id ?? saved.projectId,
-        sessionCwd: directory,
-        sessionKey,
-        targetAgentId: agentId,
-      });
-      if (!root.ok) {
-        throw new Error(root.error.message);
-      }
       const status = (phase: Parameters<typeof emitAgentRunStatusEvent>[0]["phase"]) => {
         assertRunOwnership();
         emitAgentRunStatusEvent({ runId: clientRunId, sessionKey, agentId, phase });
       };
-      let prepared: PreparedGatewaySessionLifecycle = {
-        spawnedCwd: root.value.sessionCwd,
-        sessionRoot: root.value.sessionRoot,
-      };
-      if (pending) {
-        if (pending.baseRef && !pending.baseCommit) {
-          let resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
-          if (
-            !resolved.ok &&
-            resolved.error.code === ErrorCodes.INVALID_REQUEST &&
-            project?.source === "cloned"
-          ) {
-            await refreshProjectClone(project, cloneOptions);
-            projectIdentity?.assertSelected();
-            assertRunOwnership();
-            resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
-          }
-          if (!resolved.ok) {
-            throw new Error(resolved.error.message);
-          }
-          // Accept once, before setup can fail: retries keep the commit while the
-          // original ref remains publication metadata, never a fallback selection.
-          const next = { ...pending, baseCommit: resolved.value };
-          const updated = await patchSessionEntryCore(
-            target,
-            (current) => {
-              assertSavedWorkspaceIntent(current);
-              return { pendingWorktree: next };
-            },
-            {
-              ...sessionEntryCommitGuardOptions(assertRunOwnership),
-              requireWriteSuccess: true,
-              skipMaintenance: true,
-            },
-          );
-          if (!updated) {
-            throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
-          }
-          saved = { ...saved, ...updated };
-          pending = next;
+      // A pending repository URL also owns a managed checkout, including retries
+      // saved before project sessions stopped binding directly to the shared clone.
+      pending ??= { titleSource: "" };
+      if (pending.baseRef && !pending.baseCommit) {
+        let resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
+        if (
+          !resolved.ok &&
+          resolved.error.code === ErrorCodes.INVALID_REQUEST &&
+          project?.source === "cloned"
+        ) {
+          await refreshProjectClone(project, cloneOptions);
+          projectIdentity?.assertSelected();
+          assertRunOwnership();
+          resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
         }
-        // Retries inherit workspace intent, not a previous caller's setup authority.
-        const result = await prepareSessionWorktree({
-          cfg,
-          target: {
-            ...target,
-            key: sessionKey,
-            entry: saved,
-            projectId: project?.id ?? saved.projectId,
-            sandboxRequired: saved.sandbox === "required",
+        if (!resolved.ok) {
+          throw new Error(resolved.error.message);
+        }
+        // Accept once, before setup can fail: retries keep the commit while the
+        // original ref remains publication metadata, never a fallback selection.
+        const next = { ...pending, baseCommit: resolved.value };
+        const updated = await patchSessionEntryCore(
+          target,
+          (current) => {
+            assertSavedWorkspaceIntent(current);
+            return { pendingWorktree: next };
           },
-          workspace: directory,
-          name: pending.name,
-          baseRef: pending.baseRef,
-          checkoutCommit: pending.baseCommit,
-          // An existing title can name the checkout; otherwise allocation owns
-          // its short generated name while the chat title is prepared separately.
-          label: resolveExplicitSessionName(saved),
-          runSetupScript: !cfg.cloudWorkers?.requiredProfile && params.runSetupScript,
-          signal,
-          commitGuard: assertProjectCurrent,
-          onProgress: (stage) =>
-            status(
-              stage === "base"
-                ? "preparing_worktree_base"
-                : stage === "setup"
-                  ? "running_setup"
-                  : "creating_worktree",
-            ),
-          acceptedSource: pending.source,
-          onPromptReady: params.onPromptReady
-            ? async (promptWorkspace) => {
-                // Keep pending intent authoritative until the complete checkout
-                // is published. These path facts let only this admitted turn
-                // initialize its prompt in the final execution directory.
-                const bound = await commitPreparedSessionWorkspace({
-                  prepared: promptWorkspace,
-                  target,
-                  projectId: project?.id,
-                  assertCurrent: assertRunOwnership,
-                  assertEntry: assertSavedWorkspaceIntent,
-                  missingSessionMessage:
-                    "Session disappeared while preparing its workspace; start a new session.",
-                });
-                // Subsequent Git effects must accept the project binding this
-                // preparation just published, while retaining its pending intent.
-                saved = { ...saved, ...bound };
-                Object.assign(entry, bound);
-                params.onPromptReady?.();
-              }
-            : undefined,
-        });
-        if (!result.ok) {
-          throw new Error(result.error.message);
+          {
+            ...sessionEntryCommitGuardOptions(assertRunOwnership),
+            requireWriteSuccess: true,
+            skipMaintenance: true,
+          },
+        );
+        if (!updated) {
+          throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
         }
-        prepared = result.value;
+        saved = { ...saved, ...updated };
+        pending = next;
+      }
+      // Retries inherit workspace intent, not a previous caller's setup authority.
+      const result = await prepareSessionWorktree({
+        cfg,
+        target: {
+          ...target,
+          key: sessionKey,
+          entry: saved,
+          projectId: project?.id ?? saved.projectId,
+          sandboxRequired: saved.sandbox === "required",
+        },
+        workspace: directory,
+        name: pending.name,
+        baseRef: pending.baseRef,
+        checkoutCommit: pending.baseCommit,
+        // An existing title can name the checkout; otherwise allocation owns
+        // its short generated name while the chat title is prepared separately.
+        label: resolveExplicitSessionName(saved),
+        runSetupScript: !cfg.cloudWorkers?.requiredProfile && params.runSetupScript,
+        signal,
+        commitGuard: assertProjectCurrent,
+        onProgress: (stage) =>
+          status(
+            stage === "base"
+              ? "preparing_worktree_base"
+              : stage === "setup"
+                ? "running_setup"
+                : "creating_worktree",
+          ),
+        acceptedSource: pending.source,
+        onPromptReady: params.onPromptReady
+          ? async (promptWorkspace) => {
+              // Keep pending intent authoritative until the complete checkout
+              // is published. These path facts let only this admitted turn
+              // initialize its prompt in the final execution directory.
+              const bound = await commitPreparedSessionWorkspace({
+                prepared: promptWorkspace,
+                signal,
+                target,
+                projectId: project?.id,
+                assertCurrent: assertRunOwnership,
+                assertEntry: assertSavedWorkspaceIntent,
+                missingSessionMessage:
+                  "Session disappeared while preparing its workspace; start a new session.",
+              });
+              // Subsequent Git effects must accept the project binding this
+              // preparation just published, while retaining its pending intent.
+              saved = { ...saved, ...bound };
+              Object.assign(entry, bound);
+              params.onPromptReady?.();
+            }
+          : undefined,
+      });
+      if (!result.ok) {
+        throw new Error(result.error.message);
       }
       const bound = await commitPreparedSessionWorkspace({
-        prepared,
+        prepared: result.value,
+        signal,
         target,
         projectId: project?.id,
         assertCurrent: assertRunOwnership,

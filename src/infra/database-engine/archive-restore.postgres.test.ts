@@ -1,6 +1,6 @@
+import assert from "node:assert/strict";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import "./database-suite-workers.test-support.js";
-import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,7 +9,6 @@ import { Client } from "pg";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../../commands/backup-restore.js";
-import { buildBackupArchivePath } from "../../commands/backup-shared.js";
 import { verifyBackupArchive } from "../../commands/backup-verify.js";
 import { createTestRuntime } from "../../commands/test-runtime-config-helpers.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -28,6 +27,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { buildBackupArchivePath } from "../backup-archive-path-policy.js";
 import { createBackupArchive } from "../backup-create.js";
 import { bindFreshClientCredentialStore } from "../client-credential-migration.js";
 import { runClientCredentialOperation } from "../client-credential-store.js";

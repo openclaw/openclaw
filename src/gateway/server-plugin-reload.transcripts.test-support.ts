@@ -43,18 +43,8 @@ export async function startTranscriptReloadFixtureSidecars(
       startupModuleRestorers.toReversed().forEach((restore) => restore());
     }
   });
-  await installGatewaySubagentModuleLoad(
-    idle,
-    () => {
-      const settled = Promise.resolve();
-      return { initial: settled, pending: new Map(), settled };
-    },
-    startupModuleRestorers,
-  );
+  await installGatewaySubagentModuleLoad(idle, idle, startupModuleRestorers);
   const config = getConfig();
-  const unusedRecovery = async (): Promise<never> => {
-    throw new Error("unexpected main-session recovery");
-  };
   installGatewayStartupModuleMocks(
     {
       logGatewayStartup: () => {},
@@ -90,17 +80,6 @@ export async function startTranscriptReloadFixtureSidecars(
     defaultWorkspaceDir: workspaceDir,
     deps: {},
     startChannels: idle,
-    mainSessionRecoveryStartupCheckedStorePaths: new Set<string>(),
-    isRestartRecoverySuppressed: () => false,
-    recoveryRuntime: {
-      prepareFailedWorkerPlacement: unusedRecovery,
-      prepareRestartRecovery: unusedRecovery,
-      dispatchSessionMethod: unusedRecovery,
-      dispatchAgent: unusedRecovery,
-      waitForAgent: unusedRecovery,
-      sendRecoveryNotice: unusedRecovery,
-      resumeChatInput: unusedRecovery,
-    },
     resolveGatewayContext: () => undefined,
     logHooks: log,
     logChannels: log,

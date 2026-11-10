@@ -1,3 +1,4 @@
+import { formatUiError } from "../../lib/format-error.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type {
   DraftCloudProfileSelection,
@@ -68,7 +69,7 @@ export class DraftSuggestedCloudProfile {
       isCurrent: () => this.adoption === adoption,
       reportError: (error) => {
         if (this.adoption === adoption) {
-          this.callbacks.onError(error instanceof Error ? error.message : String(error));
+          this.callbacks.onError(formatUiError(error));
           this.callbacks.changed();
         }
       },
@@ -84,7 +85,7 @@ export class DraftSuggestedCloudProfile {
       }
     } catch (error) {
       if (this.adoption === adoption) {
-        this.callbacks.onError(error instanceof Error ? error.message : String(error));
+        this.callbacks.onError(formatUiError(error));
       }
     } finally {
       if (this.adoption === adoption) {

@@ -80,7 +80,6 @@ import type {
   SessionRuntimeTargetWorkerInput,
   SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
-import type * as HarnessCompletionSourceWorker from "./session-harness-completion-source.types.js";
 import type { SessionArchivePruningSnapshot } from "./session-history-archive-pruning.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import type {
@@ -94,6 +93,8 @@ import type { SessionMembershipFacts } from "./session-membership-facts.types.js
 import type {
   PendingInputHistoryWorkerInput,
   PendingInputHistorySnapshot,
+  PendingInputOrphansWorkerInput,
+  PendingInputOrphanTarget,
 } from "./session-pending-input-history.types.js";
 import type * as PendingInputSourceWorker from "./session-pending-input-source.types.js";
 import type {
@@ -120,6 +121,7 @@ import type {
   SessionStoreProjectionWorkerResult,
 } from "./session-store-projection.types.js";
 import type {
+  SessionStoreTargetPreparationRequest,
   SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
   SessionStoreTargetReadRequest,
@@ -144,6 +146,7 @@ import type {
   SessionTranscriptInventoryReaders,
 } from "./session-transcript-inventory.types.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
+import type { SessionTranscriptReplayGroup } from "./session-transcript-replay.types.js";
 import type { SessionTranscriptSearchResult } from "./session-transcript-search.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
@@ -323,9 +326,9 @@ export type SessionHistoryWorkerInput =
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
   | PendingInputHistoryWorkerInput
+  | PendingInputOrphansWorkerInput
   | SessionPendingInputReceiptsWorkerInput
   | PendingInputSourceWorker.Input
-  | HarnessCompletionSourceWorker.Input
   | SessionGoalOperationReceiptWorkerInput
   | ConversationRowsWorkerInput
   | ConversationBindingsWorkerInput
@@ -337,6 +340,7 @@ export type SessionHistoryWorkerInput =
   | SessionStoreSummaryWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
+  | { kind: "session-target-prepare"; request: SessionStoreTargetPreparationRequest }
   | SessionStoreTargetWorkerInput
   | SessionTargetInventoryWorkerInput
   | CombinedSessionStoreTopologyWorkerInput
@@ -385,6 +389,10 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "transcript-visible-delta": {
       kind: "transcript-visible-delta";
       result: SessionTranscriptVisibleMessageDeltaResult;
+    };
+    "transcript-replay-groups": {
+      kind: "transcript-replay-groups";
+      result: SessionTranscriptReplayGroup[];
     };
     "transcript-latest-assistant": {
       kind: "transcript-latest-assistant";
@@ -454,10 +462,13 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
       result: SessionGoalOperationLookupResult;
     };
     "session-pending-input-source": PendingInputSourceWorker.Value;
-    "session-harness-completion-source": HarnessCompletionSourceWorker.Value;
     "session-pending-input-history": {
       kind: "session-pending-input-history";
       snapshot: PendingInputHistorySnapshot;
+    };
+    "session-pending-input-orphans": {
+      kind: "session-pending-input-orphans";
+      targets: PendingInputOrphanTarget[];
     };
     "session-pending-input-receipts": {
       kind: "session-pending-input-receipts";
@@ -482,6 +493,9 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
           kind: "session-store-target";
           readError: import("./session-transcript-worker-error.types.js").SessionTranscriptWorkerReadError;
         };
+    "session-target-prepare": ReturnType<
+      typeof import("./session-store-target-inventory.js").prepareSessionStoreTargetCandidates
+    >;
     "session-target-inventory": SessionStoreTargetInventoryResult;
     "combined-store-topology": CombinedSessionStoreTopologyResult;
     "session-identity-evidence": {
@@ -554,6 +568,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readCleanup: SessionHistoryReader<"session-cleanup">;
     readRawDelta: CancellableSessionHistoryReader<"transcript-raw-delta", "result">;
     readVisibleDelta: CancellableSessionHistoryReader<"transcript-visible-delta", "result">;
+    readReplayGroups: CancellableSessionHistoryReader<"transcript-replay-groups", "result">;
     readLatestAssistant: CancellableSessionHistoryReader<"transcript-latest-assistant", "result">;
     readSessionMemoryCapture: CancellableSessionHistoryReader<"session-memory-capture", "result">;
     readBoardSnapshot: SessionHistoryReader<"board-snapshot", "value">;
@@ -625,8 +640,8 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readConversationDelivery: SessionHistoryReader<"conversation-delivery", "record">;
     readGoalOperationReceipt: SessionHistoryReader<"goal-operation-receipt", "result">;
     readPendingInputSource: PendingInputSourceWorker.Reader;
-    readHarnessCompletionSource: HarnessCompletionSourceWorker.Reader;
     readPendingInputHistory: SessionHistoryReader<"session-pending-input-history", "snapshot">;
+    readPendingInputOrphans: SessionHistoryReader<"session-pending-input-orphans", "targets">;
     readPendingInputReceipts: SessionHistoryReader<"session-pending-input-receipts", "receipts">;
     readVoiceSessions: SessionHistoryReader<"voice-sessions">;
   };

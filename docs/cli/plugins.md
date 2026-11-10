@@ -36,6 +36,8 @@ when the Gateway is stopped. Reported IDs retain their manifest spelling; plugin
 policy keys in config use the required lowercase form.
 The same policy applies to live activation and the next Gateway start. Runtime
 IDs and Gateway method names retain the plugin's declared spelling.
+`plugins inspect` and its `info` alias try an exact ID, then an exact display name,
+then the canonical ID resolved from case variants or manifest legacy IDs.
 
 <CardGroup cols={2}>
   <Card title="Plugin system" href="/tools/plugin">
@@ -80,6 +82,9 @@ openclaw plugins marketplace entries [--offline] [--feed-profile <name>] [--json
 openclaw plugins marketplace list <source> [--json]
 openclaw plugins marketplace refresh [--feed-profile <name>] [--expected-sha256 <sha256>] [--json]
 ```
+
+An accepted interrupt cancels the pending catalog reads for read-only
+`plugins search` and suppresses late search results or errors.
 
 For slow install, inspect, uninstall, or registry-refresh investigation, run the
 command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings

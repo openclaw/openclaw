@@ -3,6 +3,8 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { isPathInside } from "../infra/path-guards.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import {
@@ -10,7 +12,6 @@ import {
   hasSqlitePostCommitScope,
 } from "../infra/sqlite-post-commit.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
-import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -30,7 +31,9 @@ import {
 import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import {
   drainAgentDatabaseResources,
+  hasOpenClawAgentDatabaseAsyncResources,
   matchesAgentDatabaseClose,
+  registerAgentDatabaseResourceReleaseHandler,
   revokeAgentDatabaseResources,
   withAgentDatabaseCloseFence,
 } from "./openclaw-agent-db-resources.js";
@@ -92,6 +95,17 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
 
 // Install the activity owner before publishing handles, including reads with no timer yet.
 agentDatabaseBorrowers.refreshIdleTimer = refreshAgentDatabaseIdleTimer;
+registerAgentDatabaseResourceReleaseHandler((resource) => {
+  if (!getGatewayShutdownCleanupSignal().aborted) {
+    return;
+  }
+  // Resource owners settle their accepted work before waking deferred idle writers.
+  for (const database of cache.databases.values()) {
+    if (matchesAgentDatabaseClose({ path: database.path }, resource)) {
+      cache.idleTimers.get(database.db)?.refresh();
+    }
+  }
+});
 
 export const closeCachedOpenClawAgentDatabase = createAgentDatabaseHandleCloser(cache);
 
@@ -199,7 +213,7 @@ export function retainFailedAgentDatabaseClose(
   };
   cache.retainedCloses.add(retained);
   getOpenClawDatabaseMaintenanceScope()?.own(retained, "agent-handles", retained.close);
-  cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
+  cache.unregisterExitClose ??= registerProcessExitCleanup(closeOpenClawAgentDatabases);
 }
 
 export function revokePendingAgentDatabaseOpen(pathname: string, expectedAgentId?: string): void {
@@ -237,6 +251,10 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
     }
     if (database.db.isOpen && database.db.isTransaction) {
       timer.refresh();
+      return;
+    }
+    // Their owners retire readers/workers; revoking here would cancel accepted native writes.
+    if (cleanupSignal.aborted && hasOpenClawAgentDatabaseAsyncResources({ path: database.path })) {
       return;
     }
     try {
@@ -434,9 +452,10 @@ export function closeOpenClawAgentDatabases(rootPath?: string): void {
 
 /** Latch integrity refusals so later opens fail without rescanning. */
 export function recordOpenClawAgentDatabaseOpenFailure(pathname: string, error: Error): void {
-  cache.terminal.record(pathname, error);
   // Quarantine revokes this process's trust because doctor may replace the file.
   invalidateOpenClawAgentDatabaseValidation(pathname);
+  revokeSqliteDatabaseAdmissionsForPath(pathname);
+  cache.terminal.record(pathname, error);
 }
 
 /** Release fixture handles and pathname trust before a test root is recreated. */

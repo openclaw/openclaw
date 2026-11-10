@@ -415,6 +415,30 @@ it.each([
   await expect(running).resolves.toBe("stopped");
 });
 
+it("keeps the handoff transport open while late writes settle within the drain budget", async () => {
+  const f = fixture({ observations: [{ ...ready(), expiresAtMs: Date.now() + 45_000 }] });
+  wrapCall((request, call) => {
+    if (request.method !== "gateway.suspend.handoff") {
+      return call(request);
+    }
+    return new Promise((resolve, reject) => {
+      const deadline = setTimeout(
+        () => reject(new Error("transport deadline")),
+        request.timeoutMs ?? undefined,
+      );
+      setTimeout(() => {
+        clearTimeout(deadline);
+        resolve(call(request));
+      }, 20_000);
+    });
+  });
+  const outcome = f.interrupt({ timeoutMs: undefined }).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(await outcome).toBe("stopped");
+  expect(f.events).toContain("handoff");
+  expect(f.events).not.toContain("resume");
+});
+
 it.each([
   { stage: "status", delayMs: 5_000, timeoutMs: 1_000, elapsedMs: 6_000 },
   { stage: "gateway.suspend.prepare", delayMs: 8_000, timeoutMs: undefined, elapsedMs: 30_000 },

@@ -33,7 +33,7 @@ import {
 import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
-import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
+import { chatSessionPresentationKey, watchPresentation } from "./chat-pane-session-presentation.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
@@ -46,8 +46,9 @@ import {
 } from "./chat-send-actions.ts";
 import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { chatOfflineQueueStorageError } from "./chat-send-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
@@ -73,6 +74,7 @@ import {
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { handleAbortChat, hasAbortableSessionRun, isChatStopCommand } from "./run-lifecycle.ts";
 import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
+import { cacheChatAvatarSource } from "./session-message-cache.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   updateSidebarSessionActivePanel,
@@ -129,7 +131,6 @@ export function createPageState(
     },
     context,
   );
-  const errors = createChatErrorState();
   const presentedFields = {
     settings,
     accessPreferenceRevision: 0,
@@ -195,7 +196,7 @@ export function createPageState(
     sidebarContent: null,
     imageLightbox: null,
   } satisfies Partial<ChatPageHost>;
-  const state = Object.assign(errors, presentedFields, {
+  const state = Object.assign(createChatErrorState(), presentedFields, {
     uploadConfig: context.config,
     outboxRecovery: {
       gateway: context.gateway,
@@ -207,6 +208,8 @@ export function createPageState(
       return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });
     },
     sessions: context.sessions,
+    readChatAgentsList: () =>
+      context.agents.state.client === state.client ? context.agents.state.agentsList : null,
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
@@ -286,6 +289,9 @@ export function createPageState(
     sessionWorkspaceState: undefined,
   }) as unknown as ChatPageHost;
 
+  state.cacheChatAvatarSource = (agentId, source) =>
+    cacheChatAvatarSource(chatMessagesBySession, state, state, agentId, source);
+  state.refreshCurrentChat = () => refreshPageChat(state);
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.scrollToBottom = (options) => {
@@ -372,7 +378,7 @@ export function createPageState(
       setChatError(state, null);
       void resumeStoredChatOutboxes(state);
     } else if (outcome === "rejected") {
-      setChatError(state, OFFLINE_QUEUE_STORAGE_ERROR);
+      setChatError(state, chatOfflineQueueStorageError());
     }
   };
   state.retryQueuedChatMessage = (id) => retryQueuedChatMessage(state, id);
@@ -652,9 +658,11 @@ export function createPageState(
       read: (owner) => owner.readErrors(),
       subscribe: (owner, notify) => owner.subscribeErrors(notify),
       equality: (previous, next) =>
-        previous.lastError === next.lastError && previous.chatError === next.chatError,
+        previous.lastError === next.lastError &&
+        previous.lastErrorDetail === next.lastErrorDetail &&
+        previous.chatError === next.chatError,
     });
-    for (const key of ["lastError", "chatError"] as const) {
+    for (const key of ["lastError", "lastErrorDetail", "chatError"] as const) {
       Object.defineProperty(state, key, {
         ...Object.getOwnPropertyDescriptor(state, key),
         get: () => (getObserver() ? errorProjection.read()[key] : state.readErrors()[key]),
@@ -673,7 +681,7 @@ export function createPageState(
         ),
       subscribe: (_owner, notify) => {
         onChange = notify;
-        const stop = context.sessions.subscribe(notify);
+        const stop = watchPresentation(context.sessions, notify);
         return () => {
           onChange = undefined;
           stop();
@@ -702,9 +710,9 @@ export function createPageState(
       });
     }
   }
-  return projectChatFields(
-    state,
-    // SAFETY: This literal owns every enumerable key passed to the projection.
-    Object.keys(presentedFields) as (keyof typeof presentedFields)[],
-  );
+  Object.defineProperty(state, "sessionWorkspaceReadDisabledReason", {
+    get: () => selectedChatSessionRow(state)?.workspaceReadDisabledReason,
+  });
+  // SAFETY: This literal owns every enumerable key passed to the projection.
+  return projectChatFields(state, Object.keys(presentedFields) as (keyof typeof presentedFields)[]);
 }

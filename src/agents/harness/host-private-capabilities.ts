@@ -1,3 +1,4 @@
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type {
   PreparedSessionEntryWorkerRead,
   SessionEntryWorkerRead,
@@ -15,6 +16,8 @@ import type { ReplyIncomingExecutionSelection } from "../../sessions/session-con
 import type { ReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { AsyncContext } from "../../shared/async-context.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { ModelFallbackAvailability } from "../model-fallback.types.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -24,6 +27,43 @@ import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 export type ReplyQueueInputAdapter = "human-and-question-permission" | "legacy-question-category";
 
 const replyQueueInputAdapters = new WeakMap<object, ReplyQueueInputAdapter>();
+
+const replyInputChannel = resolveGlobalSingleton(Symbol.for("openclaw.replyInputChannel"), () =>
+  Symbol("replyInputChannel"),
+);
+
+/** Retain human ingress separately from the turn's potentially redirected reply route. */
+export function bindReplyInputChannel(input: object, channel: string | undefined): void {
+  Object.assign(input, { [replyInputChannel]: channel });
+}
+
+export function readReplyInputChannel(input: object): string | undefined {
+  const channel: unknown = Reflect.get(input, replyInputChannel);
+  return typeof channel === "string" ? channel : undefined;
+}
+
+const sharedGatewayOwnerSources = resolveGlobalSingleton(
+  Symbol.for("openclaw.sharedGatewayOwnerSources"),
+  () => new WeakSet<object>(),
+);
+
+/** Only the Gateway authentication owner records a shared browser source. */
+export function bindSharedGatewayOwnerRunAuthority(authority: AdmittedRunOperatorAuthority): void {
+  if (authority.source) {
+    sharedGatewayOwnerSources.add(authority.source);
+  }
+}
+
+/** Attribution alone cannot attest shared-credential authentication. */
+export function isSharedGatewayOwnerRunAuthority(
+  authority: AdmittedRunOperatorAuthority | undefined,
+): boolean {
+  return Boolean(
+    authority?.profileId === GATEWAY_OWNER_PROFILE_ID &&
+    authority.source &&
+    sharedGatewayOwnerSources.has(authority.source),
+  );
+}
 
 /** Keep adapter metadata on the existing host owner without changing its public shape. */
 export function bindReplyQueueInputAdapter<T extends object>(
@@ -177,6 +217,9 @@ export type ReplyToolAuthorityCaller =
 
 export type ReplyToolAuthorityCallerBinding = {
   assertCurrent(): void;
+  /** Classify continuation before compatibility, retaining the selected live owner. */
+  continuationKind?: "verified-profile" | "shared-owner" | "owner-guidance";
+  allowPendingUserInputAnswer?: false;
   joinObservation?: ReplyMessageJoinObservation;
   prepare(): Promise<PreparedQuestionCallerRead | undefined>;
 };
@@ -277,6 +320,8 @@ export function captureReplyToolAuthorityCallerBinding(
   selected.assertCurrent();
   return {
     assertCurrent: () => selected.assertCurrent(),
+    continuationKind: selected.continuationKind,
+    allowPendingUserInputAnswer: selected.allowPendingUserInputAnswer,
     joinObservation: selected.joinObservation,
     prepare: async () => {
       selected.assertCurrent();

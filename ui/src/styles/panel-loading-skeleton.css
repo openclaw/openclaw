@@ -1,10 +1,17 @@
 openclaw-panel-loading-skeleton {
+  --skeleton-base: var(--skeleton-base-raised);
+
   display: block;
   box-sizing: border-box;
   width: 100%;
   min-height: 100%;
   padding: 14px;
   color: var(--muted);
+
+  .panel-loading-content {
+    display: contents;
+    animation: panel-skeleton-grace 0s var(--panel-loading-grace, 0s) backwards;
+  }
 
   &[compact] {
     min-height: 0;
@@ -25,14 +32,14 @@ openclaw-panel-loading-skeleton {
     align-items: center;
     gap: 12px;
     text-align: center;
-    font-size: 13px;
+    font-size: calc(13px * var(--control-ui-text-scale));
   }
 
   .desktop-spinner {
+    --spinner-art: var(--spinner-mask-large);
     width: 24px;
     height: 24px;
-    border: 2px solid var(--border);
-    border-top-color: var(--muted);
+    color: var(--accent);
     border-radius: 50%;
     animation: panel-skeleton-spin 1s linear infinite;
   }
@@ -54,29 +61,6 @@ openclaw-panel-loading-skeleton {
 
   * {
     box-sizing: border-box;
-  }
-
-  /* Unported shadow-root parents cannot inherit the shared shimmer styles. */
-  .skeleton {
-    position: relative;
-    overflow: hidden;
-    background: var(--skeleton-base, var(--bg-muted));
-    border-radius: var(--radius-md);
-  }
-
-  .skeleton::after {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      90deg,
-      transparent 25%,
-      var(--skeleton-highlight, var(--bg-hover)) 50%,
-      transparent 75%
-    );
-    content: "";
-    transform: translateX(-100%);
-    animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
-    will-change: transform;
   }
 
   .line {
@@ -261,19 +245,24 @@ openclaw-panel-loading-skeleton {
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .desktop-spinner,
-    .skeleton::after {
+    .desktop-spinner {
       animation: none;
     }
   }
 }
 
-@keyframes shimmer {
+/* Keep the settled panel background through brief cached-view preparation, across native roots. */
+[data-cached-session] {
+  --panel-loading-grace: 0s;
+}
+
+[data-cached-session="true"] {
+  --panel-loading-grace: 200ms;
+}
+
+@keyframes panel-skeleton-grace {
   from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(100%);
+    visibility: hidden;
   }
 }
 

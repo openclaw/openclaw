@@ -19,6 +19,10 @@ import {
 } from "./legacy-main-session-migration.test-support.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
+import {
+  readSqliteSessionGenerationClaim,
+  readSqliteSessionGenerationWindows,
+} from "./session-accessor.sqlite-generation-copy.js";
 import { readSessionTranscriptHistoryAnchorPage as readHistoryPage } from "./session-accessor.sqlite-history.test-support.js";
 import { rotateTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventInTransaction as appendEvent } from "./session-accessor.sqlite-transcript-store.js";
@@ -352,17 +356,45 @@ it("preserves the verified cold archive during an in-place key migration", async
         entry: readExactSessionEntryRowForCanonicalRepair(database, key)?.entry,
         windows: db.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
         events: db.prepare("SELECT * FROM transcript_events ORDER BY seq").all(),
+        identities: db.prepare("SELECT * FROM transcript_event_identities ORDER BY event_id").all(),
+        active: db
+          .prepare("SELECT * FROM session_transcript_active_events ORDER BY active_position")
+          .all(),
+        index: db.prepare("SELECT * FROM session_transcript_index_state").all(),
         archive: readSessionColdTranscript(db, sessionId),
         generation: db.prepare("SELECT * FROM transcript_rewrite_watermarks").get(),
       };
     }, options);
   const before = snapshot(source.key);
-  expect(before.events).toEqual([]);
+  expect(before.events).toHaveLength(2);
+  expect(before.events[1]).toMatchObject({
+    event_json: null,
+    event_zstd: null,
+    navigation_json: expect.any(String),
+  });
   if (!before.archive) {
     throw new Error("Expected a verified cold archive before in-place migration");
   }
   const archive = { ...before.archive, archive_blob: null };
   const bytes = await readVerifiedSessionColdArchive({ storePath, archive });
+
+  const rollback = new Error("restore retained navigation after comparison");
+  expect(() =>
+    writeTransaction((database) => {
+      const [window] = readSqliteSessionGenerationWindows(database, [source.key], [sessionId]);
+      const retained = readSqliteSessionGenerationClaim(database, window!);
+      database.db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run(sessionId);
+      database.db
+        .prepare("DELETE FROM session_transcript_index_state WHERE session_id = ?")
+        .run(sessionId);
+      const pending = readSqliteSessionGenerationClaim(database, window!);
+      expect(pending.contentFingerprint).toBe(retained.contentFingerprint);
+      expect(pending.fingerprint).not.toBe(retained.fingerprint);
+      throw rollback;
+    }, options),
+  ).toThrow(rollback);
+  expect(await repair(fixture, "detect")).toMatchObject({ complete: true });
+  expect(snapshot(source.key)).toEqual(before);
 
   expect(await repair(fixture)).toMatchObject({ complete: true });
   const after = snapshot(canonicalKey);

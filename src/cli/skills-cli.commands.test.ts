@@ -26,6 +26,7 @@ const mocks = await vi.hoisted(async () => {
     report,
     gateway: vi.fn(),
     config: vi.fn((_options?: unknown) => ({})),
+    bestEffortConfig: vi.fn((_options?: unknown) => ({})),
     defaultAgent: vi.fn((_config: unknown, _context?: AgentSelectionContext) => "main"),
     inferredAgent: vi.fn((_config: unknown, _cwd: string): string | undefined => undefined),
     explicitAgent: vi.fn((_config: unknown, agent: string) => agent),
@@ -65,6 +66,7 @@ vi.mock("../config/config.js", async () => {
   const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
   return {
     ...createTestConfigReadMocks(mocks, "config"),
+    readBestEffortConfig: mocks.bestEffortConfig,
   };
 });
 // mock-isolation: Skill CLI fixtures own agent and workspace selection without host configuration.
@@ -124,11 +126,11 @@ function primeVerification(overrides: Record<string, unknown> = {}) {
     },
   });
 }
-function run(input: string | string[]) {
+async function run(input: string | string[]) {
   const argv = typeof input === "string" ? input.split(" ") : input;
   const program = new Command().exitOverride();
-  registerSkillsCli(program);
-  return program.parseAsync(["skills", ...argv], { from: "user" });
+  await registerSkillsCli(program);
+  return await program.parseAsync(["skills", ...argv], { from: "user" });
 }
 
 async function expectFailure(argv: string | string[], message?: string) {
@@ -137,11 +139,8 @@ async function expectFailure(argv: string | string[], message?: string) {
     expect(errors).toContain(message);
   }
 }
-function expectUnused(...functions: unknown[]) {
-  for (const fn of functions) {
-    expect(fn).not.toHaveBeenCalled();
-  }
-}
+const expectUnused = (...functions: unknown[]) =>
+  functions.forEach((fn) => expect(fn).not.toHaveBeenCalled());
 function expectOptions(fn: unknown, options: Record<string, unknown>) {
   expect(fn).toHaveBeenCalledWith(expect.objectContaining(options));
 }
@@ -339,6 +338,7 @@ describe("skills cli commands", () => {
     { label: "default", argv: ["--json"] },
     { label: "check", argv: ["check", "--json"] },
   ])("writes $label JSON from the selected workspace to stdout", async ({ label, argv }) => {
+    mocks.config.mockRejectedValue(new Error("Invalid config: unrelated setting"));
     mocks.inferredAgent.mockReturnValue("main");
     mocks.workspace.mockImplementation((_config, id) => `/tmp/workspace-${id}`);
     await run(argv);
@@ -465,7 +465,7 @@ describe("skills cli commands", () => {
     "never replaces failed Gateway data with local skills: %s",
     async (error, root, remote) => {
       if (remote) {
-        mocks.config.mockReturnValue({
+        mocks.bestEffortConfig.mockReturnValue({
           gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:9" } },
         });
       }

@@ -2,7 +2,6 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { outboundDeliveryNotifications } from "../infra/delivery-queue-cache.js";
 import {
   captureDeliveryQueueStateContext,
@@ -42,6 +41,7 @@ import {
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayRuntimeServiceLogger } from "./server-runtime-service-shared.js";
 import { measureStartup } from "./server-startup-trace.js";
+import { reportSessionAutomationSourceLoadFailed } from "./session-automation-index.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 export { startGatewayChannelHealthMonitor } from "./server-runtime-startup-services.js";
 
@@ -77,6 +77,7 @@ export function startGatewayCronWithLogging(params: {
         await reconciliation.complete();
       } catch (err) {
         params.logCron.error(`failed to start: ${String(err)}`);
+        reportSessionAutomationSourceLoadFailed(err);
         if (err instanceof CronStoreSelectionRequiredError) {
           return;
         }
@@ -414,7 +415,6 @@ function startPendingSessionDeliveryRuntime(params: {
   deps: import("../cli/deps.types.js").CliDeps;
   log: GatewayRuntimeServiceLogger;
   maxEnqueuedAt: number;
-  sessionRecoveryReady?: Promise<void>;
   resolveGatewayContext?: GatewayContextResolver;
 }): () => Promise<void> {
   const queueContext = captureOpenClawStateWorkerContext();
@@ -425,22 +425,16 @@ function startPendingSessionDeliveryRuntime(params: {
   );
   let stopPromise: Promise<void> | undefined;
   let stopRuntime: (() => Promise<void>) | undefined;
-  // Delay session continuation recovery so the gateway has time to publish ready state and
-  // request routing before replaying restart-sentinel deliveries.
+  // Publish ready state before draining already-produced media delivery.
   scheduler.schedule({
     id: "delivery:session-recovery",
     delayMs: 1_250,
     run: () =>
       runWithGatewayIndependentRootWorkAdmission(
         async () => {
-          // Early session events can invoke main recovery themselves. Join the same
-          // restored sources as the main scan before they can reject an interrupted turn.
-          if (params.sessionRecoveryReady) {
-            await racePromiseWithAbortSignal(params.sessionRecoveryReady, signal);
-          }
           const {
             deliverQueuedSessionDelivery,
-            recoverPendingRestartContinuationDeliveries,
+            recoverPendingProducedSessionDeliveries,
             settleQueuedSessionDelivery,
           } = await import("./server-restart-sentinel.js");
           if (signal.aborted) {
@@ -464,7 +458,7 @@ function startPendingSessionDeliveryRuntime(params: {
           });
           try {
             await runDelivery(() =>
-              recoverPendingRestartContinuationDeliveries({
+              recoverPendingProducedSessionDeliveries({
                 deps: params.deps,
                 queueContext,
                 log: logRecovery,
@@ -505,7 +499,6 @@ export function activateGatewayScheduledServices(params: {
   cfgAtStart: OpenClawConfig;
   deps: import("../cli/deps.types.js").CliDeps;
   sessionDeliveryRecoveryMaxEnqueuedAt: number;
-  sessionRecoveryReady?: Promise<void>;
   log: GatewayRuntimeServiceLogger;
   resolveGatewayContext?: GatewayContextResolver;
 }): { stopScheduledServices: () => Promise<void>; stopDeliveryRecovery: () => Promise<void> } {
@@ -524,7 +517,6 @@ export function activateGatewayScheduledServices(params: {
     deps: params.deps,
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
-    sessionRecoveryReady: params.sessionRecoveryReady,
     ...(params.resolveGatewayContext
       ? { resolveGatewayContext: params.resolveGatewayContext }
       : {}),

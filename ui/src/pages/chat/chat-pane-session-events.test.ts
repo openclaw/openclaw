@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type {
   SessionRowEventListener,
@@ -113,9 +114,9 @@ describe("mounted pane session event ownership", () => {
     });
     transcript.start();
     await flushDeferredRowPrune();
-    expect(layout.primary.chat.selectedSession?.lastRunId).toBe("work-run");
-    expect(layout.primary.chat.selectedSession?.runtimeMs).toBe(180_000);
-    expect(view.container.querySelector(".chat-activity-group__label")?.textContent).toBe("Worked");
+    expect(view.container.querySelector(".chat-activity-group__label")?.textContent).toBe(
+      "Worked for 3m",
+    );
   });
 
   it("retires Talk on a provider pause and prevents it from starting again", async () => {
@@ -781,7 +782,8 @@ describe("mounted pane session event ownership", () => {
       expect(
         list.mock.calls.some(([, params]) => asOptionalRecord(params)?.agentId === "research"),
       ).toBe(true);
-      expect(state.chatError).toContain("Permission application unavailable");
+      expect(state.chatError).toBe(t("chat.permissionControls.updateFailed"));
+      expect(state.lastErrorDetail).toEqual(new Error("Permission application unavailable"));
       const failedChoice = draw();
       expect(failedChoice?.dataset.chatSelectValue).toBe("full");
       expect(failedChoice?.disabled).toBe(false);

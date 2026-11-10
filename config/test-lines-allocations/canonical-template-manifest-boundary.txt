@@ -1,0 +1,4 @@
+51
+# Canonical Template manifest boundary: nested Markdown acceptance; legacy/JSON/mixed-key rejection.
+# Preserve UTF-8, path confinement, artifact identity and denied apply/persistence regressions.
+# Exact own net LF growth; shared scalar and inherited main debt are unchanged.

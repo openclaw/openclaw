@@ -13,7 +13,7 @@ import type { CostUsageTotals } from "./session-cost-usage.types.js";
 export const USAGE_COST_QUARTER_SCOPE = "session-cost-usage-quarters-v1";
 
 export const QUARTER_MS = 15 * 60 * 1000;
-const FORMAT = 1;
+const FORMAT = 2;
 
 export const TOTAL_FIELDS = [
   "input",
@@ -36,11 +36,10 @@ export const MESSAGE_FIELDS = [
   "toolResults",
   "errors",
 ] as const;
-// Totals vectors: TOTAL_FIELDS in order, then 1 when a usage report was unavailable.
-export const TOTALS_WIDTH = 12;
+// Totals vectors: TOTAL_FIELDS in order.
+export const TOTALS_WIDTH = TOTAL_FIELDS.length;
 export const TOKENS = 4;
 export const COST = 5;
-export const UNAVAILABLE = 11;
 
 // Six column tables, each sorted by its owner row:
 // quarters: index in month, first/last offsets, totals, messages, latency count/sum/min/max/p95;
@@ -126,7 +125,6 @@ const missingEntries = (totals: CostUsageTotals) =>
 function sameTotals(left: CostUsageTotals, right: CostUsageTotals): boolean {
   return (
     TOTAL_FIELDS.every((field) => left[field] === right[field]) &&
-    (left.usageReport?.state === "unavailable") === (right.usageReport?.state === "unavailable") &&
     missingEntries(left) === missingEntries(right)
   );
 }
@@ -158,10 +156,7 @@ export function encodeUsageCostQuarters(
   const toolIndex = new Map<string, number>();
   const missingKeys: string[] = [];
   const missingIndex = new Map<string, number>();
-  const totalsValues = (totals: CostUsageTotals) => [
-    ...TOTAL_FIELDS.map((field) => totals[field]),
-    totals.usageReport?.state === "unavailable" ? 1 : 0,
-  ];
+  const totalsValues = (totals: CostUsageTotals) => TOTAL_FIELDS.map((field) => totals[field]);
   const pushMissing = (table: number, row: number, totals: CostUsageTotals) => {
     for (const [key, count] of Object.entries(totals.missingCostByModel ?? {})) {
       push(table, [row, dictionary(missingKeys, missingIndex, key, key), count]);

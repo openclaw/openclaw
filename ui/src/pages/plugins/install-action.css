@@ -37,14 +37,13 @@ openclaw-plugin-install-action {
   inset: -16px 0;
 }
 .plugin-install-progress {
-  box-sizing: border-box;
   width: 380px;
   max-width: calc(100vw - 24px);
   max-height: min(var(--oc-overlay-available-height, 420px), calc(100dvh - 16px));
   overflow-y: auto;
   padding: 20px;
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--text);
   box-shadow: var(--shadow-lg);
@@ -53,7 +52,7 @@ openclaw-plugin-install-action {
   display: flex;
   align-items: center;
   gap: 16px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 .plugin-install-progress__header strong {
   color: var(--text-strong);
@@ -62,13 +61,13 @@ openclaw-plugin-install-action {
 .plugin-install-progress__header > span {
   margin-left: auto;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
 }
 .plugin-install-progress__recovery,
 .plugin-install-progress__failure {
   margin: 16px 0 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -90,7 +89,7 @@ openclaw-plugin-install-action {
   align-items: center;
   gap: 9px;
   min-width: 0;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.35;
 }
 .plugin-install-progress__activity--started {
@@ -107,7 +106,6 @@ openclaw-plugin-install-action {
   flex: 0 0 16px;
   width: 16px;
   height: 16px;
-  box-sizing: border-box;
   border-radius: 50%;
 }
 .plugin-install-progress__activity--started .plugin-install-progress__icon {
@@ -133,6 +131,6 @@ openclaw-plugin-install-action {
     padding: 16px;
   }
   .plugin-install-progress__activity {
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 }

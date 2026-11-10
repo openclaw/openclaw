@@ -1,6 +1,6 @@
 import type { EnvironmentsListResult } from "@openclaw/gateway-protocol";
 import { createEffect, createRoot, createSignal, flush } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -345,6 +345,19 @@ describe("session active resource discovery", () => {
     await settle();
     expect(f.commit).not.toHaveBeenCalled();
     expect(f.desktopSource()).not.toBe("worker-1");
+  });
+
+  it("does not discover or reveal an assigned desktop on a native mobile host", async () => {
+    Object.assign(window, {
+      __OPENCLAW_NATIVE_EMBED__: { platform: "android", formFactor: "phone" },
+    });
+    onTestFinished(() => {
+      Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
+    });
+    const f = fixture();
+    await f.sync();
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.commit).not.toHaveBeenCalled();
   });
 
   it("reveals the existing desktop once without provisioning", async () => {

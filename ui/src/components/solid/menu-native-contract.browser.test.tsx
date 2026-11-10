@@ -210,6 +210,7 @@ it("rolls rejected initial and controlled visibility back", async () => {
   });
   expect(untrack(open)).toBe(false);
   expect(surface().matches(":popover-open")).toBe(false);
+  expect(trigger().getAttribute("aria-expanded")).toBe("false");
   expect(received).toEqual([false]);
   update(() => setOpen(true));
   expect(untrack(open)).toBe(false);
@@ -217,14 +218,17 @@ it("rolls rejected initial and controlled visibility back", async () => {
   vetoShow = false;
   update(() => setOpen(true));
   await phase(surface(), "open");
+  expect(trigger().getAttribute("aria-expanded")).toBe("true");
   expect(received).toEqual([false, false, true]);
   update(() => setOpen(false));
   expect(untrack(open)).toBe(true);
   expect(surface().matches(":popover-open")).toBe(true);
+  expect(trigger().getAttribute("aria-expanded")).toBe("true");
   expect(received).toEqual([false, false, true, true]);
   vetoHide = false;
   update(() => setOpen(false));
   await phase(surface(), "hidden");
+  expect(trigger().getAttribute("aria-expanded")).toBe("false");
   expect(received).toEqual([false, false, true, true, false]);
 });
 
@@ -305,7 +309,7 @@ it("updates root placement and RTL submenu geometry", async () => {
 
 it.each([
   { dir: "ltr", placement: "right-end", left: "60px", side: "right" },
-  { dir: "ltr", placement: "right-end", left: "1060px", side: "left" },
+  { dir: "ltr", placement: "right-end", left: "1180px", side: "left" },
   { dir: "rtl", placement: "left-end", left: "1060px", side: "left" },
 ] as const)("keeps end-aligned submenu actions reachable ($dir, $side)", async (position) => {
   await page.viewport(1280, 800);

@@ -28,6 +28,13 @@ authentication, calls to the configured local loopback Gateway do not open the
 shared state database for device authentication. Remote and explicit URL targets
 retain their device authentication and pairing requirements.
 
+Ctrl-C or SIGTERM cancels a pending `list` or `show` read without printing a late
+result or failure document. The CLI exits with status 130 or 143, respectively.
+An `add` or `edit` mutation already sent to the Gateway still waits for its
+receipt during cleanup and reports any failure; interrupting does not undo it.
+
+File inputs for `--script`, `--trigger-script`, and `scratch --file` must be regular files; symbolic links to regular files are supported. FIFOs and other special files are rejected without waiting for input. To pipe content, use `-` to read from stdin instead.
+
 ## Create jobs quickly
 
 `openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:
@@ -67,7 +74,7 @@ openclaw automations create "*/15 * * * *" \
   --to "-1001234567890"
 ```
 
-`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal run history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
+`--command <shell>` stores the Gateway host's shell: `argv: ["sh", "-lc", <shell>]` on macOS and Linux, or `argv: ["cmd.exe", "/d", "/s", "/c", <shell>]` on Windows, where the command uses `cmd.exe` syntax such as `%VAR%`. The CLI asks the Gateway for its platform; when the Gateway cannot report it, the command fails and asks for `--command-argv` instead. Jobs created before this rule on a Windows Gateway keep their stored `sh -lc` argv and fail with `spawn sh ENOENT`; rerun `openclaw cron edit <job-id> --command <shell>` to store the Windows shell. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal run history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
 
 Use `--display-name <name>` when the list and detail views should show a
 human-readable label distinct from the automation's stable name. Set or update
@@ -502,9 +509,11 @@ openclaw automations runs <job-id> --sort asc --offset 200 --limit 50
 Run-history filters are applied by the Gateway before paging. Use `--status`
 with `all`, `ok`, `error`, or `skipped`; use `--delivery-status` with
 `delivered`, `not-delivered`, `unknown`, or `not-requested`. `--query <text>`
-searches run summaries and errors. `--sort asc|desc` selects oldest-first or
-newest-first order, and `--offset <n>` advances through the result set using the
-page metadata returned by the previous command.
+searches run summaries and errors. Matching is case-insensitive and compares
+canonically equivalent Unicode forms as the same text without rewriting stored
+run history. `--sort asc|desc` selects oldest-first or newest-first order, and
+`--offset <n>` advances through the result set using the page metadata returned
+by the previous command.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
 
@@ -570,7 +579,7 @@ openclaw automations edit <job-id> --session current
 openclaw automations edit <job-id> --session "session:daily-brief"
 ```
 
-`openclaw automations add` warns when `--agent` is omitted on agent-turn jobs and falls back to the default agent (`main`). Pass `--agent <id>` at create time to pin a specific agent.
+`openclaw automations add` warns when `--agent` is omitted on agent-turn or script jobs. Ownership resolves from an explicit `--agent`, then an agent-qualified `--session-key`, then the configured default agent. The default follows `agents.defaults.systemAgent.agentId` or the applicable legacy/sole-agent fallback; omitting `--agent` does not pin the job to `main`. Pass `--agent <id>` at create time to pin a specific agent. If no owner can be resolved, creation fails with an error asking you to select an agent or configure the system agent.
 
 Delivery tweaks:
 

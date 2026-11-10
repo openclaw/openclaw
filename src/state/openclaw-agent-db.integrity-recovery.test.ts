@@ -4,6 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import * as agentDb from "./openclaw-agent-db.js";
@@ -46,6 +47,7 @@ it.each(["writable", "readonly", "async"] as const)(
       ]);
     }
 
+    invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(databasePath);
     expect(() => agentDb.openOpenClawAgentDatabase(options)).toThrow(
       /foreign_key_check failed.*session_windows row 1 references session_nodes \(foreign key 1\)/iu,
     );

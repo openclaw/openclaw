@@ -72,21 +72,25 @@ it("preserves QMD files created between inspection and removal without blocking 
   const configPath = path.join(qmdHome, "index.yml");
   await fs.mkdir(qmdHome, { recursive: true });
   const remove = fs.rmdir;
-  vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
+  const removeSpy = vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
     if (target === qmdHome) {
       await fs.writeFile(configPath, "standalone QMD configuration\n");
     }
     return remove(target);
   });
 
-  const result = await workspace.run();
+  try {
+    const result = await workspace.run();
 
-  await expect(read(configPath)).resolves.toBe("standalone QMD configuration\n");
-  expect(result).toMatchObject({
-    warningDisposition: "recoverable",
-    warnings: expect.arrayContaining([expect.stringContaining(qmdHome)]),
-  });
-  await expect(workspace.detect()).resolves.toBeNull();
+    await expect(read(configPath)).resolves.toBe("standalone QMD configuration\n");
+    expect(result).toMatchObject({
+      warningDisposition: "recoverable",
+      warnings: expect.arrayContaining([expect.stringContaining(qmdHome)]),
+    });
+    await expect(workspace.detect()).resolves.toBeNull();
+  } finally {
+    removeSpy.mockRestore();
+  }
 });
 
 it("removes only exact stale QMD lock sidecars and is idempotent", async () => {

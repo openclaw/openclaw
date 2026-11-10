@@ -1,26 +1,31 @@
 import fs from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../errno.js";
 import { parseGatewayLockPayload } from "../gateway-lock-payload.js";
-import {
-  decodeGatewayOwnerLease,
-  readGatewayOwnerLeaseFromDatabase,
-} from "../gateway-owner-lease.read.js";
-import type { GatewayOwnerLeaseIdentity } from "../gateway-owner-lease.types.js";
+import { decodeGatewayOwnerLease } from "../gateway-owner-lease.read.js";
 import { isGatewayStateOwnerDefinitelyStale } from "../gateway-state-owner-record.js";
 import { captureGatewayStateOwner, resolveGatewayStateOwnerPath } from "../gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
+import { hasVerifiedLiveSqliteOwner } from "../sqlite-live-owner.js";
+import {
+  runSqliteReadOnlyOperation,
+  withSqliteReadOnlyWorkerScope,
+} from "../sqlite-readonly-worker.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
 import { prepareSqliteReadOnlyLocation } from "../sqlite-snapshot-source.js";
+import { readDatabasePathIdentity } from "../sqlite-worker-identity.js";
 import {
   createDatabaseStoreDiagnostic,
   type DatabaseStoreDiagnostic,
 } from "./diagnostic-record.js";
-import { readBackupEngineImage, type BackupEngine } from "./physical-store.js";
+import type { BackupEngine } from "./physical-store.js";
 import type { PortDescriptor } from "./port-types.js";
 import { readPostgresStoreMetadata, withPostgresConnection } from "./postgres-store-metadata.js";
+import {
+  inspectSqliteStoreImage,
+  observeLease,
+  observeVersion,
+} from "./sqlite-store-inspection.js";
 import type { DatabaseEngineInput } from "./types.js";
 
 export type { DatabaseStoreDiagnostic } from "./diagnostic-record.js";
@@ -34,76 +39,6 @@ export type DatabaseStoreInspection = Pick<
   postgres?: DatabaseEngineInput;
   inspectionError?: "unreadable-root";
 };
-
-function observeLease(
-  result: DatabaseStoreDiagnostic,
-  lease: GatewayOwnerLeaseIdentity | undefined,
-) {
-  result.lease =
-    !lease || lease.state === "dead"
-      ? "none"
-      : lease.state === "live"
-        ? "live-owner"
-        : "unverifiable";
-}
-
-function observeVersion(result: DatabaseStoreDiagnostic, version: number) {
-  result.schema.versioning = "versioned";
-  result.schema.version = version;
-  const expected = result.schema.expectedVersion;
-  if (expected === null) {
-    return;
-  }
-  result.schema.pending = Math.max(0, expected - version);
-  if (version < expected) {
-    result.issues.push(`Schema migrations pending: version ${version}, expected ${expected}.`);
-    result.nextSteps.push("Run openclaw doctor --fix with the matching OpenClaw version.");
-  } else if (version > expected) {
-    result.issues.push(`Schema version ${version} is newer than supported version ${expected}.`);
-    result.nextSteps.push(
-      "Use an OpenClaw version that supports this schema, or restore its matching backup.",
-    );
-  }
-}
-
-function inspectSqlite(
-  result: DatabaseStoreDiagnostic,
-  db: DatabaseSync,
-  descriptor?: PortDescriptor,
-) {
-  admitSqliteSchema(db);
-  const facts = getAdmittedSqliteSchemaFacts(db)!;
-  result.connectivity = "local";
-  result.extensions = [];
-  if (descriptor?.inspectSqliteSource) {
-    try {
-      const source = descriptor.inspectSqliteSource(db);
-      observeVersion(result, source.version);
-      if (source.migrationRequired) {
-        result.schema.pending = Math.max(1, result.schema.pending ?? 0);
-        result.issues.push("A store schema migration is pending.");
-        result.nextSteps.push("Run openclaw doctor --fix before porting this store.");
-      }
-    } catch {
-      // Core state and agent stores keep their authoritative version in user_version.
-      if (result.family === "state" || result.family === "agent") {
-        observeVersion(result, facts.userVersion);
-      }
-      result.issues.push("The SQLite schema could not be admitted by its store owner.");
-      result.nextSteps.push("Run openclaw doctor --fix with the matching OpenClaw version.");
-    }
-  } else if (result.schema.versioning === "versioned") {
-    observeVersion(result, facts.userVersion);
-  }
-  if (result.family === "state") {
-    try {
-      observeLease(result, readGatewayOwnerLeaseFromDatabase(db));
-    } catch {
-      result.issues.push("The recorded Gateway lease could not be verified.");
-      result.nextSteps.push("Check the Gateway owner and rerun openclaw doctor.");
-    }
-  }
-}
 
 function inspectSearchMetadata(result: DatabaseStoreDiagnostic, value: unknown) {
   const metadata = asOptionalRecord(value);
@@ -244,7 +179,32 @@ async function inspectPostgres(
   }
 }
 
-/** Operator-only, read-only inspection: one private SQLite snapshot and at most one PG connection. */
+/**
+ * A verified live WAL source is read in place by an isolated child: closing the
+ * source there cannot release another owner's POSIX locks, and a WAL reader
+ * never blocks the writer. Every other source, or any failure, keeps the copy.
+ */
+async function readLiveWalSource(input: DatabaseStoreInspection, result: DatabaseStoreDiagnostic) {
+  try {
+    // Shared state inspects without its descriptor; descriptor checks stay on the private copy.
+    const descriptorFree = input.family === "state" || !input.descriptor?.inspectSqliteSource;
+    if (!input.path || !descriptorFree || !hasVerifiedLiveSqliteOwner(input.path)) {
+      return undefined;
+    }
+    const { key } = await readDatabasePathIdentity(input.path);
+    return await withSqliteReadOnlyWorkerScope(() =>
+      runSqliteReadOnlyOperation(
+        input.path!,
+        { type: "databaseStore.inspectLive", input: { diagnostic: result } },
+        { source: "canonical", expectedIdentity: key, env: process.env },
+      ),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/** Operator-only, read-only inspection: a live WAL read in place, else one private SQLite snapshot, and at most one PG connection. */
 export async function inspectDatabaseStore(
   input: DatabaseStoreInspection,
 ): Promise<DatabaseStoreDiagnostic> {
@@ -309,34 +269,30 @@ export async function inspectDatabaseStore(
             (!recorded || isGatewayStateOwnerDefinitelyStale(recorded, ownerPath))
           ? "none"
           : "unverifiable";
+      if (recorded && result.custody === "unverifiable") {
+        result.nextSteps.push(
+          "Inspect the recorded store owner's custody before offline maintenance.",
+        );
+      }
     } catch {
       result.issues.push("Physical store custody could not be verified.");
       result.nextSteps.push("Check the Gateway owner and rerun openclaw doctor.");
     }
-    const prepared = await prepareSqliteReadOnlyLocation(input.path, {
-      preserveSourceArtifacts: true,
-    });
     let engine: BackupEngine;
-    try {
-      engine = readBackupEngineImage(prepared.location, input.path);
-      result.observed = engine.engine;
-      result.mismatch = engine.engine !== input.configured.effective;
-      if (result.mismatch) {
-        result.issues.push(
-          `Configured ${input.configured.effective}, but the physical store is ${engine.engine}.`,
-        );
-        result.nextSteps.push(
-          input.configured.fixedLocal
-            ? "Restore the fixed-local SQLite store from its verified backup."
-            : `Stop the Gateway and run openclaw database port --family ${input.family} --to ${input.configured.effective}, or restore the matching engine configuration.`,
-        );
-      }
-      if (engine.engine === "sqlite") {
+    const live = await readLiveWalSource(input, result);
+    if (live) {
+      Object.assign(result, live.diagnostic);
+      engine = live.engine;
+    } else {
+      const prepared = await prepareSqliteReadOnlyLocation(input.path, {
+        preserveSourceArtifacts: true,
+      });
+      try {
         using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
-        inspectSqlite(result, db, input.descriptor);
+        engine = inspectSqliteStoreImage(result, db, input.path, input.descriptor);
+      } finally {
+        await prepared.cleanupAsync();
       }
-    } finally {
-      await prepared.cleanupAsync();
     }
     if (engine.engine === "postgres") {
       await inspectPostgres(result, engine, input.postgres);
@@ -347,19 +303,9 @@ export async function inspectDatabaseStore(
       "Run openclaw doctor --fix with the matching version, or restore this store's verified backup.",
     );
   }
-  if (result.custody === "unverifiable" || result.lease === "unverifiable") {
-    result.nextSteps.push(
-      "Inspect the store owner's custody and lease before offline maintenance.",
-    );
-  }
   if (result.observed === "postgres" && result.degraded === null) {
     result.nextSteps.push(
       "Search readiness was not verified; reopen the store through its owning feature to verify base search capabilities.",
-    );
-  }
-  if (result.backup === null) {
-    result.nextSteps.push(
-      "No matching backup outcome was observed; run openclaw backup create and verify its result.",
     );
   }
   if (result.schema.expectedVersion === null && result.schema.versioning !== "unversioned") {

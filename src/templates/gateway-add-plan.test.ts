@@ -26,7 +26,7 @@ async function readFixture(
   name = "workspace-agent",
 ): Promise<Extract<TemplateReadResult, { ok: true }>> {
   const source = await readTemplateManifestFile(
-    path.resolve(`src/templates/fixtures/${name}.template.json`),
+    path.resolve(`src/templates/fixtures/${name}/CLAW.md`),
   );
   if (!source.ok) {
     throw new Error(JSON.stringify(source.diagnostics));

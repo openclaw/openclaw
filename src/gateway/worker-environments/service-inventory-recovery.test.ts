@@ -25,9 +25,11 @@ describe("worker inventory read-admission recovery", () => {
     const service = support.createService(
       support.createProvider({
         inspect,
-        destroy: async () => {
+        destroy: async (lease) => {
+          lease.assertCurrent?.();
           entered.resolve();
           await remote.promise;
+          expect(lease.signal?.aborted).toBe(true);
         },
       }),
     );

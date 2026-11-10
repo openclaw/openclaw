@@ -26,7 +26,6 @@ import {
 } from "../src/process/gateway-work-admission.js";
 import { resetSessionControllerStorageForTest } from "../src/sessions/session-controller-storage-reset.test-support.js";
 import { readGlobalSingleton } from "../src/shared/global-singleton.js";
-import { hasOpenClawAgentDatabaseAsyncResources } from "../src/state/openclaw-agent-db-resources.js";
 import { cleanupSolid } from "../ui/src/test-helpers/solid-cleanup.ts";
 import { clearJsdomViewportFocus } from "./jsdom-compat.mjs";
 import {
@@ -627,7 +626,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     }
     if (!hasRetainedSqliteTestCustody()) {
       const drained = await drain("agent database custody", async () => {
-        if (hasOpenClawAgentDatabaseAsyncResources()) {
+        // A cleanup probe must not initialize a database owner for resource-free files.
+        const resources = readGlobalSingleton(
+          Symbol.for("openclaw.agentDatabaseAsyncResources"),
+        ) as { active: ReadonlySet<unknown>; closing: ReadonlyMap<unknown, unknown> } | undefined;
+        if (resources && (resources.active.size > 0 || resources.closing.size > 0)) {
           const { closeOpenClawAgentDatabasesAsync } = await vi.importActual<
             typeof import("../src/state/openclaw-agent-db-lifecycle.js")
           >("../src/state/openclaw-agent-db-lifecycle.js");

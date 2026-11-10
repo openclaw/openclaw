@@ -95,7 +95,7 @@ function ghFixture(root: string, replies: Record<string, unknown>, name = "gh") 
   writeFileSync(
     command,
     `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 const replies = ${JSON.stringify(wire)};
@@ -556,6 +556,15 @@ describe("original publication admission reader", () => {
     };
     const client = {
       ...fixture.client,
+      verifyRetainedPublicationArtifacts() {
+        throw new Error("Publication admission fixture does not recover publication artifacts");
+      },
+      downloadArtifactArchive() {
+        throw new Error("Publication admission fixture does not download artifact archives");
+      },
+      getRunArtifacts() {
+        throw new Error("Publication admission fixture does not list run artifacts");
+      },
       validateChildReuse: async () => {
         throw new Error("publication admission fixture does not reuse children");
       },
@@ -944,7 +953,7 @@ describe("GitHub API commands", () => {
       writeFileSync(
         plainGh,
         `#!${process.execPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(plainLog)}, JSON.stringify(args) + "\\n");
 if (process.env.GH_TOKEN !== "wrapper-only-token") throw new Error("missing wrapper authentication");
@@ -1649,8 +1658,19 @@ describe("release CI summary child correlation", () => {
     };
     const getRun = async (id: string) =>
       structuredClone(id === "81" ? producer : fixture.client.getRun(id));
-    const rerunFailed = vi.fn(async (id: string) => {
-      expect(id).toBe("81");
+    const producerJob = {
+      ...fixture.parentJob,
+      id: 8101,
+      name: "Build npm artifacts",
+      run_id: 81,
+      run_attempt: 1,
+      status: "completed",
+      conclusion: "failure",
+    };
+    const getAttemptJobs = async (id: string) =>
+      id === "81" ? [producerJob] : fixture.client.getRunAttemptJobs(id);
+    const rerunJob = vi.fn(async (id: number) => {
+      expect(id).toBe(producerJob.id);
       producer.run_attempt = 2;
       producer.conclusion = "success";
     });
@@ -1692,7 +1712,7 @@ describe("release CI summary child correlation", () => {
         repository,
         getRun,
         getRunAttempt: async (id: string) => (id === fixture.runId ? originalParent : getRun(id)),
-        getAttemptJobs: async (id: string) => fixture.client.getRunAttemptJobs(id),
+        getAttemptJobs,
         getParentJobs: async () => [
           ...sourceJobs,
           ...[
@@ -1712,12 +1732,12 @@ describe("release CI summary child correlation", () => {
           getWorkflowSource: () =>
             'env:\n  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"\njobs:\n  npm_artifacts:\n    name: Prepare release npm artifacts\n    env:\n      CHILD_WORKFLOW_KIND: artifact-npm\n    steps: []\n',
         }),
-        rerunFailed,
+        rerunJob,
         rerunParent,
         verify,
       }),
     ).resolves.toMatchObject({ action: "reran-parent" });
-    expect(rerunFailed).toHaveBeenCalledExactlyOnceWith("81");
+    expect(rerunJob).toHaveBeenCalledExactlyOnceWith(producerJob.id);
     expect(rerunParent).toHaveBeenCalledExactlyOnceWith(fixture.runId);
     expect((await verify.mock.results[0]!.value).children).toHaveLength(5);
   });
@@ -3082,6 +3102,8 @@ describe("release CI summary child correlation", () => {
     expect(() => requiredChildKeysForRerunGroup("qa")).toThrow(
       "release validation manifest rerun group is invalid: qa",
     );
+    const qualified = requiredChildKeysForRerunGroup("qualified-package", {}, 3);
+    expect(qualified).toEqual(new Set(["releaseChecksCandidate"]));
     const focused = validateParentManifest(
       {
         ...rawManifest({ rerunGroup: "npm-telegram" }),

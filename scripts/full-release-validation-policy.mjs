@@ -86,8 +86,11 @@ const MAX_URL_LENGTH = 1024;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY = "split-changelog-release-v1";
+// GitHub can leave runnerless same-name copies after any rerun request; they never settle.
+export const GHOST_JOBS_ADVICE =
+  "GitHub ghost jobs detected; stop rerunning, cancel that attempt, and start a fresh all-group FRV";
 
-export function assertReleasePublicationKnownBudget(plan, context) {
+export function assertReleasePublicationKnownBudget(plan, context, reusedManifest) {
   serializeReleaseArtifact(plan);
   // Only these future fields have finite bounds in the existing plan normalizers.
   // Complete future jobs/attempts and candidate receipts are not covered here.
@@ -125,7 +128,7 @@ export function assertReleasePublicationKnownBudget(plan, context) {
     errors: Array.from({ length: MAX_REPORTED_ISSUES }, () => issue),
   };
   serializeReleaseArtifact(reserved);
-  buildReleaseValidationManifest({ plan: reserved, context });
+  buildReleaseValidationManifest({ plan: reserved, context, reusedManifest });
 }
 
 // A split-layout receipt is bound to one selected release, never the directory.
@@ -273,7 +276,7 @@ const CHILD_SPECS = Object.freeze([
     displayName: "OpenClaw Release Checks",
     key: "releaseChecksCandidate",
     parentJobName: "Run release checks candidate validation",
-    rerunGroups: ["all", "cross-os", "windows-node", "live-e2e", "package"],
+    rerunGroups: ["all", "cross-os", "windows-node", "live-e2e", "package", "qualified-package"],
     suffix: "-release-checks-candidate",
     workflow: "openclaw-release-checks.yml",
   },
@@ -418,6 +421,25 @@ export function classifyReleaseGhTransportError(error) {
   return TRANSIENT_GH_TRANSPORT_PATTERN.test(text) ? "transient" : "ambiguous";
 }
 
+export function evidenceReadRetryDelay(args, error, attempt) {
+  // Only these argument shapes are GETs; fields, input, methods, and GraphQL
+  // can mutate state and must never acquire retries through this read wrapper.
+  const isGet =
+    args[0] === "api" &&
+    /^(?:repos\/|rate_limit$)/u.test(args[1] ?? "") &&
+    (args.length === 2 || (args.length === 3 && args[2] === "--allow-escape-sequences"));
+  const diagnostic = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
+  if (
+    !isGet ||
+    attempt >= 3 ||
+    /HTTP [1-4][0-9]{2}\b/u.test(diagnostic) ||
+    classifyReleaseGhTransportError(error) !== "transient"
+  ) {
+    throw error;
+  }
+  return 2_000 * 2 ** attempt;
+}
+
 // GitHub can persistently 5xx one page size of an attempt-jobs listing (for example a
 // rerun attempt carrying forward hundreds of jobs) while smaller pages of the same
 // listing succeed. Each size reads the complete paginated listing, so results never
@@ -429,9 +451,18 @@ export function isReleaseGhServerError(error) {
   return GH_SERVER_ERROR_PATTERN.test(releaseGhTransportErrorText(error));
 }
 
-export async function readReleaseJobListing(readListing) {
-  for (const [index, perPage] of RELEASE_JOB_LISTING_PAGE_SIZES.entries()) {
-    const smallerPageFallback = index < RELEASE_JOB_LISTING_PAGE_SIZES.length - 1;
+export async function readReleaseJobListing(
+  readListing,
+  pageSizes = RELEASE_JOB_LISTING_PAGE_SIZES,
+) {
+  if (
+    !pageSizes.length ||
+    pageSizes.some((size) => !RELEASE_JOB_LISTING_PAGE_SIZES.includes(size))
+  ) {
+    throw new Error("Invalid release job page size");
+  }
+  for (const [index, perPage] of pageSizes.entries()) {
+    const smallerPageFallback = index < pageSizes.length - 1;
     try {
       return await readListing(perPage, { smallerPageFallback });
     } catch (error) {
@@ -642,6 +673,25 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
     if (attempt.runAttempt !== expectedAttempt || attempt.jobs.length === 0) {
       throw new Error("release child attempt evidence is gapped");
     }
+    const identityNames = new Set();
+    for (const job of attempt.jobs) {
+      if (job?.status === "completed" && job?.conclusion === "skipped") {
+        continue;
+      }
+      const name = boundedString(job?.name, MAX_LABEL_LENGTH);
+      if (!name) {
+        throw new Error(`release child attempt ${expectedAttempt} contains an unnamed job`);
+      }
+      if (identityNames.has(name)) {
+        throw Object.assign(
+          new Error(
+            `release child attempt ${expectedAttempt} is unsealable due to duplicate job identity: ${name || "(unnamed)"}; ${GHOST_JOBS_ADVICE}`,
+          ),
+          { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
+        );
+      }
+      identityNames.add(name);
+    }
     const names = new Set();
     const completedNames = new Set(
       attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name),
@@ -666,14 +716,6 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
       const skipped = job.status === "completed" && job.conclusion === "skipped";
       if (skipped || (ghost && (completedNames.has(job.name) || runningNames.has(job.name)))) {
         continue;
-      }
-      if (names.has(job.name)) {
-        throw Object.assign(
-          new Error(
-            `release child attempt ${expectedAttempt} contains duplicate job identity: ${job.name}`,
-          ),
-          { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
-        );
       }
       names.add(job.name);
       accepted.set(job.name, job);
@@ -773,7 +815,14 @@ function candidatePreparationRequired(input) {
     return false;
   }
   if (
-    ["all", "plugin-prerelease", "cross-os", "windows-node", "package"].includes(input.rerunGroup)
+    [
+      "all",
+      "plugin-prerelease",
+      "cross-os",
+      "windows-node",
+      "package",
+      "qualified-package",
+    ].includes(input.rerunGroup)
   ) {
     return true;
   }
@@ -792,7 +841,9 @@ function releaseExecutionChildRequired(spec, input, npmTelegramForAll) {
       return input.rerunGroup === "npm-telegram" || npmTelegramForAll;
     case "releaseChecksCandidate":
       return (
-        ["all", "cross-os", "windows-node", "package"].includes(input.rerunGroup) ||
+        ["all", "cross-os", "windows-node", "package", "qualified-package"].includes(
+          input.rerunGroup,
+        ) ||
         (input.rerunGroup === "live-e2e" && !stringValue(input.liveSuiteFilter).trim())
       );
     default:
@@ -890,6 +941,26 @@ export function buildReleaseExecutionPlan(input) {
       result: stringValue(input.resolveTargetResult, "missing"),
     },
     {
+      name: "Prepare release npm artifacts",
+      required: rerunGroup === "all" || (!reused && booleanValue(input.candidateRequired)),
+      result: stringValue(input.npmPreparationResult, "skipped"),
+    },
+    {
+      name: "Qualify release npm artifacts",
+      required: rerunGroup === "all",
+      result: stringValue(input.npmQualificationResult, "skipped"),
+    },
+    {
+      name: "Prepare exact plugin npm artifacts",
+      required: rerunGroup === "all" && booleanValue(input.pluginNpmPreflightRequired),
+      result: stringValue(input.pluginNpmPreparationResult, "skipped"),
+    },
+    {
+      name: "Prepare release Docker artifacts",
+      required: rerunGroup === "all",
+      result: stringValue(input.dockerPreparationResult, "skipped"),
+    },
+    {
       name: phasedChildren ? "Acquire full release candidate" : "Prepare shared release candidate",
       required: phasedChildren
         ? !reused && booleanValue(input.candidateRequired)
@@ -915,6 +986,11 @@ function normalizedEvidenceReuse(evidenceReuse) {
   if (!evidenceReuse || evidenceReuse.requested !== true) {
     return { requested: false };
   }
+  const sourceArtifact = normalizedEvidenceReuseArtifact(
+    evidenceReuse.sourceArtifact,
+    evidenceReuse.rootRunId,
+  );
+  const sourceWorkflow = normalizedEvidenceReuseWorkflow(evidenceReuse.sourceWorkflow);
   return {
     changedPaths: Array.isArray(evidenceReuse.changedPaths)
       ? evidenceReuse.changedPaths
@@ -927,16 +1003,51 @@ function normalizedEvidenceReuse(evidenceReuse) {
     rootRunId: boundedString(evidenceReuse.rootRunId, MAX_LABEL_LENGTH),
     runUrl: boundedString(evidenceReuse.runUrl, MAX_URL_LENGTH),
     selectedRunId: boundedString(evidenceReuse.selectedRunId, MAX_LABEL_LENGTH),
-    sourceManifest:
-      evidenceReuse.sourceManifest &&
-      typeof evidenceReuse.sourceManifest === "object" &&
-      !Array.isArray(evidenceReuse.sourceManifest)
-        ? structuredClone(evidenceReuse.sourceManifest)
-        : null,
+    ...(sourceArtifact || Object.hasOwn(evidenceReuse, "sourceArtifact") ? { sourceArtifact } : {}),
+    ...(sourceWorkflow ? { sourceWorkflow } : {}),
+    ...(!sourceArtifact &&
+    evidenceReuse.sourceManifest &&
+    typeof evidenceReuse.sourceManifest === "object" &&
+    !Array.isArray(evidenceReuse.sourceManifest)
+      ? { sourceManifest: structuredClone(evidenceReuse.sourceManifest) }
+      : {}),
   };
 }
 
-function validEvidenceReuseIdentity(evidenceReuse) {
+function normalizedEvidenceReuseWorkflow(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const ref = boundedString(value.ref, MAX_LABEL_LENGTH);
+  const sha = boundedString(value.sha, MAX_LABEL_LENGTH);
+  return ref && /^[a-f0-9]{40}$/u.test(sha) ? { ref, sha } : null;
+}
+
+function normalizedEvidenceReuseArtifact(value, rootRunId) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const runAttempt = positiveInteger(value.runAttempt);
+  const id = boundedString(value.id, MAX_LABEL_LENGTH);
+  const name = boundedString(value.name, MAX_LABEL_LENGTH);
+  const digest = boundedString(value.digest, MAX_LABEL_LENGTH);
+  const sizeInBytes = Number(value.sizeInBytes);
+  const canonicalName = `full-release-validation-${rootRunId}-${runAttempt}`;
+  const legacyName = `full-release-validation-${rootRunId}`;
+  if (
+    !/^[1-9][0-9]*$/u.test(id) ||
+    !/^sha256:[a-f0-9]{64}$/u.test(digest) ||
+    runAttempt === undefined ||
+    (name !== canonicalName && !(runAttempt === 1 && name === legacyName)) ||
+    !Number.isSafeInteger(sizeInBytes) ||
+    sizeInBytes < 1
+  ) {
+    return null;
+  }
+  return { digest, id, name, runAttempt, sizeInBytes };
+}
+
+function validEvidenceReuseIdentity(evidenceReuse, targetVersion, allowPendingArtifact = false) {
   if (!evidenceReuse.requested) {
     return true;
   }
@@ -947,16 +1058,15 @@ function validEvidenceReuseIdentity(evidenceReuse) {
       evidenceReuse.changedPaths.length === 1 &&
       evidenceReuse.changedPaths[0] === "CHANGELOG.md") ||
     (evidenceReuse.policy === SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY &&
-      isSplitChangelogEvidenceDelta(
-        evidenceReuse.changedPaths,
-        evidenceReuse.sourceManifest?.candidateBinding?.package?.version ??
-          evidenceReuse.sourceManifest?.validationInputs?.targetVersion,
-      ));
+      isSplitChangelogEvidenceDelta(evidenceReuse.changedPaths, targetVersion));
   return (
     /^[a-f0-9]{40}$/u.test(evidenceReuse.evidenceSha) &&
     /^[1-9][0-9]*$/u.test(evidenceReuse.rootRunId) &&
     /^[1-9][0-9]*$/u.test(evidenceReuse.selectedRunId) &&
-    evidenceReuse.sourceManifest !== null &&
+    (evidenceReuse.sourceArtifact != null ||
+      evidenceReuse.sourceManifest ||
+      allowPendingArtifact) &&
+    (evidenceReuse.sourceArtifact == null || evidenceReuse.sourceWorkflow) &&
     validChangedPaths
   );
 }
@@ -1117,6 +1227,7 @@ export function buildReleaseExecutionPlanArtifact({
   sourceAdmission,
   publicationAdmissionContract,
   publicationAdmission,
+  pendingEvidenceReuse = false,
   qualificationCoverage,
   qualificationInputs,
   sealParentRunAttempt,
@@ -1142,7 +1253,19 @@ export function buildReleaseExecutionPlanArtifact({
     throw new Error("release execution plan seal attempt is invalid");
   }
   const normalizedReuse = normalizedEvidenceReuse(evidenceReuse);
-  if (!validEvidenceReuseIdentity(normalizedReuse)) {
+  const normalizedBlockers = normalizeIssues(blockers, "release_blocker");
+  const normalizedErrors = normalizeIssues(errors, "orchestration_error");
+  const normalizedTargetVersion = boundedString(
+    targetVersion ?? candidate?.package?.version ?? sourceAdmission?.projection?.version,
+    MAX_LABEL_LENGTH,
+  );
+  if (
+    !validEvidenceReuseIdentity(
+      normalizedReuse,
+      normalizedTargetVersion,
+      pendingEvidenceReuse || normalizedBlockers.length > 0 || normalizedErrors.length > 0,
+    )
+  ) {
     throw new Error("release execution plan evidence reuse binding is invalid");
   }
   const frozenCoverage =
@@ -1200,18 +1323,15 @@ export function buildReleaseExecutionPlanArtifact({
     workflowRef: boundedString(expected.workflowRef, MAX_LABEL_LENGTH),
     workflowSha: boundedString(expected.workflowSha, MAX_LABEL_LENGTH),
     targetSha: boundedString(expected.targetSha, MAX_LABEL_LENGTH),
-    targetVersion: boundedString(
-      targetVersion ?? candidate?.package?.version ?? sourceAdmission?.projection?.version,
-      MAX_LABEL_LENGTH,
-    ),
+    targetVersion: normalizedTargetVersion,
     trustedWorkflow: normalizedTrustedWorkflow(trustedWorkflow),
     releaseProfile: boundedString(releaseProfile, MAX_LABEL_LENGTH),
     rerunGroup: boundedString(rerunGroup, MAX_LABEL_LENGTH),
     evidenceReuse: normalizedReuse,
     gates: gates.map(normalizedGate),
     children: normalizedChildren,
-    blockers: normalizeIssues(blockers, "release_blocker"),
-    errors: normalizeIssues(errors, "orchestration_error"),
+    blockers: normalizedBlockers,
+    errors: normalizedErrors,
   };
   validatePlanSourceAdmission(basePlan, expected);
   validatePlanPublicationAdmission(basePlan, expected);
@@ -1389,7 +1509,15 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     throw new Error("release execution plan artifact binding is invalid");
   }
   const evidenceReuse = normalizedEvidenceReuse(payload.evidenceReuse);
-  if (!validEvidenceReuseIdentity(evidenceReuse)) {
+  if (
+    !validEvidenceReuseIdentity(
+      evidenceReuse,
+      payload.targetVersion ??
+        evidenceReuse.sourceManifest?.candidateBinding?.package?.version ??
+        evidenceReuse.sourceManifest?.validationInputs?.targetVersion,
+      (payload.blockers?.length ?? 0) > 0 || (payload.errors?.length ?? 0) > 0,
+    )
+  ) {
     throw new Error("release execution plan evidence reuse binding is invalid");
   }
   const trustedWorkflow = normalizedTrustedWorkflow(payload.trustedWorkflow);
@@ -1469,72 +1597,6 @@ export function terminalPolicyPass(child, targetVersion) {
   );
 }
 
-const INSTALL_SMOKE_JOB_PREFIX = "install_smoke_release_checks / ";
-const INSTALL_SMOKE_PAYLOAD_PRODUCER = `${INSTALL_SMOKE_JOB_PREFIX}installer_smoke_candidate_payload`;
-// `needs` of .github/workflows/install-smoke-reusable.yml; frv.test.ts pins it to the workflow.
-export const INSTALL_SMOKE_JOB_NEEDS = {
-  preflight: [],
-  "install-smoke-fast": ["preflight"],
-  root_dockerfile_image: ["preflight"],
-  root_dockerfile_image_ready: ["preflight", "root_dockerfile_image"],
-  qr_package_install_smoke: ["preflight"],
-  root_dockerfile_smokes: ["preflight", "root_dockerfile_image", "root_dockerfile_image_ready"],
-  installer_smoke_candidate_payload: ["preflight"],
-  installer_smoke_update_image: ["preflight"],
-  installer_smoke_nonroot_image: ["preflight"],
-  installer_smoke_update: [
-    "preflight",
-    "installer_smoke_candidate_payload",
-    "installer_smoke_update_image",
-  ],
-  installer_smoke_nonroot: [
-    "preflight",
-    "installer_smoke_candidate_payload",
-    "installer_smoke_nonroot_image",
-  ],
-  installer_smoke: [
-    "preflight",
-    "root_dockerfile_image",
-    "root_dockerfile_image_ready",
-    "installer_smoke_candidate_payload",
-    "installer_smoke_update_image",
-    "installer_smoke_update",
-    "installer_smoke_nonroot_image",
-    "installer_smoke_nonroot",
-  ],
-  bun_global_install_smoke: ["preflight", "installer_smoke_candidate_payload"],
-  bun_only_runtime_smoke: ["preflight", "installer_smoke_candidate_payload"],
-  "docker-e2e-fast": ["preflight"],
-};
-// Consumers whose payload verification binds GITHUB_RUN_ATTEMPT rather than the producer's
-// recorded attempt (#161317); frv.test.ts pins them to the workflow.
-export const INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS = new Set([
-  "installer_smoke_update",
-  "installer_smoke_nonroot",
-]);
-// Release Checks jobs that need install_smoke_release_checks, so a producer job rerun
-// re-executes them too; frv.test.ts pins them to openclaw-release-checks.yml.
-export const INSTALL_SMOKE_CALLER_DEPENDENTS = new Set([
-  "Verify release checks",
-  FULL_RELEASE_CHILD_EVIDENCE_JOB,
-]);
-
-// Seeds plus every job that transitively needs one, as a GitHub rerun re-executes them.
-function installSmokeDependents(seeds) {
-  const closure = new Set(seeds);
-  let grew = true;
-  while (grew) {
-    grew = false;
-    for (const [job, needs] of Object.entries(INSTALL_SMOKE_JOB_NEEDS)) {
-      if (!closure.has(job) && needs.some((need) => closure.has(need))) {
-        closure.add(job);
-        grew = true;
-      }
-    }
-  }
-  return closure;
-}
-
 export function planReleaseChildRerun({ childKey, jobs }) {
   const failed = evaluateReleaseChildPolicy({ child: { key: childKey, jobs } })
     .blockingJobs.map((job) => job.name)
@@ -1547,25 +1609,12 @@ export function planReleaseChildRerun({ childKey, jobs }) {
   if (failed.length === 1 && failed[0] === FULL_RELEASE_CHILD_EVIDENCE_JOB) {
     return { failed, mode: "receipt", producer: FULL_RELEASE_CHILD_EVIDENCE_JOB };
   }
-  const producerJob = jobs.find((job) => job.name === INSTALL_SMOKE_PAYLOAD_PRODUCER);
-  if (producerJob?.status === "completed" && producerJob.conclusion === "success") {
-    const local = (name) =>
-      name.startsWith(INSTALL_SMOKE_JOB_PREFIX) ? name.slice(INSTALL_SMOKE_JOB_PREFIX.length) : "";
-    const failedJobsRerun = installSmokeDependents(failed.map(local).filter(Boolean));
-    // A failed-jobs rerun that re-executes an attempt-bound consumer without the
-    // producer stays red, whether the consumer or an upstream image job failed.
-    if ([...failedJobsRerun].some((name) => INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS.has(name))) {
-      // A job rerun only re-executes the producer and its dependents; failures outside
-      // that closure (for example an upstream image build) need the whole run.
-      const producerDependents = installSmokeDependents([local(INSTALL_SMOKE_PAYLOAD_PRODUCER)]);
-      return failed.every(
-        (name) => producerDependents.has(local(name)) || INSTALL_SMOKE_CALLER_DEPENDENTS.has(name),
-      )
-        ? { failed, mode: "producer", producer: INSTALL_SMOKE_PAYLOAD_PRODUCER }
-        : { failed, mode: "all-jobs" };
-    }
+  if (failed.length !== 1) {
+    throw new Error(
+      `${childKey} has ${failed.length} blocking failed jobs; refusing a multi-job rerun because GitHub can create persistent duplicate jobs. Start a fresh all-group FRV instead`,
+    );
   }
-  return { failed, mode: "failed-jobs" };
+  return { failed, jobName: failed[0], mode: "single-job" };
 }
 
 function dispatchBlockers(children) {
@@ -1884,6 +1933,9 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     const reusedRoot = payload.evidenceReuse?.requested
       ? payload.evidenceReuse.sourceManifest
       : undefined;
+    const reusedProducer = payload.evidenceReuse?.requested
+      ? (payload.evidenceReuse.sourceWorkflow ?? reusedRoot)
+      : undefined;
     if (
       reusedRoot?.qualificationCoverage &&
       !isDeepStrictEqual(reusedRoot.qualificationCoverage, coverage)
@@ -1894,13 +1946,13 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
       const child = children.find((entry) => entry.key === spec.key);
       // Reuse retains the original producer; strict chain validation separately
       // authenticates that root and proves the complete changelog-only delta.
-      const producer = child.source === "reused" && reusedRoot?.workflowSha ? reusedRoot : payload;
+      const producer = child.source === "reused" && reusedProducer ? reusedProducer : payload;
       if (
         !child.required ||
         !child.selected ||
         child.dispatchName !== spec.dispatchName ||
         child.workflow !== spec.workflow ||
-        child.workflowSha !== producer.workflowSha ||
+        child.workflowSha !== (producer.sha ?? producer.workflowSha) ||
         (child.source === "fresh" && child.workflowRef !== producer.workflowRef) ||
         (child.source === "fresh" &&
           child.displayTitle !==
@@ -2286,7 +2338,27 @@ function releaseStateChildEvidence(child) {
   });
 }
 
-function verifyStateStructure(state, executionPlan, label) {
+function effectiveStateGates(executionPlan, expected) {
+  if (expected.effectiveGates === undefined) {
+    return executionPlan.gates;
+  }
+  const effectiveGates = Array.isArray(expected.effectiveGates)
+    ? expected.effectiveGates.map(normalizedGate)
+    : [];
+  if (
+    effectiveGates.length !== executionPlan.gates.length ||
+    effectiveGates.some(
+      (gate, index) =>
+        gate.name !== executionPlan.gates[index]?.name ||
+        gate.required !== executionPlan.gates[index]?.required,
+    )
+  ) {
+    throw new Error("effective release gates differ from the immutable execution plan");
+  }
+  return effectiveGates;
+}
+
+function verifyStateStructure(state, executionPlan, label, effectiveGates) {
   const selected = executionPlan.children.filter((entry) => entry.selected);
   const expectedKeys = selected.map((child) => child.key).toSorted();
   if (JSON.stringify(Object.keys(state.children).toSorted()) !== JSON.stringify(expectedKeys)) {
@@ -2381,7 +2453,7 @@ function verifyStateStructure(state, executionPlan, label) {
     children: snapshots,
     extraBlockers: executionPlan.blockers,
     extraErrors: executionPlan.errors,
-    localFailures: releasePlanGateFailures(executionPlan.gates),
+    localFailures: releasePlanGateFailures(effectiveGates),
     targetVersion: executionPlan.targetVersion,
   });
   if (!isDeepStrictEqual(state.waivers, baseline.waivers)) {
@@ -2516,8 +2588,9 @@ function verifyReleaseStatePair(planPayload, decisionPayload, drainPayload, expe
   ) {
     throw new Error("release decision and diagnostic drain execution plans differ");
   }
-  verifyStateStructure(decision, executionPlan, "release decision");
-  verifyStateStructure(drain, executionPlan, "diagnostic drain");
+  const effectiveGates = effectiveStateGates(executionPlan, expected);
+  verifyStateStructure(decision, executionPlan, "release decision", effectiveGates);
+  verifyStateStructure(drain, executionPlan, "diagnostic drain", effectiveGates);
   verifyStateTransition(decision, drain, executionPlan);
   return {
     decision,

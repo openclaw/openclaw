@@ -315,6 +315,37 @@ it.each(["disposal", "manifest-publication"] as const)(
   },
 );
 
+it.each([0, 1])(
+  "settles missing retained duplicate %i without losing rollback bytes",
+  async (index) => {
+    await withOpenClawTestState({ label: "doctor-missing-duplicate" }, async (state) => {
+      const { archives, bytes, doctor, inventory } = createRetainedDuplicateArchives(state);
+      const before = inventory();
+      // Exercise either ordering in the persisted inventory, not filesystem creation order.
+      const ordered = [...before.references.keys()].filter((file) => archives.includes(file));
+      const missing = ordered[index]!;
+      const survivor = ordered[1 - index]!;
+      fs.unlinkSync(missing);
+      const recovered = await doctor("recover");
+      expect(recovered.targets.flatMap((target) => target.issues.map(({ code }) => code))).toEqual([
+        "historical_duplicate_settled",
+      ]);
+      for (const file of before.manifestPaths) {
+        const manifest = migrationRun.readSessionSqliteMigrationManifest(file)!;
+        for (const target of manifest.targets) {
+          for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+            expect(move.archivePath).toBe(survivor);
+            expect(move.artifact?.disposal).toEqual({ state: "retained" });
+          }
+        }
+      }
+      expect(fs.readFileSync(survivor, "utf8")).toBe(bytes);
+      expect((await doctor("dry-run")).totals.issues).toBe(0);
+      expect((await doctor("recover")).totals.issues).toBe(0);
+    });
+  },
+);
+
 it("protects a large historical index and all siblings within the inventory budget", () => {
   const { refs, artifacts } = recoveryGraph(10_000);
   const start = performance.now();

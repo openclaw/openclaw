@@ -138,7 +138,7 @@ describe("embedded desktop panel presentation", () => {
 
   it.each([
     { reason: "control-taken:林 🦞", notice: "林 🦞 took control" },
-    { reason: "control-taken", notice: "Another operator took control" },
+    { reason: "control-taken", notice: "Someone else took control" },
   ])("identifies a takeover ($reason) and reconnects view-only", async ({ reason, notice }) => {
     const request = desktopRequest(workerInventory);
     const connect = connected();
@@ -210,7 +210,7 @@ describe("embedded desktop panel presentation", () => {
       expect(rpcCalls(request, "sessions.describe")).toHaveLength(0);
       expect(rpcCalls(request, "environments.list")).toHaveLength(0);
       expect(panel.querySelector(".desktop-picker")).toBeNull();
-      expect(panel.textContent).toContain("The requested desktop is unavailable");
+      expect(panel.textContent).toContain("This desktop is unavailable");
     });
   });
 

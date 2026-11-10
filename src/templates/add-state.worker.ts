@@ -1,4 +1,7 @@
-import { mergeWorkspaceSetupStateInDatabase } from "../agents/workspace-state-store.worker.js";
+import {
+  mergeWorkspaceSetupStateInDatabase,
+  rollbackWorkspaceBootstrapSeedInDatabase,
+} from "../agents/workspace-state-store.worker.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../state/openclaw-state-lease-worker.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
@@ -9,21 +12,27 @@ export function executeTemplateAddStateCommand(
   command: TemplateAddStateCommand,
   { write, writeAdmitted }: WorkerWriteOperationContext,
 ) {
-  const mergeSetupState = (database: OpenClawStateDatabase) =>
-    mergeWorkspaceSetupStateInDatabase(
-      database,
-      command.input.workspaceDir,
-      { bootstrapSeededAt: command.input.bootstrapSeededAt },
-      command.input.nowMs,
-    );
+  const apply = (database: OpenClawStateDatabase) =>
+    command.type === "templates.add.rollbackBootstrapSeed"
+      ? rollbackWorkspaceBootstrapSeedInDatabase(
+          database,
+          command.input.workspaceDir,
+          command.input.bootstrapSeededAt,
+        )
+      : mergeWorkspaceSetupStateInDatabase(
+          database,
+          command.input.workspaceDir,
+          { bootstrapSeededAt: command.input.bootstrapSeededAt },
+          command.input.nowMs,
+        );
   const { leases } = command.input;
   if (leases) {
     return write((database) => {
       assertOpenClawStateLeasesWorkerOwnedInTransaction(database.db, leases);
-      const result = mergeSetupState(database);
+      const result = apply(database);
       assertOpenClawStateLeasesWorkerOwnedInTransaction(database.db, leases, "commit");
       return result;
     });
   }
-  return writeAdmitted(mergeSetupState, { transactionEnvironment: "process" });
+  return writeAdmitted(apply, { transactionEnvironment: "process" });
 }

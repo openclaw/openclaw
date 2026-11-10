@@ -75,7 +75,8 @@ export type PendingObservedDialog = BrowserObservedDialogRecord & {
 export type ArmedDialogResponse = {
   accept: boolean;
   promptText?: string;
-  expiresAt: number;
+  /** Process-local elapsed deadline, independent of wall-clock corrections. */
+  expiresAtMonotonicMs: number;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -89,6 +90,7 @@ export type ConnectedBrowser = {
 
 export type ActionDownloadCapture = {
   beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
+  /** Monotonic reading (`performance.now()`), never comparable with wall-clock timestamps. */
   lastEventAtMs?: number;
   pending: Array<Promise<BrowserDownloadResult>>;
   waiters: Array<() => void>;

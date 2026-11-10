@@ -55,6 +55,7 @@ vi.mock("./userbot-skill.runtime.js", () => ({
 }));
 
 import { createQaBusState } from "../../bus-state.js";
+import { createQaStateBackedTransportAdapter } from "../../qa-transport.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
 import type { TelegramUserbotUpdate } from "./userbot-driver.runtime.js";
@@ -572,4 +573,81 @@ it("retains a quarantined lease after stopping the userbot and proxy", async () 
 
   expectOnce(mocks.userbotClose, mocks.proxyClose, mocks.leaseHeartbeat, mocks.heartbeatStop);
   expect(mocks.leaseRelease).not.toHaveBeenCalled();
+});
+
+it("quarantines retired native replies and correlates recovery after reset", async () => {
+  const onUpdate = observe();
+  mocks.userbotSend
+    .mockResolvedValueOnce({ messageId: 10, senderId: 100, chatId: -100123 })
+    .mockResolvedValueOnce({ messageId: 20, senderId: 100, chatId: -100123 });
+  const state = createQaBusState();
+  await using adapter = await createAdapter(state);
+  const transport = createQaStateBackedTransportAdapter(state, adapter);
+  const readMessages = await prepareMessageReader(adapter);
+  const partial = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
+  const recovery = `${partial}\n\nSynthetic terminal recovery`;
+  const update = nativeMessage({ replyToMessageId: 10, timestamp: 100_000, text: partial });
+  await transport.sendInbound(inbound("recovery-room", "first attempt"));
+  await onUpdate(update);
+  await transport.reset();
+  const current = await transport.sendInbound(inbound("recovery-room", "second attempt"));
+  await onUpdate({ ...update, kind: "edit", text: recovery });
+  await onUpdate({ ...update, kind: "edit", messageId: 12, text: recovery });
+  const currentUpdate = { ...update, messageId: 21, replyToMessageId: 20 };
+  await onUpdate(currentUpdate);
+  await onUpdate({ ...currentUpdate, kind: "edit", text: recovery });
+  expect(readMessages()).toEqual([{ ...currentUpdate, kind: "edit", text: recovery }]);
+  expect(readMessages(current.id)).toEqual(readMessages());
+  expect(readMessages("unknown-inbound")).toEqual([]);
+  expect(
+    state.getSnapshot().messages.filter((message) => message.direction === "outbound"),
+  ).toMatchObject([{ text: recovery, replyToId: current.id }]);
+});
+
+it("drains admitted observer writes and quarantines updates arriving during reset", async () => {
+  const onUpdate = observe();
+  mocks.userbotSend.mockResolvedValue({ messageId: 10, senderId: 100, chatId: -100123 });
+  const state = createQaBusState();
+  const gate = Promise.withResolvers<void>();
+  const addOutboundMessage = vi.fn(
+    async (input: Parameters<typeof state.addOutboundMessage>[0]) => {
+      await gate.promise;
+      return state.addOutboundMessage(input);
+    },
+  );
+  await using adapter = await createAdapter({ ...state, addOutboundMessage });
+  const transport = createQaStateBackedTransportAdapter(state, adapter);
+  const readMessages = await prepareMessageReader(adapter);
+  const update = nativeMessage({ timestamp: 100_000, text: "late" });
+  try {
+    await transport.sendInbound(inbound("recovery-room", "first"));
+    const pending = onUpdate(update);
+    expect(addOutboundMessage).toHaveBeenCalledTimes(1);
+    const resetting = transport.reset();
+    await onUpdate({ ...update, messageId: 12 });
+    gate.resolve();
+    await Promise.all([pending, resetting]);
+    expect(state.getSnapshot().messages).toEqual([]);
+    await transport.sendInbound(inbound("recovery-room", "second"));
+    await onUpdate({ ...update, kind: "edit" });
+    await onUpdate({ ...update, kind: "edit", messageId: 12 });
+    expect(readMessages()).toEqual([]);
+    expect(addOutboundMessage).toHaveBeenCalledTimes(1);
+  } finally {
+    gate.resolve();
+  }
+});
+
+it("keeps the inbound reply target when a native edit omits it", async () => {
+  const onUpdate = observe();
+  mocks.userbotSend.mockResolvedValueOnce({ messageId: 10, senderId: 100, chatId: -100123 });
+  const state = createQaBusState();
+  await using adapter = await createAdapter(state);
+  const readMessages = await prepareMessageReader(adapter);
+  const sent = await adapter.sendInbound(inbound("recovery-room", "attempt"));
+  const reply = nativeMessage({ replyToMessageId: 10, text: "partial" });
+  await onUpdate(reply);
+  const { replyToMessageId: _omitted, ...edit } = { ...reply, kind: "edit", text: "recovered" };
+  await onUpdate(edit);
+  expect(readMessages(sent.id)).toEqual([{ ...edit, replyToMessageId: 10 }]);
 });

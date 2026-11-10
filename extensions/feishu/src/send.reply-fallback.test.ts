@@ -37,6 +37,9 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(createMock).toHaveBeenCalledTimes(1);
     expect(result.messageId).toBe(expectedMessageId);
     expect(result.receipt?.replyToId).toBeUndefined();
+    expect(createMock.mock.calls[0]?.[0]?.data.uuid).not.toBe(
+      replyMock.mock.calls[0]?.[0]?.data.uuid,
+    );
   }
 
   beforeAll(async () => {
@@ -147,6 +150,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       data: {
         content: '{"zh_cn":{"content":[[{"tag":"md","text":"hello"}]]}}',
         msg_type: "post",
+        uuid: expect.any(String),
         reply_in_thread: true,
       },
     });
@@ -156,6 +160,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
         content: '{"zh_cn":{"content":[[{"tag":"md","text":"hello"}]]}}',
         receive_id: "oc_group_1",
         msg_type: "post",
+        uuid: expect.any(String),
       },
     });
   });

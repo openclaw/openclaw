@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -410,7 +411,7 @@ describe("model runtime generation scope", () => {
       }
       expect(execPaths).toEqual([]);
       expect(getRuntimeConfigSnapshot()).toBeNull();
-      expect(await fs.readFile(databasePath)).toEqual(before);
+      expectBytesEqual(await fs.readFile(databasePath), before, "shared-state database");
     } finally {
       for (const spy of rowReads) {
         spy.mockRestore();

@@ -14,6 +14,8 @@
  * report absolute costs and spread, and do not infer whole-Gateway tail changes.
  * --audiences selects distinct prepared row identities (default 2); use 8 with 65
  * clients to measure reuse within interleaved audiences rather than across all clients.
+ * --distinct-viewers keeps each recipient's authorization key distinct while sharing
+ * those prepared row identities, measuring equivalent views across viewer profiles.
  * --fresh-fields replaces every nested field per event to measure misses separately.
  * --profile <path> saves the sampled profile when used with --allocations.
  * Add --no-turbo-inlining to Node for callee attribution. Compare --clients 1/10/60
@@ -32,6 +34,8 @@
  * With --expose-gc, memoryAfterGc reports retained memory after the measured pass
  * and a job boundary for weak samples. Collection precedes digest replay and is
  * outside CPU/allocation measurement.
+ * Reports synchronous publication p99/max with sample counts; these are owner
+ * stalls, not whole-Gateway event-loop or sessions.list latency.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -60,6 +64,7 @@ const { values } = parseArgs({
     events: { type: "string", default: "3000" },
     clients: { type: "string", default: "65" },
     audiences: { type: "string", default: "2" },
+    "distinct-viewers": { type: "boolean", default: false },
     sessions: { type: "string", default: "1" },
     allocations: { type: "boolean", default: false },
     profile: { type: "string" },
@@ -96,7 +101,8 @@ let audienceRows: GatewaySessionRow[];
 mock.module(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url), {
   namedExports: {
     prepareSessionRowPublication: () => (client: GatewayClient) => ({
-      getAudienceKey: () => client.connect.scopes?.[0] ?? "viewer",
+      getAudienceKey: () =>
+        values["distinct-viewers"] ? client.connId : (client.connect.scopes?.[0] ?? "viewer"),
       getPresentation: () => ({
         present: () => audienceRows[Number(client.connect.scopes![0])],
         sharing: {},
@@ -410,10 +416,13 @@ if (values.allocations) {
 }
 const hostLoadBefore = loadavg();
 const memoryBefore = process.memoryUsage();
+const publicationMs: number[] = [];
 const cpuStart = process.threadCpuUsage();
 const start = performance.now();
 for (let index = 0; index < events; index++) {
+  const publicationStart = performance.now();
   publish(index);
+  publicationMs.push(performance.now() - publicationStart);
   if (values["yield-events"]) {
     await setImmediate();
   }
@@ -421,6 +430,7 @@ for (let index = 0; index < events; index++) {
 const elapsedMs = performance.now() - start;
 const cpu = process.threadCpuUsage(cpuStart);
 const memoryAfter = process.memoryUsage();
+const sortedPublicationMs = publicationMs.toSorted((a, b) => a - b);
 const measuredEncoding = { envelopeEncodings, envelopeBytes, deliveries };
 let sampledBytes: number | undefined;
 if (values.allocations) {
@@ -461,6 +471,7 @@ console.log(
     events,
     clients,
     audiences,
+    distinctViewers: values["distinct-viewers"],
     sessions,
     freshFields: values["fresh-fields"],
     sourceRevisions: values["source-revisions"],
@@ -471,6 +482,9 @@ console.log(
     mode: values.allocations ? "allocation" : "timing",
     elapsedMs,
     threadCpuMs: (cpu.user + cpu.system) / 1000,
+    publicationSamples: publicationMs.length,
+    publicationP99Ms: sortedPublicationMs[Math.floor(publicationMs.length * 0.99)],
+    publicationMaxMs: sortedPublicationMs.at(-1),
     sampledBytes,
     payloadDigest: digest.digest("hex"),
     wireDigest: wireDigest.digest("hex"),

@@ -126,13 +126,13 @@ handoff_source
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /HANDOFF_STOPPED/);
       assert.ok(log.indexOf("journal") < log.indexOf("arm"));
-      assert.ok(log.indexOf("arm") < log.indexOf("revoke"));
-      assert.ok(log.indexOf("revoke") < log.indexOf("stop"));
+      assert.ok(log.indexOf("revoke") < log.indexOf("arm"));
+      assert.ok(log.indexOf("arm") < log.indexOf("stop"));
       assert.ok(log.indexOf("stop") < log.indexOf("stopped-journal"));
     } else {
       assert.notEqual(result.status, 0);
       assert.equal(log.includes("stopped-journal"), false);
-      assert.equal(existsSync(permit), scenario === "arm-failure");
+      assert.equal(existsSync(permit), false);
       if (scenario === "arm-failure") { assert.equal(log.includes("stop"), false); }
     }
     assert.equal(log.some(value => value.includes("start") || value.includes("export")), false);

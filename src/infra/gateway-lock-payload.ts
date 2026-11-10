@@ -92,7 +92,7 @@ export function describeGatewayLockHolder(
 export class GatewayLockNamespaceError extends Error {
   constructor(holder: GatewayLockHolder, lockPath?: string) {
     super(
-      `cannot verify Gateway ownership from this process; heartbeat age does not prove that the holder stopped. ${describeGatewayLockHolder(holder, lockPath)}`,
+      `cannot verify Gateway ownership from this process${lockPath ? ` at ${lockPath}` : ""}; heartbeat age does not prove that the holder stopped. ${describeGatewayLockHolder(holder, lockPath)}`,
     );
     this.name = "GatewayLockNamespaceError";
   }

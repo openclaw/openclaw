@@ -24,6 +24,10 @@ import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { configRawForDisplay } from "../../lib/config/config-draft-model.ts";
 import {
+  configSecretFields,
+  type ConfigSecretFields,
+} from "../../lib/config/config-secret-fields.ts";
+import {
   currentConfigRead,
   currentDisplayConfig,
   currentDisplayRuntimeConfig,
@@ -32,6 +36,7 @@ import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.t
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { createAppearanceCatalogs } from "./appearance-catalogs.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
@@ -61,6 +66,7 @@ import {
   type SessionObserverModelSelection,
 } from "./session-observer-settings.ts";
 import { createConfigUpdatesPresentation } from "./updates-page-presentation.ts";
+import { visibleConfigSchema } from "./view-schema.tsx";
 import { createConfigViewState } from "./view-state.ts";
 import type * as View from "./view-state.ts";
 
@@ -74,9 +80,9 @@ export function createConfigPage(
   route: () => { pageId: ConfigPageId; routeData: ConfigRouteData | null },
   host: () => HTMLElement,
 ) {
-  const applicationConfig = projectOwner(context.config, (owner) => owner.current);
   const agents = projectOwner(context.agents, (owner) => owner.state);
   const identities = projectOwner(context.agentIdentity, (owner) => owner);
+  const applicationConfig = projectOwner(context.config, (owner) => owner.current);
   const lobsterdex = projectSource(subscribeLobsterdex, {
     read: getLobsterdex,
     subscribe: (subscribe, notify) => subscribe(notify),
@@ -88,6 +94,13 @@ export function createConfigPage(
     : null;
   // Imperative owner notifications can arrive while a descendant is rendering.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
+  const rawSchema = createMemo(() => {
+    revision();
+    return context.runtimeConfig.state.configSchema;
+  });
+  const openclawIdEnabled = createMemo(() => applicationConfig.read().openclawIdEnabled === true);
+  // Refreshing config values must not rebuild the unchanged schema's presentation tree.
+  const schema = createMemo(() => visibleConfigSchema(rawSchema(), openclawIdEnabled()));
   const invalidate = () => {
     publish((value) => value + 1);
     onSettled(afterCommit);
@@ -155,7 +168,7 @@ export function createConfigPage(
   let previousClient: GatewayBrowserClient | null = null;
   let previousHello: unknown;
   let previousPhase: string | null = null;
-  let countdown: ReturnType<typeof setInterval> | undefined;
+  const countdown = useVisiblePoll(1_000, invalidate);
   let routeInitialized = false;
   let normalizedMemoryLocation = "";
   let targetBlockId: string | null = null;
@@ -304,12 +317,10 @@ export function createConfigPage(
     const ticking =
       pageId === "updates" &&
       (campaign?.state === "countdown" || campaign?.state === "waiting-for-idle");
-    if (ticking && !countdown) {
-      countdown = setInterval(invalidate, 1_000);
-    }
-    if (!ticking) {
-      clearInterval(countdown);
-      countdown = undefined;
+    if (ticking) {
+      countdown.start();
+    } else {
+      countdown.stop();
     }
     if (pageId === "appearance") {
       mediaDeviceOwner.load();
@@ -431,7 +442,7 @@ export function createConfigPage(
       connected: configState.connected,
       mutationAllowed: runtimeConfig.canSet,
       openFileAllowed: runtimeConfig.canOpenFile,
-      schema: configState.configSchema,
+      schema: schema(),
       schemaLoading: configState.configSchemaLoading,
       schemaRead: runtimeConfig.schemaRead,
       onRetrySchema: () => void runtimeConfig.refreshSchema(),
@@ -461,6 +472,7 @@ export function createConfigPage(
         invalidate();
       },
       onViewStateChange: () => invalidate(),
+      secretFields: configSecretFields(context) as ConfigSecretFields | undefined,
       onFormPatch: withConfigMutation((path: Array<string | number>, value: unknown) =>
         runtimeConfig.patchForm(path, value),
       ),
@@ -624,7 +636,6 @@ export function createConfigPage(
       onCameraRefresh: () => void mediaDeviceOwner.refresh("camera", true),
       onCameraSelect: mediaDeviceOwner.selectCamera,
       gatewayUrl: context.gateway.connection.gatewayUrl,
-      assistantName: applicationConfig.read().assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: renderPageId === "advanced" ? undefined : titleForRoute(renderPageId),
       showSectionDocs: renderPageId !== "communications",
@@ -691,7 +702,7 @@ export function createConfigPage(
       connected = false;
       customThemeImportOwner.retireImport();
       mediaDeviceOwner.retire();
-      clearInterval(countdown);
+      countdown.stop();
       abortRequests();
       if (scrollFrame !== null) {
         cancelAnimationFrame(scrollFrame);
