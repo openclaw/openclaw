@@ -133,6 +133,34 @@ describe("runMessageAction send validation", () => {
       }),
     ).rejects.toThrow("location must be an object");
   });
+
+  it("rejects mixed text and captionless table sends before delivery", async () => {
+    await expect(
+      runDrySend({
+        message: "Contract update",
+        presentation: {
+          blocks: [{ type: "table", headers: ["Contract"], rows: [["Acme"]] }],
+        },
+      }),
+    ).rejects.toThrow(/table blocks require a caption/i);
+  });
+
+  it("allows mixed text and captioned table sends", async () => {
+    const result = await runDrySend({
+      message: "Contract update",
+      presentation: {
+        blocks: [
+          {
+            type: "table",
+            caption: "Contracts",
+            headers: ["Contract"],
+            rows: [["Acme"]],
+          },
+        ],
+      },
+    });
+    expect(result.kind).toBe("send");
+  });
   it.each([
     { text: "<think>private</think>\nThinking\n_summary_\n    indented body" },
     { SendMessage: " \n\t ", content: "    indented body", text: "not selected" },

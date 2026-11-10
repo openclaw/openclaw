@@ -20,6 +20,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import {
+  assertMessagePresentationTablesHaveCaptions,
   hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyPayloadContent,
@@ -123,6 +124,9 @@ export async function buildMessagePayload(params: {
     hasBuffer || Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentSources.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasLegacyInteractiveReplyBlocks(actionParams.interactive);
+  // Captionless tables are dropped by presentation normalization; reject them
+  // here so the send fails loudly instead of delivering without the table.
+  assertMessagePresentationTablesHaveCaptions(actionParams.presentation);
   const rawLocation = actionParams.location;
   // The flat tool schema also carries scheduled-event `location` as a string,
   // and some models pad unused optional slots with blanks. Keep real send locations strict.

@@ -5,6 +5,7 @@ import type {
   ModelPickerAction,
 } from "./payload.js";
 import {
+  assertMessagePresentationTablesHaveCaptions,
   hasReplyChannelData,
   hasReplyContent,
   hasReplyPayloadContent,
@@ -700,5 +701,32 @@ describe("interactive payload helpers", () => {
     { name: "out-of-range row header column", block: { ...table, rowHeaderColumnIndex: 1 } },
   ])("drops table blocks with $name instead of repairing their data", ({ block }) => {
     expect(normalizeMessagePresentation({ blocks: [block] })).toBeUndefined();
+  });
+
+  describe("assertMessagePresentationTablesHaveCaptions", () => {
+    it("rejects captionless table blocks before normalization can drop them", () => {
+      expect(() =>
+        assertMessagePresentationTablesHaveCaptions({
+          blocks: [{ type: "table", headers: ["Contract"], rows: [["Acme"]] }],
+        }),
+      ).toThrow(/table blocks require a caption/i);
+      expect(() =>
+        assertMessagePresentationTablesHaveCaptions({
+          blocks: [{ type: "table", caption: "  ", headers: ["Contract"], rows: [["Acme"]] }],
+        }),
+      ).toThrow(/table blocks require a caption/i);
+    });
+
+    it("allows captioned tables and non-table blocks", () => {
+      expect(() =>
+        assertMessagePresentationTablesHaveCaptions({
+          blocks: [
+            { type: "table", caption: "Contracts", headers: ["Contract"], rows: [["Acme"]] },
+            { type: "text", text: "Contract update" },
+          ],
+        }),
+      ).not.toThrow();
+      expect(() => assertMessagePresentationTablesHaveCaptions(undefined)).not.toThrow();
+    });
   });
 });
