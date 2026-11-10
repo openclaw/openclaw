@@ -404,4 +404,44 @@ describe("Gateway Template Add plan", () => {
     expect(changed.configuredAccess?.desired?.tools.excluded).toContain("web_fetch");
     expect(changed.planIntegrity).not.toBe(projected.planIntegrity);
   });
+
+  it("blocks last-channel automations the scheduler rejects on a multi-channel host", async () => {
+    const source = await readGatewayPackageFixture("incident-response");
+    const config = { agents: { entries: {} } };
+    const review = async (configuredChannels: string[]) =>
+      projectGatewayTemplateAddPlan(
+        await buildGatewayTemplateAddPlan(source, {
+          config,
+          sourceMcpServers: {},
+          configuredChannels,
+          packagePreflight: async () => ({
+            ok: false,
+            code: "test_unavailable",
+            message: "Package install is unavailable in this preview test.",
+          }),
+        }),
+        source,
+        trust,
+        config,
+      );
+    const blockedJobs = (plan: Awaited<ReturnType<typeof review>>) =>
+      plan.scheduledJobs?.jobs.filter((job) => job.blocked).map((job) => job.id);
+
+    const ambiguous = await review(["telegram", "discord"]);
+    expect(ambiguous.blockers).toContainEqual(
+      expect.objectContaining({
+        code: "automation_delivery_channel_ambiguous",
+        path: "$.automations[0].delivery",
+        message: expect.stringContaining("more than one configured channel"),
+      }),
+    );
+    // Owner delivery selects its own route, so only the last-channel job is blocked.
+    expect(blockedJobs(ambiguous)).toEqual(["heartbeat-summary"]);
+
+    const single = await review(["telegram"]);
+    expect(single.blockers.map((blocker) => blocker.code)).not.toContain(
+      "automation_delivery_channel_ambiguous",
+    );
+    expect(blockedJobs(single)).toEqual([]);
+  });
 });

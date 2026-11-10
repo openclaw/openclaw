@@ -4,6 +4,7 @@ import { cronJobDefinitionFromReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { toPublicCronJob } from "../cron/public-job.js";
 import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
+import { findAmbiguousAnnounceDeliveryChannels } from "../cron/service/jobs-validation.js";
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob, CronStoredJob } from "../cron/types.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
@@ -82,7 +83,10 @@ function schedulerJobRecordByDeclarationKey(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-function templateCronGatewayInput(agentId: string, ref: PersistedTemplateCronRef) {
+function templateCronGatewayInput(
+  agentId: string,
+  ref: Pick<PersistedTemplateCronRef, "declarationKey" | "job">,
+) {
   const job = ref.job;
   if ("automation" in job) {
     return { ...job.automation, declarationKey: ref.declarationKey, owner: { agentId } };
@@ -109,6 +113,18 @@ function templateCronGatewayInput(agentId: string, ref: PersistedTemplateCronRef
         }
       : { mode: "none" },
   };
+}
+
+/** Channels that make the scheduler reject this declared automation's delivery. */
+export function templateCronJobAmbiguousDeliveryChannels(
+  agentId: string,
+  job: TemplateCronJob,
+  configuredChannels: readonly string[],
+): string[] | undefined {
+  const input = normalizeCronJobCreate(
+    templateCronGatewayInput(agentId, { declarationKey: `template:${agentId}:${job.id}`, job }),
+  );
+  return input ? findAmbiguousAnnounceDeliveryChannels(input, configuredChannels) : undefined;
 }
 
 export function templateCronGatewayJobMatchesRef(

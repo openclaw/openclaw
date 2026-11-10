@@ -20,6 +20,7 @@ import {
 } from "../../cron/config-revision.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { normalizeCronJobCreate } from "../../cron/normalize.js";
+import { listConfiguredMessageChannels } from "../../infra/outbound/channel-selection.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
@@ -49,6 +50,17 @@ import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/templates-add");
 
+// Matches the scheduler: channel discovery is advisory, so a failure skips the check.
+async function listSchedulerChannels(
+  config: Parameters<typeof listConfiguredMessageChannels>[0],
+): Promise<string[] | undefined> {
+  try {
+    return await listConfiguredMessageChannels(config);
+  } catch {
+    return undefined;
+  }
+}
+
 export const templatesAddHandlers: GatewayRequestHandlers = {
   "templates.add.plan": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateTemplatesAddPlanParams, "templates.add.plan", respond)) {
@@ -70,6 +82,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         ...(params.agentId ? { agentId: params.agentId } : {}),
         config,
         sourceMcpServers: listedMcp.mcpServers,
+        configuredChannels: await listSchedulerChannels(context.getRuntimeConfig()),
       });
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
       respond(true, plan);
@@ -173,9 +186,13 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           if (!listedMcp.ok) {
             throw new Error(listedMcp.error);
           }
+          // The scheduler validates announce delivery against these channels at cron.add.
+          const configuredChannels = await listSchedulerChannels(context.getRuntimeConfig());
+          assertCurrent();
           return {
             config,
             sourceMcpServers: listedMcp.mcpServers,
+            configuredChannels,
           };
         },
         policyConfig: { configPath, env: configEnv },

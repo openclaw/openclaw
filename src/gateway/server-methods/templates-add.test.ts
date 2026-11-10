@@ -142,6 +142,7 @@ it("plans from the persisted roster, not a stale Gateway cache", async () => {
     source,
     config: onDisk,
     sourceMcpServers: {},
+    configuredChannels: [],
   });
   expect(request).toEqual([[true, plan]]);
 });
@@ -171,6 +172,7 @@ it("applies the reviewed coordinate against the persisted roster", async () => {
     expect(await input.getPlanningContext()).toEqual({
       config: onDisk,
       sourceMcpServers: {},
+      configuredChannels: [],
     });
     input.assertCurrent();
     return ready;

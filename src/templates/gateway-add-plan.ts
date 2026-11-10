@@ -62,6 +62,7 @@ export type GatewayTemplateAddPlanningContext = {
   sourceMcpServers: Record<string, Record<string, unknown>>;
   agentId?: string;
   packagePreflight?: TemplatePackagePreflight;
+  configuredChannels?: readonly string[];
 };
 
 export async function buildGatewayTemplateAddPlan(
@@ -105,6 +106,7 @@ export async function buildGatewayTemplateAddPlan(
       existingAgentIds,
       existingWorkspacePaths: existingWorkspaces.map((existing) => existing.workspace),
       existingMcpServers: context.sourceMcpServers,
+      configuredChannels: context.configuredChannels,
       packagePreflight:
         context.packagePreflight ??
         ((pkg, destinationWorkspace) =>

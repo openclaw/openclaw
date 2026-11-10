@@ -24,6 +24,14 @@ import { mcpServerSchema } from "./schema.js";
 import { collectTemplateSkillWarningReviews } from "./skill-warning-review.js";
 import type { TemplateAddPlan, TemplateAddPlanAction, TemplateReadResult } from "./types.js";
 
+// Reviewed blockers carry fixed text; raw plan diagnostics can name local paths.
+const TEMPLATE_BLOCKER_MESSAGES: Partial<Record<string, string>> = {
+  plugin_disabled:
+    "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed.",
+  automation_delivery_channel_ambiguous:
+    'This automation announces to the last channel, but this host has more than one configured channel and Templates cannot name one. The publisher must change its delivery to { "mode": "none" } before this Template can be added here.',
+};
+
 type SkillArtifact = NonNullable<
   Extract<TemplateActionEffect, { type: "skill-package" }>["desired"]
 >;
@@ -332,9 +340,8 @@ export function projectTemplateAddPlan(
           code: diagnostic.code,
           path: diagnostic.path,
           message:
-            diagnostic.code === "plugin_disabled"
-              ? "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed."
-              : "Resolve this OpenClaw state conflict before continuing.",
+            TEMPLATE_BLOCKER_MESSAGES[diagnostic.code] ??
+            "Resolve this OpenClaw state conflict before continuing.",
         })),
         ...effectBlockers,
         ...requestedPolicyBlockers(plan.agent.config, configuredAccess),

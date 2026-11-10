@@ -214,6 +214,11 @@ and private job scratch instead of installing heartbeat configuration. Legacy
 in the monitor's scratch. An `every: 0m` declaration stays disabled.
 The Add review shows each converted job with its interval and owner delivery;
 existing cron schedules and `none` or last-channel delivery keep their meaning.
+On a Gateway with more than one configured channel, the scheduler requires an
+explicit channel for an isolated automation that announces its result.
+Templates cannot name a channel, so the Gateway Add review blocks such a
+Template before Add creates the agent; its publisher must change that
+automation's delivery to `none` before it can be added there.
 Gateway review responses represent interval schedules as `{ everyMs }`, where
 `everyMs` is a positive integer, and
 owner delivery as `owner`, alongside the existing `{ cron, timezone }` schedules

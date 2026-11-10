@@ -15,6 +15,7 @@ import {
   findTemplateExtensionPackageCollisions,
   planTemplateExtensions,
 } from "./application-plan.js";
+import { templateCronJobAmbiguousDeliveryChannels } from "./cron.js";
 import { digestTemplateBytes, digestTemplateValue } from "./digest.js";
 import { digestTemplateMcpServer } from "./mcp.js";
 import { planTemplatePortableAutomation } from "./portable-automation.js";
@@ -51,6 +52,8 @@ export type TemplateAddPlanContext = {
   existingMcpServers?: Record<string, Record<string, unknown>>;
   packagePreflight?: TemplatePackagePreflight;
   sourceReferenceRoot?: string;
+  /** Channels the Gateway scheduler counts when it validates announce delivery. */
+  configuredChannels?: readonly string[];
 };
 
 function sourceReferencePath(root: string, path: string): string {
@@ -590,7 +593,19 @@ export async function buildTemplateAddPlan(params: {
   });
 
   // Strict v1 validation permits only deterministic main or isolated targets.
-  for (const job of params.manifest.automations) {
+  for (const [index, job] of params.manifest.automations.entries()) {
+    const ambiguousChannels = context.configuredChannels
+      ? templateCronJobAmbiguousDeliveryChannels(finalId, job, context.configuredChannels)
+      : undefined;
+    if (ambiguousChannels) {
+      blockers.push(
+        blocker(
+          "automation_delivery_channel_ambiguous",
+          `$.automations[${index}].delivery`,
+          `Automation ${JSON.stringify(job.id)} announces to the last channel, but this host has multiple configured channels (${ambiguousChannels.join(", ")}) and Templates cannot name one.`,
+        ),
+      );
+    }
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -604,7 +619,7 @@ export async function buildTemplateAddPlan(params: {
           ? { deliveryResolution: "local-channel-state:last" }
           : {}),
       },
-      blocked: false,
+      blocked: ambiguousChannels !== undefined,
     });
     capabilityChanges.push(
       templateAddCapabilityChange({
