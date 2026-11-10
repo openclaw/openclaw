@@ -1,0 +1,2 @@
+14
+# Exercise anonymous HTTP redirect and preserve recognized-query validation without session reads.
