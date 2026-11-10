@@ -383,7 +383,6 @@
 }
 
 .logbook-ask__form > .btn {
-  height: var(--settings-control-height);
   padding-block: 0;
 }
 
