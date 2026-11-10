@@ -647,24 +647,24 @@ it.for(["resume", "followup", "failed-reload"] as const)(
       vi.restoreAllMocks();
       await state.cleanup();
       stage("cleanup-complete");
-      assertManagedHandoffTestConsumer(
-        handoffBinding,
-        process.pid,
-        path.join(process.cwd(), "src/infra"),
-      );
-      await fs.writeFile(
-        path.join(handoffBinding.directory, `reload-case-${scenario}.json`),
-        JSON.stringify({
-          scenario,
-          pid: process.pid,
-          runtime: process.versions.bun ? "bun" : "node",
-          sendStarts,
-          effects,
-          wakes: wakes.length,
-          databasePath: handoffBinding.databasePath,
-          pauseRetirements,
-        }),
-      );
     }
+    assertManagedHandoffTestConsumer(
+      handoffBinding,
+      process.pid,
+      path.join(process.cwd(), "src/infra"),
+    );
+    await fs.writeFile(
+      path.join(handoffBinding.directory, `reload-case-${scenario}.json`),
+      JSON.stringify({
+        scenario,
+        pid: process.pid,
+        runtime: process.versions.bun ? "bun" : "node",
+        sendStarts,
+        effects,
+        wakes: wakes.length,
+        databasePath: handoffBinding.databasePath,
+        pauseRetirements,
+      }),
+    );
   },
 );
