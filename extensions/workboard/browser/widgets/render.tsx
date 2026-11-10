@@ -6,11 +6,12 @@ import {
   matchesBoardFilter,
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "../lib/workboard/board-filter.ts";
+import { workboardColumnPresentation } from "../lib/workboard/board-presentation.ts";
 import { groupWorkboardCardsByStatus } from "../lib/workboard/derived.ts";
 import { WORKBOARD_STATUSES } from "../lib/workboard/types.ts";
 import { workboardPageTarget } from "../pages/workboard/page-target.ts";
-import { WorkboardColumn } from "../pages/workboard/view-column.tsx";
-import type { WorkboardProps } from "../pages/workboard/view-helpers.tsx";
+import { WorkboardColumn, WorkboardOtherStatusesColumn } from "../pages/workboard/view-column.tsx";
+import { workboardViewState, type WorkboardProps } from "../pages/workboard/view-helpers.tsx";
 import type { WorkboardWidgetModel } from "./runtime.ts";
 
 type WidgetProps = { model: WorkboardWidgetModel; revision: number };
@@ -250,6 +251,12 @@ export function WorkboardBoardWidget(props: WidgetProps) {
     onOpenSession: (target) => props.model.host.sessions.open(target),
     onRequestUpdate: () => props.model.runtime.notify(),
   };
+  // A widget for one board follows that board's columns, like its page.
+  const state = workboardViewState(() => workboard);
+  const presentation = createMemo(() => workboardColumnPresentation(state(), filter()));
+  const otherCards = createMemo(() =>
+    presentation().otherStatuses.flatMap((status) => byStatus().get(status) ?? []),
+  );
   return (
     <Show when={isAvailable(props.model)} fallback={<WidgetAvailability {...props} />}>
       <section class="workboard-widget-board" data-test-id="workboard-board-widget">
@@ -262,7 +269,7 @@ export function WorkboardBoardWidget(props: WidgetProps) {
         </header>
         <WidgetPagination {...props} />
         <div class="workboard-board workboard-board--compact workboard-widget-board__columns">
-          <For each={props.model.statuses} keyed={(status) => status}>
+          <For each={presentation().statuses} keyed={(status) => status}>
             {(status) => (
               <WorkboardColumn
                 workboard={workboard}
@@ -272,6 +279,13 @@ export function WorkboardBoardWidget(props: WidgetProps) {
               />
             )}
           </For>
+          {otherCards().length ? (
+            <WorkboardOtherStatusesColumn
+              workboard={workboard}
+              cards={otherCards()}
+              surface="widget"
+            />
+          ) : null}
         </div>
       </section>
     </Show>
