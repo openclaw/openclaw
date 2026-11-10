@@ -10,6 +10,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-bootstrap-contract.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-user-avatar-route.js";
 import { seedApprovedOperatorReadPairing } from "./server.auth.control-ui.fixtures.test-support.js";
 import {
@@ -27,8 +28,14 @@ import {
   waitForWsClose,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
+import {
+  getTestPluginRegistry,
+  resetTestPluginRegistry,
+  setTestPluginRegistry,
+} from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
+afterEach(resetTestPluginRegistry);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 test("delegated browsers retain profile identity and enforce scopes and current authority", async () => {
@@ -58,6 +65,30 @@ test("delegated browsers retain profile identity and enforce scopes and current 
       },
     },
   );
+  const pluginPath = "/plugins/delegation-proof";
+  setTestPluginRegistry({
+    ...getTestPluginRegistry(),
+    controlUiDescriptors: [
+      {
+        pluginId: "delegation-proof",
+        source: "test",
+        descriptor: { surface: "tab", id: "proof", label: "Proof", path: pluginPath },
+      },
+    ],
+    httpRoutes: [
+      {
+        pluginId: "delegation-proof",
+        source: "test",
+        path: pluginPath,
+        auth: "gateway",
+        match: "exact",
+        handler: async (_req, res) => {
+          res.end("proof");
+          return true;
+        },
+      },
+    ],
+  });
   await withGatewayServer(
     async ({ port }) => {
       const sockets: WebSocket[] = [];
@@ -158,6 +189,31 @@ test("delegated browsers retain profile identity and enforce scopes and current 
           body: expect.stringContaining("missing scope"),
         });
         expect((await readHttp("/v1/models", "c", "operator.admin")).status).toBe(200);
+        // The same eligible tab issues a cookie for static proxy admins, never delegated admins.
+        const staticBootstrap = await fetch(
+          `http://127.0.0.1:${port}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
+          {
+            headers: {
+              ...TRUSTED_BROWSER_HEADERS,
+              "x-occ-identity": "external@example.test",
+              "x-openclaw-scopes": "operator.admin",
+            },
+          },
+        );
+        expect(staticBootstrap.status).toBe(200);
+        expect(staticBootstrap.headers.getSetCookie()).toEqual([
+          expect.stringContaining(`Path=${pluginPath}`),
+        ]);
+        expect(await staticBootstrap.json()).toMatchObject({
+          pluginFrameGrants: [{ pluginId: "delegation-proof", path: pluginPath, match: "exact" }],
+        });
+        const delegatedBootstrap = await readHttp(
+          CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+          "b",
+          "operator.admin",
+        );
+        expect(delegatedBootstrap).toMatchObject({ status: 200, cookies: [] });
+        expect(JSON.parse(delegatedBootstrap.body).pluginFrameGrants).toEqual([]);
         const reconnect = await connect("a", "operator.sessions.write");
         expect(
           (await rpcReq<UsersSelfResult>(reconnect.ws, "users.self", {})).payload?.profile.id,
