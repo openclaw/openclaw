@@ -524,6 +524,7 @@ export function createAgentWorkerOperationLoaders(
     "session.transcript.rawDelta.read": loadAgentTranscriptReadOperations,
     "session.transcript.watermark.read": loadAgentTranscriptReadOperations,
     "session.transcript.visibleDelta.read": loadAgentTranscriptReadOperations,
+    "session.transcript.replayGroups.read": loadAgentTranscriptReadOperations,
     "session.transcript.memoryCapture.read": loadAgentTranscriptReadOperations,
     "session.transcript.anchors.read": loadAgentTranscriptReadOperations,
     "session.transcript.coldMetadata.read": loadAgentTranscriptReadOperations,

@@ -649,9 +649,15 @@ describe("Control UI build chunking", () => {
       [optionalStyle, ".optional-fixture { color: orange; }"],
       [inlineStyle, ".optional-fixture { color: orange; }"],
     ]);
-    const sharedHelpers = ["../components/solid/markdown-html.tsx", "../lib/text-diff.ts"].map(
-      modulePath,
-    );
+    const sharedHelpers = [
+      "../components/solid/markdown-html.tsx",
+      "../lib/text-diff.ts",
+      "../pages/chat/components/chat-message-media.ts",
+      "../pages/chat/components/chat-message-deferred.tsx",
+      "../pages/chat/components/widget-preview-layout.ts",
+      "../lib/chat/youtube-video.ts",
+      "../lib/gateway-client-kind.ts",
+    ].map(modulePath);
     const helperPage = "\0helper-only-route";
     for (const [page, helpers, prefix, name, value] of [
       [helperPage, sharedHelpers, "helper", "helpers", "shared"],
