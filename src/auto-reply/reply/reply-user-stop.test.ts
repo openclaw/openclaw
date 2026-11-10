@@ -75,7 +75,7 @@ it.each([
 it("lets one of two racing turns claim a Stop, and no later goal step", async () => {
   const { turn } = await admitted({ stored: stopOf("stopped", 5) });
   const raced = await Promise.all([turn().claim(), turn().claim()]);
-  expect(raced.toSorted()).toEqual([false, true]);
+  expect(raced.toSorted((a, b) => Number(a) - Number(b))).toEqual([false, true]);
   // A goal continuation admitted after the claiming turn read the same Stop.
   expect(await turn().claim()).toBe(false);
 });
