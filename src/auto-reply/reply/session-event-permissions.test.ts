@@ -248,6 +248,7 @@ it.for([
   "retained-overrides-downgrade",
   "retained-database-replacement",
   "retained-config-downgrade",
+  "retained-channel-config-downgrade",
   "unrelated-agent-config",
   "remapped-workspace",
   "remapped-guarded",
@@ -262,8 +263,12 @@ it.for([
       skip("Windows cannot replace an open database file");
     }
     await runEventFixture("session-event-permissions", onTestFinished, async (state) => {
+      const channelDowngrade = change === "retained-channel-config-downgrade";
       const config = await configureEventState(state, {
         tools: { profile: "coding", codeMode: false, toolSearch: false },
+        ...(channelDowngrade
+          ? { channels: { discord: { enabled: true, actions: { stickers: true } } } }
+          : {}),
       });
       await fs.mkdir(state.workspaceDir, { recursive: true });
       const filePath = path.join(state.workspaceDir, "completion.txt");
@@ -365,6 +370,11 @@ it.for([
                   fsSync.renameSync(database.path, foreignPath);
                   fsSync.renameSync(originalPath, database.path);
                 };
+              } else if (channelDowngrade) {
+                setRuntimeConfigSnapshot({
+                  ...config,
+                  channels: { discord: { enabled: true, actions: { stickers: false } } },
+                });
               } else {
                 config.tools = { ...config.tools, deny: ["write"] };
                 setRuntimeConfigSnapshot(config);

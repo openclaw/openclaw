@@ -203,14 +203,18 @@ export function captureSessionEventConfigRelevance(
           modelPolicy: selection ? undefined : resolveAgentEntry({ agents }, agentId)?.modelPolicy,
         },
       },
-      channels: {
-        defaults: channelConfig?.defaults,
-        selected: channels.map((id) => [
-          id,
-          channelConfig?.[id],
-          channelConfig?.modelByChannel?.[id],
-        ]),
-      },
+      // Only scheduled message invocations re-admit off-route channel policy.
+      // Unscheduled tools retain config, so every channel remains authority-bearing.
+      channels: job
+        ? {
+            defaults: channelConfig?.defaults,
+            selected: channels.map((id) => [
+              id,
+              channelConfig?.[id],
+              channelConfig?.modelByChannel?.[id],
+            ]),
+          }
+        : channelConfig,
       activation: resolveChannelConfigActivationFacts({ channels: channelConfig }),
     });
     const relevantPath = (path: string, profiles: ReadonlySet<string>) => {
@@ -238,6 +242,7 @@ export function captureSessionEventConfigRelevance(
         return normalizeAgentId(tokens[2]) === normalizeAgentId(agentId);
       }
       return (
+        !job ||
         tokens?.[0] !== "channels" ||
         typeof tokens[1] !== "string" ||
         tokens[1] === "defaults" ||
