@@ -369,7 +369,11 @@ export async function runActiveReplySteer(
       steeringMode: "all",
       isInboundUserMessage,
       allowPendingUserInputAnswer: steeringAuthority.allowPendingUserInputAnswer,
-      terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
+      // Optional human corrections share the incumbent output owner without adding a reply duty.
+      terminalReplyExpectation:
+        isInboundUserMessage && followupRun.run.terminalReplyExpectation === "optional"
+          ? undefined
+          : followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: steeringAuthority.toolAuthorityFingerprint,
       ...(steeringAuthority.collaborativeCaller
         ? {
