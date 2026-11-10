@@ -8,21 +8,28 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
-export function renderChatLoading(mobile: boolean, route?: boolean, children?: JSX.Element) {
-  if (mobile && route) {
-    return <ChatConversationLoading route />;
-  }
+export function ChatThreadLoading(props: {
+  mobile: boolean;
+  route?: boolean;
+  children?: JSX.Element;
+}) {
   return (
-    <div class="chat-thread-inner">
-      {children}
-      {mobile ? (
-        <ChatConversationLoading route={false} />
-      ) : route ? (
-        <LoadingState messagesOnly />
+    <>
+      {props.mobile && props.route ? (
+        <ChatConversationLoading route />
       ) : (
-        <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
+        <div class="chat-thread-inner">
+          {props.children}
+          {props.mobile ? (
+            <ChatConversationLoading route={false} />
+          ) : props.route ? (
+            <LoadingState messagesOnly />
+          ) : (
+            <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
+          )}
+        </div>
       )}
-    </div>
+    </>
   );
 }
 

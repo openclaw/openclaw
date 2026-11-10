@@ -34,7 +34,7 @@ import {
   subscribeExpansionState,
 } from "../chat-thread.ts";
 import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
-import { ChatConversationLoading, renderChatLoading } from "./chat-conversation-loading.tsx";
+import { ChatConversationLoading, ChatThreadLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
@@ -163,7 +163,7 @@ export function ChatThread(input: ChatThreadInput) {
                   ref={[elementRef(input.bindViewport)]}
                 >
                   {input.props.loading ? (
-                    renderChatLoading(mobile(), input.props.routeLoadingSkeleton)
+                    <ChatThreadLoading mobile={mobile()} route={input.props.routeLoadingSkeleton} />
                   ) : (
                     <ChatConversationLoading route />
                   )}
@@ -222,7 +222,8 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
-  const geometry = createMemo(() => projectOwner(input.transcript, (owner) => owner));
+  const transcript = createMemo(() => input.transcript);
+  const geometry = createMemo(() => projectOwner(transcript(), (owner) => owner));
   const presentation = createMemo(
     () =>
       input.transcript.renderSession(input.props.sessionKey, (session) => ({
@@ -268,7 +269,9 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
     return projection;
   });
   const showLoadingSkeleton = createMemo(() => current().showLoadingSkeleton);
-  const routeLoading = () => input.props.routeLoadingSkeleton && showLoadingSkeleton();
+  const isEmpty = createMemo(() => current().isEmpty);
+  const searchOpen = createMemo(() => current().searchOpen);
+  const routeLoading = createMemo(() => input.props.routeLoadingSkeleton && showLoadingSkeleton());
   const commentPins = () =>
     input.props.commentAttachments?.some((attachment) => attachment.selectionAnnotation);
   const prefetchRef = createLinkReaderPrefetchRef(() => [
@@ -298,14 +301,18 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
     // Native range changes redraw this island without preparing the whole pane.
     geometry().read();
     if (showLoadingSkeleton()) {
-      return renderChatLoading(mobile(), routeLoading(), sentinel());
+      return (
+        <ChatThreadLoading mobile={mobile()} route={routeLoading()}>
+          {sentinel()}
+        </ChatThreadLoading>
+      );
     }
-    if (current().isEmpty) {
+    if (isEmpty()) {
       return (
         <div class="chat-thread-inner">
           {sentinel()}
           {historyHeader()?.content}
-          {current().searchOpen ? (
+          {searchOpen() ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>
           ) : (
             <div class="agent-chat__empty">{t("chat.thread.noMessages")}</div>
@@ -315,11 +322,12 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
     }
     return current().renderRows(sentinel(), historyHeader());
   });
-  const announcement = () => {
-    // The row owner records the accepted announcement while rendering its rows.
+  const announcement = createMemo(() => {
+    // Rows retain their DOM identity; each new projection can still change the announcement.
+    current();
     contents();
     return presentation().session.liveAnnouncementText;
-  };
+  });
   return (
     <>
       <Show when={input.presented && root()}>
