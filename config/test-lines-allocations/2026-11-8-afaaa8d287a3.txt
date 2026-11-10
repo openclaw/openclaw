@@ -1,0 +1,2 @@
+3
+# Assert child-only TMPDIR normalization at the real managed Chrome launch boundary.

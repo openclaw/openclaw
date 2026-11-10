@@ -57,7 +57,6 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-
 import { launchOpenClawChrome, resolveOpenClawUserDataDir } from "./chrome.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 
@@ -89,6 +88,8 @@ it.each([
       vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
       fixture.processListingBytes = 2 * 1024 * 1024;
     }
+    const longTmpDir = `/tmp/${"gateway-".repeat(10)}`;
+    vi.stubEnv("TMPDIR", longTmpDir);
     vi.stubEnv("MALLOC_CONF", "background_thread:true");
     vi.stubEnv("LD_PRELOAD", "/usr/lib/libjemalloc.so.2:/tmp/libother.so");
 
@@ -108,6 +109,7 @@ it.each([
     });
     fixture.spawn.mockImplementation(
       (_command, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+        expect(options.env.TMPDIR).toBe(process.platform === "linux" ? "/tmp" : longTmpDir);
         expect(options.env.MALLOC_CONF).toBeUndefined();
         expect(options.env.LD_PRELOAD).toBe("/tmp/libother.so");
         expect(process.env.MALLOC_CONF).toBe("background_thread:true");
@@ -131,6 +133,7 @@ it.each([
       platform,
     });
     expect(fixture.spawn).toHaveBeenCalledTimes(1);
+    expect(process.env.TMPDIR).toBe(longTmpDir);
     expect(running).toMatchObject({ headless: true, headlessSource: "default", proc });
     if (process.platform !== "win32") {
       expect(fs.statSync(preferencesPath).mode & 0o777).toBe(0o600);

@@ -25,6 +25,12 @@ the browser process.
 
 Other common Linux launch failures:
 
+- `Socket path too long`: Chromium cannot fit its process-singleton Unix socket
+  under a long temporary-directory path. Managed launches use `/tmp` when the
+  inherited temp path exceeds 50 bytes, leaving room for Chromium's private
+  directory and socket name. This does not change the Gateway's environment
+  or managed browser profile directory.
+
 - `GPU process isn't usable. Goodbye.`: Chromium exhausted its GPU fallback
   options. Check the preceding Chrome stderr for the first GPU-process failure.
   Inherited jemalloc `LD_PRELOAD` with `MALLOC_CONF=background_thread:true`
