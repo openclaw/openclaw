@@ -64,11 +64,18 @@ ${body}`,
     String(f.creatorPid),
     f.cache,
   ];
-  if (!leased) return runWithPrAnchor(f.anchor, args, { env: f.env });
-  const created = spawnSync(
-    f.node,
-    [resolve("scripts/pr-lib/cache-lifetime.mjs"), "create-lifetime"],
-    { env: f.env, encoding: "utf8" },
+  if (!leased) {
+    return runWithPrAnchor(f.anchor, args, { env: f.env });
+  }
+  const created = runWithPrAnchor(
+    f.anchor,
+    [
+      resolve("scripts/pr-lib/cache-lifetime.mjs"),
+      "create-lifetime",
+      f.anchor,
+      String(f.creatorPid),
+    ],
+    { env: f.env },
   );
   expect(created.status, created.stderr).toBe(0);
   const lease = created.stdout;
@@ -82,6 +89,21 @@ ${body}`,
       encoding: "utf8",
     });
     expect(shared.status, shared.stderr).toBe(0);
+    const registered = spawnSync(
+      f.node,
+      [
+        resolve("scripts/pr-lib/cache-lifetime.mjs"),
+        "register-lifetime",
+        f.anchor,
+        String(f.creatorPid),
+      ],
+      {
+        env: { ...f.env, OPENCLAW_PR_LIFETIME_FILE: lease },
+        stdio,
+        encoding: "utf8",
+      },
+    );
+    expect(registered.status, registered.stderr).toBe(0);
     return spawnSync(f.node, args, {
       env: { ...f.env, OPENCLAW_PR_LIFETIME_FILE: lease },
       stdio,
@@ -113,20 +135,80 @@ function transitions(cache: string) {
 }
 
 describePosix("PR cache crash collection", () => {
-  it("protects a lazy reader after its creator is killed and settles after the last child exits", () => {
-    const f = fixture();
-    const parent = join(f.home, "creator.mjs");
-    writeFileSync(
-      parent,
-      `
+  it.each(["intent", "file", "ready"])(
+    "reclaims a zero-hold operation interrupted after lifetime %s",
+    (phase) => {
+      const f = fixture();
+      const result =
+        phase === "ready"
+          ? child(f, "", true)
+          : runWithPrAnchor(
+              f.anchor,
+              [
+                "--input-type=module",
+                "-e",
+                `
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const open = fs.openSync;
+fs.openSync = function(path, ...args) {
+  if (String(path).split("/").at(-1).startsWith("lifetime-")) {
+    if (${JSON.stringify(phase)} === "file") open.call(this, path, ...args);
+    process.kill(process.pid, "SIGKILL");
+  }
+  return open.call(this, path, ...args);
+};
+syncBuiltinESMExports();
+process.argv = [process.execPath, process.argv[1], "create-lifetime", process.argv[2], process.argv[3]];
+await import(${JSON.stringify(source)});
+`,
+                resolve("scripts/pr-lib/cache-lifetime.mjs"),
+                f.anchor,
+                String(f.creatorPid),
+              ],
+              { env: f.env },
+            );
+      if (phase === "ready") {
+        expect(result.status, result.stderr).toBe(0);
+      } else {
+        expect(result.signal, result.stderr).toBe("SIGKILL");
+      }
+      expect(readdirSync(f.cache).filter((name) => name.startsWith("lifetime-"))).toHaveLength(
+        phase === "intent" ? 0 : 1,
+      );
+      sweep(f.cache);
+      expect(existsSync(f.anchor)).toBe(false);
+      expect(readdirSync(f.cache).filter((name) => name.startsWith("lifetime-"))).toEqual([]);
+      const db = new DatabaseSync(join(f.cache, "lifetime.sqlite"), { readOnly: true });
+      try {
+        expect(db.prepare("SELECT * FROM pending_lifetimes").all()).toEqual([]);
+        expect(db.prepare("SELECT * FROM operation_lifetimes").all()).toEqual([]);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it.each(["hold", "zero-hold"])(
+    "protects a lazy %s reader after its creator is killed until the last child exits",
+    (phase) => {
+      const f = fixture();
+      const parent = join(f.home, "creator.mjs");
+      writeFileSync(
+        parent,
+        `
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { claimCreatedAnchor, stageDependencyCache, publishDependencyCache, withDependencyCacheLock } from ${JSON.stringify(source)};
 const anchor = claimCreatedAnchor(process.env.ANCHOR, Number(process.env.CREATOR));
 const cache = process.env.CACHE, entry = cache + "/" + "a".repeat(64);
+let packagePath = anchor.path + "/package";
+if (${JSON.stringify(phase)} === "hold") {
 const stage = withDependencyCacheLock(cache, lock => stageDependencyCache(lock, entry, anchor));
 writeFileSync(stage + "/package", "still readable");
 withDependencyCacheLock(cache, lock => publishDependencyCache(lock, stage, entry, anchor));
+packagePath = entry + "/package";
+} else writeFileSync(packagePath, "still readable");
 spawn(process.execPath, ["-e", ${JSON.stringify(`
 const { readFileSync, readSync } = require("node:fs");
 console.log("ready " + process.pid);
@@ -135,34 +217,28 @@ while (readSync(3, command, 0, 1, null)) {
   if (command[0] === 113) break;
   console.log(readFileSync(process.env.PACKAGE, "utf8"));
 }
-`)}], { detached: true, env: { PACKAGE: entry + "/package" }, stdio: ["ignore", 1, 2, Number(process.env.CONTROL_FD)] });
+`)}], { detached: true, env: { PACKAGE: packagePath }, stdio: ["ignore", 1, 2, Number(process.env.CONTROL_FD)] });
 setInterval(() => {}, 1000);
 `,
-    );
-    const collector = `import { rmSync } from "node:fs"; import { collectUnusedDependencyCaches, withDependencyCacheLock } from ${JSON.stringify(source)}; for (const path of withDependencyCacheLock(process.argv[1], lock => collectUnusedDependencyCaches(lock))) rmSync(path, { recursive: true });`;
-    const create = resolve("scripts/pr-lib/cache-lifetime.mjs");
-    const result = spawnSync(
-      "python3",
-      [
-        "-I",
-        "-S",
-        "-B",
-        "-c",
-        `
+      );
+      const collector = `import { rmSync } from "node:fs"; import { collectUnusedDependencyCaches, withDependencyCacheLock } from ${JSON.stringify(source)}; for (const path of withDependencyCacheLock(process.argv[1], lock => collectUnusedDependencyCaches(lock))) rmSync(path, { recursive: true });`;
+      const create = resolve("scripts/pr-lib/cache-lifetime.mjs");
+      const result = spawnSync(
+        "python3",
+        [
+          "-I",
+          "-S",
+          "-B",
+          "-c",
+          `
 import fcntl,json,os,signal,sqlite3,subprocess,sys
-node, home, cache, parent, preload, create, collector = sys.argv[1:]
+node, home, cache, parent, preload, create, collector, phase = sys.argv[1:]
 env = dict(os.environ, HOME=home)
-lease = subprocess.check_output([node,create,"create-lifetime"],env=env,text=True)
-fd = os.open(lease,os.O_RDWR)
-os.dup2(fd,7)
-if fd != 7: os.close(fd)
-fcntl.flock(7,fcntl.LOCK_SH)
 read_fd,write_fd = os.pipe()
-child_env = dict(env,NODE=node,PARENT=parent,CACHE=cache,FIXTURE_HOME=home,
-    OPENCLAW_PR_LIFETIME_FILE=lease,NODE_OPTIONS="--require "+json.dumps(preload),CONTROL_FD=str(read_fd))
-shell = 'ANCHOR="$FIXTURE_HOME/openclaw-pr-anchor-v3.$$.live"; mkdir -m 700 "$ANCHOR"; exec 9<"$ANCHOR"; CREATOR=$$; export ANCHOR CREATOR; exec "$NODE" "$PARENT"'
-child = subprocess.Popen(["/bin/sh","-c",shell],env=child_env,pass_fds=(7,read_fd),stdout=subprocess.PIPE,text=True)
-os.close(7)
+child_env = dict(env,NODE=node,PARENT=parent,CACHE=cache,FIXTURE_HOME=home,CREATE=create,PRELOAD=preload,
+    CONTROL_FD=str(read_fd),PROCESS_HELPER=${JSON.stringify(processHelper)})
+shell = 'ANCHOR="$FIXTURE_HOME/openclaw-pr-anchor-v3.$$.live"; mkdir -m 700 "$ANCHOR"; exec 9<"$ANCHOR"; CREATOR=$$; export ANCHOR CREATOR; OPENCLAW_PR_LIFETIME_FILE=$("$NODE" "$CREATE" create-lifetime "$ANCHOR" "$$"); export OPENCLAW_PR_LIFETIME_FILE; exec 7<>"$OPENCLAW_PR_LIFETIME_FILE"; python3 -I -S -B "$PROCESS_HELPER" shared 7; "$NODE" "$CREATE" register-lifetime "$ANCHOR" "$$"; NODE_OPTIONS="--require $PRELOAD"; export NODE_OPTIONS; exec "$NODE" "$PARENT"'
+child = subprocess.Popen(["/bin/sh","-ec",shell],env=child_env,pass_fds=(read_fd,),stdout=subprocess.PIPE,text=True)
 os.close(read_fd)
 reader = None
 try:
@@ -170,6 +246,8 @@ try:
     assert ready.startswith("ready "), ready
     reader = int(ready.split()[1])
     anchor = home + "/openclaw-pr-anchor-v3." + str(child.pid) + ".live"
+    with sqlite3.connect(cache+"/lifetime.sqlite") as db:
+        lease = db.execute("SELECT lease_path FROM operation_lifetimes").fetchone()[0]
     child.kill()
     child.wait()
     subprocess.run([node,"--input-type=module","-e",collector,cache],env=env,check=True)
@@ -177,16 +255,19 @@ try:
     os.write(write_fd,b"r")
     assert child.stdout.readline().strip() == "still readable"
     with sqlite3.connect(cache+"/lifetime.sqlite") as db:
-        assert db.execute("SELECT count(*) FROM holds").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM holds").fetchone()[0] == (1 if phase == "hold" else 0)
     os.write(write_fd,b"q")
     with open(lease,"r+") as unlocked:
         fcntl.flock(unlocked,fcntl.LOCK_EX)
     reader = None
     subprocess.run([node,"--input-type=module","-e",collector,cache],env=env,check=True)
     assert not os.path.exists(anchor)
+    assert not os.path.exists(lease)
     with sqlite3.connect(cache+"/lifetime.sqlite") as db:
         assert db.execute("SELECT count(*) FROM holds").fetchone()[0] == 0
-        assert db.execute("SELECT settled FROM installations").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM operation_lifetimes").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM pending_lifetimes").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM installations WHERE settled = 0").fetchone()[0] == 0
     print("protected-until-last-child-exited")
 finally:
     os.close(write_fd)
@@ -196,19 +277,21 @@ finally:
         try: os.kill(reader,signal.SIGKILL)
         except ProcessLookupError: pass
 `,
-        f.node,
-        f.home,
-        f.cache,
-        parent,
-        resolve("scripts/pr-lib/dependency-lifetime-inherit.cjs"),
-        create,
-        collector,
-      ],
-      { env: f.env, encoding: "utf8", timeout: 20_000 },
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("protected-until-last-child-exited");
-  });
+          f.node,
+          f.home,
+          f.cache,
+          parent,
+          resolve("scripts/pr-lib/dependency-lifetime-inherit.cjs"),
+          create,
+          collector,
+          phase,
+        ],
+        { env: f.env, encoding: "utf8", timeout: 20_000 },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("protected-until-last-child-exited");
+    },
+  );
 
   it.each(["install", "hold"])("reclaims a SIGKILLed operation after %s", (phase) => {
     const f = fixture();
@@ -303,8 +386,9 @@ try {
 
   it("replays committed retirement intent after filesystem detach fails", () => {
     const f = fixture();
-    for (let index = 0; index < 5; index++)
+    for (let index = 0; index < 5; index++) {
       createSettledPrCacheEntry(f.cache, String(index).repeat(64));
+    }
     const result = child(
       f,
       `

@@ -60,7 +60,7 @@ async function produce(args) {
 
 function census(root) {
   const cache = cachePath(root);
-  const names = readdirSync(cache).sort();
+  const names = readdirSync(cache).toSorted();
   const db = new DatabaseSync(join(cache, "lifetime.sqlite"), { readOnly: true });
   try {
     const count = (sql) => Number(db.prepare(sql).get().count);
@@ -90,7 +90,9 @@ function storage(root) {
     const path = pending.pop();
     const stat = lstatSync(path);
     if (stat.isDirectory()) {
-      for (const name of readdirSync(path)) pending.push(join(path, name));
+      for (const name of readdirSync(path)) {
+        pending.push(join(path, name));
+      }
     } else if (stat.isFile()) {
       files++;
       logicalBytes += stat.size;
@@ -100,9 +102,9 @@ function storage(root) {
   return { files, logicalBytes, allocatedBytes };
 }
 
-async function setup(root, ownerPath, files, bytes) {
-  mkdirSync(root, { mode: 0o700 });
-  root = realpathSync(root);
+async function setup(directory, ownerPath, files, bytes) {
+  mkdirSync(directory, { mode: 0o700 });
+  const root = realpathSync(directory);
   const owner = await import(pathToFileURL(ownerPath).href);
   const cache = cachePath(root);
   owner.withDependencyCacheLock(cache, () => {});
@@ -130,12 +132,16 @@ async function setup(root, ownerPath, files, bytes) {
       ],
       { env: { ...process.env, HOME: root, OPENCLAW_PR_LIFETIME_FILE: "" }, encoding: "utf8" },
     );
-    if (result.error || result.status !== 0)
+    if (result.error || result.status !== 0) {
       throw new Error(result.stderr || String(result.error || result.status));
+    }
   };
-  for (let index = 0; index < 20; index++)
+  for (let index = 0; index < 20; index++) {
     worker(index < 15 ? "publish" : "settle", index, count(index));
-  for (let index = 0; index < 13; index++) worker("hold", index, 0);
+  }
+  for (let index = 0; index < 13; index++) {
+    worker("hold", index, 0);
+  }
   for (let index = 20; index < 46; index++) {
     const path = join(cache, key("seeded-legacy-orphan", index));
     mkdirSync(path, { mode: 0o700 });
@@ -153,8 +159,8 @@ async function setup(root, ownerPath, files, bytes) {
   };
 }
 
-async function run(root, ownerPath) {
-  root = realpathSync(root);
+async function run(directory, ownerPath) {
+  const root = realpathSync(directory);
   const owner = await import(pathToFileURL(ownerPath).href);
   const cache = cachePath(root);
   const before = census(root);
@@ -168,7 +174,9 @@ async function run(root, ownerPath) {
     const retired = owner.withDependencyCacheLock(cache, (lock) =>
       owner.collectUnusedDependencyCaches(lock),
     );
-    for (const path of retired) rmSync(path, { recursive: true });
+    for (const path of retired) {
+      rmSync(path, { recursive: true });
+    }
     const wallMs = performance.now() - started;
     const consumed = process.cpuUsage(cpu);
     const heapDeltaBytes = process.memoryUsage().heapUsed - heapBefore;
@@ -204,7 +212,9 @@ async function run(root, ownerPath) {
 }
 
 async function main(args) {
-  if (args[0] === "--produce") return produce(args.slice(1));
+  if (args[0] === "--produce") {
+    return produce(args.slice(1));
+  }
   if (args[0] === "--help" || !args.length) {
     console.log(
       "Usage: node scripts/bench-pr-dependency-cache.mjs --setup <new-root> [--owner <module.mjs>] [--files 62000] [--bytes 19050]\n       /usr/bin/time -p node scripts/bench-pr-dependency-cache.mjs --run <root> [--owner <module.mjs>]\nSetup creates real payload bytes and legacy ledger rows through production APIs. Run each sample on a fresh setup; copied SQLite ledgers retain different inode identities. No Team data or agent database is needed by this owner.",
@@ -216,20 +226,24 @@ async function main(args) {
     if (
       !args[index + 1] ||
       !["--setup", "--run", "--owner", "--files", "--bytes"].includes(args[index])
-    )
+    ) {
       throw new Error("Invalid benchmark arguments; use --help");
+    }
     options.set(args[index], args[index + 1]);
   }
-  if (options.has("--setup") === options.has("--run"))
+  if (options.has("--setup") === options.has("--run")) {
     throw new Error("Select exactly one of --setup or --run");
+  }
   const root = resolve(options.get("--setup") || options.get("--run"));
   const ownerPath = resolve(options.get("--owner") || defaultOwner);
   const files = Number(options.get("--files") || 62000),
     bytes = Number(options.get("--bytes") || 19050);
-  if (![files, bytes].every((value) => Number.isSafeInteger(value) && value >= 0))
+  if (![files, bytes].every((value) => Number.isSafeInteger(value) && value >= 0)) {
     throw new Error("Invalid fixture size");
-  if (options.has("--setup") && existsSync(root))
+  }
+  if (options.has("--setup") && existsSync(root)) {
     throw new Error("Setup requires a new empty path");
+  }
   const result = options.has("--setup")
     ? await setup(root, ownerPath, files, bytes)
     : await run(root, ownerPath);

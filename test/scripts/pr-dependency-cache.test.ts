@@ -394,6 +394,11 @@ describePosix("operator dependency hold release", () => {
     const { args } = reviewHolds(f);
     const bin = join(f.home, "bin");
     mkdirSync(bin);
+    const python = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], {
+      encoding: "utf8",
+    });
+    expect(python.status, python.stderr).toBe(0);
+    symlinkSync(python.stdout.trim(), join(bin, "python3"));
     for (const command of [["--dry-run"], args]) {
       const result = releaseCommand(f, command, bin);
       expect(result.status).toBe(1);
@@ -703,7 +708,7 @@ describePosix("PR cache anchor lifetime", () => {
       peer = metadataWorker(f, 'withDependencyCacheLock(cache, () => report("acquired"));');
       await peer.ready("waiting-ledger", signal);
       expect(existsSync(join(f.cache, "lifetime.sqlite"))).toBe(false);
-      expect(readdirSync(join(f.cache, ".metadata-lock"))).toHaveLength(1);
+      expect(readdirSync(join(f.cache, ".metadata-lock"))).toHaveLength(2);
       initializer.release();
       await peer.ready("acquired", signal);
       expect((await withinTest(initializer.completed, signal))[0], initializer.errors()).toBe(0);
@@ -909,7 +914,7 @@ describePosix("PR cache anchor lifetime", () => {
           expect(waiter.errors()).toContain("PR dependency cache directory changed");
           expect(holderStatus).not.toBe(0);
           expect(readdirSync(f.cache)).toEqual([]);
-          expect(readdirSync(join(`${f.cache}.retained`, ".metadata-lock"))).toHaveLength(1);
+          expect(readdirSync(join(`${f.cache}.retained`, ".metadata-lock"))).toHaveLength(2);
         }
       } finally {
         await Promise.all([holder.stop(), waiter?.stop()]);
@@ -967,7 +972,7 @@ retireAnchorDependencies(anchor, () => {
       const elapsed = performance.now() - started;
       expect(elapsed).toBeGreaterThanOrEqual(1_000);
       expect(elapsed).toBeLessThan(3_000);
-      expect(readdirSync(join(f.cache, ".metadata-lock"))).toHaveLength(1);
+      expect(readdirSync(join(f.cache, ".metadata-lock"))).toHaveLength(2);
     });
     expect(existsSync(join(f.cache, ".metadata-lock"))).toBe(false);
   });
@@ -985,7 +990,7 @@ retireAnchorDependencies(anchor, () => {
     ).toThrow("PR cache metadata lock changed; retain it");
     expect(existsSync(owner)).toBe(true);
     expect(existsSync(`${owner}.retained`)).toBe(true);
-    expect(readdirSync(join(f.cache, ".metadata-lock"))).toHaveLength(2);
+    expect(readdirSync(join(f.cache, ".metadata-lock"))).toHaveLength(3);
   });
 
   it.each([

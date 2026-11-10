@@ -62,6 +62,12 @@ lifetime file outside the anchor. Shell children inherit it; the bootstrap Node
 preload preserves it through Node and Bun subprocess APIs, which otherwise close
 extra descriptors. This descriptor grants liveness protection, not creator
 retirement authority. Python 3's standard-library `fcntl` supplies the kernel lock.
+Lifetime registration also covers operations that reuse installed dependencies
+without acquiring a cache entry. Creation intent precedes the lifetime file;
+the operation registers its shared lock before materializing or dispatching tools.
+Interrupted pre-registration intent has no dependency consumers yet: recovery
+requires the creator incarnation to be gone, no current filesystem references,
+and an exclusive lock if its lifetime file was created.
 Collection requires a non-blocking exclusive lock and keeps it through anchor
 removal. Killing the creator cannot release a surviving child's shared lock.
 Normal completion also leaves retirement to the next invocation, after the
@@ -132,7 +138,7 @@ changing their binding or executing newer workflow code in their place.
 
 Each acquisition records an anchor hold in SQLite and marks the installation
 unsettled. Additive tables in the same ledger record operation lifetimes and
-pending installation or eviction transitions; the ledger version is unchanged.
+pending lifetime creation, installation, or eviction transitions; the ledger version is unchanged.
 The hold remains committed throughout anchor retirement. After confirmed anchor removal, the owner revalidates ledger,
 installation, and hold identities before releasing that anchor's holds in SQLite.
 The installation becomes settled only when no holds remain. Failed settlement

@@ -132,6 +132,19 @@ def retire(candidate, scan, now):
     path = candidate["path"]
     lease_fd = None
     try:
+        pending = candidate.get("pending")
+        if pending is not None:
+            # Before SH registration no operation has started. An absent creator
+            # incarnation plus an empty census closes the file-creation window;
+            # a file that exists must additionally grant EX below.
+            if scan is None:
+                raise ValueError("process-census-unavailable")
+            processes, references = scan
+            if any(target in references for target in candidate["targets"]):
+                raise ValueError("process-references")
+            start = processes.get(int(pending["pid"]))
+            if start is not None and math.floor(start / 1000) <= math.floor(pending["createdMs"] / 1000):
+                raise ValueError("creator-live")
         lease = candidate.get("lease")
         if lease is not None:
             value = physical(lease["path"])
@@ -153,7 +166,7 @@ def retire(candidate, scan, now):
                 or stat.S_IMODE(value.st_mode) != 0o700
                 or not matches(value, candidate["identity"])):
             raise ValueError("changed-directory")
-        if lease is None:
+        if lease is None and pending is None:
             if scan is None:
                 raise ValueError("process-census-unavailable")
             processes, references = scan
@@ -197,7 +210,7 @@ def retire(candidate, scan, now):
 
 def batch(request):
     candidates = request["candidates"]
-    targets = {target for item in candidates if item.get("lease") is None for target in item["targets"]}
+    targets = {target for item in candidates if item.get("lease") is None or item.get("pending") is not None for target in item["targets"]}
     scan = None
     if targets:
         try:

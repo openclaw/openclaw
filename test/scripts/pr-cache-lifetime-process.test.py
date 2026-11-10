@@ -103,6 +103,23 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(self.retire()["reason"], "process-census-unavailable")
         self.assertEqual(self.retire(({}, {str(self.anchor)}))["reason"], "process-references")
 
+    def test_pending_bootstrap_requires_dead_incarnation_empty_census_and_ex(self):
+        import fcntl
+        created = time.time() * 1000
+        self.candidate["pending"] = {"pid": 1234, "createdMs": created}
+        self.assertEqual(self.retire()["reason"], "process-census-unavailable")
+        self.assertEqual(self.retire(({}, {str(self.anchor)}))["reason"], "process-references")
+        for start in (created - 1000, created):
+            self.assertEqual(self.retire(({1234: start}, set()))["reason"], "creator-live")
+        with self.lease.open("r+") as held:
+            fcntl.flock(held, fcntl.LOCK_SH)
+            self.assertEqual(self.retire(({}, set()))["reason"], "lease-held")
+        # A reused PID is unrelated, and this pending bootstrap has no 24h grace.
+        self.assertEqual(self.retire(({1234: created + 2000}, set()))["state"], "retired")
+        self.candidate.pop("lease")
+        self.lease.unlink()
+        self.assertEqual(self.retire(({}, set()))["state"], "retired")
+
     def test_missing_legacy_anchor_uses_modified_time_for_age_and_birth_for_pid(self):
         now = time.time()
         self.anchor.rmdir()

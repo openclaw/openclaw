@@ -934,10 +934,11 @@ pr_retire_created_anchor() {
 pr_start_dependency_lifetime() {
   case "$requested_subcommand" in workspace | dependency-cache-recover | dependency-hold-release) return 0 ;; esac
   if [ -n "${OPENCLAW_PR_LIFETIME_FILE:-}" ]; then return; fi
-  OPENCLAW_PR_LIFETIME_FILE=$(node "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" create-lifetime) || return 1
+  OPENCLAW_PR_LIFETIME_FILE=$(node "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" create-lifetime "$pr_bootstrap_anchor" "$$") || return 1
   export OPENCLAW_PR_LIFETIME_FILE
   exec 7<> "$OPENCLAW_PR_LIFETIME_FILE"
   python3 -I -B "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime-process.py" shared 7 || return 1
+  node "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" register-lifetime "$pr_bootstrap_anchor" "$$" || return 1
   local preload
   preload=$(node -p 'JSON.stringify(process.argv[1])' "$pr_bootstrap_root/scripts/pr-lib/dependency-lifetime-inherit.cjs") || return 1
   export NODE_OPTIONS="${NODE_OPTIONS:-} --require $preload"

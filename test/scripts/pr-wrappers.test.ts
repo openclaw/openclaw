@@ -1439,6 +1439,7 @@ exec "$anchor/scripts/pr" "$@"
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Selected source overlaps the reserved bootstrap directory");
     expect(result.stderr).not.toContain("must not extract");
+    collectFinishedDependencies(fixture);
     expect(matchingEntries(fixture.root, "openclaw-pr-anchor-v3.")).toHaveLength(0);
   });
 
@@ -2098,7 +2099,7 @@ if (process.env.PR_TEST_INSTALL_GATE) {
     return donorEntry;
   }
 
-  function collectFinishedDependencies(fixture: ReturnType<typeof makeFrozenDependencyFixture>) {
+  function collectFinishedDependencies(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
     const collected = runCommand(
       requireNodeTool("node"),
       [join(process.cwd(), "scripts/pr-lib/cache-lifetime.mjs"), "collect"],
@@ -2108,6 +2109,84 @@ if (process.env.PR_TEST_INSTALL_GATE) {
     expect(collected.status, collected.stderr).toBe(0);
     expect(collected.stderr).not.toContain("Warning:");
   }
+
+  itPosix.each(["install", "hold", "settle"])(
+    "recovers the next scripts/pr invocation after SIGKILL during %s",
+    (phase) => {
+      const fixture = makeFrozenDependencyFixture();
+      const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+      let anchor;
+      if (phase === "install") {
+        const installer = join(fixture.bin, "pnpm");
+        writeFileSync(
+          installer,
+          `${readScript(installer)}
+const anchor = fs.readdirSync(${JSON.stringify(fixture.root)}).find(name => name.startsWith("openclaw-pr-anchor-v3."));
+if (!anchor) throw new Error("Missing actual wrapper anchor");
+const creator = Number(anchor.split(".")[1]);
+process.kill(creator, "SIGKILL");
+if (process.ppid !== creator) process.kill(process.ppid, "SIGKILL");
+process.kill(process.pid, "SIGKILL");
+`,
+        );
+        const killed = fixture.run({ OPENCLAW_PR_TOOLING_ROOT: fixture.tooling });
+        expect(killed.signal, killed.stdout + killed.stderr).toBe("SIGKILL");
+        const anchors = matchingEntries(fixture.root, "openclaw-pr-anchor-v3.");
+        expect(anchors).toHaveLength(1);
+        anchor = join(fixture.root, anchors[0]!);
+        expect(readdirSync(cache).filter((name) => name.startsWith("install-"))).toHaveLength(1);
+      } else {
+        ({ anchor } = materializeAnchor(fixture, {
+          ...fixture.env,
+          OPENCLAW_PR_TOOLING_ROOT: fixture.tooling,
+        }));
+        expect(prCacheEntries(cache)).toHaveLength(1);
+        expect(readPrCacheState(join(cache, prCacheEntries(cache)[0]!)).anchors).toEqual([anchor]);
+      }
+      fixture.git(fixture.canonical, ["checkout", "main"]);
+      if (phase === "settle") {
+        const preload = join(fixture.root, "interrupt-settlement.cjs");
+        writeFileSync(
+          preload,
+          `
+const { existsSync } = require("node:fs");
+const { DatabaseSync } = require("node:sqlite");
+const exec = DatabaseSync.prototype.exec;
+DatabaseSync.prototype.exec = function(sql) {
+  if (sql === "COMMIT" && !existsSync(${JSON.stringify(anchor)})) {
+    process.kill(process.ppid, "SIGKILL");
+    process.kill(process.pid, "SIGKILL");
+  }
+  return exec.call(this, sql);
+};
+`,
+        );
+        const killed = runWrapper(fixture, ["unknown-command"], "canonical", {
+          env: { ...fixture.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}` },
+        });
+        expect(killed.signal, killed.stdout + killed.stderr).toBe("SIGKILL");
+        expect(existsSync(anchor)).toBe(false);
+        expect(existsSync(join(cache, ".metadata-lock"))).toBe(true);
+      }
+      const resumed = runWrapper(fixture, ["unknown-command"], "canonical", { env: fixture.env });
+      expect(resumed.status, resumed.stdout + resumed.stderr).toBe(2);
+      expect(resumed.stderr).not.toContain("dependency cache cleanup failed");
+      expect(matchingEntries(fixture.root, "openclaw-pr-anchor-v3.")).toEqual([]);
+      expect(prCacheEntries(cache)).toHaveLength(phase === "install" ? 0 : 1);
+      for (const key of prCacheEntries(cache)) {
+        expect(readPrCacheState(join(cache, key))).toEqual({
+          registered: true,
+          settled: true,
+          anchors: [],
+        });
+      }
+      expect(
+        readdirSync(cache).some((name) =>
+          /^(?:install-|retired-|lifetime-|\.metadata-lock)/.test(name),
+        ),
+      ).toBe(false);
+    },
+  );
 
   itPosix(
     "keeps a live package reader after its creator exits, then releases its finished hold",
@@ -2541,7 +2620,9 @@ closeSync(fd);
       "refs/remotes/origin/main:scripts/pr-lib/materialize-dependencies.mjs",
     ]);
     writeFileSync(join(oldOwner, "materialize-dependencies.mjs"), oldSource);
-    cpSync("scripts/pr-lib/cache-lifetime.mjs", join(oldOwner, "cache-lifetime.mjs"));
+    for (const name of ["cache-lifetime.mjs", "cache-lifetime-process.py"]) {
+      cpSync(join("scripts/pr-lib", name), join(oldOwner, name));
+    }
     for (const manifest of ["package.json", "packages/markdown-core/package.json"]) {
       writeFileSync(
         join(oldOwner, manifest),
@@ -2563,6 +2644,7 @@ closeSync(fd);
     const previousCalls = readFileSync(fixture.materializerCalls, "utf8").trim().split("\n").length;
     const result = fixture.run({ OPENCLAW_PR_TOOLING_ROOT: fixture.tooling });
     expect(result.status, result.stdout + result.stderr).toBe(2);
+    collectFinishedDependencies(fixture);
     expect(jsonLines(fixture.calls)).toHaveLength(1);
     const invocations = readFileSync(fixture.materializerCalls, "utf8")
       .trim()
@@ -2626,6 +2708,7 @@ EOF_HELD_PROJECTION
         env: { ...fixture.env, OPENCLAW_PR_TOOLING_ROOT: fixture.tooling },
       });
       expect(result.status, result.stdout + result.stderr).toBe(0);
+      collectFinishedDependencies(fixture);
       const line = result.stdout
         .split("\n")
         .find((value) => value.startsWith("supervised-projection="));
@@ -2665,6 +2748,7 @@ EOF_HELD_PROJECTION
           TMPDIR: temporaryAlias,
         });
         expect(result.status, result.stdout + result.stderr).toBe(2);
+        collectFinishedDependencies(fixture);
         expect(result.stderr).toContain("running wrapper code materialized from");
         expect(matchingEntries(fixture.root, "openclaw-pr-anchor-v3.")).toEqual([]);
       }
@@ -2962,6 +3046,7 @@ if (process.env.PR_TEST_INTERRUPT !== "1") process.exit(Number(process.env.PR_TE
       if (args[0] === "ci-dispatch") {
         expect(readScript(started)).toBe("operation started\n");
       }
+      collectFinishedDependencies(fixture);
       expect(matchingEntries(fixture.root, "openclaw-pr-anchor-v3.")).toEqual([]);
     },
   );
@@ -2977,6 +3062,7 @@ if (process.env.PR_TEST_INTERRUPT !== "1") process.exit(Number(process.env.PR_TE
       env: { ...fixture.env, PR_TEST_REAL_TAR: resolveCommand("tar") },
     });
     expect(result.status, result.stdout + result.stderr).toBe(1);
+    collectFinishedDependencies(fixture);
     expect(matchingEntries(fixture.root, "openclaw-pr-anchor-v3.")).toEqual([]);
     expect(result.stderr).toContain("Unable to execute the materialized scripts/pr wrapper.");
   });
@@ -3041,6 +3127,7 @@ fi
       ).toBe("differing wrapper components vs origin/main: scripts/pr-lib");
       expect(existsSync(fault.readerLog)).toBe(failure !== "producer failure");
     }
+    collectFinishedDependencies(fixture);
     expect(matchingEntries(fixture.root, "openclaw-pr-anchor-v3.")).toEqual([]);
   });
 
@@ -3086,6 +3173,8 @@ throw new Error("untrusted caller helper executed");
           "scripts/pr-lib/wrapper-components.txt",
           "scripts/pr-lib/cache-lifetime.mjs",
           "scripts/pr-lib/materialized-anchor.mjs",
+          "scripts/pr-lib/cache-lifetime-process.py",
+          "scripts/pr-lib/dependency-lifetime-inherit.cjs",
           "scripts/pr-lib/git-invocation.mjs",
           "scripts/pr-lib/materialize-dependencies.mjs",
           "scripts/pr-lib/dependency-inputs.json",
