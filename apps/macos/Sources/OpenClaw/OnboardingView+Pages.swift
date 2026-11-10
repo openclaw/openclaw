@@ -28,6 +28,10 @@ extension OnboardingView {
             self.cliPage()
         case 3:
             self.aiSetupPage(contentHeight: contentHeight)
+        case 4:
+            self.findGatewayPage()
+        case 5:
+            self.reachabilityPage()
         case 9:
             self.readyPage()
         default:
@@ -87,118 +91,113 @@ extension OnboardingView {
 
     func connectionPage() -> some View {
         onboardingPage {
-            Text("Where should your assistant live?")
+            Text("Where should your assistant run?")
                 .font(.largeTitle.weight(.semibold))
-            Text(
-                "Most people pick this Mac — OpenClaw installs everything and keeps it " +
-                    "running in the background. You can change this anytime in Settings.")
-                .font(.body)
+            Text("Most people pick this Mac. You can change this anytime in the Connection window.")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
-                .fixedSize(horizontal: false, vertical: true)
-
             self.onboardingCard(spacing: 12, padding: 14) {
-                VStack(alignment: .leading, spacing: 10) {
-                    self.connectionChoiceButton(
-                        title: "On this Mac",
-                        badge: "Recommended",
-                        subtitle: self.localGatewaySubtitle,
-                        systemImage: "laptopcomputer",
-                        selected: self.selectedConnectionMode == .local)
-                    {
-                        self.selectLocalGateway()
-                    }
-
-                    self.connectionChoiceButton(
-                        title: "On another computer",
-                        badge: nil,
-                        subtitle: Self
-                            .remoteChoiceSubtitle(discoveredGatewayCount: self.gatewayDiscovery.gateways.count),
-                        systemImage: "network",
-                        selected: self.selectedConnectionMode == .remote)
-                    {
-                        self.handleRemoteSelection()
-                    }
-
-                    if self.showRemoteChoices || self.selectedConnectionMode == .remote {
-                        self.gatewayDiscoverySection()
-
-                        if self.state.connectionMode == .remote {
-                            self.remoteConnectionSection()
-                        } else {
-                            Button("Change connection…") { self.showConnectionEditor = true }
-                        }
-                    }
-
-                    self.connectionChoiceButton(
-                        title: "Connect to an existing Gateway",
-                        badge: nil,
-                        subtitle: "Enter its address and sign in with your browser.",
-                        systemImage: "globe",
-                        selected: false)
-                    {
-                        self.showBrowserGateway = true
-                    }
+                self.connectionChoiceButton(
+                    title: "On this Mac",
+                    badge: "Recommended",
+                    subtitle: self.localGatewaySubtitle,
+                    systemImage: "laptopcomputer",
+                    selected: self.selectedConnectionMode == .local)
+                {
+                    self.selectLocalGateway()
+                }
+                self.connectionChoiceButton(
+                    title: "On another computer",
+                    subtitle: "Connect this Mac to an OpenClaw that is already running somewhere else.",
+                    systemImage: "network",
+                    selected: self.selectedConnectionMode == .remote)
+                {
+                    self.handleRemoteSelection()
                 }
             }
-
             GatewayConfigConflictRecoveryView(state: self.state)
-
-            HStack {
-                Spacer(minLength: 0)
-                Button("Set up later") {
-                    self.selectUnconfiguredGateway()
-                }
+            Button("Set up later") { self.selectUnconfiguredGateway() }
                 .buttonStyle(.link)
-                .font(.callout)
-                .foregroundStyle(self.selectedConnectionMode == .unconfigured ? Color.accentColor : .secondary)
-                .help("Skip Gateway setup for now; pick Local or Remote later in the Connection window.")
-                Spacer(minLength: 0)
-            }
             if self.selectedConnectionMode == .unconfigured {
-                Text("""
-                OK — OpenClaw won’t start anything yet; a Gateway installed outside the app keeps running. \
-                Pick Local or Remote later in the Connection window.
-                """)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .multilineTextAlignment(.center)
+                Text("OpenClaw won’t start anything yet. Set up a connection whenever you’re ready.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .disabled(self.installingCLI)
+    }
+
+    func findGatewayPage() -> some View {
+        onboardingPage {
+            Text("Find your OpenClaw")
+                .font(.largeTitle.weight(.semibold))
+            Text("How do you reach the computer it runs on?")
+                .foregroundStyle(.secondary)
+            self.onboardingCard(spacing: 12, padding: 14) {
+                self.connectionChoiceButton(
+                    title: "Sign in with OpenClaw ID",
+                    subtitle: "Connect from anywhere. Native sign-in is not available in this build.",
+                    systemImage: "person.crop.circle",
+                    selected: false)
+                {
+                    self.openClawID.begin(.connect)
+                    self.showOpenClawID = true
+                }
+                self.connectionChoiceButton(
+                    title: "Nearby",
+                    subtitle: Self.remoteChoiceSubtitle(
+                        discoveredGatewayCount: self.gatewayDiscovery.gateways.count),
+                    systemImage: "dot.radiowaves.left.and.right",
+                    selected: self.showRemoteChoices)
+                {
+                    self.showRemoteChoices.toggle()
+                }
+                if self.showRemoteChoices { self.gatewayDiscoverySection() }
+                self.connectionChoiceButton(
+                    title: "Enter an address or invite link",
+                    subtitle: """
+                    Use a Gateway address or browser sign-in link. \
+                    OpenClaw ID invites aren’t supported yet.
+                    """,
+                    systemImage: "link",
+                    selected: false)
+                {
+                    self.showBrowserGateway = true
+                }
+                if self.state.connectionMode == .remote {
+                    self.remoteConnectionSection()
+                } else {
+                    Button("Advanced connection…") { self.showConnectionEditor = true }
+                        .buttonStyle(.link)
+                }
+            }
+        }
         .sheet(isPresented: self.$showBrowserGateway) {
-            GatewayProfileEditor { _ in
-                self.finish(openPrimaryDashboard: false)
+            GatewayProfileEditor { profile in
+                self.savedBrowserGatewayName = profile.name
+                self.currentPage = self.pageOrder.firstIndex(of: self.readyPageIndex) ?? 0
             }
         }
         .sheet(isPresented: self.$showConnectionEditor) {
             PrimaryGatewayConnectionEditor(state: self.state, onSave: self.didSaveRemoteConnection)
         }
         .onChange(of: self.state.connectionMode) { _, newValue in
-            // The root view's mode observer calls handleConnectionModeChange(), which
-            // retires route-owned AI/OpenClaw state. This nested observer owns probe copy only.
             guard Self.shouldResetRemoteProbeFeedback(
-                for: newValue,
-                suppressReset: self.suppressRemoteProbeReset)
-            else { return }
+                for: newValue, suppressReset: self.suppressRemoteProbeReset) else { return }
             self.resetRemoteProbeFeedback()
         }
-        .onChange(of: state.remoteTransport) { _, _ in
-            self.retireGatewayStateForRemoteEndpointEdit()
-        }
-        .onChange(of: state.remoteTarget) { _, _ in
-            self.retireGatewayStateForRemoteEndpointEdit()
-        }
-        .onChange(of: state.remoteUrl) { _, _ in
-            self.retireGatewayStateForRemoteEndpointEdit()
-        }
-        .onChange(of: state.remoteToken) { _, _ in
-            self.retireGatewayStateForRemoteEndpointEdit()
-        }
-        .onChange(of: state.remoteIdentity) { _, _ in
-            self.retireGatewayStateForRemoteEndpointEdit()
+        .onChange(of: state.remoteTransport) { _, _ in self.retireGatewayStateForRemoteEndpointEdit() }
+        .onChange(of: state.remoteTarget) { _, _ in self.retireGatewayStateForRemoteEndpointEdit() }
+        .onChange(of: state.remoteUrl) { _, _ in self.retireGatewayStateForRemoteEndpointEdit() }
+        .onChange(of: state.remoteToken) { _, _ in self.retireGatewayStateForRemoteEndpointEdit() }
+        .onChange(of: state.remoteIdentity) { _, _ in self.retireGatewayStateForRemoteEndpointEdit() }
+    }
+
+    func reachabilityPage() -> some View {
+        onboardingPage {
+            OnboardingReachabilityContent(unavailableReason: self.openClawID.unavailableReason) {
+                self.openClawID.begin(.makeReachable)
+                self.showOpenClawID = true
+            }
         }
     }
 
@@ -450,7 +449,7 @@ extension OnboardingView {
             remoteProbeState = .ok(input, success)
             if advanceOnSuccess,
                state.connectionMode == .remote,
-               activePageIndex == connectionPageIndex
+               activePageIndex == findPageIndex
             {
                 self.handleNext()
             }
@@ -792,10 +791,28 @@ extension OnboardingView {
             Text("You’re all set!")
                 .font(.largeTitle.weight(.semibold))
             self.onboardingCard {
-                self.featureRow(
-                    title: "Configure later",
-                    subtitle: "Pick Local or Remote in the Connection window whenever you’re ready.",
-                    systemImage: "gearshape")
+                if let name = self.savedBrowserGatewayName {
+                    self.featureRow(title: "Gateway added", subtitle: name, systemImage: "checkmark.circle")
+                } else if self.selectedConnectionMode == .unconfigured {
+                    self.featureRow(
+                        title: "Configure later",
+                        subtitle: "Pick Local or Remote in the Connection window whenever you’re ready.",
+                        systemImage: "gearshape")
+                } else if self.selectedConnectionMode == .local {
+                    self.featureRow(
+                        title: "Reach it from anywhere",
+                        subtitle: "Optional OpenClaw ID setup. Native sign-in is not available in this build.",
+                        systemImage: "globe",
+                        buttonTitle: "Learn more")
+                    {
+                        self.currentPage = self.pageOrder.firstIndex(of: self.reachabilityPageIndex) ?? 0
+                    }
+                } else {
+                    self.featureRow(
+                        title: "Connected to your Gateway",
+                        subtitle: "Your remote connection is ready.",
+                        systemImage: "checkmark.circle")
+                }
                 Divider()
                     .padding(.vertical, 6)
                 self.featureRow(

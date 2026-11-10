@@ -577,21 +577,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleFirstRunOnboardingIfNeeded() async {
-        if await OnboardingController.shared.startFirstRunIfFresh() {
-            return
-        }
-        let connectionMode = AppStateStore.shared.connectionMode
-        let onboardingSeen = AppStateStore.shared.onboardingSeen
-        if connectionMode != .unconfigured, onboardingSeen {
-            OnboardingController.markComplete()
-            return
-        }
-        let seenVersion = AppDefaults.standard.integer(forKey: onboardingVersionKey)
-        let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
-        guard shouldShow else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            guard !AppStateStore.shared.onboardingSeen else { return }
-            OnboardingController.shared.show()
-        }
+        OnboardingFirstRun.presentIfNeeded(
+            connectionMode: AppStateStore.shared.connectionMode,
+            onboardingSeen: AppStateStore.shared.onboardingSeen,
+            onboardingVersion: AppDefaults.standard.integer(forKey: onboardingVersionKey),
+            markComplete: { OnboardingController.markComplete() },
+            show: {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    guard !AppStateStore.shared.onboardingSeen else { return }
+                    OnboardingController.shared.show()
+                }
+            })
     }
 }

@@ -27,6 +27,7 @@ struct RemoteGatewayAdvanceDecision: Equatable {
 @Observable
 final class OnboardingFinishState {
     var didFinish = false
+    var savedBrowserGatewayName: String?
 }
 
 /// Dashboard surface opened when onboarding finishes with working inference.
@@ -514,7 +515,6 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
     private var window: NSWindow?
     private var closeConfirmationPending = false
-    var automaticSetupTask: Task<OnboardingFirstRun.Fallback?, Never>?
     var sheetPresentationWindow: NSWindow? {
         self.window
     }
@@ -532,9 +532,6 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     }
 
     func show(page: OnboardingFirstRun.Page = .welcome, error: String? = nil) {
-        let replacingAutomaticSetup = self.automaticSetupTask != nil
-        self.automaticSetupTask?.cancel()
-        if replacingAutomaticSetup { self.busyReason = nil }
         if ProcessInfo.processInfo.isNixMode {
             // Nix mode is fully declarative; onboarding would suggest interactive setup that doesn't apply.
             Self.markComplete()
@@ -542,7 +539,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         }
         self.present(
             OnboardingView(initialPage: page, initialError: error),
-            replaceContent: replacingAutomaticSetup || page != .welcome)
+            replaceContent: page != .welcome)
     }
 
     func present(_ content: some View, replaceContent: Bool = true) {
@@ -642,7 +639,6 @@ final class OnboardingController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         guard let closing = notification.object as? NSWindow, closing === window else { return }
-        self.automaticSetupTask?.cancel()
         self.busyReason = nil
         self.window = nil
     }
@@ -669,6 +665,14 @@ struct OnboardingView: View {
     @State var onboardingVisible = false
     @State var cliInstallLocation: String?
     @State var showRemoteChoices = false
+    @State var remoteSetupSelected = false
+    var savedBrowserGatewayName: String? {
+        get { self.finishState.savedBrowserGatewayName }
+        nonmutating set { self.finishState.savedBrowserGatewayName = newValue }
+    }
+
+    @State var showOpenClawID = false
+    @State var openClawID = OnboardingOpenClawIDModel(service: UnavailableOnboardingOpenClawIDService())
     @State var showBrowserGateway = false
     @State var showConnectionEditor = false
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
@@ -698,6 +702,8 @@ struct OnboardingView: View {
     let connectionPageIndex = 1
     let cliPageIndex = 2
     let aiPageIndex = 3
+    let findPageIndex = 4
+    let reachabilityPageIndex = 5
     let readyPageIndex = 9
 
     /// The active page is scrollable on short screens. Taller windows donate all
@@ -712,11 +718,9 @@ struct OnboardingView: View {
     {
         switch mode {
         case .local:
-            // Native onboarding ends once inference works: install (when
-            // needed) plus AI setup. Successful first run lands in the normal dashboard.
-            requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]
+            requiresCLIInstall ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9]
         case .remote:
-            [0, 1, 3]
+            [0, 1, 4, 3, 9]
         case .unconfigured:
             // "Set up later" has no gateway to hand off to; keep the native
             // ready page so the flow still ends with a visible outcome.
@@ -729,15 +733,16 @@ struct OnboardingView: View {
     }
 
     var selectedConnectionMode: AppState.ConnectionMode {
-        self.isConnectionSelectionBlocking ? .local : self.state.connectionMode
+        self.remoteSetupSelected ? .remote : (self.isConnectionSelectionBlocking ? .local : self.state.connectionMode)
     }
 
     var isConnectionSelectionBlocking: Bool {
-        self.defaultsToLocalGateway && self.state.connectionMode == .unconfigured
+        !self.remoteSetupSelected && self.defaultsToLocalGateway && self.state.connectionMode == .unconfigured
     }
 
     var pageOrder: [Int] {
-        Self.pageOrder(
+        if self.savedBrowserGatewayName != nil { return [0, 1, 4, 9] }
+        return Self.pageOrder(
             for: self.selectedConnectionMode,
             requiresCLIInstall: self.requiresLocalCLI && !self.cliInstalled)
     }
@@ -756,12 +761,29 @@ struct OnboardingView: View {
         min(max(0, cursor), max(0, pageCount - 1))
     }
 
+    static func pageCursor(preserving cursor: Int, from previous: [Int], to next: [Int]) -> Int {
+        guard !previous.isEmpty, !next.isEmpty else { return 0 }
+        let visible = Self.visiblePageCursor(cursor, pageCount: previous.count)
+        for page in previous[visible...] {
+            if let index = next.firstIndex(of: page) { return index }
+        }
+        return next.count - 1
+    }
+
+    func preservePageAfterCLIReadiness(wasInstalled: Bool) {
+        let previous = Self.pageOrder(
+            for: self.selectedConnectionMode,
+            requiresCLIInstall: self.requiresLocalCLI && !wasInstalled)
+        self.currentPage = Self.pageCursor(preserving: self.requestedPage, from: previous, to: self.pageOrder)
+    }
+
     var activePageIndex: Int {
         self.activePageIndex(for: self.currentPage)
     }
 
     var buttonTitle: String {
-        self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
+        if self.activePageIndex == self.reachabilityPageIndex { return "Not now" }
+        return self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
     }
 
     var isCLIBlocking: Bool {
@@ -798,7 +820,9 @@ struct OnboardingView: View {
     }
 
     var canAdvance: Bool {
-        !self.isCLIBlocking && !self.isAISetupBlocking && !self.updatingGatewayHosting
+        !self.isCLIBlocking && !self.isAISetupBlocking && !self.updatingGatewayHosting &&
+            (self.activePageIndex != self.findPageIndex || self.state.connectionMode == .remote ||
+                self.savedBrowserGatewayName != nil)
     }
 
     static func remoteGatewayAdvanceDecision(
