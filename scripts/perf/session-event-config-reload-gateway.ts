@@ -2,10 +2,11 @@
  * Real isolated Gateway RPC/cron proof with a loopback model and a scheduling
  * barrier at native transcript preparation. No production seam or Team data.
  * node --import ./scripts/tsx.mjs scripts/perf/session-event-config-reload-gateway.ts
- *   --output <new-directory> [--expect revoked]
+ *   --output <new-directory> [--expect revoked] [--change mcp|plugin]
  * Run from each pinned checkout; child workers use that same source tree.
  * The model first establishes next_check, then the next attempt is held while
- * config.patch changes an unrelated MCP server. Capture the failed baseline too.
+ * config.patch changes an unrelated MCP server, or enables the bundled Advisor plugin
+ * as the Labs switch does. Capture the failed baseline too.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -30,9 +31,15 @@ const { values } = parseArgs({
   options: {
     output: { type: "string" },
     expect: { type: "string", default: "retained" },
+    change: { type: "string", default: "mcp" },
   },
 });
 assert(values.output);
+assert(values.change === "mcp" || values.change === "plugin");
+const change =
+  values.change === "plugin"
+    ? { plugins: { entries: { advisor: { enabled: true } } } }
+    : { mcp: { servers: { unrelated: { enabled: false, command: "true" } } } };
 const output = path.resolve(values.output);
 await mkdir(output);
 const source = fileURLToPath(new URL("../../", import.meta.url));
@@ -103,6 +110,7 @@ const instance = await createOpenClawTestInstance({
   env: {
     ...Object.fromEntries(listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined])),
     OPENCLAW_CONFIG_RELOAD_FIXTURE_GATE: `${baseUrl}/gate`,
+    OPENCLAW_CONFIG_RELOAD_FIXTURE_CHANGE: values.change,
     OPENCLAW_SKIP_CRON: "0",
     OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
     OPENCLAW_AGENT_RUNTIME: undefined,
@@ -198,7 +206,7 @@ try {
     "config.patch",
     {
       baseHash: config.hash,
-      raw: JSON.stringify({ mcp: { servers: { unrelated: { enabled: false, command: "true" } } } }),
+      raw: JSON.stringify(change),
     },
     { timeoutMs: 90_000 },
   );
@@ -257,13 +265,7 @@ try {
         "Unrelated reload must preserve schedule pacing",
       );
     } else {
-      assert(
-        instance
-          .logs()
-          .includes(
-            "Session target preparation outlived its attempt: Error: admitted run authority is no longer active | Session event configuration changed",
-          ),
-      );
+      assert(instance.logs().includes("Session event configuration changed; inspect the run"));
     }
   }
 } finally {
