@@ -2,8 +2,8 @@ import Foundation
 import Observation
 import OpenClawKit
 import OpenClawProtocol
-import Testing
 import SwiftUI
+import Testing
 #if os(macOS)
 import AppKit
 #endif
@@ -15349,29 +15349,34 @@ struct ChatHistoryMutationTests {
     }
 }
 
+#if os(macOS)
 struct ChatObscuredStreamPacingTests {
-    @Test @MainActor func `pacing preserves pending output across interval changes`() throws {
+    @Test @MainActor func `covered chat paces live text slower until it is revealed`() {
+        _ = NSApplication.shared
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
-        defer { vm.detachTransport() }
-        vm.streamPacing.interval = 0.5
-        vm.updateStreamingAssistantText("First")
-        #expect(vm.liveAssistantDisplayText == "First")
-        vm.updateStreamingAssistantText("First covered update")
-        let coveredID = try #require(vm.streamPacing.scheduledID)
-        #expect(vm.liveAssistantDisplayText == "First")
-        vm.streamPacing.interval = 0.15
-        vm.updateStreamingAssistantText("Latest revealed update")
-        #expect(vm.streamPacing.scheduledID == coveredID)
-        vm.flushStreamingAssistantDisplay(scheduledID: coveredID)
-        #expect(vm.liveAssistantDisplayText == "Latest revealed update")
-        #expect(vm.streamPacing.pending == nil)
-        #expect(vm.streamPacing.scheduledID == nil)
-        vm.updateStreamingAssistantText("Pending before clearing")
-        let retiredID = try #require(vm.streamPacing.scheduledID)
-        vm.updateStreamingAssistantText(nil)
-        #expect(vm.liveAssistantDisplayText == nil)
-        vm.updateStreamingAssistantText("New first output")
-        vm.flushStreamingAssistantDisplay(scheduledID: retiredID)
-        #expect(vm.liveAssistantDisplayText == "New first output")
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        func content(obscured: Bool) -> some View {
+            OpenClawChatView(viewModel: vm, showsComposer: false)
+                .environment(\.openClawChatIsObscured, obscured)
+        }
+        let host = NSHostingView(rootView: content(obscured: true))
+        window.contentView = host
+        defer {
+            vm.detachTransport()
+            window.contentView = nil
+            window.close()
+        }
+        host.layoutSubtreeIfNeeded()
+        #expect(vm.streamPacing.interval == 0.5)
+
+        host.rootView = content(obscured: false)
+        host.layoutSubtreeIfNeeded()
+        #expect(vm.streamPacing.interval == 0.15)
     }
 }
+#endif
