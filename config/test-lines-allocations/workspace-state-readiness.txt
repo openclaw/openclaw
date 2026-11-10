@@ -1,2 +1,2 @@
-184
-# Covers local marker isolation, container activation, retained attestation admission, affected-workspace repair guidance, and attachment preparation.
+219
+# Covers local marker isolation, container activation, retained attestation admission, affected-workspace repair guidance, attachment preparation, and early workspace provisioning.

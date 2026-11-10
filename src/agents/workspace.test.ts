@@ -16,6 +16,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { registerAgentWorkspaceAccess } from "./workspace-access.js";
 import { registerWorkspaceBootstrapTests } from "./workspace-bootstrap.test-utils.js";
 import { LEGACY_WORKSPACE_ATTESTATION_HEADER } from "./workspace-legacy-state.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
@@ -398,6 +399,40 @@ it("creates only the directory for runtime-managed-implicit provisioning (#92015
     await expectPathMissing(path.join(targetDir, name));
   }
   expect((await workspaceState.readWorkspaceStateSnapshot(targetDir)).setupExists).toBe(false);
+});
+
+it("refuses retained setup state for a runtime-managed implicit workspace", async () => {
+  const targetDir = testState!.path("implicit-retained");
+  await fs.mkdir(targetDir, { recursive: true });
+  const source = path.join(targetDir, "openclaw-workspace-state.json");
+  await fs.writeFile(source, "not-json");
+
+  await expect(
+    ensureAgentWorkspace({ dir: targetDir, provisioning: "runtime-managed-implicit" }),
+  ).rejects.toMatchObject({ kind: "legacy-workspace" });
+  await expect(fs.readFile(source, "utf8")).resolves.toBe("not-json");
+});
+
+it("refuses retained local setup state for a registered remote workspace", async () => {
+  const targetDir = testState!.path("remote-retained");
+  await fs.mkdir(targetDir, { recursive: true });
+  const source = path.join(targetDir, "openclaw-workspace-state.json");
+  await fs.writeFile(source, "not-json");
+  const release = registerAgentWorkspaceAccess(targetDir, {
+    bridge: {
+      readFile: async () => Buffer.alloc(0),
+      writeFile: async () => {},
+      stat: async () => ({ type: "file", size: 0, mtimeMs: 0 }),
+    },
+  });
+  try {
+    await expect(ensureAgentWorkspace({ dir: targetDir })).rejects.toMatchObject({
+      kind: "legacy-workspace",
+    });
+  } finally {
+    release();
+  }
+  await expect(fs.readFile(source, "utf8")).resolves.toBe("not-json");
 });
 
 it.each(["committed", "failed", "retired-before-commit", "retired-after-commit"] as const)(

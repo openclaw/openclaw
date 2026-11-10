@@ -43,7 +43,10 @@ import {
   retryWorkspaceRead,
 } from "./workspace-file-read.js";
 import { ensureGitRepo } from "./workspace-git.js";
-import { LEGACY_WORKSPACE_STATE_CURRENT_FILENAME } from "./workspace-legacy-state.js";
+import {
+  assertNoUnmigratedWorkspaceState,
+  LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
+} from "./workspace-legacy-state.js";
 import {
   captureWorkspacePreparationGuard,
   maybeWriteWorkspaceAttestation,
@@ -605,12 +608,14 @@ async function ensureAgentWorkspaceOwned(
   if (getAgentWorkspaceAccess(dir)) {
     // Remote workspace initialization belongs to the host that provisions it.
     // Do not seed a second workspace or Git repository on Gateway.
+    assertNoUnmigratedWorkspaceState({ workspaceDir: dir });
     return { dir, bootstrapPending: false };
   }
   if (params?.provisioning === "runtime-managed-implicit") {
     // The workspace belongs to a runtime-managed agent with a distinct cwd.
     // Provision the directory (cwd fallback, media staging) without scaffolding
     // bootstrap files, setup state, or a nested git repository (#92015).
+    assertNoUnmigratedWorkspaceState({ workspaceDir: dir });
     beforeFileMutation?.();
     await fs.mkdir(dir, { recursive: true });
     assertHost?.();
