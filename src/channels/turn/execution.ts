@@ -181,12 +181,15 @@ export async function runPreparedChannelTurnCore<
         const sourceAgentId =
           params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
         const recordAgentId = parseAgentSessionKey(recordSessionKey)?.agentId ?? sourceAgentId;
-        for (const agentId of new Set([sourceAgentId, recordAgentId])) {
+        const sourceSessionKey = params.ctxPayload.SessionKey ?? params.routeSessionKey;
+        for (const sessionKey of new Set([sourceSessionKey, recordSessionKey])) {
+          const agentId = sessionKey === recordSessionKey ? recordAgentId : sourceAgentId;
           if (!agentId) {
             continue;
           }
           const preparation = waitForAgentInputAdmission(agentId, {
             storePath: params.storePath,
+            sessionKey,
             signal: getPluginServiceSchedulerBinding()?.().signal,
           });
           if (preparation) {

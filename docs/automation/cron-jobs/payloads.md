@@ -151,7 +151,10 @@ source; names, schedules, and other executable inputs remain bound. A fresh
 owner capture applies only to the definition captured, even if another manager
 edits the job before the update commits. Disabling or removing a job still
 cancels its active occurrence; re-enabling it does not revive that cancelled
-occurrence.
+occurrence. A turn the occurrence already started in another session, for
+example with `sessions_send`, belongs to that session: it keeps running when the
+occurrence ends or the job is removed, and still revalidates the operator's
+role, device, and access grant.
 
 A continuation waits for its current conversation turn to finish before reading
 the current job and checking its source at launch. Trigger-supplied context does

@@ -5,6 +5,7 @@ import type {
   ImagesDescriptionInput,
   ImagesDescriptionResult,
   MediaUnderstandingCapability,
+  MediaUnderstandingProviderMetadata,
   StructuredExtractionInput,
   StructuredExtractionResult,
   VideoDescriptionResult,
@@ -72,24 +73,14 @@ export type StructuredExtractionRequest = Omit<
   jsonMode?: boolean;
 };
 
-type MediaUnderstandingDocumentModelDefaults = {
-  textExtraction?: string;
-  image?: string | false;
-};
-
 export type MediaUnderstandingProviderAuthContext = ProviderResolveSyntheticAuthContext;
 
-export type MediaUnderstandingProvider = {
+export type MediaUnderstandingProvider = MediaUnderstandingProviderMetadata & {
   id: string;
-  capabilities?: MediaUnderstandingCapability[];
   /** Add image capability from this request's configured model inputs, not registration config. */
   inheritConfiguredImageCapability?: boolean;
   /** Narrow capability-less shared entries; undefined preserves all effective capabilities. */
   sharedEntryCapabilities?: MediaUnderstandingCapability[];
-  defaultModels?: Partial<Record<MediaUnderstandingCapability, string>>;
-  autoPriority?: Partial<Record<MediaUnderstandingCapability, number>>;
-  nativeDocumentInputs?: Array<"pdf">;
-  documentModels?: Partial<Record<"pdf", MediaUnderstandingDocumentModelDefaults>>;
   resolveAuth?: (
     ctx: MediaUnderstandingProviderAuthContext,
   ) => MediaUnderstandingProviderAuthResult | null | undefined;

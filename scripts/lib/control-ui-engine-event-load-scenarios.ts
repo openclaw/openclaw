@@ -804,20 +804,23 @@ export function createEngineEventLoadScenarios(
   inventory = 1_000,
   interactionsOnly = false,
 ): EngineScenario[] {
-  return ([-1, 0, 5, 20, 100, "pageup"] as const).map((entry) => {
+  return ([-1, 0, 5, 20, 100, "pageup", "end"] as const).map((entry) => {
     const pageUpProof = entry === "pageup";
-    const count = entry === "pageup" ? 0 : entry;
+    const endProof = entry === "end";
+    const count = pageUpProof || endProof ? 0 : entry;
     let wire: Awaited<ReturnType<typeof createEventLoadWire>>;
     let fixtureRows: Parameters<typeof createEventLoadWire>[0];
     let heldRows = 0;
     let toolPreparationMs = 0;
     let roster: ReturnType<typeof createTeamScaleSidebarListOwner>;
     return {
-      id: pageUpProof
-        ? "event-load-pageup"
-        : count === -1
-          ? "event-load-unloaded"
-          : `event-load-${count}`,
+      id: endProof
+        ? "event-load-end"
+        : pageUpProof
+          ? "event-load-pageup"
+          : count === -1
+            ? "event-load-unloaded"
+            : `event-load-${count}`,
       explicitOnly: true,
       route: controlUiSessionPath(foreground),
       expected: `${Math.max(0, count)} background sessions at one tool/s (two durable-message receipts/s and one status patch/2 s) plus ${count === -1 ? 0 : toolCount} foreground tools preserve typing, scroll, route/session switches and current history.`,
@@ -972,9 +975,11 @@ export function createEngineEventLoadScenarios(
         await page.locator(composer).focus();
       },
       run: async (page) => {
-        if (pageUpProof) {
+        if (pageUpProof || endProof) {
           try {
-            return await verifyEventLoadPageUp(page, toolCount);
+            return endProof
+              ? await verifyEventLoadEnd(page, toolCount)
+              : await verifyEventLoadPageUp(page, toolCount);
           } finally {
             wire.finish();
           }
@@ -1437,6 +1442,110 @@ export function createEngineEventLoadScenarios(
 }
 
 /** Run on a fresh, prepared event-load-0 fixture instead of its timed run. */
+async function verifyEventLoadEnd(page: Page, toolCount: number) {
+  await page.evaluate((expected) => {
+    const load = Reflect.get(window, "__eventLoad");
+    load.start({ duration: 120_000, toolCount: expected });
+    load.phase("typing", "");
+  }, toolCount);
+  try {
+    await page.locator(composer).press("x");
+    await page.waitForFunction(
+      (firstHalf) => {
+        const state = Reflect.get(window, "__eventLoad").reader();
+        return state.appliedResults === firstHalf && !state.pendingToolRender;
+      },
+      Math.ceil(toolCount / 2),
+    );
+    const thread = page.locator(`${pane} .chat-thread`);
+    await thread.press("PageUp");
+    await page.waitForFunction(() => {
+      const element = document.querySelector<HTMLElement>(
+        ".chat-pane-cache__pane--active .chat-thread",
+      );
+      const state = Reflect.get(window, "__eventLoad").reader();
+      return (
+        state.readingHistory &&
+        element &&
+        element.scrollHeight - element.clientHeight - element.scrollTop > 8
+      );
+    });
+    await thread.evaluate((element) => {
+      element.addEventListener(
+        "keydown",
+        (event) => {
+          if (event instanceof KeyboardEvent && event.key === "End") {
+            const load = Reflect.get(window, "__eventLoad");
+            Reflect.set(window, "__eventLoadEndApplied", load.reader().appliedResults);
+            load.beginScroll();
+          }
+        },
+        { once: true },
+      );
+    });
+    await thread.press("End");
+    const appliedAtEnd = await page.evaluate(() => Reflect.get(window, "__eventLoadEndApplied"));
+    if (typeof appliedAtEnd !== "number" || appliedAtEnd >= toolCount) {
+      throw new Error("Foreground output drained before native End overlap");
+    }
+    await page
+      .waitForFunction(
+        ({ expected, position }) => {
+          const element = document.querySelector<HTMLElement>(
+            ".chat-pane-cache__pane--active .chat-thread",
+          );
+          const state = Reflect.get(window, "__eventLoad").reader();
+          if (!element) {
+            return false;
+          }
+          const distance = Math.abs(
+            element.scrollHeight - element.clientHeight - element.scrollTop,
+          );
+          const geometry = `${element.scrollTop}:${element.scrollHeight}:${element.clientHeight}`;
+          position.stable =
+            state.appliedResults === expected &&
+            !state.pendingToolRender &&
+            distance <= 8 &&
+            position.geometry === geometry
+              ? position.stable + 1
+              : 0;
+          position.geometry = geometry;
+          return position.stable >= 3;
+        },
+        { expected: toolCount, position: { stable: 0, geometry: "" } },
+        { polling: "raf", timeout: 120_000 },
+      )
+      .catch(async (error: unknown) => {
+        const geometry = await thread.evaluate((element) => ({
+          scrollTop: element.scrollTop,
+          scrollHeight: element.scrollHeight,
+          clientHeight: element.clientHeight,
+          distance: element.scrollHeight - element.clientHeight - element.scrollTop,
+        }));
+        throw new Error(
+          `Native End did not hold the completed stream: ${JSON.stringify(geometry)}`,
+          { cause: error },
+        );
+      });
+    const applied = await page.evaluate(() =>
+      Reflect.get(window, "__eventLoad").verifyAppliedResults(),
+    );
+    const geometry = await thread.evaluate((element) => ({
+      distance: element.scrollHeight - element.clientHeight - element.scrollTop,
+    }));
+    return {
+      correctnessOnly: true,
+      nativeEndAtEnd: true,
+      nativeEndAppliedAtCapture: appliedAtEnd,
+      nativeEndDistance: geometry.distance,
+      appliedResultCount: applied.count,
+      orderedAppliedResults: applied.ordered,
+    };
+  } finally {
+    await page.evaluate(() => Reflect.get(window, "__eventLoad").finish());
+  }
+}
+
 async function verifyEventLoadPageUp(page: Page, toolCount: number) {
   if (toolCount < 4) {
     throw new Error("PageUp overlap proof needs at least four foreground tools");
@@ -1447,17 +1556,16 @@ async function verifyEventLoadPageUp(page: Page, toolCount: number) {
     load.start({ duration: 120_000, toolCount: expected });
     load.phase("typing", "");
   }, toolCount);
-  let proofHandle:
-    | JSHandle<{
-        entryId: string;
-        text: string;
-        top: number;
-        appliedAtCapture: number;
-        maxDrift: number;
-        samples: number;
-        settledFrames: number;
-      }>
-    | undefined;
+  type PageUpProof = {
+    entryId: string;
+    text: string;
+    top: number;
+    appliedAtCapture: number;
+    maxDrift: number;
+    samples: number;
+    settledFrames: number;
+  };
+  let proofHandle: JSHandle<false | PageUpProof> | undefined;
   try {
     // Native typing releases the first half through the same producer gate.
     await page.locator(composer).press("x");
@@ -1476,103 +1584,135 @@ async function verifyEventLoadPageUp(page: Page, toolCount: number) {
       );
       return thread && Math.abs(thread.scrollHeight - thread.clientHeight - thread.scrollTop) <= 8;
     });
-    await page.evaluate(() => Reflect.get(window, "__eventLoad").beginScroll());
-    await threadLocator.press("PageUp");
-    // Wait for the browser's native paging motion, not an assigned scrollTop.
-    await page.waitForFunction(
-      ({ expected, position }) => {
-        const thread = document.querySelector<HTMLElement>(
-          ".chat-pane-cache__pane--active .chat-thread",
-        );
-        const state = Reflect.get(window, "__eventLoad").reader();
-        if (!thread || !state.followLocked || !state.readingHistory) {
-          return false;
+    await threadLocator.evaluate((thread) => {
+      Reflect.set(window, "__eventLoadPageUpEnded", false);
+      const finished = () => {
+        if (thread.scrollHeight - thread.clientHeight - thread.scrollTop > 8) {
+          Reflect.set(window, "__eventLoadPageUpEnded", true);
+          thread.removeEventListener("scrollend", finished);
         }
-        const away = thread.scrollHeight - thread.clientHeight - thread.scrollTop > 8;
-        position.stable = away && position.top === thread.scrollTop ? position.stable + 1 : 0;
-        position.top = thread.scrollTop;
-        if (position.stable < 3) {
-          return false;
-        }
-        if (state.appliedResults >= expected) {
-          throw new Error("Foreground output drained before native PageUp overlap was captured");
-        }
-        return true;
-      },
-      { expected: toolCount, position: { top: -1, stable: 0 } },
-      { polling: "raf" },
-    );
-    proofHandle = await threadLocator.evaluateHandle((thread) => {
-      const viewport = thread.getBoundingClientRect();
-      // Durable fixture messages survive the bounded live-tool window. Do not
-      // capture a transient tool-result body or rely on a retained DOM identity.
-      const anchor = [...thread.querySelectorAll<HTMLElement>(".chat-text")].find((element) => {
-        const entryId = element
-          .closest(".chat-bubble[data-entry-id]")
-          ?.getAttribute("data-entry-id");
-        const bounds = element.getBoundingClientRect();
-        return (
-          entryId &&
-          /^(?:interaction-0-|event-load-call-)\d+$/u.test(entryId) &&
-          !element.closest(".chat-tool-msg-body") &&
-          bounds.top >= viewport.top &&
-          bounds.bottom <= viewport.bottom &&
-          bounds.height > 0
-        );
-      });
-      const entryId = anchor?.closest(".chat-bubble[data-entry-id]")?.getAttribute("data-entry-id");
-      if (!anchor || !entryId) {
-        throw new Error("Native PageUp did not expose a complete durable text anchor");
-      }
-      return {
-        entryId,
-        text: anchor.textContent ?? "",
-        top: anchor.getBoundingClientRect().top,
-        appliedAtCapture: Reflect.get(window, "__eventLoad").reader().appliedResults,
-        maxDrift: 0,
-        samples: 0,
-        settledFrames: 0,
       };
+      thread.addEventListener("scrollend", finished);
+      thread.addEventListener(
+        "keydown",
+        (event) => {
+          if (event instanceof KeyboardEvent && event.key === "PageUp") {
+            Reflect.get(window, "__eventLoad").beginScroll();
+          }
+        },
+        { once: true },
+      );
     });
-    await page.waitForFunction(
-      ({ proof, expected }) => {
-        const thread = document.querySelector<HTMLElement>(
-          ".chat-pane-cache__pane--active .chat-thread",
-        );
-        const state = Reflect.get(window, "__eventLoad").reader();
-        const anchor = [...(thread?.querySelectorAll<HTMLElement>(".chat-text") ?? [])].find(
-          (element) =>
-            element.textContent === proof.text &&
-            element.closest(".chat-bubble[data-entry-id]")?.getAttribute("data-entry-id") ===
-              proof.entryId,
-        );
-        if (!thread || !anchor || !state.followLocked || !state.readingHistory) {
-          throw new Error("Incoming foreground output replaced native PageUp reader intent");
-        }
-        const drift = Math.abs(anchor.getBoundingClientRect().top - proof.top);
-        proof.maxDrift = Math.max(proof.maxDrift, drift);
-        proof.samples++;
-        if (drift > 2 || thread.scrollHeight - thread.clientHeight - thread.scrollTop <= 8) {
-          throw new Error(`Incoming foreground output moved the PageUp anchor by ${drift}px`);
-        }
-        proof.settledFrames =
-          state.appliedResults === expected && !state.pendingToolRender
-            ? proof.settledFrames + 1
-            : 0;
-        return proof.settledFrames >= 3;
-      },
-      { proof: proofHandle, expected: toolCount },
-      { polling: "raf", timeout: 120_000 },
-    );
+    const readerPosition: { top: number; stable: number; proof?: PageUpProof } = {
+      top: -1,
+      stable: 0,
+    };
+    // Install the in-page observer before the native key releases the stream.
+    // Protocol latency must not defer anchor capture until the stream drains.
+    const [captured] = await Promise.all([
+      page.waitForFunction(
+        ({ expected, position }) => {
+          const thread = document.querySelector<HTMLElement>(
+            ".chat-pane-cache__pane--active .chat-thread",
+          );
+          const state = Reflect.get(window, "__eventLoad").reader();
+          if (
+            !thread ||
+            (!position.proof &&
+              (!state.followLocked ||
+                !state.readingHistory ||
+                !Reflect.get(window, "__eventLoadPageUpEnded")))
+          ) {
+            return false;
+          }
+          if (!position.proof) {
+            const away = thread.scrollHeight - thread.clientHeight - thread.scrollTop > 8;
+            position.stable = away && position.top === thread.scrollTop ? position.stable + 1 : 0;
+            position.top = thread.scrollTop;
+            if (position.stable < 3) {
+              return false;
+            }
+            const viewport = thread.getBoundingClientRect();
+            // Durable fixture messages survive the bounded live-tool window. Do not
+            // capture a transient tool-result body or rely on a retained DOM identity.
+            const anchor = [...thread.querySelectorAll<HTMLElement>(".chat-text")].find(
+              (element) => {
+                const entryId = element
+                  .closest(".chat-bubble[data-entry-id]")
+                  ?.getAttribute("data-entry-id");
+                const bounds = element.getBoundingClientRect();
+                return (
+                  entryId &&
+                  /^(?:interaction-0-|event-load-call-)\d+$/u.test(entryId) &&
+                  !element.closest(".chat-tool-msg-body") &&
+                  bounds.top >= viewport.top &&
+                  bounds.bottom <= viewport.bottom &&
+                  bounds.height > 0
+                );
+              },
+            );
+            const entryId = anchor
+              ?.closest(".chat-bubble[data-entry-id]")
+              ?.getAttribute("data-entry-id");
+            if (!anchor || !entryId) {
+              throw new Error("Native PageUp did not expose a complete durable text anchor");
+            }
+            if (state.appliedResults >= expected) {
+              throw new Error(
+                "Foreground output drained before native PageUp overlap was captured",
+              );
+            }
+            position.proof = {
+              entryId,
+              text: anchor.textContent ?? "",
+              top: anchor.getBoundingClientRect().top,
+              appliedAtCapture: Reflect.get(window, "__eventLoad").reader().appliedResults,
+              maxDrift: 0,
+              samples: 0,
+              settledFrames: 0,
+            };
+          }
+          const proof = position.proof;
+          const anchor = [...(thread?.querySelectorAll<HTMLElement>(".chat-text") ?? [])].find(
+            (element) =>
+              element.textContent === proof.text &&
+              element.closest(".chat-bubble[data-entry-id]")?.getAttribute("data-entry-id") ===
+                proof.entryId,
+          );
+          if (!thread || !anchor || !state.followLocked || !state.readingHistory) {
+            throw new Error("Incoming foreground output replaced native PageUp reader intent");
+          }
+          const drift = Math.abs(anchor.getBoundingClientRect().top - proof.top);
+          proof.maxDrift = Math.max(proof.maxDrift, drift);
+          proof.samples++;
+          if (drift > 2 || thread.scrollHeight - thread.clientHeight - thread.scrollTop <= 8) {
+            throw new Error(`Incoming foreground output moved the PageUp anchor by ${drift}px`);
+          }
+          proof.settledFrames =
+            state.appliedResults === expected && !state.pendingToolRender
+              ? proof.settledFrames + 1
+              : 0;
+          return proof.settledFrames >= 3 && proof;
+        },
+        { position: readerPosition, expected: toolCount },
+        { polling: "raf", timeout: 120_000 },
+      ),
+      threadLocator.press("PageUp"),
+    ]);
+    proofHandle = captured;
     const applied = await page.evaluate(() =>
       Reflect.get(window, "__eventLoad").verifyAppliedResults(),
     );
-    const readerEvidence = await proofHandle.evaluate((proof) => ({
+    const proof = await proofHandle.jsonValue();
+    if (!proof) {
+      throw new Error("Native PageUp anchor proof did not complete");
+    }
+    const readerEvidence = {
       nativePageUpPreserved: true,
       pageUpAppliedAtCapture: proof.appliedAtCapture,
       pageUpMaxAnchorDriftPx: proof.maxDrift,
       pageUpSamples: proof.samples,
-    }));
+    };
     if (readerEvidence.pageUpAppliedAtCapture >= toolCount) {
       throw new Error("PageUp proof captured no remaining foreground results");
     }

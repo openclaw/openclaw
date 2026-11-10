@@ -23,9 +23,11 @@ it.each([false, true])("exports chat chunks (deleted=%s)", async (deleted) => {
   const extra = { deleted_at: deleted ? "2026-10-02T01:00:00Z" : undefined };
   const thread = { thread_id: "t", thread_name: "release plan" };
   const rows = [
-    message("1", "2026-10-01T23:50:00Z", "11", "Ann", "a".repeat(79) + "😀", extra),
-    message("2", "2026-10-02T00:10:00Z", "12", "Bo", "yes <@11>", { reply_to_message_id: "1" }),
-    message("8", at + "Z", "11", "Ann", "plan\u2028step two", thread),
+    message("1", "2026-10-01T23:50:00Z", "10011", "Ann", "a".repeat(79) + "😀", extra),
+    message("2", "2026-10-02T00:10:00Z", "20011", "Ann", "yes <@10011>", {
+      reply_to_message_id: "1",
+    }),
+    message("8", at + "Z", "10011", "Ann", "plan\u2028step two", thread),
     ...[".000Z", ".100000001Z", ".1Z"].map((suffix, i) =>
       message(String(i + 4), at + suffix, "u" + i, "开发者🦀 " + i, "x".repeat(250)),
     ),
@@ -45,9 +47,11 @@ it.each([false, true])("exports chat chunks (deleted=%s)", async (deleted) => {
   const texts = await Promise.all(chunks.map(read));
   const preview = deleted ? "\\[deleted\\]" : "a{79}";
   expect(texts[1].toString()).toMatch(
-    new RegExp(`^00:10 Bo ↩ Ann 2026-10-01 23:50 "${preview}": yes @Ann$`, "m"),
+    new RegExp(`^00:10 Ann#20011 ↩ Ann#10011 2026-10-01 23:50 "${preview}": yes @Ann#10011$`, "m"),
   );
-  expect(texts[2].toString()).toMatch(/## Thread: release plan\n00:30 Ann: plan\n {6}step two\n/);
+  expect(texts[2].toString()).toMatch(
+    /## Thread: release plan\n00:30 Ann#10011: plan\n {6}step two\n/,
+  );
   for (const [i, chunk] of chunks.entries()) {
     expect(chunk.bytes).toBe(texts[i].length);
     expect(texts[i].length).toBeLessThanOrEqual(1000);

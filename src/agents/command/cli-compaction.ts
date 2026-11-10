@@ -220,6 +220,7 @@ export async function runCliTurnCompactionLifecycle(
     assertActive();
     const sessionFile = params.sessionKey;
     const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+      agentId: params.sessionAgentId,
       sessionId: params.sessionId,
       cwd: params.cwd ?? params.workspaceDir,
       agentDir: params.agentDir,
