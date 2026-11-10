@@ -44,7 +44,7 @@ async function fixture(count: any, evidenceCount: any, body: any, quote = "") {
   return { vault, data, claims, scans: () => scans };
 }
 async function valid(result: any) {
-  expect(Check(contract.operations.records.output, result), "records contract").toBeTruthy();
+  expect(Check(contract.operations.records_detail.output, result), "records contract").toBeTruthy();
   expect(await isHostJson(result), "actual host nested-value and byte limits").toBeTruthy();
   return result;
 }

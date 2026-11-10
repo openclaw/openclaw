@@ -8,6 +8,7 @@ import { SessionOwnerChip } from "../../components/solid/session-owner-chip.tsx"
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCreatedActor } from "../../lib/session-owner.ts";
+import { foldSearchText as fold, matchFoldedQuery } from "../../lib/text-match.ts";
 import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
 
 export type DashboardAuthorOption = {
@@ -19,8 +20,6 @@ export type DashboardAuthorOption = {
 
 // The author search earns its place only once the list is long.
 const AUTHOR_SEARCH_MIN = 8;
-
-const fold = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase();
 
 function authorDisplayName(author: { id: string; label: string }, selfId?: string) {
   return author.id === selfId ? t("dashboardsPage.you") : author.label;
@@ -83,15 +82,14 @@ export function DashboardSearch(props: { query: string; onQueryChange: (query: s
 
 function AuthorName(props: { name: string; query: string }) {
   const parts = createMemo(() => {
-    const query = props.query.trim();
-    const index = query ? fold(props.name).indexOf(fold(query)) : -1;
-    return index < 0
-      ? null
-      : [
-          props.name.slice(0, index),
-          props.name.slice(index, index + query.length),
-          props.name.slice(index + query.length),
-        ];
+    const match = matchFoldedQuery(props.name, props.query);
+    return match
+      ? [
+          props.name.slice(0, match.start),
+          props.name.slice(match.start, match.end),
+          props.name.slice(match.end),
+        ]
+      : null;
   });
   return (
     <Show when={parts()} fallback={props.name}>

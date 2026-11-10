@@ -296,20 +296,37 @@ describe("lmstudio setup", () => {
     },
   );
 
-  it("interactive setup applies an optional preferred context length to all discovered LM Studio models", async () => {
-    listOnce([
-      wireModel("phi-4", { max_context_length: 65536 }),
-      wireModel(modelId, { max_context_length: 32768 }),
-    ]);
-    const { prompter } = wizard([endpoint, "lmstudio-test-key", "4096"]);
+  it.each([
+    [32_768, "4096", 4_096, 4_096, 4_096, 4_096],
+    [65_536, "16384", 16_384, 8_192, 16_384, 8_192],
+    [16_384, "65536", 65_536, 32_768, 32_768, 16_384],
+    [16_384, "131072", 65_536, 32_768, 32_768, 16_384],
+    [65_536, "", 65_536, 32_768, 32_768, 16_384],
+  ] as const)(
+    "interactive setup sizes output after preferred context selection (loaded %i, preferred %s)",
+    async (loadedContext, preferred, firstContext, firstOutput, secondContext, secondOutput) => {
+      listOnce([
+        wireModel("phi-4", {
+          max_context_length: 65_536,
+          loaded_instances: [{ id: "phi-loaded", config: { context_length: loadedContext } }],
+        }),
+        wireModel(modelId, { max_context_length: 32_768 }),
+      ]);
+      const { prompter } = wizard([endpoint, "lmstudio-test-key", preferred]);
 
-    const result = await interactive({ prompter });
+      const result = await interactive({ prompter });
 
-    expect(providerOf(result.configPatch).models).toMatchObject([
-      { id: "phi-4", contextWindow: 65536, contextTokens: 4096, maxTokens: 4096 },
-      { id: modelId, contextWindow: 32768, contextTokens: 4096, maxTokens: 4096 },
-    ]);
-  });
+      expect(providerOf(result.configPatch).models).toMatchObject([
+        { id: "phi-4", contextWindow: 65_536, contextTokens: firstContext, maxTokens: firstOutput },
+        {
+          id: modelId,
+          contextWindow: 32_768,
+          contextTokens: secondContext,
+          maxTokens: secondOutput,
+        },
+      ]);
+    },
+  );
 
   type DiscoveryFailure = { remote: boolean; status?: number; reason: string; guidance: string };
   it.each`

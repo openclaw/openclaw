@@ -1,5 +1,5 @@
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { readTableColumns, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -136,14 +136,48 @@ export function readTemplatePackageRefsInDatabase(
   db: EngineConnection,
   options: TemplatePackageRefQuery = {},
 ): PersistedTemplatePackageRef[] {
-  if (isPostgresSqlConnection(db)) {
-    throw new Error("Template package provenance requires SQLite named-parameter support.");
-  }
   if (options.readOnly && !tableExists(db, "template_package_refs")) {
     return [];
   }
-  const conditions: string[] = [];
-  const params: Record<string, string> = {};
+  const availableColumns = readTableColumns(db, "template_package_refs");
+  let query = getNodeSqliteKysely<DB>(db)
+    .selectFrom("template_package_refs")
+    .select([
+      "schema_version",
+      "agent_id",
+      "template_name",
+      "package_kind",
+      "package_source",
+      "package_ref",
+      "package_version",
+      "package_integrity",
+      "package_status",
+      "relationship",
+      "origin",
+      "independent_owner",
+      "installed_at_ms",
+      "updated_at_ms",
+    ])
+    .select((eb) =>
+      (
+        [
+          "extension_id",
+          "extension_format",
+          "extension_detected_format",
+          "extension_mapped_json",
+          "extension_unavailable_json",
+          "extension_adapter_identity",
+        ] as const
+      ).map((column) =>
+        availableColumns.has(column)
+          ? column
+          : // Historical rows predate additive extension provenance on either engine.
+            eb.lit(null).as(column),
+      ),
+    )
+    .orderBy("agent_id")
+    .orderBy("package_kind")
+    .orderBy("package_ref");
   for (const [column, value] of [
     ["agent_id", options.agentId],
     ["package_kind", options.kind],
@@ -154,34 +188,10 @@ export function readTemplatePackageRefsInDatabase(
     ["package_status", options.status],
   ] as const) {
     if (value !== undefined) {
-      conditions.push(`${column} = @${column}`);
-      params[column] = value;
+      query = query.where(column, "=", value);
     }
   }
-  const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
-  const availableColumns = readTableColumns(db, "template_package_refs");
-  const extensionColumns = [
-    "extension_id",
-    "extension_format",
-    "extension_detected_format",
-    "extension_mapped_json",
-    "extension_unavailable_json",
-    "extension_adapter_identity",
-  ]
-    .map((column) => (availableColumns.has(column) ? column : `NULL AS ${column}`))
-    .join(", ");
-  const rows =
-    db /* sqlite-allow-raw: read-only Template package reference lookup with closed column filters. */
-      .prepare(
-        `SELECT schema_version, agent_id, template_name, package_kind, package_source,
-              package_ref, package_version, package_integrity, package_status, relationship, origin,
-              independent_owner, ${extensionColumns},
-              installed_at_ms,
-              updated_at_ms
-         FROM template_package_refs${where}
-        ORDER BY agent_id, package_kind, package_ref`,
-      )
-      // SAFETY: The explicit projection matches the admitted package-reference schema consumed by its row codec.
-      .all(params) as PackageRefRow[];
+  // SAFETY: The explicit projection matches the admitted package-reference schema consumed by its row codec.
+  const rows = executeSqliteQuerySync(db, query).rows as PackageRefRow[];
   return rows.map(rowToPackageRef);
 }
