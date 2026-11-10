@@ -19,7 +19,10 @@ async function issue(
     sendPairingReply: async () => {},
     ...overrides,
   });
-  expect(result).toEqual(created ? { created: true, code } : { created: false });
+  expect(result).toEqual(
+    created ? { created: true, code, replyDelivered: true } : { created: false, code },
+  );
+  return result;
 }
 function hooks(...entries: Parameters<typeof createMockPluginRegistry>[0]) {
   initializeGlobalHookRunner(createMockPluginRegistry(entries));
@@ -50,14 +53,19 @@ it("notifies and replies only when creating a request, preserving metadata and c
   );
 });
 
-it("captures reply errors through onReplyError", async () => {
+it("captures reply errors through onReplyError and reports the missed delivery", async () => {
   const error = new Error("send failed");
   const onReplyError = vi.fn();
-  await issue("9999", {
-    onReplyError,
+  const result = await issuePairingChallenge({
+    channel: "forum",
+    senderId: "123",
+    senderIdLine: "Your forum user id: 123",
+    upsertPairingRequest: async () => ({ code: "9999", created: true }),
     sendPairingReply: () => Promise.reject(error),
+    onReplyError,
   });
   expect(onReplyError).toHaveBeenCalledExactlyOnceWith(error);
+  expect(result).toEqual({ created: true, code: "9999", replyDelivered: false });
 });
 
 it("does not block pairing replies when pairing-request hooks fail or stall", async () => {

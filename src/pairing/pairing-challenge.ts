@@ -26,13 +26,16 @@ type PairingChallengeParams = {
  */
 export async function issuePairingChallenge(
   params: PairingChallengeParams,
-): Promise<{ created: boolean; code?: string }> {
+): Promise<{ created: boolean; code?: string; replyDelivered?: boolean }> {
   const { code, created } = await params.upsertPairingRequest({
     id: params.senderId,
     meta: params.meta,
   });
   if (!created) {
-    return { created: false };
+    // A pending request already exists for this sender. Return its code so the
+    // caller can redeliver it; previously the code was dropped here, leaving the
+    // sender with no pairing code and no notice until the pending entry expired.
+    return { created: false, code };
   }
   params.onCreated?.({ code });
   const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
@@ -65,10 +68,12 @@ export async function issuePairingChallenge(
       idLine: params.senderIdLine,
       code,
     });
+  let replyDelivered = true;
   try {
     await params.sendPairingReply(replyText);
   } catch (err) {
+    replyDelivered = false;
     params.onReplyError?.(err);
   }
-  return { created: true, code };
+  return { created: true, code, replyDelivered };
 }

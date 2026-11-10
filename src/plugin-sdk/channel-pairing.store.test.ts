@@ -89,7 +89,10 @@ it("keeps the pairing lifecycle and hooks bound to one account despite replaceme
     code: alpha.code,
     created: false,
   });
-  await expect(pairing.issueChallenge(challenge)).resolves.toEqual({ created: false });
+  await expect(pairing.issueChallenge(challenge)).resolves.toEqual({
+    created: false,
+    code: alpha.code,
+  });
   expect(replies).toHaveLength(1);
   await closeStateDatabaseForTest();
   await expect(list()).resolves.toMatchObject([
