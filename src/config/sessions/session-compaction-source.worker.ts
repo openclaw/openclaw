@@ -33,7 +33,6 @@ import {
 import {
   prepareTranscriptContextSnapshot,
   prepareTranscriptEntryReader,
-  validateSessionTranscriptContextInDatabase,
 } from "./session-accessor.sqlite-model-context.js";
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { fitBackgroundResultDependencies } from "./session-background-result-dependencies.js";
@@ -82,14 +81,8 @@ function serializeCompactionSource(
   request: SessionCompactionSerializeRequest,
   control: WorkerTaskControl,
 ): SessionCompactionSourceReply {
-  // The existing detached-context check accepts only path-preserving appends.
-  validateSessionTranscriptContextInDatabase(
-    database,
-    request.resolvedScope,
-    { version: request.version },
-    "prefix",
-  );
-  const readEntry = prepareTranscriptEntryReader(database, request.resolvedScope);
+  // Summary usage appends while this compaction runs; only a rewrite changes captured rows.
+  const readEntry = prepareTranscriptEntryReader(database, request.resolvedScope, request.version);
   const { seqs, facts } = request.entries;
   const index = createConversationSerializationIndex({
     length: seqs.length,

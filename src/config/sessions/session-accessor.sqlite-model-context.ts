@@ -309,13 +309,31 @@ function withTranscriptContextSnapshot<T>(
 }
 
 /**
- * Reread rows captured by an earlier context snapshot. The caller validates that
- * snapshot's version in this transaction first; a generation keeps prefix rows.
+ * Reread rows captured by an earlier context snapshot. A generation keeps written
+ * rows byte-identical, so appends and path changes leave them readable; rewrites
+ * start a new generation. Callers that commit against the captured path keep their
+ * own current-path checks.
  */
 export function prepareTranscriptEntryReader(
   database: Pick<OpenClawAgentDatabase, "db">,
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
+  version: SessionTranscriptContextVersion,
 ): (seq: number) => SessionTreeEntry {
+  const current = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
+  const unchanged =
+    current.generation === version.generation &&
+    current.rawSeq === version.rawSeq &&
+    current.updatedAt === version.updatedAt;
+  if (
+    !unchanged &&
+    (!version.generation ||
+      current.generation !== version.generation ||
+      version.rawSeq === null ||
+      current.rawSeq === null ||
+      current.rawSeq < version.rawSeq)
+  ) {
+    throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+  }
   const readPayload = prepareSqliteQuerySync<{ seq: number }, { event_json: string }>(
     database.db,
     (parameter) =>

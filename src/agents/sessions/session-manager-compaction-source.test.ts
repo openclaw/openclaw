@@ -196,7 +196,9 @@ it("keeps old payloads in the worker while serving different summary budgets and
             expect(reopened.buildSessionContext().messages).toEqual(
               tail.buildSessionContext().messages,
             );
-            // A rewritten context (here, the committed compaction) is stale for a late retry.
+            // Appends keep captured rows; a rewrite starts a new generation and is stale.
+            await expect(source.history.serialize(8_000)).resolves.toEqual(smaller);
+            await reopened.removeTrailingEntriesAsync((entry) => entry.type === "compaction");
             await expect(source.history.serialize(8_000)).rejects.toThrow(
               "Session transcript changed during context read",
             );
