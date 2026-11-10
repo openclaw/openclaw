@@ -3,11 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sha256File } from "@openclaw/fs-safe/durability";
 import { root, type Root } from "@openclaw/fs-safe/root";
-import {
-  isRecord,
-  isStringArray,
-  isStringRecord,
-} from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -50,8 +46,7 @@ const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
 const GENERATED_IGNORE_MODE_MASK = process.platform === "win32" ? 0o200 : 0o7777;
 
 type SyncedSkillsManifest = {
-  destinations: Record<string, string>;
-  entryKeys: string[];
+  destinations: Record<string, unknown>;
   skillRootsFingerprint: string;
   skillsVersion: number;
   sourceVersion: number;
@@ -78,14 +73,12 @@ function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null 
     typeof value.sourceVersion !== "number" ||
     !Number.isFinite(value.sourceVersion) ||
     typeof value.skillRootsFingerprint !== "string" ||
-    !isStringArray(value.entryKeys) ||
-    !isStringRecord(value.destinations)
+    !isRecord(value.destinations)
   ) {
     return null;
   }
   return {
     destinations: value.destinations,
-    entryKeys: value.entryKeys,
     skillRootsFingerprint: value.skillRootsFingerprint,
     skillsVersion: value.skillsVersion,
     sourceVersion: value.sourceVersion,
@@ -94,11 +87,12 @@ function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null 
 
 function resolveSyncedSkillsManifestKey(
   manifest: Omit<SyncedSkillsManifest, "destinations">,
+  entryKeys: string[],
 ): string {
   return JSON.stringify([
     manifest.skillsVersion,
     manifest.skillRootsFingerprint,
-    manifest.entryKeys,
+    entryKeys,
     manifest.sourceVersion,
   ]);
 }
@@ -314,17 +308,21 @@ export async function syncWorkspaceSkills(params: {
     phases.mark("attempt.setup.sandbox.layout.skills_sync.reuse");
     const expectedManifestKey =
       skillsSnapshot?.version === getSkillsSnapshotVersion(sourceWorkspace)
-        ? resolveSyncedSkillsManifestKey({
-            entryKeys: skillsSnapshot.skills
+        ? resolveSyncedSkillsManifestKey(
+            {
+              skillRootsFingerprint,
+              skillsVersion: skillsSnapshot.version,
+              sourceVersion: getSkillsResourceVersion(sourceWorkspace),
+            },
+            skillsSnapshot.skills
               .map((skill) => resolveSyncedSkillIdentity(skill.skillKey ?? skill.name, skill.name))
               .toSorted(),
-            skillRootsFingerprint,
-            skillsVersion: skillsSnapshot.version,
-            sourceVersion: getSkillsResourceVersion(sourceWorkspace),
-          })
+          )
         : undefined;
     const cachedUsage = syncedSkillsUsageCache.get(targetSkillsDir);
-    const manifestKey = manifest ? resolveSyncedSkillsManifestKey(manifest) : undefined;
+    const manifestKey = manifest
+      ? resolveSyncedSkillsManifestKey(manifest, Object.keys(manifest.destinations).toSorted())
+      : undefined;
     if (
       expectedManifestKey &&
       manifestKey === expectedManifestKey &&
@@ -517,13 +515,11 @@ export async function syncWorkspaceSkills(params: {
     if (!copyFailed) {
       const nextManifest: SyncedSkillsManifest = {
         destinations: Object.fromEntries(
-          plans.flatMap((plan) =>
-            plan.destinationPath
-              ? [[plan.identity, path.basename(plan.destinationPath)] as const]
-              : [],
-          ),
+          plans.map((plan) => [
+            plan.identity,
+            plan.destinationPath ? path.basename(plan.destinationPath) : null,
+          ]),
         ),
-        entryKeys: plans.map((plan) => plan.identity).toSorted(),
         skillRootsFingerprint,
         skillsVersion,
         sourceVersion,
@@ -537,7 +533,10 @@ export async function syncWorkspaceSkills(params: {
       assertCurrent?.();
       syncedSkillsUsageCache.set(targetSkillsDir, {
         manifest: nextManifest,
-        manifestKey: resolveSyncedSkillsManifestKey(nextManifest),
+        manifestKey: resolveSyncedSkillsManifestKey(
+          nextManifest,
+          plans.map((plan) => plan.identity).toSorted(),
+        ),
         skillUsagePaths,
       });
       pruneMapToMaxSize(syncedSkillsUsageCache, 100);

@@ -472,13 +472,13 @@ describe("syncWorkspaceSkills", () => {
     const manifestPath = path.join(targetSkills, ".openclaw-sync.json");
     const manifest = JSON.parse(await readText(manifestPath)) as {
       skillsVersion: number;
-      entryKeys: string[];
+      destinations: Record<string, unknown>;
     };
     await fs.writeFile(
       manifestPath,
       JSON.stringify({
         ...manifest,
-        entryKeys: ["../escape", "..\\escape"],
+        destinations: { "../escape": "escape", "..\\escape": "escape" },
       }),
     );
 
