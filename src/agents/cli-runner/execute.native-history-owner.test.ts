@@ -106,6 +106,27 @@ describe("native login history owner at execution", () => {
     },
   );
 
+  it("refuses a saved account removed after the first node credential check", async () => {
+    const { context, calls } = nativeRun();
+    const refusal = new Error("saved account removed");
+    let checks = 0;
+    context.preparedBackend.prepareCredentialUse = async () => {
+      checks += 1;
+      calls.push("credential");
+      if (checks > 1) {
+        throw refusal;
+      }
+    };
+    context.executionTarget = { kind: "node", placement: { nodeId: "node-fixture" } };
+    const invokeNode = vi
+      .spyOn(nodeRuntime, "invokeNodeClaudeCliRun")
+      .mockRejectedValue(new Error("unexpected node execution"));
+
+    await expect(executePreparedCliRun(context)).rejects.toBe(refusal);
+    expect(checks).toBe(2);
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
   it.each([
     { provider: "claude-cli", plugin: false },
     { provider: "google-gemini-cli", plugin: false },

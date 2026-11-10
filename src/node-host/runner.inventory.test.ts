@@ -75,6 +75,7 @@ it("advertises Claude agent runs after node-local opt-in and binary resolution",
   await expectStartupTimeout();
   expect(lastCapturedOptions()?.commands).toContain("agent.cli.claude.run.v1");
   expect(lastCapturedOptions()?.caps).toContain("claude-cli-native-auth-v1");
+  expect(lastCapturedOptions()?.caps).toContain("claude-cli-thinking-env-v1");
 });
 
 it("publishes negotiated worker slots without reconnecting", async () => {

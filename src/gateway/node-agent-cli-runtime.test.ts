@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { NODE_CLAUDE_THINKING_ENV_KEYS } from "../agents/cli-runner/execute-logging.js";
+import { NODE_CLAUDE_THINKING_ENV_CAPABILITY } from "../infra/node-commands.js";
 import { decodeClaudeCliNodeRunParams } from "../node-host/invoke-agent-cli-claude-params.js";
 
 const mocks = vi.hoisted(() => ({
@@ -105,6 +107,51 @@ describe("invokeNodeClaudeCliRun", () => {
       });
 
       await expect(invoke({ nativeAuthOnly: true })).resolves.toEqual({ ok: true });
+    },
+  );
+
+  it.each([false, true])(
+    "negotiates thinking environment keys with node support (%s)",
+    async (supported) => {
+      mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
+      mocks.get.mockReturnValue({
+        ...mocks.get(),
+        caps: supported ? [NODE_CLAUDE_THINKING_ENV_CAPABILITY] : [],
+      });
+      const thinkingEnv = {
+        CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1",
+        MAX_THINKING_TOKENS: "16384",
+      };
+      mocks.invoke.mockImplementation(async ({ params }) => {
+        const envKeys = Object.keys(params.env ?? {});
+        const clearEnv = params.clearEnv ?? [];
+        for (const key of NODE_CLAUDE_THINKING_ENV_KEYS) {
+          if (!supported && (envKeys.includes(key) || clearEnv.includes(key))) {
+            throw new Error(`INVALID_REQUEST: clearEnv key is not allowed: ${key}`);
+          }
+        }
+        const decoded = await decodeClaudeCliNodeRunParams(JSON.stringify(params));
+        expect(decoded.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("100000");
+        expect(decoded.env?.MAX_THINKING_TOKENS).toBe(supported ? "16384" : undefined);
+        expect(decoded.clearEnv?.includes("MAX_THINKING_TOKENS")).toBe(supported);
+        expect(decoded.clearEnv?.includes("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING")).toBe(supported);
+        expect(decoded.clearEnv).toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+        return { ok: true };
+      });
+
+      await expect(
+        invoke({
+          env: {
+            ...thinkingEnv,
+            CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000",
+          },
+          clearEnv: [
+            "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
+            "MAX_THINKING_TOKENS",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+          ],
+        }),
+      ).resolves.toEqual({ ok: true });
     },
   );
 

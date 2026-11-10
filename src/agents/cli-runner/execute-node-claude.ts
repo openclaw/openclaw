@@ -135,6 +135,7 @@ export async function executeNodeClaudeRun(params: {
   noOutputTimeoutMs: number;
   consumeStdout: (chunk: string) => void;
   consumeStderr: (chunk: string) => void;
+  prepareCredentialUse?: () => Promise<void>;
 }): Promise<{
   result: RunExit;
   nodeRunAbortSignal: AbortSignal;
@@ -182,6 +183,10 @@ export async function executeNodeClaudeRun(params: {
         return hardTimeoutResult();
       }
       assertCurrent();
+      // Skill setup and the approval wait both happen before this call.
+      // A saved account removed during either wait must not be submitted.
+      await params.prepareCredentialUse?.();
+      assertCurrent();
       return await runWithAgentToolSourceExecutionScope(assertCurrent, () =>
         invokeNodeClaudeCliRun({
           assertCurrent,
@@ -203,6 +208,9 @@ export async function executeNodeClaudeRun(params: {
                 approvalDecision: approval.decision,
                 systemRunPlan: approval.plan,
               }
+            : {}),
+          ...(params.prepareCredentialUse
+            ? { prepareCredentialUse: params.prepareCredentialUse }
             : {}),
           timeoutMs: remainingTimeoutMs,
           idleTimeoutMs: Math.max(

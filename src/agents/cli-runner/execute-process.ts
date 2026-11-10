@@ -302,6 +302,7 @@ export async function executeCliProcess(params: {
       const nodeRun = await executeNodeClaudeRun({
         context,
         nodePlacement: params.nodePlacement,
+        prepareCredentialUse: context.preparedBackend.prepareCredentialUse,
         executionArgs: params.resolveExecutionArgs(),
         stdinPayload: params.stdin ?? "",
         ...(params.nodeSystemPrompt !== undefined
