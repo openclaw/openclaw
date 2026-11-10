@@ -176,6 +176,11 @@ describe("PostgreSQL conformance selection", () => {
     );
     expect(Object.keys(workflow.on).toSorted()).toEqual(["schedule", "workflow_dispatch"]);
     expect(workflow.on.schedule).toEqual([{ cron: "17 7 * * *" }, { cron: "43 6 * * 1" }]);
+    expect(workflow.concurrency).toEqual({
+      group: "postgres-conformance-weekly",
+      queue: "max",
+      "cancel-in-progress": false,
+    });
     const versions = workflow.on.workflow_dispatch.inputs.versions;
     expect(versions.default).toBe("all");
     expect(versions.options).toEqual(["all", "pg16", "pg17", "pg18"]);
@@ -6730,31 +6735,38 @@ describe("ci workflow guards", () => {
     ]);
     const coreLint = workflow.jobs["check-lint-hosted-core-shard"];
     expect(coreLint.needs).toEqual(["preflight", "check-plan", "check-extension-package-boundary"]);
-    const coreRestores = coreLint.steps.filter(
-      (step: WorkflowStep) =>
-        step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
-        String(step.with?.mode).startsWith("restore"),
-    );
-    for (const sharing of ["true", "false"]) {
-      for (const needsSdk of [true, false]) {
-        const selected = coreRestores.filter((step: WorkflowStep) =>
-          evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
-            eventName: "pull_request",
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
-            matrix: { requires_sdk_declarations: needsSdk },
-            preflightOutputs: {
-              shared_sdk_declarations: sharing,
-              runner_profile: "github",
-              cache_mode: "read",
-            },
-          }),
-        );
-        expect(selected.map((step: WorkflowStep) => step.with?.mode)).toEqual([
-          sharing === "true" && needsSdk ? "restore-run" : "restore-main",
-        ]);
-        expect(selected[0]?.["continue-on-error"]).not.toBe(true);
-      }
+    const sdkRestores = (steps: WorkflowStep[]) =>
+      steps.filter(
+        (step) =>
+          step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
+          String(step.with?.mode).startsWith("restore"),
+      );
+    const coreRestores = sdkRestores(coreLint.steps);
+    for (const [sharing, needsSdk, selection, modes] of [
+      ["true", true, "", ["restore-run"]],
+      ["true", true, "{}", ["restore-run"]],
+      ["true", undefined, "", ["restore-main"]],
+      ["true", undefined, "{}", []],
+      ["false", true, "", ["restore-main"]],
+      ["false", true, "{}", ["restore-main"]],
+      ["false", undefined, "", ["restore-main"]],
+      ["false", undefined, "{}", ["restore-main"]],
+    ] as const) {
+      const selected = coreRestores.filter((step: WorkflowStep) =>
+        evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { requires_sdk_declarations: needsSdk, lint_selection_json: selection },
+          preflightOutputs: {
+            shared_sdk_declarations: sharing,
+            runner_profile: "github",
+            cache_mode: "read",
+          },
+        }),
+      );
+      expect(selected.map((step: WorkflowStep) => step.with?.mode)).toEqual(modes);
+      expect(selected.some((step: WorkflowStep) => step["continue-on-error"] === true)).toBe(false);
     }
     const steps = producer.steps as WorkflowStep[];
     expect(
@@ -6765,11 +6777,7 @@ describe("ci workflow guards", () => {
     );
     expect(steps.at(-1)?.with?.mode).toBe("publish-run");
     expect(workflow.jobs["ci-gate"].needs).toContain("check-extension-package-boundary");
-    const restoreSteps = workflow.jobs["check-lint-hosted-extension-shard"].steps.filter(
-      (step: WorkflowStep) =>
-        step.uses === "./.ci-harness/.github/actions/sdk-declarations" &&
-        String(step.with?.mode).startsWith("restore"),
-    );
+    const restoreSteps = sdkRestores(workflow.jobs["check-lint-hosted-extension-shard"].steps);
     for (const enabled of ["true", "false"]) {
       const selected = restoreSteps.filter((step: WorkflowStep) =>
         evaluateWorkflowCondition(expectDefined(step.if, "SDK restore condition"), {
@@ -6837,9 +6845,6 @@ describe("ci workflow guards", () => {
     );
     expect(boundaryCache.if).toBe(
       "needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary' && steps.extension-boundary-inputs.outputs.enabled == 'true'",
-    );
-    expect(hostedCoreCache.if).toBe(
-      "(needs.preflight.outputs.shared_sdk_declarations != 'true' || matrix.requires_sdk_declarations != true) && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.runner_profile == 'github' && !inputs.release_gate",
     );
     for (const cache of [hostedLintCache, hostedCoreCache]) {
       expect(cache.uses).toBe("./.ci-harness/.github/actions/sdk-declarations");

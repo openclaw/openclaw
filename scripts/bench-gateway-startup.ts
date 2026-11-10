@@ -9,6 +9,8 @@
 // 5s foreground admission budget, so their migrations overlap the slow inspection.
 // --publication-api-delay-ms 500 seeds four historical publications; a private gh/fetch
 // fixture delays read-only GitHub observations and never uses real credentials or GitHub.
+// --restart-sessions 9 adds interrupted sessions plus 155 stale runs, synthetic inference,
+// and real startup read RPCs. Restore pristine state before each comparison sample.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv } from "node:crypto";
@@ -30,6 +32,7 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import type { InternalSessionEntry } from "../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../src/config/validation-core.js";
 import { isMainModule } from "../src/infra/is-main.js";
@@ -74,6 +77,14 @@ import {
   waitForInitialProbe as waitForProbe,
 } from "./lib/gateway-bench-runtime.ts";
 import { summarizeGatewayModuleLoads } from "./lib/gateway-startup-module-counts.mjs";
+import {
+  STARTUP_RESUME_AGENT,
+  STARTUP_RESUME_SKIPPED,
+  startupResumeConfig,
+  startStartupResumeProvider,
+  probeStartupReads,
+  type StartupReadProbe,
+} from "./lib/gateway-startup-resume.ts";
 import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
@@ -95,6 +106,7 @@ type GatewayBenchCase = {
   providerStaticCatalogStallMs?: number;
   publicationGitDelayMs?: number;
   publicationApiDelayMs?: number;
+  restartSessions?: number;
   teamScale?: boolean;
   runByDefault?: boolean;
 };
@@ -108,6 +120,14 @@ type ExitListenerSnapshot = {
 };
 
 type GatewaySample = {
+  restartRecovery?: {
+    resumed: number;
+    skipped: number;
+    completeMs?: number;
+    inferenceMs: number[];
+    errors: string[];
+  };
+  startupReads?: StartupReadProbe;
   exitListeners?: ExitListenerSnapshot;
   pluginMigration?: { total: number; completed: number; warnings: number };
   publicationRecovery?: { startedAtMs: number; releasedAtMs: number; delayMs: number };
@@ -224,6 +244,7 @@ const VALUE_FLAGS = new Set([
   "--publication-git-delay-ms",
   "--publication-api-delay-ms",
   "--plugin-migration-fixture",
+  "--restart-sessions",
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
@@ -507,6 +528,24 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     }
     cases = [{ ...cases[0], teamScale: true, pluginCount: 46 }];
   }
+  if (flags.has("--restart-sessions")) {
+    if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
+      throw new CliArgumentError("--restart-sessions requires --case teamBoot");
+    }
+    const restartSessions = parsePositiveInt(
+      flags.get("--restart-sessions")?.[0],
+      9,
+      "--restart-sessions",
+    );
+    if (restartSessions + STARTUP_RESUME_SKIPPED > 1250) {
+      throw new CliArgumentError(
+        "--restart-sessions plus skipped rows must fit the 1250-session agent",
+      );
+    }
+    cases = [
+      { ...cases[0], restartSessions, config: { ...cases[0].config, ...startupResumeConfig() } },
+    ];
+  }
   if (flags.has("--plugin-migration-fixture")) {
     const pluginMigrationFixture = flags.get("--plugin-migration-fixture")?.[0];
     if (
@@ -665,6 +704,7 @@ Options:
   --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels/secrets config for teamBoot
   --plugin-migration-fixture <status> Seed a pending or deferred config-only teamBoot obligation
   --team-scale                   Seed 46 plugins, 12 GiB shared/35 GiB agent data and 62k workspace files
+  --restart-sessions <n> Resume n interrupted sessions plus 155 stale runs; probe startup reads
   --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
   --publication-api-delay-ms <n> Recover four historical publications through delayed mock GitHub reads (200–800)
   --agent-database-mib <n> Slow-agent cache payload (default: 512), or teamBoot total transcript database size
@@ -692,6 +732,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
           bundledPluginIds: benchCase.bundledPluginFixture?.plugins?.allow ?? [],
           publicationGitDelayMs: benchCase.publicationGitDelayMs,
           publicationApiDelayMs: benchCase.publicationApiDelayMs,
+          restartSessions: benchCase.restartSessions,
         }
       : {}),
     samples,
@@ -760,6 +801,19 @@ function collectResultFailures(
         missing.push(
           "four historical publications confirmed through mock GitHub and durable receipts",
         );
+      }
+      if (
+        result.restartSessions !== undefined &&
+        (sample.restartRecovery?.resumed !== result.restartSessions ||
+          sample.restartRecovery.skipped !== STARTUP_RESUME_SKIPPED ||
+          sample.restartRecovery.inferenceMs.length !== result.restartSessions ||
+          sample.restartRecovery.errors.length ||
+          !sample.startupReads ||
+          Object.values(sample.startupReads.methods).some(
+            (read) => read.firstSuccessMs === undefined || read.errors.length,
+          ))
+      ) {
+        missing.push("restart admission/inference and successful startup read RPCs");
       }
       if (result.id === "slowAgentDatabase") {
         if (
@@ -1518,12 +1572,24 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         agentDb.runOpenClawAgentWriteTransaction(
           (writable) => {
             for (let index = 0; index < 1250; index++) {
-              writeSessionEntry(writable, `agent:${agentId}:bench-${index}`, {
+              const entry: InternalSessionEntry = {
                 sessionId: `team-boot-${agentId}-${index}`,
                 updatedAt: now - index,
                 label: `Synthetic startup session ${index}`,
                 visibility: "shared",
-              });
+                ...(benchCase.restartSessions && agentId === STARTUP_RESUME_AGENT
+                  ? index < benchCase.restartSessions
+                    ? { resumeAfterRestart: { queuedInputIds: [] } }
+                    : index < benchCase.restartSessions + STARTUP_RESUME_SKIPPED
+                      ? { lifecycleRunId: `synthetic-stale-${index}`, startedAt: now - 86_400_000 }
+                      : {}
+                  : {}),
+              };
+              writeSessionEntry(writable, `agent:${agentId}:bench-${index}`, entry);
+              // Creation retires private restart markers; shutdown marks the existing incarnation.
+              if (entry.resumeAfterRestart) {
+                writeSessionEntry(writable, `agent:${agentId}:bench-${index}`, entry);
+              }
             }
           },
           { agentId, env },
@@ -1672,6 +1738,7 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         bundledPluginFixture: benchCase.bundledPluginFixture ?? {},
         publicationGitDelayMs: benchCase.publicationGitDelayMs,
         publicationApiDelayMs: benchCase.publicationApiDelayMs,
+        restartSessions: benchCase.restartSessions,
         externalPluginCount:
           benchCase.pluginCount! - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
         agentCount: agents.length,
@@ -2029,6 +2096,7 @@ async function runGatewaySample(
         "could not allocate a benchmark port >= 40000 after 32 attempts; ensure the host's ephemeral port range includes ports >= 40000",
       );
     }
+    let resumeProvider: Awaited<ReturnType<typeof startStartupResumeProvider>> | undefined;
     const configPath = writeConfig(root, options.benchCase);
     if (options.benchCase.id === "teamBoot") {
       copyFileSync(configPath, `${configPath}.bak`);
@@ -2097,9 +2165,6 @@ async function runGatewaySample(
       }
       await delay(remaining);
     }
-    const hostLoadBefore = loadavg();
-    const startAt = performance.now();
-    const deadlineAt = startAt + options.timeoutMs;
     const startupTrace: Record<string, number> = {};
     const startupTraceLines: string[] = [];
     const output: string[] = [];
@@ -2112,10 +2177,22 @@ async function runGatewaySample(
     let moduleCountsAtHttpListen: ReturnType<typeof summarizeGatewayModuleLoads> | undefined;
     let childExited = false;
     let heapProfilePath: string | undefined;
+    let startupReads: StartupReadProbe | undefined;
+    const restartRecovery = options.benchCase.restartSessions
+      ? { resumed: 0, skipped: 0, completeMs: undefined as number | undefined }
+      : undefined;
     let child: ChildProcess | undefined;
     let rssSampler: ReturnType<typeof startGatewayRssSampling> | undefined;
 
     try {
+      if (options.benchCase.restartSessions) {
+        resumeProvider = await startStartupResumeProvider();
+        writeConfig(root, {
+          ...options.benchCase,
+          config: { ...options.benchCase.config, ...resumeProvider.config },
+        });
+        copyFileSync(configPath, `${configPath}.bak`);
+      }
       const nodeOptions = [
         ...(options.exitListeners
           ? [
@@ -2140,6 +2217,9 @@ async function runGatewaySample(
         options.benchCase.id === "teamBoot" || slowAgent ? "token" : "none",
       );
       const command = buildGatewayBenchCommand(childArgs, options);
+      const hostLoadBefore = loadavg();
+      const startAt = performance.now();
+      const deadlineAt = startAt + options.timeoutMs;
       child = spawn(command.command, command.args, {
         cwd: process.cwd(),
         detached: process.platform !== "win32",
@@ -2167,6 +2247,9 @@ async function runGatewaySample(
       });
 
       const onLine = (line: string, nowMs: number) => {
+        if (resumeProvider) {
+          appendFileSync(path.join(root, "restart-gateway.log"), `${line}\n`);
+        }
         if (options.benchCase.publicationApiDelayMs !== undefined) {
           appendFileSync(path.join(root, "publication-gateway.log"), `${line}\n`);
         }
@@ -2187,6 +2270,14 @@ async function runGatewaySample(
         const gate = /\[slow-agent-bench\] (gate-start|gate-passed)/u.exec(line);
         if (gate) {
           integrityGateMs[gate[1]!] ??= nowMs;
+        }
+        const resumeSummary = /startup restart resume: (\[.*\])/u.exec(line);
+        if (restartRecovery && resumeSummary) {
+          for (const summary of JSON.parse(resumeSummary[1]!)) {
+            restartRecovery.resumed += summary.resumed ?? 0;
+            restartRecovery.skipped += summary.skipped ?? 0;
+          }
+          restartRecovery.completeMs = nowMs;
         }
         const readyLogKind = classifyGatewayReadyLog(line);
         if (readyLogKind === "http-listen" && httpListenLogMs == null) {
@@ -2234,10 +2325,28 @@ async function runGatewaySample(
           startAt,
         });
       const healthzProbe = probe("/healthz");
+      const startupReadsWork = resumeProvider
+        ? healthzProbe.then(async (health) => {
+            if (health.status === 200) {
+              startupReads = await probeStartupReads({
+                port,
+                token: TEAM_BOOT_AUTH_TOKEN,
+                startAt,
+                deadlineAt,
+                isDone: () => childExited,
+              });
+            }
+          })
+        : undefined;
       const [healthz, readyz, firstSessionRpc] = await Promise.all([
         healthzProbe,
         probe("/readyz").then(async (readiness) => {
-          if (readiness.status === 200 && options.heapProfDir && !options.exitListeners) {
+          if (
+            readiness.status === 200 &&
+            options.heapProfDir &&
+            !options.exitListeners &&
+            !resumeProvider
+          ) {
             heapProfilePath = await captureStartupHeapProfile(
               startedChild,
               options.heapProfDir,
@@ -2283,6 +2392,19 @@ async function runGatewaySample(
           );
         }),
       ]);
+      await startupReadsWork;
+      if (resumeProvider && restartRecovery) {
+        while (
+          performance.now() < deadlineAt &&
+          (restartRecovery.completeMs === undefined ||
+            resumeProvider.resumes.length < options.benchCase.restartSessions!)
+        ) {
+          if (childExited) {
+            break;
+          }
+          await delay(25);
+        }
+      }
       // Keep the recovered request alive through its real subprocess boundary even
       // when readyz and the first RPC complete before this optional work finishes.
       if (publicationMarker) {
@@ -2314,6 +2436,7 @@ async function runGatewaySample(
       const postReadyCompletion =
         publicationMarker ||
         options.benchCase.publicationApiDelayMs !== undefined ||
+        resumeProvider ||
         options.exitListeners
           ? await Promise.all(
               [
@@ -2348,7 +2471,7 @@ async function runGatewaySample(
       const cpuMs =
         cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
       const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
-      if (options.heapProfDir && options.exitListeners && !childExited) {
+      if (options.heapProfDir && (options.exitListeners || resumeProvider) && !childExited) {
         heapProfilePath = await captureStartupHeapProfile(
           startedChild,
           options.heapProfDir,
@@ -2426,6 +2549,16 @@ async function runGatewaySample(
           ? { publicationApi: await inspectPublicationApiFixture(root) }
           : {}),
         ...(slowAgent ? { agentRecoveryMs, integrityGateMs, agentDatabaseAdmissionErrors } : {}),
+        ...(resumeProvider && restartRecovery
+          ? {
+              restartRecovery: {
+                ...restartRecovery,
+                inferenceMs: resumeProvider.resumes.map((at) => at - startAt),
+                errors: resumeProvider.errors,
+              },
+              startupReads,
+            }
+          : {}),
         completionMs,
         cpuCoreRatio,
         cpuMs,
@@ -2455,6 +2588,7 @@ async function runGatewaySample(
       };
     } finally {
       rssSampler?.stop();
+      await resumeProvider?.close();
       if (child) {
         await stopChild(child).catch(() => undefined);
       }
@@ -2592,7 +2726,11 @@ async function main() {
         publicationApiDelayMs?: number;
         teamScale?: boolean;
         pluginMigrationFixture?: GatewayBenchCase["pluginMigrationFixture"];
+        restartSessions?: number;
       };
+      if (fixture.restartSessions !== options.cases[0]?.restartSessions) {
+        throw new CliArgumentError("--restart-sessions must match the prepared fixture");
+      }
       if (fixture.agentDatabaseMib !== options.cases[0]?.agentDatabaseMib) {
         throw new CliArgumentError("--agent-database-mib must match the prepared fixture");
       }

@@ -285,7 +285,7 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     ).toMatchObject({ status: "published" });
   });
 
-  it("skips empty startup recovery writes and still reads unreported results", async () => {
+  it("reads each pending queue once during empty startup and still reads unreported results", async () => {
     const placements = withEngineStoreAdmission(() =>
       createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
     );
@@ -293,9 +293,9 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     const runtime = createRecoveryRuntime(vi.fn(), placements);
     const repositoryReads = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
     const sharedReads = vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync");
-    const deferrals = vi.spyOn(publicationStore, "deferGitHubPublicationRequestsAsync");
+    const defer = vi.spyOn(publicationStore, "deferGitHubPublicationRequestsAsync");
     await runtime.reconcilePublications();
-    expect(deferrals).not.toHaveBeenCalled();
+    expect(defer).not.toHaveBeenCalled();
     expect(pendingResults).not.toHaveBeenCalled();
     expect(repositoryReads.mock.calls.map(([input]) => input)).toEqual([
       { ownerProfileId: null, pending: true },

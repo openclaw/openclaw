@@ -1,0 +1,2 @@
+# Valid inventory and snapshot preservation for unavailable observation repositories.
+1

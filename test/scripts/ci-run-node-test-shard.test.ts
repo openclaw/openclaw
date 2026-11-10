@@ -201,10 +201,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
+        "src/state/dreaming-startup-admission.test.ts",
         "test/canonical-descendant.integration.test.ts",
         "test/codex-web-search-native.integration.test.ts",
         "test/cron-conversation-delivery.codex.integration.test.ts",
         "test/skill-usage.codex.integration.test.ts",
+        "test/slack-outbound-permanent-rejection-loopback.test.ts",
       ],
       preset: "runtime",
     },
@@ -255,6 +257,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "src/agents/agent-tools.delegated-authority.test.ts",
         "src/agents/session-placement-computer.test.ts",
+        "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
       ],
       preset: "runtime",
     },
@@ -291,6 +294,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "test/codex-settled-turn-finalization.integration.test.ts",
         "test/conversation-tools.codex.integration.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
         "test/scripts/eager-import-closure.test.ts",
         "test/scripts/lint-suppressions.test.ts",
         "test/scripts/plugin-sdk-surface-report.test.ts",
@@ -302,7 +306,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       configs: ["test/vitest/vitest.tooling.config.ts"],
       files: [
-        "test/codex-settled-turn-finalization.integration.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
         "test/scripts/vitest-worker-shutdown.test.ts",
       ],
       preset: "full",
@@ -402,6 +406,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/config/io.load-async.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
         "src/plugins/plugin-generation-worker.test.ts",
+        "test/scripts/ci-test-timings-tooling.test.ts",
+        "test/scripts/type-suppression-inventory.test.ts",
       ],
       args: [],
       jobArgs: undefined,

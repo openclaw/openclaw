@@ -22,7 +22,7 @@ export function withoutUpdateCampaign(schedule: UpdateScheduleState): UpdateSche
   return rest;
 }
 
-export function withoutUpdateTarget(schedule: UpdateScheduleState): UpdateScheduleState {
+function withoutUpdateTarget(schedule: UpdateScheduleState): UpdateScheduleState {
   const { target: _target, campaign: _campaign, ...rest } = schedule;
   return rest;
 }

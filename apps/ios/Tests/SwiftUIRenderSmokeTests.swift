@@ -190,21 +190,41 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
-    @Test @MainActor func `managed assistant image starts its artifact load`() async throws {
-        let artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111"
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        (OpenClawChatMediaKind.image, nil, nil),
+        (.audio, nil, .transcode),
+        (.video, nil, .transcode),
+        (.audio, .native, .native),
+        (.video, .native, .native),
+        (.audio, .transcode, .transcode),
+        (.video, .transcode, .transcode),
+    ] as [(OpenClawChatMediaKind, OpenClawChatPlaybackMode?, OpenClawChatPlaybackMode?)])
+    @MainActor func `managed assistant media starts its artifact load with the playback route`(
+        input: (OpenClawChatMediaKind, OpenClawChatPlaybackMode?, OpenClawChatPlaybackMode?)) async
+    {
+        let (kind, playback, expectedPlayback) = input
+        let prefix = kind == .image ? "artifact_managed_image_" : "artifact_managed_media_"
+        let artifactId = prefix + "11111111-1111-4111-8111-111111111111"
+        let mimeType = switch kind {
+        case .audio: "audio/x-ms-wma"
+        case .video: "video/x-matroska"
+        default: "image/png"
+        }
         let message = OpenClawChatMessage(
             role: "assistant",
             content: [OpenClawChatMessageContent(
-                type: "image",
+                type: kind.rawValue,
                 text: nil,
-                mimeType: "image/png",
+                mimeType: mimeType,
                 fileName: nil,
                 artifactId: artifactId,
                 url: "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full",
                 alt: "Managed preview",
+                playback: playback,
                 content: nil)],
             timestamp: 1)
-        var requestedArtifactId: String?
+        let requests = AsyncStream<OpenClawChatPlaybackMode?>.makeStream()
+        defer { requests.continuation.finish() }
         let root = ChatMessageBubble(
             message: message,
             style: .standard,
@@ -223,9 +243,11 @@ struct SwiftUIRenderSmokeTests {
             inlineWidgetResourceResolver: { _, _ in nil },
             mediaArtifactResolverReady: true,
             mediaPlaybackAllowed: { true },
-            loadMediaArtifact: { requested, kind, _ in
-                requestedArtifactId = requested
-                #expect(kind == .image)
+            loadMediaArtifact: { requested, requestedKind, playback in
+                #expect(requested == artifactId)
+                #expect(requestedKind == kind)
+                requests.continuation.yield(playback)
+                guard kind == .image else { return nil }
                 return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
                     data: Data(base64Encoded:
                         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
@@ -235,12 +257,9 @@ struct SwiftUIRenderSmokeTests {
         let window = Self.host(root, size: CGSize(width: 393, height: 420))
         defer { window.isHidden = true }
 
-        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
-        while requestedArtifactId == nil, ContinuousClock().now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-
-        #expect(requestedArtifactId == artifactId)
+        var iterator = requests.stream.makeAsyncIterator()
+        let requestedPlayback = await iterator.next()
+        #expect(requestedPlayback == .some(expectedPlayback))
     }
 
     @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {

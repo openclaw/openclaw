@@ -1,3 +1,4 @@
+import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { accountSessionGoalUsage } from "../../config/sessions/goals-transitions.js";
@@ -129,7 +130,7 @@ function isGoalContinuationOutcome(result: EmbeddedAgentRunResult): boolean {
     !meta.yielded &&
     !meta.continuationPending &&
     !meta.pendingToolCalls?.length &&
-    !result.acceptedSessionSpawns?.length &&
+    !hasCompletionMessageSessionSpawn(result.acceptedSessionSpawns) &&
     !result.didSendDeterministicApprovalPrompt &&
     !result.payloads?.some((payload) => payload.isError)
   );
