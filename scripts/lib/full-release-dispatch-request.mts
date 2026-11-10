@@ -619,6 +619,10 @@ export async function qualifyAdmission(
   do {
     const observed = observeQualificationAdmission(record, client);
     if (observed) {
+      if (admission.phase === "observed") {
+        // Reauthenticate without repacking the already frozen workflow input bytes.
+        return { record, authenticated: observed.authenticated };
+      }
       const envelope = decodePublicationDispatchEnvelope(
         String(record.request.inputs.trusted_workflow_json),
       );

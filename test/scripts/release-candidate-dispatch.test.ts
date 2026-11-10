@@ -60,8 +60,9 @@ describe("candidate checklist retained dispatch recovery", () => {
           " '/private/request with spaces/frv-request.json'",
       );
       expect(run).toHaveBeenCalledOnce();
-      expect(run).toHaveBeenCalledWith("/runtime/node", expect.any(Array));
+      expect(run.mock.calls[0]).toHaveLength(2);
       const [command, args] = run.mock.calls[0]!;
+      expect(Array.isArray(args)).toBe(true);
       expect(command).toBe("/runtime/node");
       expect(args[0]).toBe("/trusted/publisher/scripts/full-release-validation-at-sha.mjs");
       expect(args).toContain("--request-file");
