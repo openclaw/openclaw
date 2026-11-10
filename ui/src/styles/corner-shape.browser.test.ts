@@ -9,7 +9,7 @@ function corners(circular: string, superelliptical: string, selectors: string) {
 
 const CORNER_CASES = [
   ...corners("3px", "3px", ".field .oc-checkbox"),
-  ...corners("10px", "12.5px", ".btn, .nav-item"),
+  ...corners("10px", "12.5px", ".btn, .nav-item, .agent-scope-control .agent-select__trigger"),
   ...corners("16px", "20px", ".slash-menu, .chat-reply-context-menu"),
   ...corners(
     "14px",
@@ -29,10 +29,14 @@ const ALL_CASES = [
     "25px",
     ".agent-chat__input, .agent-chat__input--dictating::after, .agent-chat__disabled-banner, .agent-chat__composer-notices .chat-composer-neighbor-card, .agent-chat__composer-alert, .agent-chat__talk-status",
   ),
-  ...corners("9999px", "9999px", ".chip, .statusDot"),
+  ...corners("9999px", "9999px", ".chip, .statusDot, .circular-icon"),
   ...corners("10px", "10px", ".run-inspector__panel"),
   // Row controls share --field-radius, which scales with the engine like .btn; no superellipse.
-  ...corners("10px", "12.5px", ".settings-segmented"),
+  ...corners(
+    "10px",
+    "12.5px",
+    ".settings-segmented, .oc-icon-button, .data-table-pagination__controls button",
+  ),
   ...corners("14px", "17.5px", ".chat"),
   ...corners("3px", "3px", ".round-checkbox"),
   ...corners("2px", "2px", ".square-checkbox"),
@@ -62,6 +66,10 @@ const markup = `<main>
   <div class="agent-chat__search-bar"><input type="text" /></div>
   <span class="chip">Chip</span><span class="statusDot"></span><div class="run-inspector__panel">Surface</div>
   <div class="settings-group"><div class="settings-segmented">Segmented</div></div>
+  <button class="oc-icon-button" type="button">Action</button>
+  <button class="oc-icon-button circular-icon" style="--icon-button-radius: 9999px" type="button">Round action</button>
+  <div class="agent-scope-control"><button class="agent-select__trigger" type="button">Agent</button></div>
+  <div class="data-table-pagination__controls"><button type="button">Next</button></div>
 </main>`;
 
 // CSSOM can serialize the same circular shape as round or superellipse(1).
@@ -79,6 +87,7 @@ const ROOT_RADIUS_TOKENS = {
 const css = readStyles(
   "styles/base",
   "styles/components",
+  "components/solid/icon-button",
   "styles/checkbox",
   "styles/layout",
   "styles/option-card",
@@ -94,6 +103,20 @@ const css = readStyles(
 );
 
 fixture.describe("Control UI corner curvature", () => {
+  it.each([390, 1400])("keeps the agent filter level with fields at %spx", async (width) => {
+    const heights = await fixture.withPage(
+      String(width),
+      styleDocument(css, `${markup}<input class="settings-input" />`),
+      async (page) => {
+        await page.setViewportSize({ width, height: 900 });
+        return page
+          .locator(".agent-scope-control .agent-select__trigger, input.settings-input")
+          .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().height));
+      },
+    );
+    expect(heights).toEqual(width === 390 ? [38, 38] : [32, 32]);
+  });
+
   it.each([true, false])(
     "preserves corners and canonical root tokens (supported=%s)",
     async (supported) => {
