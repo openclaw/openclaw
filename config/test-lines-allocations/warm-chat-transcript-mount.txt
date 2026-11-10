@@ -1,3 +1,4 @@
 # #196385 adds 30 lines for warm-frame yielding, latest history, cancellation,
-# and the one-shot port lint exception; 21 lines fit the existing headroom.
-9
+# and the one-shot port lint exception; 21 lines fit the existing headroom,
+# and #196305 later removed one test line. Allocate only the remaining debt.
+8
