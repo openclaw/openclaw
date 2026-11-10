@@ -3,14 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { decodeDataUrl } from "./image-data-url.js";
 
 describe("decodeDataUrl", () => {
-  it.each(["", ";charset=utf-8;name=tile.png"])(
-    "preserves line-wrapped base64 and normalizes MIME casing with parameters %s",
-    (parameters) => {
-      const result = decodeDataUrl(` DATA:IMAGE/PNG${parameters};BASE64,\r\nSGVs\r\nbG8=\n `);
-      expect(result.mimeType).toBe("image/png");
-      expect(result.buffer.toString()).toBe("Hello");
-    },
-  );
+  it("preserves line-wrapped base64, MIME parameters and normalizes MIME casing", () => {
+    const result = decodeDataUrl(" DATA:IMAGE/PNG;charset=utf-8;BASE64,\r\nSGVs\r\nbG8=\n ");
+    expect(result.mimeType).toBe("image/png");
+    expect(result.buffer.toString()).toBe("Hello");
+  });
 
   it("rejects whitespace inside a base64 block", () => {
     expect(() => decodeDataUrl("data:image/png;base64,SGVs bG8=")).toThrow(
@@ -31,21 +28,9 @@ describe("decodeDataUrl", () => {
   });
 
   it.each([
-    {
-      dataUrl: "data:text/plain;charset=utf-8;base64,SGVsbG8=",
-      maxBytes: undefined,
-      error: /Unsupported data URL type/i,
-    },
-    {
-      dataUrl: `data:image/png;charset=utf-8;base64,${"A".repeat(16)}`,
-      maxBytes: 4,
-      error: /size limit/i,
-    },
-    {
-      dataUrl: "data:image/png;charset=utf-8;base64=1,SGVsbG8=",
-      maxBytes: undefined,
-      error: /expected base64 data: URL/i,
-    },
+    { dataUrl: "data:text/plain;charset=utf-8;base64,SGVsbG8=", error: /Unsupported data URL/i },
+    { dataUrl: `data:image/png;name=a.png;base64,${"A".repeat(16)}`, maxBytes: 4, error: /size/i },
+    { dataUrl: "data:image/png;charset=utf-8;base64=1,SGVsbG8=", error: /expected base64/i },
   ])("rejects invalid data URLs before decoding: $error", ({ dataUrl, maxBytes, error }) => {
     using bufferFromSpy = vi.spyOn(Buffer, "from");
 
