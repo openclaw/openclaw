@@ -11,7 +11,7 @@ const SANDBOX_EXAMPLES = {
     ["openclaw sandbox list", "List all sandbox containers."],
     ["openclaw sandbox list --browser", "List only browser containers."],
     ["openclaw sandbox recreate --all", "Recreate all containers."],
-    ["openclaw sandbox recreate --session main", "Recreate a specific session."],
+    ["openclaw sandbox recreate --session agent:main:main", "Recreate a specific session."],
     ["openclaw sandbox recreate --agent mybot", "Recreate agent containers."],
     ["openclaw sandbox explain", "Explain effective sandbox config."],
   ],
@@ -22,7 +22,7 @@ const SANDBOX_EXAMPLES = {
   ],
   recreate: [
     ["openclaw sandbox recreate --all", "Recreate all containers."],
-    ["openclaw sandbox recreate --session main", "Recreate a specific session."],
+    ["openclaw sandbox recreate --session agent:main:main", "Recreate a specific session."],
     ["openclaw sandbox recreate --agent mybot", "Recreate a specific agent (includes sub-agents)."],
     ["openclaw sandbox recreate --browser --all", "Recreate only browser containers."],
     ["openclaw sandbox recreate --all --force", "Skip confirmation."],
@@ -73,7 +73,7 @@ export function registerSandboxCli(program: Command) {
     .command("recreate")
     .description("Remove containers to force recreation with updated config")
     .option("--all", "Recreate all sandbox containers", false)
-    .option("--session <key>", "Recreate container for specific session")
+    .option("--session <key>", "Exact scope key from sandbox list")
     .option("--agent <id>", "Recreate containers for specific agent")
     .option("--browser", "Only recreate browser containers", false)
     .option("--force", "Skip confirmation prompt", false)
