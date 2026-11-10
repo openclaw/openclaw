@@ -16,9 +16,11 @@ from model_usage import (
     filter_by_days,
     latest_day_cost,
     load_payload,
-    main as model_usage_main,
     pick_current_model,
     positive_int,
+)
+from model_usage import (
+    main as model_usage_main,
 )
 
 
