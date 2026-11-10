@@ -156,22 +156,25 @@ async function interruptAcceptedUpdate() {
 }
 
 describe("GitHub publication index update", () => {
-  it.each(["full", "shallow", "uncached", "unregistered", "contents"])(
+  it.each(["full", "shallow", "uncached", "unregistered", "contents", "trees"])(
     "reuses commits and isolates cached-base fetches (%s)",
     async (mode) => {
       const shallow = mode === "shallow";
+      const contents = mode === "contents" || mode === "trees";
       await f.git("config", "uploadpack.allowFilter", "true");
       const clone = await makeDirectory("partial");
       const url = pathToFileURL(f.cwd).href;
       await git(clone, [
         "clone",
-        ...(mode === "unregistered" ? [] : ["--filter=blob:none"]),
+        ...(mode === "unregistered"
+          ? []
+          : [`--filter=${mode === "trees" ? "tree:0" : "blob:none"}`]),
         "--no-checkout",
         ...(shallow ? ["--depth=1"] : []),
         url,
         ".",
       ]);
-      if (mode !== "unregistered" && mode !== "contents") {
+      if (mode !== "unregistered" && !contents) {
         await git(clone, ["config", `remote.${url}.promisor`, "true"]);
       }
       if (mode !== "full") {
@@ -191,6 +194,8 @@ describe("GitHub publication index update", () => {
         GIT_AUTHOR_EMAIL: "publication@example.test",
         GIT_COMMITTER_NAME: "Publication Test",
         GIT_COMMITTER_EMAIL: "publication@example.test",
+        // Create a fixture-local commit without hydrating the treeless clone.
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: path.join(f.cwd, ".git/objects"),
       });
       await git(clone, ["update-ref", "refs/heads/unrelated-session", local]);
       const unrelatedPack = await git(
@@ -239,7 +244,7 @@ describe("GitHub publication index update", () => {
       expect(fetches).toBe(0);
       expect(await git(clone, ["rev-list", "--objects", "--missing=print", local])).toBe(missing);
 
-      if (mode === "contents") {
+      if (contents) {
         await git(clone, ["config", "fetch.unpackLimit", "1"]);
         const packDirectory = path.join(clone, ".git/objects/pack");
         const previousPacks = new Set(await fs.readdir(packDirectory));
@@ -249,10 +254,13 @@ describe("GitHub publication index update", () => {
         const packs = (await fs.readdir(packDirectory)).filter(
           (file) => file.endsWith(".pack") && !previousPacks.has(file),
         );
-        expect(packs).toHaveLength(1);
-        await expect(
-          fs.access(path.join(packDirectory, packs[0]!.replace(/\.pack$/u, ".promisor"))),
-        ).resolves.toBeUndefined();
+        expect(fetches).toBe(mode === "trees" ? 2 : 1);
+        expect(packs).toHaveLength(fetches);
+        for (const pack of packs) {
+          await expect(
+            fs.access(path.join(packDirectory, pack.replace(/\.pack$/u, ".promisor"))),
+          ).resolves.toBeUndefined();
+        }
         return;
       }
 

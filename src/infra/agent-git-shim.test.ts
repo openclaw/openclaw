@@ -461,7 +461,11 @@ it.skipIf(process.platform === "win32")(
         const base = path.join(root, `shared-fetch-${index}`);
         await fs.cp(shared, base, { recursive: true });
         await fs.symlink(fork, path.join(base, "peer-local"), "dir");
-        git(base, "remote", "add", "peer", pathToFileURL(fork).href);
+        const peerUrl =
+          args[0] === "peer" || args[0] === "peer-local" ? "peer-local" : pathToFileURL(fork).href;
+        git(base, "remote", "add", "peer", peerUrl);
+        const reader = path.join(root, `shared-reader-${index}`);
+        git(base, "worktree", "add", "--detach", reader);
         git(base, "config", "remotes.both", "origin peer");
         if (args.length === 0) {
           git(base, "config", "fetch.all", "true");
@@ -485,7 +489,10 @@ it.skipIf(process.platform === "win32")(
         }
         expect(blobCount(), args.join(" ")).toBe(beforeBlobs + (pulling ? 1 : 0));
         expect(await fs.readFile(path.join(base, ".git/shallow"), "utf8")).toBe(boundary);
-        const hydrated = await command(["show", `${pulling ? pullHead : forkHead}:fork.txt`], base);
+        const hydrated = await command(
+          ["show", `${pulling ? pullHead : forkHead}:fork.txt`],
+          reader,
+        );
         expect(hydrated.exitCode, hydrated.aggregated).toBe(0);
         expect(hydrated.aggregated).toContain("current fork content");
         if (pulling) {

@@ -296,16 +296,17 @@ export async function requireGitHubPublicationCommit(
       .filter((line) => line.startsWith("?"))
       .map((line) => line.slice(1));
   };
-  const missing = await missingObjects();
-  if (missing.length) {
-    // A known partial-clone commit can still lack its tree contents after fetch.
-    // Hydrate through the selected authenticated URL before any offline snapshots.
+  let missing = await missingObjects();
+  // A missing tree reveals its blobs after the first filtered fetch; explicit
+  // blob wants complete the snapshot in at most one further batch.
+  for (let round = 0; missing.length && round < 2; round++) {
     await fetch(missing);
-    if ((await missingObjects("content verification")).length) {
-      throw new Error(
-        `${failure} Git content verification failed: required objects are still missing after fetching.`,
-      );
-    }
+    missing = await missingObjects("content verification");
+  }
+  if (missing.length) {
+    throw new Error(
+      `${failure} Git content verification failed: required objects are still missing after fetching.`,
+    );
   }
 }
 

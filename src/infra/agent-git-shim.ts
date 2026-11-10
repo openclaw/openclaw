@@ -123,7 +123,7 @@ query_repository() {
       done
       return 1 ;;
     blobless)
-      remote_settings=$(git "$@" config --get-regexp '^remote\\..*\\.(promisor|partialclonefilter)$' 2>/dev/null) || return 1
+      remote_settings=$(git "$@" config --get-regexp '^remote\\..*\\.(url|promisor|partialclonefilter)$' 2>/dev/null) || return 1
       remote_settings="
 $remote_settings
 "
@@ -131,6 +131,7 @@ $remote_settings
 '*) ;; *) return 1 ;; esac ;;
     register_remotes)
       remotes=$(git "$@" remote) || return 1
+      fetch_cwd=
       if [ -n "$fetch_remote" ] && [ "$multiple_fetch" != 1 ]; then
         case "
 $remotes
@@ -146,6 +147,30 @@ $fetch_remote"
       fi
       while IFS= read -r remote; do
         [ -n "$remote" ] || continue
+        url=$(git "$@" ls-remote --get-url "$remote") || return 1
+        case $url in /*) ;; *)
+          # A colon is an SSH separator only before the first slash.
+          case \${url%%:*} in "$url"|*/*)
+            if [ -z "$fetch_cwd" ]; then
+              if [ "$command" = pull ]; then
+                fetch_cwd=$(git "$@" rev-parse --show-toplevel) || return 1
+              else
+                # Let Git own -C, explicit gitdirs and bare-repository setup.
+                fetch_cwd=$(git "$@" -c 'alias.openclaw-fetch-cwd=!pwd -P' openclaw-fetch-cwd) || return 1
+              fi
+            fi
+            raw_url=$url
+            case $remote_settings in *"
+remote.$remote.url "*)
+              raw_url=\${remote_settings#*"
+remote.$remote.url "}
+              raw_url=\${raw_url%%"
+"*} ;;
+            esac
+            # Preserve other fetch/push URLs while anchoring the first fetch URL.
+            git "$@" config --local --fixed-value --replace-all "remote.$remote.url" "$fetch_cwd/$url" "$raw_url" || return 1 ;;
+          esac ;;
+        esac
         # Native multi/group selection rejects --filter; keep each remote's promises usable later.
         for setting in promisor:true partialclonefilter:blob:none; do
           key=remote.$remote.\${setting%%:*}
