@@ -9,6 +9,7 @@ const TemplatePackageName = Type.String({
   pattern: "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$",
 });
 const TemplateArtifactIntegrity = Type.String({ pattern: "^sha256-[A-Za-z0-9+/]{43}=$" });
+const TemplateBundledDigest = Type.String({ pattern: "^sha256:[a-f0-9]{64}$" });
 const TemplateCatalogCoordinateSchema = closedObject({
   packageName: TemplatePackageName,
   version: NonEmptyString,
@@ -241,7 +242,7 @@ export const TemplateSkillReviewSchema = Type.Union([
     source: Type.Literal("bundled"),
     path: NonEmptyString,
     name: NonEmptyString,
-    digest: TemplateArtifactIntegrity,
+    digest: TemplateBundledDigest,
     riskWarning: NonEmptyString,
     reviewToken: NonEmptyString,
   }),
@@ -259,7 +260,7 @@ export const TemplateSkillAcknowledgementSchema = Type.Union([
     actionId: NonEmptyString,
     source: Type.Literal("bundled"),
     path: NonEmptyString,
-    digest: TemplateArtifactIntegrity,
+    digest: TemplateBundledDigest,
     reviewToken: NonEmptyString,
     acknowledgeRiskWarning: Type.Literal(true),
   }),
@@ -409,7 +410,7 @@ const TemplateSkillArtifactSchema = Type.Union([
     source: Type.Literal("bundled"),
     path: NonEmptyString,
     name: NonEmptyString,
-    digest: TemplateArtifactIntegrity,
+    digest: TemplateBundledDigest,
   }),
 ]);
 

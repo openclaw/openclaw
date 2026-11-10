@@ -100,6 +100,7 @@ describe("Templates Gateway contract", () => {
       acknowledgeSkillWarnings: [
         {
           actionId: "skill:@community/triage",
+          source: "clawhub",
           ref: "@community/triage",
           reviewToken: "sha256:reviewed-skill",
           acknowledgeRiskWarning,
@@ -201,6 +202,55 @@ describe("Templates Gateway contract", () => {
     const { integrity: _integrity, ...withoutIntegrity } = pluginReview;
     rejectPlan({ ...plan, pluginReviews: [withoutIntegrity] });
     rejectPlan({ ...plan, pluginReviews: [{ ...pluginReview, integrity: "sha256-not-a-digest" }] });
+  });
+
+  it("accepts bundled skill warning acknowledgements with native hexadecimal digests", () => {
+    const artifact = {
+      source: "bundled",
+      path: "skills/research",
+      name: "research",
+      digest: "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    };
+    const review = {
+      ...artifact,
+      actionId: "skill:skills/research",
+      riskWarning: "Review bundled scripts",
+      reviewToken: "sha256:reviewed-skill",
+    };
+    const acknowledge = (digest: string) => ({
+      source: coordinate,
+      acknowledgeSkillWarnings: [
+        {
+          actionId: review.actionId,
+          source: artifact.source,
+          path: artifact.path,
+          digest,
+          reviewToken: review.reviewToken,
+          acknowledgeRiskWarning: true,
+        },
+      ],
+    });
+    addApply.accepts(acknowledge(artifact.digest));
+    checkPlan({
+      ...basePlan,
+      skillReviews: [review],
+      actions: [
+        {
+          kind: "skill",
+          id: review.actionId,
+          action: "install",
+          blocked: false,
+          effect: { type: "skill-package", desired: artifact },
+        },
+      ],
+    });
+    for (const digest of [
+      "sha256-short",
+      `sha256-${"A".repeat(43)}=`,
+      `sha256:${"g".repeat(64)}`,
+    ]) {
+      addApply.rejects(acknowledge(digest));
+    }
   });
 
   it("admits bounded access and schedule disclosures without cron prompts", () => {
