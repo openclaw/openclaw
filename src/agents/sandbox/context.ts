@@ -50,6 +50,7 @@ import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import { captureSandboxStateOwner, SandboxStateOwnerRequiredError } from "./state-owner.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
+import { ensureReadOnlyWorkspaceSkillMountSources } from "./workspace-mounts.js";
 
 const sandboxLog = createSubsystemLogger("agent/sandbox");
 
@@ -165,6 +166,22 @@ async function ensureSandboxWorkspaceLayout(
     skillsSnapshot: params.skillsSnapshot,
     assertCurrent,
   });
+
+  const createdSkillMountSources = await ensureReadOnlyWorkspaceSkillMountSources(
+    {
+      workspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      workdir: cfg.docker.workdir,
+      workspaceAccess: cfg.workspaceAccess,
+    },
+    assertCurrent,
+  );
+  if (createdSkillMountSources && localWorkspace) {
+    // Accept only producer-created layout, never unrelated work on later turns.
+    await localWorkspace.checkpoint();
+    assertCurrent?.();
+  }
 
   return {
     agentWorkspaceDir,

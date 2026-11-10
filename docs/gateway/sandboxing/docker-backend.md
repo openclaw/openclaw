@@ -42,6 +42,18 @@ OpenClaw also creates Docker sandbox containers with an init process and
 mounted read-only at `/agent`; write operations to the agent workspace are
 rejected, while the configured tmpfs paths remain writable.
 
+Writable workspaces protect managed skill directories with read-only bind mounts,
+including on first launch when those directories do not exist yet. Writable
+ancestors of nested skill mounts are pinned in place so a sandboxed process
+cannot rename an ancestor to bypass that protection. Other workspace files
+remain writable.
+
+After a Gateway restart, a running container may be replaced automatically when
+the only mount changes add these protections, its root filesystem is read-only,
+and all existing mounts still match. Containers with image volumes, incomplete
+setup, changed user binds, or use in the current Gateway process retain their
+normal explicit-recreation requirement.
+
 File tools require a host-backed bind mount. A tmpfs or image volume can hide
 files below a workspace bind; file tools report those paths as container-only
 instead of reading the hidden host files. Use `exec` to access that storage.

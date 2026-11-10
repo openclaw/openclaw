@@ -140,6 +140,8 @@ it.each([false, true])(
           stderr = `no container with name or id ${args.at(-1)} found`;
         } else if (args[2] === "{{.State.Running}}") {
           stdout = "true";
+        } else if (args[2] === "{{.Id}} {{.HostConfig.ReadonlyRootfs}}") {
+          stdout = id + " true";
         } else if (args[2] === "{{.Id}}") {
           stdout = id;
         } else if (args[2] === "{{.ImageName}}\t{{.Image}}") {

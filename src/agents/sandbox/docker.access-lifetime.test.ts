@@ -63,7 +63,7 @@ vi.mock("./registry.js", () => ({
 }));
 vi.mock("./mount-plan.js", () => ({
   prepareSandboxMountPlan: vi.fn(async () => ({ binds: [], skippedBinds: [] })),
-  sandboxMountPlanMatchesContainer: vi.fn(async () => true),
+  compareSandboxMountPlan: vi.fn(async () => "match"),
   resolveSandboxContainerOnlyMounts: vi.fn(async () => []),
 }));
 vi.mock("./container-engine.js", () => ({
@@ -119,6 +119,9 @@ vi.mock("./container-engine.js", () => ({
             Pid: container.running || fixture.terminalState === "paused" ? 123 : 0,
           }),
         );
+      }
+      if (args[2] === "{{.Id}} {{.HostConfig.ReadonlyRootfs}}") {
+        return ok(container.id + " true");
       }
       return ok(container.hash);
     }

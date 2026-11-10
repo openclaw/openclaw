@@ -30,7 +30,7 @@ import { handleHotSandboxConfigMismatch } from "./current-config.js";
 import { throwAfterPartialSandboxCleanup } from "./docker-partial-cleanup.js";
 import {
   prepareSandboxMountPlan,
-  sandboxMountPlanMatchesContainer,
+  compareSandboxMountPlan,
   type SandboxMountPlan,
 } from "./mount-plan.js";
 import {
@@ -487,15 +487,18 @@ async function ensureSandboxContainerLifecycle(
     existingRegistryEntry?.runtimeState === "pending";
   const state = await containerState(engine, containerName, { strict: needsSetupReservation });
   let containerId = "";
+  let readOnlyRoot = false;
   if (state.exists) {
     const identity = await execContainer(
       engine,
-      ["inspect", "--format", "{{.Id}}", containerName],
+      ["inspect", "--format", "{{.Id}} {{.HostConfig.ReadonlyRootfs}}", containerName],
       {
         signal: AbortSignal.timeout(5_000),
       },
     );
-    containerId = identity.stdout.trim();
+    const [id, rootReadOnly] = identity.stdout.trim().split(/\s+/u);
+    containerId = id ?? "";
+    readOnlyRoot = rootReadOnly === "true";
     if (!/^[a-f0-9]{64}$/u.test(containerId)) {
       throw new Error("Container inspect did not return an immutable container ID.");
     }
@@ -518,23 +521,35 @@ async function ensureSandboxContainerLifecycle(
     hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
-      const isHot =
+      let isHot =
         running &&
         (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS);
       if (isHot) {
-        const mountsMatch =
-          params.requireCurrentConfig ||
-          (await sandboxMountPlanMatchesContainer({ engine, containerName, plan: mountPlan }));
-        handleHotSandboxConfigMismatch({
-          containerName,
-          scope: params.cfg.scope,
-          sessionKey: params.scopeKey,
-          mountsChanged: !mountsMatch,
-          ...(params.requireCurrentConfig !== undefined
-            ? { requireCurrentConfig: params.requireCurrentConfig }
-            : {}),
-        });
-      } else {
+        const mounts = params.requireCurrentConfig
+          ? "match"
+          : await compareSandboxMountPlan({ engine, containerName: containerId, plan: mountPlan });
+        if (
+          mounts === "protected-mounts-added" &&
+          readOnlyRoot &&
+          typeof lastUsedAtMs === "number" &&
+          lastUsedAtMs < performance.timeOrigin
+        ) {
+          // Only pre-restart containers can acquire new protection automatically.
+          // Host-backed bytes remain intact; this stable line has no persistent exec owner.
+          isHot = false;
+        }
+        params.assertCurrent?.();
+        if (isHot) {
+          handleHotSandboxConfigMismatch({
+            containerName,
+            scope: params.cfg.scope,
+            sessionKey: params.scopeKey,
+            mountsChanged: mounts !== "match",
+            requireCurrentConfig: params.requireCurrentConfig,
+          });
+        }
+      }
+      if (!isHot) {
         params.assertCurrent?.();
         const removed = await execContainer(engine, ["rm", "-f", containerId], {
           allowFailure: true,

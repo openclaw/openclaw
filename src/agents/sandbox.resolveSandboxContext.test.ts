@@ -10,6 +10,7 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js"
 import { registerSandboxBackend, type SandboxBackendHandle } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
+import { resolveWorkspaceMounts } from "./sandbox/workspace-mounts.js";
 
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
@@ -115,6 +116,72 @@ afterAll(async () => {
 });
 
 describe("resolveSandboxContext", () => {
+  it.each(["rw", "none"] as const)(
+    "protects initially absent skill roots in a %s workspace",
+    async (workspaceAccess) => {
+      const workspaceDir = await createSandboxFixtureDir("absent-skills");
+      const config = sandboxConfig("docker", {
+        workspaceAccess,
+        workspaceRoot: path.join(workspaceDir, "sandboxes"),
+      });
+      const workspace = await ensureSandboxWorkspaceForSession({
+        config,
+        sessionKey: "agent:main:absent-skills",
+        workspaceDir,
+      });
+      if (!workspace) {
+        throw new Error("expected sandbox workspace resolution");
+      }
+      expect(workspace.workspaceAccess).toBe(workspaceAccess);
+      const mounts = resolveWorkspaceMounts({
+        ...workspace,
+        workspaceAccess,
+        agentWorkspaceDir: workspaceDir,
+        workdir: "/workspace",
+      });
+      expect(mounts.filter((mount) => mount.source === "protectedSkill")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ containerPath: "/workspace/skills", readOnly: true }),
+          expect.objectContaining({ containerPath: "/workspace/.agents/skills", readOnly: true }),
+        ]),
+      );
+      expect(mounts.filter((mount) => mount.source === "protectedSkill")).toHaveLength(
+        workspaceAccess === "rw" ? 3 : 2,
+      );
+    },
+  );
+
+  it("checkpoints only producer-created skill layout, not later user edits", async () => {
+    const workspaceDir = await createSandboxFixtureDir("created-checkpoint");
+    const checkpoint = vi.fn(async () => {});
+    const localWorkspace = await import("./sandbox/local-workspace.js");
+    const prepare = vi.spyOn(localWorkspace, "prepareLocalSandboxWorkspace").mockResolvedValue({
+      workspaceDir,
+      workspaceCwd: workspaceDir,
+      assertCurrent: () => {},
+      provision: async (run) => await run(),
+      checkpoint,
+      [Symbol.dispose]: () => {},
+    });
+    try {
+      const params = {
+        config: sandboxConfig("docker"),
+        sessionKey: "agent:main:checkpoint",
+        workspaceDir,
+      };
+      await ensureSandboxWorkspaceForSession(params);
+      expect(checkpoint).toHaveBeenCalledTimes(1);
+      await fs.writeFile(path.join(workspaceDir, "user.txt"), "uncommitted user change");
+      await ensureSandboxWorkspaceForSession(params);
+      expect(checkpoint).toHaveBeenCalledTimes(1);
+      expect(await fs.readFile(path.join(workspaceDir, "user.txt"), "utf8")).toBe(
+        "uncommitted user change",
+      );
+    } finally {
+      prepare.mockRestore();
+    }
+  });
+
   it("bypasses the selected main session in global scope", async () => {
     const cfg: OpenClawConfig = {
       session: { scope: "global" },

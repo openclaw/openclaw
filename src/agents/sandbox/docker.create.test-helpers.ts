@@ -22,6 +22,7 @@ const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
   containerExists: true,
   inspectRunning: true,
+  readOnlyRoot: true,
   inspectError: "",
   createError: "",
   labelHash: "",
@@ -132,6 +133,8 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     } else {
       stdout = spawnState.inspectRunning ? "true\n" : "false\n";
     }
+  } else if (args[0] === "inspect" && args[2] === "{{.Id}} {{.HostConfig.ReadonlyRootfs}}") {
+    stdout = "c".repeat(64) + " " + spawnState.readOnlyRoot;
   } else if (args[0] === "inspect" && args[2] === "{{.Id}}") {
     stdout = "c".repeat(64);
   } else if (
@@ -316,6 +319,7 @@ export function createSandboxContainerTestHarness() {
     spawnState.calls.length = 0;
     spawnState.containerExists = true;
     spawnState.inspectRunning = true;
+    spawnState.readOnlyRoot = true;
     spawnState.inspectError = "";
     spawnState.createError = "";
     spawnState.labelHash = "";

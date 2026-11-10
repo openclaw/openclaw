@@ -7,7 +7,10 @@ import { SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH } from "./config-hash.js";
 import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import { createSandboxContainerTestHarness } from "./docker.create.test-helpers.js";
 import { collectDockerFlagValues } from "./test-args.js";
-import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
+import {
+  SANDBOX_MOUNT_FORMAT_VERSION,
+  ensureReadOnlyWorkspaceSkillMountSources,
+} from "./workspace-mounts.js";
 
 describe("ensureSandboxContainer config-hash recreation", () => {
   const harness = createSandboxContainerTestHarness();
@@ -20,6 +23,97 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     computeTestSandboxHash,
     ensureSandboxCreateCallForTest,
   } = harness;
+
+  it.each(["docker", "podman"] as const)(
+    "upgrades pre-restart protection-only %s mounts without losing host data",
+    async (backend) => {
+      const workspaceDir = tempDirs.make("openclaw-protection-upgrade-");
+      const cfg = createSandboxConfig([], [], "rw", {});
+      cfg.backend = backend;
+      fs.writeFileSync(path.join(workspaceDir, "user.txt"), "keep me");
+      await ensureReadOnlyWorkspaceSkillMountSources({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        workdir: "/workspace",
+        workspaceAccess: "rw",
+      });
+      spawnState.labelHash = "before-protected-mounts";
+      spawnState.mounts = JSON.stringify([
+        { Type: "bind", Source: workspaceDir, Destination: "/workspace", RW: true },
+      ]);
+      registryMocks.readRegistryEntry.mockResolvedValue({
+        containerName: backend === "podman" ? "oc-test-podman-shared" : "oc-test-shared",
+        ...(backend === "podman"
+          ? { backendId: "podman", backendTarget: { key: "local", globalArgs: [] } }
+          : {}),
+        sessionKey: "shared",
+        createdAtMs: 1,
+        lastUsedAtMs: Math.floor(performance.timeOrigin) - 1,
+        image: cfg.docker.image,
+        configHash: spawnState.labelHash,
+      });
+      await harness.ensureSandboxContainer({
+        ...(backend === "podman" ? { engine: harness.PODMAN_SANDBOX_ENGINE } : {}),
+        scopeKey: "shared",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+      });
+      expect(spawnState.calls.filter((call) => call.args[0] === "rm")).toHaveLength(1);
+      expect(spawnState.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
+      expect(fs.readFileSync(path.join(workspaceDir, "user.txt"), "utf8")).toBe("keep me");
+    },
+  );
+
+  it.each([
+    "current-process",
+    "writable-root",
+    "user-bind",
+    "image-volume",
+    "pending",
+    "restricted",
+  ])("retains custody for an unsafe protected-mount upgrade: %s", async (reason) => {
+    const workspaceDir = tempDirs.make("openclaw-protection-retain-");
+    const cfg = createSandboxConfig([], [], "rw", {});
+    await ensureReadOnlyWorkspaceSkillMountSources({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      workdir: "/workspace",
+      workspaceAccess: "rw",
+    });
+    spawnState.labelHash = "before-protected-mounts";
+    spawnState.readOnlyRoot = reason !== "writable-root";
+    spawnState.mounts = JSON.stringify([
+      { Type: "bind", Source: workspaceDir, Destination: "/workspace", RW: true },
+      ...(reason === "user-bind"
+        ? [{ Type: "bind", Source: "/user/skills", Destination: "/workspace/skills", RW: false }]
+        : []),
+      ...(reason === "image-volume"
+        ? [{ Type: "volume", Source: "/volume", Destination: "/data", RW: true }]
+        : []),
+    ]);
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs:
+        reason === "current-process" ? Date.now() : Math.floor(performance.timeOrigin) - 1,
+      image: cfg.docker.image,
+      configHash: spawnState.labelHash,
+      ...(reason === "pending" ? { runtimeState: "pending" } : {}),
+    });
+    await expect(
+      harness.ensureSandboxContainer({
+        scopeKey: "shared",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+        requireCurrentConfig: reason === "restricted",
+      }),
+    ).rejects.toThrow();
+    expect(spawnState.calls.some((call) => call.args[0] === "rm")).toBe(false);
+    expect(spawnState.calls.some((call) => call.args[0] === "create")).toBe(false);
+  });
 
   it("serializes concurrent provisioning for one container", async () => {
     const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
