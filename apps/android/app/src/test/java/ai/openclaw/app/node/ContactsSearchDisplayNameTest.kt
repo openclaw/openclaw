@@ -95,9 +95,17 @@ private class AggregateNameContactsProvider(
         }
       }
 
-      ContactsContract.CommonDataKinds.Phone.CONTENT_URI -> cursor.addRow(arrayOf("+15555550123"))
-      ContactsContract.CommonDataKinds.Email.CONTENT_URI -> Unit
-      else -> error("unexpected contacts URI: $uri")
+      ContactsContract.CommonDataKinds.Phone.CONTENT_URI -> {
+        cursor.addRow(arrayOf("+15555550123"))
+      }
+
+      ContactsContract.CommonDataKinds.Email.CONTENT_URI -> {
+        Unit
+      }
+
+      else -> {
+        error("unexpected contacts URI: $uri")
+      }
     }
     return cursor
   }
