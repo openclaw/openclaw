@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   isPackageActivationComplete,
@@ -28,7 +30,8 @@ export async function prepareInterruptedManagedServiceFixture(params: {
     | "risk"
     | "operator-stop"
     | "finalize-failure"
-    | "post-finalize-risk";
+    | "post-finalize-risk"
+    | "schema-advance";
 }) {
   const fixture = await createPackageSwapFixture(params.root);
   const installRoot = fixture.packageRoot;
@@ -59,6 +62,19 @@ export async function prepareInterruptedManagedServiceFixture(params: {
     });
     console.log(JSON.stringify({status:"ok",mode:"finalize",restart:false,postUpdate:{doctor:{status:"ok"},plugins:{status:"ok"}}}));
   `;
+  // Model a cross-version migration: the killed updater's candidate Doctor advances the
+  // shared schema past the staged helper, and only the 2.0.0 candidate can read it.
+  const setStateSchemaVersion = (version: number) => `{
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(${JSON.stringify(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: params.root }))});
+    db.exec("PRAGMA user_version = ${version}; UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';");
+    db.close();
+  }`;
+  // Appended so it runs on import, after the recovery module defines require.
+  const candidateSchemaReader = `
+    ${setStateSchemaVersion(OPENCLAW_STATE_SCHEMA_VERSION)}
+    ${managedServiceStateUpdateScript(params.statePath, "state.installedSchemaReader = true;")};
+  `;
   const stageRoot = fixture.params.stage.packageRoot;
   if (!stageRoot) {
     throw new Error("Interrupted-update fixture requires a staged package root");
@@ -83,7 +99,9 @@ export async function prepareInterruptedManagedServiceFixture(params: {
               return ledger.finishUpdateRun(...args);
             }`,
           )
-        : recovery;
+        : version === "2.0.0" && params.cut === "schema-advance"
+          ? recovery + candidateSchemaReader
+          : recovery;
     await fs.writeFile(path.join(directory, "dist/cli/daemon-cli.js"), observedRecovery);
     await fs.writeFile(path.join(directory, "openclaw.mjs"), repair);
     await writePackageDistInventory(directory);
@@ -141,8 +159,13 @@ export async function prepareInterruptedManagedServiceFixture(params: {
       ${
         params.cut === "prepared"
           ? ""
-          : ["after", "finalize-failure", "post-finalize-risk"].includes(params.cut)
-            ? "await createPublicationOwner(prepared.anchor, prepared.journal, fence.assertCurrent).publish();"
+          : ["after", "finalize-failure", "post-finalize-risk", "schema-advance"].includes(
+                params.cut,
+              )
+            ? "await createPublicationOwner(prepared.anchor, prepared.journal, fence.assertCurrent).publish();" +
+              (params.cut === "schema-advance"
+                ? setStateSchemaVersion(OPENCLAW_STATE_SCHEMA_VERSION + 1)
+                : "")
             : `
       const record = prepared.journal.read();
       prepared.journal.transition(record,"publishing",{kind:"displace"},fence.assertCurrent);

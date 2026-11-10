@@ -11,7 +11,8 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
     | "risk"
     | "operator-stop"
     | "finalize-failure"
-    | "post-finalize-risk";
+    | "post-finalize-risk"
+    | "schema-advance";
   trigger?: "cli" | "api" | "campaign";
   origin?: UpdateRunRecord["origin"];
   controlDisconnect?: "transferred" | "unarmed" | "dead-parent";

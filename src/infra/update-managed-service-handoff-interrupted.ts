@@ -45,9 +45,11 @@ export async function recoverInterruptedManagedUpdate(params: {
   assertCurrent: () => void;
   /** Returns the run as read by the installed runtime after post-core repair. */
   finalize: () => Promise<UpdateRunRecord | undefined>;
+  /** Reads this run; the helper switches to the installed runtime once the schema advances. */
+  readRun?: (runId: string) => UpdateRunRecord | undefined;
 }) {
   const { root, assertCurrent } = params;
-  const run = readManagedHandoffUpdateRun(params.runId);
+  const run = (params.readRun ?? readManagedHandoffUpdateRun)(params.runId);
   if (!run || run.status !== "running") {
     throw new Error("Interrupted updater has no current running record");
   }

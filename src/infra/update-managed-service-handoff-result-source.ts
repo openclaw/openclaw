@@ -251,7 +251,7 @@ function stagedRuntimePath() {
 
 function shouldRecoverInterruptedUpdater() {
   if (!params.runId || params.foregroundOrigin) return false;
-  return restorationArmed || readManagedHandoffGatewayStop()?.runId === params.runId;
+  return restorationArmed || readGatewayStop()?.runId === params.runId;
 }
 
 // Post-core repair may advance the state schema past this helper's staged reader.
@@ -268,10 +268,29 @@ function createInstalledRuntimeLedger(modulePath) {
     .map((name) => [name, (...args) => call(name, args)]));
 }
 
+let installedRuntimeLedger;
+function useInstalledRuntimeLedger() {
+  installedRuntimeLedger ??= createInstalledRuntimeLedger(params.recoveryModulePath);
+  runLedger = installedRuntimeLedger;
+  return installedRuntimeLedger;
+}
+
+// The killed updater's candidate Doctor can advance the shared schema past this staged
+// reader; only the installed candidate can then read or record this run's history.
+function readUpdateHistory(readStaged, readInstalled) {
+  try { return readStaged(); }
+  catch (error) {
+    if (!isSqliteSchemaVersionError(error)) throw error;
+    appendLog("staged runtime cannot open the advanced state schema; using the installed runtime: " + String(error).split("\n")[0]);
+    return readInstalled(useInstalledRuntimeLedger());
+  }
+}
+
 function readGatewayStop() {
-  // Only the installed-runtime ledger lists runs; before post-core repair the staged reader
-  // matches the schema. An older installed candidate may not export the listing.
-  if (!runLedger?.listUpdateRuns) return readManagedHandoffGatewayStop();
+  // Only the installed-runtime ledger lists runs. The staged reader serves until the schema
+  // advances; an older installed candidate may not export the listing.
+  if (!runLedger?.listUpdateRuns) return readUpdateHistory(readManagedHandoffGatewayStop,
+    (ledger) => findUpdateGatewayStop(ledger.listUpdateRuns({ limit: 100 })));
   try { return findUpdateGatewayStop(runLedger.listUpdateRuns({ limit: 100 })); }
   catch (error) {
     appendLog("installed runtime could not list update history; using the staged reader: " + String(error));
@@ -296,11 +315,13 @@ async function recoverInterruptedUpdater() {
       databaseIdentity: params.updateLeaseDatabaseIdentity, original: params.recovery,
       originalIdentity: originalInstallationIdentity, timeoutMs: params.recoveryTimeoutMs,
       assertCurrent,
+      readRun: (runId) => readUpdateHistory(() => handoffLedger.getUpdateRun(runId),
+        (ledger) => ledger.getUpdateRun(runId)),
       finalize: async () => {
         // The recovery owner verified the installed candidate before entering here.
         // Post-core work can advance its schema even when finalization fails.
         terminalRuntimePath = params.recoveryModulePath;
-        runLedger = createInstalledRuntimeLedger(params.recoveryModulePath);
+        useInstalledRuntimeLedger();
         const repair = await runOwnedUpdateCommand("repair", params.finalizeCommandArgv,
           params.recoveryTimeoutMs, params.cwd, { ...process.env, OPENCLAW_UPDATE_RUN_HANDOFF: "1" });
         let repaired;

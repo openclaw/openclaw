@@ -121,3 +121,27 @@ itUnix.each(["finalize-failure", "post-finalize-risk"] as const)(
     expect(result.log).not.toContain("failed to finalize update run");
   },
 );
+
+itUnix(
+  "recovers through the installed runtime after the candidate advances the schema",
+  async () => {
+    const result = await runBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "transferred",
+      interruptedUpdate: "schema-advance",
+      helperExitCode: 0,
+    });
+    expect(result.log).toContain("update command exited code=null signal=SIGKILL");
+    expect(result.log).toContain("staged runtime cannot open the advanced state schema");
+    expect(result.state, result.log).toMatchObject({
+      installedSchemaReader: true,
+      postCoreRepaired: true,
+      restored: true,
+      expectedVersion: "2.0.0",
+    });
+    expect(result.run, result.log).toMatchObject({ status: "succeeded", phase: "finished" });
+    expect(result.log).not.toMatch(
+      /Cannot find module|ERR_MODULE_NOT_FOUND|failed to finalize update run/,
+    );
+  },
+);

@@ -21,6 +21,7 @@ export {
   readManagedHandoffGatewayStop,
 } from "./update-managed-service-handoff-interrupted.js";
 export { findUpdateGatewayStop } from "./update-run-gateway-stop.js";
+export { isSqliteSchemaVersionError } from "./sqlite-user-version.js";
 export const handoffLedger = {
   adoptUpdateRun,
   finishUpdateRun,
