@@ -485,7 +485,7 @@ describe("OpenAI-compatible completions params", () => {
         },
         {
           type: "text",
-          text: "Reactions guidance\n## Runtime\nRuntime: session=alpha",
+          text: "\nReactions guidance\n## Runtime\nRuntime: session=alpha",
         },
       ],
     });

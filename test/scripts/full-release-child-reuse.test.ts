@@ -456,7 +456,7 @@ describe("independent release child reuse", () => {
     },
   );
 
-  it("replays exact raw child evidence but refuses fresh child and source-parent attempts", async () => {
+  it("replays a pinned parent origin but rejects changed origins and child attempts", async () => {
     const data = await fixture("normalCi", undefined, TOOLING, 261);
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
     const { downloadArchive, ...deps } = data.deps;
@@ -469,6 +469,8 @@ describe("independent release child reuse", () => {
       }
       return Response.json(data.artifact);
     });
+    // The source parent retried after dispatch; its original attempt is still exact.
+    const currentParent = { ...data.parent, run_attempt: 2 };
     let jobReads = 0;
     const github = async (endpoint: string) => {
       if (endpoint.includes("/jobs?")) {
@@ -477,7 +479,7 @@ describe("independent release child reuse", () => {
           throw new Error("gh: Server Error (HTTP 502)");
         }
       }
-      return endpoint === "actions/runs/77" ? data.parent : deps.github(endpoint);
+      return endpoint === "actions/runs/77" ? currentParent : deps.github(endpoint);
     };
     const writer = createReleaseEvidenceReplay(data.request);
     await validateReusableReleaseChild(selection, data.request, {
@@ -506,7 +508,7 @@ describe("independent release child reuse", () => {
         token: "synthetic",
         immutableReads: createReleaseEvidenceReplay(data.request, payload),
       }),
-    ).rejects.toThrow(/source parent attempt/);
+    ).rejects.toThrow(/source parent origin/);
     data.parent.run_attempt = 1;
     data.run.run_attempt = 2;
     await expect(
