@@ -8,6 +8,7 @@ import {
   expectSessionAutomationSource,
   registerSessionAutomationSource,
   reportSessionAutomationSourceLoadFailed,
+  unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -136,4 +137,20 @@ it("keeps archiving paused after a failed cron load and warns once per process",
   const store = await maintain("not-loaded", { archiveDashboardAfterMs: 7 * DAY_MS });
   expect(store[chatKey]?.archivedAt).toBeUndefined();
   expect(store[otherKey]?.archivedAt).toBeUndefined();
+});
+
+it("keeps archiving deferred while a hot-reloaded cron service replaces a registered one", async () => {
+  const jobs = [parentJob(true)];
+  const predecessor = { getJobs: () => jobs, getDefaultAgentId: () => "main" };
+  registerSessionAutomationSource(predecessor);
+  // The replacement is built while the predecessor still serves, then the predecessor stops.
+  expectSessionAutomationSource();
+  unregisterSessionAutomationSource(predecessor);
+  const reloading = await maintain("not-loaded", { archiveDashboardAfterMs: 7 * DAY_MS });
+  expect(reloading[chatKey]?.archivedAt).toBeUndefined();
+  expect(reloading[otherKey]?.archivedAt).toBeUndefined();
+
+  const replaced = await maintain(jobs, { archiveDashboardAfterMs: 7 * DAY_MS });
+  expect(replaced[chatKey]?.archivedAt).toBeUndefined();
+  expect(replaced[otherKey]).toMatchObject({ archiveReason: "stale-dashboard" });
 });

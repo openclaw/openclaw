@@ -16,7 +16,9 @@ type SessionAutomationSource = {
 };
 
 let source: SessionAutomationSource | null = null;
-// Set once this process creates a cron service that will load jobs; cleared when it registers.
+// Set whenever this process creates a cron service that will load jobs; cleared when one
+// registers. A replacement built while its predecessor is registered stays pending after
+// the predecessor unregisters.
 // A failed load leaves it set, so automatic archiving waits instead of pausing jobs.
 let awaitingSource = false;
 let loadFailureReported = false;
@@ -42,9 +44,24 @@ export function registerSessionAutomationSource(next: SessionAutomationSource | 
 
 /** A Gateway cron service exists and its jobs will register once loaded. */
 export function expectSessionAutomationSource(): void {
-  if (!source) {
-    awaitingSource = true;
+  awaitingSource = true;
+}
+
+/**
+ * Builds a cron service's automation source. Hot reloads construct the service
+ * directly, so an enabled one keeps archiving deferred until it registers.
+ */
+export function createSessionAutomationSource(
+  cron: {
+    getLoadedJobs: () => readonly CronStoredJob[] | undefined;
+    getDefaultAgentId: () => string | undefined;
+  },
+  loadsJobs: boolean,
+): SessionAutomationSource {
+  if (loadsJobs) {
+    expectSessionAutomationSource();
   }
+  return { getJobs: () => cron.getLoadedJobs(), getDefaultAgentId: () => cron.getDefaultAgentId() };
 }
 
 /**
