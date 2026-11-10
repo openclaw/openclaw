@@ -67,6 +67,74 @@ function finishedSpanAttributes(name: string): Record<string, unknown> | undefin
   return span?.attributes as Record<string, unknown> | undefined;
 }
 
+test("redacts captured strings before JSON escaping", async () => {
+  const { service, ctx } = await startOtelService({ traces: true, captureContent: true });
+  const canary = "DUMMY0NOT0A0REAL0SECRET0QZ7";
+  const text = `notes\npassword=${canary}\nAPI_KEY=${canary}\ttoken=${canary}\r\nsecret=${canary}`;
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "model.call.completed",
+      runId: "run-capture",
+      callId: "call-capture",
+      provider: "openai",
+      model: "test-model",
+      durationMs: 10,
+    },
+    {
+      modelContent: {
+        inputMessages: [{ role: "user", content: text }],
+        outputMessages: [{ role: "assistant", content: text }],
+        toolDefinitions: [{ name: "example", description: text }],
+      },
+    },
+  );
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "tool.execution.completed",
+      runId: "run-capture",
+      toolName: "example",
+      toolCallId: "tool-capture",
+      durationMs: 10,
+    },
+    { toolContent: { toolInput: { command: text }, toolOutput: { result: text } } },
+  );
+  await waitForDiagnosticEventsDrained();
+  await service.stop?.(ctx);
+  for (const [name, keys] of [
+    [
+      "openclaw.model.call",
+      [
+        "gen_ai.input.messages",
+        "input.value",
+        "gen_ai.output.messages",
+        "output.value",
+        "gen_ai.tool.definitions",
+        "openclaw.content.input_messages",
+        "openclaw.content.output_messages",
+        "openclaw.content.tool_definitions",
+      ],
+    ],
+    [
+      "openclaw.tool.execution",
+      [
+        "gen_ai.tool.call.arguments",
+        "gen_ai.tool.call.result",
+        "openclaw.content.tool_input",
+        "openclaw.content.tool_output",
+      ],
+    ],
+  ] as const) {
+    const attributes = exporter.getFinishedSpans().find((span) => span.name === name)?.attributes;
+    for (const key of keys) {
+      const value = attributes?.[key];
+      expect(value, key).toBeTypeOf("string");
+      expect(value, key).toContain("notes");
+      expect(value, key).not.toContain(canary);
+      expect(() => JSON.parse(String(value)), key).not.toThrow();
+    }
+  }
+});
+
 test("exports captured message content on message spans under captureContent", async () => {
   const { service, ctx } = await startOtelService({ traces: true, captureContent: true });
 
