@@ -1,2 +1,2 @@
-282
-# PostgreSQL Gateway ownership (#196156): cross-host refusal naming the holder, bounded connection startup, retiring the former owner on session loss and on a silent network, cold CLI owners taking custody, default-mode guard, and localStores config validation.
+302
+# PostgreSQL Gateway ownership (#196156): cross-host refusal naming the holder, bounded connection startup, retiring the former owner on session loss and on a silent network, cold CLI owners taking custody, custody kept while a retained lease holds the owner, default-mode guard, and localStores config validation.

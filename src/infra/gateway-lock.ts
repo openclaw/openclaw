@@ -498,6 +498,8 @@ export async function acquireGatewayLock(
   let projection: GatewayStateProjection | undefined;
   // database.localStores none: the install's PostgreSQL session lock excludes other hosts too.
   const postgres = createGatewayPostgresCustody();
+  // Retained schema leases keep the process owner, so its PostgreSQL session ends with it.
+  let postgresEnded: Promise<void> | undefined;
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner>;
   try {
     stateOwner =
@@ -520,6 +522,9 @@ export async function acquireGatewayLock(
             getProjection: () => projection,
             // PostgreSQL custody loss retires the process owner that admits all state work.
             custody: postgres.signal(),
+            onReleased: () => {
+              postgresEnded = postgres.release();
+            },
           });
           try {
             if (opts.databasePortRecovery) {
@@ -735,8 +740,8 @@ export async function acquireGatewayLock(
         await resources?.close();
         projection?.release();
         projection = undefined;
-        await postgres.release();
         stateOwner.release();
+        await postgresEnded;
       })().catch((error: unknown) => {
         released = undefined;
         throw error;

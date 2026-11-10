@@ -13,7 +13,11 @@ import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.t
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { acquireConfiguredGatewayPostgresOwner } from "./gateway-postgres-owner.js";
-import { captureGatewayStateOwner, captureStateDatabaseAccess } from "./gateway-state-owner.js";
+import {
+  captureGatewayStateOwner,
+  captureStateDatabaseAccess,
+  tryBorrowGatewayStateOwner,
+} from "./gateway-state-owner.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -257,6 +261,22 @@ describe.skipIf(!connection)("Gateway ownership with database.localStores none",
     });
     await expect(runCli()).resolves.toBe("ran");
     await vi.waitFor(async () => expect(await ownerBackends(schemaPrefix)).toHaveLength(0));
+  });
+
+  it("keeps PostgreSQL custody while a retained lease keeps the process owner", async () => {
+    const schemaPrefix = install({ connection: connection!, localStores: "none" });
+    const former = await acquireOnHost("gateway");
+    // Uncertain child cleanup borrows the owner before the lock is released.
+    const retained = tryBorrowGatewayStateOwner(former.databasePath);
+
+    await former.lock.release();
+    retained?.assertCurrent();
+    expect(await ownerBackends(schemaPrefix)).toHaveLength(1);
+    await expect(acquireOnHost("gateway")).rejects.toThrow(/busy at PostgreSQL schema prefix/);
+
+    retained?.release();
+    await vi.waitFor(async () => expect(await ownerBackends(schemaPrefix)).toHaveLength(0));
+    await acquireOnHost("gateway");
   });
 
   it("leaves the default mode on per-state-dir file ownership", async () => {
